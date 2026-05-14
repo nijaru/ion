@@ -12,6 +12,7 @@ import (
 
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
+	ionacp "github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -65,7 +66,7 @@ func main() {
 			store,
 			cfg,
 			branch,
-			session.ModeYolo,
+			ionacp.ModeYolo,
 			acpCommandOverride,
 		)
 		closeErr := store.Close()

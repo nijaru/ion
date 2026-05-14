@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
+	ionacp "github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -27,7 +28,7 @@ type ionACPRuntimeFactory struct {
 	store              storage.Store
 	cfg                *config.Config
 	branch             string
-	mode               ionsession.Mode
+	mode               ionacp.Mode
 	acpCommandOverride string
 }
 
@@ -75,7 +76,7 @@ type ionACPAgent struct {
 	conn    *acp.AgentSideConnection
 	factory acpRuntimeFactory
 	version string
-	mode    ionsession.Mode
+	mode    ionacp.Mode
 
 	mu       sync.Mutex
 	sessions map[string]*ionACPHeadlessSession
@@ -85,7 +86,7 @@ type ionACPHeadlessSession struct {
 	agent ionsession.AgentSession
 	close func() error
 	cwd   string
-	mode  ionsession.Mode
+	mode  ionacp.Mode
 }
 
 var (
@@ -93,7 +94,7 @@ var (
 	_ acp.AgentLoader = (*ionACPAgent)(nil)
 )
 
-func newIonACPAgent(factory acpRuntimeFactory, version string, mode ionsession.Mode) *ionACPAgent {
+func newIonACPAgent(factory acpRuntimeFactory, version string, mode ionacp.Mode) *ionACPAgent {
 	return &ionACPAgent{
 		factory:  factory,
 		version:  version,
@@ -109,7 +110,7 @@ func runACPAgent(
 	store storage.Store,
 	cfg *config.Config,
 	branch string,
-	mode ionsession.Mode,
+	mode ionacp.Mode,
 	acpCommandOverride string,
 ) error {
 	agent := newIonACPAgent(ionACPRuntimeFactory{
@@ -389,7 +390,7 @@ func (a *ionACPAgent) session(sessionID string) (*ionACPHeadlessSession, error) 
 	return sess, nil
 }
 
-func acpModeState(mode ionsession.Mode) *acp.SessionModeState {
+func acpModeState(mode ionacp.Mode) *acp.SessionModeState {
 	return &acp.SessionModeState{
 		CurrentModeId: acpModeID(mode),
 		AvailableModes: []acp.SessionMode{
@@ -400,26 +401,26 @@ func acpModeState(mode ionsession.Mode) *acp.SessionModeState {
 	}
 }
 
-func acpModeID(mode ionsession.Mode) acp.SessionModeId {
+func acpModeID(mode ionacp.Mode) acp.SessionModeId {
 	switch mode {
-	case ionsession.ModeRead:
+	case ionacp.ModeRead:
 		return acp.SessionModeId("read")
-	case ionsession.ModeYolo:
+	case ionacp.ModeYolo:
 		return acp.SessionModeId("auto")
 	default:
 		return acp.SessionModeId("edit")
 	}
 }
 
-func modeFromACPID(id acp.SessionModeId) (ionsession.Mode, error) {
+func modeFromACPID(id acp.SessionModeId) (ionacp.Mode, error) {
 	switch strings.ToLower(strings.TrimSpace(string(id))) {
 	case "read":
-		return ionsession.ModeRead, nil
+		return ionacp.ModeRead, nil
 	case "edit", "":
-		return ionsession.ModeEdit, nil
+		return ionacp.ModeEdit, nil
 	case "auto", "yolo":
-		return ionsession.ModeYolo, nil
+		return ionacp.ModeYolo, nil
 	default:
-		return ionsession.ModeEdit, fmt.Errorf("unsupported ACP session mode %q", id)
+		return ionacp.ModeEdit, fmt.Errorf("unsupported ACP session mode %q", id)
 	}
 }

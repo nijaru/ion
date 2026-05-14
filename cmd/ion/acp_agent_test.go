@@ -15,6 +15,7 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	ionacp "github.com/nijaru/ion/internal/backend/acp"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
@@ -124,7 +125,7 @@ type fakeACPAgentSession struct {
 	script    []ionsession.Event
 
 	mu           sync.Mutex
-	mode         ionsession.Mode
+	mode         ionacp.Mode
 	autoApproved bool
 	approvals    []bool
 }
@@ -169,7 +170,7 @@ func (s *fakeACPAgentSession) Approve(_ context.Context, _ string, approved bool
 	return nil
 }
 
-func (s *fakeACPAgentSession) SetMode(mode ionsession.Mode) {
+func (s *fakeACPAgentSession) SetMode(mode ionacp.Mode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mode = mode
@@ -231,7 +232,7 @@ func TestIonACPAgentStreamsSessionUpdates(t *testing.T) {
 		ionsession.TurnFinished{},
 	)
 	factory := &fakeACPRuntimeFactory{session: fakeSession}
-	agent := newIonACPAgent(factory, "test-version", ionsession.ModeEdit)
+	agent := newIonACPAgent(factory, "test-version", ionacp.ModeEdit)
 
 	a2cR, a2cW := io.Pipe()
 	c2aR, c2aW := io.Pipe()
@@ -327,7 +328,7 @@ func TestIonACPAgentSetSessionMode(t *testing.T) {
 	agent := newIonACPAgent(
 		&fakeACPRuntimeFactory{session: fakeSession},
 		"test-version",
-		ionsession.ModeRead,
+		ionacp.ModeRead,
 	)
 	clientConn := connectACPAgent(t, agent)
 
@@ -350,7 +351,7 @@ func TestIonACPAgentSetSessionMode(t *testing.T) {
 	}
 	fakeSession.mu.Lock()
 	defer fakeSession.mu.Unlock()
-	if fakeSession.mode != ionsession.ModeYolo || !fakeSession.autoApproved {
+	if fakeSession.mode != ionacp.ModeYolo || !fakeSession.autoApproved {
 		t.Fatalf("mode = %v auto = %v, want yolo auto", fakeSession.mode, fakeSession.autoApproved)
 	}
 }
@@ -360,12 +361,12 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 	agent := newIonACPAgent(
 		&fakeACPRuntimeFactory{session: fakeSession},
 		"test-version",
-		ionsession.ModeEdit,
+		ionacp.ModeEdit,
 	)
 	agent.sessions["session-1"] = &ionACPHeadlessSession{
 		agent: fakeSession,
 		cwd:   t.TempDir(),
-		mode:  ionsession.ModeEdit,
+		mode:  ionacp.ModeEdit,
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nijaru/ion/internal/session"
 )
 
 type classifierFunc func(context.Context, PolicyClassification) (PolicyDecision, error)
@@ -25,79 +23,79 @@ func TestPolicyEngine(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		mode     session.Mode
+		mode     Mode
 		tool     string
 		args     string
 		expected Policy
 	}{
 		{
 			"EDIT mode: Read tool Allowed",
-			session.ModeEdit,
+			ModeEdit,
 			"read",
 			`{"file_path": "file.txt"}`,
 			PolicyAllow,
 		},
 		{
 			"EDIT mode: Write tool Asked",
-			session.ModeEdit,
+			ModeEdit,
 			"write",
 			`{"file_path": "file.txt"}`,
 			PolicyAsk,
 		},
 		{
 			"EDIT mode: Bash tool Asked",
-			session.ModeEdit,
+			ModeEdit,
 			"bash",
 			`{"command": "ls -la"}`,
 			PolicyAsk,
 		},
-		{"EDIT mode: Sensitive tool Asked", session.ModeEdit, "mcp", `{}`, PolicyAsk},
+		{"EDIT mode: Sensitive tool Asked", ModeEdit, "mcp", `{}`, PolicyAsk},
 
 		{
 			"READ mode: Read tool Allowed",
-			session.ModeRead,
+			ModeRead,
 			"read",
 			`{"file_path": "file.txt"}`,
 			PolicyAllow,
 		},
 		{
 			"READ mode: Write tool Denied",
-			session.ModeRead,
+			ModeRead,
 			"write",
 			`{"file_path": "file.txt"}`,
 			PolicyDeny,
 		},
 		{
 			"READ mode: Bash tool Denied",
-			session.ModeRead,
+			ModeRead,
 			"bash",
 			`{"command": "ls -la"}`,
 			PolicyDeny,
 		},
-		{"READ mode: Sensitive tool Asked", session.ModeRead, "mcp", `{}`, PolicyAsk},
+		{"READ mode: Sensitive tool Asked", ModeRead, "mcp", `{}`, PolicyAsk},
 
 		{
 			"YOLO mode: Read tool Allowed",
-			session.ModeYolo,
+			ModeYolo,
 			"read",
 			`{"file_path": "file.txt"}`,
 			PolicyAllow,
 		},
 		{
 			"YOLO mode: Write tool Allowed",
-			session.ModeYolo,
+			ModeYolo,
 			"write",
 			`{"file_path": "file.txt"}`,
 			PolicyAllow,
 		},
 		{
 			"YOLO mode: Bash tool Allowed",
-			session.ModeYolo,
+			ModeYolo,
 			"bash",
 			`{"command": "rm -rf /"}`,
 			PolicyAllow,
 		},
-		{"YOLO mode: Sensitive tool Allowed", session.ModeYolo, "mcp", `{}`, PolicyAllow},
+		{"YOLO mode: Sensitive tool Allowed", ModeYolo, "mcp", `{}`, PolicyAllow},
 	}
 
 	for _, tt := range tests {
@@ -121,7 +119,7 @@ func TestReadModeCannotBeWeakenedBySessionApprovals(t *testing.T) {
 	pe := NewPolicyEngine()
 	ctx := context.Background()
 
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	pe.AllowCategoryOf("write")
 
 	policy, _ := pe.Authorize(ctx, "write", `{"file_path":"file.txt"}`)
@@ -130,7 +128,7 @@ func TestReadModeCannotBeWeakenedBySessionApprovals(t *testing.T) {
 	}
 
 	pe.SetAutoApprove(true)
-	pe.SetMode(session.ModeRead)
+	pe.SetMode(ModeRead)
 
 	policy, reason := pe.Authorize(ctx, "write", `{"file_path":"file.txt"}`)
 	if policy != PolicyDeny {
@@ -156,14 +154,14 @@ func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
 		"write",
 	}
 
-	pe.SetMode(session.ModeRead)
+	pe.SetMode(ModeRead)
 	got := pe.VisibleToolNames(names)
 	want := []string{"glob", "grep", "list", "read", "read_skill"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("READ visible tools = %#v, want %#v", got, want)
 	}
 
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	got = pe.VisibleToolNames(names)
 	if strings.Join(got, ",") != strings.Join(names, ",") {
 		t.Fatalf("EDIT visible tools = %#v, want %#v", got, names)
@@ -172,7 +170,7 @@ func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
 
 func TestYoloAllowsUnknownTools(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetMode(session.ModeYolo)
+	pe.SetMode(ModeYolo)
 
 	policy, reason := pe.Authorize(context.Background(), "external_tool", `{}`)
 	if policy != PolicyAllow {
@@ -182,7 +180,7 @@ func TestYoloAllowsUnknownTools(t *testing.T) {
 
 func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	var audit PolicyAuditEvent
 	pe.SetAuditSink(func(event PolicyAuditEvent) {
 		audit = event
@@ -213,7 +211,7 @@ func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
 
 func TestPolicyClassifierFailuresFailClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	pe.SetClassifier(
 		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
 			return PolicyDecision{}, errors.New("model unavailable")
@@ -232,7 +230,7 @@ func TestPolicyClassifierFailuresFailClosedToAsk(t *testing.T) {
 
 func TestPolicyClassifierTimeoutFailsClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	pe.SetClassifier(
 		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
 			<-ctx.Done()
@@ -252,7 +250,7 @@ func TestPolicyClassifierTimeoutFailsClosedToAsk(t *testing.T) {
 
 func TestPolicyClassifierInvalidDecisionFailsClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	pe.SetClassifier(
 		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
 			return PolicyDecision{Action: "maybe", Reason: "invalid parse"}, nil
@@ -278,13 +276,13 @@ func TestPolicyClassifierCannotWeakenHardBoundaries(t *testing.T) {
 		time.Second,
 	)
 
-	pe.SetMode(session.ModeRead)
+	pe.SetMode(ModeRead)
 	policy, reason := pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
 	if policy != PolicyDeny {
 		t.Fatalf("READ write policy = %v (%q), want deny", policy, reason)
 	}
 
-	pe.SetMode(session.ModeEdit)
+	pe.SetMode(ModeEdit)
 	policy, reason = pe.Authorize(context.Background(), "read", `{"file_path":"file.txt"}`)
 	if policy != PolicyAllow {
 		t.Fatalf("read policy = %v (%q), want allow", policy, reason)
