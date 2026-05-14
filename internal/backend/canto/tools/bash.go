@@ -9,24 +9,9 @@ import (
 	"github.com/nijaru/canto/llm"
 )
 
-const maxOutputSize = 1024 * 1024 // 1MB
-
 type Bash struct {
 	cwd      string
 	executor *localExecutor
-	jobs     *backgroundJobs
-}
-
-type BashOption func(*bashOptions)
-
-type bashOptions struct {
-	backgroundJobs bool
-}
-
-func WithBackgroundJobs() BashOption {
-	return func(opts *bashOptions) {
-		opts.backgroundJobs = true
-	}
 }
 
 func NewBash(cwd string) *Bash {
@@ -39,21 +24,11 @@ func NewBash(cwd string) *Bash {
 func NewBashWithEnvironment(
 	cwd string,
 	environment EnvironmentPolicy,
-	opts ...BashOption,
 ) *Bash {
-	options := bashOptions{}
-	for _, opt := range opts {
-		opt(&options)
-	}
-
-	b := &Bash{
+	return &Bash{
 		cwd:      cwd,
 		executor: newLocalExecutorWithEnvironment(resolveSandboxMode(), environment),
 	}
-	if options.backgroundJobs {
-		b.jobs = newBackgroundJobs()
-	}
-	return b
 }
 
 func (b *Bash) Spec() llm.Spec {
@@ -62,25 +37,6 @@ func (b *Bash) Spec() llm.Spec {
 			"type":        "string",
 			"description": "The command to execute (e.g. 'ls -la', 'go test ./...', 'git status')",
 		},
-	}
-	if b.jobs != nil {
-		properties["action"] = map[string]any{
-			"type":        "string",
-			"enum":        []string{"run", "output", "kill"},
-			"description": "Action to perform. Defaults to run.",
-		}
-		properties["background"] = map[string]any{
-			"type":        "boolean",
-			"description": "For action=run, start the command in the background and return a job id.",
-		}
-		properties["job_id"] = map[string]any{
-			"type":        "string",
-			"description": "Background job id for action=output or action=kill.",
-		}
-		properties["tail_lines"] = map[string]any{
-			"type":        "integer",
-			"description": "For action=output, return only the last N output lines.",
-		}
 	}
 
 	return llm.Spec{
@@ -113,57 +69,19 @@ func (b *Bash) ExecuteStreaming(
 		return "", err
 	}
 
-	switch strings.ToLower(strings.TrimSpace(input.Action)) {
-	case "", "run":
-		if strings.TrimSpace(input.Command) == "" {
-			return "", fmt.Errorf("command is required")
-		}
-		if input.Background {
-			if b.jobs == nil {
-				return "", fmt.Errorf("background jobs are disabled")
-			}
-			return b.jobs.start(ctx, b.executor, localCommand{
-				CWD:     b.cwd,
-				Command: input.Command,
-			})
-		}
-		return b.executor.Run(ctx, localCommand{
-			CWD:     b.cwd,
-			Command: input.Command,
-			Emit:    emit,
-		})
-	case "output":
-		if b.jobs == nil {
-			return "", fmt.Errorf("background jobs are disabled")
-		}
-		return b.jobs.output(input.JobID, input.TailLines)
-	case "kill":
-		if b.jobs == nil {
-			return "", fmt.Errorf("background jobs are disabled")
-		}
-		return b.jobs.kill(ctx, input.JobID)
-	default:
-		return "", fmt.Errorf("unsupported bash action %q", input.Action)
+	action := strings.ToLower(strings.TrimSpace(input.Action))
+	if action != "" && action != "run" ||
+		input.Background ||
+		strings.TrimSpace(input.JobID) != "" ||
+		input.TailLines != 0 {
+		return "", fmt.Errorf("background jobs are deferred")
 	}
-}
-
-func (b *Bash) Jobs() []BackgroundJobInfo {
-	if b.jobs == nil {
-		return nil
+	if strings.TrimSpace(input.Command) == "" {
+		return "", fmt.Errorf("command is required")
 	}
-	return b.jobs.list()
-}
-
-func (b *Bash) StopJob(ctx context.Context, id string) (string, error) {
-	if b.jobs == nil {
-		return "", fmt.Errorf("background jobs are disabled")
-	}
-	return b.jobs.kill(ctx, id)
-}
-
-func (b *Bash) Close() {
-	if b.jobs == nil {
-		return
-	}
-	b.jobs.close()
+	return b.executor.Run(ctx, localCommand{
+		CWD:     b.cwd,
+		Command: input.Command,
+		Emit:    emit,
+	})
 }

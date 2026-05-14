@@ -99,11 +99,6 @@ func primaryArg(name, args string) (string, argKind, bool) {
 		if value, kind, ok := jsonStringArg(args, "command", kindText); ok {
 			return value, kind, true
 		}
-		action, _, actionOK := jsonStringArg(args, "action", kindText)
-		jobID, _, jobOK := jsonStringArg(args, "job_id", kindText)
-		if actionOK && jobOK {
-			return strings.TrimSpace(action + " " + jobID), kindText, true
-		}
 		return "", kindText, false
 	case "read", "write", "edit", "multi_edit":
 		return jsonStringArg(args, "file_path", kindPath)

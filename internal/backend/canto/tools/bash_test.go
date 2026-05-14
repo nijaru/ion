@@ -31,32 +31,18 @@ func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
 	}
 }
 
-func TestBashSpecExposesBackgroundJobsWhenEnabled(t *testing.T) {
-	properties := bashSpecProperties(t, newBackgroundBash(t))
-	for _, key := range []string{"command", "action", "background", "job_id", "tail_lines"} {
-		if _, ok := properties[key]; !ok {
-			t.Fatalf("background bash spec missing %q: %#v", key, properties)
-		}
-	}
-}
-
-func TestBashRejectsBackgroundJobsByDefault(t *testing.T) {
+func TestBashRejectsDeferredBackgroundJobArgs(t *testing.T) {
 	b := NewBash(t.TempDir())
-	if got := b.Jobs(); len(got) != 0 {
-		t.Fatalf("default jobs = %#v, want none", got)
-	}
-
-	_, err := b.Execute(t.Context(), `{"command":"sleep 10","background":true}`)
-	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
-		t.Fatalf("background run error = %v, want disabled", err)
-	}
-	_, err = b.Execute(t.Context(), `{"action":"output","job_id":"bash-1"}`)
-	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
-		t.Fatalf("background output error = %v, want disabled", err)
-	}
-	_, err = b.StopJob(t.Context(), "bash-1")
-	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
-		t.Fatalf("stop job error = %v, want disabled", err)
+	for _, args := range []string{
+		`{"command":"sleep 10","background":true}`,
+		`{"action":"output","job_id":"bash-1"}`,
+		`{"action":"kill","job_id":"bash-1"}`,
+		`{"command":"echo ok","tail_lines":10}`,
+	} {
+		_, err := b.Execute(t.Context(), args)
+		if err == nil || !strings.Contains(err.Error(), "background jobs are deferred") {
+			t.Fatalf("Execute(%s) error = %v, want deferred background jobs", args, err)
+		}
 	}
 }
 
@@ -128,142 +114,6 @@ func TestBash_Execute(t *testing.T) {
 	})
 }
 
-func TestBashBackgroundJobLifecycle(t *testing.T) {
-	b := newBackgroundBash(t)
-
-	start, err := b.Execute(
-		t.Context(),
-		`{"command":"printf start; sleep 10","background":true}`,
-	)
-	if err != nil {
-		t.Fatalf("start background: %v", err)
-	}
-	if !strings.Contains(start, "background job bash-1 started") {
-		t.Fatalf("start result = %q", start)
-	}
-
-	jobs := b.Jobs()
-	if len(jobs) != 1 {
-		t.Fatalf("jobs = %d, want 1", len(jobs))
-	}
-	if jobs[0].ID != "bash-1" || jobs[0].Status != "running" {
-		t.Fatalf("job = %+v, want running bash-1", jobs[0])
-	}
-
-	var output string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		output, err = b.Execute(t.Context(), `{"action":"output","job_id":"bash-1"}`)
-		if err != nil {
-			t.Fatalf("output background: %v", err)
-		}
-		if strings.Contains(output, "start") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !strings.Contains(output, "background job bash-1 running") ||
-		!strings.Contains(output, "start") {
-		t.Fatalf("output = %q, want status and command output", output)
-	}
-
-	stop, err := b.Execute(t.Context(), `{"action":"kill","job_id":"bash-1"}`)
-	if err != nil {
-		t.Fatalf("kill background: %v", err)
-	}
-	if stop != "background job bash-1 stopped" {
-		t.Fatalf("stop = %q", stop)
-	}
-	if jobs := b.Jobs(); len(jobs) != 1 || jobs[0].Status != "stopped" {
-		t.Fatalf("jobs after stop = %+v, want stopped job", jobs)
-	}
-}
-
-func TestBashBackgroundOutputTail(t *testing.T) {
-	b := newBackgroundBash(t)
-
-	if _, err := b.Execute(
-		t.Context(),
-		`{"command":"printf 'one\ntwo\nthree\n'","background":true}`,
-	); err != nil {
-		t.Fatalf("start background: %v", err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		jobs := b.Jobs()
-		if len(jobs) == 1 && jobs[0].Status == "done" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	output, err := b.Execute(
-		t.Context(),
-		`{"action":"output","job_id":"bash-1","tail_lines":2}`,
-	)
-	if err != nil {
-		t.Fatalf("output background: %v", err)
-	}
-	if !strings.HasSuffix(output, "two\nthree\n") {
-		t.Fatalf("tail output = %q, want last two lines", output)
-	}
-}
-
-func TestBackgroundJobOutputIsBounded(t *testing.T) {
-	done := make(chan struct{})
-	close(done)
-	job := &backgroundJob{id: "bash-1", done: done}
-
-	job.append([]byte(strings.Repeat("a", maxOutputSize-1)))
-	job.append([]byte("bcdef"))
-	job.append([]byte("ignored"))
-
-	wantBytes := maxOutputSize + len(backgroundOutputTruncatedMarker)
-	if info := job.info(); info.OutputBytes != wantBytes {
-		t.Fatalf("output bytes = %d, want %d", info.OutputBytes, wantBytes)
-	}
-
-	output := job.output(0)
-	payload, ok := strings.CutPrefix(output, "background job bash-1 done\n")
-	if !ok {
-		t.Fatalf("output prefix = %q", output[:min(len(output), 64)])
-	}
-	if len(payload) != wantBytes {
-		t.Fatalf("payload bytes = %d, want %d", len(payload), wantBytes)
-	}
-	if payload[maxOutputSize-1] != 'b' {
-		t.Fatalf("last retained byte = %q, want b", payload[maxOutputSize-1])
-	}
-	if !strings.HasSuffix(payload, backgroundOutputTruncatedMarker) {
-		t.Fatal("payload missing truncation marker")
-	}
-	if strings.Contains(payload, "cdef") || strings.Contains(payload, "ignored") {
-		t.Fatal("payload kept bytes after truncation boundary")
-	}
-}
-
-func TestBashCloseStopsBackgroundJobs(t *testing.T) {
-	b := newBackgroundBash(t)
-	if _, err := b.Execute(
-		t.Context(),
-		`{"command":"sleep 10","background":true}`,
-	); err != nil {
-		t.Fatalf("start background: %v", err)
-	}
-
-	done := make(chan struct{})
-	go func() {
-		b.Close()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close did not stop background job promptly")
-	}
-}
-
 func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("ION_TEST_VISIBLE", "visible")
@@ -309,17 +159,6 @@ func TestBash_WorkingDirectory(t *testing.T) {
 	if strings.TrimSpace(res) != subdir {
 		t.Errorf("expected %s, got %q", subdir, res)
 	}
-}
-
-func newBackgroundBash(t *testing.T) *Bash {
-	t.Helper()
-	b := NewBashWithEnvironment(
-		t.TempDir(),
-		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
-		WithBackgroundJobs(),
-	)
-	t.Cleanup(b.Close)
-	return b
 }
 
 func bashSpecProperties(t *testing.T, b *Bash) map[string]any {
