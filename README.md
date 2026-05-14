@@ -17,7 +17,7 @@ Fast, lightweight terminal coding agent written in Go.
 
 The current stabilization focus is:
 
-- native submit -> stream -> tool -> approval -> cancel -> error -> persist/replay flow
+- native submit -> stream -> tool execution -> cancel -> error -> persist/replay flow
 - transcript viewport, multiline composer, footer/status region, and resume display
 - deterministic tests first, PTY/TUI smoke tests second, live provider smoke last
 
