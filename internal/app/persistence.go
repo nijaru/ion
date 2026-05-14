@@ -11,17 +11,41 @@ import (
 )
 
 func persistErrorCmd(action string, err error) tea.Cmd {
+	if err == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
 	}
 }
 
-func (m Model) persistEntry(action string, entry any) error {
+func (m Model) persistErrorAndAwait(action string, err error) tea.Cmd {
+	return sequenceCmds(persistErrorCmd(action, err), m.awaitSessionEvent())
+}
+
+func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
+	filtered := cmds[:0]
+	for _, cmd := range cmds {
+		if cmd != nil {
+			filtered = append(filtered, cmd)
+		}
+	}
+	switch len(filtered) {
+	case 0:
+		return nil
+	case 1:
+		return filtered[0]
+	default:
+		return tea.Sequence(filtered...)
+	}
+}
+
+func (m Model) persistEntry(entry any) error {
 	if m.Model.Storage == nil {
 		return nil
 	}
 	if err := m.Model.Storage.Append(context.Background(), entry); err != nil {
-		return fmt.Errorf("%s: %w", action, err)
+		return err
 	}
 	return nil
 }

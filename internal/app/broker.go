@@ -106,10 +106,11 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	if err != nil {
 		displayErr = err.Error()
 	}
+	var cmds []tea.Cmd
 	if limit, ok := classifyProviderLimitError(err); ok {
 		displayErr = limit.display()
-		if err := m.persistEntry("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
-			return m, persistErrorCmd("persist routing stop", err)
+		if err := m.persistEntry(m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
+			cmds = append(cmds, persistErrorCmd("persist routing stop", err))
 		}
 	}
 	m.Progress.LastError = displayErr
@@ -124,20 +125,22 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.Progress.TurnStartedAt = time.Time{}
 	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
+	printErr := m.printEntries(entry)
+	cmds = append([]tea.Cmd{printErr}, cmds...)
 	if awaitTerminal {
-		if err := m.persistEntry("persist session error", storage.System{
+		if err := m.persistEntry(storage.System{
 			Type:    "system",
 			Content: entry.Content,
 			TS:      now(),
 		}); err != nil {
-			return m, persistErrorCmd("persist session error", err)
+			cmds = append(cmds, persistErrorCmd("persist session error", err))
 		}
 	}
-	printErr := m.printEntries(entry)
 	if !awaitTerminal {
-		return m, printErr
+		return m, sequenceCmds(cmds...)
 	}
-	return m, tea.Sequence(printErr, m.awaitSessionEvent())
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, sequenceCmds(cmds...)
 }
 
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
@@ -159,12 +162,12 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
 		p.Status = msg.Status
 	}
-	if err := m.persistEntry("persist status", storage.Status{
+	if err := m.persistEntry(storage.Status{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(msg.Timestamp),
 	}); err != nil {
-		return m, persistErrorCmd("persist status", err)
+		return m, m.persistErrorAndAwait("persist status", err)
 	}
 	return m, m.awaitSessionEvent()
 }
@@ -176,24 +179,27 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	m.Progress.CurrentTurnInput += msg.Input
 	m.Progress.CurrentTurnOutput += msg.Output
 	m.Progress.CurrentTurnCost += msg.Cost
-	if err := m.persistEntry("persist token usage", storage.TokenUsage{
+	var cmds []tea.Cmd
+	if err := m.persistEntry(storage.TokenUsage{
 		Type:   "token_usage",
 		Input:  msg.Input,
 		Output: msg.Output,
 		Cost:   msg.Cost,
 		TS:     entryUnix(msg.Timestamp),
 	}); err != nil {
-		return m, persistErrorCmd("persist token usage", err)
+		cmds = append(cmds, persistErrorCmd("persist token usage", err))
 	}
 	if reason := m.configuredBudgetStopReason(); reason != "" &&
 		reason != m.Progress.BudgetStopReason {
 		m.Progress.BudgetStopReason = reason
-		if err := m.persistEntry("persist routing stop", m.routingDecision("stop", "budget_limit", reason)); err != nil {
-			return m, persistErrorCmd("persist routing stop", err)
+		if err := m.persistEntry(m.routingDecision("stop", "budget_limit", reason)); err != nil {
+			cmds = append(cmds, persistErrorCmd("persist routing stop", err))
 		}
 		if m.InFlight.Thinking {
 			if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
-				return m, persistErrorCmd("cancel over-budget turn", err)
+				cmds = append(cmds, persistErrorCmd("cancel over-budget turn", err))
+				cmds = append(cmds, m.awaitSessionEvent())
+				return m, sequenceCmds(cmds...)
 			}
 			m.clearActiveTurnState(true)
 			m.InFlight.DrainUntilTurnStarted = true
@@ -204,17 +210,20 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				Timestamp: msg.Timestamp,
 				Content:   "Canceled: " + reason,
 			}
-			if err := m.persistEntry("persist budget cancellation", storage.System{
+			if err := m.persistEntry(storage.System{
 				Type:    "system",
 				Content: entry.Content,
 				TS:      entryUnix(msg.Timestamp),
 			}); err != nil {
-				return m, persistErrorCmd("persist budget cancellation", err)
+				cmds = append(cmds, persistErrorCmd("persist budget cancellation", err))
 			}
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+			cmds = append([]tea.Cmd{m.printEntries(entry)}, cmds...)
+			cmds = append(cmds, m.awaitSessionEvent())
+			return m, sequenceCmds(cmds...)
 		}
 	}
-	return m, m.awaitSessionEvent()
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, sequenceCmds(cmds...)
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
@@ -489,7 +498,7 @@ func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd)
 	m.InFlight.Subagents[msg.AgentName] = p
 	m.Progress.Mode = stateWorking
 
-	if err := m.persistEntry("persist subagent start", storage.Subagent{
+	if err := m.persistEntry(storage.Subagent{
 		Type:    "subagent",
 		Name:    msg.AgentName,
 		Content: "Started: " + msg.Query,
@@ -500,7 +509,7 @@ func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd)
 			Role:    session.Subagent,
 			Title:   p.Name,
 			Content: "Started: " + p.Intent,
-		}), persistErrorCmd("persist subagent start", err))
+		}), persistErrorCmd("persist subagent start", err), m.awaitSessionEvent())
 	}
 	return m, tea.Sequence(m.printEntries(session.Entry{
 		Role:      session.Subagent,
@@ -541,7 +550,7 @@ func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd)
 	delete(m.InFlight.Subagents, msg.AgentName)
 	m.Progress.Mode = stateComplete
 
-	if err := m.persistEntry("persist subagent completion", storage.Subagent{
+	if err := m.persistEntry(storage.Subagent{
 		Type:    "subagent",
 		Name:    msg.AgentName,
 		Content: committed.Content,
@@ -551,6 +560,7 @@ func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd)
 		return m, tea.Sequence(
 			m.printEntries(committed),
 			persistErrorCmd("persist subagent completion", err),
+			m.awaitSessionEvent(),
 		)
 	}
 	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
@@ -584,7 +594,7 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 	m.Progress.Mode = stateError
 	m.Progress.LastError = "Subagent failed: " + msg.Error
 
-	if err := m.persistEntry("persist subagent failure", storage.Subagent{
+	if err := m.persistEntry(storage.Subagent{
 		Type:    "subagent",
 		Name:    msg.AgentName,
 		Content: committed.Content,
@@ -594,6 +604,7 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 		return m, tea.Sequence(
 			m.printEntries(committed),
 			persistErrorCmd("persist subagent failure", err),
+			m.awaitSessionEvent(),
 		)
 	}
 	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())

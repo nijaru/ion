@@ -21,12 +21,12 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	m.Progress.Mode = stateCancelled
 	m.Progress.Status = ""
 	entry := session.Entry{Role: session.System, Content: reason}
-	if err := m.persistEntry("persist cancellation", storage.System{
+	if err := m.persistEntry(storage.System{
 		Type:    "system",
 		Content: entry.Content,
 		TS:      now(),
 	}); err != nil {
-		return m, persistErrorCmd("persist cancellation", err)
+		return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist cancellation", err))
 	}
 	return m, m.printEntries(entry)
 }
@@ -83,8 +83,8 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		m, errCmd := m.handleSessionError(err, false)
 		return m, tea.Sequence(m.printEntries(userEntry), errCmd)
 	}
-	if err := m.persistEntry("persist routing decision", m.routingDecision("use_model", "active_preset", "")); err != nil {
-		return m, persistErrorCmd("persist routing decision", err)
+	if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
+		return m, tea.Sequence(m.printEntries(userEntry), persistErrorCmd("persist routing decision", err))
 	}
 	return m, m.printEntries(userEntry)
 }
