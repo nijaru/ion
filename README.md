@@ -1,27 +1,40 @@
 # ion
 
-> **Warning:** `ion` is currently transitioning to a Go/Bubble Tea v2 rewrite. The architecture, CLI surface, and internal boundaries are in flux. If you need the last known stable Rust/RNK-era checkpoint, use the Git tag `stable-rnk`.
+> **Warning:** `ion` is work in progress and not stable yet. The core agent loop, TUI, and CLI surface are still changing.
 
-Fast, lightweight coding agent with an inline terminal host.
+Fast, lightweight terminal coding agent written in Go.
 
 ## Current Direction
 
-- Active implementation: Go host in `internal/`
+- Primary path: Ion TUI -> CantoBackend -> Canto -> provider API
+- Target: simple, reliable Pi-like core behavior before larger Pi+ features
+- Active implementation: Go packages under `cmd/ion/` and `internal/`
 - Active UI stack: Bubble Tea v2 + Bubbles v2
-- Planned runtime boundary: ACP-shaped session interface
-- Historical Rust implementation: archived under `archive/rust/`
+- Deferred path: ACP and subscription bridges after the native core is stable
+- Historical Rust checkpoint: Git tag `stable-rnk`; archive under `archive/rust/`
 
 ## Current Status
 
-The rewrite is in progress. The Go host currently includes:
+The current stabilization focus is:
 
-- transcript viewport
-- multiline composer
-- footer/status region
-- streamed backend event scaffold
-- tool-entry rendering
+- native submit -> stream -> tool -> approval -> cancel -> error -> persist/replay flow
+- transcript viewport, multiline composer, footer/status region, and resume display
+- deterministic tests first, PTY/TUI smoke tests second, live provider smoke last
 
-## Run The Current Host
+Expect bugs and breaking changes until this loop is stable.
+
+## Install Locally
+
+From the repo root:
+
+```sh
+go install ./cmd/ion
+```
+
+Make sure your Go binary directory is on `PATH`, usually `$(go env GOPATH)/bin`
+or `GOBIN` if you set it.
+
+## Run From Source
 
 ```sh
 go run ./cmd/ion
