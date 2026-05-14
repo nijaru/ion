@@ -52,15 +52,7 @@ func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 	if _, ok := ev2.(ionsession.TurnFinished); !ok {
 		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
-
-	ev3 := receiveEvent(t, b.Events())
-	status, ok := ev3.(ionsession.StatusChanged)
-	if !ok {
-		t.Fatalf("third event = %T, want StatusChanged", ev3)
-	}
-	if status.Status != "Ready" {
-		t.Fatalf("status = %q, want Ready", status.Status)
-	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
@@ -75,15 +67,7 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
 		t.Fatalf("first event = %T, want TurnFinished", ev1)
 	}
-
-	ev2 := receiveEvent(t, b.Events())
-	status, ok := ev2.(ionsession.StatusChanged)
-	if !ok {
-		t.Fatalf("second event = %T, want StatusChanged", ev2)
-	}
-	if status.Status != "Ready" {
-		t.Fatalf("status = %q, want Ready", status.Status)
-	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
@@ -124,15 +108,7 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
 		t.Fatalf("first event = %T, want TurnFinished", ev1)
 	}
-
-	ev2 := receiveEvent(t, b.Events())
-	status, ok := ev2.(ionsession.StatusChanged)
-	if !ok {
-		t.Fatalf("second event = %T, want StatusChanged", ev2)
-	}
-	if status.Status != "Ready" {
-		t.Fatalf("status = %q, want Ready", status.Status)
-	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsReportsDeadlineTerminalError(t *testing.T) {
@@ -469,5 +445,14 @@ func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	}
 	if started.AgentName != "explorer-123" {
 		t.Fatalf("started agent name = %q, want child id", started.AgentName)
+	}
+}
+
+func assertNoBackendEvent(t *testing.T, b *Backend) {
+	t.Helper()
+	select {
+	case ev := <-b.Events():
+		t.Fatalf("unexpected backend event: %#v", ev)
+	default:
 	}
 }
