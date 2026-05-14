@@ -176,7 +176,7 @@ assert_not_contains "eager"
 assert_not_contains "verify"
 
 send_line "/jobs"
-assert_contains "Background jobs: none"
+assert_contains "/jobs is deferred until its roadmap phase"
 
 send_line "/settings"
 assert_contains "thinking"

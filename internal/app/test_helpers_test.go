@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -115,14 +114,6 @@ type steeringStubSession struct {
 	err    error
 }
 
-type jobStubSession struct {
-	stubSession
-	jobs            []session.JobInfo
-	stopped         []string
-	stopDeadlineSet bool
-	stopDeadline    time.Time
-}
-
 func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	t.Helper()
 	switch msg := msg.(type) {
@@ -176,16 +167,6 @@ func (s *steeringStubSession) SteerTurn(
 		return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
 	}
 	return s.result, nil
-}
-
-func (s *jobStubSession) Jobs() []session.JobInfo {
-	return s.jobs
-}
-
-func (s *jobStubSession) StopJob(ctx context.Context, id string) (string, error) {
-	s.stopped = append(s.stopped, id)
-	s.stopDeadline, s.stopDeadlineSet = ctx.Deadline()
-	return "stopped " + id, nil
 }
 
 type stubStorageSession struct {
@@ -275,32 +256,6 @@ func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si storage.SessionI
 }
 
 func (s *resumeOnlyStore) Close() error { return nil }
-
-type forkTreeStore struct {
-	resumeOnlyStore
-	forked     storage.Session
-	forkParent string
-	forkOpts   storage.ForkOptions
-	tree       storage.SessionTree
-}
-
-func (s *forkTreeStore) ForkSession(
-	ctx context.Context,
-	parentID string,
-	opts storage.ForkOptions,
-) (storage.Session, error) {
-	s.forkParent = parentID
-	s.forkOpts = opts
-	return s.forked, nil
-}
-
-func (s *forkTreeStore) SessionTree(
-	ctx context.Context,
-	sessionID string,
-) (storage.SessionTree, error) {
-	s.tree.Current.ID = sessionID
-	return s.tree, nil
-}
 
 func readyModel(t *testing.T) Model {
 	t.Helper()

@@ -106,6 +106,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpDetail: "branch the current session",
 			idle:       slashCommandIdleAlways,
 			hidden:     true,
+			deferred:   true,
 		},
 		{
 			name:       "/tree",
@@ -113,6 +114,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpLabel:  "/tree",
 			helpDetail: "show session lineage and children",
 			hidden:     true,
+			deferred:   true,
 		},
 		{
 			name:       "/compact",
@@ -195,6 +197,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpLabel:  "/jobs",
 			helpDetail: "show background jobs",
 			hidden:     true,
+			deferred:   true,
 		},
 		{
 			name:       "/stop",
@@ -203,6 +206,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpDetail: "stop a background job",
 			idle:       slashCommandIdleWithArgs,
 			hidden:     true,
+			deferred:   true,
 		},
 		{name: "/quit", detail: "quit", helpLabel: "/quit, /exit", helpDetail: "leave ion"},
 		{name: "/exit", detail: "quit", hidden: true},

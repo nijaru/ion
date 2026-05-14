@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -664,137 +663,13 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 }
 
-func TestForkCommandRequiresMaterializedSession(t *testing.T) {
-	model := readyModel(t)
-
-	_, cmd := model.handleCommand("/fork experiment")
-	if cmd == nil {
-		t.Fatal("expected /fork command to return an error")
-	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "No active session to fork yet") {
-		t.Fatalf("error = %v, want no active session", err)
-	}
-}
-
-func TestTreeCommandRequiresMaterializedSession(t *testing.T) {
-	model := readyModel(t)
-
-	_, cmd := model.handleCommand("/tree")
-	if cmd == nil {
-		t.Fatal("expected /tree command to return an error")
-	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "No active session tree yet") {
-		t.Fatalf("error = %v, want no active session", err)
-	}
-}
-
-func TestForkCommandForksCurrentSessionAndSwitchesRuntime(t *testing.T) {
-	oldSession := &stubSession{events: make(chan session.Event)}
-	parentStorage := &stubStorageSession{
-		id:     "parent-session",
-		model:  "openai/gpt-4.1",
-		branch: "main",
-	}
-	forkedStorage := &stubStorageSession{
-		id:     "child-session",
-		model:  "openai/gpt-4.1",
-		branch: "main",
-	}
-	store := &forkTreeStore{forked: forkedStorage}
-	replayedStorage := &stubStorageSession{
-		id:      "child-session",
-		model:   "openai/gpt-4.1",
-		branch:  "main",
-		entries: []session.Entry{{Role: session.User, Content: "before fork"}},
-	}
-	var observedSessionID string
-	var observedConfig *config.Config
-	model := New(
-		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
-		parentStorage,
-		store,
-		"/tmp/test",
-		"main",
-		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-			observedSessionID = sessionID
-			copied := *cfg
-			observedConfig = &copied
-			newSession := &stubSession{events: make(chan session.Event)}
-			return stubBackend{
-				sess:     newSession,
-				provider: cfg.Provider,
-				model:    cfg.Model,
-			}, newSession, replayedStorage, nil
-		},
-	)
-
-	_, cmd := model.handleCommand("/fork try alternate")
-	if cmd == nil {
-		t.Fatal("expected /fork command")
-	}
-	if store.forkParent != "parent-session" {
-		t.Fatalf("fork parent = %q, want parent-session", store.forkParent)
-	}
-	if store.forkOpts.Label != "try alternate" || store.forkOpts.Reason != "user requested /fork" {
-		t.Fatalf("fork opts = %#v, want label and reason", store.forkOpts)
-	}
-	if !forkedStorage.closed {
-		t.Fatal("expected temporary forked session to be closed before runtime switch")
-	}
-
-	msg := cmd()
-	switched, ok := msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
-	if observedSessionID != "child-session" {
-		t.Fatalf("switcher session = %q, want child-session", observedSessionID)
-	}
-	if observedConfig == nil || observedConfig.Provider != "openai" ||
-		observedConfig.Model != "gpt-4.1" {
-		t.Fatalf("switcher config = %#v, want openai/gpt-4.1", observedConfig)
-	}
-	if switched.notice != "Forked session child-session" {
-		t.Fatalf("notice = %q, want fork notice", switched.notice)
-	}
-	if len(switched.replayEntries) != 1 || switched.replayEntries[0].Content != "before fork" {
-		t.Fatalf("replay entries = %#v, want child transcript", switched.replayEntries)
-	}
-}
-
-func TestSessionTreeNoticeMarksCurrentAndChildren(t *testing.T) {
-	now := time.Now()
-	got := sessionTreeNotice(storage.SessionTree{
-		Current: storage.SessionInfo{ID: "child-session"},
-		Lineage: []storage.SessionInfo{
-			{ID: "parent-session", Title: "debug task", Branch: "main", UpdatedAt: now},
-			{ID: "child-session", Title: "try alternate", Branch: "main", UpdatedAt: now},
-		},
-		Children: []storage.SessionInfo{
-			{ID: "next-session", Title: "follow-up branch", Branch: "main", UpdatedAt: now},
-		},
-	})
-
-	for _, want := range []string{
-		"Session tree",
-		"lineage:",
-		"- parent-session - debug task - main",
-		"* child-session - try alternate - main",
-		"children:",
-		"- next-session - follow-up branch - main",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("tree notice missing %q:\n%s", want, got)
-		}
-	}
-}
-
 func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 	model := readyModel(t)
 	for _, input := range []string{
+		"/fork experiment",
+		"/tree",
+		"/jobs",
+		"/stop bash-1",
 		"/mcp add server",
 		"/rewind cp-1",
 	} {
@@ -1155,57 +1030,6 @@ func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status = %q, want %q", got, want)
 		}
-	}
-}
-
-func TestJobsCommandReportsBackgroundJobs(t *testing.T) {
-	jobs := []session.JobInfo{{
-		ID:          "bash-1",
-		Command:     "npm run dev",
-		Status:      "running",
-		OutputBytes: 42,
-	}}
-	got := backgroundJobsNotice(jobs)
-	for _, want := range []string{
-		"Background jobs",
-		"bash-1",
-		"running",
-		"npm run dev",
-		"42 bytes",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("jobs notice = %q, want %q", got, want)
-		}
-	}
-}
-
-func TestStopCommandStopsBackgroundJob(t *testing.T) {
-	sess := &jobStubSession{stubSession: stubSession{events: make(chan session.Event)}}
-	b := stubBackend{sess: &sess.stubSession}
-	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
-	model.Model.Session = sess
-
-	_, cmd := model.handleCommand("/stop bash-1")
-	if cmd == nil {
-		t.Fatal("stop command returned nil cmd")
-	}
-	msg := cmd()
-	printed, ok := msg.(localEntriesMsg)
-	if !ok {
-		t.Fatalf("message = %T, want localEntriesMsg", msg)
-	}
-	if len(sess.stopped) != 1 || sess.stopped[0] != "bash-1" {
-		t.Fatalf("stopped = %#v, want bash-1", sess.stopped)
-	}
-	if !sess.stopDeadlineSet {
-		t.Fatal("stop command used context without deadline")
-	}
-	if remaining := time.Until(sess.stopDeadline); remaining <= 0 || remaining > stopJobTimeout {
-		t.Fatalf("stop deadline remaining = %s, want within %s", remaining, stopJobTimeout)
-	}
-	if len(printed.entries) != 1 ||
-		!strings.Contains(printed.entries[0].Content, "stopped bash-1") {
-		t.Fatalf("printed = %#v, want stop notice", printed.entries)
 	}
 }
 
