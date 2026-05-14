@@ -96,6 +96,33 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
+func (m Model) handleStreamClosed() (Model, tea.Cmd) {
+	if !m.InFlight.Thinking {
+		return m, nil
+	}
+	m.clearActiveTurnState(true)
+	m.Progress.Compacting = false
+	m.Progress.Mode = stateError
+	m.Progress.Status = ""
+	m.Progress.LastError = "session event stream closed"
+	m.recordFinishedTurnSummary()
+
+	entry := session.Entry{
+		Role:    session.System,
+		Content: "Error: " + m.Progress.LastError,
+	}
+	var cmds []tea.Cmd
+	cmds = append(cmds, m.printEntries(entry))
+	if err := m.persistEntry(storage.System{
+		Type:    "system",
+		Content: entry.Content,
+		TS:      now(),
+	}); err != nil {
+		cmds = append(cmds, persistErrorCmd("persist stream close error", err))
+	}
+	return m, sequenceCmds(cmds...)
+}
+
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
 	m.clearActiveTurnState(true)
 	m.InFlight.DrainUntilTurnStarted = true

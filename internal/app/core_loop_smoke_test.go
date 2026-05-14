@@ -187,6 +187,38 @@ func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {
 	requireEntry(t, entries, session.System, "Canceled by user")
 }
 
+func TestCoreLoopSmokeStreamCloseDuringTurnStopsBusyState(t *testing.T) {
+	model, _, store, stored := newCoreLoopSmokeModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, cmd := model.Update(streamClosedMsg{generation: model.Model.EventGeneration})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("stream close during turn should print terminal error")
+	}
+	if model.InFlight.Thinking {
+		t.Fatal("thinking stayed true after stream close")
+	}
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "session event stream closed" {
+		t.Fatalf("last error = %q, want stream closed", model.Progress.LastError)
+	}
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	requireEntry(t, entries, session.System, "Error: session event stream closed")
+}
+
 func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}

@@ -706,7 +706,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil
 		}
-		return m, nil
+		return m.handleStreamClosed()
 
 	case clearPendingMsg:
 		if msg.action == m.Input.Pending {
