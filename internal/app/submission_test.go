@@ -82,6 +82,32 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	}
 }
 
+func TestSubmitTextPrintsUserWhenRoutingPersistenceFails(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+
+	updated, cmd := model.submitText("keep going")
+	model = updated
+
+	if len(sess.submits) != 1 || sess.submits[0] != "keep going" {
+		t.Fatalf("submitted turns = %#v, want keep going", sess.submits)
+	}
+	requireSequenceCmd(t, cmd)
+	var sawDecision bool
+	for _, event := range storageSess.appends {
+		if _, ok := event.(storage.RoutingDecision); ok {
+			sawDecision = true
+			break
+		}
+	}
+	if !sawDecision {
+		t.Fatalf("missing routing decision append attempt: %#v", storageSess.appends)
+	}
+}
+
 func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := New(
@@ -305,6 +331,28 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	if !strings.Contains(system.Content, "Canceled: turn cost limit reached") {
 		t.Fatalf("system cancellation = %q, want budget cancellation", system.Content)
 	}
+}
+
+func TestTokenUsagePersistenceErrorStillCancelsOverBudgetTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
+	model.InFlight.Thinking = true
+	model.Progress.Mode = stateStreaming
+
+	updated, cmd := model.handleSessionEvent(session.TokenUsage{Cost: 0.011})
+	model = updated
+
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+	requireSequenceCmd(t, cmd)
 }
 
 func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {

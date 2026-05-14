@@ -567,6 +567,27 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	}
 }
 
+func TestSessionErrorPersistenceFailureKeepsReducerArmed(t *testing.T) {
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+	model.InFlight.QueuedTurns = []string{"stale follow up"}
+
+	next, cmd := model.Update(session.Error{Err: errors.New("backend failed")})
+	model = next.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "backend failed" {
+		t.Fatalf("last error = %q, want backend failed", model.Progress.LastError)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want cleared", model.InFlight.QueuedTurns)
+	}
+	requireSequenceCmd(t, cmd)
+}
+
 func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
 	model := readyModel(t)
 
@@ -579,6 +600,20 @@ func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
 	if model.Progress.LastError != "session error" {
 		t.Fatalf("last error = %q, want fallback", model.Progress.LastError)
 	}
+}
+
+func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, cmd := model.Update(session.StatusChanged{Status: "Thinking..."})
+	model = next.(Model)
+
+	if model.Progress.Status != "Thinking..." {
+		t.Fatalf("status = %q, want Thinking...", model.Progress.Status)
+	}
+	requireSequenceCmd(t, cmd)
 }
 
 func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {

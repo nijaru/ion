@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -124,6 +125,16 @@ func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	default:
 		t.Fatalf("message = %T, want localErrorMsg", msg)
 		return nil
+	}
+}
+
+func requireSequenceCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	if got := fmt.Sprintf("%T", cmd()); got != "tea.sequenceMsg" {
+		t.Fatalf("command = %s, want tea.sequenceMsg", got)
 	}
 }
 
