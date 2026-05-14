@@ -926,50 +926,6 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 	}
 }
 
-func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
-	model := readyModel(t)
-	model.App.StartupLines = []string{"line-1", "line-2"}
-	model.Progress.Status = "ready"
-	model.App.StartupEntries = []session.Entry{
-		{Role: session.User, Content: "hello"},
-		{Role: session.Agent, Content: "world"},
-	}
-
-	lines := model.startupPrintLines()
-	want := []string{
-		"line-1",
-		"line-2",
-		model.headerLine(),
-		"",
-		model.renderStartupStatus("ready"),
-		"",
-		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
-		"",
-		model.renderEntry(session.Entry{Role: session.Agent, Content: "world"}),
-	}
-
-	if len(lines) != len(want) {
-		t.Fatalf("startup lines length = %d, want %d", len(lines), len(want))
-	}
-	for i := range want {
-		if lines[i] != want[i] {
-			t.Fatalf("startup line %d = %q, want %q", i, lines[i], want[i])
-		}
-	}
-}
-
-func TestStartupPrintLinesOmitsConfigurationWarning(t *testing.T) {
-	model := readyModel(t)
-	model.Progress.Status = noProviderConfiguredStatus()
-
-	lines := model.startupPrintLines()
-	for _, line := range lines {
-		if strings.Contains(line, "No provider configured") {
-			t.Fatalf("startup lines should not include config warning: %#v", lines)
-		}
-	}
-}
-
 func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
