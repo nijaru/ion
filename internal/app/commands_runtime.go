@@ -204,7 +204,8 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 	}
 
 	m.applyRuntimeSwitched(msg)
-	return m, tea.Sequence(m.runtimeSwitchedCommands(msg)...)
+	cmds := m.runtimeSwitchedCommands(msg)
+	return m, tea.Sequence(cmds...)
 }
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
