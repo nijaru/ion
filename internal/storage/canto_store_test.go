@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -117,6 +118,39 @@ func TestEphemeralCantoStoreUsesSingleMetadataSQLiteConnection(t *testing.T) {
 	store := storeAny.(*cantoStore)
 	if got := store.db.Stats().MaxOpenConnections; got != 1 {
 		t.Fatalf("ephemeral metadata db max open connections = %d, want 1", got)
+	}
+}
+
+func TestCantoStoreGetInputsOrdersSameSecondByInsertion(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-input-history"
+	ts := time.Date(2026, time.May, 14, 12, 0, 0, 0, time.UTC).Unix()
+	for _, content := range []string{"first", "second", "third"} {
+		if _, err := store.db.ExecContext(
+			ctx,
+			"INSERT INTO inputs (cwd, content, created_at) VALUES (?, ?, ?)",
+			cwd,
+			content,
+			ts,
+		); err != nil {
+			t.Fatalf("insert input: %v", err)
+		}
+	}
+
+	got, err := store.GetInputs(ctx, cwd, 3)
+	if err != nil {
+		t.Fatalf("get inputs: %v", err)
+	}
+	want := []string{"third", "second", "first"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("inputs = %#v, want %#v", got, want)
 	}
 }
 

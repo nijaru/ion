@@ -370,6 +370,7 @@ func New(
 			m.Progress.TotalCost = cost
 		}
 	}
+	m.loadInputHistory(context.Background())
 
 	return m
 }

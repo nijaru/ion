@@ -170,7 +170,10 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 	return s.OpenSessionWithID(ctx, id, cwd, model, branch)
 }
 
-func (s *cantoStore) OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (Session, error) {
+func (s *cantoStore) OpenSessionWithID(
+	ctx context.Context,
+	id, cwd, model, branch string,
+) (Session, error) {
 	now := time.Now().UTC()
 	storedNow := metadataTimestamp(now)
 
@@ -394,7 +397,7 @@ func (s *cantoStore) AddInput(ctx context.Context, cwd, content string) error {
 		"INSERT INTO inputs (cwd, content, created_at) VALUES (?, ?, ?)",
 		cwd,
 		content,
-		time.Now().Unix(),
+		metadataTimestamp(time.Now()),
 	)
 	return err
 }
@@ -402,7 +405,7 @@ func (s *cantoStore) AddInput(ctx context.Context, cwd, content string) error {
 func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		"SELECT content FROM inputs WHERE cwd = ? ORDER BY created_at DESC LIMIT ?",
+		"SELECT content FROM inputs WHERE cwd = ? ORDER BY created_at DESC, id DESC LIMIT ?",
 		cwd,
 		limit,
 	)

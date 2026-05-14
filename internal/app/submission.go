@@ -62,6 +62,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	m.Input.History = append(m.Input.History, text)
 	m.resetHistoryCursor()
+	historyCmd := m.persistInputHistory(context.Background(), text)
 
 	userEntry := session.Entry{
 		Role:      session.User,
@@ -72,7 +73,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)
-		return m, tea.Sequence(m.printEntries(userEntry), cmd)
+		return m, sequenceCmds(m.printEntries(userEntry), cmd, historyCmd)
 	}
 
 	m.Progress.Mode = stateIonizing
@@ -81,12 +82,16 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
 		m, errCmd := m.handleSessionError(err, false)
-		return m, tea.Sequence(m.printEntries(userEntry), errCmd)
+		return m, sequenceCmds(m.printEntries(userEntry), errCmd, historyCmd)
 	}
 	if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
-		return m, tea.Sequence(m.printEntries(userEntry), persistErrorCmd("persist routing decision", err))
+		return m, sequenceCmds(
+			m.printEntries(userEntry),
+			persistErrorCmd("persist routing decision", err),
+			historyCmd,
+		)
 	}
-	return m, m.printEntries(userEntry)
+	return m, sequenceCmds(m.printEntries(userEntry), historyCmd)
 }
 
 func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
