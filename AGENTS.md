@@ -98,9 +98,8 @@ tk done <id>
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
 - Keep global Ion files under `~/.ion/`.
-- Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, policy/subagent paths, cost limits, verbosity.
+- Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, subagent paths, cost limits, verbosity.
 - Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state.
-- Workspace trust belongs in `~/.ion/trusted_workspaces.json`, separate from config and state.
 - Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write settings/state.
 - Prefer hardcoded defaults for ion-owned behavior. Add persistent state only when the value is machine-owned and genuinely needs to survive sessions.
 

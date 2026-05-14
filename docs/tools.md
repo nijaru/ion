@@ -11,7 +11,7 @@ surfaces are deferred or hidden from the default tool surface. `/compact`
 remains a host command because context survival is reliability work. Skill
 tools are opt-in stdlib surfaces rather than default coding tools:
 `read_skill` is available behind `skill_tools = "read"`, while `manage_skill`
-remains deferred behind a separate write/trust gate. The host-side
+remains deferred behind a later write-management design. The host-side
 `/skills [query]` command can list installed local skill metadata without
 injecting those skills into the model prompt.
 
