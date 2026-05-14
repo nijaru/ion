@@ -226,9 +226,9 @@ func (s *Session) Resume(ctx context.Context, sessionID string) error {
 	return s.Open(ctx)
 }
 
-func (s *Session) SetMode(mode session.Mode) {
+func (s *Session) SetMode(mode Mode) {
 	s.policy.SetMode(mode)
-	s.policy.SetAutoApprove(mode == session.ModeYolo)
+	s.policy.SetAutoApprove(mode == ModeYolo)
 }
 
 func (s *Session) SetAutoApprove(enabled bool) {

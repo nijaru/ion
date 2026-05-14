@@ -20,11 +20,3 @@ type Entry struct {
 	Reasoning string
 	IsError   bool
 }
-
-type Mode int
-
-const (
-	ModeRead Mode = iota
-	ModeEdit
-	ModeYolo
-)

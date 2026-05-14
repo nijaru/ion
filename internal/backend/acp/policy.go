@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/nijaru/ion/internal/session"
 )
 
 // Policy defines how a tool call should be handled.
@@ -38,7 +36,7 @@ type PolicyEngine struct {
 	Policies map[ToolCategory]Policy
 
 	mu                sync.RWMutex
-	mode              session.Mode
+	mode              Mode
 	autoApprove       bool
 	classifier        PolicyClassifier
 	classifierTimeout time.Duration
@@ -62,7 +60,7 @@ func NewPolicyEngine() *PolicyEngine {
 			"subagent":   CategorySensitive,
 		},
 		Policies:          defaultCategoryPolicies(),
-		mode:              session.ModeEdit,
+		mode:              ModeEdit,
 		classifierTimeout: 2 * time.Second,
 	}
 }
@@ -108,7 +106,7 @@ func (pe *PolicyEngine) SetAuditSink(sink PolicyAuditSink) {
 }
 
 // SetMode updates the active session mode.
-func (pe *PolicyEngine) SetMode(mode session.Mode) {
+func (pe *PolicyEngine) SetMode(mode Mode) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	pe.mode = mode
@@ -146,7 +144,7 @@ func (pe *PolicyEngine) VisibleToolNames(names []string) []string {
 
 	visible := make([]string, 0, len(names))
 	for _, name := range names {
-		if pe.mode == session.ModeRead {
+		if pe.mode == ModeRead {
 			if pe.Categories[name] != CategoryRead {
 				continue
 			}
@@ -177,7 +175,7 @@ func (pe *PolicyEngine) Authorize(
 	category, ok := pe.Categories[toolName]
 
 	switch mode {
-	case session.ModeRead:
+	case ModeRead:
 		if !ok {
 			return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
 		}
@@ -190,7 +188,7 @@ func (pe *PolicyEngine) Authorize(
 			return PolicyDeny, fmt.Sprintf("Tool %q is blocked in READ mode.", toolName)
 		}
 
-	case session.ModeEdit:
+	case ModeEdit:
 		if auto {
 			return PolicyAllow, ""
 		}
@@ -232,7 +230,7 @@ func (pe *PolicyEngine) Authorize(
 			category,
 		)
 
-	case session.ModeYolo:
+	case ModeYolo:
 		return PolicyAllow, ""
 	}
 
