@@ -839,6 +839,10 @@ func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	ctx := context.Background()
 	cwd := "/tmp/ion-storage-test"
 	lazy := NewLazySession(store, cwd, "model-a", "main")
+	lazyID := lazy.ID()
+	if strings.TrimSpace(lazyID) == "" {
+		t.Fatal("lazy session did not allocate an ID")
+	}
 
 	recent, err := store.GetRecentSession(ctx, cwd)
 	if err != nil {
@@ -869,6 +873,9 @@ func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	created, err := lazy.Ensure(ctx)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
+	}
+	if lazy.ID() != lazyID {
+		t.Fatalf("lazy ID changed from %q to %q", lazyID, lazy.ID())
 	}
 	if created.ID() != lazy.ID() {
 		t.Fatalf("created ID = %q, want lazy ID %q", created.ID(), lazy.ID())
