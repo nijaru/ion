@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -14,8 +13,6 @@ import (
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
 )
-
-const stopJobTimeout = 5 * time.Second
 
 // handleCommand dispatches a slash command entered by the user.
 func (m Model) handleCommand(input string) (Model, tea.Cmd) {
@@ -174,98 +171,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(
 			session.Entry{Role: session.System, Content: runtimeStatusSummary(m)},
 		)
-
-	case "/jobs":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /jobs")
-		}
-		jobs, ok := m.Model.Session.(session.JobSession)
-		if !ok {
-			return m, cmdError("background jobs are unavailable for this backend")
-		}
-		return m, m.printEntries(
-			session.Entry{Role: session.System, Content: backgroundJobsNotice(jobs.Jobs())},
-		)
-
-	case "/stop":
-		if len(fields) != 2 {
-			return m, cmdError("usage: /stop <job-id>")
-		}
-		jobs, ok := m.Model.Session.(session.JobSession)
-		if !ok {
-			return m, cmdError("background jobs are unavailable for this backend")
-		}
-		id := fields[1]
-		return m, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), stopJobTimeout)
-			defer cancel()
-			notice, err := jobs.StopJob(ctx, id)
-			if err != nil {
-				return localErrorMsg{err: err}
-			}
-			return localEntriesMsg{entries: []session.Entry{{
-				Role:    session.System,
-				Content: notice,
-			}}}
-		}
-
-	case "/fork":
-		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
-			return m, cmdError("No active session to fork yet")
-		}
-		parentID := m.currentMaterializedSessionID()
-		if parentID == "" {
-			return m, cmdError("No active session to fork yet")
-		}
-		forker, ok := m.Model.Store.(storage.SessionForker)
-		if !ok {
-			return m, cmdError("session store does not support forking")
-		}
-		label := strings.TrimSpace(strings.TrimPrefix(input, command))
-		forked, err := forker.ForkSession(context.Background(), parentID, storage.ForkOptions{
-			Label:  label,
-			Reason: "user requested /fork",
-		})
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to fork session: %v", err))
-		}
-		defer func() {
-			_ = forked.Close()
-		}()
-		meta := forked.Meta()
-		provider, model := splitStoredSessionModel(meta.Model)
-		if provider == "" || model == "" {
-			return m, cmdError(
-				fmt.Sprintf("forked session %s is missing provider/model metadata", forked.ID()),
-			)
-		}
-		cfg := &config.Config{Provider: provider, Model: model}
-		notice := session.Entry{Role: session.System, Content: "Forked session " + forked.ID()}
-		return m.resumeRuntimeCommand(cfg, notice, forked.ID())
-
-	case "/tree":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /tree")
-		}
-		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
-			return m, cmdError("No active session tree yet")
-		}
-		sessionID := m.currentMaterializedSessionID()
-		if sessionID == "" {
-			return m, cmdError("No active session tree yet")
-		}
-		reader, ok := m.Model.Store.(storage.SessionTreeReader)
-		if !ok {
-			return m, cmdError("session store does not support tree view")
-		}
-		tree, err := reader.SessionTree(context.Background(), sessionID)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load session tree: %v", err))
-		}
-		return m, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: sessionTreeNotice(tree),
-		})
 
 	case "/skills":
 		dir, err := config.DefaultSkillsDir()
