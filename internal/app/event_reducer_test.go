@@ -542,6 +542,38 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	}
 }
 
+func TestChildCompletedDuringTurnDoesNotMarkParentComplete(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Progress.Mode = stateWorking
+	model.Progress.Status = "Running subagent..."
+	model.InFlight.Subagents["worker-1"] = &SubagentProgress{
+		ID:     "worker-1",
+		Name:   "worker-1",
+		Intent: "inspect the repo",
+		Status: "Started",
+	}
+
+	updated, _ := model.handleSessionEvent(session.ChildCompleted{
+		AgentName: "worker-1",
+		Result:    "done",
+	})
+	model = updated
+
+	if model.Progress.Mode == stateComplete {
+		t.Fatal("child completion marked parent turn complete")
+	}
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("progress mode = %v, want parent turn to keep running", model.Progress.Mode)
+	}
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared after child completion", model.Progress.Status)
+	}
+	if model.InFlight.Subagents["worker-1"] != nil {
+		t.Fatalf("child entry = %#v, want cleared", model.InFlight.Subagents["worker-1"])
+	}
+}
+
 func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 

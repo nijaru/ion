@@ -417,7 +417,28 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	if err := b.SubmitTurn(ctx, "proactive compaction please"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	events := b.Events()
+	var statuses []string
+	finished := false
+	for !finished {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.StatusChanged:
+				statuses = append(statuses, msg.Status)
+			case ionsession.TurnFinished:
+				finished = true
+			}
+		case <-time.After(backendEventWaitTimeout):
+			t.Fatal("timed out waiting for proactive compaction turn")
+		}
+	}
+	if !containsString(statuses, "Compacting context...") {
+		t.Fatalf("statuses = %#v, want proactive compaction status", statuses)
+	}
+	if containsString(statuses, "Ready") {
+		t.Fatalf("statuses = %#v, want no non-terminal Ready during proactive turn", statuses)
+	}
 
 	calls := provider.Calls()
 	if len(calls) != 2 {
@@ -517,4 +538,13 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider calls = %d, want 1 compaction call only", len(calls))
 	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

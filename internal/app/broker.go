@@ -579,7 +579,15 @@ func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd)
 		Content:   "Completed: " + p.Output,
 	}
 	delete(m.InFlight.Subagents, msg.AgentName)
-	m.Progress.Mode = stateComplete
+	m.Progress.Status = ""
+	switch {
+	case len(m.InFlight.Subagents) > 0:
+		m.Progress.Mode = stateWorking
+	case m.InFlight.Thinking:
+		m.Progress.Mode = stateIonizing
+	default:
+		m.Progress.Mode = stateComplete
+	}
 
 	if err := m.persistEntry(storage.Subagent{
 		Type:    "subagent",

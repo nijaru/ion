@@ -113,12 +113,8 @@ func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
 		return nil
 	}
 	b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
-	compacted, err := b.Compact(ctx)
-	if err != nil {
+	if _, err := b.Compact(ctx); err != nil {
 		return err
-	}
-	if compacted && b.acceptsTurnEvent(turnID) {
-		b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Ready"}
 	}
 	return nil
 }
