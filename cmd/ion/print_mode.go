@@ -96,6 +96,7 @@ func runPromptTurn(
 		select {
 		case ev, ok := <-agent.Events():
 			if !ok {
+				cancelPrintTurn(agent)
 				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
@@ -117,6 +118,9 @@ func runPromptTurn(
 				result.Cost += msg.Cost
 			case session.Error:
 				cancelPrintTurn(agent)
+				if msg.Err == nil {
+					return printResult{}, fmt.Errorf("session error")
+				}
 				return printResult{}, fmt.Errorf("session error: %w", msg.Err)
 			case session.TurnFinished:
 				seenTurnFinished = true

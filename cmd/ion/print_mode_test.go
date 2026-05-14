@@ -421,6 +421,19 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 	}
 }
 
+func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 1)}
+	sess.events <- session.Error{}
+
+	_, err := runPromptTurn(context.Background(), sess, "hello")
+	if err == nil || err.Error() != "session error" {
+		t.Fatalf("runPromptTurn error = %v, want fallback session error", err)
+	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.AgentDelta{Delta: "partial"}
@@ -429,6 +442,9 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
 		t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
+	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
 	}
 }
 
