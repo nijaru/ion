@@ -448,6 +448,63 @@ func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		event csession.Event
+		want  string
+	}{
+		{
+			name: "completed",
+			event: csession.NewChildCompletedEvent("session-id", csession.ChildCompletedData{
+				ChildID: "explorer-123",
+				Summary: "done",
+			}),
+			want: "completed",
+		},
+		{
+			name: "failed",
+			event: csession.NewChildFailedEvent("session-id", csession.ChildFailedData{
+				ChildID: "explorer-123",
+				Error:   "boom",
+			}),
+			want: "failed",
+		},
+		{
+			name: "canceled",
+			event: csession.NewChildCanceledEvent("session-id", csession.ChildCanceledData{
+				ChildID: "explorer-123",
+				Reason:  "user",
+			}),
+			want: "failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			events := make(chan csession.Event, 1)
+			events <- tt.event
+			close(events)
+
+			translateSessionEvents(t.Context(), b, events, 0)
+
+			ev := receiveEvent(t, b.Events())
+			switch tt.want {
+			case "completed":
+				if _, ok := ev.(ionsession.ChildCompleted); !ok {
+					t.Fatalf("event = %T, want ChildCompleted", ev)
+				}
+			case "failed":
+				if _, ok := ev.(ionsession.ChildFailed); !ok {
+					t.Fatalf("event = %T, want ChildFailed", ev)
+				}
+			}
+			assertNoBackendEvent(t, b)
+		})
+	}
+}
+
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {

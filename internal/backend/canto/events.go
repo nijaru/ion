@@ -120,7 +120,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				AgentName: data.ChildID,
 				Result:    data.Summary,
 			}
-			b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
 		}
 	case session.ChildBlocked:
 		var data session.ChildBlockedData
@@ -140,7 +139,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				AgentName: data.ChildID,
 				Error:     data.Error,
 			}
-			b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
 		}
 	case session.ChildCanceled:
 		var data session.ChildCanceledData
@@ -150,7 +148,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				AgentName: data.ChildID,
 				Error:     "Canceled: " + data.Reason,
 			}
-			b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
 		}
 	}
 	return false
