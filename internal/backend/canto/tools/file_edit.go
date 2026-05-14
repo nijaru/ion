@@ -123,6 +123,10 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = root.Remove(tmpPath)
+		return "", err
+	}
 	if err := root.Rename(tmpPath, relPath); err != nil {
 		_ = root.Remove(tmpPath)
 		return "", err
@@ -297,6 +301,13 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 			_ = root.Remove(op.from)
 		}
 		return "", fmt.Errorf("multi_edit aborted: %v", writeErrs)
+	}
+
+	if err := ctx.Err(); err != nil {
+		for _, op := range renames {
+			_ = root.Remove(op.from)
+		}
+		return "", err
 	}
 
 	for _, op := range renames {
