@@ -13,6 +13,10 @@ type materializedSession interface {
 	Materialized() bool
 }
 
+type sessionOpenerWithID interface {
+	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (Session, error)
+}
+
 type LazySession struct {
 	mu      sync.Mutex
 	store   Store
@@ -22,7 +26,8 @@ type LazySession struct {
 }
 
 func NewLazySession(store Store, cwd, model, branch string) *LazySession {
-	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
+	now := time.Now()
+	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
 	return &LazySession{
 		store: store,
 		id:    id,
@@ -31,7 +36,7 @@ func NewLazySession(store Store, cwd, model, branch string) *LazySession {
 			CWD:       cwd,
 			Model:     model,
 			Branch:    branch,
-			CreatedAt: time.Now(),
+			CreatedAt: now,
 		},
 	}
 }
@@ -52,7 +57,18 @@ func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
 	if s.created != nil {
 		return s.created, nil
 	}
-	created, err := s.store.OpenSession(ctx, s.meta.CWD, s.meta.Model, s.meta.Branch)
+	if s.store == nil {
+		return nil, fmt.Errorf("open lazy session %s: storage store is not configured", s.id)
+	}
+	var (
+		created Session
+		err     error
+	)
+	if opener, ok := s.store.(sessionOpenerWithID); ok {
+		created, err = opener.OpenSessionWithID(ctx, s.id, s.meta.CWD, s.meta.Model, s.meta.Branch)
+	} else {
+		created, err = s.store.OpenSession(ctx, s.meta.CWD, s.meta.Model, s.meta.Branch)
+	}
 	if err != nil {
 		return nil, err
 	}

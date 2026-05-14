@@ -166,8 +166,13 @@ func (s *cantoStore) init() error {
 
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	now := time.Now().UTC()
-	storedNow := metadataTimestamp(now)
 	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
+	return s.OpenSessionWithID(ctx, id, cwd, model, branch)
+}
+
+func (s *cantoStore) OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (Session, error) {
+	now := time.Now().UTC()
+	storedNow := metadataTimestamp(now)
 
 	_, err := s.db.ExecContext(
 		ctx,
