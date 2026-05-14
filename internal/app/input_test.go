@@ -127,8 +127,8 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first ctrl+c should arm quit timeout")
 	}
-	if !model.Input.CtrlCPending {
-		t.Fatal("expected ctrlCPending after first ctrl+c")
+	if model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatalf("pending action = %v, want ctrl+c quit", model.Input.Pending)
 	}
 	if line := ansi.Strip(model.statusLine()); !strings.Contains(
 		line,
@@ -159,8 +159,8 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared", got)
 	}
-	if model.Input.CtrlCPending {
-		t.Fatal("ctrlCPending should remain false after clearing composer")
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("pending action should remain clear after clearing composer")
 	}
 }
 
@@ -176,8 +176,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("ctrl+c while running should print durable cancellation")
 	}
-	if model.Input.CtrlCPending {
-		t.Fatal("ctrlCPending should remain false while running")
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("pending action should remain clear while running")
 	}
 	if sess.cancels != 1 {
 		t.Fatalf("cancel count = %d, want 1", sess.cancels)
@@ -224,8 +224,8 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first ctrl+d should arm quit timeout")
 	}
-	if !model.Input.CtrlCPending {
-		t.Fatal("expected ctrlCPending after first ctrl+d")
+	if model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatalf("pending action = %v, want ctrl+d quit", model.Input.Pending)
 	}
 	if line := ansi.Strip(model.statusLine()); !strings.Contains(
 		line,
@@ -244,6 +244,41 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	}
 }
 
+func TestQuitDoubleTapRequiresSameKey(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatal("first ctrl+c should arm ctrl+c quit")
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+d after ctrl+c should arm ctrl+d quit")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatalf("pending action = %v, want ctrl+d quit", model.Input.Pending)
+	}
+
+	model = readyModel(t)
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatal("first ctrl+d should arm ctrl+d quit")
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl+c after ctrl+d should arm ctrl+c quit")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatalf("pending action = %v, want ctrl+c quit", model.Input.Pending)
+	}
+}
+
 func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("abc")
@@ -257,7 +292,7 @@ func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 	if got := model.Input.Composer.Value(); got != "bc" {
 		t.Fatalf("composer = %q, want delete-forward result", got)
 	}
-	if model.Input.CtrlCPending {
+	if model.Input.Pending != pendingActionNone {
 		t.Fatal("ctrl+d with draft should not arm quit")
 	}
 }
@@ -273,7 +308,7 @@ func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("ctrl+d while running should not quit or print")
 	}
-	if model.Input.CtrlCPending {
+	if model.Input.Pending != pendingActionNone {
 		t.Fatal("ctrl+d while running should not arm quit")
 	}
 	if !model.InFlight.Thinking {
@@ -325,7 +360,7 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 
 	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
 	model = updated.(Model)
-	if model.Input.CtrlCPending || model.Input.Pending != pendingActionNone {
+	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should clear after timeout")
 	}
 	if line := ansi.Strip(model.statusLine()); strings.Contains(
