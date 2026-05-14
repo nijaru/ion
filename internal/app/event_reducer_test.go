@@ -422,6 +422,39 @@ func TestTurnFinishedWithoutAssistantResponseShowsError(t *testing.T) {
 	}
 }
 
+func TestTurnFinishedWithoutAssistantResponseClearsPendingToolState(t *testing.T) {
+	model := readyModel(t)
+	toolEntry := &session.Entry{Role: session.Tool, Title: "Bash(sleep 10)"}
+	model.Progress.Mode = stateWorking
+	model.Progress.Status = "Running bash..."
+	model.Progress.LastToolUseID = "tool-a"
+	model.InFlight.Thinking = true
+	model.InFlight.Pending = toolEntry
+	model.InFlight.PendingTools = map[string]*session.Entry{"tool-a": toolEntry}
+
+	updated, _ := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "turn finished without assistant response" {
+		t.Fatalf("last error = %q", model.Progress.LastError)
+	}
+	if model.InFlight.Pending != nil ||
+		len(model.InFlight.PendingTools) != 0 ||
+		model.Progress.LastToolUseID != "" ||
+		model.Progress.Status != "" {
+		t.Fatalf(
+			"terminal error left stale tool state: pending=%#v tools=%#v lastTool=%q status=%q",
+			model.InFlight.Pending,
+			model.InFlight.PendingTools,
+			model.Progress.LastToolUseID,
+			model.Progress.Status,
+		)
+	}
+}
+
 func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 
