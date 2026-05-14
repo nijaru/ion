@@ -48,3 +48,20 @@ func TestResolvedAPIKeyUsesCustomAuthForCustomProvider(t *testing.T) {
 		t.Fatalf("missing auth detail = %q, want LOCAL_API_KEY", got)
 	}
 }
+
+func TestProviderModelsUsesConfiguredContextLimitWithoutDiscovery(t *testing.T) {
+	models := providerModels(&config.Config{
+		Provider:     "local-api",
+		Model:        "qwen3.6:27b",
+		ContextLimit: 70000,
+	})
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	if models[0].ID != "qwen3.6:27b" {
+		t.Fatalf("model ID = %q, want qwen3.6:27b", models[0].ID)
+	}
+	if models[0].ContextWindow != 70000 {
+		t.Fatalf("context window = %d, want configured limit", models[0].ContextWindow)
+	}
+}

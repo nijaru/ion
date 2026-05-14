@@ -61,9 +61,9 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 	if !ok {
 		return nil, fmt.Errorf("unsupported canto provider %q", cfg.Provider)
 	}
-	models := providerModels(ctx, cfg)
 	apiKey := resolvedAPIKey(cfg, def)
 	endpoint := providers.ResolvedEndpointContext(ctx, cfg)
+	models := providerModels(cfg)
 	switch def.Family {
 	case providers.FamilyAnthropic:
 		if apiKey == "" {
@@ -127,22 +127,20 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 	}
 }
 
-func providerModels(ctx context.Context, cfg *config.Config) []llm.Model {
+func providerModels(cfg *config.Config) []llm.Model {
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" || strings.TrimSpace(cfg.Model) == "" {
 		return nil
 	}
-	meta, ok := registry.GetMetadata(ctx, cfg.Provider, cfg.Model)
-	if !ok {
-		return []llm.Model{{ID: cfg.Model}}
+	model := llm.Model{ID: cfg.Model}
+	if meta, ok := registry.GetCachedMetadata(cfg.Provider, cfg.Model); ok {
+		model.ContextWindow = meta.ContextLimit
+		model.CostPer1MIn = meta.InputPrice
+		model.CostPer1MOut = meta.OutputPrice
 	}
-	return []llm.Model{
-		{
-			ID:            cfg.Model,
-			ContextWindow: meta.ContextLimit,
-			CostPer1MIn:   meta.InputPrice,
-			CostPer1MOut:  meta.OutputPrice,
-		},
+	if cfg.ContextLimit > 0 {
+		model.ContextWindow = cfg.ContextLimit
 	}
+	return []llm.Model{model}
 }
 
 func resolvedAPIKey(cfg *config.Config, def providers.Definition) string {

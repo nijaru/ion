@@ -43,27 +43,40 @@ func initRegistry() {
 func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bool) {
 	registryOnce.Do(initRegistry)
 
-	key := fmt.Sprintf("%s/%s", strings.ToLower(provider), strings.ToLower(model))
-
-	registryMu.RLock()
-	meta, ok := registryCache[key]
-	registryMu.RUnlock()
-
-	// If found and fresh enough (e.g. 24h), return it
-	if ok && time.Now().Unix()-meta.UpdatedAt < 86400 {
+	if meta, ok := cachedMetadata(provider, model); ok {
 		return meta, true
 	}
 
 	fetched, err := metadataFetcher(ctx, provider, model)
 	if err == nil {
 		registryMu.Lock()
-		registryCache[key] = fetched
+		registryCache[metadataKey(provider, model)] = fetched
 		saveCache()
 		registryMu.Unlock()
 		return fetched, true
 	}
 
 	return ModelMetadata{}, false
+}
+
+func GetCachedMetadata(provider, model string) (ModelMetadata, bool) {
+	registryOnce.Do(initRegistry)
+	return cachedMetadata(provider, model)
+}
+
+func cachedMetadata(provider, model string) (ModelMetadata, bool) {
+	registryMu.RLock()
+	meta, ok := registryCache[metadataKey(provider, model)]
+	registryMu.RUnlock()
+
+	if ok && time.Now().Unix()-meta.UpdatedAt < 86400 {
+		return meta, true
+	}
+	return ModelMetadata{}, false
+}
+
+func metadataKey(provider, model string) string {
+	return fmt.Sprintf("%s/%s", strings.ToLower(provider), strings.ToLower(model))
 }
 
 func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
