@@ -239,7 +239,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.clearActiveTurnState(true)
 	m.Progress.Mode = stateReady
 	m.Progress.LastTurnSummary = turnSummary{}
-	m.Input.CtrlCPending = false
+	m.clearPendingAction()
 	m.Progress.TokensSent = 0
 	m.Progress.TokensReceived = 0
 	m.Progress.TotalCost = 0

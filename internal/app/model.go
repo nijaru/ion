@@ -256,7 +256,6 @@ type InputState struct {
 	History        []string
 	HistoryIdx     int
 	HistoryDraft   string
-	CtrlCPending   bool
 	Pending        pendingAction
 	PrintHoldUntil time.Time
 	PrintHoldDelay time.Duration

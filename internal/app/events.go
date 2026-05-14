@@ -53,7 +53,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.clearPendingAction()
 			return m.cancelRunningTurn("Canceled by user")
 		}
-		if m.Input.CtrlCPending {
+		if m.Input.Pending == pendingActionQuitCtrlC {
 			return m, tea.Quit
 		}
 		return m, m.armPendingAction(pendingActionQuitCtrlC)
@@ -67,7 +67,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.clearPendingAction()
 			return m, nil
 		}
-		if m.Input.CtrlCPending {
+		if m.Input.Pending == pendingActionQuitCtrlD {
 			return m, tea.Quit
 		}
 		return m, m.armPendingAction(pendingActionQuitCtrlD)

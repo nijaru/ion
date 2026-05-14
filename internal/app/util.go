@@ -202,7 +202,6 @@ func (m *Model) clearProgressError() {
 }
 
 func (m *Model) clearPendingAction() {
-	m.Input.CtrlCPending = false
 	m.Input.Pending = pendingActionNone
 }
 
@@ -210,7 +209,6 @@ func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
 	m.Input.Pending = action
 	switch action {
 	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
-		m.Input.CtrlCPending = true
 	default:
 		m.clearPendingAction()
 		return nil
