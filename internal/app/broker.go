@@ -318,16 +318,20 @@ func (m *Model) clearPendingAssistant() {
 func (m *Model) finishTurnMode(assistantCompleted bool, cmds []tea.Cmd) []tea.Cmd {
 	switch {
 	case m.Progress.Mode == stateError:
+		m.clearActiveTurnState(true)
 		m.InFlight.QueuedTurns = nil
 		m.Progress.Status = ""
 	case m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "":
+		m.clearActiveTurnState(true)
 		m.Progress.Mode = stateCancelled
 		m.InFlight.QueuedTurns = nil
 		m.Progress.Status = ""
 	case !assistantCompleted:
+		m.clearActiveTurnState(true)
 		m.Progress.Mode = stateError
 		m.Progress.LastError = "turn finished without assistant response"
 		m.InFlight.QueuedTurns = nil
+		m.Progress.Status = ""
 		cmds = append(cmds, m.printEntries(session.Entry{
 			Role:    session.System,
 			Content: "Error: turn finished without assistant response",
