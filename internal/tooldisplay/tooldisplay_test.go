@@ -57,9 +57,6 @@ func TestTitleKeepsCommandAndQueryText(t *testing.T) {
 	if got := Title("bash", `{"command":"go test ./..."}`, Options{}); got != "Bash(go test ./...)" {
 		t.Fatalf("bash title = %q, want literal command", got)
 	}
-	if got := Title("bash", `{"action":"output","job_id":"bash-1"}`, Options{}); got != "Bash(output bash-1)" {
-		t.Fatalf("bash output title = %q, want action and job id", got)
-	}
 	if got := Title("grep", `{"pattern":"func Render","path":"."}`, Options{}); got != "Search(func Render)" {
 		t.Fatalf("grep title = %q, want pattern when present", got)
 	}

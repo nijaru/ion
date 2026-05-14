@@ -17,6 +17,8 @@ type localCommand struct {
 	Emit    func(string) error
 }
 
+const maxOutputSize = 1024 * 1024 // 1MB
+
 type localExecutor struct {
 	sandbox     SandboxMode
 	environment EnvironmentPolicy

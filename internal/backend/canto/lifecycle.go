@@ -158,9 +158,6 @@ func (b *Backend) Close() error {
 		if harness != nil {
 			harness.Close()
 		}
-		if b.bash != nil {
-			b.bash.Close()
-		}
 		b.wg.Wait()
 		close(b.events)
 	})

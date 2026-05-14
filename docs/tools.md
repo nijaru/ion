@@ -39,23 +39,13 @@ Explicit `seatbelt` and `bubblewrap` modes fail closed when their backend is
 unavailable. `auto` uses the platform backend when present and reports when it
 falls back to `off`.
 
-Background jobs are a same-tool extension rather than new default tools:
-`bash` supports normal foreground runs, background job starts, job output
-reads, and job kills with the same policy and sandbox posture. Ion keeps live
-job handles in the active session runtime; it does not promise that background
-processes survive app exit or restart. Use `/jobs` to list live jobs and
-`/stop <job-id>` to stop one from the TUI.
+Background jobs are deferred. The native Pi-parity tool path only runs
+foreground commands; `/jobs` and `/stop` stay hidden until async process UX is
+designed as a coherent later feature.
 
-Approval tiers remain deliberately small:
-
-| Mode | Behavior |
-|---|---|
-| READ | read tools allowed; write/execute blocked; sensitive asks |
-| EDIT | read tools allowed; write/execute/sensitive follow policy |
-| AUTO | all tools allowed |
-
-Granular persistent rules live in `~/.ion/policy.yaml`; see
-`docs/security/policy.md`.
+Native Pi-parity execution is trusted by default. Approval tiers, persistent
+policy files, and sandbox permission UX are deferred until the core loop and
+TUI are stable.
 
 Native `read` returns model-visible file contents with line numbers. The TUI
 still compacts read rows by default, but the model receives stable line
