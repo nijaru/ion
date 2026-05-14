@@ -138,7 +138,10 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		updated := m.updateProviderForActivePreset(cfg, name)
+		updated, err := m.updateProviderForActivePreset(cfg, name)
+		if err != nil {
+			return m, cmdError(err.Error())
+		}
 		if err := config.SaveState(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}

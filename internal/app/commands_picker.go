@@ -356,7 +356,11 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.Picker.Overlay = nil
 			return m.openModelPickerWithConfig(&cfg)
 		}
-		updated := m.updateProviderForActivePreset(&cfg, selected.Value)
+		updated, err := m.updateProviderForActivePreset(&cfg, selected.Value)
+		if err != nil {
+			m.Picker.Overlay = nil
+			return m, cmdError(err.Error())
+		}
 		if err := config.SaveState(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
