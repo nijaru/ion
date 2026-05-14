@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/go-json-experiment/json"
@@ -68,8 +70,27 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := root.WriteFile(relPath, []byte(input.Content), 0o644); err != nil {
+	mode := os.FileMode(0o644)
+	if info, err := root.Stat(relPath); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	tmpPath, err := writeEditTempFile(root, relPath, []byte(input.Content), mode)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = root.Remove(tmpPath)
+		return "", err
+	}
+	if err := root.Rename(tmpPath, relPath); err != nil {
+		_ = root.Remove(tmpPath)
+		return "", err
+	}
+
 	return limitToolOutput(fmt.Sprintf("Wrote %s.", input.FilePath)), nil
 }
