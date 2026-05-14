@@ -288,6 +288,28 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	}
 }
 
+func TestCantoStoreUpdateSessionFailsWhenMetadataMissing(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	err = store.UpdateSession(context.Background(), SessionInfo{
+		ID:          "missing-session",
+		Model:       "openrouter/test-model",
+		Branch:      "main",
+		LastPreview: "hello",
+	})
+	if err == nil {
+		t.Fatal("update missing session succeeded")
+	}
+	if !strings.Contains(err.Error(), "missing-session metadata not found") {
+		t.Fatalf("update error = %v, want missing metadata error", err)
+	}
+}
+
 func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

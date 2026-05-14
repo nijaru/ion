@@ -433,7 +433,7 @@ func (s *cantoStore) Canto() *session.SQLiteStore {
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE session_meta
 		 SET updated_at = ?,
@@ -453,7 +453,17 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		si.LastPreview,
 		si.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return fmt.Errorf("session %s metadata not found", si.ID)
+	}
+	return nil
 }
 
 func (s *cantoStore) ensureColumn(table, columnDef string) error {

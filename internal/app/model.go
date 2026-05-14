@@ -184,8 +184,6 @@ type AppState struct {
 	ActivePreset      modelPreset
 	Sandbox           string
 	PrintedTranscript bool
-	StartupLines      []string
-	StartupEntries    []session.Entry
 }
 
 // ModelState holds the core backend, session, and storage handles.
@@ -375,16 +373,6 @@ func New(
 	return m
 }
 
-func (m Model) WithStartupLines(lines []string) Model {
-	m.App.StartupLines = append([]string(nil), lines...)
-	return m
-}
-
-func (m Model) WithStartupEntries(entries []session.Entry) Model {
-	m.App.StartupEntries = append([]session.Entry(nil), entries...)
-	return m
-}
-
 func (m Model) WithPrintedTranscript(v bool) Model {
 	m.App.PrintedTranscript = v
 	return m
@@ -424,41 +412,6 @@ func (m Model) WithSessionPicker() Model {
 func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 	m.Model.Checkpoints = store
 	return m
-}
-
-func (m Model) startupPrintLines() []string {
-	lines := make([]string, 0, len(m.App.StartupLines)+len(m.App.StartupEntries)+2)
-	lines = append(lines, m.App.StartupLines...)
-	lines = append(lines, m.headerLine())
-	if m.Progress.Status != "" && !isConfigurationStatus(m.Progress.Status) {
-		lines = append(lines, "")
-		lines = append(lines, m.renderStartupStatus(m.Progress.Status))
-	}
-	if len(m.App.StartupEntries) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, m.RenderEntries(m.App.StartupEntries...)...)
-	}
-	return lines
-}
-
-func (m Model) renderStartupBlock() string {
-	lines := m.startupPrintLines()
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m Model) renderStartupStatus(status string) string {
-	trimmed := strings.TrimSpace(status)
-	if trimmed == "" {
-		return ""
-	}
-
-	if isConfigurationStatus(trimmed) {
-		return m.st.warn.Render("• " + trimmed)
-	}
-	return m.st.dim.Render(trimmed)
 }
 
 func (m Model) configurationStatus() string {
