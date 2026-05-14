@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
@@ -769,4 +770,62 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	if !terminalErrorFound {
 		t.Fatalf("missing durable provider error terminal event")
 	}
+}
+
+func TestRunTurnReportsStreamEndWithoutTerminalEvent(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	events := make(chan cantofw.RunEvent)
+	close(events)
+
+	b.runTurn(
+		t.Context(),
+		turnID,
+		"hi",
+		func() {},
+		promptStreamFunc(func(context.Context, string) (<-chan cantofw.RunEvent, error) {
+			return events, nil
+		}),
+	)
+
+	errEvent := waitForSessionError(t, b.Events())
+	if !strings.Contains(errEvent.Err.Error(), "turn stream ended without terminal session event") {
+		t.Fatalf("error = %v, want missing terminal event", errEvent.Err)
+	}
+	waitForTurnFinished(t, b.Events())
+	if b.turn.active {
+		t.Fatal("turn remained active after missing terminal stream error")
+	}
+}
+
+func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	events := make(chan cantofw.RunEvent, 1)
+	events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+	close(events)
+
+	b.runTurn(
+		t.Context(),
+		turnID,
+		"hi",
+		func() {},
+		promptStreamFunc(func(context.Context, string) (<-chan cantofw.RunEvent, error) {
+			return events, nil
+		}),
+	)
+
+	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("cancellation stream error did not emit TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+}
+
+type promptStreamFunc func(context.Context, string) (<-chan cantofw.RunEvent, error)
+
+func (f promptStreamFunc) PromptStream(
+	ctx context.Context,
+	message string,
+) (<-chan cantofw.RunEvent, error) {
+	return f(ctx, message)
 }
