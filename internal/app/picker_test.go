@@ -418,7 +418,7 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
 
-	items, err := modelItemsForProvider(&config.Config{Provider: "openrouter"})
+	items, err := modelItemsForProvider(t.Context(), &config.Config{Provider: "openrouter"})
 	if err != nil {
 		t.Fatalf("modelItemsForProvider: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
 
-	items, err := modelItemsForProvider(&config.Config{Provider: "openrouter"})
+	items, err := modelItemsForProvider(t.Context(), &config.Config{Provider: "openrouter"})
 	if err != nil {
 		t.Fatalf("modelItemsForProvider: %v", err)
 	}
@@ -745,19 +745,127 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	}
 }
 
-func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
-		}
-		return []registry.ModelMetadata{
-			{ID: "vendor/model-a"},
-			{ID: "vendor/model-b"},
-			{ID: "vendor/model-c"},
-		}, nil
+func TestOpenModelPickerDoesNotFetchBeforeReturning(t *testing.T) {
+	called := false
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			called = true
+			return []registry.ModelMetadata{{ID: "vendor/model-a"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "vendor/current",
+	})
+	model = updated
+	if called {
+		t.Fatal("model catalog was fetched before the picker returned")
 	}
-	defer func() { listModelsForConfig = oldListModelsForConfig }()
+	if cmd == nil {
+		t.Fatal("expected background model catalog load command")
+	}
+	if model.Picker.Overlay == nil || !model.Picker.Overlay.loading {
+		t.Fatalf("picker overlay = %#v, want immediate loading model picker", model.Picker.Overlay)
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 1 || items[0].Value != "vendor/current" || items[0].Detail != "primary" {
+		t.Fatalf("initial picker items = %#v, want selected primary model", items)
+	}
+
+	model = resolveModelPickerLoad(t, model, cmd)
+	if !called {
+		t.Fatal("background model catalog load did not run")
+	}
+	if model.Picker.Overlay.loading {
+		t.Fatal("picker still loading after catalog result")
+	}
+}
+
+func TestOpenModelPickerUsesFreshCacheWithoutRefresh(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	oldCachedModelsForConfig := cachedModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		t.Fatal("fresh cache should not trigger model catalog refresh")
+		return nil, nil
+	}
+	cachedModelsForConfig = func(cfg *config.Config) ([]registry.ModelMetadata, bool, bool) {
+		return []registry.ModelMetadata{{ID: "vendor/cached"}}, true, true
+	}
+	t.Cleanup(func() {
+		listModelsForConfig = oldListModelsForConfig
+		cachedModelsForConfig = oldCachedModelsForConfig
+	})
+
+	model := readyModel(t)
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "vendor/cached",
+	})
+	model = updated
+	if cmd != nil {
+		t.Fatalf("fresh cache returned refresh command %T", cmd)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.loading {
+		t.Fatalf("picker overlay = %#v, want loaded picker from cache", model.Picker.Overlay)
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 1 || items[0].Value != "vendor/cached" {
+		t.Fatalf("cached picker items = %#v", items)
+	}
+}
+
+func TestOpenModelPickerShowsStaleCacheWhileRefreshing(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	oldCachedModelsForConfig := cachedModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		return []registry.ModelMetadata{{ID: "vendor/fresh"}}, nil
+	}
+	cachedModelsForConfig = func(cfg *config.Config) ([]registry.ModelMetadata, bool, bool) {
+		return []registry.ModelMetadata{{ID: "vendor/stale"}}, false, true
+	}
+	t.Cleanup(func() {
+		listModelsForConfig = oldListModelsForConfig
+		cachedModelsForConfig = oldCachedModelsForConfig
+	})
+
+	model := readyModel(t)
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "vendor/stale",
+	})
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected stale cache to refresh in the background")
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 1 || items[0].Value != "vendor/stale" || !model.Picker.Overlay.loading {
+		t.Fatalf("initial stale-cache picker = %#v loading=%v", items, model.Picker.Overlay.loading)
+	}
+
+	model = resolveModelPickerLoad(t, model, cmd)
+	items = pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 2 || items[1].Value != "vendor/fresh" || model.Picker.Overlay.loading {
+		t.Fatalf("refreshed picker = %#v loading=%v", items, model.Picker.Overlay.loading)
+	}
+}
+
+func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			return []registry.ModelMetadata{
+				{ID: "vendor/model-a"},
+				{ID: "vendor/model-b"},
+				{ID: "vendor/model-c"},
+			}, nil
+		},
+	)
 
 	model := readyModel(t)
 	updated, cmd := model.openModelPickerWithConfig(&config.Config{
@@ -766,9 +874,7 @@ func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
 		FastModel: "vendor/model-a",
 	})
 	model = updated
-	if cmd != nil {
-		t.Fatalf("openModelPickerWithConfig returned unexpected command %T", cmd)
-	}
+	model = resolveModelPickerLoad(t, model, cmd)
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker overlay")
 	}
@@ -776,9 +882,9 @@ func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Group != "Configured presets" || items[1].Group != "Configured presets" {
+	if items[0].Group != "Selected models" || items[1].Group != "Selected models" {
 		t.Fatalf(
-			"configured groups = [%q %q], want [Configured presets Configured presets]",
+			"selected groups = [%q %q], want [Selected models Selected models]",
 			items[0].Group,
 			items[1].Group,
 		)
@@ -795,21 +901,22 @@ func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Configured presets") ||
+	if !strings.Contains(rendered, "Selected models") ||
 		!strings.Contains(rendered, "All models") {
 		t.Fatalf("rendered picker missing model groups: %q", rendered)
 	}
 }
 
 func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		return []registry.ModelMetadata{
-			{ID: "google/gemini-2.0-flash-lite-001"},
-			{ID: "vendor/model-c"},
-		}, nil
-	}
-	defer func() { listModelsForConfig = oldListModelsForConfig }()
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			return []registry.ModelMetadata{
+				{ID: "google/gemini-2.0-flash-lite-001"},
+				{ID: "vendor/model-c"},
+			}, nil
+		},
+	)
 
 	model := readyModel(t)
 	updated, cmd := model.openModelPickerWithConfig(&config.Config{
@@ -817,22 +924,22 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 		Model:    "vendor/model-b",
 	})
 	model = updated
-	if cmd != nil {
-		t.Fatalf("openModelPickerWithConfig returned unexpected command %T", cmd)
-	}
+	model = resolveModelPickerLoad(t, model, cmd)
 	items := pickerDisplayItems(model.Picker.Overlay)
 	if len(items) != 3 {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Value != "vendor/model-b" || items[0].Group != "Configured presets" {
-		t.Fatalf("configured primary row = %#v, want stale configured model first", items[0])
+	if items[0].Value != "vendor/model-b" || items[0].Group != "Selected models" {
+		t.Fatalf("selected primary row = %#v, want saved primary model first", items[0])
 	}
-	if items[0].Metrics == nil || items[0].Metrics.Context != "—" ||
-		items[0].Metrics.Input != "—" || items[0].Metrics.Output != "—" {
-		t.Fatalf("missing metadata metrics = %#v, want explicit unknown columns", items[0].Metrics)
+	if items[0].Metrics != nil || items[0].Detail != "primary" {
+		t.Fatalf(
+			"missing metadata row = %#v, want primary detail without fake metric columns",
+			items[0],
+		)
 	}
 	for _, item := range items {
-		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Configured presets" {
+		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Selected models" {
 			t.Fatalf("resolved fast default should not appear as configured preset: %#v", item)
 		}
 	}
@@ -853,20 +960,21 @@ func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
-		}
-		if cfg.Model != "tencent/hy3-preview:free" {
-			t.Fatalf("model = %q, want runtime CLI override", cfg.Model)
-		}
-		return []registry.ModelMetadata{
-			{ID: "anthropic/claude-sonnet-4.5"},
-			{ID: "tencent/hy3-preview:free"},
-		}, nil
-	}
-	defer func() { listModelsForConfig = oldListModelsForConfig }()
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			if cfg.Model != "tencent/hy3-preview:free" {
+				t.Fatalf("model = %q, want runtime CLI override", cfg.Model)
+			}
+			return []registry.ModelMetadata{
+				{ID: "anthropic/claude-sonnet-4.5"},
+				{ID: "tencent/hy3-preview:free"},
+			}, nil
+		},
+	)
 
 	model := readyModel(t).WithConfig(&config.Config{
 		Provider: "openrouter",
@@ -874,9 +982,7 @@ func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 	})
 	updated, cmd := model.openModelPicker()
 	model = updated
-	if cmd != nil {
-		t.Fatalf("openModelPicker returned unexpected command %T", cmd)
-	}
+	model = resolveModelPickerLoad(t, model, cmd)
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker overlay")
 	}
@@ -899,12 +1005,12 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model for openrouter",
 		items: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Configured presets"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Configured presets"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Selected models"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Selected models"},
 		},
 		filtered: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Configured presets"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Configured presets"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Selected models"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Selected models"},
 		},
 		purpose: pickerPurposeModel,
 		cfg:     &config.Config{Provider: "openrouter"},

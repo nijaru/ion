@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	listModels          = registry.ListModels
-	listModelsForConfig = registry.ListModelsForConfig
+	listModels            = registry.ListModels
+	listModelsForConfig   = registry.ListModelsForConfig
+	cachedModelsForConfig = registry.CachedModelsForConfig
 )
 
 const pickerPageSize = 8
@@ -62,11 +63,24 @@ func providerDisplayName(value string) string {
 	return providers.DisplayName(value)
 }
 
-func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
-	models, err := listModelsForConfig(context.Background(), cfg)
+func modelItemsForProvider(ctx context.Context, cfg *config.Config) ([]pickerItem, error) {
+	models, err := listModelsForConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
+	return modelItemsFromMetadata(models), nil
+}
+
+func cachedModelItemsForProvider(cfg *config.Config) ([]pickerItem, bool, bool) {
+	models, fresh, ok := cachedModelsForConfig(cfg)
+	if !ok {
+		return nil, false, false
+	}
+	return modelItemsFromMetadata(models), fresh, true
+}
+
+func modelItemsFromMetadata(models []registry.ModelMetadata) []pickerItem {
+	models = append([]registry.ModelMetadata(nil), models...)
 	slices.SortFunc(models, func(a, b registry.ModelMetadata) int {
 		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
 			return strings.Compare(orgA, orgB)
@@ -95,7 +109,7 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 			Search:  search,
 		})
 	}
-	return items, nil
+	return items
 }
 
 func clonePickerItems(items []pickerItem) []pickerItem {
@@ -325,7 +339,8 @@ func pickerSearchFields(item pickerItem) []pickerSearchField {
 		{value: normalizeSearchQuery(item.Group), weight: 20},
 	}
 	if item.Metrics != nil {
-		fields = append(fields,
+		fields = append(
+			fields,
 			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Context), weight: 30},
 			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Input), weight: 31},
 			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Output), weight: 32},
@@ -395,7 +410,8 @@ func pickerSearchIndex(
 		{value: normalizeSearchQuery(group), weight: 20},
 	}
 	if metrics != nil {
-		fields = append(fields,
+		fields = append(
+			fields,
 			pickerSearchField{value: normalizeSearchQuery(metrics.Context), weight: 30},
 			pickerSearchField{value: normalizeSearchQuery(metrics.Input), weight: 31},
 			pickerSearchField{value: normalizeSearchQuery(metrics.Output), weight: 32},

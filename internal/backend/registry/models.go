@@ -44,11 +44,31 @@ var (
 	ollamaFetcher          = fetchOllamaModels
 )
 
-const modelListRequestTimeout = 10 * time.Second
-const modelsDevTTL = 24 * time.Hour
+const (
+	modelListRequestTimeout = 10 * time.Second
+	modelsDevTTL            = 24 * time.Hour
+)
 
 func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
 	return ListModelsForConfig(ctx, &config.Config{Provider: provider})
+}
+
+func CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
+	if cfg == nil {
+		return nil, false, false
+	}
+	providerModelsOnce.Do(initProviderModelsCache)
+
+	key := providerCacheKey(cfg)
+	providerModelsMu.RLock()
+	cached, ok := providerModelsCacheMap[key]
+	providerModelsMu.RUnlock()
+	if !ok {
+		return nil, false, false
+	}
+	models := append([]ModelMetadata(nil), cached.Models...)
+	sortModels(models)
+	return models, cachedFresh(cached.UpdatedAt), true
 }
 
 func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
@@ -70,7 +90,6 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 
 	fetched, err := providerCatalogFetcher(ctx, cfg.Provider, cfg)
 	if err == nil {
-		annotateCreated(ctx, fetched)
 		sortModels(fetched)
 		providerModelsMu.Lock()
 		providerModelsCacheMap[key] = providerModelsCache{
@@ -103,7 +122,11 @@ func initProviderModelsCache() {
 	loadProviderModelsCache()
 }
 
-func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+func fetchModels(
+	ctx context.Context,
+	provider string,
+	cfg *config.Config,
+) ([]ModelMetadata, error) {
 	provider = providers.ResolveID(provider)
 	switch provider {
 	case "anthropic":
@@ -115,8 +138,15 @@ func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]Mo
 	case "gemini":
 		return geminiFetcher(ctx)
 	case "ollama":
-		if endpoint := providers.ResolvedEndpoint(cfg); endpoint != "" && endpoint != "http://localhost:11434/v1" {
-			return fetchOpenAICompatibleModels(ctx, provider, providers.ResolvedEndpoint(cfg), "", nil)
+		if endpoint := providers.ResolvedEndpoint(cfg); endpoint != "" &&
+			endpoint != "http://localhost:11434/v1" {
+			return fetchOpenAICompatibleModels(
+				ctx,
+				provider,
+				providers.ResolvedEndpoint(cfg),
+				"",
+				nil,
+			)
 		}
 		return ollamaFetcher(ctx)
 	case "local-api":
@@ -134,7 +164,13 @@ func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]Mo
 		if endpoint == "" {
 			return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 		}
-		return fetchOpenAICompatibleModels(ctx, provider, endpoint, resolvedAuthToken(cfg, def), providers.ResolvedHeaders(cfg))
+		return fetchOpenAICompatibleModels(
+			ctx,
+			provider,
+			endpoint,
+			resolvedAuthToken(cfg, def),
+			providers.ResolvedHeaders(cfg),
+		)
 	}
 }
 
@@ -358,11 +394,14 @@ func fetchOllamaModels(ctx context.Context) ([]ModelMetadata, error) {
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
-	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
-func fetchOpenAICompatibleModels(ctx context.Context, provider, endpoint, token string, extraHeaders map[string]string) ([]ModelMetadata, error) {
+func fetchOpenAICompatibleModels(
+	ctx context.Context,
+	provider, endpoint, token string,
+	extraHeaders map[string]string,
+) ([]ModelMetadata, error) {
 	headers := make(map[string]string, len(extraHeaders)+1)
 	for k, v := range extraHeaders {
 		headers[k] = v
@@ -407,7 +446,11 @@ func cachedFresh(updatedAt int64) bool {
 	if updatedAt <= 0 {
 		return false
 	}
-	return time.Since(time.Unix(updatedAt, 0)) < time.Duration(config.DefaultModelCacheTTLSeconds())*time.Second
+	return time.Since(
+		time.Unix(updatedAt, 0),
+	) < time.Duration(
+		config.DefaultModelCacheTTLSeconds(),
+	)*time.Second
 }
 
 func providerModelsCachePath() string {
@@ -437,7 +480,12 @@ func saveProviderModelsCache() {
 	_ = os.WriteFile(path, data, 0o644)
 }
 
-func fetchJSON(ctx context.Context, method, endpoint string, headers map[string]string, into any) error {
+func fetchJSON(
+	ctx context.Context,
+	method, endpoint string,
+	headers map[string]string,
+	into any,
+) error {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
@@ -458,7 +506,12 @@ func fetchJSON(ctx context.Context, method, endpoint string, headers map[string]
 		return fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf(
+			"%s returned %d: %s",
+			endpoint,
+			resp.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
 	}
 	if err := json.Unmarshal(body, into); err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -504,7 +557,8 @@ func modelOrg(id string) string {
 
 func modelsDevCreatedIndex(ctx context.Context) map[string]int64 {
 	modelsDevMu.RLock()
-	if len(modelsDevMeta.Created) > 0 && time.Since(time.Unix(modelsDevMeta.UpdatedAt, 0)) < modelsDevTTL {
+	if len(modelsDevMeta.Created) > 0 &&
+		time.Since(time.Unix(modelsDevMeta.UpdatedAt, 0)) < modelsDevTTL {
 		index := mapsCloneInt64(modelsDevMeta.Created)
 		modelsDevMu.RUnlock()
 		return index
@@ -552,7 +606,11 @@ func fetchModelsDevCreated(ctx context.Context) (map[string]int64, error) {
 		return nil, fmt.Errorf("read models.dev response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("models.dev returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf(
+			"models.dev returned %d: %s",
+			resp.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
 	}
 	var payload map[string]modelsDevProvider
 	if err := json.Unmarshal(body, &payload); err != nil {

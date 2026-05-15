@@ -16,7 +16,7 @@ func helpText() string {
 		"",
 		"keys",
 		"",
-		"  Ctrl+M           toggle configured primary/fast preset",
+		"  Ctrl+M           toggle primary/fast model",
 		"  Ctrl+T           thinking picker",
 		"  Ctrl+X           open composer in external editor",
 		"  Tab              complete slash commands and @file refs; swap provider/model pickers",
