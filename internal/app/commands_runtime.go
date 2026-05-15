@@ -108,6 +108,7 @@ func (m Model) switchRuntimeCommand(
 	}
 	m.Model.RuntimeSwitchRequest++
 	requestID := m.Model.RuntimeSwitchRequest
+	m.Progress.Status = "Switching runtime..."
 
 	return m, func() tea.Msg {
 		if oldSession != nil {
@@ -157,6 +158,7 @@ func (m Model) resumeRuntimeCommand(
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
 	oldStorage := m.Model.Storage
+	m.Progress.Status = "Switching runtime..."
 	return m, func() tea.Msg {
 		oldSession := m.Model.Session
 		if oldSession != nil {
