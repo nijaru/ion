@@ -45,6 +45,7 @@ func (b *Bash) Spec() llm.Spec {
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": properties,
+			"required":   []string{"command"},
 		},
 	}
 }

@@ -20,7 +20,8 @@ func TestBash_Spec(t *testing.T) {
 }
 
 func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
-	properties := bashSpecProperties(t, NewBash("."))
+	params := bashSpecParameters(t, NewBash("."))
+	properties := bashSpecProperties(t, params)
 	for _, key := range []string{"action", "background", "job_id", "tail_lines"} {
 		if _, ok := properties[key]; ok {
 			t.Fatalf("default bash spec exposes %q: %#v", key, properties)
@@ -28,6 +29,13 @@ func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
 	}
 	if _, ok := properties["command"]; !ok {
 		t.Fatalf("default bash spec missing command: %#v", properties)
+	}
+	required, ok := params["required"].([]string)
+	if !ok {
+		t.Fatalf("bash spec required = %T, want []string", params["required"])
+	}
+	if strings.Join(required, ",") != "command" {
+		t.Fatalf("bash spec required = %#v, want command", required)
 	}
 }
 
@@ -161,12 +169,17 @@ func TestBash_WorkingDirectory(t *testing.T) {
 	}
 }
 
-func bashSpecProperties(t *testing.T, b *Bash) map[string]any {
+func bashSpecParameters(t *testing.T, b *Bash) map[string]any {
 	t.Helper()
 	params, ok := b.Spec().Parameters.(map[string]any)
 	if !ok {
 		t.Fatalf("bash spec parameters = %T, want map[string]any", b.Spec().Parameters)
 	}
+	return params
+}
+
+func bashSpecProperties(t *testing.T, params map[string]any) map[string]any {
+	t.Helper()
 	properties, ok := params["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("bash spec properties = %T, want map[string]any", params["properties"])
