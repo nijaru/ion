@@ -164,6 +164,9 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError("Wait for the runtime switch to finish before sending input.")
+	}
 	if strings.HasPrefix(text, "/") {
 		return m.submitText(text)
 	}

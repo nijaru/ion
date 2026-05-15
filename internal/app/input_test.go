@@ -175,6 +175,34 @@ func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
 	}
 }
 
+func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.RuntimeSwitchRequest = 1
+	model.Input.Composer.SetValue("run this after the switch")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected runtime-switch guard error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime switch guard", err)
+	}
+	if got := model.Input.Composer.Value(); got != "run this after the switch" {
+		t.Fatalf("composer = %q, want draft preserved", got)
+	}
+	if len(sess.submits) != 0 {
+		t.Fatalf("old session submits = %#v, want none", sess.submits)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want none", model.InFlight.QueuedTurns)
+	}
+}
+
 func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("/session")
