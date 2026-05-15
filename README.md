@@ -1,8 +1,10 @@
-# ion
+# Ion
 
-> Early preview. Ion is still changing. It can run shell commands and edit files in the repository where you launch it, so review changes before committing them.
+> Early preview: Ion is not stable yet. It can run shell commands and edit files in the repository where you launch it, so review changes before committing them.
 
-Ion is a terminal coding agent for local repositories. Use it to ask questions about a codebase, make edits, search files, run commands, and continue the same session later.
+Ion is a lightweight coding agent for the terminal.
+
+Run it inside a repository to work with your chosen model in an interactive TUI or one-shot command. Ion can read and edit files, run project commands, and resume previous sessions.
 
 ## Features
 
