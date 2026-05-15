@@ -149,9 +149,19 @@ func (m Model) renderPicker() string {
 	}
 	b.WriteString(m.shellPaddedLine(m.st.dim, m.renderPickerHelpText()))
 	b.WriteString("\n")
-	if len(items) == 0 {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "No matching items"))
+	if m.Picker.Overlay.loading {
+		b.WriteString(m.shellPaddedLine(m.st.dim, "Loading models..."))
 		b.WriteString("\n")
+	}
+	if m.Picker.Overlay.err != "" {
+		b.WriteString(m.shellPaddedLine(m.st.warn, m.Picker.Overlay.err))
+		b.WriteString("\n")
+	}
+	if len(items) == 0 {
+		if !m.Picker.Overlay.loading && m.Picker.Overlay.err == "" {
+			b.WriteString(m.shellPaddedLine(m.st.dim, "No matching items"))
+			b.WriteString("\n")
+		}
 		return b.String()
 	}
 	if start > 0 {
@@ -193,12 +203,15 @@ func (m Model) renderPicker() string {
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • Ctrl+M swap primary/fast • Tab swap provider/model • PgUp/PgDn page • ↑/↓ navigate • Enter select • Esc cancel"
+		return "Type to search • Tab provider • Ctrl+M primary/fast • Enter select • Esc cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeCommand {
-		return "Type to search • ↑/↓ navigate • Enter insert • Esc cancel"
+		return "Type to search • Enter insert • Esc cancel"
 	}
-	return "Type to search • PgUp/PgDn page • ↑/↓ navigate • Enter select • Esc cancel"
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
+		return "Type to search • Tab models • Enter select • Esc cancel"
+	}
+	return "Type to search • Enter select • Esc cancel"
 }
 
 type pickerMetricWidths struct {

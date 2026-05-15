@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -279,4 +280,38 @@ func readyModel(t *testing.T) Model {
 		t.Fatalf("expected Model after window size update")
 	}
 	return ready
+}
+
+func resolveModelPickerLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return model
+	}
+	msg := cmd()
+	updated, nextCmd := model.Update(msg)
+	if nextCmd != nil {
+		t.Fatalf("model picker load returned unexpected command %T", nextCmd)
+	}
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected Model after model picker load")
+	}
+	return next
+}
+
+func stubModelCatalog(
+	t *testing.T,
+	fn func(context.Context, *config.Config) ([]registry.ModelMetadata, error),
+) {
+	t.Helper()
+	oldListModelsForConfig := listModelsForConfig
+	oldCachedModelsForConfig := cachedModelsForConfig
+	listModelsForConfig = fn
+	cachedModelsForConfig = func(*config.Config) ([]registry.ModelMetadata, bool, bool) {
+		return nil, false, false
+	}
+	t.Cleanup(func() {
+		listModelsForConfig = oldListModelsForConfig
+		cachedModelsForConfig = oldCachedModelsForConfig
+	})
 }

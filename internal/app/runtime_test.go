@@ -211,18 +211,19 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
-		}
-		return []registry.ModelMetadata{
-			{ID: "z-ai/glm-4.5"},
-			{ID: "z-ai/glm-5"},
-			{ID: "z-ai/glm-5-turbo"},
-		}, nil
-	}
-	defer func() { listModelsForConfig = oldListModelsForConfig }()
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			return []registry.ModelMetadata{
+				{ID: "z-ai/glm-4.5"},
+				{ID: "z-ai/glm-5"},
+				{ID: "z-ai/glm-5-turbo"},
+			}, nil
+		},
+	)
 
 	model.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
@@ -235,9 +236,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated
-	if cmd != nil {
-		t.Fatalf("expected no command when reopening model picker, got %T", cmd)
-	}
+	model = resolveModelPickerLoad(t, model, cmd)
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker to open")
 	}
@@ -323,14 +322,15 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 func TestProviderCommandClearsStaleError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "anthropic" {
-			t.Fatalf("provider = %q, want anthropic", cfg.Provider)
-		}
-		return []registry.ModelMetadata{{ID: "claude-test"}}, nil
-	}
-	t.Cleanup(func() { listModelsForConfig = oldListModelsForConfig })
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "anthropic" {
+				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			}
+			return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+		},
+	)
 
 	model := readyModel(t)
 	model.Progress.Mode = stateError
@@ -339,9 +339,7 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 	updated, cmd := model.handleCommand("/provider anthropic")
 	model = updated
 
-	if cmd != nil {
-		t.Fatalf("expected provider command to open picker without command, got %T", cmd)
-	}
+	model = resolveModelPickerLoad(t, model, cmd)
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
 		t.Fatalf(
 			"stale error not cleared: mode=%v err=%q",
@@ -575,7 +573,11 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	oldSession := &stubSession{events: make(chan session.Event)}
 	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
 	newSession := &stubSession{events: make(chan session.Event)}
-	newStorage := &stubStorageSession{id: "new-session", model: "openai/new", branch: "feature/switch"}
+	newStorage := &stubStorageSession{
+		id:     "new-session",
+		model:  "openai/new",
+		branch: "feature/switch",
+	}
 
 	model := New(
 		stubBackend{sess: oldSession, provider: "openai", model: "old"},
@@ -639,7 +641,11 @@ func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	oldSession := &stubSession{events: make(chan session.Event)}
 	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
 	newSession := &stubSession{events: make(chan session.Event)}
-	newStorage := &stubStorageSession{id: "resumed-session", model: "openai/new", branch: "feature/resume"}
+	newStorage := &stubStorageSession{
+		id:     "resumed-session",
+		model:  "openai/new",
+		branch: "feature/resume",
+	}
 
 	model := New(
 		stubBackend{sess: oldSession, provider: "openai", model: "old"},

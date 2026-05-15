@@ -78,6 +78,13 @@ type runtimeSwitchErrorMsg struct {
 	err      error
 }
 
+type modelPickerLoadedMsg struct {
+	requestID uint64
+	cfg       config.Config
+	items     []pickerItem
+	err       error
+}
+
 type sessionCompactedMsg struct {
 	notice string
 }
@@ -151,6 +158,9 @@ type pickerOverlayState struct {
 	query    string
 	purpose  pickerPurpose
 	cfg      *config.Config
+	loading  bool
+	err      string
+	request  uint64
 }
 
 type progressMode int
@@ -225,8 +235,9 @@ type InFlightState struct {
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
-	Overlay *pickerOverlayState
-	Session *sessionPickerState
+	Overlay          *pickerOverlayState
+	Session          *sessionPickerState
+	ModelLoadRequest uint64
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -676,6 +687,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runtimeSwitchErrorMsg:
 		return m.handleRuntimeSwitchError(msg)
+
+	case modelPickerLoadedMsg:
+		return m.handleModelPickerLoaded(msg)
 
 	case sessionCompactedMsg:
 		return m.handleSessionCompacted(msg)

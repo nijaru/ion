@@ -33,6 +33,7 @@ func (m Model) openProviderPicker() (Model, tea.Cmd) {
 func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	items := providerItems(cfg)
 	m.clearProgressError()
+	m.Picker.ModelLoadRequest++
 	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
 		items:    items,
@@ -59,26 +60,29 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	if !providers.SupportsModelListing(cfg) {
 		return m, cmdError(providerModelEntryNotice(cfg.Provider))
 	}
-	items, err := modelItemsForProvider(cfg)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to list models for %s: %v", cfg.Provider, err))
+	m.Picker.ModelLoadRequest++
+	requestID := m.Picker.ModelLoadRequest
+	cached, fresh, ok := cachedModelItemsForProvider(cfg)
+	items := m.modelPickerItemsForCatalog(cfg, cached)
+	loading := !fresh
+	if !ok {
+		items = m.modelPickerFavoriteItems(cfg, nil)
 	}
-	if len(items) == 0 {
-		return m, cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
-	}
-	favorites := m.modelPickerFavoriteItems(cfg, items)
-	catalog := m.modelPickerCatalogItems(items, favorites)
-	combined := append(clonePickerItems(favorites), catalog...)
 	m.clearProgressError()
 	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
-		items:    combined,
-		filtered: clonePickerItems(combined),
-		index:    pickerIndex(combined, m.configuredModelForActivePreset(cfg)),
+		items:    clonePickerItems(items),
+		filtered: clonePickerItems(items),
+		index:    pickerIndex(items, m.configuredModelForActivePreset(cfg)),
 		purpose:  pickerPurposeModel,
 		cfg:      cfg,
+		loading:  loading,
+		request:  requestID,
 	}
-	return m, nil
+	if fresh {
+		return m, nil
+	}
+	return m, loadModelPickerItems(requestID, cfg)
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
@@ -108,6 +112,7 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 			nil,
 		)
 	}
+	m.Picker.ModelLoadRequest++
 	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a " + m.activePresetTitle() + " thinking level",
 		items:    items,
@@ -130,23 +135,29 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 	case primaryModel == "" && fastModel == "":
 		return nil
 	case primaryModel != "" && strings.EqualFold(primaryModel, fastModel):
-		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Configured presets"
+		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
+		item.Group = "Selected models"
 		return []pickerItem{item}
 	}
 
 	favorites := make([]pickerItem, 0, 2)
 	if primaryModel != "" {
-		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Configured presets"
+		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
+		item.Group = "Selected models"
 		favorites = append(favorites, item)
 	}
 	if fastModel != "" {
-		item := m.modelPickerFavoriteItem(all, fastModel)
-		item.Group = "Configured presets"
+		item := m.modelPickerFavoriteItem(all, fastModel, "fast")
+		item.Group = "Selected models"
 		favorites = append(favorites, item)
 	}
 	return favorites
+}
+
+func (m Model) modelPickerItemsForCatalog(cfg *config.Config, items []pickerItem) []pickerItem {
+	favorites := m.modelPickerFavoriteItems(cfg, items)
+	catalog := m.modelPickerCatalogItems(items, favorites)
+	return append(clonePickerItems(favorites), catalog...)
 }
 
 func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem {
@@ -180,24 +191,84 @@ func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem
 	return catalog
 }
 
-func (m Model) modelPickerFavoriteItem(all []pickerItem, model string) pickerItem {
+func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pickerItem {
 	if item, ok := pickerItemByValue(all, model); ok {
+		if item.Detail == "" && item.Metrics == nil {
+			item.Detail = slot
+		}
+		item.Search = append(
+			item.Search,
+			pickerSearchField{value: slot, weight: 8},
+			pickerSearchField{value: "selected", weight: 8},
+		)
 		return item
 	}
 	return pickerItem{
-		Label:   model,
-		Value:   model,
-		Detail:  "metadata unavailable",
-		Tone:    pickerToneWarn,
-		Metrics: &pickerMetrics{Context: "—", Input: "—", Output: "—"},
+		Label:  model,
+		Value:  model,
+		Detail: slot,
+		Tone:   pickerToneWarn,
 		Search: pickerSearchIndex(
 			model,
 			model,
-			"metadata unavailable",
-			"Configured presets",
-			&pickerMetrics{Context: "—", Input: "—", Output: "—"},
+			slot,
+			"Selected models",
+			nil,
 		),
 	}
+}
+
+func loadModelPickerItems(requestID uint64, cfg *config.Config) tea.Cmd {
+	cfgCopy := config.Config{}
+	if cfg != nil {
+		cfgCopy = *cfg
+	}
+	return func() tea.Msg {
+		items, err := modelItemsForProvider(context.Background(), &cfgCopy)
+		return modelPickerLoadedMsg{
+			requestID: requestID,
+			cfg:       cfgCopy,
+			items:     items,
+			err:       err,
+		}
+	}
+}
+
+func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
+	overlay := m.Picker.Overlay
+	if overlay == nil ||
+		overlay.purpose != pickerPurposeModel ||
+		overlay.request != msg.requestID ||
+		msg.requestID != m.Picker.ModelLoadRequest {
+		return m, nil
+	}
+
+	overlay.loading = false
+	overlay.err = ""
+	if msg.err != nil {
+		overlay.err = fmt.Sprintf("Failed to list models for %s: %v", msg.cfg.Provider, msg.err)
+		if len(overlay.items) == 0 {
+			overlay.filtered = nil
+		}
+		return m, nil
+	}
+	if len(msg.items) == 0 {
+		overlay.err = fmt.Sprintf("No models available for provider %s", msg.cfg.Provider)
+		if len(overlay.items) == 0 {
+			overlay.filtered = nil
+		}
+		return m, nil
+	}
+
+	cfg := &msg.cfg
+	combined := m.modelPickerItemsForCatalog(cfg, msg.items)
+	overlay.items = combined
+	overlay.filtered = clonePickerItems(combined)
+	overlay.index = pickerIndex(combined, m.configuredModelForActivePreset(cfg))
+	if overlay.query != "" {
+		refreshPickerFilter(&m)
+	}
+	return m, nil
 }
 
 func togglePreset(p modelPreset) modelPreset {

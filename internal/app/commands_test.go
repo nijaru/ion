@@ -51,19 +51,24 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			oldListModelsForConfig := listModelsForConfig
 			if tc.name == "provider" {
-				listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-					return []registry.ModelMetadata{{ID: "anthropic-model"}}, nil
-				}
+				stubModelCatalog(
+					t,
+					func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+						return []registry.ModelMetadata{{ID: "anthropic-model"}}, nil
+					},
+				)
 			}
-			t.Cleanup(func() { listModelsForConfig = oldListModelsForConfig })
 
 			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
 			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
 			model, cmd := model.handleCommand(tc.command)
+			if tc.wantPicker {
+				model = resolveModelPickerLoad(t, model, cmd)
+				cmd = nil
+			}
 			if tc.wantCommand && cmd == nil {
 				t.Fatal("expected direct config command to return a cmd")
 			}
