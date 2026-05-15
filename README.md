@@ -116,10 +116,6 @@ go vet ./...
 go run ./cmd/ion
 ```
 
-The current implementation is Go. The old Rust implementation is preserved under `archive/rust/` for reference only. The `stable-rnk` tag points at the last known stable Rust-era checkpoint.
-
-Project planning and audit notes live in local `ai/` context files. Start with `ai/STATUS.md` and `ai/PLAN.md` when working on the repo.
-
 ## License
 
 [MIT](LICENSE)
