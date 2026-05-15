@@ -64,6 +64,7 @@ type runtimeSwitchedMsg struct {
 	session       session.AgentSession
 	storage       storage.Session
 	oldSession    session.AgentSession
+	oldStorage    storage.Session
 	preset        modelPreset
 	printLines    []string
 	replayEntries []session.Entry

@@ -569,6 +569,125 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{id: "new-session", model: "openai/new", branch: "feature/switch"}
+
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "old"},
+		oldStorage,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{
+				sess:     newSession,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, newSession, newStorage, nil
+		},
+	)
+
+	model, cmd := model.switchRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "new"},
+		&config.Config{Provider: "openai", Model: "new"},
+		presetPrimary,
+		session.Entry{Role: session.System, Content: "Switched"},
+		oldStorage.ID(),
+		false,
+	)
+	if cmd == nil {
+		t.Fatal("expected runtime switch command")
+	}
+	rawMsg := cmd()
+	msg, ok := rawMsg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("switch command message = %T, want runtimeSwitchedMsg", rawMsg)
+	}
+
+	next, _ := model.Update(msg)
+	model = next.(Model)
+
+	if !oldSession.closed {
+		t.Fatal("old agent session was not closed")
+	}
+	if !oldStorage.closed {
+		t.Fatal("old storage session was not closed")
+	}
+	if newSession.closed {
+		t.Fatal("new agent session was closed")
+	}
+	if newStorage.closed {
+		t.Fatal("new storage session was closed")
+	}
+	if model.Model.Storage != newStorage {
+		t.Fatalf("active storage = %#v, want new storage", model.Model.Storage)
+	}
+}
+
+func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{id: "resumed-session", model: "openai/new", branch: "feature/resume"}
+
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "old"},
+		oldStorage,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{
+				sess:     newSession,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, newSession, newStorage, nil
+		},
+	)
+
+	model, cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "new"},
+		session.Entry{Role: session.System, Content: "Resumed"},
+		newStorage.ID(),
+	)
+	if cmd == nil {
+		t.Fatal("expected resume runtime command")
+	}
+	rawMsg := cmd()
+	msg, ok := rawMsg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("resume command message = %T, want runtimeSwitchedMsg", rawMsg)
+	}
+
+	next, _ := model.Update(msg)
+	model = next.(Model)
+
+	if !oldSession.closed {
+		t.Fatal("old agent session was not closed")
+	}
+	if !oldStorage.closed {
+		t.Fatal("old storage session was not closed")
+	}
+	if newSession.closed {
+		t.Fatal("new agent session was closed")
+	}
+	if newStorage.closed {
+		t.Fatal("new storage session was closed")
+	}
+	if model.Model.Storage != newStorage {
+		t.Fatalf("active storage = %#v, want resumed storage", model.Model.Storage)
+	}
+}
+
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
 	oldSession := &stubSession{events: make(chan session.Event)}
