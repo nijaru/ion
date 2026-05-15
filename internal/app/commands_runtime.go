@@ -95,6 +95,7 @@ func (m Model) switchRuntimeCommand(
 	}
 
 	oldSession := m.Model.Session
+	oldStorage := m.Model.Storage
 	targetSessionID := sessionID
 	if preserveSession && targetSessionID == "" && oldSession != nil {
 		targetSessionID = oldSession.ID()
@@ -132,6 +133,7 @@ func (m Model) switchRuntimeCommand(
 			session:    sess,
 			storage:    storageSess,
 			oldSession: oldSession,
+			oldStorage: oldStorage,
 			status:     backend.Bootstrap().Status,
 			notice:     notice.Content,
 			showStatus: preserveSession,
@@ -154,6 +156,7 @@ func (m Model) resumeRuntimeCommand(
 	cfgCopy := *cfg
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
+	oldStorage := m.Model.Storage
 	return m, func() tea.Msg {
 		oldSession := m.Model.Session
 		if oldSession != nil {
@@ -188,6 +191,7 @@ func (m Model) resumeRuntimeCommand(
 			session:       sess,
 			storage:       storageSess,
 			oldSession:    oldSession,
+			oldStorage:    oldStorage,
 			printLines:    printLines,
 			replayEntries: entries,
 			status:        backend.Bootstrap().Status,
@@ -221,6 +225,9 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Model.Config = msg.cfg
 	if msg.oldSession != nil {
 		_ = msg.oldSession.Close()
+	}
+	if msg.oldStorage != nil {
+		_ = msg.oldStorage.Close()
 	}
 	m.Model.EventGeneration++
 	m.App.Sandbox = backendSandboxSummary(msg.backend)
