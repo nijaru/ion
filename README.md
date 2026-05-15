@@ -1,12 +1,8 @@
 # ion
 
-A terminal coding agent for local repositories.
+> Early preview. Ion is still changing. It can run shell commands and edit files in the repository where you launch it, so review changes before committing them.
 
-> Early preview. Ion is still changing, and it can run shell commands and edit files in the repository where you launch it. Review changes before committing them.
-
-Ion runs in your terminal, talks to an LLM provider, and gives the model a small set of coding tools for reading, searching, editing, and running commands in the current workspace.
-
-It is written in Go and uses a native provider path for API-backed models. The focus right now is the basic coding loop: submit a prompt, stream the response, call tools, edit files, cancel cleanly, and resume the session later.
+Ion is a terminal coding agent for local repositories. Use it to ask questions about a codebase, make edits, search files, run commands, and continue the same session later.
 
 ## Features
 
