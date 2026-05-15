@@ -64,16 +64,17 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.resetHistoryCursor()
 	historyCmd := m.persistInputHistory(context.Background(), text)
 
-	userEntry := session.Entry{
-		Role:      session.User,
-		Timestamp: time.Now().UTC(),
-		Content:   text,
-	}
 	m.resetComposerDraft()
 
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)
-		return m, sequenceCmds(m.printEntries(userEntry), cmd, historyCmd)
+		return m, sequenceCmds(cmd, historyCmd)
+	}
+
+	userEntry := session.Entry{
+		Role:      session.User,
+		Timestamp: time.Now().UTC(),
+		Content:   text,
 	}
 
 	m.Progress.Mode = stateIonizing

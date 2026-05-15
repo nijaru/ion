@@ -173,6 +173,27 @@ func TestSlashCommandBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	}
 }
 
+func TestSlashCommandDoesNotEchoTranscriptEntry(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/provider")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("command = %T, want nil for local picker without transcript echo", cmd)
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("slash command printed a transcript entry")
+	}
+	if len(model.Input.History) != 1 || model.Input.History[0] != "/provider" {
+		t.Fatalf("history = %#v, want /provider", model.Input.History)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
+	}
+}
+
 func TestSubmitComposerRejectsIncompleteRuntimeConfiguration(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
@@ -440,7 +461,11 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("fresh turn did not clear drain fence")
 	}
 	if !model.InFlight.Thinking || model.Progress.Mode != stateIonizing {
-		t.Fatalf("fresh turn state = thinking %v mode %v", model.InFlight.Thinking, model.Progress.Mode)
+		t.Fatalf(
+			"fresh turn state = thinking %v mode %v",
+			model.InFlight.Thinking,
+			model.Progress.Mode,
+		)
 	}
 
 	updated, _ = model.Update(session.AgentDelta{Delta: "fresh"})
@@ -691,8 +716,8 @@ func TestSlashCommandOpensProviderPickerDuringTurn(t *testing.T) {
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
 		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
 	}
-	if cmd == nil {
-		t.Fatal("expected slash command transcript print")
+	if cmd != nil {
+		t.Fatalf("command = %T, want nil for local picker without transcript echo", cmd)
 	}
 }
 

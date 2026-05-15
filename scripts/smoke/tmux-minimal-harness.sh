@@ -164,6 +164,12 @@ assert_contains "Type a message"
 
 send_multiline_composer_smoke
 
+send_line "/provider"
+assert_contains "Pick a provider"
+assert_not_contains "› /provider"
+tmux send-keys -t "$SESSION" Escape
+sleep 0.5
+
 send_line "/help"
 assert_contains "/tools"
 assert_contains "/settings"
