@@ -7,7 +7,6 @@ import (
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
-	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -25,7 +24,6 @@ type Backend struct {
 	ionStore   storage.Store
 	sess       storage.Session
 	tools      *tool.Registry
-	bash       *tools.Bash
 	compactLLM llm.Provider
 	steering   *steeringMutator
 
