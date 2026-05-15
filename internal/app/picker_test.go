@@ -882,9 +882,9 @@ func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Group != "Selected models" || items[1].Group != "Selected models" {
+	if items[0].Group != "Current" || items[1].Group != "Current" {
 		t.Fatalf(
-			"selected groups = [%q %q], want [Selected models Selected models]",
+			"current groups = [%q %q], want [Current Current]",
 			items[0].Group,
 			items[1].Group,
 		)
@@ -901,7 +901,7 @@ func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Selected models") ||
+	if !strings.Contains(rendered, "Current") ||
 		!strings.Contains(rendered, "All models") {
 		t.Fatalf("rendered picker missing model groups: %q", rendered)
 	}
@@ -929,7 +929,7 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Value != "vendor/model-b" || items[0].Group != "Selected models" {
+	if items[0].Value != "vendor/model-b" || items[0].Group != "Current" {
 		t.Fatalf("selected primary row = %#v, want saved primary model first", items[0])
 	}
 	if items[0].Metrics != nil || items[0].Detail != "primary" {
@@ -939,7 +939,7 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 		)
 	}
 	for _, item := range items {
-		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Selected models" {
+		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Current" {
 			t.Fatalf("resolved fast default should not appear as configured preset: %#v", item)
 		}
 	}
@@ -986,7 +986,7 @@ func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker overlay")
 	}
-	if !strings.Contains(model.Picker.Overlay.title, "openrouter") {
+	if !strings.Contains(model.Picker.Overlay.title, "OpenRouter") {
 		t.Fatalf("picker title = %q, want active runtime provider", model.Picker.Overlay.title)
 	}
 	if got := model.Picker.Overlay.cfg.Provider; got != "openrouter" {
@@ -1005,12 +1005,12 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model for openrouter",
 		items: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Selected models"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Selected models"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Current"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Current"},
 		},
 		filtered: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Selected models"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Selected models"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Current"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Current"},
 		},
 		purpose: pickerPurposeModel,
 		cfg:     &config.Config{Provider: "openrouter"},

@@ -70,7 +70,9 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	}
 	m.clearProgressError()
 	m.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
+		title: "Pick " + m.activePresetTitle() + " model: " + modelPickerProviderTitle(
+			cfg.Provider,
+		),
 		items:    clonePickerItems(items),
 		filtered: clonePickerItems(items),
 		index:    pickerIndex(items, m.configuredModelForActivePreset(cfg)),
@@ -136,19 +138,19 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 		return nil
 	case primaryModel != "" && strings.EqualFold(primaryModel, fastModel):
 		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
-		item.Group = "Selected models"
+		item.Group = "Current"
 		return []pickerItem{item}
 	}
 
 	favorites := make([]pickerItem, 0, 2)
 	if primaryModel != "" {
 		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
-		item.Group = "Selected models"
+		item.Group = "Current"
 		favorites = append(favorites, item)
 	}
 	if fastModel != "" {
 		item := m.modelPickerFavoriteItem(all, fastModel, "fast")
-		item.Group = "Selected models"
+		item.Group = "Current"
 		favorites = append(favorites, item)
 	}
 	return favorites
@@ -212,10 +214,18 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pic
 			model,
 			model,
 			slot,
-			"Selected models",
+			"Current",
 			nil,
 		),
 	}
+}
+
+func modelPickerProviderTitle(provider string) string {
+	display := providerDisplayName(provider)
+	if strings.TrimSpace(display) != "" {
+		return display
+	}
+	return provider
 }
 
 func loadModelPickerItems(requestID uint64, cfg *config.Config) tea.Cmd {

@@ -203,13 +203,13 @@ func (m Model) renderPicker() string {
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • Tab provider • Ctrl+M primary/fast • Enter select • Esc cancel"
+		return "Type to search • Tab change provider • Ctrl+M primary/fast • Enter select • Esc cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeCommand {
 		return "Type to search • Enter insert • Esc cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
-		return "Type to search • Tab models • Enter select • Esc cancel"
+		return "Type to search • Tab model list • Enter select • Esc cancel"
 	}
 	return "Type to search • Enter select • Esc cancel"
 }

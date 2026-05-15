@@ -46,6 +46,7 @@ var (
 
 const (
 	modelListRequestTimeout = 10 * time.Second
+	localModelCacheTTL      = 10 * time.Second
 	modelsDevTTL            = 24 * time.Hour
 )
 
@@ -68,7 +69,7 @@ func CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
 	}
 	models := append([]ModelMetadata(nil), cached.Models...)
 	sortModels(models)
-	return models, cachedFresh(cached.UpdatedAt), true
+	return models, cachedFreshForConfig(cached.UpdatedAt, cfg), true
 }
 
 func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
@@ -84,7 +85,7 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 	providerModelsMu.RLock()
 	cached, ok := providerModelsCacheMap[key]
 	providerModelsMu.RUnlock()
-	if ok && cachedFresh(cached.UpdatedAt) {
+	if ok && cachedFreshForConfig(cached.UpdatedAt, cfg) {
 		return append([]ModelMetadata(nil), cached.Models...), nil
 	}
 
@@ -443,14 +444,41 @@ func parseMillionCost(raw string) (float64, bool) {
 }
 
 func cachedFresh(updatedAt int64) bool {
+	return cachedFreshWithin(
+		updatedAt,
+		time.Duration(config.DefaultModelCacheTTLSeconds())*time.Second,
+	)
+}
+
+func cachedFreshForConfig(updatedAt int64, cfg *config.Config) bool {
+	return cachedFreshWithin(updatedAt, modelCacheTTL(cfg))
+}
+
+func cachedFreshWithin(updatedAt int64, ttl time.Duration) bool {
 	if updatedAt <= 0 {
 		return false
 	}
-	return time.Since(
-		time.Unix(updatedAt, 0),
-	) < time.Duration(
-		config.DefaultModelCacheTTLSeconds(),
-	)*time.Second
+	return time.Since(time.Unix(updatedAt, 0)) < ttl
+}
+
+func modelCacheTTL(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
+	}
+	provider := providers.ResolveID(cfg.Provider)
+	switch provider {
+	case "local-api", "ollama":
+		return localModelCacheTTL
+	}
+	endpoint := strings.ToLower(
+		strings.TrimSpace(providers.ResolvedEndpointContext(context.Background(), cfg)),
+	)
+	if strings.Contains(endpoint, "://localhost") ||
+		strings.Contains(endpoint, "://127.") ||
+		strings.Contains(endpoint, "://[::1]") {
+		return localModelCacheTTL
+	}
+	return time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
 }
 
 func providerModelsCachePath() string {

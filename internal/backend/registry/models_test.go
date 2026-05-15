@@ -74,6 +74,35 @@ func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
 	}
 }
 
+func TestModelCacheTTLUsesShortTTLForLocalCatalogs(t *testing.T) {
+	shortTTLConfigs := []*config.Config{
+		{Provider: "local-api"},
+		{Provider: "ollama"},
+		{Provider: "openai-compatible", Endpoint: "http://127.0.0.1:8080/v1"},
+		{Provider: "openai-compatible", Endpoint: "http://localhost:8080/v1"},
+	}
+	for _, cfg := range shortTTLConfigs {
+		if got := modelCacheTTL(cfg); got != localModelCacheTTL {
+			t.Fatalf("modelCacheTTL(%#v) = %v, want %v", cfg, got, localModelCacheTTL)
+		}
+	}
+
+	remoteTTL := time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
+	if got := modelCacheTTL(&config.Config{Provider: "openrouter"}); got != remoteTTL {
+		t.Fatalf("remote modelCacheTTL = %v, want %v", got, remoteTTL)
+	}
+}
+
+func TestCachedFreshForConfigExpiresLocalCatalogsSooner(t *testing.T) {
+	updatedAt := time.Now().Add(-30 * time.Second).Unix()
+	if cachedFreshForConfig(updatedAt, &config.Config{Provider: "local-api"}) {
+		t.Fatal("local-api cache stayed fresh past local TTL")
+	}
+	if !cachedFreshForConfig(updatedAt, &config.Config{Provider: "openrouter"}) {
+		t.Fatal("remote catalog cache expired before default TTL")
+	}
+}
+
 func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 	tests := []struct {
 		provider string
@@ -96,7 +125,11 @@ func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 			}
 			defer func() { *tc.target = original }()
 
-			models, err := fetchModels(context.Background(), tc.provider, &config.Config{Provider: tc.provider})
+			models, err := fetchModels(
+				context.Background(),
+				tc.provider,
+				&config.Config{Provider: tc.provider},
+			)
 			if err != nil {
 				t.Fatalf("fetchModels(%q): %v", tc.provider, err)
 			}
