@@ -442,6 +442,29 @@ func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 	}
 }
 
+func TestStatusLineMarksFastPresetOnModelSegment(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "deepseek/deepseek-v4-flash:free",
+	}
+
+	line := ansi.Strip(model.statusLine())
+	if strings.Contains(line, "fast") {
+		t.Fatalf("primary status line should not show fast marker: %q", line)
+	}
+
+	model.App.ActivePreset = presetFast
+	line = ansi.Strip(model.statusLine())
+	if strings.Contains(line, "[FAST]") {
+		t.Fatalf("status line should not render fast as a mode label: %q", line)
+	}
+	if !strings.Contains(line, "deepseek/deepseek-v4-flash:free (fast)") {
+		t.Fatalf("status line should mark fast on model segment: %q", line)
+	}
+}
+
 func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.TokensSent = 0

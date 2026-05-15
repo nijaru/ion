@@ -18,11 +18,6 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	presetLabel := ""
-	if m.activePreset() == presetFast {
-		presetLabel = m.st.dim.Render("[FAST]")
-	}
-
 	provider := ""
 	model := ""
 	limit := 0
@@ -31,7 +26,7 @@ func (m Model) statusLine() string {
 			provider = m.st.dim.Render(value)
 		}
 		if value := m.Model.Backend.Model(); value != "" {
-			model = m.st.dim.Render(value)
+			model = m.st.dim.Render(m.statusModelLabel(value))
 		}
 		limit = m.Model.Backend.ContextLimit()
 	}
@@ -56,7 +51,6 @@ func (m Model) statusLine() string {
 
 	candidates := [][]string{
 		{
-			presetLabel,
 			provider,
 			model,
 			thinking,
@@ -66,10 +60,10 @@ func (m Model) statusLine() string {
 			branch,
 			gitDiff,
 		},
-		{presetLabel, provider, model, thinking, usage, cost, branch, gitDiff},
-		{presetLabel, provider, model, thinking, usage, cost},
-		{presetLabel, model, thinking, usage, cost},
-		{presetLabel, thinking, usage, cost},
+		{provider, model, thinking, usage, cost, branch, gitDiff},
+		{provider, model, thinking, usage, cost},
+		{model, thinking, usage, cost},
+		{thinking, usage, cost},
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)
@@ -79,6 +73,13 @@ func (m Model) statusLine() string {
 	}
 
 	return fitLine(joinLineSegments(sep, thinking, usage, cost), width)
+}
+
+func (m Model) statusModelLabel(model string) string {
+	if m.activePreset() != presetFast {
+		return model
+	}
+	return model + " (fast)"
 }
 
 func (m Model) renderTokenUsage(total, limit int) string {
