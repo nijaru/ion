@@ -31,6 +31,16 @@ func (m Model) openProviderPicker() (Model, tea.Cmd) {
 }
 
 func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
+	return m.openProviderPickerForPreset(cfg, m.activePreset())
+}
+
+func (m Model) openProviderPickerForPreset(
+	cfg *config.Config,
+	preset modelPreset,
+) (Model, tea.Cmd) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	items := providerItems(cfg)
 	m.clearProgressError()
 	m.Picker.ModelLoadRequest++
@@ -40,6 +50,7 @@ func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd)
 		filtered: append([]pickerItem(nil), items...),
 		index:    pickerIndex(items, cfg.Provider),
 		purpose:  pickerPurposeProvider,
+		preset:   preset,
 		cfg:      cfg,
 	}
 	return m, nil
@@ -61,6 +72,9 @@ func (m Model) openModelPickerForPreset(
 	cfg *config.Config,
 	preset modelPreset,
 ) (Model, tea.Cmd) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	if cfg.Provider == "" {
 		return m.openProviderPickerWithConfig(cfg)
 	}
@@ -355,16 +369,18 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "tab":
 		if m.Picker.Overlay.purpose == pickerPurposeProvider {
 			if m.Picker.Overlay.cfg != nil && m.Picker.Overlay.cfg.Provider != "" {
-				runtimeCfg, err := m.runtimeConfigForActivePreset(m.Picker.Overlay.cfg)
-				if err != nil {
-					return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-				}
-				return m.openModelPickerWithConfig(runtimeCfg)
+				return m.openModelPickerForPreset(
+					m.Picker.Overlay.cfg,
+					m.Picker.Overlay.modelPreset(),
+				)
 			}
 			return m, nil
 		}
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			return m.openProviderPickerWithConfig(m.Picker.Overlay.cfg)
+			return m.openProviderPickerForPreset(
+				m.Picker.Overlay.cfg,
+				m.Picker.Overlay.modelPreset(),
+			)
 		}
 		return m, nil
 	case "ctrl+m":
@@ -433,6 +449,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
+		preset := m.Picker.Overlay.modelPreset()
 		if def, ok := providers.Lookup(selected.Value); ok && def.ID == "local-api" {
 			if _, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(&cfg, def.ID), def); !ready {
 				return m, cmdError("Local API is not running")
@@ -440,28 +457,28 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		if strings.EqualFold(cfg.Provider, selected.Value) {
 			m.Picker.Overlay = nil
-			return m.openModelPickerWithConfig(&cfg)
+			return m.openModelPickerForPreset(&cfg, preset)
 		}
-		updated, err := m.updateProviderForActivePreset(&cfg, selected.Value)
+		updated, err := updateProviderSelection(&cfg, selected.Value)
 		if err != nil {
 			m.Picker.Overlay = nil
 			return m, cmdError(err.Error())
 		}
-		if err := config.SaveState(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-		}
-		m.Model.Backend.SetConfig(updated)
-		m.Model.Config = updated
 		m.clearProgressError()
-		m.Progress.Status = noModelConfiguredStatus()
 		m.Picker.Overlay = nil
 		if !providers.SupportsModelListing(updated) {
+			if err := config.SaveState(updated); err != nil {
+				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
+			}
+			m.Model.Backend.SetConfig(updated)
+			m.Model.Config = updated
+			m.Progress.Status = noModelConfiguredStatus()
 			return m, m.printEntries(session.Entry{
 				Role:    session.System,
 				Content: providerModelEntryNotice(updated.Provider),
 			})
 		}
-		return m.openModelPickerWithConfig(updated)
+		return m.openModelPickerForPreset(updated, preset)
 
 	case pickerPurposeModel:
 		preset := m.Picker.Overlay.modelPreset()

@@ -263,6 +263,53 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	}
 }
 
+func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "anthropic" {
+				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			}
+			return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openai",
+		model:    "gpt-4.1",
+	}
+	model.Picker.Overlay = &pickerOverlayState{
+		title:    "Pick a provider",
+		items:    providerItems(&config.Config{}),
+		filtered: providerItems(&config.Config{}),
+		index:    pickerIndex(providerItems(&config.Config{}), "anthropic"),
+		purpose:  pickerPurposeProvider,
+		cfg:      &config.Config{Provider: "openai", Model: "gpt-4.1"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = resolveModelPickerLoad(t, updated, cmd)
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if got := model.Picker.Overlay.cfg.Provider; got != "anthropic" {
+		t.Fatalf("picker provider = %q, want anthropic", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want provider unstored until model selection", err)
+	}
+	if got := model.Model.Backend.Provider(); got != "openai" {
+		t.Fatalf("backend provider = %q, want unchanged openai", got)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("backend model = %q, want unchanged gpt-4.1", got)
+	}
+}
+
 func TestModelPickerRejectsProviderWithoutModelListing(t *testing.T) {
 	model := readyModel(t)
 

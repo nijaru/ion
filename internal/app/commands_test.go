@@ -23,15 +23,8 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 		name        string
 		command     string
 		expected    string
-		wantPicker  bool
 		wantCommand bool
 	}{
-		{
-			name:       "provider",
-			command:    "/provider anthropic",
-			expected:   "provider = 'anthropic'\nmodel = ''\n",
-			wantPicker: true,
-		},
 		{
 			name:        "model",
 			command:     "/model gpt-4.1",
@@ -51,34 +44,18 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			if tc.name == "provider" {
-				stubModelCatalog(
-					t,
-					func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-						return []registry.ModelMetadata{{ID: "anthropic-model"}}, nil
-					},
-				)
-			}
-
 			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
 			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
 			model, cmd := model.handleCommand(tc.command)
-			if tc.wantPicker {
-				model = resolveModelPickerLoad(t, model, cmd)
-				cmd = nil
-			}
 			if tc.wantCommand && cmd == nil {
 				t.Fatal("expected direct config command to return a cmd")
 			}
 			if !tc.wantCommand && cmd != nil {
 				t.Fatalf("expected no cmd, got %T", cmd)
 			}
-			if tc.wantPicker && model.Picker.Overlay == nil {
-				t.Fatal("expected picker to open")
-			}
-			if !tc.wantPicker && model.Picker.Overlay != nil {
+			if model.Picker.Overlay != nil {
 				t.Fatal("expected no picker to open")
 			}
 
@@ -93,6 +70,99 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 				t.Fatal("expected status to be updated after direct config command")
 			}
 		})
+	}
+}
+
+func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "anthropic" {
+				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			}
+			if cfg.Model != "" {
+				t.Fatalf("model = %q, want staged provider without model", cfg.Model)
+			}
+			return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+		},
+	)
+
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "gpt-4.1",
+		},
+	}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	updated, cmd := model.handleCommand("/provider anthropic")
+	model = resolveModelPickerLoad(t, updated, cmd)
+
+	if capture.cfg != nil {
+		t.Fatalf("backend config = %#v, want provider staged only in picker", capture.cfg)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if got := model.Picker.Overlay.cfg.Provider; got != "anthropic" {
+		t.Fatalf("picker provider = %q, want anthropic", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want provider unstored until model selection", err)
+	}
+
+	model, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected picker to close after cancel")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file after cancel error = %v, want no staged provider persisted", err)
+	}
+	if got := model.Model.Backend.Provider(); got != "openai" {
+		t.Fatalf("backend provider = %q, want unchanged openai", got)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("backend model = %q, want unchanged gpt-4.1", got)
+	}
+}
+
+func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			if cfg.Model != "z-ai/glm-5" {
+				t.Fatalf("model = %q, want current model", cfg.Model)
+			}
+			return []registry.ModelMetadata{{ID: "z-ai/glm-5"}}, nil
+		},
+	)
+
+	model := readyModel(t).WithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "z-ai/glm-5",
+	})
+
+	updated, cmd := model.handleCommand("/provider openrouter")
+	model = resolveModelPickerLoad(t, updated, cmd)
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if got := model.Picker.Overlay.cfg.Model; got != "z-ai/glm-5" {
+		t.Fatalf("picker model = %q, want current model", got)
+	}
+	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "z-ai/glm-5" {
+		t.Fatalf("selected model = %q, want current model", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want provider/model unchanged until selection", err)
 	}
 }
 
