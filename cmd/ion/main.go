@@ -274,8 +274,7 @@ func main() {
 	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
-		WithConfigForRuntime(cfg, runtimeCfg).
-		WithActivePreset(activePreset)
+		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset)
 	if openResumePicker {
 		model = model.WithSessionPicker()
 	}

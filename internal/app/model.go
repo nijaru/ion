@@ -396,10 +396,17 @@ func (m Model) WithConfig(cfg *config.Config) Model {
 }
 
 func (m Model) WithConfigForRuntime(cfg, runtimeCfg *config.Config) Model {
+	return m.WithConfigForRuntimePreset(cfg, runtimeCfg, m.activePreset().String())
+}
+
+func (m Model) WithConfigForRuntimePreset(
+	cfg, runtimeCfg *config.Config,
+	preset string,
+) Model {
 	if cfg == nil {
 		return m
 	}
-	snapshot := newRuntimeSnapshot(cfg, runtimeCfg, m.activePreset(), "")
+	snapshot := newRuntimeSnapshot(cfg, runtimeCfg, modelPresetFromString(preset), "")
 	m.applyRuntimeSnapshot(snapshot)
 	return m
 }

@@ -52,11 +52,13 @@ func TestResumeSessionIDUsesMaterializedStorage(t *testing.T) {
 	}
 }
 
-func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T) {
+func TestWithConfigForRuntimePresetKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
-		WithConfigForRuntime(
+		WithConfigForRuntimePreset(
 			&config.Config{
 				Provider:            "openai",
 				Model:               "gpt-4.1",
@@ -69,8 +71,8 @@ func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T)
 				Model:           "gpt-4.1-mini",
 				ReasoningEffort: "low",
 			},
-		).
-		WithActivePreset("fast")
+			"fast",
+		)
 
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
