@@ -115,5 +115,5 @@ func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
 		}
 		return next, tea.Sequence(cmd, next.awaitSessionEvent())
 	}
-	return next, cmd
+	return next, sequenceCmds(cmd, next.awaitSessionEvent())
 }
