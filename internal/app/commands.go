@@ -92,14 +92,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
 		}
-		return m.switchRuntimeCommand(
-			runtimeCfg,
+		transition := newRuntimeTransition(
 			updated,
+			runtimeCfg,
 			m.activePreset(),
+			"",
+		).withStatePersistence()
+		return m.switchRuntimeCommand(
+			transition,
 			session.Entry{Role: session.System, Content: "Model set to " + name},
 			m.currentMaterializedSessionID(),
 			false,
-			true,
 		)
 
 	case "/thinking":
@@ -236,13 +239,11 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if command == "/clear" {
 			notice = "Started fresh session"
 		}
+		transition := newRuntimeTransition(cfg, runtimeCfg, m.activePreset(), "")
 		return m.switchRuntimeCommand(
-			runtimeCfg,
-			cfg,
-			m.activePreset(),
+			transition,
 			session.Entry{Role: session.System, Content: notice},
 			"",
-			false,
 			false,
 		)
 
