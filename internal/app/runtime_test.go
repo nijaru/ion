@@ -740,6 +740,31 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchErrorClearsSwitchingStatus(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 7
+	model.Progress.Status = "Switching runtime..."
+
+	next, cmd := model.Update(runtimeSwitchErrorMsg{
+		switchID: 7,
+		err:      errors.New("Local API is not running"),
+	})
+	model = next.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected local error print command")
+	}
+	if model.Model.RuntimeSwitchRequest != 0 {
+		t.Fatalf("runtime switch request = %d, want cleared", model.Model.RuntimeSwitchRequest)
+	}
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared after switch error", model.Progress.Status)
+	}
+	if line := ansi.Strip(model.progressLine()); strings.Contains(line, "Switching runtime") {
+		t.Fatalf("progress line = %q, want no stale switching status", line)
+	}
+}
+
 func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
