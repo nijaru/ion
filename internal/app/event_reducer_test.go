@@ -728,6 +728,32 @@ func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {
 	}
 }
 
+func TestLocalErrorClearsLocalBusyStatus(t *testing.T) {
+	for _, status := range []string{"Compacting context...", "Switching runtime..."} {
+		t.Run(status, func(t *testing.T) {
+			model := readyModel(t)
+			model.Progress.Compacting = isCompactingStatus(status)
+			model.Progress.Status = status
+
+			next, cmd := model.Update(localErrorMsg{err: errors.New("operation failed")})
+			model = next.(Model)
+
+			if cmd == nil {
+				t.Fatal("expected local error print command")
+			}
+			if model.Progress.Compacting {
+				t.Fatal("compacting flag should clear after local error")
+			}
+			if model.Progress.Status != "" {
+				t.Fatalf("status = %q, want cleared", model.Progress.Status)
+			}
+			if line := ansi.Strip(model.progressLine()); strings.Contains(line, status) {
+				t.Fatalf("progress line = %q, want stale local status removed", line)
+			}
+		})
+	}
+}
+
 func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)

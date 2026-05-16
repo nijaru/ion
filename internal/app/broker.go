@@ -173,6 +173,9 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	if !m.InFlight.Thinking {
 		m.Progress.Compacting = false
+		if isLocalBusyStatus(m.Progress.Status) {
+			m.Progress.Status = ""
+		}
 		if m.Progress.Mode == stateError {
 			m.Progress.Mode = stateReady
 		}
@@ -180,6 +183,11 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	}
 	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
 	return m, m.printEntries(entry)
+}
+
+func isLocalBusyStatus(status string) bool {
+	trimmed := strings.TrimSpace(status)
+	return trimmed == "Switching runtime..." || isCompactingStatus(trimmed)
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
