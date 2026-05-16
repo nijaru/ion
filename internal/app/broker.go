@@ -390,7 +390,7 @@ func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
 	}
 	if msg.AgentID == "" {
 		m.Progress.Mode = stateStreaming
-		if m.InFlight.Pending == nil {
+		if m.InFlight.Pending == nil || m.InFlight.Pending.Role != session.Agent {
 			m.InFlight.Pending = &session.Entry{
 				Role:      session.Agent,
 				Timestamp: msg.Timestamp,

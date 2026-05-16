@@ -187,6 +187,35 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentDeltaDoesNotAppendToPendingToolEntry(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Args:      "echo ok",
+	})
+	model = updated.(Model)
+	updated, _ = model.Update(session.AgentDelta{Delta: "assistant text"})
+	model = updated.(Model)
+
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Agent {
+		t.Fatalf("pending entry = %#v, want agent entry", model.InFlight.Pending)
+	}
+	if model.InFlight.Pending.Content != "assistant text" {
+		t.Fatalf("pending agent content = %q, want assistant text", model.InFlight.Pending.Content)
+	}
+	tool := model.InFlight.PendingTools["tool-call-1"]
+	if tool == nil {
+		t.Fatal("pending tool entry was lost")
+	}
+	if tool.Content != "" {
+		t.Fatalf("pending tool content = %q, want unchanged", tool.Content)
+	}
+}
+
 func TestAgentMessagePrintsWithoutPendingStream(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)
