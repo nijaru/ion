@@ -465,7 +465,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			context.Background(),
 			&cfg,
 			selected.Value,
-			m.activePreset(),
+			preset,
 		)
 		if err != nil {
 			if selection.cfg == nil {
