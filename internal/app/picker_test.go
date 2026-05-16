@@ -1121,6 +1121,54 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	}
 }
 
+func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
+	model := readyModel(t)
+	cfg := &config.Config{
+		Provider:  "openrouter",
+		Model:     "vendor/primary",
+		FastModel: "vendor/fast",
+	}
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick fast model: OpenRouter",
+		items: []pickerItem{
+			{Label: "vendor/primary", Value: "vendor/primary", Group: "Current"},
+			{Label: "vendor/fast", Value: "vendor/fast", Group: "Current"},
+		},
+		filtered: []pickerItem{
+			{Label: "vendor/primary", Value: "vendor/primary", Group: "Current"},
+			{Label: "vendor/fast", Value: "vendor/fast", Group: "Current"},
+		},
+		index:   1,
+		purpose: pickerPurposeModel,
+		preset:  presetFast,
+		cfg:     cfg,
+	}
+
+	updated, _ := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
+	}
+	if model.Picker.Overlay.modelPreset() != presetFast {
+		t.Fatalf("provider picker preset = %q, want fast", model.Picker.Overlay.modelPreset())
+	}
+
+	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if model.Picker.Overlay.modelPreset() != presetFast {
+		t.Fatalf("model picker preset = %q, want fast", model.Picker.Overlay.modelPreset())
+	}
+	if !strings.Contains(model.Picker.Overlay.title, "Pick fast model") {
+		t.Fatalf("picker title = %q, want fast target", model.Picker.Overlay.title)
+	}
+	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "vendor/fast" {
+		t.Fatalf("selected model = %q, want fast model", got)
+	}
+}
+
 func TestModelPickerPageKeysJumpByPage(t *testing.T) {
 	model := readyModel(t)
 	items := make([]pickerItem, 12)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
@@ -138,17 +139,23 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		updated, err := m.updateProviderForActivePreset(cfg, name)
+		updated, err := updateProviderSelection(cfg, name)
 		if err != nil {
 			return m, cmdError(err.Error())
 		}
-		if err := config.SaveState(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-		}
-		m.Model.Backend.SetConfig(updated)
-		m.Model.Config = updated
 		m.clearProgressError()
-		m.Progress.Status = noModelConfiguredStatus()
+		if !providers.SupportsModelListing(updated) {
+			if err := config.SaveState(updated); err != nil {
+				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
+			}
+			m.Model.Backend.SetConfig(updated)
+			m.Model.Config = updated
+			m.Progress.Status = noModelConfiguredStatus()
+			return m, m.printEntries(session.Entry{
+				Role:    session.System,
+				Content: providerModelEntryNotice(updated.Provider),
+			})
+		}
 		return m.openModelPickerWithConfig(updated)
 
 	case "/settings":

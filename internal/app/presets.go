@@ -92,7 +92,7 @@ func mergeRuntimeSelection(dst, runtime *config.Config) {
 	}
 }
 
-func (m Model) updateProviderForActivePreset(
+func updateProviderSelection(
 	cfg *config.Config,
 	provider string,
 ) (*config.Config, error) {
@@ -109,6 +109,9 @@ func (m Model) updateProviderForActivePreset(
 	}
 	updated := *cfg
 	updated.Provider = def.ID
+	if providers.ResolveID(cfg.Provider) == def.ID {
+		return &updated, nil
+	}
 	updated.Model = ""
 	updated.FastModel = ""
 	updated.SummaryModel = ""
