@@ -42,7 +42,9 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 	if len(m.InFlight.QueuedTurns) > 0 {
 		queued := m.InFlight.QueuedTurns[0]
 		m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
-		cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+		cmds = append(cmds, func() tea.Msg {
+			return queuedTurnMsg{text: queued, rearmSessionEvents: false}
+		})
 	}
 	return m, tea.Sequence(cmds...)
 }

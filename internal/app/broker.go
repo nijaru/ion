@@ -281,7 +281,9 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	m.recordFinishedTurnSummary()
 
 	if queued := m.popQueuedTurn(); queued != "" {
-		cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+		cmds = append(cmds, func() tea.Msg {
+			return queuedTurnMsg{text: queued, rearmSessionEvents: true}
+		})
 		return m, tea.Sequence(cmds...)
 	}
 	cmds = append(cmds, loadGitDiffStats(m.App.Workdir))

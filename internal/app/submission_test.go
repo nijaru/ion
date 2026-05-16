@@ -416,7 +416,10 @@ func TestQueuedTurnRearmsEventReaderWhenSubmissionBlocked(t *testing.T) {
 	model.Model.Config = &config.Config{MaxSessionCost: 0.01}
 	model.Progress.TotalCost = 0.01
 
-	updated, cmd := model.handleQueuedTurn(queuedTurnMsg{text: "follow up"})
+	updated, cmd := model.handleQueuedTurn(queuedTurnMsg{
+		text:               "follow up",
+		rearmSessionEvents: true,
+	})
 	model = updated
 
 	if len(sess.submits) != 0 {
@@ -426,6 +429,30 @@ func TestQueuedTurnRearmsEventReaderWhenSubmissionBlocked(t *testing.T) {
 		t.Fatal("blocked queued turn should not mark the model in-flight")
 	}
 	requireSequenceCmd(t, cmd)
+}
+
+func TestQueuedTurnCanUseExistingEventReaderWhenSubmissionBlocked(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{MaxSessionCost: 0.01}
+	model.Progress.TotalCost = 0.01
+
+	updated, cmd := model.handleQueuedTurn(queuedTurnMsg{
+		text:               "follow up",
+		rearmSessionEvents: false,
+	})
+	model = updated
+
+	if len(sess.submits) != 0 {
+		t.Fatalf("submitted turns = %#v, want none", sess.submits)
+	}
+	if model.InFlight.Thinking {
+		t.Fatal("blocked queued turn should not mark the model in-flight")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "session cost limit reached") {
+		t.Fatalf("error = %v, want session cost limit", err)
+	}
 }
 
 func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {

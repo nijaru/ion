@@ -109,6 +109,9 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 
 func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
 	next, cmd := m.submitText(msg.text)
+	if !msg.rearmSessionEvents {
+		return next, cmd
+	}
 	if next.InFlight.Thinking {
 		if cmd == nil {
 			return next, next.awaitSessionEvent()
