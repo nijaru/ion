@@ -480,16 +480,17 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.clearProgressError()
 		m.Picker.Overlay = nil
 		if !providers.SupportsModelListing(updated) {
-			if err := config.SaveState(updated); err != nil {
-				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-			}
-			snapshot := newRuntimeSnapshot(
+			transition := newRuntimeTransition(
 				updated,
 				updated,
 				m.activePreset(),
 				noModelConfiguredStatus(),
-			)
-			m.applyRuntimeSnapshot(snapshot)
+			).withStatePersistence()
+			var commitErr error
+			m, commitErr = m.commitRuntimeTransition(transition)
+			if commitErr != nil {
+				return m, runtimeTransitionErrorCmd(commitErr)
+			}
 			return m, m.printEntries(session.Entry{
 				Role:    session.System,
 				Content: providerModelEntryNotice(updated.Provider),
@@ -544,11 +545,17 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.SaveReasoningState(m.activePreset().String(), level); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
+		transition := newRuntimeTransition(
+			updated,
+			runtimeCfg,
+			m.activePreset(),
+			"",
+		).withReasoningPersistence(m.activePreset(), level)
+		var commitErr error
+		m, commitErr = m.commitRuntimeTransition(transition)
+		if commitErr != nil {
+			return m, runtimeTransitionErrorCmd(commitErr)
 		}
-		snapshot := newRuntimeSnapshot(updated, runtimeCfg, m.activePreset(), "")
-		m.applyRuntimeSnapshot(snapshot)
 		m.Picker.Overlay = nil
 		return m, m.printEntries(
 			session.Entry{

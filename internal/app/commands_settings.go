@@ -102,8 +102,12 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to reload runtime config: %v", err))
 	}
 	mergeRuntimeSelection(runtimeCfg, m.Model.Config)
-	snapshot := newRuntimeSnapshot(runtimeCfg, runtimeCfg, m.activePreset(), "")
-	m.applyRuntimeSnapshot(snapshot)
+	transition := newRuntimeTransition(runtimeCfg, runtimeCfg, m.activePreset(), "")
+	var commitErr error
+	m, commitErr = m.commitRuntimeTransition(transition)
+	if commitErr != nil {
+		return m, runtimeTransitionErrorCmd(commitErr)
+	}
 	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
 }
 
