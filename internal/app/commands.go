@@ -76,11 +76,11 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.SaveState(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-		}
-		m.Model.Backend.SetConfig(runtimeCfg)
 		if runtimeCfg.Provider == "" {
+			if err := config.SaveState(updated); err != nil {
+				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
+			}
+			m.Model.Backend.SetConfig(runtimeCfg)
 			m.Progress.Status = noProviderConfiguredStatus()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Model set to " + name},
@@ -93,6 +93,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			session.Entry{Role: session.System, Content: "Model set to " + name},
 			m.currentMaterializedSessionID(),
 			false,
+			true,
 		)
 
 	case "/thinking":
@@ -222,6 +223,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			m.activePreset(),
 			session.Entry{Role: session.System, Content: notice},
 			"",
+			false,
 			false,
 		)
 

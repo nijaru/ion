@@ -500,9 +500,6 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.SaveState(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
 		return m.switchRuntimeCommand(
@@ -512,6 +509,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			notice,
 			m.currentMaterializedSessionID(),
 			false,
+			true,
 		)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
