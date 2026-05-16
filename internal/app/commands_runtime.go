@@ -49,13 +49,11 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
+	transition := newRuntimeTransition(cfg, runtimeCfg, preset, "")
 	return m.switchRuntimeCommand(
-		runtimeCfg,
-		cfg,
-		preset,
+		transition,
 		notice,
 		m.currentMaterializedSessionID(),
-		false,
 		false,
 	)
 }
@@ -78,18 +76,11 @@ func (m Model) ResumeSessionID() string {
 }
 
 func (m Model) switchRuntimeCommand(
-	cfg *config.Config,
-	appCfg *config.Config,
-	preset modelPreset,
+	transition runtimeTransition,
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
-	persistState bool,
 ) (Model, tea.Cmd) {
-	transition := newRuntimeTransition(appCfg, cfg, preset, "")
-	if persistState {
-		transition = transition.withStatePersistence()
-	}
 	transition = transition.withActivePresetPersistence()
 
 	if m.Model.Switcher == nil {
@@ -108,8 +99,9 @@ func (m Model) switchRuntimeCommand(
 		targetSessionID = oldSession.ID()
 	}
 	switcher := m.Model.Switcher
-	cfgCopy := *cfg
+	cfgCopy := transition.snapshot.backendConfig
 	appCfgCopy := transition.snapshot.appConfig
+	preset := transition.snapshot.preset
 	m.Model.RuntimeSwitchRequest++
 	requestID := m.Model.RuntimeSwitchRequest
 	m.Progress.Status = "Switching runtime..."

@@ -602,22 +602,26 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 
 	var firstCmd tea.Cmd
 	model, firstCmd = model.switchRuntimeCommand(
-		&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
-		&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
-		presetPrimary,
+		newRuntimeTransition(
+			&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
+			presetPrimary,
+			"",
+		),
 		session.Entry{Role: session.System, Content: "First"},
 		"",
-		false,
 		false,
 	)
 	var secondCmd tea.Cmd
 	model, secondCmd = model.switchRuntimeCommand(
-		&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
-		&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
-		presetPrimary,
+		newRuntimeTransition(
+			&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
+			presetPrimary,
+			"",
+		),
 		session.Entry{Role: session.System, Content: "Second"},
 		"",
-		false,
 		false,
 	)
 
@@ -692,12 +696,14 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	)
 
 	model, cmd := model.switchRuntimeCommand(
-		&config.Config{Provider: "openai", Model: "new"},
-		&config.Config{Provider: "openai", Model: "new"},
-		presetPrimary,
+		newRuntimeTransition(
+			&config.Config{Provider: "openai", Model: "new"},
+			&config.Config{Provider: "openai", Model: "new"},
+			presetPrimary,
+			"",
+		),
 		session.Entry{Role: session.System, Content: "Switched"},
 		oldStorage.ID(),
-		false,
 		false,
 	)
 	if cmd == nil {
@@ -903,12 +909,14 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	)
 
 	model, cmd := model.switchRuntimeCommand(
-		&config.Config{Provider: "openai", Model: "gpt-4.1"},
-		&config.Config{Provider: "openai", Model: "gpt-4.1"},
-		presetFast,
+		newRuntimeTransition(
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			presetFast,
+			"",
+		),
 		session.Entry{Role: session.System, Content: "Switched"},
 		"",
-		false,
 		false,
 	)
 	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "save active preset") {

@@ -520,14 +520,13 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
+		transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
+			withStatePersistence()
 		return m.switchRuntimeCommand(
-			runtimeCfg,
-			updated,
-			preset,
+			transition,
 			notice,
 			m.currentMaterializedSessionID(),
 			false,
-			true,
 		)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
