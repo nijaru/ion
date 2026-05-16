@@ -117,6 +117,36 @@ func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
 	return m, nil
 }
 
+func (m Model) modelSelectionTransition(
+	cfg *config.Config,
+	preset modelPreset,
+	model string,
+) (runtimeTransition, *config.Config, error) {
+	updated := updateModelForPreset(cfg, model, preset)
+	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
+	if err != nil {
+		return runtimeTransition{}, nil, err
+	}
+	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
+		withStatePersistence()
+	return transition, runtimeCfg, nil
+}
+
+func (m Model) thinkingSelectionTransition(
+	cfg *config.Config,
+	preset modelPreset,
+	level string,
+) (runtimeTransition, *config.Config, error) {
+	updated := updateThinkingForPreset(cfg, level, preset)
+	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
+	if err != nil {
+		return runtimeTransition{}, nil, err
+	}
+	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
+		withReasoningPersistence(preset, level)
+	return transition, runtimeCfg, nil
+}
+
 func runtimeTransitionErrorCmd(err error) tea.Cmd {
 	if err == nil {
 		return nil

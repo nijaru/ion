@@ -513,15 +513,12 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
-		updated := updateModelForPreset(&cfg, selected.Value, preset)
-		runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
+		transition, _, err := m.modelSelectionTransition(&cfg, preset, selected.Value)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
-			withStatePersistence()
 		return m.switchRuntimeCommand(
 			transition,
 			notice,
@@ -539,17 +536,10 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
-		updated := m.updateThinkingForActivePreset(&cfg, level)
-		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		transition, _, err := m.thinkingSelectionTransition(&cfg, m.activePreset(), level)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		transition := newRuntimeTransition(
-			updated,
-			runtimeCfg,
-			m.activePreset(),
-			"",
-		).withReasoningPersistence(m.activePreset(), level)
 		var commitErr error
 		m, commitErr = m.commitRuntimeTransition(transition)
 		if commitErr != nil {

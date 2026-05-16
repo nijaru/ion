@@ -71,18 +71,16 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
 			return m, nil
 		}
-		updated := m.updateModelForActivePreset(cfg, name)
-		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		transition, runtimeCfg, err := m.modelSelectionTransition(
+			cfg,
+			m.activePreset(),
+			name,
+		)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
 		if runtimeCfg.Provider == "" {
-			transition := newRuntimeTransition(
-				updated,
-				runtimeCfg,
-				m.activePreset(),
-				noProviderConfiguredStatus(),
-			).withStatePersistence()
+			transition.snapshot.status = noProviderConfiguredStatus()
 			var commitErr error
 			m, commitErr = m.commitRuntimeTransition(transition)
 			if commitErr != nil {
@@ -92,12 +90,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
 		}
-		transition := newRuntimeTransition(
-			updated,
-			runtimeCfg,
-			m.activePreset(),
-			"",
-		).withStatePersistence()
 		return m.switchRuntimeCommand(
 			transition,
 			session.Entry{Role: session.System, Content: "Model set to " + name},
@@ -122,17 +114,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
 			return m, nil
 		}
-		updated := m.updateThinkingForActivePreset(cfg, level)
-		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		transition, _, err := m.thinkingSelectionTransition(
+			cfg,
+			m.activePreset(),
+			level,
+		)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		transition := newRuntimeTransition(
-			updated,
-			runtimeCfg,
-			m.activePreset(),
-			"",
-		).withReasoningPersistence(m.activePreset(), level)
 		var commitErr error
 		m, commitErr = m.commitRuntimeTransition(transition)
 		if commitErr != nil {

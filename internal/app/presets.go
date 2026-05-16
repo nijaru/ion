@@ -142,12 +142,20 @@ func updateModelForPreset(
 }
 
 func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) *config.Config {
+	return updateThinkingForPreset(cfg, effort, m.activePreset())
+}
+
+func updateThinkingForPreset(
+	cfg *config.Config,
+	effort string,
+	preset modelPreset,
+) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 	updated := *cfg
 	effort = strings.TrimSpace(effort)
-	switch m.activePreset() {
+	switch preset {
 	case presetFast:
 		updated.FastReasoningEffort = effort
 	default:
