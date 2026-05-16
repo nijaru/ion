@@ -461,42 +461,32 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
 		preset := m.Picker.Overlay.modelPreset()
-		updated := &cfg
-		if strings.EqualFold(cfg.Provider, selected.Value) {
-			if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
-				return m, cmdError(err.Error())
-			}
-			m.Picker.Overlay = nil
-			return m.openModelPickerForPreset(updated, preset)
-		}
-		updated, err := updateProviderSelection(&cfg, selected.Value)
+		selection, err := m.providerSelection(
+			context.Background(),
+			&cfg,
+			selected.Value,
+			m.activePreset(),
+		)
 		if err != nil {
-			m.Picker.Overlay = nil
-			return m, cmdError(err.Error())
-		}
-		if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
+			if selection.cfg == nil {
+				m.Picker.Overlay = nil
+			}
 			return m, cmdError(err.Error())
 		}
 		m.clearProgressError()
 		m.Picker.Overlay = nil
-		if !providers.SupportsModelListing(updated) {
-			transition := newRuntimeTransition(
-				updated,
-				updated,
-				m.activePreset(),
-				noModelConfiguredStatus(),
-			).withStatePersistence()
+		if !selection.supportsModelListing {
 			var commitErr error
-			m, commitErr = m.commitRuntimeTransition(transition)
+			m, commitErr = m.commitRuntimeTransition(selection.transition)
 			if commitErr != nil {
 				return m, runtimeTransitionErrorCmd(commitErr)
 			}
 			return m, m.printEntries(session.Entry{
 				Role:    session.System,
-				Content: providerModelEntryNotice(updated.Provider),
+				Content: providerModelEntryNotice(selection.cfg.Provider),
 			})
 		}
-		return m.openModelPickerForPreset(updated, preset)
+		return m.openModelPickerForPreset(selection.cfg, preset)
 
 	case pickerPurposeModel:
 		preset := m.Picker.Overlay.modelPreset()

@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 )
 
 type runtimeTransition struct {
@@ -22,6 +24,12 @@ type runtimeSnapshot struct {
 	backendConfig config.Config
 	preset        modelPreset
 	status        string
+}
+
+type providerSelection struct {
+	cfg                  *config.Config
+	supportsModelListing bool
+	transition           runtimeTransition
 }
 
 func newRuntimeSnapshot(
@@ -117,6 +125,34 @@ func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
 	return m, nil
 }
 
+func (m Model) providerSelection(
+	ctx context.Context,
+	cfg *config.Config,
+	provider string,
+	preset modelPreset,
+) (providerSelection, error) {
+	updated, err := updateProviderSelection(cfg, provider)
+	if err != nil {
+		return providerSelection{}, err
+	}
+	if err := ensureProviderReadyForSelection(ctx, updated); err != nil {
+		return providerSelection{cfg: updated}, err
+	}
+	selection := providerSelection{
+		cfg:                  updated,
+		supportsModelListing: providers.SupportsModelListing(updated),
+	}
+	if !selection.supportsModelListing {
+		selection.transition = newRuntimeTransition(
+			updated,
+			updated,
+			preset,
+			noModelConfiguredStatus(),
+		).withStatePersistence()
+	}
+	return selection, nil
+}
+
 func (m Model) modelSelectionTransition(
 	cfg *config.Config,
 	preset modelPreset,
@@ -145,6 +181,15 @@ func (m Model) thinkingSelectionTransition(
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		withReasoningPersistence(preset, level)
 	return transition, runtimeCfg, nil
+}
+
+func resumeSelectionTransition(cfg *config.Config) runtimeTransition {
+	return newRuntimeTransition(
+		cfg,
+		cfg,
+		presetPrimary,
+		"",
+	).withActivePresetPersistence()
 }
 
 func runtimeTransitionErrorCmd(err error) tea.Cmd {
