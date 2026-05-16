@@ -29,7 +29,11 @@ func (m Model) activePreset() modelPreset {
 }
 
 func (m Model) activePresetTitle() string {
-	switch m.activePreset() {
+	return presetTitle(m.activePreset())
+}
+
+func presetTitle(preset modelPreset) string {
+	switch preset {
 	case presetFast:
 		return "fast"
 	default:
@@ -44,7 +48,10 @@ func modelPresetFromString(value string) modelPreset {
 	return presetPrimary
 }
 
-func (m Model) runtimeConfigForPreset(cfg *config.Config, preset modelPreset) (*config.Config, error) {
+func (m Model) runtimeConfigForPreset(
+	cfg *config.Config,
+	preset modelPreset,
+) (*config.Config, error) {
 	return registry.ResolveRuntimeConfig(context.Background(), cfg, registry.Preset(preset))
 }
 
@@ -109,12 +116,20 @@ func (m Model) updateProviderForActivePreset(
 }
 
 func (m Model) updateModelForActivePreset(cfg *config.Config, model string) *config.Config {
+	return updateModelForPreset(cfg, model, m.activePreset())
+}
+
+func updateModelForPreset(
+	cfg *config.Config,
+	model string,
+	preset modelPreset,
+) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 	updated := *cfg
 	model = strings.TrimSpace(model)
-	switch m.activePreset() {
+	switch preset {
 	case presetFast:
 		updated.FastModel = model
 	default:
@@ -139,10 +154,14 @@ func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) 
 }
 
 func (m Model) configuredModelForActivePreset(cfg *config.Config) string {
+	return configuredModelForPreset(cfg, m.activePreset())
+}
+
+func configuredModelForPreset(cfg *config.Config, preset modelPreset) string {
 	if cfg == nil {
 		return ""
 	}
-	switch m.activePreset() {
+	switch preset {
 	case presetFast:
 		return strings.TrimSpace(cfg.FastModel)
 	default:
