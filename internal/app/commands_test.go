@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,59 @@ func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
 		t.Fatalf("state file error = %v, want provider/model unchanged until selection", err)
+	}
+}
+
+func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("provider = \"openai\"\nmodel = \"gpt-4.1-old\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldBackend := stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openai",
+		model:    "gpt-4.1-old",
+	}
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return nil, nil, nil, errors.New("switch failed")
+		},
+	)
+
+	updated, cmd := model.handleCommand("/model gpt-4.1-new")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected model command to start runtime switch")
+	}
+	raw := cmd()
+	switchErr, ok := raw.(runtimeSwitchErrorMsg)
+	if !ok {
+		t.Fatalf("switch command message = %T, want runtimeSwitchErrorMsg", raw)
+	}
+	next, _ := model.Update(switchErr)
+	model = next.(Model)
+
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-old" {
+		t.Fatalf("backend model = %q, want unchanged old model", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want no failed model persisted", err)
 	}
 }
 

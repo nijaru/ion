@@ -561,6 +561,7 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 		session.Entry{Role: session.System, Content: "First"},
 		"",
 		false,
+		false,
 	)
 	var secondCmd tea.Cmd
 	model, secondCmd = model.switchRuntimeCommand(
@@ -569,6 +570,7 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 		presetPrimary,
 		session.Entry{Role: session.System, Content: "Second"},
 		"",
+		false,
 		false,
 	)
 
@@ -648,6 +650,7 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 		presetPrimary,
 		session.Entry{Role: session.System, Content: "Switched"},
 		oldStorage.ID(),
+		false,
 		false,
 	)
 	if cmd == nil {
@@ -767,6 +770,7 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		presetFast,
 		session.Entry{Role: session.System, Content: "Switched"},
 		"",
+		false,
 		false,
 	)
 	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "save active preset") {

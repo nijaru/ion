@@ -56,6 +56,7 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		notice,
 		m.currentMaterializedSessionID(),
 		false,
+		false,
 	)
 }
 
@@ -83,8 +84,14 @@ func (m Model) switchRuntimeCommand(
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
+	persistState bool,
 ) (Model, tea.Cmd) {
 	if m.Model.Switcher == nil {
+		if persistState {
+			if err := config.SaveState(appCfg); err != nil {
+				return m, persistErrorCmd("save state", err)
+			}
+		}
 		if err := config.SaveActivePreset(preset.String()); err != nil {
 			return m, persistErrorCmd("save active preset", err)
 		}
@@ -117,6 +124,15 @@ func (m Model) switchRuntimeCommand(
 		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, targetSessionID)
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: requestID, err: err}
+		}
+		if persistState {
+			if err := config.SaveState(&appCfgCopy); err != nil {
+				closeSwitchedRuntime(sess, storageSess)
+				return runtimeSwitchErrorMsg{
+					switchID: requestID,
+					err:      fmt.Errorf("save state: %w", err),
+				}
+			}
 		}
 		if err := config.SaveActivePreset(preset.String()); err != nil {
 			closeSwitchedRuntime(sess, storageSess)
@@ -273,10 +289,16 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 		cmds = append(cmds, m.printEntries(msg.replayEntries...))
 	}
 	if strings.TrimSpace(msg.notice) != "" {
-		cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.notice}))
+		cmds = append(
+			cmds,
+			m.printEntries(session.Entry{Role: session.System, Content: msg.notice}),
+		)
 	}
 	if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
-		cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.status}))
+		cmds = append(
+			cmds,
+			m.printEntries(session.Entry{Role: session.System, Content: msg.status}),
+		)
 	}
 	return append(cmds, m.awaitSessionEvent())
 }
