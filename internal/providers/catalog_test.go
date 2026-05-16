@@ -122,6 +122,40 @@ func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
 	}
 }
 
+func TestProbeLocalAPIFreshBypassesCachedFailure(t *testing.T) {
+	localProbeMu.Lock()
+	localProbeCache = map[string]localProbeResult{}
+	localProbeMu.Unlock()
+
+	ready := false
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if !ready {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"local-model"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Provider: "local-api",
+		Endpoint: srv.URL + "/v1",
+	}
+	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+		t.Fatal("expected cached probe to fail while server is unavailable")
+	}
+	ready = true
+	if _, ok := ProbeLocalAPIFresh(context.Background(), cfg); !ok {
+		t.Fatal("expected fresh probe to bypass cached failure")
+	}
+	if requests != 2 {
+		t.Fatalf("configured endpoint requests = %d, want 2", requests)
+	}
+}
+
 func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.T) {
 	cfg := &config.Config{
 		Provider: "openrouter",

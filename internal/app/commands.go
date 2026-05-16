@@ -145,6 +145,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(err.Error())
 		}
+		if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
+			return m, cmdError(err.Error())
+		}
 		m.clearProgressError()
 		if !providers.SupportsModelListing(updated) {
 			if err := config.SaveState(updated); err != nil {

@@ -394,15 +394,25 @@ func summarizeEndpoint(raw string) string {
 }
 
 func ProbeLocalAPI(ctx context.Context, cfg *config.Config) (string, bool) {
+	return probeLocalAPI(ctx, cfg, true)
+}
+
+func ProbeLocalAPIFresh(ctx context.Context, cfg *config.Config) (string, bool) {
+	return probeLocalAPI(ctx, cfg, false)
+}
+
+func probeLocalAPI(ctx context.Context, cfg *config.Config, useCache bool) (string, bool) {
 	for _, endpoint := range localAPIProbeTargets(cfg) {
 		if endpoint == "" {
 			continue
 		}
-		if cached, ok := localProbeCached(endpoint); ok {
-			if cached.ready {
-				return cached.endpoint, true
+		if useCache {
+			if cached, ok := localProbeCached(endpoint); ok {
+				if cached.ready {
+					return cached.endpoint, true
+				}
+				continue
 			}
-			continue
 		}
 		ready := probeOpenAICompatibleEndpoint(ctx, endpoint)
 		storeLocalProbe(endpoint, ready)

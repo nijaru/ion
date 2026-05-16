@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -20,6 +21,16 @@ func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
 	default:
 		return false
 	}
+}
+
+func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config) error {
+	if cfg == nil || providers.ResolveID(cfg.Provider) != "local-api" {
+		return nil
+	}
+	if _, ready := providers.ProbeLocalAPIFresh(ctx, cfg); ready {
+		return nil
+	}
+	return errors.New("Local API is not running")
 }
 
 func (m Model) openProviderPicker() (Model, tea.Cmd) {
@@ -450,18 +461,20 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
 		preset := m.Picker.Overlay.modelPreset()
-		if def, ok := providers.Lookup(selected.Value); ok && def.ID == "local-api" {
-			if _, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(&cfg, def.ID), def); !ready {
-				return m, cmdError("Local API is not running")
-			}
-		}
+		updated := &cfg
 		if strings.EqualFold(cfg.Provider, selected.Value) {
+			if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
+				return m, cmdError(err.Error())
+			}
 			m.Picker.Overlay = nil
-			return m.openModelPickerForPreset(&cfg, preset)
+			return m.openModelPickerForPreset(updated, preset)
 		}
 		updated, err := updateProviderSelection(&cfg, selected.Value)
 		if err != nil {
 			m.Picker.Overlay = nil
+			return m, cmdError(err.Error())
+		}
+		if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
 			return m, cmdError(err.Error())
 		}
 		m.clearProgressError()
