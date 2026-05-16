@@ -99,10 +99,8 @@ func (m Model) switchRuntimeCommand(
 		if err := config.SaveActivePreset(preset.String()); err != nil {
 			return m, persistErrorCmd("save active preset", err)
 		}
-		m.Model.Backend.SetConfig(cfg)
-		m.Model.Config = appCfgCopy
-		m.App.ActivePreset = preset
-		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
+		snapshot := newRuntimeSnapshot(appCfgCopy, cfg, preset, "")
+		m.applyRuntimeSnapshot(snapshot)
 		return m, m.printEntries(notice)
 	}
 
@@ -149,7 +147,7 @@ func (m Model) switchRuntimeCommand(
 		return runtimeSwitchedMsg{
 			switchID:   requestID,
 			cfg:        &appCfgCopy,
-			reasoning:  cfgCopy.ReasoningEffort,
+			runtimeCfg: &cfgCopy,
 			preset:     preset,
 			backend:    backend,
 			session:    sess,
@@ -172,10 +170,8 @@ func (m Model) resumeRuntimeCommand(
 		if err := config.SaveActivePreset(presetPrimary.String()); err != nil {
 			return m, persistErrorCmd("save active preset", err)
 		}
-		m.Model.Backend.SetConfig(cfg)
-		m.Model.Config = cfg
-		m.App.ActivePreset = presetPrimary
-		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
+		snapshot := newRuntimeSnapshot(cfg, cfg, presetPrimary, "")
+		m.applyRuntimeSnapshot(snapshot)
 		return m, m.printEntries(notice)
 	}
 	switcher := m.Model.Switcher
@@ -220,6 +216,7 @@ func (m Model) resumeRuntimeCommand(
 		return runtimeSwitchedMsg{
 			switchID:      switchID,
 			cfg:           &cfgCopy,
+			runtimeCfg:    &cfgCopy,
 			preset:        presetPrimary,
 			backend:       backend,
 			session:       sess,
@@ -248,15 +245,21 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Model.RuntimeSwitchRequest = 0
-	if msg.preset == "" {
-		m.App.ActivePreset = presetPrimary
-	} else {
-		m.App.ActivePreset = msg.preset
+	preset := msg.preset
+	if preset == "" {
+		preset = presetPrimary
 	}
 	m.Model.Backend = msg.backend
 	m.Model.Session = msg.session
 	m.Model.Storage = msg.storage
-	m.Model.Config = msg.cfg
+	if msg.cfg != nil || msg.runtimeCfg != nil {
+		snapshot := newRuntimeSnapshot(msg.cfg, msg.runtimeCfg, preset, msg.status)
+		m.applyRuntimeSnapshot(snapshot)
+	} else {
+		m.Model.Config = nil
+		m.App.ActivePreset = preset
+		m.Progress.Status = msg.status
+	}
 	if msg.oldSession != nil {
 		_ = msg.oldSession.Close()
 	}
@@ -267,13 +270,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.App.Sandbox = backendSandboxSummary(msg.backend)
 	m.Picker.Overlay = nil
 	m.Picker.Session = nil
-	m.Progress.Status = msg.status
 	m.clearProgressError()
-	if msg.reasoning != "" {
-		m.Progress.ReasoningEffort = normalizeThinkingValue(msg.reasoning)
-	} else if msg.cfg != nil {
-		m.Progress.ReasoningEffort = normalizeThinkingValue(msg.cfg.ReasoningEffort)
-	}
 	if msg.storage != nil {
 		meta := msg.storage.Meta()
 		m.App.Branch = meta.Branch

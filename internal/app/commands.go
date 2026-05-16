@@ -80,9 +80,13 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			if err := config.SaveState(updated); err != nil {
 				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 			}
-			m.Model.Backend.SetConfig(runtimeCfg)
-			m.Model.Config = updated
-			m.Progress.Status = noProviderConfiguredStatus()
+			snapshot := newRuntimeSnapshot(
+				updated,
+				runtimeCfg,
+				m.activePreset(),
+				noProviderConfiguredStatus(),
+			)
+			m.applyRuntimeSnapshot(snapshot)
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
@@ -122,9 +126,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err := config.SaveReasoningState(m.activePreset().String(), level); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
-		m.Model.Backend.SetConfig(runtimeCfg)
-		m.Model.Config = updated
-		m.Progress.ReasoningEffort = level
+		snapshot := newRuntimeSnapshot(updated, runtimeCfg, m.activePreset(), "")
+		m.applyRuntimeSnapshot(snapshot)
 		return m, m.printEntries(
 			session.Entry{
 				Role:    session.System,
@@ -153,9 +156,13 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			if err := config.SaveState(updated); err != nil {
 				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 			}
-			m.Model.Backend.SetConfig(updated)
-			m.Model.Config = updated
-			m.Progress.Status = noModelConfiguredStatus()
+			snapshot := newRuntimeSnapshot(
+				updated,
+				updated,
+				m.activePreset(),
+				noModelConfiguredStatus(),
+			)
+			m.applyRuntimeSnapshot(snapshot)
 			return m, m.printEntries(session.Entry{
 				Role:    session.System,
 				Content: providerModelEntryNotice(updated.Provider),

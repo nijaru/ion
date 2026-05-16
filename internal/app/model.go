@@ -59,7 +59,7 @@ type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Back
 type runtimeSwitchedMsg struct {
 	switchID      uint64
 	cfg           *config.Config
-	reasoning     string
+	runtimeCfg    *config.Config
 	backend       backend.Backend
 	session       session.AgentSession
 	storage       storage.Session
@@ -399,16 +399,8 @@ func (m Model) WithConfigForRuntime(cfg, runtimeCfg *config.Config) Model {
 	if cfg == nil {
 		return m
 	}
-	copied := *cfg
-	m.Model.Config = &copied
-	backendCfg := copied
-	if runtimeCfg != nil {
-		backendCfg = *runtimeCfg
-	}
-	m.Progress.ReasoningEffort = normalizeThinkingValue(backendCfg.ReasoningEffort)
-	if m.Model.Backend != nil {
-		m.Model.Backend.SetConfig(&backendCfg)
-	}
+	snapshot := newRuntimeSnapshot(cfg, runtimeCfg, m.activePreset(), "")
+	m.applyRuntimeSnapshot(snapshot)
 	return m
 }
 

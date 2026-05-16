@@ -88,6 +88,53 @@ func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T)
 	}
 }
 
+func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			sess: &stubSession{events: make(chan session.Event)},
+		},
+	}
+	model := readyModel(t)
+
+	updated, _ := model.Update(runtimeSwitchedMsg{
+		cfg: &config.Config{
+			Provider:            "openai",
+			Model:               "gpt-4.1",
+			ReasoningEffort:     "high",
+			FastModel:           "gpt-4.1-mini",
+			FastReasoningEffort: "low",
+		},
+		runtimeCfg: &config.Config{
+			Provider:        "openai",
+			Model:           "gpt-4.1-mini",
+			ReasoningEffort: "low",
+		},
+		preset:  presetFast,
+		backend: capture,
+		session: &stubSession{events: make(chan session.Event)},
+		storage: &stubStorageSession{id: "session-1", branch: "main"},
+		status:  "ready",
+	})
+	model = updated.(Model)
+
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.Model != "gpt-4.1" ||
+		model.Model.Config.FastModel != "gpt-4.1-mini" {
+		t.Fatalf("app config = %#v, want full app snapshot", model.Model.Config)
+	}
+	if capture.cfg == nil ||
+		capture.cfg.Model != "gpt-4.1-mini" ||
+		capture.cfg.ReasoningEffort != "low" {
+		t.Fatalf("backend config = %#v, want resolved runtime snapshot", capture.cfg)
+	}
+	if model.Progress.ReasoningEffort != "low" {
+		t.Fatalf("progress reasoning = %q, want runtime reasoning", model.Progress.ReasoningEffort)
+	}
+}
+
 func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
