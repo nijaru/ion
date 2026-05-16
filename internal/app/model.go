@@ -157,6 +157,7 @@ type pickerOverlayState struct {
 	index    int
 	query    string
 	purpose  pickerPurpose
+	preset   modelPreset
 	cfg      *config.Config
 	loading  bool
 	err      string

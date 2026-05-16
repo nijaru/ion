@@ -54,6 +54,13 @@ func (m Model) openModelPicker() (Model, tea.Cmd) {
 }
 
 func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
+	return m.openModelPickerForPreset(cfg, m.activePreset())
+}
+
+func (m Model) openModelPickerForPreset(
+	cfg *config.Config,
+	preset modelPreset,
+) (Model, tea.Cmd) {
 	if cfg.Provider == "" {
 		return m.openProviderPickerWithConfig(cfg)
 	}
@@ -70,13 +77,14 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	}
 	m.clearProgressError()
 	m.Picker.Overlay = &pickerOverlayState{
-		title: "Pick " + m.activePresetTitle() + " model: " + modelPickerProviderTitle(
+		title: "Pick " + presetTitle(preset) + " model: " + modelPickerProviderTitle(
 			cfg.Provider,
 		),
 		items:    clonePickerItems(items),
 		filtered: clonePickerItems(items),
-		index:    pickerIndex(items, m.configuredModelForActivePreset(cfg)),
+		index:    pickerIndex(items, configuredModelForPreset(cfg, preset)),
 		purpose:  pickerPurposeModel,
+		preset:   preset,
 		cfg:      cfg,
 		loading:  loading,
 		request:  requestID,
@@ -274,7 +282,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 	combined := m.modelPickerItemsForCatalog(cfg, msg.items)
 	overlay.items = combined
 	overlay.filtered = clonePickerItems(combined)
-	overlay.index = pickerIndex(combined, m.configuredModelForActivePreset(cfg))
+	overlay.index = pickerIndex(combined, configuredModelForPreset(cfg, overlay.modelPreset()))
 	if overlay.query != "" {
 		refreshPickerFilter(&m)
 	}
@@ -361,11 +369,8 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			m.App.ActivePreset = togglePreset(m.activePreset())
-			if err := config.SaveActivePreset(m.App.ActivePreset.String()); err != nil {
-				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
-			}
-			return m.openModelPickerWithConfig(m.Picker.Overlay.cfg)
+			preset := togglePreset(m.Picker.Overlay.modelPreset())
+			return m.openModelPickerForPreset(m.Picker.Overlay.cfg, preset)
 		}
 		return m, nil
 	case "pgup", "pageup":
@@ -459,11 +464,13 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		return m.openModelPickerWithConfig(updated)
 
 	case pickerPurposeModel:
-		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
+		preset := m.Picker.Overlay.modelPreset()
+		currentCfg, err := m.runtimeConfigForPreset(&cfg, preset)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if currentCfg.Provider != "" &&
+		if preset == m.activePreset() &&
+			currentCfg.Provider != "" &&
 			strings.EqualFold(
 				strings.TrimSpace(currentCfg.Model),
 				strings.TrimSpace(selected.Value),
@@ -471,8 +478,8 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
-		updated := m.updateModelForActivePreset(&cfg, selected.Value)
-		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		updated := updateModelForPreset(&cfg, selected.Value, preset)
+		runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
@@ -484,7 +491,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		return m.switchRuntimeCommand(
 			runtimeCfg,
 			updated,
-			m.activePreset(),
+			preset,
 			notice,
 			m.currentMaterializedSessionID(),
 			false,
@@ -524,6 +531,18 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	default:
 		m.Picker.Overlay = nil
 		return m, nil
+	}
+}
+
+func (p *pickerOverlayState) modelPreset() modelPreset {
+	if p == nil {
+		return presetPrimary
+	}
+	switch p.preset {
+	case presetFast:
+		return presetFast
+	default:
+		return presetPrimary
 	}
 }
 

@@ -665,6 +665,100 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	}
 }
 
+func TestModelPickerCtrlMChangesEditTargetWithoutChangingActiveRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		FastModel: "gpt-4.1-mini",
+	}
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		provider: "openai",
+		model:    "gpt-4.1",
+	}
+
+	updated, _ := model.openModelPickerWithConfig(cfg)
+	model = updated
+	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = updated
+
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want unchanged primary", model.App.ActivePreset)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset != nil {
+		t.Fatalf("persisted active preset = %#v, want nil", state.ActivePreset)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("backend model = %q, want unchanged primary model", got)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.modelPreset() != presetFast {
+		t.Fatalf("picker preset = %#v, want fast edit target", model.Picker.Overlay)
+	}
+	if !strings.Contains(model.Picker.Overlay.title, "Pick fast model") {
+		t.Fatalf("picker title = %q, want fast target", model.Picker.Overlay.title)
+	}
+	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "gpt-4.1-mini" {
+		t.Fatalf("selected model = %q, want fast model", got)
+	}
+	if line := ansi.Strip(model.statusLine()); strings.Contains(line, "(fast)") {
+		t.Fatalf("status line changed active runtime after picker toggle: %q", line)
+	}
+}
+
+func TestModelPickerSelectingExistingFastModelActivatesFastPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Provider:            "openai",
+		Model:               "gpt-4.1",
+		FastModel:           "gpt-4.1-mini",
+		FastReasoningEffort: "low",
+	}
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		provider: "openai",
+		model:    "gpt-4.1",
+	}
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick fast model: OpenAI",
+		items: []pickerItem{
+			{Label: "gpt-4.1-mini", Value: "gpt-4.1-mini"},
+		},
+		filtered: []pickerItem{
+			{Label: "gpt-4.1-mini", Value: "gpt-4.1-mini"},
+		},
+		index:   0,
+		purpose: pickerPurposeModel,
+		preset:  presetFast,
+		cfg:     cfg,
+	}
+
+	updated, cmd := model.commitPickerSelection()
+	model = updated
+
+	if cmd == nil {
+		t.Fatal("expected model selection notice")
+	}
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("persisted active preset = %#v, want fast", state.ActivePreset)
+	}
+}
+
 func TestModelPickerMetricHeaderFitsShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
