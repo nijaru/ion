@@ -220,6 +220,45 @@ func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
 	}
 }
 
+func TestModelCommandWithoutSwitcherUpdatesAppConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("provider = \"openai\"\nmodel = \"gpt-4.1-old\"\nfast_model = \"gpt-4.1-mini\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "gpt-4.1-old",
+		},
+	}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	updated, cmd := model.handleCommand("/model gpt-4.1-new")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected model command notice")
+	}
+	if capture.cfg == nil || capture.cfg.Model != "gpt-4.1-new" {
+		t.Fatalf("backend config = %#v, want new model", capture.cfg)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.Model != "gpt-4.1-new" ||
+		model.Model.Config.FastModel != "gpt-4.1-mini" {
+		t.Fatalf("app config = %#v, want updated full config", model.Model.Config)
+	}
+}
+
 func TestProviderCommandRejectsInvalidProvidersBeforePersistingState(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
