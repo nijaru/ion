@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -1167,6 +1170,92 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	}
 }
 
+func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ready := false
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if !ready {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3.6:27b"}]}`))
+	}))
+	defer srv.Close()
+
+	endpoint := srv.URL + "/v1"
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\nendpoint = \""+endpoint+"\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := config.SaveState(&config.Config{
+		Provider: "openrouter",
+		Model:    "deepseek/deepseek-v4-flash:free",
+	}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if _, ok := providers.ProbeLocalAPI(context.Background(), &config.Config{
+		Provider: "local-api",
+		Endpoint: endpoint,
+	}); ok {
+		t.Fatal("expected initial local api probe to fail")
+	}
+	ready = true
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "local-api" {
+				t.Fatalf("provider = %q, want local-api", cfg.Provider)
+			}
+			if cfg.Endpoint != endpoint {
+				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
+			}
+			return []registry.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	updated, cmd := model.openProviderPicker()
+	model = updated
+	if cmd != nil {
+		t.Fatalf("provider picker returned unexpected command %T", cmd)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
+	}
+	model.Picker.Overlay.index = pickerIndex(pickerDisplayItems(model.Picker.Overlay), "local-api")
+
+	updated, cmd = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = resolveModelPickerLoad(t, updated, cmd)
+	if requests < 2 {
+		t.Fatalf("local api requests = %d, want fresh reprobe after cached failure", requests)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if model.Picker.Overlay.err != "" {
+		t.Fatalf("model picker error = %q", model.Picker.Overlay.err)
+	}
+	if got := model.Picker.Overlay.cfg.Endpoint; got != endpoint {
+		t.Fatalf("model picker endpoint = %q, want %q", got, endpoint)
+	}
+}
+
 func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 	model := readyModel(t)
 	cfg := &config.Config{
@@ -1373,4 +1462,31 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	if !found {
 		t.Fatalf("local-api should render when active")
 	}
+}
+
+func TestProviderItemsUseConfiguredLocalAPIEndpointWhenRuntimeProviderDiffers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3.6:27b"}]}`))
+	}))
+	defer srv.Close()
+
+	items := providerItems(&config.Config{
+		Provider: "openrouter",
+		Endpoint: srv.URL + "/v1",
+	})
+	for _, item := range items {
+		if item.Value != "local-api" {
+			continue
+		}
+		if !strings.Contains(item.Detail, "Ready at ") {
+			t.Fatalf("local-api detail = %q, want configured endpoint readiness", item.Detail)
+		}
+		return
+	}
+	t.Fatal("local-api provider not found")
 }

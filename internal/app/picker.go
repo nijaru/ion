@@ -246,8 +246,9 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 	}
 	copy := *cfg
 	activeProvider := providers.ResolveID(copy.Provider)
-	copy.Provider = providers.ResolveID(provider)
-	if activeProvider != copy.Provider {
+	targetProvider := providers.ResolveID(provider)
+	copy.Provider = targetProvider
+	if activeProvider != targetProvider && targetProvider != "local-api" {
 		copy.Endpoint = ""
 		copy.AuthEnvVar = ""
 		copy.ExtraHeaders = nil
