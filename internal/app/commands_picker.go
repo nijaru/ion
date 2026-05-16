@@ -531,6 +531,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
+		m.Model.Config = updated
 		m.Progress.ReasoningEffort = level
 		m.Picker.Overlay = nil
 		return m, m.printEntries(

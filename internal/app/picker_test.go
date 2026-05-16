@@ -759,6 +759,52 @@ func TestModelPickerSelectingExistingFastModelActivatesFastPreset(t *testing.T) 
 	}
 }
 
+func TestThinkingPickerCommitUpdatesAppConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Provider:            "openai",
+		Model:               "gpt-4.1",
+		ReasoningEffort:     "auto",
+		FastModel:           "gpt-4.1-mini",
+		FastReasoningEffort: "low",
+	}
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			provider: "openai",
+			model:    "gpt-4.1",
+		},
+	}
+	model := readyModel(t)
+	model.Model.Backend = capture
+	model.Model.Config = cfg
+
+	updated, cmd := model.openThinkingPicker()
+	model = updated
+	if cmd != nil {
+		t.Fatalf("thinking picker returned unexpected command %T", cmd)
+	}
+	model.Picker.Overlay.index = pickerIndex(model.Picker.Overlay.items, "high")
+
+	updated, cmd = model.commitPickerSelection()
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected thinking selection notice")
+	}
+	if capture.cfg == nil || capture.cfg.ReasoningEffort != "high" {
+		t.Fatalf("backend config = %#v, want high reasoning", capture.cfg)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.ReasoningEffort != "high" ||
+		model.Model.Config.FastReasoningEffort != "low" {
+		t.Fatalf("app config = %#v, want updated full config", model.Model.Config)
+	}
+	if model.Progress.ReasoningEffort != "high" {
+		t.Fatalf("progress reasoning = %q, want high", model.Progress.ReasoningEffort)
+	}
+}
+
 func TestModelPickerMetricHeaderFitsShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
