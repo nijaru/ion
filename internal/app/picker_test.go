@@ -1338,6 +1338,52 @@ func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 	}
 }
 
+func TestProviderPickerNonListingSelectionUsesPickerPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	model := readyModel(t)
+	model.App.ActivePreset = presetPrimary
+	items := providerItems(&config.Config{})
+	model.Picker.Overlay = &pickerOverlayState{
+		title:    "Pick a provider",
+		items:    items,
+		filtered: items,
+		index:    pickerIndex(items, "zai"),
+		purpose:  pickerPurposeProvider,
+		preset:   presetFast,
+		cfg: &config.Config{
+			Provider:  "openrouter",
+			Model:     "vendor/primary",
+			FastModel: "vendor/fast",
+		},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+
+	if cmd == nil {
+		t.Fatal("expected non-listing provider selection notice")
+	}
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast picker target", model.App.ActivePreset)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("persisted active preset = %#v, want fast", state.ActivePreset)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "zai" {
+		t.Fatalf("config provider = %q, want zai", cfg.Provider)
+	}
+}
+
 func TestModelPickerPageKeysJumpByPage(t *testing.T) {
 	model := readyModel(t)
 	items := make([]pickerItem, 12)

@@ -148,7 +148,7 @@ func (m Model) providerSelection(
 			updated,
 			preset,
 			noModelConfiguredStatus(),
-		).withStatePersistence()
+		).withStatePersistence().withActivePresetPersistence()
 	}
 	return selection, nil
 }
