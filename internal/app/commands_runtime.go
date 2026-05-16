@@ -86,21 +86,18 @@ func (m Model) switchRuntimeCommand(
 	preserveSession bool,
 	persistState bool,
 ) (Model, tea.Cmd) {
+	transition := newRuntimeTransition(appCfg, cfg, preset, "")
+	if persistState {
+		transition = transition.withStatePersistence()
+	}
+	transition = transition.withActivePresetPersistence()
+
 	if m.Model.Switcher == nil {
-		appCfgCopy := cfg
-		if appCfg != nil {
-			appCfgCopy = appCfg
+		var err error
+		m, err = m.commitRuntimeTransition(transition)
+		if err != nil {
+			return m, runtimeTransitionErrorCmd(err)
 		}
-		if persistState {
-			if err := config.SaveState(appCfgCopy); err != nil {
-				return m, persistErrorCmd("save state", err)
-			}
-		}
-		if err := config.SaveActivePreset(preset.String()); err != nil {
-			return m, persistErrorCmd("save active preset", err)
-		}
-		snapshot := newRuntimeSnapshot(appCfgCopy, cfg, preset, "")
-		m.applyRuntimeSnapshot(snapshot)
 		return m, m.printEntries(notice)
 	}
 
@@ -112,10 +109,7 @@ func (m Model) switchRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := *cfg
-	appCfgCopy := cfgCopy
-	if appCfg != nil {
-		appCfgCopy = *appCfg
-	}
+	appCfgCopy := transition.snapshot.appConfig
 	m.Model.RuntimeSwitchRequest++
 	requestID := m.Model.RuntimeSwitchRequest
 	m.Progress.Status = "Switching runtime..."
@@ -128,20 +122,11 @@ func (m Model) switchRuntimeCommand(
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: requestID, err: err}
 		}
-		if persistState {
-			if err := config.SaveState(&appCfgCopy); err != nil {
-				closeSwitchedRuntime(sess, storageSess)
-				return runtimeSwitchErrorMsg{
-					switchID: requestID,
-					err:      fmt.Errorf("save state: %w", err),
-				}
-			}
-		}
-		if err := config.SaveActivePreset(preset.String()); err != nil {
+		if err := transition.persist(); err != nil {
 			closeSwitchedRuntime(sess, storageSess)
 			return runtimeSwitchErrorMsg{
 				switchID: requestID,
-				err:      fmt.Errorf("save active preset: %w", err),
+				err:      err,
 			}
 		}
 		return runtimeSwitchedMsg{
@@ -166,12 +151,19 @@ func (m Model) resumeRuntimeCommand(
 	notice session.Entry,
 	sessionID string,
 ) (Model, tea.Cmd) {
+	transition := newRuntimeTransition(
+		cfg,
+		cfg,
+		presetPrimary,
+		"",
+	).withActivePresetPersistence()
+
 	if m.Model.Switcher == nil {
-		if err := config.SaveActivePreset(presetPrimary.String()); err != nil {
-			return m, persistErrorCmd("save active preset", err)
+		var err error
+		m, err = m.commitRuntimeTransition(transition)
+		if err != nil {
+			return m, runtimeTransitionErrorCmd(err)
 		}
-		snapshot := newRuntimeSnapshot(cfg, cfg, presetPrimary, "")
-		m.applyRuntimeSnapshot(snapshot)
 		return m, m.printEntries(notice)
 	}
 	switcher := m.Model.Switcher
@@ -206,11 +198,11 @@ func (m Model) resumeRuntimeCommand(
 			printLines = append(printLines, header)
 		}
 		printLines = append(printLines, "", "--- resumed ---", "")
-		if err := config.SaveActivePreset(presetPrimary.String()); err != nil {
+		if err := transition.persist(); err != nil {
 			closeSwitchedRuntime(sess, storageSess)
 			return runtimeSwitchErrorMsg{
 				switchID: switchID,
-				err:      fmt.Errorf("save active preset: %w", err),
+				err:      err,
 			}
 		}
 		return runtimeSwitchedMsg{
