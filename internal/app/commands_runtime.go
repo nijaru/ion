@@ -143,12 +143,7 @@ func (m Model) resumeRuntimeCommand(
 	notice session.Entry,
 	sessionID string,
 ) (Model, tea.Cmd) {
-	transition := newRuntimeTransition(
-		cfg,
-		cfg,
-		presetPrimary,
-		"",
-	).withActivePresetPersistence()
+	transition := resumeSelectionTransition(cfg)
 
 	if m.Model.Switcher == nil {
 		var err error
@@ -159,7 +154,9 @@ func (m Model) resumeRuntimeCommand(
 		return m, m.printEntries(notice)
 	}
 	switcher := m.Model.Switcher
-	cfgCopy := *cfg
+	cfgCopy := transition.snapshot.backendConfig
+	appCfgCopy := transition.snapshot.appConfig
+	preset := transition.snapshot.preset
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
 	oldStorage := m.Model.Storage
@@ -199,9 +196,9 @@ func (m Model) resumeRuntimeCommand(
 		}
 		return runtimeSwitchedMsg{
 			switchID:      switchID,
-			cfg:           &cfgCopy,
+			cfg:           &appCfgCopy,
 			runtimeCfg:    &cfgCopy,
-			preset:        presetPrimary,
+			preset:        preset,
 			backend:       backend,
 			session:       sess,
 			storage:       storageSess,

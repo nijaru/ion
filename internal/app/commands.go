@@ -9,7 +9,6 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
@@ -143,32 +142,28 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		updated, err := updateProviderSelection(cfg, name)
+		selection, err := m.providerSelection(
+			context.Background(),
+			cfg,
+			name,
+			m.activePreset(),
+		)
 		if err != nil {
 			return m, cmdError(err.Error())
 		}
-		if err := ensureProviderReadyForSelection(context.Background(), updated); err != nil {
-			return m, cmdError(err.Error())
-		}
 		m.clearProgressError()
-		if !providers.SupportsModelListing(updated) {
-			transition := newRuntimeTransition(
-				updated,
-				updated,
-				m.activePreset(),
-				noModelConfiguredStatus(),
-			).withStatePersistence()
+		if !selection.supportsModelListing {
 			var commitErr error
-			m, commitErr = m.commitRuntimeTransition(transition)
+			m, commitErr = m.commitRuntimeTransition(selection.transition)
 			if commitErr != nil {
 				return m, runtimeTransitionErrorCmd(commitErr)
 			}
 			return m, m.printEntries(session.Entry{
 				Role:    session.System,
-				Content: providerModelEntryNotice(updated.Provider),
+				Content: providerModelEntryNotice(selection.cfg.Provider),
 			})
 		}
-		return m.openModelPickerWithConfig(updated)
+		return m.openModelPickerWithConfig(selection.cfg)
 
 	case "/settings":
 		return m.handleSettingsCommand(fields)
