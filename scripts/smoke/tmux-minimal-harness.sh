@@ -191,6 +191,19 @@ send_softwrap_composer_smoke() {
   sleep 0.5
 }
 
+send_command_picker_filter_smoke() {
+  tmux send-keys -t "$SESSION" "/" Tab
+  sleep 0.5
+  assert_visible_contains "Pick a command"
+  tmux send-keys -t "$SESSION" "settings"
+  sleep "${ION_TMUX_STEP_DELAY:-1}"
+  assert_visible_contains "› /settings"
+  tmux send-keys -t "$SESSION" Escape
+  sleep 0.2
+  tmux send-keys -t "$SESSION" C-c
+  sleep 0.5
+}
+
 start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
@@ -199,6 +212,7 @@ assert_contains "Type a message"
 
 send_multiline_composer_smoke
 send_softwrap_composer_smoke
+send_command_picker_filter_smoke
 
 send_line "/provider"
 assert_contains "Pick a provider"

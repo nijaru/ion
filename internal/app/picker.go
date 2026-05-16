@@ -263,6 +263,14 @@ func refreshPickerFilter(m *Model) {
 	query := strings.TrimSpace(m.Picker.Overlay.query)
 	if query == "" {
 		m.Picker.Overlay.filtered = append([]pickerItem(nil), m.Picker.Overlay.items...)
+		if len(m.Picker.Overlay.filtered) == 0 {
+			m.Picker.Overlay.index = 0
+			return
+		}
+		if m.Picker.Overlay.index >= len(m.Picker.Overlay.filtered) {
+			m.Picker.Overlay.index = len(m.Picker.Overlay.filtered) - 1
+		}
+		return
 	} else {
 		filtered := rankedPickerItems(m.Picker.Overlay.items, query)
 		m.Picker.Overlay.filtered = filtered
@@ -271,9 +279,7 @@ func refreshPickerFilter(m *Model) {
 		m.Picker.Overlay.index = 0
 		return
 	}
-	if m.Picker.Overlay.index >= len(m.Picker.Overlay.filtered) {
-		m.Picker.Overlay.index = len(m.Picker.Overlay.filtered) - 1
-	}
+	m.Picker.Overlay.index = 0
 }
 
 func pickerDisplayItems(p *pickerOverlayState) []pickerItem {
