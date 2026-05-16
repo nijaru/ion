@@ -92,6 +92,28 @@ assert_visible_line_count_at_most() {
   fi
 }
 
+assert_visible_contains() {
+  local needle="$1"
+  capture_visible
+  if ! grep -Fq -- "$needle" "$CAPTURE"; then
+    echo "missing expected visible text: $needle" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
+assert_visible_not_contains() {
+  local needle="$1"
+  capture_visible
+  if grep -Fq -- "$needle" "$CAPTURE"; then
+    echo "unexpected visible text: $needle" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
 assert_visible_separator_line_count_at_most() {
   local max="$1"
   local count
@@ -156,6 +178,19 @@ send_multiline_composer_smoke() {
   sleep 0.5
 }
 
+send_softwrap_composer_smoke() {
+  tmux resize-window -t "$SESSION" -x 48 -y 24
+  sleep 0.5
+  tmux send-keys -t "$SESSION" "write a sentence that should wrap across multiple terminal rows before submit"
+  sleep "${ION_TMUX_STEP_DELAY:-1}"
+  assert_visible_contains "write a sentence"
+  assert_visible_contains "before submit"
+  tmux send-keys -t "$SESSION" C-c
+  sleep 0.5
+  tmux resize-window -t "$SESSION" -x "$WIDTH" -y "$HEIGHT"
+  sleep 0.5
+}
+
 start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
@@ -163,10 +198,11 @@ assert_not_contains "Env inherit"
 assert_contains "Type a message"
 
 send_multiline_composer_smoke
+send_softwrap_composer_smoke
 
 send_line "/provider"
 assert_contains "Pick a provider"
-assert_not_contains "› /provider"
+assert_visible_not_contains "› /provider"
 tmux send-keys -t "$SESSION" Escape
 sleep 0.5
 
