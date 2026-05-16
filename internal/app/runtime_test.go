@@ -747,6 +747,64 @@ func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	}
 }
 
+func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{
+		id:     "resumed-session",
+		model:  "openai/new",
+		branch: "feature/resume",
+	}
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "old"},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{
+				sess:     newSession,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, newSession, newStorage, nil
+		},
+	).WithActivePreset("fast")
+
+	model, cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "new"},
+		session.Entry{Role: session.System, Content: "Resumed"},
+		newStorage.ID(),
+	)
+	if cmd == nil {
+		t.Fatal("expected resume runtime command")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("resume command message = %T, want runtimeSwitchedMsg", msg)
+	}
+	next, _ := model.Update(switched)
+	model = next.(Model)
+
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "primary" {
+		t.Fatalf("state active_preset = %#v, want primary", state.ActivePreset)
+	}
+}
+
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
 	oldSession := &stubSession{events: make(chan session.Event)}
@@ -1063,6 +1121,12 @@ func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 }
 
 func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
 	oldSession := &stubSession{events: make(chan session.Event)}
 	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
@@ -1102,6 +1166,13 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 	}
 	if !newStorage.closed {
 		t.Fatal("new storage was not closed after failed resume")
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("state active_preset = %#v, want fast after failed resume", state.ActivePreset)
 	}
 }
 
