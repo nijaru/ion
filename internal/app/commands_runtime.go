@@ -164,6 +164,9 @@ func (m Model) resumeRuntimeCommand(
 	sessionID string,
 ) (Model, tea.Cmd) {
 	if m.Model.Switcher == nil {
+		if err := config.SaveActivePreset(presetPrimary.String()); err != nil {
+			return m, persistErrorCmd("save active preset", err)
+		}
 		m.Model.Backend.SetConfig(cfg)
 		m.App.ActivePreset = presetPrimary
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
@@ -201,6 +204,13 @@ func (m Model) resumeRuntimeCommand(
 			printLines = append(printLines, header)
 		}
 		printLines = append(printLines, "", "--- resumed ---", "")
+		if err := config.SaveActivePreset(presetPrimary.String()); err != nil {
+			closeSwitchedRuntime(sess, storageSess)
+			return runtimeSwitchErrorMsg{
+				switchID: switchID,
+				err:      fmt.Errorf("save active preset: %w", err),
+			}
+		}
 		return runtimeSwitchedMsg{
 			switchID:      switchID,
 			cfg:           &cfgCopy,
