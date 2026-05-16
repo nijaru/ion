@@ -805,6 +805,39 @@ func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
 	}
 }
 
+func TestResumeRuntimeWithoutSwitcherUpdatesAppConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "old",
+		},
+	}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	updated, cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openrouter", Model: "z-ai/glm-5"},
+		session.Entry{Role: session.System, Content: "Resumed"},
+		"session-1",
+	)
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected resume notice")
+	}
+	if capture.cfg == nil ||
+		capture.cfg.Provider != "openrouter" ||
+		capture.cfg.Model != "z-ai/glm-5" {
+		t.Fatalf("backend config = %#v, want resumed runtime", capture.cfg)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.Provider != "openrouter" ||
+		model.Model.Config.Model != "z-ai/glm-5" {
+		t.Fatalf("app config = %#v, want resumed runtime", model.Model.Config)
+	}
+}
+
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
 	oldSession := &stubSession{events: make(chan session.Event)}

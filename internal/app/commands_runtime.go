@@ -87,8 +87,12 @@ func (m Model) switchRuntimeCommand(
 	persistState bool,
 ) (Model, tea.Cmd) {
 	if m.Model.Switcher == nil {
+		appCfgCopy := cfg
+		if appCfg != nil {
+			appCfgCopy = appCfg
+		}
 		if persistState {
-			if err := config.SaveState(appCfg); err != nil {
+			if err := config.SaveState(appCfgCopy); err != nil {
 				return m, persistErrorCmd("save state", err)
 			}
 		}
@@ -96,6 +100,7 @@ func (m Model) switchRuntimeCommand(
 			return m, persistErrorCmd("save active preset", err)
 		}
 		m.Model.Backend.SetConfig(cfg)
+		m.Model.Config = appCfgCopy
 		m.App.ActivePreset = preset
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 		return m, m.printEntries(notice)
@@ -168,6 +173,7 @@ func (m Model) resumeRuntimeCommand(
 			return m, persistErrorCmd("save active preset", err)
 		}
 		m.Model.Backend.SetConfig(cfg)
+		m.Model.Config = cfg
 		m.App.ActivePreset = presetPrimary
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 		return m, m.printEntries(notice)

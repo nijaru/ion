@@ -81,6 +81,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 			}
 			m.Model.Backend.SetConfig(runtimeCfg)
+			m.Model.Config = updated
 			m.Progress.Status = noProviderConfiguredStatus()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Model set to " + name},
