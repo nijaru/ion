@@ -103,7 +103,8 @@ type gitDiffStatsMsg struct {
 }
 
 type queuedTurnMsg struct {
-	text string
+	text               string
+	rearmSessionEvents bool
 }
 
 type sessionPickerItem struct {
