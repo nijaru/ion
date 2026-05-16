@@ -97,6 +97,14 @@ func (m Model) refreshSessionPickerFilter() {
 	query := strings.TrimSpace(m.Picker.Session.query)
 	if query == "" {
 		m.Picker.Session.filtered = append([]sessionPickerItem(nil), m.Picker.Session.items...)
+		if len(m.Picker.Session.filtered) == 0 {
+			m.Picker.Session.index = 0
+			return
+		}
+		if m.Picker.Session.index >= len(m.Picker.Session.filtered) {
+			m.Picker.Session.index = len(m.Picker.Session.filtered) - 1
+		}
+		return
 	} else {
 		m.Picker.Session.filtered = rankedSessionPickerItems(m.Picker.Session.items, query, m.App.Workdir)
 	}
@@ -104,9 +112,7 @@ func (m Model) refreshSessionPickerFilter() {
 		m.Picker.Session.index = 0
 		return
 	}
-	if m.Picker.Session.index >= len(m.Picker.Session.filtered) {
-		m.Picker.Session.index = len(m.Picker.Session.filtered) - 1
-	}
+	m.Picker.Session.index = 0
 }
 
 func (m Model) renderSessionPicker() string {

@@ -314,6 +314,33 @@ func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
 	}
 }
 
+func TestSessionPickerFilteringSelectsTopRankedMatch(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.Session = &sessionPickerState{
+		items: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "sess-1", Title: "zz resume"}},
+			{info: storage.SessionInfo{ID: "sess-2", Title: "resume"}},
+		},
+		index: 1,
+	}
+	model.Picker.Session.filtered = model.Picker.Session.items
+
+	for _, r := range []rune("resume") {
+		model, _ = model.handleSessionPickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+
+	items := model.Picker.Session.filtered
+	if len(items) != 2 {
+		t.Fatalf("filtered items = %#v, want two matches", items)
+	}
+	if got := model.Picker.Session.index; got != 0 {
+		t.Fatalf("selected index = %d, want top ranked match", got)
+	}
+	if got := items[model.Picker.Session.index].info.ID; got != "sess-2" {
+		t.Fatalf("selected session = %q, want sess-2", got)
+	}
+}
+
 func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 80
