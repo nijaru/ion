@@ -576,6 +576,40 @@ func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
 	}
 }
 
+func TestPickerFilteringSelectsTopRankedMatch(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a model",
+		items: []pickerItem{
+			{Label: "vendor/slow-model", Value: "vendor/slow-model"},
+			{Label: "vendor/fast", Value: "vendor/fast"},
+			{Label: "vendor/fast-turbo", Value: "vendor/fast-turbo"},
+		},
+		filtered: []pickerItem{
+			{Label: "vendor/slow-model", Value: "vendor/slow-model"},
+			{Label: "vendor/fast", Value: "vendor/fast"},
+			{Label: "vendor/fast-turbo", Value: "vendor/fast-turbo"},
+		},
+		index:   2,
+		purpose: pickerPurposeModel,
+	}
+
+	for _, r := range []rune("fast") {
+		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 2 {
+		t.Fatalf("filtered items = %d, want 2", len(items))
+	}
+	if got := model.Picker.Overlay.index; got != 0 {
+		t.Fatalf("selected index = %d, want top ranked match", got)
+	}
+	if got := items[model.Picker.Overlay.index].Value; got != "vendor/fast" {
+		t.Fatalf("selected model = %q, want vendor/fast", got)
+	}
+}
+
 func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{
