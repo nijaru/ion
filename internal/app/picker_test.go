@@ -902,6 +902,7 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 func TestModelPickerCtrlMChangesEditTargetWithoutChangingActiveRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cfg := &config.Config{
 		Provider:  "openai",

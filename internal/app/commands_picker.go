@@ -101,17 +101,15 @@ func (m Model) openModelPickerForPreset(
 	if !providers.SupportsModelListing(cfg) {
 		return m, cmdError(providerModelEntryNotice(cfg.Provider))
 	}
-	if configuredModelForPreset(cfg, preset) == "" {
-		setup, err := providerSetupPrompt(context.Background(), cfg)
-		if err != nil {
-			return m, cmdError(err.Error())
-		}
-		switch setup {
-		case setupPromptAPIKey:
-			return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
-		case setupPromptEndpoint:
-			return m.openEndpointPrompt(cfg, preset)
-		}
+	setup, err := providerSetupPrompt(context.Background(), cfg)
+	if err != nil {
+		return m, cmdError(err.Error())
+	}
+	switch setup {
+	case setupPromptAPIKey:
+		return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
+	case setupPromptEndpoint:
+		return m.openEndpointPrompt(cfg, preset)
 	}
 	return m.openReadyModelPickerForPreset(cfg, preset)
 }
