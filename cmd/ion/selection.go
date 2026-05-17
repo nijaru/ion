@@ -151,6 +151,9 @@ func applySessionConfigFromMetadata(
 	if provider == "" {
 		return nil
 	}
+	if providers.ResolveID(cfg.Provider) != providers.ResolveID(provider) {
+		clearProviderScopedPresets(cfg)
+	}
 	cfg.Provider = provider
 	cfg.Model = model
 	return nil
