@@ -76,6 +76,27 @@ func TestBashCancellationKillsProcessGroup(t *testing.T) {
 	}
 }
 
+func TestBashExecuteDoesNotWaitForDetachedChildHoldingStdout(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := NewBash(tmpDir)
+
+	start := time.Now()
+	res, err := b.Execute(t.Context(), `{"command":"printf done; (sleep 1; touch survived) &"}`)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("detached child held command for %s; output=%q", elapsed, res)
+	}
+	if strings.TrimSpace(res) != "done" {
+		t.Fatalf("output = %q, want done", res)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(tmpDir, "survived")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detached child marker stat err = %v, want not exist", err)
+	}
+}
+
 func TestBash_Execute(t *testing.T) {
 	tmpDir := t.TempDir()
 	b := NewBash(tmpDir)

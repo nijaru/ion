@@ -64,7 +64,7 @@ func TestFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read with limit failed: %v", err)
 		}
-		if res != "     2\tline 2" {
+		if res != "     2\tline 2\n\n[1 more line(s) in file. Use offset=3 to continue.]" {
 			t.Errorf("expected numbered line 2, got %q", res)
 		}
 
@@ -77,7 +77,7 @@ func TestFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read with zero offset failed: %v", err)
 		}
-		if res != "     1\tline 1" {
+		if res != "     1\tline 1\n\n[2 more line(s) in file. Use offset=2 to continue.]" {
 			t.Errorf("expected zero offset to start at line 1, got %q", res)
 		}
 
@@ -140,12 +140,9 @@ func TestFileTools(t *testing.T) {
 			"offset":    99,
 			"limit":     10,
 		})
-		res, err = r.Execute(context.Background(), string(emptyRangeArgs))
-		if err != nil {
-			t.Fatalf("empty range read failed: %v", err)
-		}
-		if res != "" {
-			t.Fatalf("empty range read = %q, want empty", res)
+		_, err = r.Execute(context.Background(), string(emptyRangeArgs))
+		if err == nil || !strings.Contains(err.Error(), "beyond end of file") {
+			t.Fatalf("empty range read error = %v, want beyond end of file", err)
 		}
 	})
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type localCommand struct {
@@ -18,6 +19,7 @@ type localCommand struct {
 }
 
 const maxOutputSize = maxToolOutputSize
+const exitStdioGrace = 100 * time.Millisecond
 
 type localExecutor struct {
 	sandbox     SandboxMode
@@ -110,18 +112,27 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	cmd.Env = e.environment.commandEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWriter, err := pipeForCommand()
 	if err != nil {
 		return "", fmt.Errorf("stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	defer stdout.Close()
+	stderr, stderrWriter, err := pipeForCommand()
 	if err != nil {
+		_ = stdoutWriter.Close()
 		return "", fmt.Errorf("stderr pipe: %w", err)
 	}
+	defer stderr.Close()
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 
 	if err := cmd.Start(); err != nil {
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
 		return "", err
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 
 	stopKill := context.AfterFunc(ctx, func() {
 		if cmd.Process != nil {
@@ -195,10 +206,8 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	wg.Go(func() { readPipe(stdout) })
 	wg.Go(func() { readPipe(stderr) })
 
-	// StdoutPipe/StderrPipe must be drained before Wait; Wait can close pipes
-	// before slow readers consume buffered output.
-	wg.Wait()
 	err = cmd.Wait()
+	waitForReadersOrClosePipes(&wg, cmd.Process.Pid, stdout, stderr)
 	if emitErr != nil {
 		return output.String(), emitErr
 	}
@@ -220,4 +229,32 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	}
 
 	return result, nil
+}
+
+func pipeForCommand() (*os.File, *os.File, error) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	return reader, writer, nil
+}
+
+func waitForReadersOrClosePipes(wg *sync.WaitGroup, processID int, readers ...*os.File) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(exitStdioGrace):
+		if processID > 0 {
+			_ = syscall.Kill(-processID, syscall.SIGKILL)
+		}
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+		<-done
+	}
 }
