@@ -38,7 +38,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 	if m.localCommandBusy() {
-		return m, cmdError("Finish or cancel the current turn before changing presets.")
+		return m, cmdError(m.localCommandBusyMessage("changing presets"))
 	}
 	cfg, err := m.commandConfig()
 	if err != nil {

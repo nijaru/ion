@@ -749,6 +749,37 @@ func TestBusyTurnBlocksRuntimeChangingCommands(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchBlocksRuntimeChangingCommands(t *testing.T) {
+	commands := []string{
+		"/primary",
+		"/fast",
+		"/resume session-1",
+		"/model model-b",
+		"/provider local-api",
+		"/thinking high",
+		"/settings retry on",
+		"/new",
+		"/clear",
+		"/compact",
+	}
+
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			model := readyModel(t)
+			model.Model.RuntimeSwitchRequest = 1
+
+			_, cmd := model.handleCommand(command)
+			if cmd == nil {
+				t.Fatal("expected runtime-switch command to return an error")
+			}
+			err := localErrorFromMsg(t, cmd())
+			if !strings.Contains(err.Error(), "runtime switch") {
+				t.Fatalf("error = %v, want runtime-switch guard", err)
+			}
+		})
+	}
+}
+
 func TestBusyTurnAllowsReadOnlyLocalCommands(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
@@ -763,6 +794,26 @@ func TestBusyTurnAllowsReadOnlyLocalCommands(t *testing.T) {
 				t.Fatalf("%s should remain available while a turn is active", command)
 			}
 		})
+	}
+}
+
+func TestRuntimeSwitchBlocksPresetHotkey(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 1
+	model.App.ActivePreset = presetPrimary
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected runtime-switch guard error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime-switch guard", err)
+	}
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want unchanged primary", model.App.ActivePreset)
 	}
 }
 
@@ -791,6 +842,34 @@ func TestBusyTurnBlocksRuntimeChangingPickerSelection(t *testing.T) {
 	err := localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
 		t.Fatalf("error = %v, want busy-turn guard", err)
+	}
+}
+
+func TestRuntimeSwitchBlocksRuntimeChangingPickerSelection(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 1
+	model.Picker.Overlay = &pickerOverlayState{
+		items: []pickerItem{
+			{Label: "model-b", Value: "model-b"},
+		},
+		filtered: []pickerItem{
+			{Label: "model-b", Value: "model-b"},
+		},
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "local-api", Model: "model-a"},
+	}
+
+	updated, cmd := model.commitPickerSelection()
+	model = updated
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected runtime-switch picker selection to close overlay")
+	}
+	if cmd == nil {
+		t.Fatal("expected runtime-switch picker selection to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime-switch guard", err)
 	}
 }
 
