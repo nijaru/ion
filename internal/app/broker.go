@@ -31,10 +31,15 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 // handleSessionEvent processes events from the agent session channel.
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	if m.InFlight.DrainUntilTurnStarted {
-		if _, ok := ev.(session.TurnStarted); !ok {
+		started, ok := ev.(session.TurnStarted)
+		if !ok {
+			return m, m.awaitSessionEvent()
+		}
+		if m.isDrainedLateTurnStart(started) {
 			return m, m.awaitSessionEvent()
 		}
 		m.InFlight.DrainUntilTurnStarted = false
+		m.InFlight.DrainStartedAt = time.Time{}
 	}
 
 	switch msg := ev.(type) {
@@ -126,13 +131,12 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
 	m.clearActiveTurnState(true)
 	m.InFlight.DrainUntilTurnStarted = true
+	m.InFlight.DrainStartedAt = time.Now()
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
 	m.Progress.Status = ""
-	displayErr := "session error"
-	if err != nil {
-		displayErr = err.Error()
-	}
+	m.Progress.StatusUpdatedAt = time.Time{}
+	displayErr := sessionErrorDisplay(err)
 	var cmds []tea.Cmd
 	if limit, ok := classifyProviderLimitError(err); ok {
 		displayErr = limit.display()
@@ -193,6 +197,10 @@ func isLocalBusyStatus(status string) bool {
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 	if msg.AgentID == "" {
 		m.Progress.Status = msg.Status
+		m.Progress.StatusUpdatedAt = msg.Timestamp
+		if m.Progress.StatusUpdatedAt.IsZero() {
+			m.Progress.StatusUpdatedAt = time.Now()
+		}
 		m.Progress.Compacting = isCompactingStatus(msg.Status)
 	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
 		p.Status = msg.Status
@@ -205,6 +213,20 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 		return m, m.persistErrorAndAwait("persist status", err)
 	}
 	return m, m.awaitSessionEvent()
+}
+
+func sessionErrorDisplay(err error) string {
+	if err == nil {
+		return "session error"
+	}
+	raw := strings.Join(strings.Fields(err.Error()), " ")
+	if raw == "" {
+		return "session error"
+	}
+	if strings.Contains(strings.ToLower(raw), "assistant response has no content") {
+		return "Provider returned an empty response. Try again or switch models."
+	}
+	return privacy.Redact(raw)
 }
 
 func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
@@ -239,6 +261,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 			}
 			m.clearActiveTurnState(true)
 			m.InFlight.DrainUntilTurnStarted = true
+			m.InFlight.DrainStartedAt = time.Now()
 			m.Progress.Mode = stateCancelled
 			m.Progress.Status = ""
 			entry := session.Entry{
@@ -279,6 +302,13 @@ func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	m.InFlight.PendingTools = nil
 	m.InFlight.AgentCommitted = false
 	return m, m.awaitSessionEvent()
+}
+
+func (m Model) isDrainedLateTurnStart(msg session.TurnStarted) bool {
+	if m.InFlight.DrainStartedAt.IsZero() || msg.Timestamp.IsZero() {
+		return false
+	}
+	return !msg.Timestamp.After(m.InFlight.DrainStartedAt)
 }
 
 func (m Model) handleTurnFinished() (Model, tea.Cmd) {

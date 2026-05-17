@@ -17,9 +17,11 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	}
 	m.clearActiveTurnState(true)
 	m.InFlight.DrainUntilTurnStarted = true
+	m.InFlight.DrainStartedAt = time.Now()
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateCancelled
 	m.Progress.Status = ""
+	m.Progress.StatusUpdatedAt = time.Time{}
 	entry := session.Entry{Role: session.System, Content: reason}
 	if err := m.persistEntry(storage.System{
 		Type:    "system",
@@ -43,6 +45,7 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 	m.InFlight.ReasonBuf = ""
 	m.InFlight.AgentCommitted = false
 	m.InFlight.DrainUntilTurnStarted = false
+	m.InFlight.DrainStartedAt = time.Time{}
 	m.Progress.LastToolUseID = ""
 	m.Progress.ContextTokens = 0
 }

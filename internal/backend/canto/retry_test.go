@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"syscall"
 	"testing"
@@ -116,7 +117,7 @@ func TestRetryRecoveryWaitsThroughToolLoop(t *testing.T) {
 	}
 	defer func() { _ = b.Close() }()
 
-	if retry, ok := b.llm.(*llm.RetryProvider); ok {
+	if retry, ok := retryProviderInChain(b.llm); ok {
 		retry.Config.MinInterval = time.Millisecond
 		retry.Config.MaxInterval = time.Millisecond
 	}
@@ -143,6 +144,129 @@ func TestRetryRecoveryWaitsThroughToolLoop(t *testing.T) {
 	}
 	if !entryExists(entries, ionsession.Agent, "final after retry tool") {
 		t.Fatalf("final assistant response was not persisted: %#v", entries)
+	}
+}
+
+func TestRetryExhaustionDoesNotEscalateProviderError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-retry", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &retryProvider{
+		FauxProvider: ctesting.NewFauxProvider(
+			"openai",
+			ctesting.Step{Err: transientStreamErr},
+			ctesting.Step{Err: transientStreamErr},
+			ctesting.Step{Err: transientStreamErr},
+			ctesting.Step{Err: transientStreamErr},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	retry, ok := retryProviderInChain(b.llm)
+	if !ok {
+		t.Fatalf("backend llm = %T, want retry provider in wrapper chain", b.llm)
+	}
+	retry.Config.MinInterval = time.Millisecond
+	retry.Config.MaxInterval = time.Millisecond
+
+	if err := b.SubmitTurn(ctx, "retry until terminal"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	msg := waitForSessionError(t, b.Events())
+	waitForTurnFinishedAfterError(t, b.Events())
+
+	if strings.Contains(msg.Err.Error(), "escalation exhausted") {
+		t.Fatalf("error leaked agent escalation wording: %v", msg.Err)
+	}
+	calls := provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("provider calls = %d, want only RetryProvider attempts", len(calls))
+	}
+}
+
+func TestSetConfigUpdatesWrappedRetryProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-retry", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &retryProvider{FauxProvider: ctesting.NewFauxProvider("openai")}
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	retry, ok := retryProviderInChain(b.llm)
+	if !ok {
+		t.Fatalf("backend llm = %T, want retry provider in wrapper chain", b.llm)
+	}
+
+	retryUntilCancelled := false
+	b.SetConfig(&config.Config{
+		Provider:            "openai",
+		Model:               "model-a",
+		ContextLimit:        100,
+		RetryUntilCancelled: &retryUntilCancelled,
+	})
+	if retry.Config.RetryForever {
+		t.Fatal("RetryForever = true, want updated false")
+	}
+	if !retry.Config.RetryForeverTransportOnly {
+		t.Fatal("RetryForeverTransportOnly = false, want true")
 	}
 }
 
@@ -187,6 +311,9 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 		if !strings.Contains(status.Status, "Provider error") {
 			t.Fatalf("status = %q, want provider error label", status.Status)
 		}
+		if !strings.Contains(status.Status, "transient provider failure") {
+			t.Fatalf("status = %q, want provider error detail", status.Status)
+		}
 		if !strings.Contains(status.Status, "Ctrl+C stops") {
 			t.Fatalf("status = %q, want cancel hint", status.Status)
 		}
@@ -203,5 +330,19 @@ func TestRetryStatusLabelsTransportErrors(t *testing.T) {
 	})
 	if !strings.Contains(status, "Network error") {
 		t.Fatalf("status = %q, want network error label", status)
+	}
+}
+
+func TestRetryStatusRedactsErrorDetail(t *testing.T) {
+	status := retryStatus(llm.RetryEvent{
+		Attempt: 1,
+		Delay:   time.Second,
+		Err:     errors.New("request failed api_key=sk-secret1234567890"),
+	})
+	if strings.Contains(status, "sk-secret") {
+		t.Fatalf("status leaked secret: %q", status)
+	}
+	if !strings.Contains(status, "[redacted-secret]") {
+		t.Fatalf("status = %q, want redaction marker", status)
 	}
 }

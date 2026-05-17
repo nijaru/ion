@@ -10,6 +10,7 @@ import (
 	cproviders "github.com/nijaru/canto/llm/providers"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/providers"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
@@ -33,23 +34,57 @@ func configureRetryProvider(
 	return retry
 }
 
+type providerRetryOwner struct {
+	llm.Provider
+}
+
+func (p providerRetryOwner) IsTransient(error) bool {
+	return false
+}
+
+// useProviderRetryOnly makes provider retry/backoff the single native retry owner.
+func useProviderRetryOnly(p llm.Provider) llm.Provider {
+	if p == nil {
+		return nil
+	}
+	return providerRetryOwner{Provider: p}
+}
+
+func retryProviderInChain(p llm.Provider) (*llm.RetryProvider, bool) {
+	switch provider := p.(type) {
+	case nil:
+		return nil, false
+	case *llm.RetryProvider:
+		return provider, true
+	case providerRetryOwner:
+		return retryProviderInChain(provider.Provider)
+	case requestObservingProvider:
+		return retryProviderInChain(provider.Provider)
+	default:
+		return nil, false
+	}
+}
+
 func retryStatus(event llm.RetryEvent) string {
 	delay := event.Delay.Round(time.Second)
 	if delay <= 0 {
 		delay = event.Delay
 	}
-	kind := "Provider error"
+	label := "Provider error"
 	if llm.IsTransientTransportError(event.Err) {
-		kind = "Network error"
+		label = "Network error"
+	}
+	if detail := retryErrorDetail(event.Err); detail != "" {
+		label += ": " + detail
 	}
 	if delay > 0 {
 		return fmt.Sprintf(
 			"%s. Retrying in %s... Ctrl+C stops.",
-			kind,
+			label,
 			delay,
 		)
 	}
-	return kind + ". Retrying... Ctrl+C stops."
+	return label + ". Retrying... Ctrl+C stops."
 }
 
 func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
@@ -144,4 +179,16 @@ func providerModels(cfg *config.Config) []llm.Model {
 
 func missingAuthDetail(cfg *config.Config, def providers.Definition) string {
 	return providers.MissingAuthDetail(cfg, def)
+}
+
+func retryErrorDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := strings.Join(strings.Fields(privacy.Redact(err.Error())), " ")
+	const maxLen = 160
+	if len(detail) <= maxLen {
+		return detail
+	}
+	return strings.TrimSpace(detail[:maxLen-3]) + "..."
 }

@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
@@ -27,7 +26,7 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	}
 	copied := *cfg
 	b.cfg = &copied
-	if retry, ok := b.compactLLM.(*llm.RetryProvider); ok {
+	if retry, ok := retryProviderInChain(b.compactLLM); ok {
 		retry.Config.RetryForever = copied.RetryUntilCancelledEnabled()
 		retry.Config.RetryForeverTransportOnly = true
 	}

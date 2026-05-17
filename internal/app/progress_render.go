@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 func (m Model) renderQueuedTurns() string {
@@ -34,7 +35,11 @@ func (m Model) progressLine() string {
 	}
 	switch m.Progress.Mode {
 	case stateIonizing, stateStreaming, stateWorking:
-		status := m.Progress.Status
+		status := retryCountdownStatus(
+			m.Progress.Status,
+			m.Progress.StatusUpdatedAt,
+			time.Now(),
+		)
 		if isIdleStatus(status) || isConfigurationStatus(status) {
 			switch m.Progress.Mode {
 			case stateIonizing:
@@ -69,6 +74,9 @@ func (m Model) progressLine() string {
 	case stateBlocked:
 		line = m.st.warn.Render("⚠ Subagent blocked")
 	case stateError:
+		if m.suppressTerminalErrorProgress() {
+			return ""
+		}
 		line = m.st.warn.Render("× Error")
 	default:
 		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
@@ -93,6 +101,10 @@ func (m Model) suppressIdleReadyProgress() bool {
 	return m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0
 }
 
+func (m Model) suppressTerminalErrorProgress() bool {
+	return m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0
+}
+
 func (m Model) renderProgressStats(parts []string) string {
 	if len(parts) == 0 {
 		return ""
@@ -103,4 +115,34 @@ func (m Model) renderProgressStats(parts []string) string {
 		b.WriteString(m.st.dim.Render(part))
 	}
 	return b.String()
+}
+
+func retryCountdownStatus(status string, updatedAt, now time.Time) string {
+	if updatedAt.IsZero() || now.IsZero() {
+		return status
+	}
+	prefix, rest, ok := strings.Cut(status, "Retrying in ")
+	if !ok {
+		return status
+	}
+	delayText, suffix, ok := strings.Cut(rest, "...")
+	if !ok {
+		return status
+	}
+	delay, err := time.ParseDuration(strings.TrimSpace(delayText))
+	if err != nil {
+		return status
+	}
+	remaining := updatedAt.Add(delay).Sub(now)
+	if remaining <= 0 {
+		return prefix + "Retrying now..." + suffix
+	}
+	return prefix + "Retrying in " + roundUpSecond(remaining).String() + "..." + suffix
+}
+
+func roundUpSecond(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return ((d + time.Second - 1) / time.Second) * time.Second
 }
