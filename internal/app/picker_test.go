@@ -1862,14 +1862,23 @@ func TestSetupPromptIgnoresControlKeyText(t *testing.T) {
 func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3.6:27b"}]}`))
+	}))
+	defer srv.Close()
+	endpoint := srv.URL + "/v1"
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 			if cfg.Provider != "openai-compatible" {
 				t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 			}
-			if cfg.Endpoint != "http://fedora:11434/v1" {
-				t.Fatalf("endpoint = %q, want normalized fedora endpoint", cfg.Endpoint)
+			if cfg.Endpoint != endpoint {
+				t.Fatalf("endpoint = %q, want normalized endpoint %q", cfg.Endpoint, endpoint)
 			}
 			return []registry.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
 		},
@@ -1880,7 +1889,7 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 	if cmd != nil {
 		t.Fatalf("unexpected endpoint prompt command %T", cmd)
 	}
-	for _, r := range "fedora:11434" {
+	for _, r := range srv.URL {
 		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
 		if cmd != nil {
 			t.Fatalf("typing returned command %T", cmd)
@@ -1893,8 +1902,8 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 	if err != nil {
 		t.Fatalf("load stable config: %v", err)
 	}
-	if stable.Endpoint != "http://fedora:11434/v1" {
-		t.Fatalf("stable endpoint = %q, want normalized fedora endpoint", stable.Endpoint)
+	if stable.Endpoint != endpoint {
+		t.Fatalf("stable endpoint = %q, want normalized endpoint %q", stable.Endpoint, endpoint)
 	}
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
