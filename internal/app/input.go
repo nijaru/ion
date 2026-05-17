@@ -41,8 +41,7 @@ func (m Model) statusLine() string {
 		gitDiff = m.st.dim.Render(value)
 	}
 
-	total := m.Progress.TokensSent + m.Progress.TokensReceived
-	usage := m.renderTokenUsage(total, limit)
+	usage := m.renderContextUsage(m.Progress.ContextTokens, limit)
 
 	cost := ""
 	if label := m.costBudgetLabel(m.Progress.TotalCost); label != "" {
@@ -82,7 +81,7 @@ func (m Model) statusModelLabel(model string) string {
 	return model + " (fast)"
 }
 
-func (m Model) renderTokenUsage(total, limit int) string {
+func (m Model) renderContextUsage(total, limit int) string {
 	if total <= 0 {
 		return ""
 	}

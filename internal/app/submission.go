@@ -44,6 +44,7 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 	m.InFlight.AgentCommitted = false
 	m.InFlight.DrainUntilTurnStarted = false
 	m.Progress.LastToolUseID = ""
+	m.Progress.ContextTokens = 0
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {

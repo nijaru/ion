@@ -187,6 +187,76 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 }
 
+func TestTokenUsageSeparatesSessionTotalsFromContextEstimate(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10, Cost: 0.01})
+	model = updated.(Model)
+	updated, _ = model.Update(session.TokenUsage{Input: 20, Output: 5, Cost: 0.02})
+	model = updated.(Model)
+
+	if model.Progress.TokensSent != 120 || model.Progress.TokensReceived != 15 {
+		t.Fatalf(
+			"session totals = %d/%d, want 120/15",
+			model.Progress.TokensSent,
+			model.Progress.TokensReceived,
+		)
+	}
+	if model.Progress.ContextTokens != 135 {
+		t.Fatalf("context tokens = %d, want 135", model.Progress.ContextTokens)
+	}
+	if model.Progress.TotalCost != 0.03 || model.Progress.CurrentTurnCost != 0.03 {
+		t.Fatalf(
+			"cost totals = %.3f/%.3f, want 0.030/0.030",
+			model.Progress.TotalCost,
+			model.Progress.CurrentTurnCost,
+		)
+	}
+}
+
+func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Args:      "echo ok",
+	})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolResult{
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Result:    "ok\n",
+	})
+	model = updated.(Model)
+
+	if model.Progress.ContextTokens != 0 {
+		t.Fatalf("context tokens after tool = %d, want reset", model.Progress.ContextTokens)
+	}
+
+	updated, _ = model.Update(session.TokenUsage{Input: 140, Output: 20})
+	model = updated.(Model)
+
+	if model.Progress.TokensSent != 240 || model.Progress.TokensReceived != 30 {
+		t.Fatalf(
+			"session totals = %d/%d, want 240/30",
+			model.Progress.TokensSent,
+			model.Progress.TokensReceived,
+		)
+	}
+	if model.Progress.ContextTokens != 160 {
+		t.Fatalf("context tokens = %d, want 160", model.Progress.ContextTokens)
+	}
+}
+
 func TestAgentDeltaDoesNotAppendToPendingToolEntry(t *testing.T) {
 	model := readyModel(t)
 

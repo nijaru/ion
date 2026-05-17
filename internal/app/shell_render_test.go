@@ -469,6 +469,7 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.TokensSent = 0
 	model.Progress.TokensReceived = 0
+	model.Progress.ContextTokens = 0
 	model.Progress.TotalCost = 0
 	model.Model.Backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
 
@@ -481,7 +482,7 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	}
 }
 
-func TestStatusLineColorsTokenUsageByContextPercentage(t *testing.T) {
+func TestStatusLineColorsContextUsageByContextPercentage(t *testing.T) {
 	tests := []struct {
 		name  string
 		total int
@@ -498,7 +499,7 @@ func TestStatusLineColorsTokenUsageByContextPercentage(t *testing.T) {
 				sess:         &stubSession{events: make(chan session.Event)},
 				contextLimit: 100_000,
 			}
-			model.Progress.TokensSent = tt.total
+			model.Progress.ContextTokens = tt.total
 
 			label := fmt.Sprintf("%dk/100k (%d%%)", tt.total/1000, tt.total/1000)
 			rendered := map[string]string{
@@ -510,6 +511,25 @@ func TestStatusLineColorsTokenUsageByContextPercentage(t *testing.T) {
 				t.Fatalf("status line = %q, want rendered usage %q", model.statusLine(), rendered)
 			}
 		})
+	}
+}
+
+func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:         &stubSession{events: make(chan session.Event)},
+		contextLimit: 100_000,
+	}
+	model.Progress.TokensSent = 180_000
+	model.Progress.TokensReceived = 20_000
+	model.Progress.ContextTokens = 0
+
+	line := ansi.Strip(model.statusLine())
+	if strings.Contains(line, "200k/100k") {
+		t.Fatalf("status line used cumulative tokens as context usage: %q", line)
+	}
+	if strings.Contains(line, "k/100k") {
+		t.Fatalf("status line should hide unknown context usage: %q", line)
 	}
 }
 
