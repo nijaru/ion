@@ -766,6 +766,36 @@ func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
 	}
 }
 
+func TestSessionErrorSoftensEmptyAssistantResponse(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, _ := model.Update(session.Error{
+		Err: errors.New(
+			"assistant response has no content, reasoning, thinking blocks, or tool calls",
+		),
+	})
+	model = next.(Model)
+
+	want := "Provider returned an empty response. Try again or switch models."
+	if model.Progress.LastError != want {
+		t.Fatalf("last error = %q, want %q", model.Progress.LastError, want)
+	}
+	if got := ansi.Strip(model.progressLine()); got != "" {
+		t.Fatalf("progress line = %q, want printed transcript to own the error", got)
+	}
+	var sys storage.System
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.System); ok {
+			sys = e
+		}
+	}
+	if !strings.Contains(sys.Content, want) {
+		t.Fatalf("system error = %q, want friendly empty-response message", sys.Content)
+	}
+}
+
 func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)

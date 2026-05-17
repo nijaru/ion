@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -472,8 +473,22 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	if !model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("expected cancel to drain late turn events")
 	}
+	drainStartedAt := model.InFlight.DrainStartedAt
+	if drainStartedAt.IsZero() {
+		t.Fatal("expected cancel to record drain fence timestamp")
+	}
 
 	model.App.PrintedTranscript = false
+	updated, _ := model.Update(session.TurnStarted{
+		Base: session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
+	})
+	model = updated.(Model)
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("late turn start reopened progress mode = %v", model.Progress.Mode)
+	}
+	if !model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("late turn start cleared drain fence")
+	}
 	for _, ev := range []session.Event{
 		session.AgentDelta{Delta: "stale"},
 		session.ThinkingDelta{Delta: "stale reasoning"},
@@ -501,7 +516,9 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatalf("late cancelled-turn events changed visible state: %#v", model.InFlight)
 	}
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ = model.Update(session.TurnStarted{
+		Base: session.BaseAt(drainStartedAt.Add(time.Millisecond)),
+	})
 	model = updated.(Model)
 	if model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("fresh turn did not clear drain fence")

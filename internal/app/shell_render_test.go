@@ -365,6 +365,32 @@ func TestErrorProgressLineUsesCompactStateCopy(t *testing.T) {
 	}
 }
 
+func TestErrorProgressLineSuppressesDuplicateAfterTranscriptPrint(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = true
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "backend failed"
+
+	if got := ansi.Strip(model.progressLine()); got != "" {
+		t.Fatalf("progress line = %q, want no duplicate error row", got)
+	}
+}
+
+func TestRetryCountdownStatusUsesStatusTimestamp(t *testing.T) {
+	updatedAt := time.Date(2026, 5, 17, 13, 0, 0, 0, time.UTC)
+	status := "Provider error: upstream timeout. Retrying in 5s... Ctrl+C stops."
+
+	got := retryCountdownStatus(status, updatedAt, updatedAt.Add(2100*time.Millisecond))
+	if !strings.Contains(got, "Retrying in 3s") {
+		t.Fatalf("status = %q, want countdown to 3s", got)
+	}
+
+	got = retryCountdownStatus(status, updatedAt, updatedAt.Add(6*time.Second))
+	if !strings.Contains(got, "Retrying now") {
+		t.Fatalf("status = %q, want retry-now state", got)
+	}
+}
+
 func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateStreaming

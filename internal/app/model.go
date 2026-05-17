@@ -250,6 +250,7 @@ type InFlightState struct {
 	Thinking              bool
 	AgentCommitted        bool // true once AgentMessage owns the turn transcript
 	DrainUntilTurnStarted bool
+	DrainStartedAt        time.Time
 }
 
 // PickerState holds state for the various overlay pickers.
@@ -265,6 +266,7 @@ type ProgressState struct {
 	Mode              progressMode
 	LastError         string
 	Status            string
+	StatusUpdatedAt   time.Time
 	ReasoningEffort   string
 	TurnStartedAt     time.Time
 	CurrentTurnInput  int
