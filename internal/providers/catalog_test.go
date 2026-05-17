@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/credentials"
@@ -172,6 +173,31 @@ func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.
 	}
 }
 
+func TestProbeLocalAPIDoesNotFallbackFromConfiguredOpenAICompatibleEndpoint(t *testing.T) {
+	localProbeMu.Lock()
+	localProbeCache = map[string]localProbeResult{
+		"http://fedora:11434/v1": {
+			endpoint: "http://fedora:11434/v1",
+			ready:    false,
+			checked:  time.Now(),
+		},
+		"http://127.0.0.1:1234/v1": {
+			endpoint: "http://127.0.0.1:1234/v1",
+			ready:    true,
+			checked:  time.Now(),
+		},
+	}
+	localProbeMu.Unlock()
+
+	cfg := &config.Config{
+		Provider: "openai-compatible",
+		Endpoint: "http://fedora:11434/v1",
+	}
+	if got, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+		t.Fatalf("probe endpoint = %q, want no fallback from configured endpoint", got)
+	}
+}
+
 func TestCustomAuthAndHeadersDoNotLeakToDefaultProviders(t *testing.T) {
 	cfg := &config.Config{
 		Provider:     "openrouter",
@@ -282,6 +308,9 @@ func TestLocalAPIAliasResolvesToOpenAICompatiblePickerEntry(t *testing.T) {
 
 func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	custom := mustLookup(t, "openai-compatible")
+	localProbeMu.Lock()
+	localProbeCache = map[string]localProbeResult{}
+	localProbeMu.Unlock()
 	if headers := ResolvedHeaders(nil); headers != nil {
 		t.Fatalf("headers = %#v, want nil", headers)
 	}
@@ -291,7 +320,9 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	if SupportsModelListing(nil) {
 		t.Fatal("SupportsModelListing(nil) = true, want false")
 	}
-	detail, ready := CredentialStateContext(context.Background(), nil, custom)
+	probeCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	detail, ready := CredentialStateContext(probeCtx, nil, custom)
 	if ready || detail != "Set endpoint" {
 		t.Fatalf("custom credential state = (%q, %v), want Set endpoint false", detail, ready)
 	}
