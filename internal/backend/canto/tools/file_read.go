@@ -70,40 +70,57 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	start := 0
-	if input.Offset > 0 {
-		start = input.Offset - 1
+	output, err := numberedReadOutput(string(content), input.Offset, input.Limit)
+	if err != nil {
+		return "", err
 	}
-	return limitToolOutput(numberedLines(string(content), start, input.Limit)), nil
+	return limitToolOutput(output), nil
 }
 
-func numberedLines(content string, offset, limit int) string {
+func numberedReadOutput(content string, offset, limit int) (string, error) {
 	if content == "" {
-		return ""
+		return "", nil
 	}
 
 	lines := strings.Split(content, "\n")
 	if strings.HasSuffix(content, "\n") && len(lines) > 0 {
 		lines = lines[:len(lines)-1]
 	}
-	if offset >= len(lines) {
-		return ""
+	start := 0
+	if offset > 0 {
+		start = offset - 1
 	}
-	end := len(lines)
-	if limit > 0 {
-		end = min(offset+limit, len(lines))
+	if start >= len(lines) {
+		return "", fmt.Errorf("offset %d is beyond end of file (%d lines total)", offset, len(lines))
 	}
 
+	end := len(lines)
+	if limit > 0 {
+		end = min(start+limit, len(lines))
+	}
+	output := numberedLines(lines, start, end)
+	if limit > 0 && end < len(lines) {
+		remaining := len(lines) - end
+		output += fmt.Sprintf(
+			"\n\n[%d more line(s) in file. Use offset=%d to continue.]",
+			remaining,
+			end+1,
+		)
+	}
+	return output, nil
+}
+
+func numberedLines(lines []string, start, end int) string {
 	var b strings.Builder
-	for i, line := range lines[offset:end] {
+	for i, line := range lines[start:end] {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		if offset+i == 0 {
+		if start+i == 0 {
 			line = strings.TrimPrefix(line, "\ufeff")
 		}
 		line = strings.TrimSuffix(line, "\r")
-		fmt.Fprintf(&b, "%6d\t%s", offset+i+1, line)
+		fmt.Fprintf(&b, "%6d\t%s", start+i+1, line)
 	}
 	return b.String()
 }
