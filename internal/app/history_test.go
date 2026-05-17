@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -144,5 +145,47 @@ func TestCtrlPHistoryRespectsBoundaries(t *testing.T) {
 
 	if model.Input.HistoryIdx != -1 {
 		t.Fatal("expected exit to draft")
+	}
+}
+
+func TestInputHistorySkipsConsecutiveDuplicates(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.submitText("/help")
+	model = updated
+	model.Input.HistoryIdx = 0
+	model.Input.HistoryDraft = "draft"
+	updated, _ = model.submitText("/help")
+	model = updated
+
+	if len(model.Input.History) != 1 || model.Input.History[0] != "/help" {
+		t.Fatalf("history = %#v, want one /help entry", model.Input.History)
+	}
+	if model.Input.HistoryIdx != -1 || model.Input.HistoryDraft != "" {
+		t.Fatalf(
+			"history cursor = %d/%q, want reset",
+			model.Input.HistoryIdx,
+			model.Input.HistoryDraft,
+		)
+	}
+}
+
+func TestInputHistoryCapsInMemoryEntries(t *testing.T) {
+	model := readyModel(t)
+	for i := range maxInputHistoryEntries {
+		model.Input.History = append(model.Input.History, fmt.Sprintf("prompt-%03d", i))
+	}
+
+	updated, _ := model.submitText("/help")
+	model = updated
+
+	if got := len(model.Input.History); got != maxInputHistoryEntries {
+		t.Fatalf("history length = %d, want %d", got, maxInputHistoryEntries)
+	}
+	if got := model.Input.History[0]; got != "prompt-001" {
+		t.Fatalf("oldest retained history = %q, want prompt-001", got)
+	}
+	if got := model.Input.History[len(model.Input.History)-1]; got != "/help" {
+		t.Fatalf("newest history = %q, want /help", got)
 	}
 }

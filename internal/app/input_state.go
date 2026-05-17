@@ -42,6 +42,23 @@ func (m *Model) setComposerDraft(value string) {
 	m.relayoutComposer()
 }
 
+func (m *Model) appendInputHistory(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	if len(m.Input.History) > 0 && m.Input.History[len(m.Input.History)-1] == text {
+		m.resetHistoryCursor()
+		return "", false
+	}
+	m.Input.History = append(m.Input.History, text)
+	if overflow := len(m.Input.History) - maxInputHistoryEntries; overflow > 0 {
+		m.Input.History = append([]string(nil), m.Input.History[overflow:]...)
+	}
+	m.resetHistoryCursor()
+	return text, true
+}
+
 func (m *Model) loadInputHistory(ctx context.Context) {
 	if m.Model.Store == nil || strings.TrimSpace(m.App.Workdir) == "" {
 		return
