@@ -217,6 +217,131 @@ func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnDoesNotProactivelyCompactStalePreCompactionUsage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-compact-stale-usage",
+		"openai/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	appendCantoHistory(
+		t,
+		ctx,
+		store,
+		storageSession.ID(),
+		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("old context ", 80)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("old answer ", 80)},
+	)
+
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatal("expected canto-backed store")
+	}
+	sess, err := cantoStore.Canto().Load(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	var cutoffID string
+	for _, e := range sess.Events() {
+		if e.Type == csession.MessageAdded {
+			cutoffID = e.ID.String()
+		}
+	}
+	if cutoffID == "" {
+		t.Fatal("missing cutoff event")
+	}
+	if err := cantoStore.Canto().Save(ctx, csession.NewCompactionEvent(
+		storageSession.ID(),
+		csession.CompactionSnapshot{
+			Strategy:      "summarize",
+			MaxTokens:     100,
+			ThresholdPct:  proactiveCompactThreshold,
+			CurrentTokens: 80,
+			CutoffEventID: cutoffID,
+			Entries: []csession.HistoryEntry{{
+				EventType:        csession.ContextAdded,
+				ContextKind:      csession.ContextKindSummary,
+				ContextPlacement: csession.ContextPlacementPrefix,
+				Message: llm.Message{
+					Role:    llm.RoleUser,
+					Content: "<conversation_summary>\nshort summary\n</conversation_summary>",
+				},
+			}},
+		},
+	)); err != nil {
+		t.Fatalf("append compaction snapshot: %v", err)
+	}
+	if err := storageSession.Append(ctx, storage.TokenUsage{Input: 72, Output: 8}); err != nil {
+		t.Fatalf("append stale usage: %v", err)
+	}
+
+	provider := &heuristicCountProvider{
+		FauxProvider: ctesting.NewFauxProvider(
+			"openai",
+			ctesting.Step{Content: "normal reply"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "continue from summary"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	var statuses []string
+	finished := false
+	for !finished {
+		select {
+		case ev := <-b.Events():
+			switch msg := ev.(type) {
+			case ionsession.StatusChanged:
+				statuses = append(statuses, msg.Status)
+			case ionsession.TurnFinished:
+				finished = true
+			}
+		case <-time.After(backendEventWaitTimeout):
+			t.Fatal("timed out waiting for turn")
+		}
+	}
+	if containsString(statuses, "Compacting context...") {
+		t.Fatalf("statuses = %#v, want no stale-usage proactive compaction", statuses)
+	}
+	if calls := provider.Calls(); len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1 normal turn call", len(calls))
+	}
+}
+
 func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -378,12 +503,13 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 		llm.Message{Role: llm.RoleUser, Content: "recent question"},
 	)
 
-	provider := &overflowRecoveryProvider{
+	provider := &fixedCountProvider{
 		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Content: "compacted summary"},
 			ctesting.Step{Content: "recovered reply"},
 		),
+		tokens: 80,
 	}
 
 	oldFactory := providerFactory
@@ -397,17 +523,7 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 
 	b := New()
 	b.SetStore(store)
-	b.SetSession(&proactiveUsageSession{
-		id: storageSession.ID(),
-		meta: storage.Metadata{
-			ID:     storageSession.ID(),
-			CWD:    "/tmp/ion-proactive",
-			Model:  "model-a",
-			Branch: "main",
-		},
-		usageIn:  72,
-		usageOut: 8,
-	})
+	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
@@ -488,12 +604,13 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
 	)
 
-	provider := &overflowRecoveryProvider{
+	provider := &fixedCountProvider{
 		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Err: errors.New("compaction provider failed")},
 			ctesting.Step{Content: "turn should not run"},
 		),
+		tokens: 80,
 	}
 
 	oldFactory := providerFactory
@@ -507,17 +624,7 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 
 	b := New()
 	b.SetStore(store)
-	b.SetSession(&proactiveUsageSession{
-		id: storageSession.ID(),
-		meta: storage.Metadata{
-			ID:     storageSession.ID(),
-			CWD:    "/tmp/ion-proactive-fail",
-			Model:  "model-a",
-			Branch: "main",
-		},
-		usageIn:  72,
-		usageOut: 8,
-	})
+	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)

@@ -529,12 +529,10 @@ func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	blockingSession := &blockingUsageSession{
-		Session: storageSession,
-		entered: make(chan struct{}),
+	provider := &blockingCountProvider{
+		compactProvider: compactProvider{id: "local-api"},
+		entered:         make(chan struct{}),
 	}
-
-	provider := &compactProvider{id: "local-api"}
 	oldFactory := providerFactory
 	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		return provider, nil
@@ -543,7 +541,7 @@ func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) 
 
 	b := New()
 	b.SetStore(store)
-	b.SetSession(blockingSession)
+	b.SetSession(storageSession)
 	b.SetConfig(
 		&config.Config{
 			Provider:     "local-api",
@@ -561,9 +559,9 @@ func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) 
 		t.Fatalf("submit turn: %v", err)
 	}
 	select {
-	case <-blockingSession.entered:
+	case <-provider.entered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for proactive compaction usage check")
+		t.Fatal("timed out waiting for proactive compaction token check")
 	}
 	if err := b.CancelTurn(ctx); err != nil {
 		t.Fatalf("cancel turn: %v", err)

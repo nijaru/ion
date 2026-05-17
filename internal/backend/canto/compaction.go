@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/nijaru/canto/governor"
+	"github.com/nijaru/canto/llm"
+	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/config"
 )
@@ -33,9 +35,8 @@ func compactionMessage(extra string) string {
 	return ionCompactionGuidance + "\n\nUser guidance:\n" + extra
 }
 
-func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
+func (b *Backend) shouldProactivelyCompact(ctx context.Context, pendingUserInput string) (bool, error) {
 	b.mu.Lock()
-	sess := b.sess
 	store := b.store
 	provider := b.compactLLM
 	sessionID := b.ID()
@@ -43,21 +44,30 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 	limit := b.ContextLimit()
 	b.mu.Unlock()
 
-	if sess == nil || store == nil || provider == nil || sessionID == "" || model == "" ||
-		limit <= 0 {
+	if store == nil || provider == nil || sessionID == "" || model == "" || limit <= 0 {
 		return false, nil
 	}
 
-	inputTokens, outputTokens, _, err := sess.Usage(ctx)
+	sess, err := store.Load(ctx, sessionID)
 	if err != nil {
 		return false, err
+	}
+	messages, err := sess.EffectiveMessages()
+	if err != nil {
+		return false, err
+	}
+	if pendingUserInput = strings.TrimSpace(pendingUserInput); pendingUserInput != "" {
+		messages = append(messages, llm.Message{
+			Role:    llm.RoleUser,
+			Content: pendingUserInput,
+		})
 	}
 
 	threshold := int(float64(limit) * proactiveCompactThreshold)
 	if threshold <= 0 {
 		threshold = limit
 	}
-	used := inputTokens + outputTokens
+	used := prompt.EstimateMessagesTokens(ctx, provider, model, messages)
 	return used >= threshold && used < limit, nil
 }
 

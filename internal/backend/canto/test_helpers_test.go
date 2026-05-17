@@ -6,9 +6,8 @@ import (
 	"sync"
 
 	"github.com/nijaru/canto/llm"
+	"github.com/nijaru/canto/prompt"
 	ctesting "github.com/nijaru/canto/x/testing"
-	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 )
 
 type compactProvider struct {
@@ -84,19 +83,6 @@ type retryProvider struct {
 	*ctesting.FauxProvider
 }
 
-type proactiveUsageSession struct {
-	id       string
-	meta     storage.Metadata
-	usageIn  int
-	usageOut int
-}
-
-type blockingUsageSession struct {
-	storage.Session
-	entered chan struct{}
-	once    sync.Once
-}
-
 func (p *retryProvider) IsTransient(err error) bool {
 	return errors.Is(err, transientStreamErr)
 }
@@ -105,6 +91,21 @@ func (p *retryProvider) IsContextOverflow(err error) bool { return false }
 
 type overflowRecoveryProvider struct {
 	*ctesting.FauxProvider
+}
+
+type heuristicCountProvider struct {
+	*ctesting.FauxProvider
+}
+
+type fixedCountProvider struct {
+	*ctesting.FauxProvider
+	tokens int
+}
+
+type blockingCountProvider struct {
+	compactProvider
+	entered chan struct{}
+	once    sync.Once
 }
 
 type blockingStreamProvider struct {
@@ -182,26 +183,34 @@ func (p *overflowRecoveryProvider) CountTokens(
 	return 10_000, nil
 }
 
-func (p *overflowRecoveryProvider) IsContextOverflow(err error) bool {
-	return errors.Is(err, overflowErr)
+func (p *heuristicCountProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
+	return prompt.EstimateMessagesTokens(ctx, nil, model, messages), nil
 }
 
-func (s *proactiveUsageSession) ID() string                                  { return s.id }
-func (s *proactiveUsageSession) Meta() storage.Metadata                      { return s.meta }
-func (s *proactiveUsageSession) Append(ctx context.Context, event any) error { return nil }
-func (s *proactiveUsageSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
-	return nil, nil
+func (p *fixedCountProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
+	return p.tokens, nil
 }
-func (s *proactiveUsageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
-func (s *proactiveUsageSession) Usage(ctx context.Context) (int, int, float64, error) {
-	return s.usageIn, s.usageOut, 0, nil
-}
-func (s *proactiveUsageSession) Close() error { return nil }
 
-func (s *blockingUsageSession) Usage(ctx context.Context) (int, int, float64, error) {
-	s.once.Do(func() {
-		close(s.entered)
+func (p *blockingCountProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
+	p.once.Do(func() {
+		close(p.entered)
 	})
 	<-ctx.Done()
-	return 0, 0, 0, ctx.Err()
+	return 0, ctx.Err()
+}
+
+func (p *overflowRecoveryProvider) IsContextOverflow(err error) bool {
+	return errors.Is(err, overflowErr)
 }

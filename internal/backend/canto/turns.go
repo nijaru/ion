@@ -74,7 +74,7 @@ func (b *Backend) runTurn(
 	defer b.finishActiveTurn(turnID)
 	defer cancel()
 
-	if err := b.compactBeforeTurn(ctx, turnID); err != nil {
+	if err := b.compactBeforeTurn(ctx, turnID, input); err != nil {
 		b.finishTurnWithError(turnID, err)
 		return
 	}
@@ -104,8 +104,8 @@ func (b *Backend) runTurn(
 	}
 }
 
-func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
-	shouldCompact, err := b.shouldProactivelyCompact(ctx)
+func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64, input string) error {
+	shouldCompact, err := b.shouldProactivelyCompact(ctx, input)
 	if err != nil {
 		return err
 	}
