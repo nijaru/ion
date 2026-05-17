@@ -42,20 +42,18 @@ func TestEditSurfaceEvalSplitTools(t *testing.T) {
 		assertFileContent(t, tmpDir, path, "\ufeffone\r\ntwo\r\n")
 	})
 
-	t.Run("multi_edit validates all edits before writing", func(t *testing.T) {
+	t.Run("multi_edit validates all same-file edits before writing", func(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
-		writeFile(t, tmpDir, "atomic-a.txt", "alpha\n")
-		writeFile(t, tmpDir, "atomic-b.txt", "beta\n")
+		writeFile(t, tmpDir, "atomic.txt", "alpha\nbeta\n")
 
 		_, err := executeToolJSON(t, m, context.Background(), map[string]any{
+			"file_path": "atomic.txt",
 			"edits": []map[string]any{
 				{
-					"file_path":  "atomic-a.txt",
 					"old_string": "alpha",
 					"new_string": "one",
 				},
 				{
-					"file_path":  "atomic-b.txt",
 					"old_string": "missing",
 					"new_string": "two",
 				},
@@ -65,24 +63,21 @@ func TestEditSurfaceEvalSplitTools(t *testing.T) {
 			t.Fatal("expected validation failure")
 		}
 
-		assertFileContent(t, tmpDir, "atomic-a.txt", "alpha\n")
-		assertFileContent(t, tmpDir, "atomic-b.txt", "beta\n")
+		assertFileContent(t, tmpDir, "atomic.txt", "alpha\nbeta\n")
 	})
 
-	t.Run("multi_edit handles multi-file successful edits", func(t *testing.T) {
+	t.Run("multi_edit handles multiple edits in one file", func(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
-		writeFile(t, tmpDir, "multi-a.txt", "alpha\n")
-		writeFile(t, tmpDir, "multi-b.txt", "beta\n")
+		writeFile(t, tmpDir, "multi.txt", "alpha\nbeta\n")
 
 		result, err := executeToolJSON(t, m, context.Background(), map[string]any{
+			"file_path": "multi.txt",
 			"edits": []map[string]any{
 				{
-					"file_path":  "multi-a.txt",
 					"old_string": "alpha",
 					"new_string": "one",
 				},
 				{
-					"file_path":  "multi-b.txt",
 					"old_string": "beta",
 					"new_string": "two",
 				},
@@ -91,13 +86,63 @@ func TestEditSurfaceEvalSplitTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("multi_edit failed: %v", err)
 		}
-		if !strings.Contains(result, "--- a/multi-a.txt") ||
-			!strings.Contains(result, "--- a/multi-b.txt") {
-			t.Fatalf("multi_edit result missing per-file diffs: %q", result)
+		if !strings.Contains(result, "--- a/multi.txt") ||
+			!strings.Contains(result, "-alpha") ||
+			!strings.Contains(result, "+one") ||
+			!strings.Contains(result, "-beta") ||
+			!strings.Contains(result, "+two") {
+			t.Fatalf("multi_edit result missing diff: %q", result)
 		}
 
-		assertFileContent(t, tmpDir, "multi-a.txt", "one\n")
-		assertFileContent(t, tmpDir, "multi-b.txt", "two\n")
+		assertFileContent(t, tmpDir, "multi.txt", "one\ntwo\n")
+	})
+
+	t.Run("multi_edit matches edits against original content", func(t *testing.T) {
+		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
+		writeFile(t, tmpDir, "original-match.txt", "alpha\none\n")
+
+		_, err := executeToolJSON(t, m, context.Background(), map[string]any{
+			"file_path": "original-match.txt",
+			"edits": []map[string]any{
+				{
+					"old_string": "alpha",
+					"new_string": "one",
+				},
+				{
+					"old_string": "one",
+					"new_string": "two",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("multi_edit failed: %v", err)
+		}
+
+		assertFileContent(t, tmpDir, "original-match.txt", "one\ntwo\n")
+	})
+
+	t.Run("multi_edit rejects overlapping edits", func(t *testing.T) {
+		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
+		writeFile(t, tmpDir, "overlap.txt", "abcdef\n")
+
+		_, err := executeToolJSON(t, m, context.Background(), map[string]any{
+			"file_path": "overlap.txt",
+			"edits": []map[string]any{
+				{
+					"old_string": "abc",
+					"new_string": "x",
+				},
+				{
+					"old_string": "bcd",
+					"new_string": "y",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "overlap") {
+			t.Fatalf("multi_edit overlap error = %v, want overlap", err)
+		}
+
+		assertFileContent(t, tmpDir, "overlap.txt", "abcdef\n")
 	})
 
 	t.Run("edit reports duplicate and expected-count failures with lines", func(t *testing.T) {
@@ -180,9 +225,9 @@ func TestEditSurfaceEvalSplitTools(t *testing.T) {
 		writeFile(t, tmpDir, "multi.txt", "before\n")
 		m := &MultiEdit{FileTool: FileTool{cwd: tmpDir}}
 		_, err = executeToolJSON(t, m, ctx, map[string]any{
+			"file_path": "multi.txt",
 			"edits": []map[string]any{
 				{
-					"file_path":  "multi.txt",
 					"old_string": "before",
 					"new_string": "after",
 				},

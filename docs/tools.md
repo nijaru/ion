@@ -62,9 +62,11 @@ Large model-visible tool results are truncated with an explicit marker that
 includes the cutoff and omitted byte count. If the model needs the omitted
 content, it should rerun the tool with a narrower command, path, or line range.
 
-Native `write`, `edit`, and `multi_edit` remain separate. A merged
-Pi-style `edit(edits[])` surface is a future candidate, but it should only
-replace the split after a local edit eval proves equal or better reliability.
+Native `write`, `edit`, and `multi_edit` remain separate. `multi_edit` is
+intentionally single-file: it validates every replacement against the original
+file content, rejects overlapping edits, checkpoints once, writes one temporary
+file, and finalizes with one rename. Cross-file changes should be emitted as
+separate serialized tool calls.
 
 Ion keeps its model-visible tool wrappers rather than directly exposing
 Canto's stable `coding` package tools. Canto remains the framework substrate;
