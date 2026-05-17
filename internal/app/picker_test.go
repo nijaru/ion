@@ -253,6 +253,21 @@ func TestMatchingWorkspaceFileReferencesRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestMatchingWorkspaceFileReferencesRejectsSymlinkDirEscapes(t *testing.T) {
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workdir, "outside")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if matches := matchingWorkspaceFileReferences(workdir, "outside/"); len(matches) != 0 {
+		t.Fatalf("matches = %#v, want none for symlink escape", matches)
+	}
+}
+
 func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
 	info := storage.SessionInfo{
 		ID:          "sess-1",
