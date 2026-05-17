@@ -210,6 +210,7 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	m.Progress.TokensSent += msg.Input
 	m.Progress.TokensReceived += msg.Output
+	m.Progress.ContextTokens += tokenUsageTotal(msg)
 	m.Progress.TotalCost += msg.Cost
 	m.Progress.CurrentTurnInput += msg.Input
 	m.Progress.CurrentTurnOutput += msg.Output
@@ -272,6 +273,7 @@ func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	m.Progress.CurrentTurnInput = 0
 	m.Progress.CurrentTurnOutput = 0
 	m.Progress.CurrentTurnCost = 0
+	m.Progress.ContextTokens = 0
 	m.Progress.BudgetStopReason = ""
 	m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
 	m.InFlight.PendingTools = nil
@@ -499,11 +501,19 @@ func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
 		if len(m.InFlight.PendingTools) == 0 {
 			m.Progress.Mode = stateIonizing
 			m.Progress.Status = ""
+			m.Progress.ContextTokens = 0
 		}
 
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
 	return m, m.awaitSessionEvent()
+}
+
+func tokenUsageTotal(msg session.TokenUsage) int {
+	if msg.Total > 0 {
+		return msg.Total
+	}
+	return msg.Input + msg.Output
 }
 
 func (m Model) pendingToolEntry(toolUseID string) *session.Entry {

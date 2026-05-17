@@ -275,6 +275,7 @@ type ProgressState struct {
 	LastTurnSummary   turnSummary
 	TokensSent        int
 	TokensReceived    int
+	ContextTokens     int
 	TotalCost         float64
 	LastToolUseID     string
 }

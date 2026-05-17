@@ -263,6 +263,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.clearPendingAction()
 	m.Progress.TokensSent = 0
 	m.Progress.TokensReceived = 0
+	m.Progress.ContextTokens = 0
 	m.Progress.TotalCost = 0
 	if msg.storage != nil {
 		if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
