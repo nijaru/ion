@@ -21,9 +21,14 @@ func (b *Backend) Name() string {
 }
 
 func (b *Backend) SetConfig(cfg *config.Config) {
-	b.cfg = cfg
+	if cfg == nil {
+		b.cfg = nil
+		return
+	}
+	copied := *cfg
+	b.cfg = &copied
 	if retry, ok := b.compactLLM.(*llm.RetryProvider); ok {
-		retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
+		retry.Config.RetryForever = copied.RetryUntilCancelledEnabled()
 		retry.Config.RetryForeverTransportOnly = true
 	}
 }
