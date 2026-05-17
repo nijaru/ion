@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -136,16 +137,12 @@ func (m Model) providerSelection(
 	if err != nil {
 		return providerSelection{}, err
 	}
-	if err := ensureProviderReadyForSelection(ctx, updated); err != nil {
-		def, _ := providers.Lookup(updated.Provider)
-		if def.ID == providers.OpenAICompatibleID {
-			return providerSelection{cfg: updated, setup: setupPromptEndpoint}, nil
-		}
+	setup, err := providerSetupPrompt(ctx, updated)
+	if err != nil {
 		return providerSelection{cfg: updated}, err
 	}
-	def, _ := providers.Lookup(updated.Provider)
-	if providers.RequiresAuth(updated, def) && providers.ResolvedAuthToken(updated, def) == "" {
-		return providerSelection{cfg: updated, setup: setupPromptAPIKey}, nil
+	if setup != 0 {
+		return providerSelection{cfg: updated, setup: setup}, nil
 	}
 	selection := providerSelection{
 		cfg:                  updated,
@@ -160,6 +157,34 @@ func (m Model) providerSelection(
 		).withStatePersistence().withActivePresetPersistence()
 	}
 	return selection, nil
+}
+
+func providerSetupPrompt(ctx context.Context, cfg *config.Config) (setupPromptKind, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
+		return 0, nil
+	}
+	def, ok := providers.Lookup(cfg.Provider)
+	if !ok {
+		return 0, fmt.Errorf("unsupported provider %q", strings.TrimSpace(cfg.Provider))
+	}
+	missingAuth := providers.RequiresAuth(cfg, def) &&
+		providers.ResolvedAuthToken(cfg, def) == ""
+	if def.ID == providers.OpenAICompatibleID {
+		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
+			return setupPromptAPIKey, nil
+		}
+		if err := ensureProviderReadyForSelection(ctx, cfg); err != nil {
+			return setupPromptEndpoint, nil
+		}
+		if missingAuth {
+			return setupPromptAPIKey, nil
+		}
+		return 0, nil
+	}
+	if missingAuth {
+		return setupPromptAPIKey, nil
+	}
+	return 0, nil
 }
 
 func (m Model) modelSelectionTransition(

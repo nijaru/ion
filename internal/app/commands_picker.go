@@ -101,6 +101,25 @@ func (m Model) openModelPickerForPreset(
 	if !providers.SupportsModelListing(cfg) {
 		return m, cmdError(providerModelEntryNotice(cfg.Provider))
 	}
+	if configuredModelForPreset(cfg, preset) == "" {
+		setup, err := providerSetupPrompt(context.Background(), cfg)
+		if err != nil {
+			return m, cmdError(err.Error())
+		}
+		switch setup {
+		case setupPromptAPIKey:
+			return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
+		case setupPromptEndpoint:
+			return m.openEndpointPrompt(cfg, preset)
+		}
+	}
+	return m.openReadyModelPickerForPreset(cfg, preset)
+}
+
+func (m Model) openReadyModelPickerForPreset(
+	cfg *config.Config,
+	preset modelPreset,
+) (Model, tea.Cmd) {
 	m.Picker.ModelLoadRequest++
 	requestID := m.Picker.ModelLoadRequest
 	cached, fresh, ok := cachedModelItemsForProvider(cfg)
@@ -531,7 +550,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 				Content: providerModelEntryNotice(selection.cfg.Provider),
 			})
 		}
-		return m.openModelPickerForPreset(selection.cfg, preset)
+		return m.openReadyModelPickerForPreset(selection.cfg, preset)
 
 	case pickerPurposeModel:
 		preset := m.Picker.Overlay.modelPreset()
