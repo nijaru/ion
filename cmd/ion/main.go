@@ -279,6 +279,8 @@ func main() {
 		model = model.WithSessionPicker()
 	} else if startupProviderMissing(b) {
 		model = model.WithProviderPicker()
+	} else if startupModelMissing(b) {
+		model = model.WithModelPicker()
 	}
 	printStartup(
 		os.Stdout,
@@ -310,6 +312,12 @@ func main() {
 
 func startupProviderMissing(b backend.Backend) bool {
 	return b != nil && strings.TrimSpace(b.Provider()) == ""
+}
+
+func startupModelMissing(b backend.Backend) bool {
+	return b != nil &&
+		strings.TrimSpace(b.Provider()) != "" &&
+		strings.TrimSpace(b.Model()) == ""
 }
 
 func runtimeHandlesForClose(

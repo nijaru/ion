@@ -42,6 +42,7 @@ func (s *closeStorageSession) Close() error {
 
 type providerBackend struct {
 	provider string
+	model    string
 }
 
 func (b providerBackend) Name() string {
@@ -53,7 +54,7 @@ func (b providerBackend) Provider() string {
 }
 
 func (b providerBackend) Model() string {
-	return ""
+	return b.model
 }
 
 func (b providerBackend) ContextLimit() int {
@@ -117,5 +118,20 @@ func TestStartupProviderMissing(t *testing.T) {
 	}
 	if startupProviderMissing(nil) {
 		t.Fatal("nil backend should not need startup setup")
+	}
+}
+
+func TestStartupModelMissing(t *testing.T) {
+	if startupModelMissing(providerBackend{}) {
+		t.Fatal("empty provider should not need model setup")
+	}
+	if !startupModelMissing(providerBackend{provider: "openrouter"}) {
+		t.Fatal("configured provider without model should need model setup")
+	}
+	if startupModelMissing(providerBackend{provider: "openrouter", model: "model-a"}) {
+		t.Fatal("configured provider and model should not need model setup")
+	}
+	if startupModelMissing(nil) {
+		t.Fatal("nil backend should not need model setup")
 	}
 }
