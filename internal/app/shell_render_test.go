@@ -442,6 +442,24 @@ func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 	}
 }
 
+func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
+	model = updated.(Model)
+	model.Model.Backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "short-model",
+	}
+	model.App.Workdir = "/tmp/very-long-workspace-name"
+	model.App.Branch = "main"
+
+	line := ansi.Strip(model.statusLine())
+	if strings.Contains(line, "main") && !strings.Contains(line, "very-long-workspace-name/") {
+		t.Fatalf("status line should not show branch without workspace path: %q", line)
+	}
+}
+
 func TestStatusLineMarksFastPresetOnModelSegment(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
