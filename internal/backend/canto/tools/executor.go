@@ -136,20 +136,6 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 
 	limitExceeded := false
 	var emitErr error
-	setEmitErr := func(err error) {
-		if err == nil {
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if emitErr != nil {
-			return
-		}
-		emitErr = err
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	}
 	hasEmitErr := func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -174,13 +160,19 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 					continue
 				}
 				output.WriteString(chunk)
-				mu.Unlock()
 				if request.Emit != nil {
 					if err := request.Emit(chunk); err != nil {
-						setEmitErr(err)
+						if emitErr == nil {
+							emitErr = err
+							if cmd.Process != nil {
+								_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+							}
+						}
+						mu.Unlock()
 						return
 					}
 				}
+				mu.Unlock()
 			}
 			if err != nil {
 				break
