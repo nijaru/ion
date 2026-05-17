@@ -130,6 +130,13 @@ func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
 	}
 }
 
+func TestWithProviderPickerOpensSetupPicker(t *testing.T) {
+	model := readyModel(t).WithProviderPicker()
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
+	}
+}
+
 func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

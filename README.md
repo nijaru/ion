@@ -22,26 +22,15 @@ Make sure your Go binary directory is on `PATH`:
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-Create `~/.ion/config.toml`:
-
-```toml
-# ~/.ion/config.toml
-provider = "openai"
-model = "gpt-5.5"
-reasoning_effort = "auto"
-```
-
-Set the matching API key:
-
-```sh
-export OPENAI_API_KEY="..."
-```
-
 Start Ion in a project:
 
 ```sh
 ion
 ```
+
+Ion opens a provider picker the first time it starts without a configured
+runtime. Choose a provider, set the matching API key in your shell when needed,
+then choose a model.
 
 ## Providers
 
@@ -50,9 +39,14 @@ and several OpenAI-compatible services. It also supports local model servers.
 Most local runtimes expose an OpenAI-compatible `/v1` API, which is the endpoint
 shape Ion expects for `local-api`.
 
+Most users do not need a config file. Use `~/.ion/config.toml` for custom
+endpoints, stable defaults, or provider options you want to keep outside the
+TUI.
+
 Use `local-api` for no-auth OpenAI-compatible local servers:
 
 ```toml
+# ~/.ion/config.toml
 provider = "local-api"
 model = "qwen3.6:27b"
 endpoint = "http://localhost:11434/v1"
@@ -63,14 +57,14 @@ Use `openai-compatible` for custom OpenAI-compatible endpoints that require an
 API key or custom headers:
 
 ```toml
+# ~/.ion/config.toml
 provider = "openai-compatible"
 model = "provider/model"
 endpoint = "https://example.com/v1"
 auth_env_var = "CUSTOM_API_KEY"
 ```
 
-Runtime selections made in the TUI are stored in `~/.ion/state.toml`. Stable
-defaults belong in `~/.ion/config.toml`.
+Runtime selections made in the TUI are stored in `~/.ion/state.toml`.
 
 You can override the config for a single run:
 
