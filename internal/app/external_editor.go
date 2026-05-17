@@ -20,7 +20,7 @@ func (m Model) openExternalEditor() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, m.printEntries(session.Entry{
 			Role:    session.System,
-			Content: "External editor is unavailable while a turn is active",
+			Content: m.localCommandBusyMessage("opening the external editor"),
 		})
 	}
 	path, err := writeExternalEditorBuffer(m.expandMarkers(m.Input.Composer.Value()))

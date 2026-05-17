@@ -471,7 +471,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 	if m.localCommandBusy() && pickerSelectionRequiresIdle(m.Picker.Overlay.purpose) {
 		m.Picker.Overlay = nil
-		return m, cmdError("Finish or cancel the current turn before changing runtime settings.")
+		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
 	}
 
 	switch m.Picker.Overlay.purpose {
