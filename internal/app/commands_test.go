@@ -220,7 +220,7 @@ func TestWithModelPickerMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	model := readyModel(t).
-		WithConfig(&config.Config{Provider: "anthropic"}).
+		WithConfig(&config.Config{Provider: "anthropic", Model: "claude-test"}).
 		WithModelPicker()
 	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
 		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
@@ -239,6 +239,7 @@ func TestWithModelPickerDownOpenAICompatibleEndpointOpensSetupPrompt(t *testing.
 	model := readyModel(t).
 		WithConfig(&config.Config{
 			Provider: "openai-compatible",
+			Model:    "qwen3.6:27b",
 			Endpoint: "http://127.0.0.1:1/v1",
 		}).
 		WithModelPicker()
