@@ -903,7 +903,15 @@ func TestApplySessionConfigFromMetadata(t *testing.T) {
 		t.Fatalf("close seed session: %v", err)
 	}
 
-	cfg := &config.Config{Provider: "local-api", Model: "qwen3.6:27b", ReasoningEffort: "high"}
+	cfg := &config.Config{
+		Provider:               "local-api",
+		Model:                  "qwen3.6:27b",
+		ReasoningEffort:        "high",
+		FastModel:              "qwen3.6:27b-fast",
+		FastReasoningEffort:    "low",
+		SummaryModel:           "qwen3.6:27b-summary",
+		SummaryReasoningEffort: "minimal",
+	}
 	if err := applySessionConfigFromMetadata(ctx, store, seedID, cfg); err != nil {
 		t.Fatalf("apply session config: %v", err)
 	}
@@ -916,6 +924,12 @@ func TestApplySessionConfigFromMetadata(t *testing.T) {
 	}
 	if cfg.ReasoningEffort != "high" {
 		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
+	}
+	if cfg.FastModel != "" ||
+		cfg.FastReasoningEffort != "" ||
+		cfg.SummaryModel != "" ||
+		cfg.SummaryReasoningEffort != "" {
+		t.Fatalf("provider-scoped presets were not cleared: %#v", cfg)
 	}
 }
 
