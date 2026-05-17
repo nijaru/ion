@@ -343,6 +343,36 @@ func TestSessionPickerFilteringSelectsTopRankedMatch(t *testing.T) {
 	}
 }
 
+func TestSessionPickerPageKeysJumpByPage(t *testing.T) {
+	model := readyModel(t)
+	items := make([]sessionPickerItem, 12)
+	for i := range items {
+		items[i] = sessionPickerItem{
+			info: storage.SessionInfo{
+				ID:    "sess-" + string(rune('a'+i)),
+				Title: "session " + string(rune('a'+i)),
+			},
+		}
+	}
+	model.Picker.Session = &sessionPickerState{
+		items:    items,
+		filtered: slices.Clone(items),
+		index:    0,
+	}
+
+	updated, _ := model.handleSessionPickerKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	model = updated
+	if got := model.Picker.Session.index; got != pickerPageSize {
+		t.Fatalf("index after pgdown = %d, want %d", got, pickerPageSize)
+	}
+
+	updated, _ = model.handleSessionPickerKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	model = updated
+	if got := model.Picker.Session.index; got != 0 {
+		t.Fatalf("index after pgup = %d, want 0", got)
+	}
+}
+
 func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 80
