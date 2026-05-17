@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/credentials"
 )
 
 func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
@@ -27,7 +28,7 @@ func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &config.Config{
-		Provider: "local-api",
+		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
 
@@ -60,9 +61,9 @@ func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	def := mustLookup(t, "local-api")
+	def := mustLookup(t, "openai-compatible")
 	cfg := &config.Config{
-		Provider: "local-api",
+		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
 
@@ -80,9 +81,9 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 	localProbeCache = map[string]localProbeResult{}
 	localProbeMu.Unlock()
 
-	def := mustLookup(t, "local-api")
+	def := mustLookup(t, "openai-compatible")
 	cfg := &config.Config{
-		Provider: "local-api",
+		Provider: "openai-compatible",
 		Endpoint: "http://127.0.0.1:1/v1",
 	}
 
@@ -108,7 +109,7 @@ func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &config.Config{
-		Provider: "local-api",
+		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
 	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
@@ -141,7 +142,7 @@ func TestProbeLocalAPIFreshBypassesCachedFailure(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &config.Config{
-		Provider: "local-api",
+		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
 	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
@@ -165,9 +166,9 @@ func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.
 		t.Fatalf("resolved endpoint = %q, want OpenRouter default", got)
 	}
 
-	cfg.Provider = "local-api"
+	cfg.Provider = "openai-compatible"
 	if got := ResolvedEndpoint(cfg); got != "http://fedora:8080/v1" {
-		t.Fatalf("local-api endpoint = %q, want configured endpoint", got)
+		t.Fatalf("openai-compatible endpoint = %q, want configured endpoint", got)
 	}
 }
 
@@ -184,12 +185,12 @@ func TestCustomAuthAndHeadersDoNotLeakToDefaultProviders(t *testing.T) {
 		t.Fatalf("headers = %#v, want none", got)
 	}
 
-	cfg.Provider = "local-api"
+	cfg.Provider = "openai-compatible"
 	if got := ResolvedAuthEnvVar(cfg); got != "LOCAL_API_KEY" {
-		t.Fatalf("local auth env = %q, want configured override", got)
+		t.Fatalf("custom auth env = %q, want configured override", got)
 	}
 	if got := ResolvedHeaders(cfg); got["X-Local"] != "1" {
-		t.Fatalf("local headers = %#v, want configured header", got)
+		t.Fatalf("custom headers = %#v, want configured header", got)
 	}
 }
 
@@ -206,12 +207,18 @@ func TestCredentialStateDoesNotUseCustomAuthForDefaultProviders(t *testing.T) {
 		t.Fatalf("credential state = (%q, %v), want Set OPENROUTER_API_KEY false", detail, ready)
 	}
 
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"local-model"}]}`))
+	}))
+	defer srv.Close()
+
 	cfg.Provider = "openai-compatible"
-	cfg.Endpoint = "http://localhost:8080/v1"
+	cfg.Endpoint = srv.URL + "/v1"
 	def = mustLookup(t, "openai-compatible")
 	detail, ready = CredentialState(cfg, def)
-	if !ready || detail != "Ready" {
-		t.Fatalf("custom credential state = (%q, %v), want Ready true", detail, ready)
+	if !ready || !strings.HasPrefix(detail, "Ready at ") {
+		t.Fatalf("custom credential state = (%q, %v), want Ready at ... true", detail, ready)
 	}
 }
 
@@ -234,6 +241,24 @@ func TestCredentialEnvVarsIncludesCatalogAndCustomAuth(t *testing.T) {
 	}
 }
 
+func TestCredentialStateUsesStoredProviderCredential(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENAI_API_KEY", "")
+	if err := credentials.SaveAPIKey("openai", "stored-key"); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+
+	def := mustLookup(t, "openai")
+	detail, ready := CredentialState(&config.Config{Provider: "openai"}, def)
+	if !ready || detail != "Ready" {
+		t.Fatalf("credential state = (%q, %v), want Ready true", detail, ready)
+	}
+	if got := ResolvedAuthToken(&config.Config{Provider: "openai"}, def); got != "stored-key" {
+		t.Fatalf("auth token = %q, want stored-key", got)
+	}
+}
+
 func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
 	cfg := &config.Config{Provider: "zai"}
 	if got := ResolvedEndpoint(cfg); got != "https://api.z.ai/api/paas/v4" {
@@ -241,19 +266,17 @@ func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
 	}
 }
 
-func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T) {
+func TestLocalAPIAliasResolvesToOpenAICompatiblePickerEntry(t *testing.T) {
 	custom := mustLookup(t, "openai-compatible")
 	cfg := &config.Config{
 		Provider: "local-api",
 		Endpoint: "http://fedora:8080/v1",
 	}
-	if ShowInPicker(cfg, custom) {
-		t.Fatal("custom provider should stay hidden when endpoint belongs to local-api")
+	if ResolveID(cfg.Provider) != "openai-compatible" {
+		t.Fatalf("resolved provider = %q, want openai-compatible", ResolveID(cfg.Provider))
 	}
-
-	cfg.Provider = "openai-compatible"
 	if !ShowInPicker(cfg, custom) {
-		t.Fatal("custom provider should show when it is the active provider")
+		t.Fatal("OpenAI-compatible provider should show for the local-api alias")
 	}
 }
 

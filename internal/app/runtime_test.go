@@ -315,6 +315,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -379,6 +380,7 @@ func TestModelPickerRejectsProviderWithoutModelListing(t *testing.T) {
 func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ZAI_API_KEY", "test-key")
 	model := readyModel(t)
 	model.Progress.Mode = stateError
 	model.Progress.LastError = "failed to list models for zai"
@@ -418,6 +420,7 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 func TestProviderCommandClearsStaleError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {

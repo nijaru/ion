@@ -77,6 +77,7 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -1113,14 +1114,15 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	if model.Model.Config == nil || model.Model.Config.RetryUntilCancelledEnabled() {
 		t.Fatal("model config retry setting was not updated")
 	}
-	if model.Model.Config.Provider != "local-api" || model.Model.Config.Model != "qwen3.6:27b" {
+	if model.Model.Config.Provider != "openai-compatible" ||
+		model.Model.Config.Model != "qwen3.6:27b" {
 		t.Fatalf(
-			"runtime config = %s/%s, want state-backed local-api/qwen3.6:27b",
+			"runtime config = %s/%s, want state-backed openai-compatible/qwen3.6:27b",
 			model.Model.Config.Provider,
 			model.Model.Config.Model,
 		)
 	}
-	if capture.cfg == nil || capture.cfg.Provider != "local-api" ||
+	if capture.cfg == nil || capture.cfg.Provider != "openai-compatible" ||
 		capture.cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("backend config = %#v, want state-backed provider/model", capture.cfg)
 	}

@@ -27,6 +27,10 @@ func (m Model) View() tea.View {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
 		hasShellLeadIn = true
+	} else if m.Picker.Setup != nil {
+		b.WriteString(m.renderSetupPrompt())
+		b.WriteString("\n")
+		hasShellLeadIn = true
 	} else if m.Picker.Overlay != nil {
 		b.WriteString(m.renderPicker())
 		b.WriteString("\n")
@@ -198,6 +202,44 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
+	return b.String()
+}
+
+func (m Model) renderSetupPrompt() string {
+	if m.Picker.Setup == nil {
+		return ""
+	}
+	prompt := m.Picker.Setup
+	title := ""
+	help := "Enter save • Esc cancel"
+	value := prompt.value
+	switch prompt.kind {
+	case setupPromptAPIKey:
+		title = "Enter API key for " + prompt.providerName
+		value = strings.Repeat("•", len([]rune(prompt.value)))
+	case setupPromptEndpoint:
+		title = "OpenAI-compatible endpoint"
+		help = "Enter save • Esc cancel"
+	default:
+		title = "Provider setup"
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(m.shellPaddedLine(m.st.cyan, title))
+	b.WriteString("\n")
+	if prompt.kind == setupPromptEndpoint {
+		b.WriteString(m.shellPaddedLine(m.st.dim, "Example: http://127.0.0.1:11434/v1"))
+		b.WriteString("\n")
+	}
+	if prompt.err != "" {
+		b.WriteString(m.shellPaddedLine(m.st.warn, prompt.err))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.shellPaddedLine(lipgloss.NewStyle(), "> "+value))
+	b.WriteString("\n")
+	b.WriteString(m.shellPaddedLine(m.st.dim, help))
+	b.WriteString("\n")
 	return b.String()
 }
 

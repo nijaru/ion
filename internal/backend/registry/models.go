@@ -150,12 +150,19 @@ func fetchModels(
 			)
 		}
 		return ollamaFetcher(ctx)
-	case "local-api":
+	case providers.OpenAICompatibleID:
 		endpoint := providers.ResolvedEndpointContext(ctx, cfg)
 		if endpoint == "" {
-			return nil, fmt.Errorf("Local API is not running")
+			return nil, fmt.Errorf("OpenAI-compatible endpoint is not configured")
 		}
-		return fetchOpenAICompatibleModels(ctx, provider, endpoint, "", nil)
+		def, _ := providers.Lookup(provider)
+		return fetchOpenAICompatibleModels(
+			ctx,
+			provider,
+			endpoint,
+			providers.ResolvedAuthToken(cfg, def),
+			providers.ResolvedHeaders(cfg),
+		)
 	default:
 		def, ok := providers.Lookup(provider)
 		if !ok || def.Family != providers.FamilyOpenAI {
@@ -169,7 +176,7 @@ func fetchModels(
 			ctx,
 			provider,
 			endpoint,
-			resolvedAuthToken(cfg, def),
+			providers.ResolvedAuthToken(cfg, def),
 			providers.ResolvedHeaders(cfg),
 		)
 	}
@@ -467,7 +474,7 @@ func modelCacheTTL(cfg *config.Config) time.Duration {
 	}
 	provider := providers.ResolveID(cfg.Provider)
 	switch provider {
-	case "local-api", "ollama":
+	case providers.OpenAICompatibleID, "ollama":
 		return localModelCacheTTL
 	}
 	endpoint := strings.ToLower(
@@ -797,23 +804,4 @@ func providerCacheKey(cfg *config.Config) string {
 		strings.ToLower(strings.TrimSpace(endpoint)),
 		strings.TrimSpace(authEnv),
 	}, "|")
-}
-
-func resolvedAuthToken(cfg *config.Config, def providers.Definition) string {
-	names := make([]string, 0, 1+len(def.AlternateEnvVars))
-	if cfg != nil {
-		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-			names = append(names, override)
-		}
-	}
-	if def.DefaultEnvVar != "" {
-		names = append(names, def.DefaultEnvVar)
-	}
-	names = append(names, def.AlternateEnvVars...)
-	for _, name := range names {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
-		}
-	}
-	return ""
 }

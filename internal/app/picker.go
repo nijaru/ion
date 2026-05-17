@@ -248,7 +248,7 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 	activeProvider := providers.ResolveID(copy.Provider)
 	targetProvider := providers.ResolveID(provider)
 	copy.Provider = targetProvider
-	if activeProvider != targetProvider && targetProvider != "local-api" {
+	if activeProvider != targetProvider && !providers.IsOpenAICompatible(targetProvider) {
 		copy.Endpoint = ""
 		copy.AuthEnvVar = ""
 		copy.ExtraHeaders = nil

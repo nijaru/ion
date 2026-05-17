@@ -160,8 +160,8 @@ func TestLoadAppliesMutableState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Provider != "local-api" {
-		t.Fatalf("provider = %q, want local-api", cfg.Provider)
+	if cfg.Provider != "openai-compatible" {
+		t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 	}
 	if cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("model = %q, want qwen3.6:27b", cfg.Model)
@@ -195,7 +195,7 @@ func TestLoadProviderEnvOverrideClearsStaleModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Provider != "local-api" || cfg.Model != "" {
+	if cfg.Provider != "openai-compatible" || cfg.Model != "" {
 		t.Fatalf("cfg = %#v, want provider override with no stale model", cfg)
 	}
 }
@@ -222,7 +222,7 @@ func TestLoadProviderEnvOverrideKeepsExplicitModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Provider != "local-api" || cfg.Model != "qwen3.6:27b" {
+	if cfg.Provider != "openai-compatible" || cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("cfg = %#v, want explicit provider/model override", cfg)
 	}
 }
@@ -254,8 +254,8 @@ func TestLoadStateCanClearConfiguredModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Provider != "local-api" {
-		t.Fatalf("provider = %q, want local-api", cfg.Provider)
+	if cfg.Provider != "openai-compatible" {
+		t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 	}
 	if cfg.Model != "" {
 		t.Fatalf("model = %q, want empty", cfg.Model)
@@ -405,7 +405,7 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 	}
 	got := string(data)
 	for _, want := range []string{
-		`provider = 'local-api'`,
+		`provider = 'openai-compatible'`,
 		`model = 'qwen3.6:27b'`,
 	} {
 		if !strings.Contains(got, want) {

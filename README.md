@@ -29,32 +29,30 @@ ion
 ```
 
 Ion opens a provider picker the first time it starts without a configured
-runtime. Choose a provider, set the matching API key in your shell when needed,
-then choose a model.
+runtime. Choose a provider, enter an API key when prompted, then choose a model.
 
 ## Providers
 
 Ion supports API-key providers such as OpenAI, Anthropic, Gemini, OpenRouter,
-and several OpenAI-compatible services. It also supports local model servers.
-Most local runtimes expose an OpenAI-compatible `/v1` API, which is the endpoint
-shape Ion expects for `local-api`.
+and several OpenAI-compatible services. It also supports local model servers
+that expose an OpenAI-compatible `/v1` API.
 
 Most users do not need a config file. Use `~/.ion/config.toml` for custom
 endpoints, stable defaults, or provider options you want to keep outside the
 TUI.
 
-Use `local-api` for no-auth OpenAI-compatible local servers:
+Use `openai-compatible` for local or custom OpenAI-compatible endpoints. API
+keys are optional for this provider unless your endpoint requires one:
 
 ```toml
 # ~/.ion/config.toml
-provider = "local-api"
+provider = "openai-compatible"
 model = "qwen3.6:27b"
 endpoint = "http://localhost:11434/v1"
 context_limit = 70000
 ```
 
-Use `openai-compatible` for custom OpenAI-compatible endpoints that require an
-API key or custom headers:
+For a custom endpoint that requires an environment-backed token:
 
 ```toml
 # ~/.ion/config.toml
@@ -64,13 +62,14 @@ endpoint = "https://example.com/v1"
 auth_env_var = "CUSTOM_API_KEY"
 ```
 
-Runtime selections made in the TUI are stored in `~/.ion/state.toml`.
+Runtime selections made in the TUI are stored in `~/.ion/state.toml`. API keys
+entered in Ion are stored in `~/.ion/credentials.toml`.
 
 You can override the config for a single run:
 
 ```sh
 ION_PROVIDER=openai ION_MODEL=gpt-5.5 ion
-ion --provider local-api --model qwen3.6:27b
+ion --provider openai-compatible --model qwen3.6:27b
 ```
 
 ## Usage
@@ -95,6 +94,7 @@ Common TUI commands:
 ```text
 /help       show commands and keys
 /provider   choose a provider
+/login      save a provider API key
 /model      choose a model
 /thinking   choose reasoning effort
 /status     show runtime status

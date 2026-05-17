@@ -17,11 +17,13 @@ import (
 
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/credentials"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/storage"
 )
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY",
 		"OPENAI_API_KEY",
@@ -53,7 +55,7 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 		"Gemini",
 		"OpenRouter",
 		"Ollama",
-		"Local API",
+		"OpenAI-compatible",
 		"Anthropic",
 		"Cerebras",
 		"DeepSeek",
@@ -1280,8 +1282,8 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-			if cfg.Provider != "local-api" {
-				t.Fatalf("provider = %q, want local-api", cfg.Provider)
+			if cfg.Provider != "openai-compatible" {
+				t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 			}
 			if cfg.Endpoint != endpoint {
 				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
@@ -1299,7 +1301,10 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
 		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
 	}
-	model.Picker.Overlay.index = pickerIndex(pickerDisplayItems(model.Picker.Overlay), "local-api")
+	model.Picker.Overlay.index = pickerIndex(
+		pickerDisplayItems(model.Picker.Overlay),
+		"openai-compatible",
+	)
 
 	updated, cmd = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = resolveModelPickerLoad(t, updated, cmd)
@@ -1368,6 +1373,7 @@ func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 func TestProviderPickerNonListingSelectionUsesPickerPreset(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ZAI_API_KEY", "test-key")
 
 	model := readyModel(t)
 	model.App.ActivePreset = presetPrimary
@@ -1458,6 +1464,7 @@ func TestProviderItemsUseCatalogGroups(t *testing.T) {
 }
 
 func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY",
 		"OPENAI_API_KEY",
@@ -1499,8 +1506,9 @@ func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
 		return ""
 	}
 
-	if indexOf("gemini") == -1 || indexOf("openrouter") == -1 || indexOf("local-api") == -1 {
-		t.Fatalf("expected ready providers and Local API to appear in picker: %#v", items)
+	if indexOf("gemini") == -1 || indexOf("openrouter") == -1 ||
+		indexOf("openai-compatible") == -1 {
+		t.Fatalf("expected ready providers and OpenAI-compatible to appear in picker: %#v", items)
 	}
 	if indexOf("anthropic") == -1 {
 		t.Fatalf("expected anthropic in picker")
@@ -1508,30 +1516,28 @@ func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
 	if indexOf("gemini") > indexOf("anthropic") || indexOf("openrouter") > indexOf("anthropic") {
 		t.Fatalf("ready remote providers should sort before unset direct providers")
 	}
-	if indexOf("local-api") > indexOf("anthropic") {
-		t.Fatalf("Local API should sort ahead of unset direct providers")
+	if indexOf("openai-compatible") > indexOf("anthropic") {
+		t.Fatalf("OpenAI-compatible should sort ahead of unset direct providers")
 	}
 	if groupOf("anthropic") != "Needs setup" {
 		t.Fatalf("unset direct provider group = %q, want Needs setup", groupOf("anthropic"))
 	}
 }
 
-func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
+func TestProviderItemsShowSingleOpenAICompatibleEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	items := providerItems(&config.Config{})
+	foundCustom := false
 	for _, item := range items {
 		if item.Value == "openai-compatible" {
-			t.Fatalf("custom endpoint entry %q should be hidden by default", item.Value)
+			foundCustom = true
+		}
+		if item.Value == "local-api" {
+			t.Fatalf("local-api should be accepted as an alias, not shown as a second picker entry")
 		}
 	}
-	foundLocal := false
-	for _, item := range items {
-		if item.Value == "local-api" && item.Label == "Local API" {
-			foundLocal = true
-			break
-		}
-	}
-	if !foundLocal {
-		t.Fatalf("Local API should always be visible")
+	if !foundCustom {
+		t.Fatalf("OpenAI-compatible endpoint should always be visible")
 	}
 
 	items = providerItems(
@@ -1549,29 +1555,23 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	}
 
 	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
-	for _, item := range items {
-		if item.Value == "openai-compatible" {
-			t.Fatalf("custom endpoint entry should stay hidden when endpoint belongs to local-api")
-		}
-	}
-
-	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
 	found = false
 	for _, item := range items {
-		if item.Value == "local-api" && item.Label == "Local API" {
+		if item.Value == "openai-compatible" && item.Label == "OpenAI-compatible" {
 			if item.Detail != "Not running" {
-				t.Fatalf("local-api detail = %q, want %q", item.Detail, "Not running")
+				t.Fatalf("OpenAI-compatible detail = %q, want %q", item.Detail, "Not running")
 			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("local-api should render when active")
+		t.Fatalf("OpenAI-compatible should render when active through local-api alias")
 	}
 }
 
 func TestProviderItemsUseConfiguredLocalAPIEndpointWhenRuntimeProviderDiffers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			http.NotFound(w, r)
@@ -1587,13 +1587,129 @@ func TestProviderItemsUseConfiguredLocalAPIEndpointWhenRuntimeProviderDiffers(t 
 		Endpoint: srv.URL + "/v1",
 	})
 	for _, item := range items {
-		if item.Value != "local-api" {
+		if item.Value != "openai-compatible" {
 			continue
 		}
 		if !strings.Contains(item.Detail, "Ready at ") {
-			t.Fatalf("local-api detail = %q, want configured endpoint readiness", item.Detail)
+			t.Fatalf(
+				"OpenAI-compatible detail = %q, want configured endpoint readiness",
+				item.Detail,
+			)
 		}
 		return
 	}
-	t.Fatal("local-api provider not found")
+	t.Fatal("OpenAI-compatible provider not found")
+}
+
+func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "anthropic" {
+				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			}
+			return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	updated, cmd := model.handleCommand("/provider anthropic")
+	model = updated
+	if cmd != nil {
+		t.Fatalf("unexpected provider command %T", cmd)
+	}
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
+	}
+	for _, r := range "sk-ant-test" {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = resolveModelPickerLoad(t, model, cmd)
+
+	if model.Picker.Setup != nil {
+		t.Fatal("setup prompt should close after saving key")
+	}
+	if got, ok := credentials.LookupAPIKey("anthropic"); !ok || got != "sk-ant-test" {
+		t.Fatalf("saved credential = (%q, %v), want sk-ant-test true", got, ok)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
+func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openai-compatible" {
+				t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
+			}
+			if cfg.Endpoint != "http://fedora:11434/v1" {
+				t.Fatalf("endpoint = %q, want normalized fedora endpoint", cfg.Endpoint)
+			}
+			return []registry.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	model, cmd := model.openEndpointPrompt(&config.Config{}, presetPrimary)
+	if cmd != nil {
+		t.Fatalf("unexpected endpoint prompt command %T", cmd)
+	}
+	for _, r := range "fedora:11434" {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = resolveModelPickerLoad(t, model, cmd)
+
+	stable, err := config.LoadStable()
+	if err != nil {
+		t.Fatalf("load stable config: %v", err)
+	}
+	if stable.Endpoint != "http://fedora:11434/v1" {
+		t.Fatalf("stable endpoint = %q, want normalized fedora endpoint", stable.Endpoint)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
+func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte("provider = \"openai-compatible\"\nendpoint = \"http://127.0.0.1:1/v1\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := readyModel(t)
+	model, cmd := model.handleCommand("/provider openai-compatible")
+	if cmd != nil {
+		t.Fatalf("unexpected provider command %T", cmd)
+	}
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
+		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)
+	}
+	if model.Picker.Setup.value != "http://127.0.0.1:1/v1" {
+		t.Fatalf("setup prompt value = %q, want configured endpoint", model.Picker.Setup.value)
+	}
 }

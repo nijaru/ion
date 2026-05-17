@@ -24,13 +24,16 @@ func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
 }
 
 func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config) error {
-	if cfg == nil || providers.ResolveID(cfg.Provider) != "local-api" {
+	if cfg == nil || !providers.IsOpenAICompatible(cfg.Provider) {
 		return nil
 	}
 	if _, ready := providers.ProbeLocalAPIFresh(ctx, cfg); ready {
 		return nil
 	}
-	return errors.New("Local API is not running")
+	if strings.TrimSpace(cfg.Endpoint) != "" {
+		return errors.New("OpenAI-compatible endpoint is not running")
+	}
+	return errors.New("set an endpoint or start a local OpenAI-compatible server")
 }
 
 func (m Model) openProviderPicker() (Model, tea.Cmd) {
@@ -472,6 +475,14 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 				m.Picker.Overlay = nil
 			}
 			return m, cmdError(err.Error())
+		}
+		if selection.setup != 0 {
+			switch selection.setup {
+			case setupPromptAPIKey:
+				return m.openAPIKeyPrompt(selection.cfg, selected.Value, preset)
+			case setupPromptEndpoint:
+				return m.openEndpointPrompt(selection.cfg, preset)
+			}
 		}
 		m.clearProgressError()
 		m.Picker.Overlay = nil

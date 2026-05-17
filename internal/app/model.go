@@ -128,6 +128,13 @@ const (
 	pickerPurposeCommand
 )
 
+type setupPromptKind int
+
+const (
+	setupPromptAPIKey setupPromptKind = iota + 1
+	setupPromptEndpoint
+)
+
 type pickerItem struct {
 	Label   string
 	Value   string
@@ -163,6 +170,16 @@ type pickerOverlayState struct {
 	loading  bool
 	err      string
 	request  uint64
+}
+
+type setupPromptState struct {
+	kind         setupPromptKind
+	provider     string
+	providerName string
+	value        string
+	preset       modelPreset
+	cfg          config.Config
+	err          string
 }
 
 type progressMode int
@@ -239,6 +256,7 @@ type InFlightState struct {
 type PickerState struct {
 	Overlay          *pickerOverlayState
 	Session          *sessionPickerState
+	Setup            *setupPromptState
 	ModelLoadRequest uint64
 }
 

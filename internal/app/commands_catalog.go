@@ -132,6 +132,13 @@ func slashCommandDefinitions() []slashCommandInfo {
 			idle:       slashCommandIdleWithArgs,
 		},
 		{
+			name:       "/login",
+			detail:     "save provider API key",
+			helpLabel:  "/login [provider]",
+			helpDetail: "save an API key for a provider",
+			idle:       slashCommandIdleWithArgs,
+		},
+		{
 			name:       "/model",
 			detail:     "choose model",
 			helpLabel:  "/model [name]",

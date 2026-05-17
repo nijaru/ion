@@ -151,6 +151,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(err.Error())
 		}
+		if selection.setup != 0 {
+			switch selection.setup {
+			case setupPromptAPIKey:
+				return m.openAPIKeyPrompt(selection.cfg, name, m.activePreset())
+			case setupPromptEndpoint:
+				return m.openEndpointPrompt(selection.cfg, m.activePreset())
+			}
+		}
 		m.clearProgressError()
 		if !selection.supportsModelListing {
 			var commitErr error
@@ -164,6 +172,22 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			})
 		}
 		return m.openModelPickerWithConfig(selection.cfg)
+
+	case "/login":
+		cfg, err := m.commandConfig()
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+		}
+		provider := ""
+		if len(fields) >= 2 {
+			provider = fields[1]
+		} else {
+			provider = cfg.Provider
+		}
+		if strings.TrimSpace(provider) == "" {
+			return m.openProviderPicker()
+		}
+		return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
 
 	case "/settings":
 		return m.handleSettingsCommand(fields)
