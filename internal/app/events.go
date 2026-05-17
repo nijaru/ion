@@ -383,6 +383,9 @@ func matchingWorkspaceFileReferences(workdir, query string) []fileReferenceMatch
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil
 	}
+	if !pathInsideWorkspace(workdir, dir) {
+		return nil
+	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -407,6 +410,19 @@ func matchingWorkspaceFileReferences(workdir, query string) []fileReferenceMatch
 		return strings.Compare(a.reference, b.reference)
 	})
 	return matches
+}
+
+func pathInsideWorkspace(workdir, path string) bool {
+	realWorkdir, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return false
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(realWorkdir, realPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func matchingSlashCommands(prefix string) []string {
