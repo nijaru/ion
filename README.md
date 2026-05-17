@@ -1,33 +1,19 @@
 # Ion
 
-> Early preview: Ion is not stable yet. It can run shell commands and edit files in the repository where you launch it, so review changes before committing them.
+> [!NOTE]
+> Ion is early preview software. It can edit files and run shell commands in the
+> current workspace.
 
-Ion is a lightweight coding agent for the terminal.
+Ion is a terminal coding agent for local development. It runs in your shell,
+connects to your model provider, keeps sessions on disk, and can inspect code,
+edit files, and run project commands.
 
-Run it inside a repository to work with your chosen model in an interactive TUI or one-shot command. Ion can read and edit files, run project commands, and resume previous sessions.
+## Quickstart
 
-## Features
-
-- Interactive terminal UI with multiline input
-- One-shot print mode for scripts and smoke tests
-- Session persistence with resume and continue
-- Provider and model switching from the TUI
-- File tools for read, write, edit, multi-edit, list, grep, and glob
-- Foreground shell command execution
-- OpenAI, Anthropic, Gemini, OpenRouter, Ollama, local API, and OpenAI-compatible providers
-
-## Installation
-
-Ion requires Go 1.26 or newer.
+Ion requires Go 1.26 or newer. Install it with Go:
 
 ```sh
 go install github.com/nijaru/ion/cmd/ion@latest
-```
-
-From a local checkout:
-
-```sh
-go install ./cmd/ion
 ```
 
 Make sure your Go binary directory is on `PATH`:
@@ -36,54 +22,78 @@ Make sure your Go binary directory is on `PATH`:
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-## Configuration
-
-Stable settings live in `~/.ion/config.toml`. Runtime choices made inside the TUI are stored in `~/.ion/state.toml`.
-
 Create `~/.ion/config.toml`:
 
 ```toml
-provider = "openrouter"
-model = "openai/gpt-5.4"
+# ~/.ion/config.toml
+provider = "openai"
+model = "gpt-5.5"
 reasoning_effort = "auto"
 ```
 
 Set the matching API key:
 
 ```sh
-export OPENROUTER_API_KEY="..."
+export OPENAI_API_KEY="..."
 ```
 
-Local OpenAI-compatible server example:
-
-```toml
-provider = "local-api"
-model = "qwen3.6:27b"
-endpoint = "http://localhost:8080/v1"
-context_limit = 70000
-```
-
-Temporary runtime overrides:
-
-```sh
-ION_PROVIDER=openrouter ION_MODEL=openai/gpt-5.4 ion
-ion --provider local-api --model qwen3.6:27b
-```
-
-## Usage
-
-Start the interactive TUI:
+Start Ion in a project:
 
 ```sh
 ion
 ```
 
-Run one prompt and exit:
+## Providers
+
+Ion supports API-key providers such as OpenAI, Anthropic, Gemini, OpenRouter,
+and several OpenAI-compatible services. It also supports local model servers.
+Most local runtimes expose an OpenAI-compatible `/v1` API, which is the endpoint
+shape Ion expects for `local-api`.
+
+Use `local-api` for no-auth OpenAI-compatible local servers:
+
+```toml
+provider = "local-api"
+model = "qwen3.6:27b"
+endpoint = "http://localhost:11434/v1"
+context_limit = 70000
+```
+
+Use `openai-compatible` for custom OpenAI-compatible endpoints that require an
+API key or custom headers:
+
+```toml
+provider = "openai-compatible"
+model = "provider/model"
+endpoint = "https://example.com/v1"
+auth_env_var = "CUSTOM_API_KEY"
+```
+
+Runtime selections made in the TUI are stored in `~/.ion/state.toml`. Stable
+defaults belong in `~/.ion/config.toml`.
+
+You can override the config for a single run:
 
 ```sh
-ion -p "summarize the current repo"
+ION_PROVIDER=openai ION_MODEL=gpt-5.5 ion
+ion --provider local-api --model qwen3.6:27b
+```
+
+## Usage
+
+Start the TUI:
+
+```sh
+ion
+```
+
+Run a non-interactive prompt:
+
+```sh
+ion -p "summarize this project"
+cat README.md | ion -p "summarize this"
 ion --continue -p "what did we do last?"
-ion -p --output json "reply with ok"
+ion -p --json "reply with ok"
 ```
 
 Common TUI commands:
@@ -93,26 +103,25 @@ Common TUI commands:
 /provider   choose a provider
 /model      choose a model
 /thinking   choose reasoning effort
-/tools      show available tools
 /status     show runtime status
 /resume     resume a previous session
 /compact    compact the current session
 /quit       exit
 ```
 
-## Security
-
-Ion currently trusts local tool execution by default. The model can read files, edit files, and run foreground shell commands in the workspace.
-
-Use it in repositories where that is acceptable, and review the diff before committing. Approval prompts, persistent permission policy, and richer sandbox UX are planned after the core agent loop is stable.
-
 ## Development
 
+Use the standard Go toolchain:
+
 ```sh
+go install ./cmd/ion
+go run ./cmd/ion
 go test ./...
 go vet ./...
-go run ./cmd/ion
 ```
+
+Live provider smoke tests are gated behind environment variables and are not
+part of the default test run.
 
 ## License
 
