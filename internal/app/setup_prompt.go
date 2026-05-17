@@ -80,6 +80,19 @@ func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleSetupPromptPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
+	if m.Picker.Setup == nil {
+		return m, nil
+	}
+	content := inlinePasteText(msg.Content)
+	if content == "" {
+		return m, nil
+	}
+	m.Picker.Setup.value += content
+	m.Picker.Setup.err = ""
+	return m, nil
+}
+
 func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 	prompt := m.Picker.Setup
 	if prompt == nil {

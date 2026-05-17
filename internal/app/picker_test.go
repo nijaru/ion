@@ -343,6 +343,32 @@ func TestSessionPickerFilteringSelectsTopRankedMatch(t *testing.T) {
 	}
 }
 
+func TestSessionPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model.Picker.Session = &sessionPickerState{
+		items: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "sess-1", Title: "zz resume"}},
+			{info: storage.SessionInfo{ID: "sess-2", Title: "resume"}},
+		},
+		index: 1,
+	}
+	model.Picker.Session.filtered = model.Picker.Session.items
+
+	updated, _ := model.Update(tea.PasteMsg{Content: "resume\n"})
+	model = updated.(Model)
+
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Session.query; got != "resume" {
+		t.Fatalf("session query = %q, want pasted query", got)
+	}
+	if got := model.Picker.Session.filtered[model.Picker.Session.index].info.ID; got != "sess-2" {
+		t.Fatalf("selected session = %q, want top pasted-query match", got)
+	}
+}
+
 func TestSessionPickerPageKeysJumpByPage(t *testing.T) {
 	model := readyModel(t)
 	items := make([]sessionPickerItem, 12)
@@ -589,6 +615,39 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
 	}
 
+	if got := len(pickerDisplayItems(model.Picker.Overlay)); got != 1 {
+		t.Fatalf("filtered items = %d, want 1", got)
+	}
+	if got := pickerDisplayItems(model.Picker.Overlay)[0].Label; got != "OpenRouter" {
+		t.Fatalf("filtered label = %q, want OpenRouter", got)
+	}
+}
+
+func TestPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a provider",
+		items: []pickerItem{
+			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY"},
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
+		},
+		filtered: []pickerItem{
+			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY"},
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
+		},
+		purpose: pickerPurposeProvider,
+	}
+
+	updated, _ := model.Update(tea.PasteMsg{Content: "router\n"})
+	model = updated.(Model)
+
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Overlay.query; got != "router" {
+		t.Fatalf("picker query = %q, want pasted query", got)
+	}
 	if got := len(pickerDisplayItems(model.Picker.Overlay)); got != 1 {
 		t.Fatalf("filtered items = %d, want 1", got)
 	}
@@ -1671,6 +1730,25 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	}
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
+func TestSetupPromptPasteUpdatesPromptWithoutChangingComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model, cmd := model.openEndpointPrompt(&config.Config{}, presetPrimary)
+	if cmd != nil {
+		t.Fatalf("unexpected endpoint prompt command %T", cmd)
+	}
+
+	updated, _ := model.Update(tea.PasteMsg{Content: "fedora:11434\n"})
+	model = updated.(Model)
+
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Setup.value; got != "fedora:11434" {
+		t.Fatalf("setup prompt value = %q, want pasted endpoint", got)
 	}
 }
 

@@ -441,6 +441,19 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handlePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
+	if m.Picker.Overlay == nil {
+		return m, nil
+	}
+	content := inlinePasteText(msg.Content)
+	if content == "" {
+		return m, nil
+	}
+	m.Picker.Overlay.query += content
+	refreshPickerFilter(&m)
+	return m, nil
+}
+
 func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	if m.Picker.Overlay == nil {
 		return m, nil

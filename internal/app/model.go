@@ -738,6 +738,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleQueuedTurn(msg)
 
 	case tea.PasteMsg:
+		if m.Picker.Session != nil {
+			return m.handleSessionPickerPaste(msg)
+		}
+		if m.Picker.Setup != nil {
+			return m.handleSetupPromptPaste(msg)
+		}
+		if m.Picker.Overlay != nil {
+			return m.handlePickerPaste(msg)
+		}
 		return m.handlePaste(msg)
 
 	case tea.KeyPressMsg:
