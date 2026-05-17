@@ -441,8 +441,8 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter":
 		return m.commitPickerSelection()
 	default:
-		if msg.Text != "" {
-			m.Picker.Overlay.query += msg.Text
+		if text, ok := keyTextInput(msg); ok {
+			m.Picker.Overlay.query += text
 			refreshPickerFilter(&m)
 			return m, nil
 		}

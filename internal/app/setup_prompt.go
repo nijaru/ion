@@ -72,8 +72,8 @@ func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter":
 		return m.commitSetupPrompt()
 	default:
-		if msg.Text != "" {
-			m.Picker.Setup.value += msg.Text
+		if text, ok := keyTextInput(msg); ok {
+			m.Picker.Setup.value += text
 			m.Picker.Setup.err = ""
 		}
 		return m, nil

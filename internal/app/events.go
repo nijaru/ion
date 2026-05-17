@@ -7,11 +7,24 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/session"
 )
+
+func keyTextInput(msg tea.KeyPressMsg) (string, bool) {
+	if msg.Text == "" {
+		return "", false
+	}
+	for _, r := range msg.Text {
+		if unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return msg.Text, true
+}
 
 // handleKey is the source of truth for core TUI hotkey semantics.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
