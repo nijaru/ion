@@ -98,8 +98,8 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.Picker.Session = nil
 		return m.resumeStoredSessionByID(selected.info.ID)
 	default:
-		if msg.Text != "" {
-			m.Picker.Session.query += msg.Text
+		if text, ok := keyTextInput(msg); ok {
+			m.Picker.Session.query += text
 			m.refreshSessionPickerFilter()
 		}
 		return m, nil
@@ -215,7 +215,9 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.shellPaddedLine(m.st.dim, "Type to search • PgUp/PgDn page • Enter select • Esc cancel"))
+	b.WriteString(
+		m.shellPaddedLine(m.st.dim, "Type to search • PgUp/PgDn page • Enter select • Esc cancel"),
+	)
 	b.WriteString("\n")
 	return b.String()
 }

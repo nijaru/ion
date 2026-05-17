@@ -369,6 +369,37 @@ func TestSessionPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	}
 }
 
+func TestSessionPickerIgnoresControlKeyText(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model.Picker.Session = &sessionPickerState{
+		items: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "sess-1", Title: "resume"}},
+		},
+		filtered: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "sess-1", Title: "resume"}},
+		},
+		query: "res",
+	}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{
+		Text: "\x18",
+		Code: 'x',
+		Mod:  tea.ModCtrl,
+	})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("unexpected control-key command %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Session.query; got != "res" {
+		t.Fatalf("session query = %q, want unchanged query", got)
+	}
+}
+
 func TestSessionPickerPageKeysJumpByPage(t *testing.T) {
 	model := readyModel(t)
 	items := make([]sessionPickerItem, 12)
@@ -653,6 +684,39 @@ func TestPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	}
 	if got := pickerDisplayItems(model.Picker.Overlay)[0].Label; got != "OpenRouter" {
 		t.Fatalf("filtered label = %q, want OpenRouter", got)
+	}
+}
+
+func TestPickerIgnoresControlKeyText(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a provider",
+		items: []pickerItem{
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
+		},
+		filtered: []pickerItem{
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
+		},
+		query:   "router",
+		purpose: pickerPurposeProvider,
+	}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{
+		Text: "\x18",
+		Code: 'x',
+		Mod:  tea.ModCtrl,
+	})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("unexpected control-key command %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Overlay.query; got != "router" {
+		t.Fatalf("picker query = %q, want unchanged query", got)
 	}
 }
 
@@ -1749,6 +1813,33 @@ func TestSetupPromptPasteUpdatesPromptWithoutChangingComposer(t *testing.T) {
 	}
 	if got := model.Picker.Setup.value; got != "fedora:11434" {
 		t.Fatalf("setup prompt value = %q, want pasted endpoint", got)
+	}
+}
+
+func TestSetupPromptIgnoresControlKeyText(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+	model, cmd := model.openEndpointPrompt(&config.Config{}, presetPrimary)
+	if cmd != nil {
+		t.Fatalf("unexpected endpoint prompt command %T", cmd)
+	}
+	model.Picker.Setup.value = "fedora:11434"
+
+	updated, cmd := model.Update(tea.KeyPressMsg{
+		Text: "\x18",
+		Code: 'x',
+		Mod:  tea.ModCtrl,
+	})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("unexpected control-key command %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	if got := model.Picker.Setup.value; got != "fedora:11434" {
+		t.Fatalf("setup value = %q, want unchanged value", got)
 	}
 }
 
