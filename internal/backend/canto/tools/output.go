@@ -21,14 +21,30 @@ func limitToolOutputBytes(output string, limit int) string {
 		cut--
 	}
 	omitted := len(output) - cut
-	marker := fmt.Sprintf(
-		"\n\n[tool output truncated after %d bytes; %d bytes omitted. Use a narrower command, path, or line range to inspect the rest.]",
-		cut,
-		omitted,
-	)
+	marker := toolOutputTruncationMarker(cut, omitted)
 	prefix := strings.TrimRight(output[:cut], "\n")
 	if prefix == "" {
 		return strings.TrimLeft(marker, "\n")
 	}
 	return prefix + marker
+}
+
+func toolOutputTruncationMarker(cut, omitted int) string {
+	return fmt.Sprintf(
+		"\n\n[tool output truncated after %d bytes; %d bytes omitted. Use a narrower command, path, or line range to inspect the rest.]",
+		cut,
+		omitted,
+	)
+}
+
+func toolOutputSafeAppendLen(prefix, chunk string, limit int) int {
+	remaining := limit - len(prefix)
+	if remaining <= 0 {
+		return 0
+	}
+	cut := min(len(chunk), remaining)
+	for cut > 0 && !utf8.ValidString(prefix+chunk[:cut]) {
+		cut--
+	}
+	return cut
 }

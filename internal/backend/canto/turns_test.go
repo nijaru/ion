@@ -3,6 +3,7 @@ package canto
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,6 +284,115 @@ func TestSubmitTurnBashEmitsToolOutputDeltas(t *testing.T) {
 			}
 		case <-timeout:
 			t.Fatal("timed out waiting for bash streaming turn")
+		}
+	}
+}
+
+func TestSubmitTurnBashTruncatesStreamedToolResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "bash-call-large", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = fmt.Sprintf(
+		`{"command":"awk 'BEGIN { for (i = 0; i < %d; i++) printf \"a\" }'"}`,
+		1024*1024+64,
+	)
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run the large streaming command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	var (
+		deltaBytes int
+		resultErr  error
+		result     string
+	)
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before bash turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolOutputDelta:
+				if msg.ToolUseID == "bash-call-large" {
+					deltaBytes += len(msg.Delta)
+				}
+			case ionsession.ToolResult:
+				if msg.ToolUseID == "bash-call-large" {
+					resultErr = msg.Error
+					result = msg.Result
+				}
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				if !strings.Contains(result, "[tool output truncated after") {
+					rawLen, rawHasMarker := rawToolCompletedOutputInfo(t, b, "bash-call-large")
+					t.Fatalf(
+						"tool result missing truncation marker; result len=%d delta bytes=%d err=%v raw len=%d raw marker=%v suffix=%q",
+						len(result),
+						deltaBytes,
+						resultErr,
+						rawLen,
+						rawHasMarker,
+						tailString(result, 200),
+					)
+				}
+				if !strings.Contains(result, "64 bytes omitted") {
+					t.Fatalf(
+						"tool result = %q, want omitted byte count",
+						tailString(result, 200),
+					)
+				}
+				if len(result) > 1024*1024+512 {
+					t.Fatalf("tool result length = %d, want bounded output", len(result))
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for large bash streaming turn")
 		}
 	}
 }
@@ -916,4 +1026,35 @@ func (f promptStreamFunc) PromptStream(
 	message string,
 ) (<-chan cantofw.RunEvent, error) {
 	return f(ctx, message)
+}
+
+func tailString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[len(s)-max:]
+}
+
+func rawToolCompletedOutputInfo(t *testing.T, b *Backend, toolUseID string) (int, bool) {
+	t.Helper()
+	if b.harness == nil || b.harness.Runner == nil {
+		return 0, false
+	}
+	events, err := b.harness.Runner.Events(t.Context(), b.ID())
+	if err != nil {
+		t.Fatalf("raw events: %v", err)
+	}
+	for _, ev := range events {
+		if ev.Type != csession.ToolCompleted {
+			continue
+		}
+		data, ok, err := ev.ToolCompletedData()
+		if err != nil {
+			t.Fatalf("decode raw tool completed: %v", err)
+		}
+		if ok && data.ID == toolUseID {
+			return len(data.Output), strings.Contains(data.Output, "[tool output truncated after")
+		}
+	}
+	return 0, false
 }

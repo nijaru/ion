@@ -33,3 +33,12 @@ func TestLimitToolOutputBytesDoesNotSplitFirstRune(t *testing.T) {
 		t.Fatalf("truncated output = %q, want marker without replacement rune", got)
 	}
 }
+
+func TestToolOutputSafeAppendLenDoesNotSplitRune(t *testing.T) {
+	if got := toolOutputSafeAppendLen("", "世hello", 1); got != 0 {
+		t.Fatalf("safe append len = %d, want 0", got)
+	}
+	if got := toolOutputSafeAppendLen("", "世hello", 4); got != len("世h") {
+		t.Fatalf("safe append len = %d, want %d", got, len("世h"))
+	}
+}

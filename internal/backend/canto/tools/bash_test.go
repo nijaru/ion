@@ -3,11 +3,15 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/canto/tracing"
 )
 
 func TestBash_Spec(t *testing.T) {
@@ -151,6 +155,69 @@ func TestBashExecuteStreamingStopsCommandWhenConsumerStops(t *testing.T) {
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("marker stat err = %v, want not exist", err)
 	}
+}
+
+func TestBashExecuteStreamingEmitsTruncationMarker(t *testing.T) {
+	b := NewBash(t.TempDir())
+	assertStreamingTruncationMarker(t, b)
+}
+
+func TestBashExecuteStreamingThroughTracingEmitsTruncationMarker(t *testing.T) {
+	b := NewBash(t.TempDir())
+	wrapped, ok := tracing.WrapTool(b).(tool.StreamingTool)
+	if !ok {
+		t.Fatal("wrapped bash does not implement StreamingTool")
+	}
+	assertStreamingTruncationMarker(t, wrapped)
+}
+
+func TestBashExecuteEmitsTruncationMarker(t *testing.T) {
+	b := NewBash(t.TempDir())
+	args := largeOutputCommandArgs(maxOutputSize + 64)
+	got, err := b.Execute(t.Context(), args)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	assertTruncationMarker(t, got)
+}
+
+func assertStreamingTruncationMarker(t *testing.T, b tool.StreamingTool) {
+	t.Helper()
+	args := largeOutputCommandArgs(maxOutputSize + 64)
+
+	var chunks []string
+	for chunk, err := range b.ExecuteStreaming(t.Context(), args) {
+		if err != nil {
+			t.Fatalf("execute streaming failed: %v", err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	got := strings.Join(chunks, "")
+	assertTruncationMarker(t, got)
+}
+
+func largeOutputCommandArgs(size int) string {
+	return fmt.Sprintf(`{"command":"awk 'BEGIN { for (i = 0; i < %d; i++) printf \"a\" }'"}`, size)
+}
+
+func assertTruncationMarker(t *testing.T, got string) {
+	t.Helper()
+	if !strings.Contains(got, "[tool output truncated after") {
+		t.Fatalf("output missing truncation marker")
+	}
+	if !strings.Contains(got, "64 bytes omitted") {
+		t.Fatalf("output = %q, want omitted byte count", tailForTest(got, 200))
+	}
+	if len(got) > maxOutputSize+512 {
+		t.Fatalf("output length = %d, want bounded output", len(got))
+	}
+}
+
+func tailForTest(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[len(s)-max:]
 }
 
 func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
