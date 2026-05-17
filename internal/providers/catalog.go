@@ -495,6 +495,9 @@ func localAPIProbeTargets(cfg *config.Config) []string {
 
 	if cfg != nil && IsOpenAICompatible(cfg.Provider) {
 		add(cfg.Endpoint)
+		if strings.TrimSpace(cfg.Endpoint) != "" {
+			return out
+		}
 	}
 	add("http://127.0.0.1:1234/v1")
 	add("http://127.0.0.1:8000/v1")
