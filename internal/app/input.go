@@ -59,7 +59,7 @@ func (m Model) statusLine() string {
 			branch,
 			gitDiff,
 		},
-		{provider, model, thinking, usage, cost, branch, gitDiff},
+		{provider, model, thinking, usage, cost, gitDiff},
 		{provider, model, thinking, usage, cost},
 		{model, thinking, usage, cost},
 		{thinking, usage, cost},
