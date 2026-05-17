@@ -18,6 +18,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Picker.Session != nil {
 		return m.handleSessionPickerKey(msg)
 	}
+	if m.Picker.Setup != nil {
+		return m.handleSetupPromptKey(msg)
+	}
 	if m.Picker.Overlay != nil {
 		return m.handlePickerKey(msg)
 	}

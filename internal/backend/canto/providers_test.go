@@ -20,10 +20,10 @@ func TestResolvedAPIKeyDoesNotUseCustomAuthForDefaultProvider(t *testing.T) {
 		AuthEnvVar: "LOCAL_API_KEY",
 	}
 
-	if got := resolvedAPIKey(cfg, def); got != "router-key" {
+	if got := providers.ResolvedAuthToken(cfg, def); got != "router-key" {
 		t.Fatalf("api key = %q, want default provider key", got)
 	}
-	if got := missingAuthDetail(cfg, def); got != "OPENROUTER_API_KEY" {
+	if got := providers.MissingAuthDetail(cfg, def); got != "OPENROUTER_API_KEY" {
 		t.Fatalf("missing auth detail = %q, want OPENROUTER_API_KEY", got)
 	}
 }
@@ -41,10 +41,10 @@ func TestResolvedAPIKeyUsesCustomAuthForCustomProvider(t *testing.T) {
 		AuthEnvVar: "LOCAL_API_KEY",
 	}
 
-	if got := resolvedAPIKey(cfg, def); got != "local-key" {
+	if got := providers.ResolvedAuthToken(cfg, def); got != "local-key" {
 		t.Fatalf("api key = %q, want custom provider key", got)
 	}
-	if got := missingAuthDetail(cfg, def); got != "LOCAL_API_KEY" {
+	if got := providers.MissingAuthDetail(cfg, def); got != "LOCAL_API_KEY" {
 		t.Fatalf("missing auth detail = %q, want LOCAL_API_KEY", got)
 	}
 }

@@ -251,6 +251,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.App.Sandbox = backendSandboxSummary(msg.backend)
 	m.Picker.Overlay = nil
 	m.Picker.Session = nil
+	m.Picker.Setup = nil
 	m.clearProgressError()
 	if msg.storage != nil {
 		meta := msg.storage.Meta()

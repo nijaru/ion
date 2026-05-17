@@ -100,6 +100,7 @@ tk done <id>
 - Keep global Ion files under `~/.ion/`.
 - Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, subagent paths, cost limits, verbosity.
 - Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state.
+- Provider API keys entered through Ion belong in `~/.ion/credentials.toml` with private file permissions, not in config or state.
 - Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write settings/state.
 - Prefer hardcoded defaults for ion-owned behavior. Add persistent state only when the value is machine-owned and genuinely needs to survive sessions.
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/credentials"
 )
 
 type (
@@ -41,16 +42,19 @@ const (
 )
 
 const (
-	AuthAPIKey AuthKind = "api_key"
-	AuthToken  AuthKind = "token"
-	AuthLocal  AuthKind = "local"
-	AuthACP    AuthKind = "acp"
+	AuthAPIKey   AuthKind = "api_key"
+	AuthToken    AuthKind = "token"
+	AuthLocal    AuthKind = "local"
+	AuthOptional AuthKind = "optional"
+	AuthACP      AuthKind = "acp"
 )
 
 const (
 	RuntimeNative Runtime = "native"
 	RuntimeACP    Runtime = "acp"
 )
+
+const OpenAICompatibleID = "openai-compatible"
 
 type Definition struct {
 	ID                     string
@@ -133,6 +137,10 @@ func IsACP(id string) bool {
 	return ok && def.Runtime == RuntimeACP
 }
 
+func IsOpenAICompatible(id string) bool {
+	return ResolveID(id) == OpenAICompatibleID
+}
+
 func DefaultACPCommand(id string) (string, bool) {
 	def, ok := Lookup(id)
 	if !ok || def.ACPCommand == "" {
@@ -156,7 +164,7 @@ func ResolvedEndpointContext(ctx context.Context, cfg *config.Config) string {
 	if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" && def.SupportsCustomEndpoint {
 		return endpoint
 	}
-	if def.ID == "local-api" {
+	if def.ID == OpenAICompatibleID {
 		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
 			return endpoint
 		}
@@ -204,6 +212,47 @@ func CredentialEnvVars(cfg *config.Config) []string {
 	return out
 }
 
+func ResolvedAuthToken(cfg *config.Config, def Definition) string {
+	if def.AuthKind == AuthLocal || def.AuthKind == AuthACP {
+		return ""
+	}
+	for _, envVar := range authEnvVars(cfg, def) {
+		if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
+			return value
+		}
+	}
+	if key, ok := credentials.LookupAPIKey(def.ID); ok {
+		return key
+	}
+	return ""
+}
+
+func RequiresAuth(cfg *config.Config, def Definition) bool {
+	switch def.AuthKind {
+	case AuthAPIKey, AuthToken:
+		return true
+	case AuthOptional:
+		return cfg != nil && strings.TrimSpace(cfg.AuthEnvVar) != ""
+	default:
+		return false
+	}
+}
+
+func MissingAuthDetail(cfg *config.Config, def Definition) string {
+	if def.SupportsCustomEndpoint && cfg != nil {
+		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+			return override
+		}
+	}
+	if envVar := ResolvedAuthEnvVar(cfg); envVar != "" {
+		return envVar
+	}
+	if def.DefaultEnvVar != "" {
+		return def.DefaultEnvVar
+	}
+	return "provider credentials"
+}
+
 func ResolvedHeaders(cfg *config.Config) map[string]string {
 	if cfg == nil {
 		return nil
@@ -241,7 +290,20 @@ func CredentialStateContext(
 	if def.Runtime == RuntimeACP {
 		return "Subscription", true
 	}
-	if def.ID == "local-api" {
+	if def.ID == OpenAICompatibleID {
+		configuredEndpoint := ""
+		if cfg != nil {
+			configuredEndpoint = strings.TrimSpace(cfg.Endpoint)
+		}
+		if RequiresAuth(cfg, def) && ResolvedAuthToken(cfg, def) == "" {
+			return fmt.Sprintf("Set %s", MissingAuthDetail(cfg, def)), false
+		}
+		if configuredEndpoint == "" {
+			if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
+				return "Ready at " + summarizeEndpoint(endpoint), true
+			}
+			return "Set endpoint", false
+		}
 		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
 			return "Ready at " + summarizeEndpoint(endpoint), true
 		}
@@ -258,22 +320,14 @@ func CredentialStateContext(
 		strings.TrimSpace(endpoint) == "" {
 		return "Set endpoint", false
 	}
-	for _, envVar := range authEnvVars(cfg, def) {
-		if strings.TrimSpace(envVar) == "" {
-			continue
-		}
-		if strings.TrimSpace(os.Getenv(envVar)) != "" {
-			return "Ready", true
-		}
+	if ResolvedAuthToken(cfg, def) != "" {
+		return "Ready", true
 	}
-	if def.AuthKind == AuthLocal {
+	if def.AuthKind == AuthLocal || def.AuthKind == AuthOptional {
 		return "Local", true
 	}
-	if envVar := ResolvedAuthEnvVar(cfg); envVar != "" {
-		return fmt.Sprintf("Set %s", envVar), false
-	}
-	if def.DefaultEnvVar != "" {
-		return fmt.Sprintf("Set %s", def.DefaultEnvVar), false
+	if RequiresAuth(cfg, def) {
+		return fmt.Sprintf("Set %s", MissingAuthDetail(cfg, def)), false
 	}
 	return "Set provider options", false
 }
@@ -287,7 +341,7 @@ func GroupName(def Definition) string {
 	case KindLocal:
 		return "Local"
 	case KindCustom:
-		return "Custom Endpoints"
+		return "Local / custom"
 	default:
 		return ""
 	}
@@ -295,7 +349,7 @@ func GroupName(def Definition) string {
 
 func SortRank(cfg *config.Config, def Definition) int {
 	_, ready := CredentialState(cfg, def)
-	isLocal := def.Kind == KindLocal
+	isLocal := def.Kind == KindLocal || def.ID == OpenAICompatibleID
 	switch {
 	case ready && !isLocal:
 		return 0
@@ -326,7 +380,7 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 	if def.Runtime != RuntimeNative {
 		return false
 	}
-	if def.ID == "local-api" {
+	if def.ID == OpenAICompatibleID {
 		return true
 	}
 	if def.Kind != KindCustom {
@@ -414,7 +468,7 @@ func probeLocalAPI(ctx context.Context, cfg *config.Config, useCache bool) (stri
 				continue
 			}
 		}
-		ready := probeOpenAICompatibleEndpoint(ctx, endpoint)
+		ready := probeOpenAICompatibleEndpoint(ctx, endpoint, cfg)
 		storeLocalProbe(endpoint, ready)
 		if ready {
 			return endpoint, true
@@ -439,7 +493,7 @@ func localAPIProbeTargets(cfg *config.Config) []string {
 		out = append(out, value)
 	}
 
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Provider), "local-api") {
+	if cfg != nil && IsOpenAICompatible(cfg.Provider) {
 		add(cfg.Endpoint)
 	}
 	add("http://127.0.0.1:1234/v1")
@@ -471,7 +525,7 @@ func storeLocalProbe(endpoint string, ready bool) {
 	}
 }
 
-func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string) bool {
+func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string, cfg *config.Config) bool {
 	reqCtx := ctx
 	if _, ok := reqCtx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -488,6 +542,16 @@ func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string) bool {
 		return false
 	}
 	req.Header.Set("User-Agent", "ion/0.0.0")
+	if cfg != nil {
+		if def, ok := Lookup(cfg.Provider); ok {
+			if token := ResolvedAuthToken(cfg, def); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			for key, value := range ResolvedHeaders(cfg) {
+				req.Header.Set(key, value)
+			}
+		}
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -677,24 +741,15 @@ var definitions = []Definition{
 	},
 	{
 		ID:                     "openai-compatible",
-		DisplayName:            "Custom API",
+		DisplayName:            "OpenAI-compatible",
 		Kind:                   KindCustom,
 		Family:                 FamilyOpenAI,
-		AuthKind:               AuthAPIKey,
+		AuthKind:               AuthOptional,
 		DefaultEnvVar:          "OPENAI_COMPATIBLE_API_KEY",
 		SupportsModelListing:   true,
 		SupportsCustomEndpoint: true,
 		Runtime:                RuntimeNative,
-	},
-	{
-		ID:                     "local-api",
-		DisplayName:            "Local API",
-		Kind:                   KindLocal,
-		Family:                 FamilyOpenAI,
-		AuthKind:               AuthLocal,
-		SupportsModelListing:   true,
-		SupportsCustomEndpoint: true,
-		Runtime:                RuntimeNative,
+		Aliases:                []string{"local-api", "custom-api"},
 	},
 	{
 		ID:          "claude-pro",

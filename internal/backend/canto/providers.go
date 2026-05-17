@@ -3,7 +3,6 @@ package canto
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -61,13 +60,13 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 	if !ok {
 		return nil, fmt.Errorf("unsupported canto provider %q", cfg.Provider)
 	}
-	apiKey := resolvedAPIKey(cfg, def)
+	apiKey := providers.ResolvedAuthToken(cfg, def)
 	endpoint := providers.ResolvedEndpointContext(ctx, cfg)
 	models := providerModels(cfg)
 	switch def.Family {
 	case providers.FamilyAnthropic:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", providers.MissingAuthDetail(cfg, def))
 		}
 		return cproviders.NewAnthropic(cproviders.Config{
 			APIKey:   apiKey,
@@ -76,8 +75,8 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 			Models:   models,
 		}), nil
 	case providers.FamilyOpenAI:
-		if def.AuthKind != providers.AuthLocal && apiKey == "" {
-			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+		if providers.RequiresAuth(cfg, def) && apiKey == "" {
+			return nil, fmt.Errorf("%s not set", providers.MissingAuthDetail(cfg, def))
 		}
 		if def.ID == "openai" {
 			return cproviders.NewOpenAI(cproviders.Config{
@@ -97,7 +96,7 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 		})
 	case providers.FamilyOpenRouter:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", providers.MissingAuthDetail(cfg, def))
 		}
 		return cproviders.NewOpenRouter(cproviders.Config{
 			APIKey:   apiKey,
@@ -107,7 +106,7 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 		}), nil
 	case providers.FamilyGemini:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", providers.MissingAuthDetail(cfg, def))
 		}
 		return cproviders.NewGemini(cproviders.Config{
 			APIKey:   apiKey,
@@ -143,43 +142,6 @@ func providerModels(cfg *config.Config) []llm.Model {
 	return []llm.Model{model}
 }
 
-func resolvedAPIKey(cfg *config.Config, def providers.Definition) string {
-	if def.AuthKind == providers.AuthLocal {
-		return ""
-	}
-	for _, name := range apiKeyEnvVars(cfg, def) {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func missingAuthDetail(cfg *config.Config, def providers.Definition) string {
-	if def.SupportsCustomEndpoint {
-		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-			return override
-		}
-	}
-	if envVar := providers.ResolvedAuthEnvVar(cfg); envVar != "" {
-		return envVar
-	}
-	if def.DefaultEnvVar != "" {
-		return def.DefaultEnvVar
-	}
-	return "provider credentials"
-}
-
-func apiKeyEnvVars(cfg *config.Config, def providers.Definition) []string {
-	names := []string{}
-	if def.SupportsCustomEndpoint {
-		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-			names = append(names, override)
-		}
-	}
-	if def.DefaultEnvVar != "" {
-		names = append(names, def.DefaultEnvVar)
-	}
-	names = append(names, def.AlternateEnvVars...)
-	return names
+	return providers.MissingAuthDetail(cfg, def)
 }

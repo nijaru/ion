@@ -247,8 +247,8 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 	}
 
 	applyCLIConfigOverrides(cfg, "local-api", "qwen3.6:27b", "")
-	if cfg.Provider != "local-api" || cfg.Model != "qwen3.6:27b" {
-		t.Fatalf("cfg = %#v, want local-api qwen model", cfg)
+	if cfg.Provider != "openai-compatible" || cfg.Model != "qwen3.6:27b" {
+		t.Fatalf("cfg = %#v, want openai-compatible qwen model", cfg)
 	}
 
 	cfg = &config.Config{
@@ -260,7 +260,7 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 		SummaryReasoningEffort: "low",
 	}
 	applyCLIConfigOverrides(cfg, "local-api", "", "")
-	if cfg.Provider != "local-api" ||
+	if cfg.Provider != "openai-compatible" ||
 		cfg.Model != "" ||
 		cfg.FastModel != "" ||
 		cfg.FastReasoningEffort != "" ||
@@ -490,7 +490,7 @@ func TestResolveStartupConfig(t *testing.T) {
 	t.Run("custom endpoint provider requires endpoint", func(t *testing.T) {
 		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model"}
 		err := resolveStartupConfig(cfg)
-		if err == nil || err.Error() != "Custom API requires endpoint configuration" {
+		if err == nil || err.Error() != "OpenAI-compatible requires endpoint configuration" {
 			t.Fatalf("resolveStartupConfig error = %v", err)
 		}
 	})
@@ -769,7 +769,8 @@ func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testin
 	}
 
 	err = b.Session().SubmitTurn(context.Background(), "hello")
-	if err == nil || !strings.Contains(err.Error(), "Local API requires endpoint configuration") {
+	if err == nil ||
+		!strings.Contains(err.Error(), "OpenAI-compatible requires endpoint configuration") {
 		t.Fatalf("submit error = %v, want endpoint configuration error", err)
 	}
 }

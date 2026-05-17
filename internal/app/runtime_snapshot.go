@@ -30,6 +30,7 @@ type providerSelection struct {
 	cfg                  *config.Config
 	supportsModelListing bool
 	transition           runtimeTransition
+	setup                setupPromptKind
 }
 
 func newRuntimeSnapshot(
@@ -136,7 +137,15 @@ func (m Model) providerSelection(
 		return providerSelection{}, err
 	}
 	if err := ensureProviderReadyForSelection(ctx, updated); err != nil {
+		def, _ := providers.Lookup(updated.Provider)
+		if def.ID == providers.OpenAICompatibleID {
+			return providerSelection{cfg: updated, setup: setupPromptEndpoint}, nil
+		}
 		return providerSelection{cfg: updated}, err
+	}
+	def, _ := providers.Lookup(updated.Provider)
+	if providers.RequiresAuth(updated, def) && providers.ResolvedAuthToken(updated, def) == "" {
+		return providerSelection{cfg: updated, setup: setupPromptAPIKey}, nil
 	}
 	selection := providerSelection{
 		cfg:                  updated,

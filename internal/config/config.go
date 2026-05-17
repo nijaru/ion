@@ -111,8 +111,8 @@ func applyEnvOverrides(cfg *Config) {
 	modelOverride := os.Getenv("ION_MODEL")
 
 	if strings.TrimSpace(providerOverride) != "" {
-		provider := strings.ToLower(strings.TrimSpace(providerOverride))
-		if provider != strings.ToLower(strings.TrimSpace(cfg.Provider)) &&
+		provider := normalizeProviderID(providerOverride)
+		if provider != normalizeProviderID(cfg.Provider) &&
 			strings.TrimSpace(modelOverride) == "" {
 			cfg.Model = ""
 		}
@@ -135,7 +135,7 @@ func applyEnvOverrides(cfg *Config) {
 }
 
 func normalizeConfig(cfg *Config) {
-	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
+	cfg.Provider = normalizeProviderID(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
 	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
@@ -255,7 +255,7 @@ func Save(cfg *Config) error {
 	}
 
 	out := *cfg
-	out.Provider = strings.ToLower(strings.TrimSpace(out.Provider))
+	out.Provider = normalizeProviderID(out.Provider)
 	out.Model = strings.TrimSpace(out.Model)
 	out.ReasoningEffort = normalizeReasoningEffort(out.ReasoningEffort)
 	if out.ReasoningEffort == DefaultReasoningEffort {
@@ -339,7 +339,7 @@ func applyState(cfg *Config, state *State) {
 		return
 	}
 	if state.Provider != nil {
-		cfg.Provider = strings.ToLower(strings.TrimSpace(*state.Provider))
+		cfg.Provider = normalizeProviderID(*state.Provider)
 	}
 	if state.Model != nil {
 		cfg.Model = strings.TrimSpace(*state.Model)
@@ -365,7 +365,7 @@ func stateFromConfig(cfg *Config) *State {
 	if cfg == nil {
 		return &State{}
 	}
-	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	provider := normalizeProviderID(cfg.Provider)
 	model := strings.TrimSpace(cfg.Model)
 	reasoning := normalizeOptionalReasoningEffort(cfg.ReasoningEffort)
 	fastModel := strings.TrimSpace(cfg.FastModel)
@@ -415,13 +415,22 @@ func splitProviderModel(value string) (string, string, bool) {
 		return "", "", false
 	}
 
-	provider := strings.ToLower(strings.TrimSpace(left))
+	provider := normalizeProviderID(left)
 	model := strings.TrimSpace(right)
 	if provider == "" || model == "" {
 		return "", "", false
 	}
 
 	return provider, model, true
+}
+
+func normalizeProviderID(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "local-api", "custom-api":
+		return "openai-compatible"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func DefaultDataDir() (string, error) {
