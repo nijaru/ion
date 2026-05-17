@@ -23,6 +23,33 @@ func TestProviderAndModelLoadFromEnv(t *testing.T) {
 	}
 }
 
+func TestSetConfigCopiesProviderAndModel(t *testing.T) {
+	t.Setenv("ION_PROVIDER", "")
+	t.Setenv("ION_MODEL", "")
+
+	cfg := &config.Config{Provider: "openai", Model: "model-a"}
+	b := New()
+	b.SetConfig(cfg)
+
+	cfg.Provider = "anthropic"
+	cfg.Model = "model-b"
+
+	if got := b.Provider(); got != "openai" {
+		t.Fatalf("Provider() = %q, want copied openai", got)
+	}
+	if got := b.Model(); got != "model-a" {
+		t.Fatalf("Model() = %q, want copied model-a", got)
+	}
+
+	b.SetConfig(nil)
+	if got := b.Provider(); got != "" {
+		t.Fatalf("Provider() after nil config = %q, want empty", got)
+	}
+	if got := b.Model(); got != "" {
+		t.Fatalf("Model() after nil config = %q, want empty", got)
+	}
+}
+
 func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())
