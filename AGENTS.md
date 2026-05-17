@@ -90,6 +90,7 @@ tk done <id>
 - Advanced ideas from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and similar agents are references, not mandates. Adopt them only when they simplify Ion or clearly improve the core coding workflow.
 - For core-loop and TUI planning/review, compare against local references when useful: `/Users/nick/github/badlogic/pi-mono` as the simple reliable baseline, `/Users/nick/github/openai/codex` as the richer open-source CLI/session/tooling baseline, and Claude Code / Claude-like implementations as product references. Use references to clarify behavior, not to copy features wholesale.
 - Pi parity is primarily an internal architecture target: session history, provider-visible context, event ordering, tool lifecycle, cancel/error settlement, persistence/replay, and runtime state ownership. Do not copy Pi UI/UX wholesale; use Pi and other agents to validate TUI behavior only where it affects correctness, simplicity, or state clarity.
+- Pi is opinionated and intentionally minimal. Follow Pi's internal patterns by default, but allow deliberate Ion/Canto differences when they keep phase-1 core simple, improve correctness, or preserve an obvious phase-2 Pi+ extension path.
 - Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may keep its own UI/product choices and add SOTA capabilities when they preserve core simplicity.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
