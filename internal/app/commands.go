@@ -9,6 +9,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
@@ -62,6 +63,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
+		cfg = m.commandConfigWithActiveProvider(cfg)
 		currentCfg, err := m.runtimeConfigForActivePreset(cfg)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
@@ -79,15 +81,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
 		if runtimeCfg.Provider == "" {
-			transition.snapshot.status = noProviderConfiguredStatus()
-			var commitErr error
-			m, commitErr = m.commitRuntimeTransition(transition)
-			if commitErr != nil {
-				return m, runtimeTransitionErrorCmd(commitErr)
-			}
-			return m, m.printEntries(
-				session.Entry{Role: session.System, Content: "Model set to " + name},
-			)
+			return m, cmdError("cannot set model without an active provider; use /provider first")
 		}
 		return m.switchRuntimeCommand(
 			transition,
@@ -320,6 +314,27 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	default:
 		return m, cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
 	}
+}
+
+func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	if strings.TrimSpace(cfg.Provider) != "" || m.Model.Backend == nil {
+		return cfg
+	}
+
+	def, ok := providers.Lookup(m.Model.Backend.Provider())
+	if !ok || def.Runtime != providers.RuntimeNative {
+		return cfg
+	}
+	if def.ID == providers.OpenAICompatibleID && strings.TrimSpace(cfg.Endpoint) == "" {
+		return cfg
+	}
+
+	updated := *cfg
+	updated.Provider = def.ID
+	return &updated
 }
 
 func (m Model) localCommandBusy() bool {

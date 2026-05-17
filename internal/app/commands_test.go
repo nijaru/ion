@@ -27,12 +27,6 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 		wantCommand bool
 	}{
 		{
-			name:        "model",
-			command:     "/model gpt-4.1",
-			expected:    "model = 'gpt-4.1'\n",
-			wantCommand: true,
-		},
-		{
 			name:        "thinking",
 			command:     "/thinking high",
 			expected:    "reasoning_effort = 'high'\n",
@@ -71,6 +65,75 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 				t.Fatal("expected status to be updated after direct config command")
 			}
 		})
+	}
+}
+
+func TestModelCommandRejectsMissingProviderBeforePersistingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, cmd := model.handleCommand("/model gpt-4.1")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected /model without provider to return an error command")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "use /provider first") {
+		t.Fatalf("error = %v, want provider guidance", err)
+	}
+	if model.Model.Config != nil && model.Model.Config.Model != "" {
+		t.Fatalf("app config = %#v, want no model-only config", model.Model.Config)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want no providerless model state", err)
+	}
+}
+
+func TestModelCommandUsesBackendProviderWhenConfigMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "gpt-4.1-old",
+		},
+	}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	updated, cmd := model.handleCommand("/model gpt-4.1-new")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected /model with active provider to return a notice command")
+	}
+	if capture.cfg == nil ||
+		capture.cfg.Provider != "openai" ||
+		capture.cfg.Model != "gpt-4.1-new" {
+		t.Fatalf("backend config = %#v, want active provider with new model", capture.cfg)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.Provider != "openai" ||
+		model.Model.Config.Model != "gpt-4.1-new" {
+		t.Fatalf("app config = %#v, want active provider with new model", model.Model.Config)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "state.toml"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	for _, want := range []string{"provider = 'openai'", "model = 'gpt-4.1-new'"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("state = %q, want %q", string(data), want)
+		}
 	}
 }
 
