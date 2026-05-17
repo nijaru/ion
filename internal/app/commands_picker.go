@@ -289,6 +289,18 @@ func loadModelPickerItems(requestID uint64, cfg *config.Config) tea.Cmd {
 	}
 }
 
+func (m Model) startupPickerCmd() tea.Cmd {
+	overlay := m.Picker.Overlay
+	if overlay == nil ||
+		overlay.purpose != pickerPurposeModel ||
+		!overlay.loading ||
+		overlay.request == 0 ||
+		overlay.cfg == nil {
+		return nil
+	}
+	return loadModelPickerItems(overlay.request, overlay.cfg)
+}
+
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
 	overlay := m.Picker.Overlay
 	if overlay == nil ||

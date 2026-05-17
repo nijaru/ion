@@ -138,6 +138,51 @@ func TestWithProviderPickerOpensSetupPicker(t *testing.T) {
 	}
 }
 
+func TestWithModelPickerOpensStartupModelPicker(t *testing.T) {
+	model := readyModel(t).
+		WithConfig(&config.Config{Provider: "openrouter"}).
+		WithModelPicker()
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if got := model.Picker.Overlay.cfg.Provider; got != "openrouter" {
+		t.Fatalf("picker provider = %q, want openrouter", got)
+	}
+}
+
+func TestStartupPickerCmdLoadsInitialModelPicker(t *testing.T) {
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			return []registry.ModelMetadata{{ID: "openai/gpt-5.5"}}, nil
+		},
+	)
+
+	model := readyModel(t).
+		WithConfig(&config.Config{Provider: "openrouter"}).
+		WithModelPicker()
+	cmd := model.startupPickerCmd()
+	if cmd == nil {
+		t.Fatal("startup model picker should schedule model loading")
+	}
+	updated, _ := model.Update(cmd())
+	model = updated.(Model)
+
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+	if model.Picker.Overlay.loading {
+		t.Fatal("model picker should finish loading after startup command")
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) == 0 || items[0].Value != "openai/gpt-5.5" {
+		t.Fatalf("picker items = %#v, want loaded gpt-5.5 item", items)
+	}
+}
+
 func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

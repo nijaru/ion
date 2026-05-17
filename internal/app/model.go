@@ -446,6 +446,11 @@ func (m Model) WithProviderPicker() Model {
 	return m
 }
 
+func (m Model) WithModelPicker() Model {
+	m, _ = m.openModelPicker()
+	return m
+}
+
 func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 	m.Model.Checkpoints = store
 	return m
@@ -673,6 +678,7 @@ func (m Model) Init() tea.Cmd {
 		m.Input.Spinner.Tick,
 		m.awaitSessionEvent(),
 		loadGitDiffStats(m.App.Workdir),
+		m.startupPickerCmd(),
 	)
 }
 
