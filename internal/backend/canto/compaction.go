@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/nijaru/canto/governor"
-	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/config"
@@ -35,7 +34,7 @@ func compactionMessage(extra string) string {
 	return ionCompactionGuidance + "\n\nUser guidance:\n" + extra
 }
 
-func (b *Backend) shouldProactivelyCompact(ctx context.Context, pendingUserInput string) (bool, error) {
+func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
 	store := b.store
 	provider := b.compactLLM
@@ -55,12 +54,6 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context, pendingUserInput
 	messages, err := sess.EffectiveMessages()
 	if err != nil {
 		return false, err
-	}
-	if pendingUserInput = strings.TrimSpace(pendingUserInput); pendingUserInput != "" {
-		messages = append(messages, llm.Message{
-			Role:    llm.RoleUser,
-			Content: pendingUserInput,
-		})
 	}
 
 	threshold := int(float64(limit) * proactiveCompactThreshold)
