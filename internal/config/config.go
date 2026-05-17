@@ -116,6 +116,9 @@ func applyEnvOverrides(cfg *Config) {
 			strings.TrimSpace(modelOverride) == "" {
 			cfg.Model = ""
 		}
+		if provider != normalizeProviderID(cfg.Provider) {
+			clearProviderScopedPresets(cfg)
+		}
 		cfg.Provider = provider
 	}
 
@@ -339,7 +342,11 @@ func applyState(cfg *Config, state *State) {
 		return
 	}
 	if state.Provider != nil {
-		cfg.Provider = normalizeProviderID(*state.Provider)
+		provider := normalizeProviderID(*state.Provider)
+		if provider != normalizeProviderID(cfg.Provider) {
+			clearProviderScopedPresets(cfg)
+		}
+		cfg.Provider = provider
 	}
 	if state.Model != nil {
 		cfg.Model = strings.TrimSpace(*state.Model)
@@ -359,6 +366,16 @@ func applyState(cfg *Config, state *State) {
 	if state.SummaryReasoningEffort != nil {
 		cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(*state.SummaryReasoningEffort)
 	}
+}
+
+func clearProviderScopedPresets(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.FastModel = ""
+	cfg.FastReasoningEffort = ""
+	cfg.SummaryModel = ""
+	cfg.SummaryReasoningEffort = ""
 }
 
 func stateFromConfig(cfg *Config) *State {

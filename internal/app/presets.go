@@ -114,7 +114,9 @@ func updateProviderSelection(
 	}
 	updated.Model = ""
 	updated.FastModel = ""
+	updated.FastReasoningEffort = ""
 	updated.SummaryModel = ""
+	updated.SummaryReasoningEffort = ""
 	return &updated, nil
 }
 

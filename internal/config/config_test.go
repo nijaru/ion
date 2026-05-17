@@ -174,6 +174,47 @@ func TestLoadAppliesMutableState(t *testing.T) {
 	}
 }
 
+func TestLoadStateProviderOverrideClearsProviderScopedPresets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(
+		"provider = \"local-api\"\n"+
+			"model = \"qwen3.6:27b\"\n"+
+			"fast_model = \"qwen3.6:27b-fast\"\n"+
+			"fast_reasoning_effort = \"low\"\n"+
+			"summary_model = \"qwen3.6:27b-summary\"\n"+
+			"summary_reasoning_effort = \"minimal\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	statePath := filepath.Join(configDir, "state.toml")
+	if err := os.WriteFile(statePath, []byte(
+		"provider = \"openrouter\"\nmodel = \"openai/gpt-5.4\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
+		t.Fatalf("cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4", cfg.Provider, cfg.Model)
+	}
+	if cfg.FastModel != "" ||
+		cfg.FastReasoningEffort != "" ||
+		cfg.SummaryModel != "" ||
+		cfg.SummaryReasoningEffort != "" {
+		t.Fatalf("provider-scoped presets were not cleared: %#v", cfg)
+	}
+}
+
 func TestLoadProviderEnvOverrideClearsStaleModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -182,6 +223,18 @@ func TestLoadProviderEnvOverrideClearsStaleModel(t *testing.T) {
 	configDir := filepath.Join(home, ".ion")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte(
+			"provider = \"openrouter\"\n"+
+				"model = \"openai/gpt-5.4\"\n"+
+				"fast_model = \"google/gemini-2.0-flash-lite-001\"\n"+
+				"fast_reasoning_effort = \"low\"\n",
+		),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 	if err := os.WriteFile(
 		filepath.Join(configDir, "state.toml"),
@@ -197,6 +250,9 @@ func TestLoadProviderEnvOverrideClearsStaleModel(t *testing.T) {
 	}
 	if cfg.Provider != "openai-compatible" || cfg.Model != "" {
 		t.Fatalf("cfg = %#v, want provider override with no stale model", cfg)
+	}
+	if cfg.FastModel != "" || cfg.FastReasoningEffort != "" {
+		t.Fatalf("provider-scoped fast preset was not cleared: %#v", cfg)
 	}
 }
 
