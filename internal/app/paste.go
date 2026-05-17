@@ -42,6 +42,10 @@ func (m Model) handlePaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func inlinePasteText(content string) string {
+	return strings.Join(strings.Fields(content), " ")
+}
+
 // expandMarkers replaces all paste marker placeholders with their original content.
 func (m Model) expandMarkers(text string) string {
 	for _, marker := range m.PasteMarkers {

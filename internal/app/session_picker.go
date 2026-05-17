@@ -106,6 +106,19 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleSessionPickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
+	if m.Picker.Session == nil {
+		return m, nil
+	}
+	content := inlinePasteText(msg.Content)
+	if content == "" {
+		return m, nil
+	}
+	m.Picker.Session.query += content
+	m.refreshSessionPickerFilter()
+	return m, nil
+}
+
 func (m Model) refreshSessionPickerFilter() {
 	if m.Picker.Session == nil {
 		return
