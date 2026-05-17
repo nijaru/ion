@@ -139,6 +139,8 @@ func TestWithProviderPickerOpensSetupPicker(t *testing.T) {
 }
 
 func TestWithModelPickerOpensStartupModelPicker(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
 	model := readyModel(t).
 		WithConfig(&config.Config{Provider: "openrouter"}).
 		WithModelPicker()
@@ -150,7 +152,46 @@ func TestWithModelPickerOpensStartupModelPicker(t *testing.T) {
 	}
 }
 
+func TestWithModelPickerMissingAPIKeyOpensSetupPrompt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	model := readyModel(t).
+		WithConfig(&config.Config{Provider: "anthropic"}).
+		WithModelPicker()
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
+	}
+	if got := model.Picker.Setup.provider; got != "anthropic" {
+		t.Fatalf("setup provider = %q, want anthropic", got)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf("picker overlay = %#v, want setup prompt only", model.Picker.Overlay)
+	}
+}
+
+func TestWithModelPickerDownOpenAICompatibleEndpointOpensSetupPrompt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	model := readyModel(t).
+		WithConfig(&config.Config{
+			Provider: "openai-compatible",
+			Endpoint: "http://127.0.0.1:1/v1",
+		}).
+		WithModelPicker()
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
+		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)
+	}
+	if got := model.Picker.Setup.value; got != "http://127.0.0.1:1/v1" {
+		t.Fatalf("setup endpoint value = %q, want configured endpoint", got)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf("picker overlay = %#v, want setup prompt only", model.Picker.Overlay)
+	}
+}
+
 func TestStartupPickerCmdLoadsInitialModelPicker(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {

@@ -171,7 +171,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 				Content: providerModelEntryNotice(selection.cfg.Provider),
 			})
 		}
-		return m.openModelPickerWithConfig(selection.cfg)
+		return m.openReadyModelPickerForPreset(selection.cfg, m.activePreset())
 
 	case "/login":
 		cfg, err := m.commandConfig()
