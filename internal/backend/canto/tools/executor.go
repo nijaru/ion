@@ -17,7 +17,7 @@ type localCommand struct {
 	Emit    func(string) error
 }
 
-const maxOutputSize = 1024 * 1024 // 1MB
+const maxOutputSize = maxToolOutputSize
 
 type localExecutor struct {
 	sandbox     SandboxMode
@@ -135,6 +135,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	var wg sync.WaitGroup
 
 	limitExceeded := false
+	omittedBytes := 0
 	var emitErr error
 	hasEmitErr := func() bool {
 		mu.Lock()
@@ -151,17 +152,28 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 				}
 				chunk := string(buf[:n])
 				mu.Lock()
-				if output.Len() >= maxOutputSize {
-					if !limitExceeded {
-						limitExceeded = true
-						output.WriteString("\n... [Output truncated: exceeded 1MB limit] ...\n")
-					}
+				if limitExceeded {
+					omittedBytes += len(chunk)
 					mu.Unlock()
 					continue
 				}
-				output.WriteString(chunk)
+
+				emitChunk := chunk
+				if remaining := maxOutputSize - output.Len(); len(chunk) > remaining {
+					limitExceeded = true
+					emitLen := toolOutputSafeAppendLen(output.String(), chunk, maxOutputSize)
+					if emitLen <= 0 {
+						omittedBytes += len(chunk)
+						mu.Unlock()
+						continue
+					}
+					emitChunk = chunk[:emitLen]
+					omittedBytes += len(chunk) - emitLen
+				}
+
+				output.WriteString(emitChunk)
 				if request.Emit != nil {
-					if err := request.Emit(chunk); err != nil {
+					if err := request.Emit(emitChunk); err != nil {
 						if emitErr == nil {
 							emitErr = err
 							if cmd.Process != nil {
@@ -183,12 +195,23 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	wg.Go(func() { readPipe(stdout) })
 	wg.Go(func() { readPipe(stderr) })
 
-	err = cmd.Wait()
+	// StdoutPipe/StderrPipe must be drained before Wait; Wait can close pipes
+	// before slow readers consume buffered output.
 	wg.Wait()
-	result := limitToolOutput(output.String())
+	err = cmd.Wait()
 	if emitErr != nil {
-		return result, emitErr
+		return output.String(), emitErr
 	}
+	if omittedBytes > 0 {
+		marker := toolOutputTruncationMarker(output.Len(), omittedBytes)
+		output.WriteString(marker)
+		if request.Emit != nil {
+			if err := request.Emit(marker); err != nil {
+				return output.String(), err
+			}
+		}
+	}
+	result := output.String()
 	if err != nil {
 		if result == "" {
 			return "", err
