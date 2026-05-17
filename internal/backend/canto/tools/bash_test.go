@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -88,16 +90,21 @@ func TestBash_Execute(t *testing.T) {
 	t.Run("streaming output", func(t *testing.T) {
 		args := `{"command": "echo 'line1'; echo 'line2'"}`
 		var chunks []string
-		res, err := b.ExecuteStreaming(context.Background(), args, func(chunk string) error {
+		var execErr error
+		for chunk, err := range b.ExecuteStreaming(context.Background(), args) {
+			if err != nil {
+				execErr = err
+				break
+			}
 			chunks = append(chunks, chunk)
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("execute streaming failed: %v", err)
+		}
+		if execErr != nil {
+			t.Fatalf("execute streaming failed: %v", execErr)
 		}
 		if len(chunks) == 0 {
 			t.Error("expected at least one chunk, got zero")
 		}
+		res := strings.Join(chunks, "")
 		if !strings.Contains(res, "line1") || !strings.Contains(res, "line2") {
 			t.Errorf("unexpected output: %q", res)
 		}
@@ -120,6 +127,30 @@ func TestBash_Execute(t *testing.T) {
 			t.Fatal("expected empty command to fail")
 		}
 	})
+}
+
+func TestBashExecuteStreamingStopsCommandWhenConsumerStops(t *testing.T) {
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "survived")
+	b := NewBash(tmpDir)
+
+	for chunk, err := range b.ExecuteStreaming(
+		t.Context(),
+		`{"command":"printf 'start\n'; sleep 1; touch survived"}`,
+	) {
+		if err != nil {
+			t.Fatalf("execute streaming failed: %v", err)
+		}
+		if !strings.Contains(chunk, "start") {
+			t.Fatalf("first chunk = %q, want start", chunk)
+		}
+		break
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("marker stat err = %v, want not exist", err)
+	}
 }
 
 func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {

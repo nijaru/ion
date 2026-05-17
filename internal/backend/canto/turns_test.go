@@ -197,6 +197,96 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnBashEmitsToolOutputDeltas(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "bash-call-1", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"printf ion-stream-output"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run the streaming command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	var (
+		deltas []string
+		result string
+	)
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before bash turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolOutputDelta:
+				if msg.ToolUseID == "bash-call-1" {
+					deltas = append(deltas, msg.Delta)
+				}
+			case ionsession.ToolResult:
+				if msg.ToolUseID == "bash-call-1" {
+					result = msg.Result
+				}
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				combined := strings.Join(deltas, "")
+				if !strings.Contains(combined, "ion-stream-output") {
+					t.Fatalf("tool output deltas = %q, want streamed bash output", combined)
+				}
+				if result != "ion-stream-output" {
+					t.Fatalf("tool result = %q, want final output once", result)
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for bash streaming turn")
+		}
+	}
+}
+
 func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	ctx := t.Context()
 	store, err := storage.NewCantoStore(t.TempDir())

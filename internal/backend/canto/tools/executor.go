@@ -135,11 +135,35 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	var wg sync.WaitGroup
 
 	limitExceeded := false
+	var emitErr error
+	setEmitErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if emitErr != nil {
+			return
+		}
+		emitErr = err
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}
+	hasEmitErr := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return emitErr != nil
+	}
 	readPipe := func(r io.Reader) {
 		buf := make([]byte, 4096)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
+				if hasEmitErr() {
+					return
+				}
+				chunk := string(buf[:n])
 				mu.Lock()
 				if output.Len() >= maxOutputSize {
 					if !limitExceeded {
@@ -149,12 +173,14 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 					mu.Unlock()
 					continue
 				}
-				chunk := string(buf[:n])
 				output.WriteString(chunk)
-				if request.Emit != nil {
-					_ = request.Emit(chunk)
-				}
 				mu.Unlock()
+				if request.Emit != nil {
+					if err := request.Emit(chunk); err != nil {
+						setEmitErr(err)
+						return
+					}
+				}
 			}
 			if err != nil {
 				break
@@ -168,6 +194,9 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	err = cmd.Wait()
 	wg.Wait()
 	result := limitToolOutput(output.String())
+	if emitErr != nil {
+		return result, emitErr
+	}
 	if err != nil {
 		if result == "" {
 			return "", err
