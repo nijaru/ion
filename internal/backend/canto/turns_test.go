@@ -17,7 +17,56 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/oklog/ulid/v2"
 )
+
+type eventTypeFailingCantoStore struct {
+	inner    csession.Store
+	failType csession.EventType
+	err      error
+}
+
+func (s *eventTypeFailingCantoStore) Save(ctx context.Context, ev csession.Event) error {
+	if ev.Type == s.failType {
+		return s.err
+	}
+	return s.inner.Save(ctx, ev)
+}
+
+func (s *eventTypeFailingCantoStore) Load(
+	ctx context.Context,
+	sessionID string,
+) (*csession.Session, error) {
+	sess, err := s.inner.Load(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return sess.WithWriter(s), nil
+}
+
+func (s *eventTypeFailingCantoStore) LoadUntil(
+	ctx context.Context,
+	sessionID string,
+	eventID ulid.ULID,
+) (*csession.Session, error) {
+	sess, err := s.inner.LoadUntil(ctx, sessionID, eventID)
+	if err != nil {
+		return nil, err
+	}
+	return sess.WithWriter(s), nil
+}
+
+func (s *eventTypeFailingCantoStore) Fork(
+	ctx context.Context,
+	originalSessionID string,
+	newSessionID string,
+) (*csession.Session, error) {
+	sess, err := s.inner.Fork(ctx, originalSessionID, newSessionID)
+	if err != nil {
+		return nil, err
+	}
+	return sess.WithWriter(s), nil
+}
 
 func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	ctx := context.Background()
@@ -284,6 +333,106 @@ func TestSubmitTurnBashEmitsToolOutputDeltas(t *testing.T) {
 			}
 		case <-timeout:
 			t.Fatal("timed out waiting for bash streaming turn")
+		}
+	}
+}
+
+func TestSubmitTurnStreamingDeltaPersistenceErrorFinishesTurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	innerStore, err := csession.NewSQLiteStore(filepath.Join(t.TempDir(), "canto.sqlite"))
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	persistErr := errors.New("persist tool delta")
+	failingStore := &eventTypeFailingCantoStore{
+		inner:    innerStore,
+		failType: csession.ToolOutputDelta,
+		err:      persistErr,
+	}
+	cwd := t.TempDir()
+	ionStore, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new ion store: %v", err)
+	}
+	storageSession, err := ionStore.OpenSession(
+		ctx,
+		cwd,
+		"local-api/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open ion session: %v", err)
+	}
+
+	call := llm.Call{ID: "bash-call-persist-error", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"printf ion-stream-output"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "should-not-run"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.store = failingStore
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run the streaming command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	var sawError bool
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before bash turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.Error:
+				sawError = true
+				if !strings.Contains(msg.Err.Error(), persistErr.Error()) {
+					t.Fatalf("session error = %v, want %v", msg.Err, persistErr)
+				}
+			case ionsession.ToolOutputDelta:
+				t.Fatalf("unexpected persisted tool output delta: %#v", msg)
+			case ionsession.ToolResult:
+				t.Fatalf("unexpected tool result after delta persistence error: %#v", msg)
+			case ionsession.TurnFinished:
+				if !sawError {
+					t.Fatal("turn finished without surfacing delta persistence error")
+				}
+				if b.turn.active {
+					t.Fatal("turn remained active after delta persistence error")
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for bash persistence error turn")
 		}
 	}
 }
