@@ -61,9 +61,11 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		}
 	}
 
-	m.Input.History = append(m.Input.History, text)
-	m.resetHistoryCursor()
-	historyCmd := m.persistInputHistory(context.Background(), text)
+	historyText, historyChanged := m.appendInputHistory(text)
+	var historyCmd tea.Cmd
+	if historyChanged {
+		historyCmd = m.persistInputHistory(context.Background(), historyText)
+	}
 
 	m.resetComposerDraft()
 
