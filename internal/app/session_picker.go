@@ -74,6 +74,22 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.Picker.Session.index++
 		}
 		return m, nil
+	case "pgup", "pageup":
+		if m.Picker.Session.index > 0 {
+			m.Picker.Session.index -= pickerPageSize
+			if m.Picker.Session.index < 0 {
+				m.Picker.Session.index = 0
+			}
+		}
+		return m, nil
+	case "pgdown", "pagedown":
+		if max := len(m.Picker.Session.filtered); max > 0 {
+			m.Picker.Session.index += pickerPageSize
+			if m.Picker.Session.index >= max {
+				m.Picker.Session.index = max - 1
+			}
+		}
+		return m, nil
 	case "enter":
 		if len(m.Picker.Session.filtered) == 0 {
 			return m, nil
@@ -148,7 +164,7 @@ func (m Model) renderSessionPicker() string {
 		return b.String()
 	}
 
-	const maxVisible = 8
+	const maxVisible = pickerPageSize
 	start := 0
 	if len(m.Picker.Session.filtered) > maxVisible {
 		start = m.Picker.Session.index - maxVisible/2
@@ -186,7 +202,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.shellPaddedLine(m.st.dim, "Type to search • Enter select • Esc cancel"))
+	b.WriteString(m.shellPaddedLine(m.st.dim, "Type to search • PgUp/PgDn page • Enter select • Esc cancel"))
 	b.WriteString("\n")
 	return b.String()
 }
