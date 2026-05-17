@@ -422,6 +422,11 @@ func (m Model) WithSessionPicker() Model {
 	return m
 }
 
+func (m Model) WithProviderPicker() Model {
+	m, _ = m.openProviderPicker()
+	return m
+}
+
 func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 	m.Model.Checkpoints = store
 	return m

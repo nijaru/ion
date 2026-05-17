@@ -277,6 +277,8 @@ func main() {
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset)
 	if openResumePicker {
 		model = model.WithSessionPicker()
+	} else if startupProviderMissing(b) {
+		model = model.WithProviderPicker()
 	}
 	printStartup(
 		os.Stdout,
@@ -304,6 +306,10 @@ func main() {
 	if sessionID := resumeHintSessionID(finalModel); sessionID != "" && !cli.noSessionRequested() {
 		printResumeHint(os.Stdout, sessionID)
 	}
+}
+
+func startupProviderMissing(b backend.Backend) bool {
+	return b != nil && strings.TrimSpace(b.Provider()) == ""
 }
 
 func runtimeHandlesForClose(

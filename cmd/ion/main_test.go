@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/app"
+	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -38,6 +40,40 @@ func (s *closeStorageSession) Close() error {
 	return nil
 }
 
+type providerBackend struct {
+	provider string
+}
+
+func (b providerBackend) Name() string {
+	return "provider-test"
+}
+
+func (b providerBackend) Provider() string {
+	return b.provider
+}
+
+func (b providerBackend) Model() string {
+	return ""
+}
+
+func (b providerBackend) ContextLimit() int {
+	return 0
+}
+
+func (b providerBackend) Bootstrap() backend.Bootstrap {
+	return backend.Bootstrap{}
+}
+
+func (b providerBackend) Session() session.AgentSession {
+	return nil
+}
+
+func (b providerBackend) SetStore(storage.Store) {}
+
+func (b providerBackend) SetSession(storage.Session) {}
+
+func (b providerBackend) SetConfig(*config.Config) {}
+
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 	startupAgent := &printSession{}
 	currentAgent := &printSession{}
@@ -69,5 +105,17 @@ func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
 	}
 	if storageSession != startupStorage {
 		t.Fatalf("storage = %#v, want fallback storage", storageSession)
+	}
+}
+
+func TestStartupProviderMissing(t *testing.T) {
+	if !startupProviderMissing(providerBackend{}) {
+		t.Fatal("empty provider should need startup setup")
+	}
+	if startupProviderMissing(providerBackend{provider: "openai"}) {
+		t.Fatal("configured provider should not need startup setup")
+	}
+	if startupProviderMissing(nil) {
+		t.Fatal("nil backend should not need startup setup")
 	}
 }
