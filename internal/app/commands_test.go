@@ -754,10 +754,21 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		},
 	)
 
-	_, cmd := model.handleCommand("/clear")
+	updated, cmd := model.handleCommand("/clear")
+	model = updated
 	msg := cmd()
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(msg)
+	model = next.(Model)
+	if model.Model.Config == nil ||
+		model.Model.Config.Provider != "openrouter" ||
+		model.Model.Config.Model != "deepseek/deepseek-v4-flash" {
+		t.Fatalf(
+			"app config after clear = %#v, want active backend provider/model",
+			model.Model.Config,
+		)
 	}
 }
 
