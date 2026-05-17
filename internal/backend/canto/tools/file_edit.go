@@ -146,33 +146,39 @@ type MultiEdit struct {
 	FileTool
 }
 
-type EditOperation struct {
-	FilePath   string `json:"file_path"`
+type editReplacement struct {
 	OldString  string `json:"old_string"`
 	NewString  string `json:"new_string"`
 	ReplaceAll bool   `json:"replace_all"`
 	Expected   int    `json:"expected_replacements"`
 }
 
+type matchedReplacement struct {
+	editIndex int
+	start     int
+	end       int
+	newString string
+}
+
 func (m *MultiEdit) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "multi_edit",
-		Description: "Apply multiple targeted text replacements across one or more files after validating every operation.",
+		Description: "Apply multiple targeted text replacements to one file after validating every operation against the original content.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"file_path": map[string]any{
+					"type":        "string",
+					"description": "Relative path to the file to modify.",
+				},
 				"edits": map[string]any{
 					"type": "array",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"file_path": map[string]any{
-								"type":        "string",
-								"description": "Path to the file to modify.",
-							},
 							"old_string": map[string]any{
 								"type":        "string",
-								"description": "The exact text to replace. Include context lines to ensure uniqueness.",
+								"description": "The exact text to replace. Must match the original file, not another edit's output.",
 							},
 							"new_string": map[string]any{
 								"type":        "string",
@@ -187,18 +193,19 @@ func (m *MultiEdit) Spec() llm.Spec {
 								"description": "Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
 							},
 						},
-						"required": []string{"file_path", "old_string", "new_string"},
+						"required": []string{"old_string", "new_string"},
 					},
 				},
 			},
-			"required": []string{"edits"},
+			"required": []string{"file_path", "edits"},
 		},
 	}
 }
 
 func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	var input struct {
-		Edits []EditOperation `json:"edits"`
+		FilePath string            `json:"file_path"`
+		Edits    []editReplacement `json:"edits"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
@@ -216,121 +223,52 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	contents := make(map[string]string)
-	originals := make(map[string]string)
-	modes := make(map[string]os.FileMode)
-	for _, edit := range input.Edits {
-		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
-			return "", fmt.Errorf("%s: %w", edit.FilePath, err)
-		}
-		relPath, err := m.relativePath(edit.FilePath)
-		if err != nil {
-			return "", err
-		}
-
-		if _, ok := contents[relPath]; !ok {
-			content, err := root.ReadFile(relPath)
-			if err != nil {
-				return "", fmt.Errorf("failed to read %s: %w", edit.FilePath, err)
-			}
-			info, err := root.Stat(relPath)
-			if err != nil {
-				return "", fmt.Errorf("failed to stat %s: %w", edit.FilePath, err)
-			}
-			contents[relPath] = string(content)
-			originals[relPath] = string(content)
-			modes[relPath] = info.Mode().Perm()
-		}
-
-		strContent := contents[relPath]
-		oldString, newString := matchEditStrings(strContent, edit.OldString, edit.NewString)
-		_, err = replacementCount(
-			edit.FilePath,
-			strContent,
-			oldString,
-			edit.ReplaceAll,
-			edit.Expected,
-		)
-		if err != nil {
-			return "", err
-		}
-
-		if edit.ReplaceAll {
-			contents[relPath] = strings.Replace(strContent, oldString, newString, -1)
-		} else {
-			contents[relPath] = strings.Replace(strContent, oldString, newString, 1)
-		}
+	relPath, err := m.relativePath(input.FilePath)
+	if err != nil {
+		return "", err
+	}
+	content, err := root.ReadFile(relPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", input.FilePath, err)
+	}
+	info, err := root.Stat(relPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat %s: %w", input.FilePath, err)
+	}
+	original := string(content)
+	newContent, replacements, err := applyEditReplacements(input.FilePath, original, input.Edits)
+	if err != nil {
+		return "", err
 	}
 
-	paths := sortedMapKeys(contents)
-	if _, err := m.checkpointPaths(ctx, paths...); err != nil {
+	if _, err := m.checkpointPaths(ctx, input.FilePath); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	type renameOp struct {
-		from, to string
+	tmpPath, err := writeEditTempFile(root, relPath, []byte(newContent), info.Mode().Perm())
+	if err != nil {
+		return "", err
 	}
-	var renames []renameOp
-	var writeErrs []error
-
-	var diffs strings.Builder
-	for _, relPath := range paths {
-		content := contents[relPath]
-		tmpPath, err := writeEditTempFile(root, relPath, []byte(content), modes[relPath])
-		if err != nil {
-			writeErrs = append(
-				writeErrs,
-				fmt.Errorf("failed to write temp for %s: %w", relPath, err),
-			)
-			break
-		}
-		renames = append(renames, renameOp{from: tmpPath, to: relPath})
-
-		diff := udiff.Unified("a/"+relPath, "b/"+relPath, originals[relPath], content)
-		if diff != "" {
-			diffs.WriteString(diff)
-			diffs.WriteString("\n")
-		}
-	}
-
-	if len(writeErrs) > 0 {
-		for _, op := range renames {
-			_ = root.Remove(op.from)
-		}
-		return "", fmt.Errorf("multi_edit aborted: %v", writeErrs)
-	}
-
 	if err := ctx.Err(); err != nil {
-		for _, op := range renames {
-			_ = root.Remove(op.from)
-		}
+		_ = root.Remove(tmpPath)
+		return "", err
+	}
+	if err := root.Rename(tmpPath, relPath); err != nil {
+		_ = root.Remove(tmpPath)
 		return "", err
 	}
 
-	for _, op := range renames {
-		if err := root.Rename(op.from, op.to); err != nil {
-			return "", fmt.Errorf("failed to finalize %s: %w", op.to, err)
-		}
-	}
-
+	diff := udiff.Unified("a/"+relPath, "b/"+relPath, original, newContent)
 	return limitToolOutput(fmt.Sprintf(
-		"Applied %d edit(s) across %d file(s).\n\n%s",
+		"Applied %d edit(s) with %d replacement(s) in %s.\n\n%s",
 		len(input.Edits),
-		len(contents),
-		diffs.String(),
+		replacements,
+		input.FilePath,
+		diff,
 	)), nil
-}
-
-func sortedMapKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 func writeEditTempFile(
@@ -369,6 +307,89 @@ func writeEditTempFile(
 		return name, nil
 	}
 	return "", fmt.Errorf("could not create temporary file for %s", relPath)
+}
+
+func applyEditReplacements(
+	filePath, content string,
+	edits []editReplacement,
+) (string, int, error) {
+	matches := make([]matchedReplacement, 0, len(edits))
+	for i, edit := range edits {
+		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
+			return "", 0, fmt.Errorf("edit[%d] in %s: %w", i, filePath, err)
+		}
+		oldString, newString := matchEditStrings(content, edit.OldString, edit.NewString)
+		count, err := replacementCount(
+			filePath,
+			content,
+			oldString,
+			edit.ReplaceAll,
+			edit.Expected,
+		)
+		if err != nil {
+			return "", 0, fmt.Errorf("edit[%d]: %w", i, err)
+		}
+		for _, start := range replacementIndexes(content, oldString, edit.ReplaceAll) {
+			matches = append(matches, matchedReplacement{
+				editIndex: i,
+				start:     start,
+				end:       start + len(oldString),
+				newString: newString,
+			})
+		}
+		if !edit.ReplaceAll && count != 1 {
+			return "", 0, fmt.Errorf("edit[%d]: expected one replacement in %s, found %d", i, filePath, count)
+		}
+	}
+	if len(matches) == 0 {
+		return "", 0, fmt.Errorf("multi_edit produced no replacements in %s", filePath)
+	}
+
+	slices.SortFunc(matches, func(a, b matchedReplacement) int {
+		if a.start != b.start {
+			return a.start - b.start
+		}
+		return a.end - b.end
+	})
+	for i := 1; i < len(matches); i++ {
+		prev := matches[i-1]
+		cur := matches[i]
+		if prev.end > cur.start {
+			return "", 0, fmt.Errorf(
+				"edit[%d] and edit[%d] overlap in %s; merge them into one edit",
+				prev.editIndex,
+				cur.editIndex,
+				filePath,
+			)
+		}
+	}
+
+	newContent := content
+	for i := len(matches) - 1; i >= 0; i-- {
+		match := matches[i]
+		newContent = newContent[:match.start] + match.newString + newContent[match.end:]
+	}
+	if newContent == content {
+		return "", 0, fmt.Errorf("multi_edit produced no content changes in %s", filePath)
+	}
+	return newContent, len(matches), nil
+}
+
+func replacementIndexes(content, oldString string, replaceAll bool) []int {
+	var indexes []int
+	start := 0
+	for {
+		idx := strings.Index(content[start:], oldString)
+		if idx < 0 {
+			return indexes
+		}
+		absolute := start + idx
+		indexes = append(indexes, absolute)
+		if !replaceAll {
+			return indexes
+		}
+		start = absolute + len(oldString)
+	}
 }
 
 func randomHexSuffix() (string, error) {

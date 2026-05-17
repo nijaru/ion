@@ -394,10 +394,8 @@ func TestFileTools(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
 
 		f1 := "file1.txt"
-		f2 := "file2.txt"
-		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld"), 0o644)
-		os.WriteFile(filepath.Join(tmpDir, f2), []byte("foo\nbar"), 0o644)
-		if err := os.Chmod(filepath.Join(tmpDir, f2), 0o755); err != nil {
+		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld\n"), 0o755)
+		if err := os.Chmod(filepath.Join(tmpDir, f1), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(tmpDir, f1+".tmp"), []byte("user temp"), 0o644); err != nil {
@@ -405,16 +403,15 @@ func TestFileTools(t *testing.T) {
 		}
 
 		args, _ := json.Marshal(map[string]any{
+			"file_path": f1,
 			"edits": []map[string]any{
 				{
-					"file_path":  f1,
 					"old_string": "world",
 					"new_string": "ion",
 				},
 				{
-					"file_path":  f2,
-					"old_string": "bar",
-					"new_string": "baz",
+					"old_string": "hello",
+					"new_string": "hi",
 				},
 			},
 		})
@@ -426,13 +423,13 @@ func TestFileTools(t *testing.T) {
 		if strings.Contains(res, "Checkpoint: ") {
 			t.Fatalf("multi_edit result leaked checkpoint id: %q", res)
 		}
-		if !strings.Contains(res, "Applied 2 edit(s) across 2 file(s).") {
+		if !strings.Contains(res, "Applied 2 edit(s) with 2 replacement(s) in file1.txt.") {
 			t.Fatalf("multi_edit result = %q, want concise success", res)
 		}
 
 		// Verify content
 		c1, _ := os.ReadFile(filepath.Join(tmpDir, f1))
-		if string(c1) != "hello\nion" {
+		if string(c1) != "hi\nion\n" {
 			t.Errorf("f1 content mismatch: %q", string(c1))
 		}
 
@@ -440,21 +437,15 @@ func TestFileTools(t *testing.T) {
 		if !strings.Contains(res, "--- a/file1.txt") || !strings.Contains(res, "+++ b/file1.txt") {
 			t.Errorf("diff for f1 missing in result: %q", res)
 		}
-		if !strings.Contains(res, "-world") || !strings.Contains(res, "+ion") {
+		if !strings.Contains(res, "-hello") || !strings.Contains(res, "+hi") ||
+			!strings.Contains(res, "-world") || !strings.Contains(res, "+ion") {
 			t.Errorf("hunk for f1 missing in result: %q", res)
 		}
-		if !strings.Contains(res, "--- a/file2.txt") || !strings.Contains(res, "-bar") ||
-			!strings.Contains(res, "+baz") {
-			t.Errorf("diff for f2 missing in result: %q", res)
-		}
-		if strings.Index(res, "--- a/file1.txt") > strings.Index(res, "--- a/file2.txt") {
-			t.Fatalf("multi_edit diff output is not sorted: %q", res)
-		}
-		f2Info, err := os.Stat(filepath.Join(tmpDir, f2))
+		f1Info, err := os.Stat(filepath.Join(tmpDir, f1))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := f2Info.Mode().Perm(); got != 0o755 {
+		if got := f1Info.Mode().Perm(); got != 0o755 {
 			t.Fatalf("multi_edit changed file mode to %v, want 0755", got)
 		}
 		tempContent, err := os.ReadFile(filepath.Join(tmpDir, f1+".tmp"))
@@ -471,9 +462,9 @@ func TestFileTools(t *testing.T) {
 		}
 
 		badArgs, _ := json.Marshal(map[string]any{
+			"file_path": f1,
 			"edits": []map[string]any{
 				{
-					"file_path":  f1,
 					"old_string": "",
 					"new_string": "x",
 				},
@@ -484,10 +475,10 @@ func TestFileTools(t *testing.T) {
 		}
 
 		ambiguousArgs, _ := json.Marshal(map[string]any{
+			"file_path": f1,
 			"edits": []map[string]any{
 				{
-					"file_path":  f2,
-					"old_string": "o",
+					"old_string": "i",
 					"new_string": "O",
 				},
 			},
@@ -500,10 +491,6 @@ func TestFileTools(t *testing.T) {
 
 	t.Run("MultiEdit rejects symlink escapes", func(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
-		safeFile := "safe-multi-edit.txt"
-		if err := os.WriteFile(filepath.Join(tmpDir, safeFile), []byte("safe\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
 		outside := filepath.Join(t.TempDir(), "outside-multi-edit.txt")
 		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -513,14 +500,9 @@ func TestFileTools(t *testing.T) {
 		}
 
 		args, _ := json.Marshal(map[string]any{
+			"file_path": "outside-multi-edit-link.txt",
 			"edits": []map[string]any{
 				{
-					"file_path":  safeFile,
-					"old_string": "safe",
-					"new_string": "changed",
-				},
-				{
-					"file_path":  "outside-multi-edit-link.txt",
 					"old_string": "outside",
 					"new_string": "changed",
 				},
@@ -530,13 +512,6 @@ func TestFileTools(t *testing.T) {
 			t.Fatal("expected multi_edit through symlink escape to fail")
 		}
 
-		safeData, err := os.ReadFile(filepath.Join(tmpDir, safeFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(safeData) != "safe\n" {
-			t.Fatalf("safe file changed before failed multi_edit completed: %q", safeData)
-		}
 		outsideData, err := os.ReadFile(outside)
 		if err != nil {
 			t.Fatal(err)
