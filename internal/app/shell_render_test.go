@@ -426,6 +426,46 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
+func TestStatusLineStartsWithInsetSpace(t *testing.T) {
+	model := readyModel(t)
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.HasPrefix(line, " ") {
+		t.Fatalf("status line = %q, want leading inset space", line)
+	}
+	if got := lipgloss.Width(model.statusLine()); got > model.shellWidth() {
+		t.Fatalf(
+			"expected status line width <= %d, got %d: %q",
+			model.shellWidth(),
+			got,
+			model.statusLine(),
+		)
+	}
+}
+
+func TestStatusLinePendingActionStartsWithInsetSpace(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
+	model = updated.(Model)
+	model.Input.Pending = pendingActionQuitCtrlC
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.HasPrefix(line, " ") {
+		t.Fatalf("pending status line = %q, want leading inset space", line)
+	}
+	if !strings.Contains(line, "Press Ctrl+C again to quit") {
+		t.Fatalf("pending status line = %q, want quit hint", line)
+	}
+	if got := lipgloss.Width(model.statusLine()); got > model.shellWidth() {
+		t.Fatalf(
+			"expected pending status line width <= %d, got %d: %q",
+			model.shellWidth(),
+			got,
+			model.statusLine(),
+		)
+	}
+}
+
 func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 	model := readyModel(t)
 	model.App.Workdir = "/tmp/sy"

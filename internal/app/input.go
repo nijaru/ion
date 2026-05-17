@@ -12,8 +12,12 @@ import (
 
 func (m Model) statusLine() string {
 	width := m.shellWidth()
+	contentWidth := width - 1
+	if contentWidth <= 0 {
+		return insetStatusLine("", width)
+	}
 	if hint := strings.TrimSpace(m.pendingActionStatus()); hint != "" {
-		return fitLine(m.st.warn.Render(hint), width)
+		return insetStatusLine(m.st.warn.Render(hint), width)
 	}
 
 	sep := m.st.sep.Render(" • ")
@@ -66,12 +70,19 @@ func (m Model) statusLine() string {
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)
-		if ansi.StringWidth(line) <= width {
-			return line
+		if ansi.StringWidth(line) <= contentWidth {
+			return insetStatusLine(line, width)
 		}
 	}
 
-	return fitLine(joinLineSegments(sep, thinking, usage, cost), width)
+	return insetStatusLine(joinLineSegments(sep, thinking, usage, cost), width)
+}
+
+func insetStatusLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return " " + fitLine(line, width-1)
 }
 
 func (m Model) statusModelLabel(model string) string {
