@@ -237,11 +237,23 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
 			return m, cmdError("cannot " + command + " without an active provider and model")
 		}
+		appCfg := cfg
+		if appCfg == nil {
+			appCfg = &config.Config{}
+		}
+		if strings.TrimSpace(appCfg.Provider) == "" {
+			updated := *appCfg
+			updated.Provider = runtimeCfg.Provider
+			appCfg = &updated
+		}
+		if configuredModelForPreset(appCfg, m.activePreset()) == "" {
+			appCfg = updateModelForPreset(appCfg, runtimeCfg.Model, m.activePreset())
+		}
 		notice := "Started new session"
 		if command == "/clear" {
 			notice = "Started fresh session"
 		}
-		transition := newRuntimeTransition(cfg, runtimeCfg, m.activePreset(), "")
+		transition := newRuntimeTransition(appCfg, runtimeCfg, m.activePreset(), "")
 		return m.switchRuntimeCommand(
 			transition,
 			session.Entry{Role: session.System, Content: notice},
