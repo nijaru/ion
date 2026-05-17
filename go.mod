@@ -12,7 +12,8 @@ require (
 	github.com/coder/acp-go-sdk v0.12.2
 	github.com/go-json-experiment/json v0.0.0-20260505212615-e40f80bf6836
 	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d
-	github.com/nijaru/canto v0.0.0-20260517181434-e4045a256699
+	github.com/nijaru/canto v0.0.0-20260517190756-926e02f5512e
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/yuin/goldmark v1.8.2
 	go.opentelemetry.io/otel v1.43.0
@@ -49,7 +50,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sashabaranov/go-openai v1.41.2 // indirect
