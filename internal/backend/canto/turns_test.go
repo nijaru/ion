@@ -247,6 +247,76 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnEmptyAssistantResponseEmitsSessionError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := ctesting.NewFauxProvider("local-api", ctesting.Step{})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+	})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "return nothing"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	var sawError bool
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-b.Events():
+			if !ok {
+				t.Fatal("event stream closed before empty-response turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.AgentMessage:
+				t.Fatalf("unexpected assistant message for empty response: %#v", msg)
+			case ionsession.Error:
+				if msg.Err == nil ||
+					!strings.Contains(msg.Err.Error(), "assistant response has no content") {
+					t.Fatalf("session error = %v, want empty assistant response error", msg.Err)
+				}
+				sawError = true
+			case ionsession.TurnFinished:
+				if !sawError {
+					t.Fatal("turn finished before empty-response error")
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for empty-response turn")
+		}
+	}
+}
+
 func TestSubmitTurnBashEmitsToolOutputDeltas(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
