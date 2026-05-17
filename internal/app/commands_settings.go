@@ -102,7 +102,11 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to reload runtime config: %v", err))
 	}
 	mergeRuntimeSelection(runtimeCfg, m.Model.Config)
-	transition := newRuntimeTransition(runtimeCfg, runtimeCfg, m.activePreset(), "")
+	backendCfg, err := m.runtimeConfigForActivePreset(runtimeCfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	transition := newRuntimeTransition(runtimeCfg, backendCfg, m.activePreset(), "")
 	var commitErr error
 	m, commitErr = m.commitRuntimeTransition(transition)
 	if commitErr != nil {

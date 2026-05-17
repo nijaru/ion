@@ -1477,6 +1477,53 @@ func TestSettingsCommandPreservesRuntimeSelection(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandPreservesFastRuntimeSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	sess := &stubSession{events: make(chan session.Event)}
+	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
+		WithConfigForRuntimePreset(
+			&config.Config{
+				Provider:            "openai",
+				Model:               "gpt-4.1",
+				ReasoningEffort:     "medium",
+				FastModel:           "gpt-4.1-mini",
+				FastReasoningEffort: "low",
+			},
+			&config.Config{
+				Provider:        "openai",
+				Model:           "gpt-4.1-mini",
+				ReasoningEffort: "low",
+			},
+			"fast",
+		)
+
+	model, cmd := model.handleCommand("/settings tool collapsed")
+	if cmd == nil {
+		t.Fatal("expected settings command")
+	}
+	_ = cmd()
+
+	if model.Model.Config == nil ||
+		model.Model.Config.Model != "gpt-4.1" ||
+		model.Model.Config.FastModel != "gpt-4.1-mini" ||
+		model.Model.Config.ToolVerbosity != "collapsed" {
+		t.Fatalf("app config = %#v, want full selection plus updated setting", model.Model.Config)
+	}
+	if capture.cfg == nil ||
+		capture.cfg.Model != "gpt-4.1-mini" ||
+		capture.cfg.ReasoningEffort != "low" ||
+		capture.cfg.ToolVerbosity != "collapsed" {
+		t.Fatalf("backend config = %#v, want resolved fast runtime plus setting", capture.cfg)
+	}
+}
+
 func TestSettingsToolAutoClearsStableOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
