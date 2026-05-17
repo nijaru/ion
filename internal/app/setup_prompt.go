@@ -22,6 +22,9 @@ func (m Model) openAPIKeyPrompt(
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unsupported provider %q", strings.TrimSpace(provider)))
 	}
+	if !providerSupportsAPIKeyPrompt(def) {
+		return m, cmdError(fmt.Sprintf("%s does not use API keys", def.DisplayName))
+	}
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
@@ -36,6 +39,15 @@ func (m Model) openAPIKeyPrompt(
 		cfg:          cfgCopy,
 	}
 	return m, nil
+}
+
+func providerSupportsAPIKeyPrompt(def providers.Definition) bool {
+	switch def.AuthKind {
+	case providers.AuthAPIKey, providers.AuthToken, providers.AuthOptional:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) openEndpointPrompt(cfg *config.Config, preset modelPreset) (Model, tea.Cmd) {

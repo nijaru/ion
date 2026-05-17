@@ -224,6 +224,47 @@ func TestStartupPickerCmdLoadsInitialModelPicker(t *testing.T) {
 	}
 }
 
+func TestLoginCommandOpensAPIKeyPrompt(t *testing.T) {
+	model := readyModel(t)
+	updated, cmd := model.handleCommand("/login anthropic")
+	model = updated
+	if cmd != nil {
+		t.Fatalf("unexpected login command %T", cmd)
+	}
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
+	}
+	if got := model.Picker.Setup.provider; got != "anthropic" {
+		t.Fatalf("setup provider = %q, want anthropic", got)
+	}
+}
+
+func TestLoginCommandRejectsProvidersWithoutAPIKeys(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		want     string
+	}{
+		{provider: "ollama", want: "Ollama does not use API keys"},
+		{provider: "claude-pro", want: "Claude Code does not use API keys"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			model := readyModel(t)
+			updated, cmd := model.handleCommand("/login " + tc.provider)
+			model = updated
+			if cmd == nil {
+				t.Fatal("expected login command to return an error")
+			}
+			err := localErrorFromMsg(t, cmd())
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if model.Picker.Setup != nil {
+				t.Fatalf("setup prompt = %#v, want none", model.Picker.Setup)
+			}
+		})
+	}
+}
+
 func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
