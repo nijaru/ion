@@ -1794,6 +1794,96 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 	}
 }
 
+func TestSetupPromptCommitDuringBusyTurnKeepsPromptAndSkipsConfigWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	model := readyModel(t)
+	model, cmd := model.openEndpointPrompt(&config.Config{}, presetPrimary)
+	if cmd != nil {
+		t.Fatalf("unexpected endpoint prompt command %T", cmd)
+	}
+	for _, r := range "fedora:11434" {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+	model.InFlight.Thinking = true
+
+	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected busy setup commit to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+		t.Fatalf("error = %v, want busy-turn guard", err)
+	}
+	if model.Picker.Setup == nil {
+		t.Fatal("setup prompt closed; want typed value preserved")
+	}
+	if model.Picker.Setup.value != "fedora:11434" {
+		t.Fatalf("setup prompt value = %q, want preserved endpoint", model.Picker.Setup.value)
+	}
+	if !strings.Contains(model.Picker.Setup.err, "Finish or cancel the current turn") {
+		t.Fatalf("prompt error = %q, want busy-turn guard", model.Picker.Setup.err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("config file should not be written while busy, stat err = %v", err)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf("picker overlay = %#v, want none while busy", model.Picker.Overlay)
+	}
+}
+
+func TestSetupPromptCommitDuringRuntimeSwitchKeepsPromptAndSkipsCredentialWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	model := readyModel(t)
+	model, cmd := model.openAPIKeyPrompt(&config.Config{}, "anthropic", presetPrimary)
+	if cmd != nil {
+		t.Fatalf("unexpected API key prompt command %T", cmd)
+	}
+	for _, r := range "sk-ant-test" {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+	model.Model.RuntimeSwitchRequest = 1
+
+	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected runtime-switch setup commit to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime-switch guard", err)
+	}
+	if model.Picker.Setup == nil {
+		t.Fatal("setup prompt closed; want typed value preserved")
+	}
+	if model.Picker.Setup.value != "sk-ant-test" {
+		t.Fatalf("setup prompt value = %q, want preserved API key", model.Picker.Setup.value)
+	}
+	if !strings.Contains(model.Picker.Setup.err, "runtime switch") {
+		t.Fatalf("prompt error = %q, want runtime-switch guard", model.Picker.Setup.err)
+	}
+	if got, ok := credentials.LookupAPIKey("anthropic"); ok || got != "" {
+		t.Fatalf("credential = (%q, %v), want no write while runtime switch is active", got, ok)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf(
+			"picker overlay = %#v, want none while runtime switch is active",
+			model.Picker.Overlay,
+		)
+	}
+}
+
 func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

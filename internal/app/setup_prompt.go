@@ -98,6 +98,10 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 	if prompt == nil {
 		return m, nil
 	}
+	if m.localCommandBusy() {
+		prompt.err = m.localCommandBusyMessage("saving provider setup")
+		return m, cmdError(prompt.err)
+	}
 	switch prompt.kind {
 	case setupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
