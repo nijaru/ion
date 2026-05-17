@@ -52,6 +52,9 @@ func (m Model) openProviderPickerForPreset(
 	cfg *config.Config,
 	preset modelPreset,
 ) (Model, tea.Cmd) {
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
+	}
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
@@ -86,6 +89,9 @@ func (m Model) openModelPickerForPreset(
 	cfg *config.Config,
 	preset modelPreset,
 ) (Model, tea.Cmd) {
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
+	}
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
@@ -124,6 +130,9 @@ func (m Model) openModelPickerForPreset(
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
+	}
 	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))

@@ -754,8 +754,11 @@ func TestRuntimeSwitchBlocksRuntimeChangingCommands(t *testing.T) {
 		"/primary",
 		"/fast",
 		"/resume session-1",
+		"/model",
 		"/model model-b",
+		"/provider",
 		"/provider local-api",
+		"/thinking",
 		"/thinking high",
 		"/settings retry on",
 		"/new",
@@ -814,6 +817,25 @@ func TestRuntimeSwitchBlocksPresetHotkey(t *testing.T) {
 	}
 	if model.App.ActivePreset != presetPrimary {
 		t.Fatalf("active preset = %q, want unchanged primary", model.App.ActivePreset)
+	}
+}
+
+func TestRuntimeSwitchBlocksThinkingPickerHotkey(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 1
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected runtime-switch guard error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime-switch guard", err)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf("picker overlay = %#v, want none during runtime switch", model.Picker.Overlay)
 	}
 }
 
