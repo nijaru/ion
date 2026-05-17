@@ -26,14 +26,29 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 	}()
 
 	meta := resumed.Meta()
-	provider, model := splitStoredSessionModel(meta.Model)
-	if provider == "" || model == "" {
+	provider, modelName := splitStoredSessionModel(meta.Model)
+	if provider == "" || modelName == "" {
 		return m, cmdError(fmt.Sprintf("session %s is missing provider/model metadata", sessionID))
 	}
 
-	cfg := &config.Config{Provider: provider, Model: model}
+	cfg, err := m.configForStoredSession(provider, modelName)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to apply session metadata: %v", err))
+	}
 	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
 	return m.resumeRuntimeCommand(cfg, notice, sessionID)
+}
+
+func (m Model) configForStoredSession(provider, model string) (*config.Config, error) {
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	cfg, err = updateProviderSelection(cfg, provider)
+	if err != nil {
+		return nil, err
+	}
+	return updateModelForPreset(cfg, model, presetPrimary), nil
 }
 
 func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {

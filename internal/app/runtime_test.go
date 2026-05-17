@@ -1194,6 +1194,110 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	}
 }
 
+func TestResumeStoredSessionPreservesOpenAICompatibleEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	const endpoint = "http://fedora:8080/v1"
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte(
+			"provider = \"openai-compatible\"\n"+
+				"model = \"old-model\"\n"+
+				"endpoint = \""+endpoint+"\"\n",
+		),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	tempSession := &stubStorageSession{
+		id:     "session-1",
+		model:  "openai-compatible/qwen3.6:27b",
+		branch: "main",
+	}
+
+	var captured config.Config
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		&resumeOnlyStore{resumed: tempSession},
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			captured = *cfg
+			newSession := &stubSession{events: make(chan session.Event)}
+			opened := &stubStorageSession{
+				id:     sessionID,
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "feature/resume",
+			}
+			return stubBackend{
+				sess:     newSession,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, newSession, opened, nil
+		},
+	)
+
+	model, cmd := model.resumeStoredSessionByID("session-1")
+	msg := cmd()
+
+	if _, ok := msg.(runtimeSwitchedMsg); !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	if captured.Provider != "openai-compatible" ||
+		captured.Model != "qwen3.6:27b" ||
+		captured.Endpoint != endpoint {
+		t.Fatalf(
+			"resume config = %#v, want openai-compatible qwen with endpoint %q",
+			captured,
+			endpoint,
+		)
+	}
+}
+
+func TestConfigForStoredSessionClearsProviderScopedPresets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	model := readyModel(t)
+	model.Model.Config = &config.Config{
+		Provider:               "local-api",
+		Model:                  "qwen3.6:27b",
+		ReasoningEffort:        "high",
+		FastModel:              "qwen3.6:27b-fast",
+		FastReasoningEffort:    "low",
+		SummaryModel:           "qwen3.6:27b-summary",
+		SummaryReasoningEffort: "minimal",
+	}
+
+	cfg, err := model.configForStoredSession("openrouter", "openai/gpt-5.4")
+	if err != nil {
+		t.Fatalf("config for stored session: %v", err)
+	}
+	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
+		t.Fatalf(
+			"cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4",
+			cfg.Provider,
+			cfg.Model,
+		)
+	}
+	if cfg.ReasoningEffort != "high" {
+		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
+	}
+	if cfg.FastModel != "" ||
+		cfg.FastReasoningEffort != "" ||
+		cfg.SummaryModel != "" ||
+		cfg.SummaryReasoningEffort != "" {
+		t.Fatalf("provider-scoped presets were not cleared: %#v", cfg)
+	}
+}
+
 func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
