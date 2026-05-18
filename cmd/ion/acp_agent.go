@@ -25,11 +25,10 @@ type acpRuntimeFactory interface {
 }
 
 type ionACPRuntimeFactory struct {
-	store              storage.Store
-	cfg                *config.Config
-	branch             string
-	mode               ionacp.Mode
-	acpCommandOverride string
+	store  storage.Store
+	cfg    *config.Config
+	branch string
+	mode   ionacp.Mode
 }
 
 func (f ionACPRuntimeFactory) Open(
@@ -54,7 +53,6 @@ func (f ionACPRuntimeFactory) Open(
 		cwd,
 		f.branch,
 		resolved,
-		f.acpCommandOverride,
 		sessionID,
 		true,
 	)
@@ -111,14 +109,12 @@ func runACPAgent(
 	cfg *config.Config,
 	branch string,
 	mode ionacp.Mode,
-	acpCommandOverride string,
 ) error {
 	agent := newIonACPAgent(ionACPRuntimeFactory{
-		store:              store,
-		cfg:                cfg,
-		branch:             branch,
-		mode:               mode,
-		acpCommandOverride: acpCommandOverride,
+		store:  store,
+		cfg:    cfg,
+		branch: branch,
+		mode:   mode,
 	}, version, mode)
 	conn := acp.NewAgentSideConnection(agent, w, r)
 	agent.SetAgentConnection(conn)
@@ -247,7 +243,9 @@ func (a *ionACPAgent) SetSessionConfigOption(
 	context.Context,
 	acp.SetSessionConfigOptionRequest,
 ) (acp.SetSessionConfigOptionResponse, error) {
-	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
+	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(
+		acp.AgentMethodSessionSetConfigOption,
+	)
 }
 
 func (a *ionACPAgent) openSession(

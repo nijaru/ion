@@ -8,7 +8,6 @@ import (
 
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -91,7 +90,6 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 		LazyThreshold: threshold,
 		LazyEnabled:   len(names) > threshold,
 		Names:         names,
-		Sandbox:       tools.SandboxSummary(),
 		Environment:   environment,
 	}
 }

@@ -1581,7 +1581,6 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 
 func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 	model := readyModel(t)
-	model.App.Sandbox = "auto: seatbelt"
 
 	_, cmd := model.handleCommand("/status")
 	if cmd == nil {
@@ -1604,11 +1603,13 @@ func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
 	got := toolSurfaceSummary(backend.ToolSurface{
 		Count:       2,
 		Names:       []string{"bash", "read"},
-		Sandbox:     "off",
 		Environment: "inherit",
 	})
-	if !strings.Contains(got, "sandbox off") || !strings.Contains(got, "bash env inherited") {
-		t.Fatalf("summary = %q, want sandbox and environment posture", got)
+	if !strings.Contains(got, "bash env inherited") {
+		t.Fatalf("summary = %q, want environment posture", got)
+	}
+	if strings.Contains(got, "sandbox") {
+		t.Fatalf("summary = %q, want no sandbox posture while sandbox is parked", got)
 	}
 	if strings.Contains(got, "eager") {
 		t.Fatalf("summary = %q, want no internal eager/lazy jargon for default tools", got)

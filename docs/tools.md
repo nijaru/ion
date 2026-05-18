@@ -26,18 +26,9 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current tool names. The startup banner and `/tools` both report the active bash
-sandbox posture for the native Canto backend.
-
-Bash sandboxing is configured with:
-
-```text
-ION_SANDBOX=off|auto|seatbelt|bubblewrap
-```
-
-Explicit `seatbelt` and `bubblewrap` modes fail closed when their backend is
-unavailable. `auto` uses the platform backend when present and reports when it
-falls back to `off`.
+current tool names. Sandbox execution is parked while the native core loop
+stabilizes; the default bash tool runs foreground commands directly in the
+workspace.
 
 Background jobs are deferred. The native Pi-parity tool path only runs
 foreground commands; `/jobs` and `/stop` stay hidden until async process UX is
@@ -71,8 +62,8 @@ separate serialized tool calls.
 Ion keeps its model-visible tool wrappers rather than directly exposing
 Canto's stable `coding` package tools. Canto remains the framework substrate;
 Ion's wrappers own product-level names, line-numbered reads, ripgrep search,
-checkpoints, sandbox/status integration, compact TUI display, and edit error
-messages tuned for coding-agent recovery.
+checkpoints, compact TUI display, and edit error messages tuned for
+coding-agent recovery.
 
 The same boundary applies to Canto's skill primitives. Canto can provide a
 validated skill registry plus `read_skill` and `manage_skill` primitives, but

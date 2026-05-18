@@ -5,7 +5,7 @@ import (
 )
 
 // AgentSession represents the canonical interface between the Go host and
-// an underlying agent runtime (either native ion or external ACP).
+// an underlying agent runtime.
 type AgentSession interface {
 	// Open initializes or creates a new session.
 	Open(ctx context.Context) error
@@ -30,11 +30,6 @@ type AgentSession interface {
 
 	// Meta returns session metadata.
 	Meta() map[string]string
-}
-
-// ApprovalSession resolves optional compatibility-backend permission prompts.
-type ApprovalSession interface {
-	Approve(ctx context.Context, requestID string, approved bool) error
 }
 
 type SteeringOutcome string

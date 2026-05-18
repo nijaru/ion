@@ -12,7 +12,6 @@ import (
 
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
-	ionacp "github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -51,37 +50,11 @@ func main() {
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
-	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
 
 	store, err := openStartupStore(cli.noSessionRequested())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
-	}
-	if cli.agentRequested() {
-		runErr := runACPAgent(
-			ctx,
-			os.Stdin,
-			os.Stdout,
-			store,
-			cfg,
-			branch,
-			ionacp.ModeYolo,
-			acpCommandOverride,
-		)
-		closeErr := store.Close()
-		if runErr != nil {
-			if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
-			}
-			fmt.Fprintf(os.Stderr, "ACP agent error: %v\n", runErr)
-			os.Exit(1)
-		}
-		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
-			os.Exit(1)
-		}
-		return
 	}
 
 	printRequested, prompt, output, err := resolvePrintFlags(
@@ -205,7 +178,6 @@ func main() {
 		cwd,
 		branch,
 		runtimeCfg,
-		acpCommandOverride,
 		sessionID,
 		persistResumedSessionModel,
 	)
@@ -263,7 +235,6 @@ func main() {
 			cwd,
 			currentBranch(),
 			cfg,
-			acpCommandOverride,
 			sessionID,
 			true,
 		)

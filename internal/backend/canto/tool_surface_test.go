@@ -58,6 +58,9 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	if surface.Environment != "inherit" {
 		t.Fatalf("tool environment = %q, want inherit", surface.Environment)
 	}
+	if surface.Sandbox != "" {
+		t.Fatalf("tool sandbox = %q, want empty while sandbox is parked", surface.Sandbox)
+	}
 
 	b.SetConfig(&config.Config{
 		Provider: "local-api",
@@ -71,6 +74,44 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 			"filtered tool environment = %q, want inherit_without_provider_keys",
 			surface.Environment,
 		)
+	}
+}
+
+func TestToolSurfaceIgnoresParkedSandboxEnv(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "auto")
+
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+	})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if surface := b.ToolSurface(); surface.Sandbox != "" {
+		t.Fatalf("tool sandbox = %q, want empty while sandbox is parked", surface.Sandbox)
 	}
 }
 

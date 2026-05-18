@@ -106,32 +106,6 @@ func TestBackendForProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultACPCommand(t *testing.T) {
-	cases := []struct {
-		provider string
-		want     string
-		ok       bool
-	}{
-		{provider: "claude-pro", want: "claude --acp", ok: true},
-		{provider: "gemini-advanced", want: "gemini --acp", ok: true},
-		{provider: "gh-copilot", want: "gh copilot --acp", ok: true},
-		{provider: "chatgpt", want: "", ok: false},
-		{provider: "codex", want: "", ok: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.provider, func(t *testing.T) {
-			got, ok := defaultACPCommand(tc.provider)
-			if ok != tc.ok {
-				t.Fatalf("defaultACPCommand(%q) ok = %v, want %v", tc.provider, ok, tc.ok)
-			}
-			if got != tc.want {
-				t.Fatalf("defaultACPCommand(%q) = %q, want %q", tc.provider, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestNormalizeFlagArgsAcceptsLeadingSeparator(t *testing.T) {
 	got, picker := normalizeFlagArgs([]string{"--", "--continue"})
 	if picker {
@@ -648,7 +622,6 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 		"main",
 		&config.Config{},
 		"",
-		"",
 		true,
 	)
 	if err != nil {
@@ -687,7 +660,6 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 		"main",
 		&config.Config{Provider: "claude-pro"},
 		"",
-		"",
 		true,
 	)
 	if err != nil {
@@ -721,7 +693,7 @@ func TestOpenRuntimeDefersACPProviders(t *testing.T) {
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "claude-pro", Model: "sonnet"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
 	if err == nil {
 		t.Fatal("openRuntime returned nil error, want ACP deferred error")
 	}
@@ -751,7 +723,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testin
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -804,7 +776,7 @@ func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *t
 	}
 
 	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, "", seedID, true)
+	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, seedID, true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -849,7 +821,7 @@ func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "ollama", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -964,7 +936,6 @@ func TestOpenRuntimeResumeCanKeepRuntimeOverrideProcessLocal(t *testing.T) {
 		"/tmp/test",
 		"feature/override",
 		cfg,
-		"",
 		seedID,
 		false,
 	)

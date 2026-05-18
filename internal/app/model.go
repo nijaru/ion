@@ -212,7 +212,6 @@ type AppState struct {
 	GitDiff           string
 	Version           string
 	ActivePreset      modelPreset
-	Sandbox           string
 	PrintedTranscript bool
 }
 
@@ -387,7 +386,6 @@ func New(
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
 		m.App.ActivePreset = modelPresetFromString(*state.ActivePreset)
 	}
-	m.App.Sandbox = backendSandboxSummary(b)
 
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
