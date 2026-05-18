@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nijaru/ion/internal/config"
 )
 
 func TestGetMetadataUsesInjectedFetcher(t *testing.T) {
@@ -103,5 +105,75 @@ func TestCachedContextLimitUsesOnlyRegistryCache(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("metadata fetch calls after cache hit = %d, want 0", calls)
+	}
+}
+
+func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	registryOnce = sync.Once{}
+	registryCache = nil
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldMetadataFetcher := metadataFetcher
+	oldCatalogFetcher := providerCatalogFetcher
+	defer func() {
+		metadataFetcher = oldMetadataFetcher
+		providerCatalogFetcher = oldCatalogFetcher
+	}()
+
+	var metadataCalls int
+	var catalogCalls int
+	metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
+		metadataCalls++
+		return ModelMetadata{
+			ID:           model,
+			Provider:     provider,
+			ContextLimit: 123000,
+			UpdatedAt:    time.Now().Unix(),
+		}, nil
+	}
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		catalogCalls++
+		return []ModelMetadata{{ID: "vendor/model", ContextLimit: 123000}}, nil
+	}
+
+	cfg := &config.Config{Provider: "openrouter", Model: "vendor/model"}
+	if limit, ok := CachedContextLimitForConfig(cfg); ok {
+		t.Fatalf("cached context limit = %d, want cache miss", limit)
+	}
+	if metadataCalls != 0 || catalogCalls != 0 {
+		t.Fatalf(
+			"fetch calls = metadata %d/catalog %d, want zero",
+			metadataCalls,
+			catalogCalls,
+		)
+	}
+
+	providerModelsOnce.Do(initProviderModelsCache)
+	providerModelsMu.Lock()
+	providerModelsCacheMap[providerCacheKey(cfg)] = providerModelsCache{
+		UpdatedAt: time.Now().Unix(),
+		Models: []ModelMetadata{{
+			ID:           "vendor/model",
+			Provider:     "openrouter",
+			ContextLimit: 456000,
+		}},
+	}
+	providerModelsMu.Unlock()
+
+	limit, ok := CachedContextLimitForConfig(cfg)
+	if !ok {
+		t.Fatal("expected cached provider model context limit")
+	}
+	if limit != 456000 {
+		t.Fatalf("context limit = %d, want 456000", limit)
+	}
+	if metadataCalls != 0 || catalogCalls != 0 {
+		t.Fatalf(
+			"fetch calls after provider cache hit = metadata %d/catalog %d, want zero",
+			metadataCalls,
+			catalogCalls,
+		)
 	}
 }
