@@ -1,48 +1,54 @@
 # Ion
 
 > [!NOTE]
-> Ion is early preview software. It can edit files and run shell commands in the
-> current workspace.
+> Ion is an early preview. It can read, edit, and run commands in your working
+> tree, but the core agent and TUI are still being hardened.
 
-Ion is a terminal coding agent for local development. It runs in your shell,
-connects to your model provider, keeps sessions on disk, and can inspect code,
-edit files, and run project commands.
+Ion is a terminal coding agent for working on codebases from your shell. It
+opens an interactive chat UI, gives the model a small set of coding tools, and
+keeps sessions available so you can resume work later.
 
-## Quickstart
+## Install
 
-Ion requires Go 1.26 or newer. Install it with Go:
+Ion requires Go 1.26 or newer.
+
+From a local checkout:
+
+```sh
+go install ./cmd/ion
+```
+
+From GitHub:
 
 ```sh
 go install github.com/nijaru/ion/cmd/ion@latest
 ```
 
-Make sure your Go binary directory is on `PATH`:
+Make sure Go's binary directory is on your `PATH`:
 
 ```sh
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-Start Ion in a project:
+Then start Ion:
 
 ```sh
 ion
 ```
 
-Ion opens a provider picker the first time it starts without a configured
-runtime. Choose a provider, enter an API key when prompted, then choose a model.
+## Provider Setup
 
-## Providers
+The first interactive run opens the provider picker. Choose a provider, enter
+an API key when prompted, then choose a model.
 
-Ion supports API-key providers such as OpenAI, Anthropic, Gemini, OpenRouter,
-and several OpenAI-compatible services. It also supports local model servers
-that expose an OpenAI-compatible `/v1` API.
+Ion supports direct API-key providers and custom OpenAI-compatible endpoints.
+OpenAI-compatible `/v1` APIs are the usual interface for local model servers,
+hosted gateways, and self-managed inference services.
 
-Most users do not need a config file. Use `~/.ion/config.toml` for custom
-endpoints, stable defaults, or provider options you want to keep outside the
-TUI.
+Most users do not need a config file. Use `~/.ion/config.toml` only for custom
+endpoints, stable defaults, or provider settings you want outside the TUI.
 
-Use `openai-compatible` for local or custom OpenAI-compatible endpoints. API
-keys are optional for this provider unless your endpoint requires one:
+Example custom/local endpoint:
 
 ```toml
 # ~/.ion/config.toml
@@ -52,7 +58,7 @@ endpoint = "http://localhost:11434/v1"
 context_limit = 70000
 ```
 
-For a custom endpoint that requires an environment-backed token:
+Example endpoint with an environment-backed token:
 
 ```toml
 # ~/.ion/config.toml
@@ -62,10 +68,10 @@ endpoint = "https://example.com/v1"
 auth_env_var = "CUSTOM_API_KEY"
 ```
 
-Runtime selections made in the TUI are stored in `~/.ion/state.toml`. API keys
+Runtime choices made in the TUI are stored in `~/.ion/state.toml`. API keys
 entered in Ion are stored in `~/.ion/credentials.toml`.
 
-You can override the config for a single run:
+Per-run overrides are also supported:
 
 ```sh
 ION_PROVIDER=openai ION_MODEL=gpt-5.5 ion
@@ -80,13 +86,13 @@ Start the TUI:
 ion
 ```
 
-Run a non-interactive prompt:
+Run a prompt and print the answer:
 
 ```sh
 ion -p "summarize this project"
 cat README.md | ion -p "summarize this"
 ion --continue -p "what did we do last?"
-ion -p --json "reply with ok"
+ion --json -p "reply with ok"
 ```
 
 Common TUI commands:
@@ -94,7 +100,7 @@ Common TUI commands:
 ```text
 /help       show commands and keys
 /provider   choose a provider
-/login      save a provider API key
+/login      save an API key
 /model      choose a model
 /thinking   choose reasoning effort
 /status     show runtime status
@@ -105,13 +111,11 @@ Common TUI commands:
 
 ## Development
 
-Use the standard Go toolchain:
-
 ```sh
-go install ./cmd/ion
 go run ./cmd/ion
 go test ./...
 go vet ./...
+scripts/smoke/tmux-minimal-harness.sh
 ```
 
 Live provider smoke tests are gated behind environment variables and are not
