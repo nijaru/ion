@@ -225,6 +225,72 @@ func TestSubmitComposerRejectsIncompleteRuntimeConfiguration(t *testing.T) {
 	}
 }
 
+func TestSubmitComposerPreservesPasteMarkersWhenPromptIsBlocked(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Backend = stubBackend{
+		sess:        sess,
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "",
+		modelSet:    true,
+	}
+	placeholder := "[paste #1 +12 lines]"
+	model.Input.Composer.SetValue(placeholder)
+	model.PasteMarkers[placeholder] = pasteMarker{
+		placeholder: placeholder,
+		content:     "expanded paste content",
+	}
+
+	updated, cmd := model.submitComposer()
+	model = updated
+
+	if cmd == nil {
+		t.Fatal("expected configuration error")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "No model configured") {
+		t.Fatalf("error = %v, want no model configured", err)
+	}
+	if got := model.Input.Composer.Value(); got != placeholder {
+		t.Fatalf("composer = %q, want paste placeholder preserved", got)
+	}
+	if len(model.PasteMarkers) != 1 {
+		t.Fatalf("paste markers = %#v, want preserved marker", model.PasteMarkers)
+	}
+	if got := model.expandMarkers(model.Input.Composer.Value()); got != "expanded paste content" {
+		t.Fatalf("expanded composer = %q, want original paste content", got)
+	}
+}
+
+func TestSubmitComposerConsumesPasteMarkersAfterAcceptedPrompt(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	placeholder := "[paste #1 +12 lines]"
+	model.Input.Composer.SetValue("summarize " + placeholder)
+	model.PasteMarkers[placeholder] = pasteMarker{
+		placeholder: placeholder,
+		content:     "expanded paste content",
+	}
+
+	updated, cmd := model.submitComposer()
+	model = updated
+
+	if cmd == nil {
+		t.Fatal("expected accepted prompt to print user entry")
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "summarize expanded paste content" {
+		t.Fatalf("submits = %#v, want expanded paste content", sess.submits)
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after accepted prompt", got)
+	}
+	if len(model.PasteMarkers) != 0 {
+		t.Fatalf("paste markers = %#v, want consumed after accepted prompt", model.PasteMarkers)
+	}
+}
+
 func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	store, err := storage.NewCantoStore(t.TempDir())
 	if err != nil {
@@ -451,7 +517,10 @@ func TestQueuedTurnCanUseExistingEventReaderWhenSubmissionBlocked(t *testing.T) 
 	if model.InFlight.Thinking {
 		t.Fatal("blocked queued turn should not mark the model in-flight")
 	}
-	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "session cost limit reached") {
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(
+		err.Error(),
+		"session cost limit reached",
+	) {
 		t.Fatalf("error = %v, want session cost limit", err)
 	}
 }
@@ -840,11 +909,11 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 
-	if model.Progress.Mode != stateError {
-		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	if model.Progress.Mode != stateReady {
+		t.Fatalf("progress mode = %v, want ready after immediate rejection", model.Progress.Mode)
 	}
-	if model.Progress.LastError != "backend unavailable" {
-		t.Fatalf("last error = %q, want backend unavailable", model.Progress.LastError)
+	if model.Progress.LastError != "" {
+		t.Fatalf("last error = %q, want none for local submit rejection", model.Progress.LastError)
 	}
 	if !model.Progress.TurnStartedAt.IsZero() {
 		t.Fatalf(
@@ -856,7 +925,22 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 		t.Fatalf("submit count = %d, want 0 after immediate failure", len(sess.submits))
 	}
 	if cmd == nil {
-		t.Fatal("expected follow-up command to render transcript entries")
+		t.Fatal("expected local error command")
+	}
+	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "backend unavailable" {
+		t.Fatalf("local error = %v, want backend unavailable", err)
+	}
+	if got := model.Input.Composer.Value(); got != "hello" {
+		t.Fatalf("composer = %q, want preserved draft after submit rejection", got)
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("rejected prompt should not print a user transcript entry")
+	}
+	if model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("immediate submit rejection should not arm the session-event drain")
+	}
+	if len(model.Input.History) != 0 {
+		t.Fatalf("history = %v, want no entry for rejected prompt", model.Input.History)
 	}
 	for _, event := range storeSess.appends {
 		if _, ok := event.(storage.RoutingDecision); ok {

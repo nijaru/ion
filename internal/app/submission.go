@@ -53,7 +53,6 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	text = m.expandMarkers(text)
-	m.clearPasteMarkers()
 
 	if !strings.HasPrefix(text, "/") {
 		if status := m.configurationStatus(); status != "" {
@@ -64,15 +63,13 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		}
 	}
 
-	historyText, historyChanged := m.appendInputHistory(text)
-	var historyCmd tea.Cmd
-	if historyChanged {
-		historyCmd = m.persistInputHistory(context.Background(), historyText)
-	}
-
-	m.resetComposerDraft()
-
 	if strings.HasPrefix(text, "/") {
+		historyText, historyChanged := m.appendInputHistory(text)
+		var historyCmd tea.Cmd
+		if historyChanged {
+			historyCmd = m.persistInputHistory(context.Background(), historyText)
+		}
+		m.resetComposerDraft()
 		m, cmd := m.handleCommand(text)
 		return m, sequenceCmds(cmd, historyCmd)
 	}
@@ -88,9 +85,23 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.Progress.LastError = ""
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
-		m, errCmd := m.handleSessionError(err, false)
-		return m, sequenceCmds(m.printEntries(userEntry), errCmd, historyCmd)
+		m.clearActiveTurnState(true)
+		m.Progress.Compacting = false
+		m.Progress.Mode = stateReady
+		m.Progress.Status = ""
+		m.Progress.StatusUpdatedAt = time.Time{}
+		m.Progress.LastError = ""
+		m.Progress.TurnStartedAt = time.Time{}
+		return m, cmdError(sessionErrorDisplay(err))
 	}
+
+	historyText, historyChanged := m.appendInputHistory(text)
+	var historyCmd tea.Cmd
+	if historyChanged {
+		historyCmd = m.persistInputHistory(context.Background(), historyText)
+	}
+	m.resetComposerDraft()
+
 	if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
 		return m, sequenceCmds(
 			m.printEntries(userEntry),
