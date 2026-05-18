@@ -77,7 +77,7 @@ func TestNewEphemeralCantoStorePersistsWithinProcessOnly(t *testing.T) {
 		t.Fatalf("ephemeral dbPath = %q, want empty durable path", store.dbPath)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := store.OpenSession(ctx, "/tmp/ion-ephemeral", "model-a", "main")
 	if err != nil {
 		t.Fatalf("open session: %v", err)
@@ -1842,5 +1842,72 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 	}
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
+	}
+}
+
+func TestCantoStoreEntriesPreserveDisplayOnlyEventsAfterCompactionCutoff(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := t.Context()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	recentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "recent answer",
+	})
+	if err := cantoSess.Append(ctx, recentEvent); err != nil {
+		t.Fatalf("append recent agent: %v", err)
+	}
+	snapshot := csession.CompactionSnapshot{
+		Strategy:      "summarize",
+		CutoffEventID: recentEvent.ID.String(),
+		Entries: []csession.HistoryEntry{
+			{
+				Message: llm.Message{
+					Role:    llm.RoleSystem,
+					Content: "<conversation_summary>\nsummary\n</conversation_summary>",
+				},
+			},
+			{
+				EventID: recentEvent.ID.String(),
+				Message: llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+			},
+		},
+	}
+	if err := cantoSess.Append(ctx, csession.NewCompactionEvent(sess.ID(), snapshot)); err != nil {
+		t.Fatalf("append compaction: %v", err)
+	}
+	afterAt := time.Date(2026, 5, 2, 14, 0, 0, 0, time.UTC)
+	if err := sess.Append(ctx, System{
+		Type:    "system",
+		Content: "fresh display marker",
+		TS:      afterAt.Unix(),
+	}); err != nil {
+		t.Fatalf("append fresh display event: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries length = %d, want 3: %#v", len(entries), entries)
+	}
+	if entries[2].Role != ionsession.System ||
+		entries[2].Content != "fresh display marker" ||
+		!entries[2].Timestamp.Equal(afterAt) {
+		t.Fatalf("fresh display entry = %#v, want marker at %s", entries[2], afterAt)
 	}
 }
