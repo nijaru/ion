@@ -282,6 +282,11 @@ func readyModel(t *testing.T) Model {
 	return ready
 }
 
+func withOpenRouterKey(t *testing.T) {
+	t.Helper()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+}
+
 func resolveModelPickerLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
 	t.Helper()
 	if cmd == nil {
