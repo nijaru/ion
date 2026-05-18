@@ -31,15 +31,22 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 // handleSessionEvent processes events from the agent session channel.
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	if m.InFlight.DrainUntilTurnStarted {
-		started, ok := ev.(session.TurnStarted)
-		if !ok {
+		switch msg := ev.(type) {
+		case session.UserMessage:
+			if m.shouldDrainLateEvent(msg.Timestamp) {
+				return m, m.awaitSessionEvent()
+			}
+			m.InFlight.DrainUntilTurnStarted = false
+			m.InFlight.DrainStartedAt = time.Time{}
+		case session.TurnStarted:
+			if m.shouldDrainLateEvent(msg.Timestamp) {
+				return m, m.awaitSessionEvent()
+			}
+			m.InFlight.DrainUntilTurnStarted = false
+			m.InFlight.DrainStartedAt = time.Time{}
+		default:
 			return m, m.awaitSessionEvent()
 		}
-		if m.isDrainedLateTurnStart(started) {
-			return m, m.awaitSessionEvent()
-		}
-		m.InFlight.DrainUntilTurnStarted = false
-		m.InFlight.DrainStartedAt = time.Time{}
 	}
 
 	switch msg := ev.(type) {
@@ -319,11 +326,11 @@ func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) isDrainedLateTurnStart(msg session.TurnStarted) bool {
-	if m.InFlight.DrainStartedAt.IsZero() || msg.Timestamp.IsZero() {
+func (m Model) shouldDrainLateEvent(timestamp time.Time) bool {
+	if m.InFlight.DrainStartedAt.IsZero() || timestamp.IsZero() {
 		return false
 	}
-	return !msg.Timestamp.After(m.InFlight.DrainStartedAt)
+	return !timestamp.After(m.InFlight.DrainStartedAt)
 }
 
 func (m Model) handleTurnFinished() (Model, tea.Cmd) {

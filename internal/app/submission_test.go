@@ -555,7 +555,16 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 
 	model.App.PrintedTranscript = false
-	updated, _ := model.Update(session.TurnStarted{
+	updated, _ := model.Update(session.UserMessage{
+		Base:    session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
+		Message: "stale canceled prompt",
+	})
+	model = updated.(Model)
+	if model.App.PrintedTranscript {
+		t.Fatal("late canceled-turn user message printed transcript output")
+	}
+
+	updated, _ = model.Update(session.TurnStarted{
 		Base: session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
 	})
 	model = updated.(Model)
@@ -590,6 +599,18 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		len(model.InFlight.PendingTools) != 0 ||
 		model.Progress.Status != "" {
 		t.Fatalf("late cancelled-turn events changed visible state: %#v", model.InFlight)
+	}
+
+	updated, cmd = model.Update(session.UserMessage{
+		Base:    session.BaseAt(drainStartedAt.Add(time.Millisecond)),
+		Message: "fresh prompt",
+	})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("fresh user message after cancel did not print")
+	}
+	if model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("fresh user message did not clear drain fence")
 	}
 
 	updated, _ = model.Update(session.TurnStarted{
