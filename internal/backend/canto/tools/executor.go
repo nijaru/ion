@@ -18,8 +18,11 @@ type localCommand struct {
 	Emit    func(string) error
 }
 
-const maxOutputSize = maxToolOutputSize
-const exitStdioGrace = 100 * time.Millisecond
+const (
+	maxOutputSize     = maxToolOutputSize
+	exitStdioGrace    = 100 * time.Millisecond
+	exitStdioMaxDrain = 2 * time.Second
+)
 
 type localExecutor struct {
 	sandbox     SandboxMode
@@ -144,6 +147,13 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	var output strings.Builder
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	readProgress := make(chan struct{}, 1)
+	noteReadProgress := func() {
+		select {
+		case readProgress <- struct{}{}:
+		default:
+		}
+	}
 
 	limitExceeded := false
 	omittedBytes := 0
@@ -158,6 +168,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
+				noteReadProgress()
 				if hasEmitErr() {
 					return
 				}
@@ -207,7 +218,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	wg.Go(func() { readPipe(stderr) })
 
 	err = cmd.Wait()
-	waitForReadersOrClosePipes(&wg, cmd.Process.Pid, stdout, stderr)
+	waitForReadersOrClosePipes(&wg, cmd.Process.Pid, readProgress, stdout, stderr)
 	if emitErr != nil {
 		return output.String(), emitErr
 	}
@@ -239,22 +250,55 @@ func pipeForCommand() (*os.File, *os.File, error) {
 	return reader, writer, nil
 }
 
-func waitForReadersOrClosePipes(wg *sync.WaitGroup, processID int, readers ...*os.File) {
+func waitForReadersOrClosePipes(
+	wg *sync.WaitGroup,
+	processID int,
+	progress <-chan struct{},
+	readers ...*os.File,
+) {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
-	select {
-	case <-done:
-		return
-	case <-time.After(exitStdioGrace):
-		if processID > 0 {
-			_ = syscall.Kill(-processID, syscall.SIGKILL)
+
+	idleTimer := time.NewTimer(exitStdioGrace)
+	defer idleTimer.Stop()
+	maxTimer := time.NewTimer(exitStdioMaxDrain)
+	defer maxTimer.Stop()
+
+	resetIdleTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
 		}
-		for _, reader := range readers {
-			_ = reader.Close()
-		}
-		<-done
+		idleTimer.Reset(exitStdioGrace)
 	}
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-progress:
+			resetIdleTimer()
+		case <-idleTimer.C:
+			closeReadersAndWait(processID, readers, done)
+			return
+		case <-maxTimer.C:
+			closeReadersAndWait(processID, readers, done)
+			return
+		}
+	}
+}
+
+func closeReadersAndWait(processID int, readers []*os.File, done <-chan struct{}) {
+	if processID > 0 {
+		_ = syscall.Kill(-processID, syscall.SIGKILL)
+	}
+	for _, reader := range readers {
+		_ = reader.Close()
+	}
+	<-done
 }
