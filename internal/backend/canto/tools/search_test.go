@@ -54,27 +54,24 @@ func TestSearchTools(t *testing.T) {
 			t.Fatalf("grep with absolute workspace path failed: %v", err)
 		}
 		if strings.Contains(res, tmpDir) {
-			t.Errorf("expected absolute workspace grep path to render relative results, got %q", res)
-		}
-
-		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":".."}`); err == nil {
-			t.Fatal("expected grep path outside workspace to fail")
+			t.Errorf(
+				"expected absolute workspace grep path to render relative results, got %q",
+				res,
+			)
 		}
 
 		outsideDir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(outsideDir, "outside.txt"), []byte("search outside"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(outsideDir, filepath.Join(tmpDir, "outside-link")); err != nil {
-			t.Skipf("symlink unavailable: %v", err)
+		outsideArgs := `{"pattern":"search","path":"` + filepath.ToSlash(outsideDir) + `"}`
+		res, err = g.Execute(context.Background(), outsideArgs)
+		if err != nil {
+			t.Fatalf("grep with absolute outside path failed: %v", err)
 		}
-		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":"outside-link"}`); err == nil {
-			t.Fatal("expected grep symlink path outside workspace to fail")
+		if !strings.Contains(res, "outside.txt") {
+			t.Fatalf("expected outside.txt in absolute outside grep results, got %q", res)
 		}
-		if err := os.Remove(filepath.Join(tmpDir, "outside-link")); err != nil {
-			t.Fatal(err)
-		}
-
 		res, err = g.Execute(context.Background(), `{"pattern":"-needle"}`)
 		if err != nil {
 			t.Fatalf("grep pattern starting with dash failed: %v", err)

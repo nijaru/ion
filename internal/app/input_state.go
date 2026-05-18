@@ -14,12 +14,14 @@ func (m *Model) updateComposer(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 	m.relayoutComposer()
+	m.refreshComposerCompletions()
 	return cmd
 }
 
 func (m *Model) insertComposerText(value string) {
 	m.Input.Composer.InsertString(value)
 	m.relayoutComposer()
+	m.refreshComposerCompletions()
 }
 
 func (m *Model) clearPasteMarkers() {
@@ -33,6 +35,7 @@ func (m *Model) resetHistoryCursor() {
 
 func (m *Model) resetComposerDraft() {
 	m.Input.Composer.Reset()
+	m.Input.Completion = nil
 	m.clearPasteMarkers()
 	m.relayoutComposer()
 }
@@ -40,6 +43,7 @@ func (m *Model) resetComposerDraft() {
 func (m *Model) setComposerDraft(value string) {
 	m.Input.Composer.SetValue(value)
 	m.relayoutComposer()
+	m.refreshComposerCompletions()
 }
 
 func (m *Model) appendInputHistory(text string) (string, bool) {

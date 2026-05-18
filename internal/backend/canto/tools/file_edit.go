@@ -31,7 +31,7 @@ func (e *Edit) Spec() llm.Spec {
 			"properties": map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "Relative path to the file to modify.",
+					"description": "File to modify, relative to the current directory or absolute.",
 				},
 				"old_string": map[string]any{
 					"type":        "string",
@@ -70,20 +70,15 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	relPath, err := e.relativePath(input.FilePath)
+	absPath, err := e.mutationPath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
-	root, err := e.openRoot()
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	content, err := root.ReadFile(relPath)
+	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
 	}
@@ -115,20 +110,20 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	info, err := root.Stat(relPath)
+	info, err := os.Stat(absPath)
 	if err != nil {
 		return "", err
 	}
-	tmpPath, err := writeEditTempFile(root, relPath, []byte(newContent), info.Mode().Perm())
+	tmpPath, err := writeEditTempFile(absPath, []byte(newContent), info.Mode().Perm())
 	if err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		_ = root.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
-	if err := root.Rename(tmpPath, relPath); err != nil {
-		_ = root.Remove(tmpPath)
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
 
@@ -169,7 +164,7 @@ func (m *MultiEdit) Spec() llm.Spec {
 			"properties": map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "Relative path to the file to modify.",
+					"description": "File to modify, relative to the current directory or absolute.",
 				},
 				"edits": map[string]any{
 					"type": "array",
@@ -214,24 +209,19 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("edits must contain at least one operation")
 	}
 
-	root, err := m.openRoot()
+	absPath, err := m.mutationPath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
-	defer root.Close()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	relPath, err := m.relativePath(input.FilePath)
-	if err != nil {
-		return "", err
-	}
-	content, err := root.ReadFile(relPath)
+	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read %s: %w", input.FilePath, err)
 	}
-	info, err := root.Stat(relPath)
+	info, err := os.Stat(absPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat %s: %w", input.FilePath, err)
 	}
@@ -248,20 +238,20 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	tmpPath, err := writeEditTempFile(root, relPath, []byte(newContent), info.Mode().Perm())
+	tmpPath, err := writeEditTempFile(absPath, []byte(newContent), info.Mode().Perm())
 	if err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		_ = root.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
-	if err := root.Rename(tmpPath, relPath); err != nil {
-		_ = root.Remove(tmpPath)
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
 
-	diff := udiff.Unified("a/"+relPath, "b/"+relPath, original, newContent)
+	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, original, newContent)
 	return limitToolOutput(fmt.Sprintf(
 		"Applied %d edit(s) with %d replacement(s) in %s.\n\n%s",
 		len(input.Edits),
@@ -271,24 +261,16 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	)), nil
 }
 
-func writeEditTempFile(
-	root *os.Root,
-	relPath string,
-	data []byte,
-	mode os.FileMode,
-) (string, error) {
-	dir := filepath.Dir(relPath)
-	base := filepath.Base(relPath)
+func writeEditTempFile(path string, data []byte, mode os.FileMode) (string, error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
 	for attempt := 0; attempt < 16; attempt++ {
 		suffix, err := randomHexSuffix()
 		if err != nil {
 			return "", err
 		}
-		name := "." + base + "." + suffix + ".tmp"
-		if dir != "." {
-			name = filepath.Join(dir, name)
-		}
-		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		name := filepath.Join(dir, "."+base+"."+suffix+".tmp")
+		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
@@ -297,16 +279,16 @@ func writeEditTempFile(
 		}
 		if _, err := file.Write(data); err != nil {
 			_ = file.Close()
-			_ = root.Remove(name)
+			_ = os.Remove(name)
 			return "", err
 		}
 		if err := file.Close(); err != nil {
-			_ = root.Remove(name)
+			_ = os.Remove(name)
 			return "", err
 		}
 		return name, nil
 	}
-	return "", fmt.Errorf("could not create temporary file for %s", relPath)
+	return "", fmt.Errorf("could not create temporary file for %s", path)
 }
 
 func applyEditReplacements(
@@ -338,7 +320,12 @@ func applyEditReplacements(
 			})
 		}
 		if !edit.ReplaceAll && count != 1 {
-			return "", 0, fmt.Errorf("edit[%d]: expected one replacement in %s, found %d", i, filePath, count)
+			return "", 0, fmt.Errorf(
+				"edit[%d]: expected one replacement in %s, found %d",
+				i,
+				filePath,
+				count,
+			)
 		}
 	}
 	if len(matches) == 0 {

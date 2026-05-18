@@ -447,6 +447,14 @@ func summarizeEndpoint(raw string) string {
 	return u.Host
 }
 
+func EndpointDisplayName(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	return summarizeEndpoint(value)
+}
+
 func ProbeLocalAPI(ctx context.Context, cfg *config.Config) (string, bool) {
 	return probeLocalAPI(ctx, cfg, true)
 }

@@ -88,6 +88,29 @@ func TestTabCompletesSlashCommands(t *testing.T) {
 	}
 }
 
+func TestComposerShowsSlashCommandSuggestionsWhileTyping(t *testing.T) {
+	model := readyModel(t)
+
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "/", Code: '/'},
+		{Text: "m", Code: 'm'},
+	} {
+		updated, _ := model.Update(key)
+		model = updated.(Model)
+	}
+
+	if model.Picker.Overlay != nil {
+		t.Fatal("typing a slash prefix should not steal focus into the picker")
+	}
+	if got := model.Input.Composer.Value(); got != "/m" {
+		t.Fatalf("composer = %q, want typed prefix", got)
+	}
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "/model") || !strings.Contains(view, "choose model") {
+		t.Fatalf("view missing visible slash suggestions:\n%s", view)
+	}
+}
+
 func TestTabCompletesKnownSlashArguments(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -190,6 +213,38 @@ func TestCommandPickerInsertsSelectedCommand(t *testing.T) {
 	}
 	if model.Picker.Overlay != nil {
 		t.Fatal("expected command picker to close")
+	}
+}
+
+func TestPickerHelpUsesKeyActionFormat(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
+	help := model.renderPickerHelpText()
+	if !strings.Contains(help, "Tab: providers") ||
+		!strings.Contains(help, "Ctrl+M: primary/fast") ||
+		strings.Contains(help, "Tab change provider") {
+		t.Fatalf("model picker help = %q, want key/action labels", help)
+	}
+
+	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeProvider}
+	help = model.renderPickerHelpText()
+	if !strings.Contains(help, "Tab: models") || strings.Contains(help, "Tab model list") {
+		t.Fatalf("provider picker help = %q, want key/action labels", help)
+	}
+}
+
+func TestComposerShowsFileReferenceSuggestionsWhileTyping(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.setComposerDraft("read @RE")
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "@README.md") {
+		t.Fatalf("view missing visible file suggestions:\n%s", view)
 	}
 }
 
@@ -616,6 +671,23 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	}
 	if slices.Contains(got, "vendor/model-unknown") {
 		t.Fatalf("did not expect unknown-priced model to match free query, got %v", got)
+	}
+}
+
+func TestPickerSearchMatchesAllQueryKeywords(t *testing.T) {
+	items := modelItemsFromMetadata([]registry.ModelMetadata{
+		{ID: "deepseek/deepseek-v4-flash"},
+		{ID: "deepseek/deepseek-r1"},
+		{ID: "openai/gpt-5.5"},
+	})
+
+	filtered := rankedPickerItems(items, "deepseek 4")
+	got := make([]string, 0, len(filtered))
+	for _, item := range filtered {
+		got = append(got, item.Label)
+	}
+	if !slices.Equal(got, []string{"deepseek/deepseek-v4-flash"}) {
+		t.Fatalf("filtered = %#v, want only deepseek v4", got)
 	}
 }
 
@@ -1733,9 +1805,12 @@ func TestProviderItemsShowSingleOpenAICompatibleEndpoint(t *testing.T) {
 	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
 	found = false
 	for _, item := range items {
-		if item.Value == "openai-compatible" && item.Label == "OpenAI-compatible" {
-			if item.Detail != "Not running" {
-				t.Fatalf("OpenAI-compatible detail = %q, want %q", item.Detail, "Not running")
+		if item.Value == "openai-compatible" && item.Label == "127.0.0.1:1" {
+			if item.Detail != "OpenAI-compatible • Not running" {
+				t.Fatalf(
+					"OpenAI-compatible detail = %q, want endpoint type and readiness",
+					item.Detail,
+				)
 			}
 			found = true
 			break
@@ -1766,9 +1841,12 @@ func TestProviderItemsUseConfiguredLocalAPIEndpointWhenRuntimeProviderDiffers(t 
 		if item.Value != "openai-compatible" {
 			continue
 		}
-		if !strings.Contains(item.Detail, "Ready at ") {
+		if item.Label != strings.TrimPrefix(srv.URL, "http://") {
+			t.Fatalf("OpenAI-compatible label = %q, want endpoint host", item.Label)
+		}
+		if item.Detail != "OpenAI-compatible • Ready" {
 			t.Fatalf(
-				"OpenAI-compatible detail = %q, want configured endpoint readiness",
+				"OpenAI-compatible detail = %q, want endpoint type and readiness",
 				item.Detail,
 			)
 		}

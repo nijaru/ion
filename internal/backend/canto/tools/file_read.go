@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/go-json-experiment/json"
@@ -23,7 +24,7 @@ func (r *Read) Spec() llm.Spec {
 			"properties": map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "Relative path to the file from the current directory.",
+					"description": "File to read, relative to the current directory or absolute.",
 				},
 				"offset": map[string]any{
 					"type":        "integer",
@@ -55,17 +56,12 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("limit must be non-negative")
 	}
 
-	relPath, err := r.relativePath(input.FilePath)
+	absPath, err := r.absolutePath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
-	root, err := r.openRoot()
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 
-	content, err := root.ReadFile(relPath)
+	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
 	}
@@ -91,7 +87,11 @@ func numberedReadOutput(content string, offset, limit int) (string, error) {
 		start = offset - 1
 	}
 	if start >= len(lines) {
-		return "", fmt.Errorf("offset %d is beyond end of file (%d lines total)", offset, len(lines))
+		return "", fmt.Errorf(
+			"offset %d is beyond end of file (%d lines total)",
+			offset,
+			len(lines),
+		)
 	}
 
 	end := len(lines)

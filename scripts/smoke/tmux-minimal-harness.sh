@@ -8,6 +8,8 @@ HEIGHT="${ION_TMUX_HEIGHT:-30}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ion-tmux-smoke.XXXXXX")"
 CAPTURE="${ION_TMUX_CAPTURE:-$(mktemp "${TMPDIR:-/tmp}/ion-tmux-capture.XXXXXX")}"
 ION_HOME="${ION_TMUX_HOME:-$HOME}"
+ION_PROVIDER_SMOKE="${ION_TMUX_PROVIDER:-ollama}"
+ION_MODEL_SMOKE="${ION_TMUX_MODEL:-ion-tmux-smoke}"
 LIVE="${ION_TMUX_LIVE:-0}"
 
 if ! command -v tmux >/dev/null 2>&1; then
@@ -155,7 +157,7 @@ start_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$ION_HOME\" go run ./... $args"
+    "cd \"$ROOT\" && HOME=\"$ION_HOME\" ION_PROVIDER=\"$ION_PROVIDER_SMOKE\" ION_MODEL=\"$ION_MODEL_SMOKE\" go run ./... $args"
   wait_contains "Type a message" 30
 }
 
@@ -192,6 +194,15 @@ send_softwrap_composer_smoke() {
   sleep 0.5
 }
 
+send_visible_completion_smoke() {
+  tmux send-keys -t "$SESSION" "/m"
+  sleep "${ION_TMUX_STEP_DELAY:-1}"
+  assert_visible_contains "/model"
+  assert_visible_contains "choose model"
+  tmux send-keys -t "$SESSION" C-c
+  sleep 0.5
+}
+
 send_command_picker_filter_smoke() {
   tmux send-keys -t "$SESSION" "/" Tab
   sleep 0.5
@@ -213,10 +224,12 @@ assert_contains "Type a message"
 
 send_multiline_composer_smoke
 send_softwrap_composer_smoke
+send_visible_completion_smoke
 send_command_picker_filter_smoke
 
 send_line "/provider"
 assert_contains "Pick a provider"
+assert_contains "Tab: models"
 assert_visible_not_contains "› /provider"
 tmux send-keys -t "$SESSION" Escape
 sleep 0.5

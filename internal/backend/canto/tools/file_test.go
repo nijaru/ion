@@ -104,8 +104,12 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		outsideArgs, _ := json.Marshal(map[string]any{"file_path": outside})
-		if _, err := r.Execute(context.Background(), string(outsideArgs)); err == nil {
-			t.Fatal("expected absolute path outside workspace to fail")
+		res, err = r.Execute(context.Background(), string(outsideArgs))
+		if err != nil {
+			t.Fatalf("read with absolute path outside workspace failed: %v", err)
+		}
+		if res != "     1\toutside" {
+			t.Fatalf("absolute outside read = %q, want numbered outside content", res)
 		}
 
 		linkPath := filepath.Join(tmpDir, "outside-link.txt")
@@ -113,8 +117,12 @@ func TestFileTools(t *testing.T) {
 			t.Skipf("symlink unavailable: %v", err)
 		}
 		linkArgs, _ := json.Marshal(map[string]any{"file_path": "outside-link.txt"})
-		if _, err := r.Execute(context.Background(), string(linkArgs)); err == nil {
-			t.Fatal("expected symlink escape to fail")
+		res, err = r.Execute(context.Background(), string(linkArgs))
+		if err != nil {
+			t.Fatalf("read through symlink failed: %v", err)
+		}
+		if res != "     1\toutside" {
+			t.Fatalf("symlink read = %q, want numbered outside content", res)
 		}
 	})
 
@@ -146,13 +154,28 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("Write rejects symlink escapes", func(t *testing.T) {
+	t.Run("Write supports trusted absolute paths and symlinks", func(t *testing.T) {
 		w := &Write{FileTool: *newTestFileTool(t, tmpDir)}
 		outsideDir := t.TempDir()
 		outsideFile := filepath.Join(outsideDir, "outside.txt")
 		if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		absoluteArgs, _ := json.Marshal(map[string]any{
+			"file_path": filepath.Join(outsideDir, "absolute.txt"),
+			"content":   "absolute",
+		})
+		if _, err := w.Execute(context.Background(), string(absoluteArgs)); err != nil {
+			t.Fatalf("write absolute path outside workspace failed: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(outsideDir, "absolute.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "absolute" {
+			t.Fatalf("absolute file = %q, want absolute", data)
+		}
+
 		if err := os.Symlink(outsideFile, filepath.Join(tmpDir, "outside-write-link.txt")); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
@@ -161,15 +184,15 @@ func TestFileTools(t *testing.T) {
 			"file_path": "outside-write-link.txt",
 			"content":   "changed",
 		})
-		if _, err := w.Execute(context.Background(), string(linkArgs)); err == nil {
-			t.Fatal("expected write through symlink escape to fail")
+		if _, err := w.Execute(context.Background(), string(linkArgs)); err != nil {
+			t.Fatalf("write through symlink failed: %v", err)
 		}
 
-		data, err := os.ReadFile(outsideFile)
+		data, err = os.ReadFile(outsideFile)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(data) != "outside" {
+		if string(data) != "changed" {
 			t.Fatalf("outside file changed to %q", data)
 		}
 
@@ -180,11 +203,15 @@ func TestFileTools(t *testing.T) {
 			"file_path": "outside-write-dir/new.txt",
 			"content":   "changed",
 		})
-		if _, err := w.Execute(context.Background(), string(dirArgs)); err == nil {
-			t.Fatal("expected write through symlink directory escape to fail")
+		if _, err := w.Execute(context.Background(), string(dirArgs)); err != nil {
+			t.Fatalf("write through symlink directory failed: %v", err)
 		}
-		if _, err := os.Stat(filepath.Join(outsideDir, "new.txt")); err == nil {
-			t.Fatal("write created file outside workspace")
+		data, err = os.ReadFile(filepath.Join(outsideDir, "new.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "changed" {
+			t.Fatalf("outside dir file = %q, want changed", data)
 		}
 	})
 
@@ -362,7 +389,7 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("Edit rejects symlink escapes", func(t *testing.T) {
+	t.Run("Edit supports trusted symlinks", func(t *testing.T) {
 		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
 		outside := filepath.Join(t.TempDir(), "outside-edit.txt")
 		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
@@ -377,15 +404,15 @@ func TestFileTools(t *testing.T) {
 			"old_string": "outside",
 			"new_string": "changed",
 		})
-		if _, err := e.Execute(context.Background(), string(args)); err == nil {
-			t.Fatal("expected edit through symlink escape to fail")
+		if _, err := e.Execute(context.Background(), string(args)); err != nil {
+			t.Fatalf("edit through symlink failed: %v", err)
 		}
 
 		data, err := os.ReadFile(outside)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(data) != "outside\n" {
+		if string(data) != "changed\n" {
 			t.Fatalf("outside file changed to %q", data)
 		}
 	})
@@ -489,7 +516,7 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("MultiEdit rejects symlink escapes", func(t *testing.T) {
+	t.Run("MultiEdit supports trusted symlinks", func(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
 		outside := filepath.Join(t.TempDir(), "outside-multi-edit.txt")
 		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
@@ -508,15 +535,15 @@ func TestFileTools(t *testing.T) {
 				},
 			},
 		})
-		if _, err := m.Execute(context.Background(), string(args)); err == nil {
-			t.Fatal("expected multi_edit through symlink escape to fail")
+		if _, err := m.Execute(context.Background(), string(args)); err != nil {
+			t.Fatalf("multi_edit through symlink failed: %v", err)
 		}
 
 		outsideData, err := os.ReadFile(outside)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(outsideData) != "outside\n" {
+		if string(outsideData) != "changed\n" {
 			t.Fatalf("outside file changed to %q", outsideData)
 		}
 	})
@@ -552,11 +579,23 @@ func TestFileTools(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(outsideDir, "outside.txt"), []byte("outside"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		absOutsideArgs := `{"path":` + strconv.Quote(outsideDir) + `}`
+		res, err = l.Execute(context.Background(), absOutsideArgs)
+		if err != nil {
+			t.Fatalf("list with absolute outside path failed: %v", err)
+		}
+		if !strings.Contains(res, "outside.txt") {
+			t.Fatalf("absolute outside list = %q, want outside.txt", res)
+		}
 		if err := os.Symlink(outsideDir, filepath.Join(tmpDir, "outside-dir-link")); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
-		if _, err := l.Execute(context.Background(), `{"path":"outside-dir-link"}`); err == nil {
-			t.Fatal("expected symlink directory escape to fail")
+		res, err = l.Execute(context.Background(), `{"path":"outside-dir-link"}`)
+		if err != nil {
+			t.Fatalf("list through symlink directory failed: %v", err)
+		}
+		if !strings.Contains(res, "outside.txt") {
+			t.Fatalf("symlink directory list = %q, want outside.txt", res)
 		}
 	})
 }

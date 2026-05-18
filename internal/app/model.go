@@ -172,6 +172,15 @@ type pickerOverlayState struct {
 	request  uint64
 }
 
+type completionState struct {
+	items []completionItem
+}
+
+type completionItem struct {
+	Label  string
+	Detail string
+}
+
 type setupPromptState struct {
 	kind         setupPromptKind
 	provider     string
@@ -284,6 +293,7 @@ type ProgressState struct {
 // InputState holds state for the composer, history, and double-tap tracking.
 type InputState struct {
 	Composer       textarea.Model
+	Completion     *completionState
 	Spinner        spinner.Model
 	History        []string
 	HistoryIdx     int

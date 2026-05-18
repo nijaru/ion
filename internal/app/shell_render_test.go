@@ -387,6 +387,9 @@ func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 		!strings.Contains(view, "Running bash...") {
 		t.Fatalf("view = %q, want one blank row between active tool and shell progress", view)
 	}
+	if strings.Contains(view, "Running bash...\n─") {
+		t.Fatalf("view = %q, want no top separator directly below running progress", view)
+	}
 }
 
 func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
