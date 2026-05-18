@@ -128,7 +128,11 @@ func (m *Model) layout() {
 	if width <= 0 {
 		width = 1
 	}
-	m.Input.Composer.SetWidth(width)
+	contentWidth := width - composerPromptWidth()
+	if contentWidth <= 0 {
+		contentWidth = 1
+	}
+	m.Input.Composer.SetWidth(contentWidth)
 }
 
 func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (Model, tea.Cmd) {

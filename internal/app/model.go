@@ -328,13 +328,13 @@ func New(
 ) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
-	ta.Prompt = "› "
+	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 	ta.DynamicHeight = true
 	ta.MinHeight = minComposerHeight
 	ta.MaxHeight = maxComposerHeight
 	ta.SetHeight(minComposerHeight)
-	ta.SetWidth(80)
+	ta.SetWidth(max(1, 80-composerPromptWidth()))
 	ta.Focus()
 	taStyles := ta.Styles()
 	taStyles.Focused.CursorLine = taStyles.Focused.CursorLine.UnsetBackground()
