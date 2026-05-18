@@ -1238,6 +1238,122 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
+	b := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	turnID := b.turn.start(cancel)
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	events := make(chan cantofw.RunEvent)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.runTurn(
+			ctx,
+			turnID,
+			"hi",
+			cancel,
+			promptStreamFunc(func(ctx context.Context, _ string) (<-chan cantofw.RunEvent, error) {
+				close(ready)
+				go func() {
+					defer close(events)
+					<-ctx.Done()
+					<-release
+					events <- cantofw.RunEvent{
+						Type: cantofw.RunEventSession,
+						Event: csession.NewTurnCompletedEvent(
+							"session-id",
+							csession.TurnCompletedData{Error: context.Canceled.Error()},
+						),
+					}
+					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+				}()
+				return events, nil
+			}),
+		)
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for prompt stream")
+	}
+	if err := b.CancelTurn(t.Context()); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	assertNoBackendEvent(t, b)
+
+	close(release)
+	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("canceled stream settlement did not emit TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+	select {
+	case <-done:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for runTurn to exit")
+	}
+}
+
+func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
+	b := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	oldTurnID := b.turn.start(cancel)
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	events := make(chan cantofw.RunEvent)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.runTurn(
+			ctx,
+			oldTurnID,
+			"old",
+			cancel,
+			promptStreamFunc(func(ctx context.Context, _ string) (<-chan cantofw.RunEvent, error) {
+				close(ready)
+				go func() {
+					defer close(events)
+					<-ctx.Done()
+					<-release
+					events <- cantofw.RunEvent{
+						Type: cantofw.RunEventSession,
+						Event: csession.NewTurnCompletedEvent(
+							"session-id",
+							csession.TurnCompletedData{Error: context.Canceled.Error()},
+						),
+					}
+					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+				}()
+				return events, nil
+			}),
+		)
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for prompt stream")
+	}
+	if err := b.CancelTurn(t.Context()); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	nextTurnID := b.turn.start(func() {})
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for old runTurn to exit")
+	}
+	assertNoBackendEvent(t, b)
+	if !b.turn.activeFor(nextTurnID) {
+		t.Fatal("old canceled settlement finished the next turn")
+	}
+}
+
 type promptStreamFunc func(context.Context, string) (<-chan cantofw.RunEvent, error)
 
 func (f promptStreamFunc) PromptStream(
