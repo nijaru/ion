@@ -59,7 +59,12 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 		t.Fatalf("tool environment = %q, want inherit", surface.Environment)
 	}
 
-	b.cfg.ToolEnv = "inherit_without_provider_keys"
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+		ToolEnv:  "inherit_without_provider_keys",
+	})
 	surface = b.ToolSurface()
 	if surface.Environment != "inherit_without_provider_keys" {
 		t.Fatalf(

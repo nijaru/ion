@@ -19,6 +19,7 @@ type Backend struct {
 	store   session.Store
 	events  chan ionsession.Event
 	cfg     *config.Config
+	cfgMu   sync.RWMutex
 	llm     llm.Provider
 
 	ionStore   storage.Store

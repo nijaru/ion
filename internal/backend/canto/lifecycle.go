@@ -23,6 +23,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	providerName := b.Provider()
 	modelName := b.Model()
+	cfg := b.configSnapshot()
 
 	if providerName == "" {
 		return fmt.Errorf(
@@ -43,11 +44,11 @@ func (b *Backend) Open(ctx context.Context) error {
 		return fmt.Errorf("ion store not initialized")
 	}
 
-	p, err := providerFactory(ctx, b.cfg)
+	p, err := providerFactory(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	p = configureRetryProvider(p, b.cfg, b.events)
+	p = configureRetryProvider(p, cfg, b.events)
 	p = useProviderRetryOnly(p)
 	p = observeProviderRequests(p)
 	b.compactLLM = p
@@ -74,15 +75,15 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
-	if b.cfg.SkillToolMode() != "off" {
+	if cfg.SkillToolMode() != "off" {
 		skillsDir, err := ionconfig.DefaultSkillsDir()
 		if err != nil {
 			return fmt.Errorf("resolve skills dir: %w", err)
 		}
 		registry.Register(tools.NewReadSkill([]string{skillsDir}))
 	}
-	if b.cfg.SubagentToolMode() == "on" {
-		personas, err := loadSubagentPersonas(b.cfg)
+	if cfg.SubagentToolMode() == "on" {
+		personas, err := loadSubagentPersonas(cfg)
 		if err != nil {
 			return err
 		}
@@ -95,7 +96,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.steering = newSteeringMutator()
 
 	agentOptions := []agent.Option{
-		agent.WithRequestProcessors(reasoningEffortProcessor(b.cfg)),
+		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
 		agent.WithMutators(b.steering),
 	}
 	harness, err := cantofw.NewHarness("ion").

@@ -57,6 +57,16 @@ type State struct {
 	ActivePreset           *string `toml:"active_preset,omitempty"`
 }
 
+type RuntimeStateUpdate struct {
+	Config              *Config
+	PersistConfig       bool
+	ActivePreset        string
+	PersistActivePreset bool
+	ReasoningPreset     string
+	ReasoningEffort     string
+	PersistReasoning    bool
+}
+
 func DefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -229,6 +239,36 @@ func SaveActivePreset(preset string) error {
 		state.ActivePreset = nil
 	} else {
 		state.ActivePreset = &normalized
+	}
+	return saveState(state)
+}
+
+func SaveRuntimeState(update RuntimeStateUpdate) error {
+	state, err := LoadState()
+	if err != nil {
+		return err
+	}
+	if update.PersistConfig {
+		active := state.ActivePreset
+		state = stateFromConfig(update.Config)
+		state.ActivePreset = active
+	}
+	if update.PersistReasoning {
+		normalized := normalizeOptionalReasoningEffort(update.ReasoningEffort)
+		switch normalizeActivePreset(update.ReasoningPreset) {
+		case "fast":
+			state.FastReasoningEffort = optionalString(normalized)
+		default:
+			state.ReasoningEffort = optionalString(normalized)
+		}
+	}
+	if update.PersistActivePreset {
+		normalized := normalizeActivePreset(update.ActivePreset)
+		if normalized == "" {
+			state.ActivePreset = nil
+		} else {
+			state.ActivePreset = &normalized
+		}
 	}
 	return saveState(state)
 }
