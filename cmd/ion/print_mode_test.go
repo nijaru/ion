@@ -136,6 +136,15 @@ func TestNormalizeFlagArgsAllowsFlagsAfterPositionalPrompt(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
 	}
+
+	got, openResumePicker = normalizeFlagArgs([]string{"-p", "--agent"})
+	want = []string{"-p", "--", "--agent"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
 }
 
 func TestNormalizeFlagArgsKeepsPromptValuesWithFlags(t *testing.T) {

@@ -66,7 +66,7 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	restoreRequestObserver := cantobackend.SetProviderRequestObserverForTest(requests.record)
 	t.Cleanup(restoreRequestObserver)
 
-	b, sess, err := openRuntime(ctx, store, cwd, "smoke", &cfg, "", "", true)
+	b, sess, err := openRuntime(ctx, store, cwd, "smoke", &cfg, "", true)
 	if err != nil {
 		if isLiveSmokeUnavailable(err) {
 			t.Skipf("live smoke unavailable: %v", err)
@@ -196,7 +196,6 @@ loop:
 		cwd,
 		"smoke",
 		&resumedCfg,
-		"",
 		sess.ID(),
 		true,
 	)
@@ -267,7 +266,6 @@ loop:
 		cwd,
 		"smoke",
 		&switchCfg,
-		"",
 		sess.ID(),
 		true,
 	)

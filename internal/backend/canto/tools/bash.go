@@ -32,7 +32,7 @@ func NewBashWithEnvironment(
 ) *Bash {
 	return &Bash{
 		cwd:      cwd,
-		executor: newLocalExecutorWithEnvironment(resolveSandboxMode(), environment),
+		executor: newLocalExecutorWithEnvironment(SandboxOff, environment),
 	}
 }
 

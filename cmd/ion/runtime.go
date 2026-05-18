@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
@@ -96,7 +94,6 @@ func openRuntime(
 	store storage.Store,
 	cwd, branch string,
 	cfg *config.Config,
-	acpCommandOverride string,
 	sessionID string,
 	persistResumedSessionModel bool,
 ) (backend.Backend, storage.Session, error) {
@@ -121,20 +118,6 @@ func openRuntime(
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
-
-	if isACPProvider(runtimeCfg.Provider) {
-		command := strings.TrimSpace(acpCommandOverride)
-		if command == "" {
-			derived, ok := defaultACPCommand(runtimeCfg.Provider)
-			if !ok {
-				return nil, nil, fmt.Errorf("ION_ACP_COMMAND environment variable not set")
-			}
-			command = derived
-		}
-		if err := os.Setenv("ION_ACP_COMMAND", command); err != nil {
-			return nil, nil, fmt.Errorf("failed to set ION_ACP_COMMAND: %w", err)
-		}
-	}
 
 	if sessionID != "" {
 		sess, err := store.ResumeSession(ctx, sessionID)

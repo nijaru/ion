@@ -12,6 +12,10 @@ import (
 	"github.com/nijaru/ion/internal/tooldisplay"
 )
 
+type acpApprovalSession interface {
+	Approve(ctx context.Context, requestID string, approved bool) error
+}
+
 func (a *ionACPAgent) forwardEvent(
 	ctx context.Context,
 	sessionID string,
@@ -75,7 +79,7 @@ func (a *ionACPAgent) requestPermission(
 	sess *ionACPHeadlessSession,
 	req ionsession.ApprovalRequest,
 ) error {
-	approvalSession, ok := sess.agent.(ionsession.ApprovalSession)
+	approvalSession, ok := sess.agent.(acpApprovalSession)
 	if !ok {
 		return fmt.Errorf("session does not support approval requests")
 	}

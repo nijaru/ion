@@ -181,14 +181,6 @@ func backendForProvider(provider string) (backend.Backend, error) {
 	return nil, fmt.Errorf("unsupported provider %q", provider)
 }
 
-func isACPProvider(provider string) bool {
-	return providers.IsACP(provider)
-}
-
-func defaultACPCommand(provider string) (string, bool) {
-	return providers.DefaultACPCommand(provider)
-}
-
 func splitSessionModelName(value string) (string, string) {
 	value = strings.TrimSpace(value)
 	if value == "" {

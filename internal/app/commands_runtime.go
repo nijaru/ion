@@ -263,7 +263,6 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		_ = msg.oldStorage.Close()
 	}
 	m.Model.EventGeneration++
-	m.App.Sandbox = backendSandboxSummary(msg.backend)
 	m.Picker.Overlay = nil
 	m.Picker.Session = nil
 	m.Picker.Setup = nil

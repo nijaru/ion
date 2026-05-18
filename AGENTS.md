@@ -34,12 +34,9 @@ A standalone terminal coding agent — same category as Claude Code, Codex, pi. 
 ion TUI → CantoBackend → canto framework → provider API (Anthropic, OpenAI, OpenRouter)
 ```
 
-**Secondary path** (CLI/subscription compatibility, best-effort feature parity):
-```
-ion TUI → ACPBackend → ACP JSON-RPC 2.0 → [claude | gemini | gh] CLI
-```
-
-ACP is for CLI-backed providers and subscription-style access. It does not drive ion's design. When something is unclear, make native mode work first, then bridge the same product behavior to ACP where it fits.
+ACP/subscription bridges are parked during phase-1 Pi parity. They do not drive
+Ion's design, default CLI/TUI surface, or core-loop tests. Reconnect them later
+only after the native Canto path is stable.
 
 ## Active Components
 
@@ -48,7 +45,7 @@ ACP is for CLI-backed providers and subscription-style access. It does not drive
 | `internal/app` | Bubble Tea v2 host UI: transcript, composer, viewport, and footer. |
 | `AgentSession` | Canonical host-facing boundary (SubmitTurn, Events, Cancel). |
 | `CantoBackend` | Primary agent core — canto framework, full feature set. |
-| `ACPBackend` | CLI/subscription bridge — spawns CLI, bridges via ACP JSON-RPC 2.0. |
+| `ACPBackend` | Parked CLI/subscription bridge code; compile-covered only, not phase-1 scope. |
 | `archive/rust/` | Historical reference only; not active implementation guidance. |
 
 ## Project Structure
