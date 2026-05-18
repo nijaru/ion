@@ -7,10 +7,14 @@ type turnState struct {
 	active        bool
 	cancel        context.CancelFunc
 	activeToolIDs map[string]struct{}
+	canceled      map[uint64]struct{}
 }
 
 func newTurnState() turnState {
-	return turnState{activeToolIDs: make(map[string]struct{})}
+	return turnState{
+		activeToolIDs: make(map[string]struct{}),
+		canceled:      make(map[uint64]struct{}),
+	}
 }
 
 func (s *turnState) start(cancel context.CancelFunc) uint64 {
@@ -22,22 +26,32 @@ func (s *turnState) start(cancel context.CancelFunc) uint64 {
 }
 
 func (s *turnState) finish(id uint64) bool {
-	if s.seq != id || !s.active {
+	if s.seq == id && s.active {
+		s.active = false
+		s.cancel = nil
+		s.clearTools()
+		return true
+	}
+	if _, ok := s.canceled[id]; !ok {
 		return false
 	}
-	s.active = false
-	s.cancel = nil
-	s.clearTools()
-	return true
+	delete(s.canceled, id)
+	return id == s.seq && !s.active
 }
 
-func (s *turnState) cancelActive() (context.CancelFunc, bool) {
+func (s *turnState) requestCancel() (context.CancelFunc, bool) {
+	if !s.active {
+		return nil, false
+	}
 	cancel := s.cancel
-	active := s.active
 	s.cancel = nil
 	s.active = false
+	if s.canceled == nil {
+		s.canceled = make(map[uint64]struct{})
+	}
+	s.canceled[s.seq] = struct{}{}
 	s.clearTools()
-	return cancel, active
+	return cancel, true
 }
 
 func (s *turnState) activeFor(id uint64) bool {
@@ -45,11 +59,23 @@ func (s *turnState) activeFor(id uint64) bool {
 }
 
 func (s *turnState) accepts(id uint64) bool {
-	return id == 0 || s.activeFor(id)
+	if id == 0 || s.activeFor(id) {
+		return true
+	}
+	_, ok := s.canceled[id]
+	return ok
 }
 
 func (s *turnState) hasActiveTool() bool {
 	return len(s.activeToolIDs) > 0
+}
+
+func (s *turnState) isCanceling(id uint64) bool {
+	if id == 0 {
+		return false
+	}
+	_, ok := s.canceled[id]
+	return ok
 }
 
 func (s *turnState) markToolActive(id uint64, toolID string) {

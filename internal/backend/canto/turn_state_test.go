@@ -24,31 +24,58 @@ func TestTurnStateFinishClearsCancelAndTools(t *testing.T) {
 	}
 }
 
-func TestTurnStateCancelActiveReturnsCancelAndClears(t *testing.T) {
+func TestTurnStateRequestCancelTracksSettlementWithoutBlockingNextTurn(t *testing.T) {
 	state := newTurnState()
 	var canceled bool
 	turnID := state.start(func() { canceled = true })
 	state.markToolActive(turnID, "tool-call-1")
 
-	cancel, active := state.cancelActive()
+	cancel, active := state.requestCancel()
 	if !active {
-		t.Fatal("cancelActive reported inactive turn")
+		t.Fatal("requestCancel reported inactive turn")
 	}
 	if cancel == nil {
-		t.Fatal("cancelActive returned nil cancel")
+		t.Fatal("requestCancel returned nil cancel")
 	}
 	cancel()
 	if !canceled {
 		t.Fatal("returned cancel func did not run")
 	}
 	if state.active {
-		t.Fatal("turn remained active after cancelActive")
+		t.Fatal("turn remained active after cancel request")
+	}
+	if !state.isCanceling(turnID) {
+		t.Fatal("turn was not marked canceling")
+	}
+	if !state.accepts(turnID) {
+		t.Fatal("canceling turn no longer accepted settlement events")
 	}
 	if state.cancel != nil {
 		t.Fatal("cancel remained set after cancelActive")
 	}
 	if state.hasActiveTool() {
 		t.Fatal("active tools remained after cancelActive")
+	}
+	if !state.finish(turnID) {
+		t.Fatal("finish returned false for current canceling turn")
+	}
+	if state.active || state.isCanceling(turnID) {
+		t.Fatal("turn state remained canceling after settlement")
+	}
+}
+
+func TestTurnStateSuppressesCanceledSettlementAfterNextTurnStarts(t *testing.T) {
+	state := newTurnState()
+	canceledTurn := state.start(func() {})
+
+	state.requestCancel()
+	nextTurn := state.start(func() {})
+
+	if state.finish(canceledTurn) {
+		t.Fatal("stale canceled turn claimed terminal finish after next turn started")
+	}
+	if !state.activeFor(nextTurn) {
+		t.Fatal("next turn was not kept active")
 	}
 }
 

@@ -197,7 +197,7 @@ func TestFinishTurnWithErrorReportsDeadlineExceeded(t *testing.T) {
 	}
 }
 
-func TestTerminalErrorAfterCancelDoesNotEmit(t *testing.T) {
+func TestTerminalErrorAfterCancelFinishesQuietly(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
@@ -206,12 +206,13 @@ func TestTerminalErrorAfterCancelDoesNotEmit(t *testing.T) {
 	if err := b.CancelTurn(t.Context()); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
-	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
-		t.Fatal("cancel did not emit TurnFinished")
-	}
+	assertNoBackendEvent(t, b)
 
-	if b.emitTurnError(7, ionsession.BaseNow(), errors.New("late provider error")) {
-		t.Fatal("late terminal error claimed canceled turn")
+	if !b.emitTurnError(7, ionsession.BaseNow(), errors.New("late provider error")) {
+		t.Fatal("late terminal error did not settle canceled turn")
+	}
+	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("late terminal error did not finish canceled turn")
 	}
 	select {
 	case ev := <-b.Events():

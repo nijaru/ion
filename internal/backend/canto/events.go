@@ -14,6 +14,9 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 	if !b.acceptsTurnEvent(turnID) {
 		return true
 	}
+	if b.isCancelingTurn(turnID) && ev.Type != session.TurnCompleted {
+		return false
+	}
 
 	base := ionEventBase(ev)
 	switch ev.Type {

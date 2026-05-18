@@ -190,6 +190,9 @@ func (b *Backend) translateRunEvent(
 
 	switch event.Type {
 	case cantofw.RunEventChunk:
+		if b.isCancelingTurn(turnID) {
+			return false
+		}
 		chunk := event.Chunk
 		base := ionsession.BaseNow()
 		if chunk.Reasoning != "" {
@@ -216,7 +219,7 @@ func (b *Backend) translateRunEvent(
 		if event.Err == nil {
 			return false
 		}
-		if isCancellationTerminal(event.Err.Error()) {
+		if b.isCancelingTurn(turnID) || isCancellationTerminal(event.Err.Error()) {
 			return b.emitTurnFinished(turnID, ionsession.BaseNow())
 		}
 		return b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
@@ -226,6 +229,9 @@ func (b *Backend) translateRunEvent(
 }
 
 func (b *Backend) emitTurnError(turnID uint64, base ionsession.Base, err error) bool {
+	if b.isCancelingTurn(turnID) {
+		return b.emitTurnFinished(turnID, base)
+	}
 	if !b.claimTerminalTurn(turnID) {
 		return false
 	}
@@ -272,6 +278,12 @@ func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
 	return b.turn.accepts(turnID)
 }
 
+func (b *Backend) isCancelingTurn(turnID uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.turn.isCanceling(turnID)
+}
+
 func (b *Backend) SteerTurn(
 	ctx context.Context,
 	text string,
@@ -295,16 +307,13 @@ func (b *Backend) SteerTurn(
 	return steering.Submit(ctx, sessionID, text)
 }
 
-func (b *Backend) CancelTurn(ctx context.Context) error {
+func (b *Backend) CancelTurn(_ context.Context) error {
 	b.mu.Lock()
-	cancel, active := b.turn.cancelActive()
+	cancel, _ := b.turn.requestCancel()
 	b.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
-	}
-	if active {
-		b.events <- ionsession.TurnFinished{Base: ionsession.BaseNow()}
 	}
 	return nil
 }
