@@ -254,6 +254,7 @@ func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 }
 
 func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingModel(t *testing.T) {
+	withOpenRouterKey(t)
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},

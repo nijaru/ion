@@ -1121,6 +1121,7 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 }
 
 func TestOpenModelPickerDoesNotFetchBeforeReturning(t *testing.T) {
+	withOpenRouterKey(t)
 	called := false
 	stubModelCatalog(
 		t,
@@ -1160,6 +1161,7 @@ func TestOpenModelPickerDoesNotFetchBeforeReturning(t *testing.T) {
 }
 
 func TestOpenModelPickerUsesFreshCacheWithoutRefresh(t *testing.T) {
+	withOpenRouterKey(t)
 	oldListModelsForConfig := listModelsForConfig
 	oldCachedModelsForConfig := cachedModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -1193,6 +1195,7 @@ func TestOpenModelPickerUsesFreshCacheWithoutRefresh(t *testing.T) {
 }
 
 func TestOpenModelPickerShowsStaleCacheWhileRefreshing(t *testing.T) {
+	withOpenRouterKey(t)
 	oldListModelsForConfig := listModelsForConfig
 	oldCachedModelsForConfig := cachedModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -1228,6 +1231,7 @@ func TestOpenModelPickerShowsStaleCacheWhileRefreshing(t *testing.T) {
 }
 
 func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
+	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -1283,6 +1287,7 @@ func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
 }
 
 func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
+	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
@@ -1323,6 +1328,7 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	withOpenRouterKey(t)
 	cfgDir := filepath.Join(home, ".ion")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -1492,6 +1498,7 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 }
 
 func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
+	withOpenRouterKey(t)
 	model := readyModel(t)
 	cfg := &config.Config{
 		Provider:  "openrouter",

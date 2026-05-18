@@ -332,6 +332,7 @@ func TestLoginCommandRejectsProvidersWithoutAPIKeys(t *testing.T) {
 func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
