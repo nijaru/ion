@@ -74,12 +74,6 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		return m, sequenceCmds(cmd, historyCmd)
 	}
 
-	userEntry := session.Entry{
-		Role:      session.User,
-		Timestamp: time.Now().UTC(),
-		Content:   text,
-	}
-
 	m.Progress.Mode = stateIonizing
 	m.Progress.Status = ""
 	m.Progress.LastError = ""
@@ -104,12 +98,11 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
 		return m, sequenceCmds(
-			m.printEntries(userEntry),
 			persistErrorCmd("persist routing decision", err),
 			historyCmd,
 		)
 	}
-	return m, sequenceCmds(m.printEntries(userEntry), historyCmd)
+	return m, historyCmd
 }
 
 func (m Model) handleDeferredEnter() (Model, tea.Cmd) {

@@ -55,6 +55,34 @@ func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateEventsCommitsUserFromMessageAdded(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 2)
+	events <- csession.NewEvent("session-id", csession.MessageAdded, llm.Message{
+		Role:    llm.RoleUser,
+		Content: "read README.md",
+	})
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 0)
+
+	ev1 := receiveEvent(t, b.Events())
+	committed, ok := ev1.(ionsession.UserMessage)
+	if !ok {
+		t.Fatalf("first event = %T, want UserMessage", ev1)
+	}
+	if committed.Message != "read README.md" {
+		t.Fatalf("committed user message = %#v", committed)
+	}
+
+	ev2 := receiveEvent(t, b.Events())
+	if _, ok := ev2.(ionsession.TurnFinished); !ok {
+		t.Fatalf("second event = %T, want TurnFinished", ev2)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 1)

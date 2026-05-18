@@ -22,6 +22,12 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		if err := ev.UnmarshalData(&msg); err != nil {
 			return false
 		}
+		if msg.Role == llm.RoleUser && strings.TrimSpace(msg.Content) != "" {
+			b.events <- ionsession.UserMessage{
+				Base:    base,
+				Message: msg.Content,
+			}
+		}
 		if msg.Role == llm.RoleAssistant &&
 			(strings.TrimSpace(msg.Content) != "" || strings.TrimSpace(msg.Reasoning) != "") {
 			b.events <- ionsession.AgentMessage{

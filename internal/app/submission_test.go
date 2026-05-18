@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +82,7 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	}
 }
 
-func TestSubmitTextPrintsUserWhenRoutingPersistenceFails(t *testing.T) {
+func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
@@ -96,7 +95,12 @@ func TestSubmitTextPrintsUserWhenRoutingPersistenceFails(t *testing.T) {
 	if len(sess.submits) != 1 || sess.submits[0] != "keep going" {
 		t.Fatalf("submitted turns = %#v, want keep going", sess.submits)
 	}
-	requireSequenceCmd(t, cmd)
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "persist routing decision") {
+		t.Fatalf("error = %v, want routing persistence error", err)
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("submit should wait for ordered session event before printing user message")
+	}
 	var sawDecision bool
 	for _, event := range storageSess.appends {
 		if _, ok := event.(storage.RoutingDecision); ok {
@@ -277,8 +281,11 @@ func TestSubmitComposerConsumesPasteMarkersAfterAcceptedPrompt(t *testing.T) {
 	updated, cmd := model.submitComposer()
 	model = updated
 
-	if cmd == nil {
-		t.Fatal("expected accepted prompt to print user entry")
+	if cmd != nil {
+		t.Fatalf("command = %T, want no immediate transcript print", cmd())
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("accepted prompt should wait for ordered session event before printing user message")
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "summarize expanded paste content" {
 		t.Fatalf("submits = %#v, want expanded paste content", sess.submits)
@@ -689,7 +696,7 @@ func TestCostCommandReportsMissingCost(t *testing.T) {
 }
 
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Input.Composer.SetValue("follow up")
@@ -722,11 +729,18 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
 	}
-	if got := fmt.Sprintf("%T", nextCmd()); !strings.Contains(got, "sequenceMsg") {
-		t.Fatalf(
-			"queued follow-up command = %s, want sequence that re-arms session event wait",
-			got,
-		)
+	sess.events <- session.UserMessage{Message: "follow up"}
+	eventMsg, ok := nextCmd().(sessionEventMsg)
+	if !ok {
+		t.Fatalf("queued follow-up command returned %T, want sessionEventMsg", eventMsg)
+	}
+	if _, ok := eventMsg.event.(session.UserMessage); !ok {
+		t.Fatalf("queued follow-up event = %T, want UserMessage", eventMsg.event)
+	}
+	next, nextCmd = model.Update(eventMsg)
+	model = next.(Model)
+	if nextCmd == nil {
+		t.Fatal("expected committed user message to print and re-arm session event wait")
 	}
 }
 

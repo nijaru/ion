@@ -773,6 +773,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		session.TurnStarted,
 		session.TurnFinished,
 		session.ThinkingDelta,
+		session.UserMessage,
 		session.AgentDelta,
 		session.AgentMessage,
 		session.ToolCallStarted,
