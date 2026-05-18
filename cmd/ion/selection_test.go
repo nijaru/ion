@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/config"
@@ -1011,5 +1012,77 @@ func TestSyncSessionMetadata(t *testing.T) {
 	}
 	if got := store.updated.Branch; got != "feature/handoff" {
 		t.Fatalf("updated branch = %q, want %q", got, "feature/handoff")
+	}
+	if !store.updated.PreserveUpdatedAt {
+		t.Fatal("syncSessionMetadata should preserve updated_at for metadata-only resume sync")
+	}
+}
+
+func TestSyncSessionMetadataPreservesRecentOrdering(t *testing.T) {
+	storeAny, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer storeAny.Close()
+
+	ctx := context.Background()
+	cwd := "/tmp/test"
+	older, err := storeAny.OpenSession(ctx, cwd, "ollama/old-model", "main")
+	if err != nil {
+		t.Fatalf("open older session: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	newer, err := storeAny.OpenSession(ctx, cwd, "ollama/newer-model", "main")
+	if err != nil {
+		t.Fatalf("open newer session: %v", err)
+	}
+
+	before, err := storeAny.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list before sync: %v", err)
+	}
+	var olderUpdatedAt time.Time
+	for _, info := range before {
+		if info.ID == older.ID() {
+			olderUpdatedAt = info.UpdatedAt
+		}
+	}
+	if olderUpdatedAt.IsZero() {
+		t.Fatalf("older session missing from before list: %#v", before)
+	}
+	if before[0].ID != newer.ID() {
+		t.Fatalf("recent before sync = %q, want newer %q", before[0].ID, newer.ID())
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := syncSessionMetadata(ctx, storeAny, older.ID(), "ollama/resumed-model", "feature/resume"); err != nil {
+		t.Fatalf("sync metadata: %v", err)
+	}
+
+	after, err := storeAny.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list after sync: %v", err)
+	}
+	if after[0].ID != newer.ID() {
+		t.Fatalf(
+			"recent after metadata-only resume sync = %q, want newer %q",
+			after[0].ID,
+			newer.ID(),
+		)
+	}
+	var synced storage.SessionInfo
+	for _, info := range after {
+		if info.ID == older.ID() {
+			synced = info
+		}
+	}
+	if synced.ID == "" {
+		t.Fatalf("older session missing from after list: %#v", after)
+	}
+	if !synced.UpdatedAt.Equal(olderUpdatedAt) {
+		t.Fatalf("updated_at changed from %s to %s", olderUpdatedAt, synced.UpdatedAt)
+	}
+	if synced.Model != "ollama/resumed-model" || synced.Branch != "feature/resume" {
+		t.Fatalf("synced metadata = %#v, want updated model and branch", synced)
 	}
 }

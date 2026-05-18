@@ -433,15 +433,20 @@ func (s *cantoStore) Canto() *session.SQLiteStore {
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
+	preserveUpdatedAt := 0
+	if si.PreserveUpdatedAt {
+		preserveUpdatedAt = 1
+	}
 	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE session_meta
-		 SET updated_at = ?,
+		 SET updated_at = CASE WHEN ? != 0 THEN updated_at ELSE ? END,
 		     model = CASE WHEN ? != '' THEN ? ELSE model END,
 		     branch = CASE WHEN ? != '' THEN ? ELSE branch END,
 		     name = CASE WHEN (name IS NULL OR name = '') AND ? != '' THEN ? ELSE name END,
 		     last_preview = CASE WHEN ? != '' THEN ? ELSE last_preview END
 		 WHERE id = ?`,
+		preserveUpdatedAt,
 		metadataTimestamp(time.Now()),
 		si.Model,
 		si.Model,
