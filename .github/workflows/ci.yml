@@ -6,17 +6,27 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version-file: go-host/go.mod
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
-      - name: Test Go host
-        working-directory: go-host
-        run: go test ./...
+      - name: Test
+        run: go test ./... -count=1 -timeout 300s
+
+      - name: Vet
+        run: go vet ./...
