@@ -40,15 +40,12 @@ func printLinesCmd(lines ...string) tea.Cmd {
 	if filtered[len(filtered)-1] != "" {
 		filtered = append(filtered, "")
 	}
-	cmds := make([]tea.Cmd, 0, len(filtered))
-	for _, line := range filtered {
+	for i, line := range filtered {
 		if line == "" {
-			cmds = append(cmds, tea.Printf("\x1b[0m"))
-			continue
+			filtered[i] = "\x1b[0m"
 		}
-		cmds = append(cmds, tea.Printf("%s", line))
 	}
-	return tea.Sequence(cmds...)
+	return tea.Printf("%s", strings.Join(filtered, "\n"))
 }
 
 // clearVisibleScreenCmd clears the visible inline frame after terminal width
