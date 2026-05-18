@@ -97,11 +97,11 @@ func (m Model) renderContextUsage(total, limit int) string {
 		return ""
 	}
 	if limit <= 0 {
-		return m.st.dim.Render(fmt.Sprintf("%dk tokens", total/1000))
+		return m.st.dim.Render(fmt.Sprintf("%s tokens", compactCount(total)))
 	}
 
 	pct := (total * 100) / limit
-	label := fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct)
+	label := fmt.Sprintf("%s/%s (%d%%)", compactCount(total), compactCount(limit), pct)
 	switch {
 	case pct >= 80:
 		return m.st.warn.Render(label)
