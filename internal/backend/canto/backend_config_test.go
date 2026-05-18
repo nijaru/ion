@@ -50,6 +50,72 @@ func TestSetConfigCopiesProviderAndModel(t *testing.T) {
 	}
 }
 
+func TestSetConfigUpdatesOpenReasoningProcessor(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("openai", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return reasoningFauxProvider{Provider: provider}, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	var gotReasoning string
+	restoreObserver := SetProviderRequestObserverForTest(func(provider string, req *llm.Request) {
+		gotReasoning = req.ReasoningEffort
+	})
+	defer restoreObserver()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider:        "openai",
+		Model:           "model-a",
+		ReasoningEffort: "low",
+	})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	b.SetConfig(&config.Config{
+		Provider:        "openai",
+		Model:           "model-a",
+		ReasoningEffort: "high",
+	})
+	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	if gotReasoning != "high" {
+		t.Fatalf("reasoning effort = %q, want high from latest SetConfig", gotReasoning)
+	}
+}
+
+type reasoningFauxProvider struct {
+	llm.Provider
+}
+
+func (p reasoningFauxProvider) Capabilities(model string) llm.Capabilities {
+	caps := llm.DefaultCapabilities()
+	caps.Reasoning = llm.ReasoningCapabilities{
+		Kind:       llm.ReasoningKindEffort,
+		Efforts:    []string{"minimal", "low", "medium", "high"},
+		CanDisable: true,
+	}
+	return caps
+}
+
 func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())

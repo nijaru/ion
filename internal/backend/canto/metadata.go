@@ -20,28 +20,41 @@ func (b *Backend) Name() string {
 }
 
 func (b *Backend) SetConfig(cfg *config.Config) {
+	b.cfgMu.Lock()
 	if cfg == nil {
 		b.cfg = nil
+		b.cfgMu.Unlock()
 		return
 	}
 	copied := *cfg
 	b.cfg = &copied
+	b.cfgMu.Unlock()
 	if retry, ok := retryProviderInChain(b.compactLLM); ok {
 		retry.Config.RetryForever = copied.RetryUntilCancelledEnabled()
 		retry.Config.RetryForeverTransportOnly = true
 	}
 }
 
+func (b *Backend) configSnapshot() *config.Config {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	if b.cfg == nil {
+		return nil
+	}
+	copied := *b.cfg
+	return &copied
+}
+
 func (b *Backend) Provider() string {
-	if b.cfg != nil && b.cfg.Provider != "" {
-		return b.cfg.Provider
+	if cfg := b.configSnapshot(); cfg != nil && cfg.Provider != "" {
+		return cfg.Provider
 	}
 	return os.Getenv("ION_PROVIDER")
 }
 
 func (b *Backend) Model() string {
-	if b.cfg != nil && b.cfg.Model != "" {
-		return b.cfg.Model
+	if cfg := b.configSnapshot(); cfg != nil && cfg.Model != "" {
+		return cfg.Model
 	}
 	m := os.Getenv("ION_MODEL")
 	if i := strings.IndexByte(m, ' '); i > 0 {
@@ -51,8 +64,9 @@ func (b *Backend) Model() string {
 }
 
 func (b *Backend) ContextLimit() int {
-	if b.cfg != nil && b.cfg.ContextLimit > 0 {
-		return b.cfg.ContextLimit
+	cfg := b.configSnapshot()
+	if cfg != nil && cfg.ContextLimit > 0 {
+		return cfg.ContextLimit
 	}
 	provider := b.Provider()
 	model := b.Model()

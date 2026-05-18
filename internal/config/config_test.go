@@ -205,7 +205,11 @@ func TestLoadStateProviderOverrideClearsProviderScopedPresets(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
-		t.Fatalf("cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4", cfg.Provider, cfg.Model)
+		t.Fatalf(
+			"cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4",
+			cfg.Provider,
+			cfg.Model,
+		)
 	}
 	if cfg.FastModel != "" ||
 		cfg.FastReasoningEffort != "" ||
@@ -578,6 +582,59 @@ func TestSaveReasoningStateDoesNotFreezeConfiguredModel(t *testing.T) {
 	}
 	if !strings.Contains(got, "reasoning_effort = 'high'") {
 		t.Fatalf("state missing reasoning effort:\n%s", got)
+	}
+}
+
+func TestSaveRuntimeStateCombinesSelectionReasoningAndActivePreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveState(&Config{
+		Provider:            "openrouter",
+		Model:               "model-a",
+		FastModel:           "model-b",
+		FastReasoningEffort: "low",
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	if err := SaveRuntimeState(RuntimeStateUpdate{
+		Config: &Config{
+			Provider:        "openai",
+			Model:           "gpt-5.5",
+			ReasoningEffort: "medium",
+			FastModel:       "gpt-5.5-mini",
+		},
+		PersistConfig:       true,
+		ActivePreset:        "fast",
+		PersistActivePreset: true,
+		ReasoningPreset:     "fast",
+		ReasoningEffort:     "high",
+		PersistReasoning:    true,
+	}); err != nil {
+		t.Fatalf("save runtime state: %v", err)
+	}
+
+	state, err := LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.Provider == nil || *state.Provider != "openai" {
+		t.Fatalf("provider = %#v, want openai", state.Provider)
+	}
+	if state.Model == nil || *state.Model != "gpt-5.5" {
+		t.Fatalf("model = %#v, want gpt-5.5", state.Model)
+	}
+	if state.ReasoningEffort == nil || *state.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning = %#v, want medium", state.ReasoningEffort)
+	}
+	if state.FastModel == nil || *state.FastModel != "gpt-5.5-mini" {
+		t.Fatalf("fast model = %#v, want gpt-5.5-mini", state.FastModel)
+	}
+	if state.FastReasoningEffort == nil || *state.FastReasoningEffort != "high" {
+		t.Fatalf("fast reasoning = %#v, want high", state.FastReasoningEffort)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("active preset = %#v, want fast", state.ActivePreset)
 	}
 }
 

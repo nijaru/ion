@@ -98,23 +98,20 @@ func (t runtimeTransition) withActivePresetPersistence() runtimeTransition {
 }
 
 func (t runtimeTransition) persist() error {
-	if t.persistState {
-		if err := config.SaveState(&t.snapshot.appConfig); err != nil {
-			return fmt.Errorf("save state: %w", err)
-		}
+	if !t.persistState && !t.persistReasoning && !t.persistActivePreset {
+		return nil
 	}
-	if t.persistReasoning {
-		if err := config.SaveReasoningState(
-			t.persistReasoningSlot.String(),
-			t.persistReasoningText,
-		); err != nil {
-			return fmt.Errorf("save state: %w", err)
-		}
+	update := config.RuntimeStateUpdate{
+		Config:              &t.snapshot.appConfig,
+		PersistConfig:       t.persistState,
+		ActivePreset:        t.snapshot.preset.String(),
+		PersistActivePreset: t.persistActivePreset,
+		ReasoningPreset:     t.persistReasoningSlot.String(),
+		ReasoningEffort:     t.persistReasoningText,
+		PersistReasoning:    t.persistReasoning,
 	}
-	if t.persistActivePreset {
-		if err := config.SaveActivePreset(t.snapshot.preset.String()); err != nil {
-			return fmt.Errorf("save active preset: %w", err)
-		}
+	if err := config.SaveRuntimeState(update); err != nil {
+		return fmt.Errorf("save state: %w", err)
 	}
 	return nil
 }

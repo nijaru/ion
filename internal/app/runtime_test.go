@@ -949,8 +949,8 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		"",
 		false,
 	)
-	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "save active preset") {
-		t.Fatalf("switch error = %v, want save active preset error", err)
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "save state") {
+		t.Fatalf("switch error = %v, want save state error", err)
 	}
 	if oldSession.closed {
 		t.Fatal("old session was closed after failed switch")

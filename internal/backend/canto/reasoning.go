@@ -11,8 +11,17 @@ import (
 )
 
 func reasoningEffortProcessor(cfg *config.Config) prompt.RequestProcessor {
+	return dynamicReasoningEffortProcessor(func() *config.Config {
+		return cfg
+	})
+}
+
+func dynamicReasoningEffortProcessor(
+	configSource func() *config.Config,
+) prompt.RequestProcessor {
 	return prompt.RequestProcessorFunc(
 		func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
+			cfg := configSource()
 			if cfg == nil {
 				return nil
 			}

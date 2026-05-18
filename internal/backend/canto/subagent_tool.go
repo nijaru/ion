@@ -205,7 +205,7 @@ func (b *Backend) newChildAgent(
 	ctx context.Context,
 	persona subagents.Persona,
 ) (agent.Agent, error) {
-	cfg := b.cfg
+	cfg := b.configSnapshot()
 	if cfg == nil {
 		return nil, fmt.Errorf("subagent config is not initialized")
 	}

@@ -6,8 +6,9 @@ import (
 )
 
 func (b *Backend) executorEnvironmentPolicy() tools.EnvironmentPolicy {
+	cfg := b.configSnapshot()
 	return tools.NewEnvironmentPolicy(
-		b.cfg.ToolEnvMode(),
-		providers.CredentialEnvVars(b.cfg),
+		cfg.ToolEnvMode(),
+		providers.CredentialEnvVars(cfg),
 	)
 }
