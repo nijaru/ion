@@ -47,6 +47,18 @@ func TestReasoningEffortProcessorMapsOffToNone(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortProcessorPreservesBooleanThinkingControl(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "high"})
+	provider := &reasoningCapProvider{reasoningToggle: true}
+	if err := processor.ApplyRequest(context.Background(), provider, "qwen3", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "high" {
+		t.Fatalf("reasoning control = %q, want high", req.ReasoningEffort)
+	}
+}
+
 func TestReasoningEffortProcessorDropsUnsupportedEffortValue(t *testing.T) {
 	req := &llm.Request{}
 	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "xhigh"})

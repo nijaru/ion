@@ -127,7 +127,7 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 			Endpoint:  endpoint,
 			Headers:   providers.ResolvedHeaders(cfg),
 			Models:    models,
-			ModelCaps: nil,
+			ModelCaps: openAICompatibleModelCaps(cfg),
 		})
 	case providers.FamilyOpenRouter:
 		if apiKey == "" {
@@ -175,6 +175,23 @@ func providerModels(cfg *config.Config) []llm.Model {
 		model.ContextWindow = cfg.ContextLimit
 	}
 	return []llm.Model{model}
+}
+
+func openAICompatibleModelCaps(cfg *config.Config) map[string]llm.Capabilities {
+	if cfg == nil || strings.TrimSpace(cfg.Model) == "" || !isQwenThinkingModel(cfg.Model) {
+		return nil
+	}
+	caps := llm.DefaultCapabilities()
+	caps.Reasoning = llm.ReasoningCapabilities{
+		Kind:       llm.ReasoningKindBoolean,
+		CanDisable: true,
+	}
+	return map[string]llm.Capabilities{cfg.Model: caps}
+}
+
+func isQwenThinkingModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(name, "qwen") || strings.Contains(name, "qwq")
 }
 
 func missingAuthDetail(cfg *config.Config, def providers.Definition) string {
