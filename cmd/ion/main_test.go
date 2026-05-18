@@ -109,6 +109,30 @@ func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
 	}
 }
 
+func TestCloseRuntimeOpenErrorClosesPartialHandles(t *testing.T) {
+	agent := &printSession{}
+	storageSession := &closeStorageSession{id: "partial"}
+
+	err := closeRuntimeOpenError(
+		"backend initialization error",
+		context.Canceled,
+		agent,
+		storageSession,
+	)
+	if err == nil {
+		t.Fatal("closeRuntimeOpenError returned nil")
+	}
+	if agent.closed != 1 {
+		t.Fatalf("agent closed = %d, want 1", agent.closed)
+	}
+	if storageSession.closed != 1 {
+		t.Fatalf("storage closed = %d, want 1", storageSession.closed)
+	}
+	if got := err.Error(); got != "backend initialization error: context canceled" {
+		t.Fatalf("error = %q, want labeled context cancellation", got)
+	}
+}
+
 func TestStartupProviderMissing(t *testing.T) {
 	if !startupProviderMissing(providerBackend{}) {
 		t.Fatal("empty provider should need startup setup")

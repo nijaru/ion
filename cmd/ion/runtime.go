@@ -143,16 +143,19 @@ func openRuntime(
 		}
 		b.SetSession(sess)
 		if err := b.Session().Resume(ctx, sessionID); err != nil {
-			_ = sess.Close()
-			return nil, nil, fmt.Errorf("backend resume error: %w", err)
+			return nil, nil, closeRuntimeOpenError("backend resume error", err, b.Session(), sess)
 		}
 		modelName := ""
 		if persistResumedSessionModel {
 			modelName = sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
 		}
 		if err := syncSessionMetadata(ctx, store, sessionID, modelName, branch); err != nil {
-			_ = sess.Close()
-			return nil, nil, fmt.Errorf("failed to update resumed session metadata: %w", err)
+			return nil, nil, closeRuntimeOpenError(
+				"failed to update resumed session metadata",
+				err,
+				b.Session(),
+				sess,
+			)
 		}
 		return b, sess, nil
 	}
@@ -167,10 +170,26 @@ func openRuntime(
 	sess := storage.NewLazySession(store, cwd, modelName, branch)
 	b.SetSession(sess)
 	if err := b.Session().Open(ctx); err != nil {
-		_ = sess.Close()
-		return nil, nil, fmt.Errorf("backend initialization error: %w", err)
+		return nil, nil, closeRuntimeOpenError(
+			"backend initialization error",
+			err,
+			b.Session(),
+			sess,
+		)
 	}
 	return b, sess, nil
+}
+
+func closeRuntimeOpenError(
+	label string,
+	err error,
+	agent session.AgentSession,
+	sess storage.Session,
+) error {
+	if closeErr := closeRuntimeHandles(agent, sess, nil); closeErr != nil {
+		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))
+	}
+	return fmt.Errorf("%s: %w", label, err)
 }
 
 func syncSessionMetadata(
@@ -182,8 +201,9 @@ func syncSessionMetadata(
 		return nil
 	}
 	return store.UpdateSession(ctx, storage.SessionInfo{
-		ID:     sessionID,
-		Model:  modelName,
-		Branch: branch,
+		ID:                sessionID,
+		Model:             modelName,
+		Branch:            branch,
+		PreserveUpdatedAt: true,
 	})
 }
