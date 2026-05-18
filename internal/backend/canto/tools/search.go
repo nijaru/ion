@@ -23,51 +23,31 @@ func NewSearchTool(cwd string) *SearchTool {
 }
 
 func (t *SearchTool) searchArg(target string) (string, error) {
-	if target == "" {
+	target = strings.TrimSpace(target)
+	if target == "" || target == "." {
 		target = "."
 	}
 	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
 		return "", err
 	}
-	candidate := target
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(absCwd, candidate)
-	}
-	absPath, err := filepath.Abs(candidate)
+	target, err = expandHomePath(target)
 	if err != nil {
 		return "", err
 	}
-	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
-		return "", fmt.Errorf("path escapes workspace: %s", target)
+	absPath := target
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(absCwd, absPath)
 	}
-	if err := t.rejectSymlinkEscape(absCwd, absPath, target); err != nil {
-		return "", err
-	}
+	absPath = filepath.Clean(absPath)
 	if absPath == absCwd {
 		return "", nil
 	}
 	relPath, err := filepath.Rel(absCwd, absPath)
-	if err != nil {
-		return "", err
+	if err == nil && filepath.IsLocal(relPath) {
+		return relPath, nil
 	}
-	return relPath, nil
-}
-
-func (t *SearchTool) rejectSymlinkEscape(absCwd, absPath, target string) error {
-	realCwd, err := filepath.EvalSymlinks(absCwd)
-	if err != nil {
-		realCwd = absCwd
-	}
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return fmt.Errorf("path not found: %s", target)
-	}
-	if realPath != realCwd &&
-		!strings.HasPrefix(realPath, realCwd+string(filepath.Separator)) {
-		return fmt.Errorf("path escapes workspace: %s", target)
-	}
-	return nil
+	return absPath, nil
 }
 
 func validateGlobPattern(pattern string) error {
@@ -105,7 +85,7 @@ func (g *Grep) Spec() llm.Spec {
 				},
 				"path": map[string]any{
 					"type":        "string",
-					"description": "The directory or file to search in (defaults to current working directory).",
+					"description": "Directory or file to search in, relative to the current directory or absolute.",
 				},
 			},
 			"required": []string{"pattern"},

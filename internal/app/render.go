@@ -62,13 +62,18 @@ func (m Model) renderShell() string {
 		b.WriteString("\n")
 	}
 
-	// Top separator
-	b.WriteString(m.st.sep.Render(m.shellSeparator()))
-	b.WriteString("\n")
+	if m.shellTopSeparatorVisible() {
+		b.WriteString(m.st.sep.Render(m.shellSeparator()))
+		b.WriteString("\n")
+	}
 
 	// Composer
 	b.WriteString(m.renderComposer())
 	b.WriteString("\n")
+	if completions := m.renderComposerCompletions(); completions != "" {
+		b.WriteString(completions)
+		b.WriteString("\n")
+	}
 
 	// Bottom separator
 	b.WriteString(m.st.sep.Render(m.shellSeparator()))
@@ -82,6 +87,18 @@ func (m Model) renderShell() string {
 
 func (m Model) renderComposer() string {
 	return renderComposerView(m.Input.Composer.View(), m.shellWidth())
+}
+
+func (m Model) shellTopSeparatorVisible() bool {
+	if m.Progress.Compacting {
+		return false
+	}
+	switch m.Progress.Mode {
+	case stateIonizing, stateStreaming, stateWorking:
+		return false
+	default:
+		return true
+	}
 }
 
 func renderComposerView(view string, width int) string {
@@ -99,6 +116,32 @@ func renderComposerView(view string, width int) string {
 
 func composerPromptWidth() int {
 	return ansi.StringWidth(composerPrompt)
+}
+
+func (m Model) renderComposerCompletions() string {
+	if m.Picker.Overlay != nil ||
+		m.Picker.Session != nil ||
+		m.Picker.Setup != nil ||
+		m.Input.Completion == nil ||
+		len(m.Input.Completion.items) == 0 {
+		return ""
+	}
+
+	labelWidth := 0
+	for _, item := range m.Input.Completion.items {
+		labelWidth = max(labelWidth, lipgloss.Width(item.Label))
+	}
+
+	lines := make([]string, 0, len(m.Input.Completion.items))
+	for _, item := range m.Input.Completion.items {
+		line := item.Label
+		if item.Detail != "" {
+			line += strings.Repeat(" ", max(2, labelWidth-lipgloss.Width(item.Label)+2))
+			line += item.Detail
+		}
+		lines = append(lines, m.shellPaddedLine(m.st.dim, line))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) shellWidth() int {
@@ -269,15 +312,15 @@ func (m Model) renderSetupPrompt() string {
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • Tab change provider • Ctrl+M primary/fast • Enter select • Esc cancel"
+		return "Type to search • ↑/↓ move • Enter: select • Tab: providers • Ctrl+M: primary/fast • Esc: cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeCommand {
-		return "Type to search • Enter insert • Esc cancel"
+		return "Type to search • ↑/↓ move • Enter: insert • Esc: cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
-		return "Type to search • Tab model list • Enter select • Esc cancel"
+		return "Type to search • ↑/↓ move • Enter: select • Tab: models • Esc: cancel"
 	}
-	return "Type to search • Enter select • Esc cancel"
+	return "Type to search • ↑/↓ move • Enter: select • Esc: cancel"
 }
 
 type pickerMetricWidths struct {

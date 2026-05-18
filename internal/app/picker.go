@@ -131,18 +131,55 @@ func providerItem(label, value string) pickerItem {
 
 func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem {
 	detail, tone, ready := providerDetail(cfg, def)
+	label, detail := providerItemLabelAndDetail(cfg, def, detail)
 	group := providers.GroupName(def)
 	if !ready && strings.HasPrefix(detail, "Set ") {
 		group = "Needs setup"
 	}
 	return pickerItem{
-		Label:  def.DisplayName,
+		Label:  label,
 		Value:  def.ID,
 		Detail: detail,
 		Group:  group,
 		Tone:   tone,
-		Search: pickerSearchIndex(def.DisplayName, def.ID, detail, group, nil),
+		Search: pickerSearchIndex(label, def.ID, detail+" "+def.DisplayName, group, nil),
 	}
+}
+
+func providerItemLabelAndDetail(
+	cfg *config.Config,
+	def providers.Definition,
+	detail string,
+) (string, string) {
+	if def.ID != providers.OpenAICompatibleID {
+		return def.DisplayName, detail
+	}
+
+	endpoint := providerItemEndpointDisplay(cfg, detail)
+	if endpoint == "" {
+		return def.DisplayName, detail
+	}
+
+	status := detail
+	if strings.HasPrefix(status, "Ready at ") {
+		status = "Ready"
+	}
+	if status == "" {
+		return endpoint, def.DisplayName
+	}
+	return endpoint, def.DisplayName + " • " + status
+}
+
+func providerItemEndpointDisplay(cfg *config.Config, detail string) string {
+	if cfg != nil {
+		if endpoint := providers.EndpointDisplayName(cfg.Endpoint); endpoint != "" {
+			return endpoint
+		}
+	}
+	if endpoint, ok := strings.CutPrefix(detail, "Ready at "); ok {
+		return strings.TrimSpace(endpoint)
+	}
+	return ""
 }
 
 func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone, bool) {
@@ -361,6 +398,10 @@ func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
 	if q == "" {
 		return 0, true
 	}
+	queryTokens := strings.Fields(q)
+	if len(queryTokens) > 1 {
+		return multiTokenPickerSearchScore(queryTokens, fields...)
+	}
 
 	best := int(^uint(0) >> 1)
 	matched := false
@@ -376,6 +417,30 @@ func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
 		}
 	}
 	return best, matched
+}
+
+func multiTokenPickerSearchScore(tokens []string, fields ...pickerSearchField) (int, bool) {
+	total := 0
+	for _, token := range tokens {
+		best := int(^uint(0) >> 1)
+		matched := false
+		for _, field := range fields {
+			score, ok := searchFieldScore(token, field.value)
+			if !ok {
+				continue
+			}
+			score += field.weight
+			if score < best {
+				best = score
+				matched = true
+			}
+		}
+		if !matched {
+			return 0, false
+		}
+		total += best
+	}
+	return total, true
 }
 
 func searchFieldScore(query, candidate string) (int, bool) {

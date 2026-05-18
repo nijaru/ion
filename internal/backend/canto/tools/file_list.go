@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/go-json-experiment/json"
@@ -42,17 +42,12 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		input.Path = "."
 	}
 
-	relPath, err := l.relativePath(input.Path)
+	absPath, err := l.absolutePath(input.Path)
 	if err != nil {
 		return "", err
 	}
-	root, err := l.openRoot()
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 
-	entries, err := fs.ReadDir(root.FS(), relPath)
+	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return "", err
 	}

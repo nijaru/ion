@@ -25,7 +25,7 @@ func (w *Write) Spec() llm.Spec {
 			"properties": map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "Relative path to the file.",
+					"description": "File to write, relative to the current directory or absolute.",
 				},
 				"content": map[string]any{
 					"type":        "string",
@@ -46,15 +46,10 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	relPath, err := w.relativePath(input.FilePath)
+	absPath, err := w.mutationPath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
-	root, err := w.openRoot()
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -66,12 +61,12 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return "", err
 	}
 
 	mode := os.FileMode(0o644)
-	if info, err := root.Stat(relPath); err == nil {
+	if info, err := os.Stat(absPath); err == nil {
 		mode = info.Mode().Perm()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -79,16 +74,16 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	tmpPath, err := writeEditTempFile(root, relPath, []byte(input.Content), mode)
+	tmpPath, err := writeEditTempFile(absPath, []byte(input.Content), mode)
 	if err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		_ = root.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
-	if err := root.Rename(tmpPath, relPath); err != nil {
-		_ = root.Remove(tmpPath)
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
 
