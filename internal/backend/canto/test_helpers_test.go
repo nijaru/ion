@@ -60,6 +60,7 @@ func (p *compactProvider) IsContextOverflow(err error) bool { return false }
 type reasoningCapProvider struct {
 	compactProvider
 	reasoningEffort bool
+	reasoningToggle bool
 }
 
 func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
@@ -68,6 +69,12 @@ func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
 		caps.Reasoning = llm.ReasoningCapabilities{
 			Kind:       llm.ReasoningKindEffort,
 			Efforts:    []string{"minimal", "low", "medium", "high"},
+			CanDisable: true,
+		}
+	}
+	if p.reasoningToggle {
+		caps.Reasoning = llm.ReasoningCapabilities{
+			Kind:       llm.ReasoningKindBoolean,
 			CanDisable: true,
 		}
 	}

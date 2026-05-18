@@ -39,7 +39,7 @@ func dynamicReasoningEffortProcessor(
 			if effort == "off" {
 				wireEffort = "none"
 			}
-			if p == nil || !p.Capabilities(model).SupportsReasoningEffort(wireEffort) {
+			if p == nil || !p.Capabilities(model).SupportsReasoningControl(wireEffort) {
 				req.ReasoningEffort = ""
 				return nil
 			}

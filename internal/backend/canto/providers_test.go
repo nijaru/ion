@@ -3,6 +3,7 @@ package canto
 import (
 	"testing"
 
+	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
@@ -63,5 +64,30 @@ func TestProviderModelsUsesConfiguredContextLimitWithoutDiscovery(t *testing.T) 
 	}
 	if models[0].ContextWindow != 70000 {
 		t.Fatalf("context window = %d, want configured limit", models[0].ContextWindow)
+	}
+}
+
+func TestOpenAICompatibleQwenModelGetsBooleanReasoningCaps(t *testing.T) {
+	capsByModel := openAICompatibleModelCaps(&config.Config{
+		Provider: "openai-compatible",
+		Model:    "qwen3.6:27b-uncensored",
+	})
+	caps, ok := capsByModel["qwen3.6:27b-uncensored"]
+	if !ok {
+		t.Fatalf("model caps = %#v, want qwen model entry", capsByModel)
+	}
+	if caps.Reasoning.Kind != llm.ReasoningKindBoolean ||
+		!caps.SupportsReasoningToggle("high") ||
+		!caps.SupportsReasoningToggle("none") {
+		t.Fatalf("qwen reasoning caps = %#v, want boolean disable-capable", caps.Reasoning)
+	}
+}
+
+func TestOpenAICompatibleNonQwenModelGetsNoInferredReasoningCaps(t *testing.T) {
+	if caps := openAICompatibleModelCaps(&config.Config{
+		Provider: "openai-compatible",
+		Model:    "custom-model",
+	}); caps != nil {
+		t.Fatalf("model caps = %#v, want nil for non-qwen custom model", caps)
 	}
 }
