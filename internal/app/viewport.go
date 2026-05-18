@@ -231,7 +231,7 @@ func (m Model) renderEntry(e session.Entry) string {
 
 	switch e.Role {
 	case session.User:
-		return m.st.user.Render("› " + e.Content)
+		return m.renderUserEntry(e.Content)
 
 	case session.Agent:
 		var b strings.Builder
@@ -330,6 +330,22 @@ func (m Model) renderEntry(e session.Entry) string {
 	default:
 		return e.Content
 	}
+}
+
+func (m Model) renderUserEntry(content string) string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return m.st.user.Render("› ")
+	}
+	rows := strings.Split(content, "\n")
+	for i, row := range rows {
+		prefix := strings.Repeat(" ", composerPromptWidth())
+		if i == 0 {
+			prefix = composerPrompt
+		}
+		rows[i] = m.st.user.Render(prefix + row)
+	}
+	return strings.Join(rows, "\n")
 }
 
 // renderSubagentRow formats a single background worker's status for Plane B.
