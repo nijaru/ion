@@ -243,6 +243,27 @@ func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 	}
 }
 
+func TestTranslateRunEventEmitsThinkingDeltaFromReasoningChunk(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type:  cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Reasoning: "thinking through it"},
+	}, 7, &turnUsageTracker{})
+
+	ev := receiveEvent(t, b.Events())
+	delta, ok := ev.(ionsession.ThinkingDelta)
+	if !ok {
+		t.Fatalf("event = %T, want ThinkingDelta", ev)
+	}
+	if delta.Delta != "thinking through it" {
+		t.Fatalf("delta = %q, want thinking through it", delta.Delta)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
