@@ -64,6 +64,14 @@ func GetCachedMetadata(provider, model string) (ModelMetadata, bool) {
 	return cachedMetadata(provider, model)
 }
 
+func CachedContextLimit(provider, model string) (int, bool) {
+	meta, ok := GetCachedMetadata(provider, model)
+	if !ok || meta.ContextLimit <= 0 {
+		return 0, false
+	}
+	return meta.ContextLimit, true
+}
+
 func cachedMetadata(provider, model string) (ModelMetadata, bool) {
 	registryMu.RLock()
 	meta, ok := registryCache[metadataKey(provider, model)]

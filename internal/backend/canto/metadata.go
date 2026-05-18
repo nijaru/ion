@@ -69,8 +69,8 @@ func (b *Backend) ContextLimit() int {
 	}
 	provider := b.Provider()
 	model := b.Model()
-	if meta, ok := registry.GetMetadata(context.Background(), provider, model); ok {
-		return meta.ContextLimit
+	if limit, ok := registry.CachedContextLimit(provider, model); ok {
+		return limit
 	}
 	return 0
 }

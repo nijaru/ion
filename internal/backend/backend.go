@@ -18,6 +18,7 @@ type Backend interface {
 	Name() string
 	Provider() string
 	Model() string
+	// ContextLimit must be cheap and nonblocking; render paths call it often.
 	ContextLimit() int
 	Bootstrap() Bootstrap
 	Session() session.AgentSession
