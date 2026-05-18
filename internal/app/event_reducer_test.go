@@ -44,6 +44,23 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	}
 }
 
+func TestUserMessagePrintsFromSessionEvent(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(session.UserMessage{Message: "read README.md"})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected committed user print command")
+	}
+	if !model.App.PrintedTranscript {
+		t.Fatal("user message event did not mark transcript printed")
+	}
+	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
+		t.Fatalf("user event changed in-flight assistant state: %#v", model.InFlight)
+	}
+}
+
 func TestPlaneBShowsPendingAgentText(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 24

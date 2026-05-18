@@ -123,6 +123,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 
 	go func() {
+		b.events <- session.UserMessage{Message: input}
 		b.events <- session.TurnStarted{}
 		b.events <- session.StatusChanged{Status: "[fake] planning reply"}
 

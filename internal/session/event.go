@@ -68,6 +68,14 @@ type ThinkingDelta struct {
 
 func (e ThinkingDelta) isEvent() {}
 
+// UserMessage fires when a user message is committed to the durable session.
+type UserMessage struct {
+	Base
+	Message string `json:"message"`
+}
+
+func (e UserMessage) isEvent() {}
+
 // AgentMessage fires when a complete agent message is committed.
 type AgentMessage struct {
 	Base

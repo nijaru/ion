@@ -58,6 +58,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.ThinkingDelta:
 		return m.handleThinkingDelta(msg)
 
+	case session.UserMessage:
+		return m.handleUserMessage(msg)
+
 	case session.AgentDelta:
 		return m.handleAgentDelta(msg)
 
@@ -99,6 +102,18 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
+	if strings.TrimSpace(msg.Message) == "" {
+		return m, m.awaitSessionEvent()
+	}
+	entry := session.Entry{
+		Role:      session.User,
+		Timestamp: msg.Timestamp,
+		Content:   msg.Message,
+	}
+	return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 }
 
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
