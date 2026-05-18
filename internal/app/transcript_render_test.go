@@ -382,7 +382,7 @@ func TestRenderReasoningOnlyEntryShowsMarkerWhenThinkingHidden(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if got != "• Thinking" {
+	if got != "• Thinking..." {
 		t.Fatalf("reasoning-only render = %q, want marker", got)
 	}
 	if strings.Contains(got, "private chain of thought") {
@@ -400,6 +400,9 @@ func TestRenderThinkingEntryCanShowFullReasoning(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "• Thinking...") {
+		t.Fatalf("full thinking render = %q, want thinking marker with ellipsis", got)
+	}
 	if !strings.Contains(got, "visible reasoning") {
 		t.Fatalf("full thinking render = %q, want reasoning text", got)
 	}
