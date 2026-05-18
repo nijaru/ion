@@ -72,6 +72,28 @@ func CachedContextLimit(provider, model string) (int, bool) {
 	return meta.ContextLimit, true
 }
 
+func CachedContextLimitForConfig(cfg *config.Config) (int, bool) {
+	if cfg == nil || strings.TrimSpace(cfg.Model) == "" {
+		return 0, false
+	}
+	if limit, ok := CachedContextLimit(cfg.Provider, cfg.Model); ok {
+		return limit, true
+	}
+	if providers.IsOpenAICompatible(cfg.Provider) && strings.TrimSpace(cfg.Endpoint) == "" {
+		return 0, false
+	}
+	models, _, ok := CachedModelsForConfig(cfg)
+	if !ok {
+		return 0, false
+	}
+	for _, meta := range models {
+		if strings.EqualFold(meta.ID, cfg.Model) && meta.ContextLimit > 0 {
+			return meta.ContextLimit, true
+		}
+	}
+	return 0, false
+}
+
 func cachedMetadata(provider, model string) (ModelMetadata, bool) {
 	registryMu.RLock()
 	meta, ok := registryCache[metadataKey(provider, model)]

@@ -67,6 +67,9 @@ func (b *Backend) ContextLimit() int {
 	if cfg != nil && cfg.ContextLimit > 0 {
 		return cfg.ContextLimit
 	}
+	if limit, ok := registry.CachedContextLimitForConfig(cfg); ok {
+		return limit
+	}
 	provider := b.Provider()
 	model := b.Model()
 	if limit, ok := registry.CachedContextLimit(provider, model); ok {
