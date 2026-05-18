@@ -95,12 +95,15 @@ func TestComposerSupportsHardMultilineInput(t *testing.T) {
 	}
 	view := ansi.Strip(model.View().Content)
 	first := strings.Index(view, "› first line")
-	second := strings.Index(view, "› second line")
+	second := strings.Index(view, "  second line")
 	if first < 0 || second < 0 {
 		t.Fatalf("composer did not render both hard lines:\n%s", view)
 	}
 	if first > second {
 		t.Fatalf("composer rendered hard lines out of order:\n%s", view)
+	}
+	if strings.Contains(view, "› second line") {
+		t.Fatalf("composer repeated prompt marker on continuation row:\n%s", view)
 	}
 	if strings.Contains(view, "first linesecond line") {
 		t.Fatalf("composer collapsed hard newline into one row:\n%s", view)
@@ -127,12 +130,55 @@ func TestComposerSupportsCtrlJMultilineInput(t *testing.T) {
 		t.Fatalf("composer = %q, want ctrl+j multiline input", got)
 	}
 	view := ansi.Strip(model.View().Content)
-	if !strings.Contains(view, "› first line") || !strings.Contains(view, "› second line") {
+	if !strings.Contains(view, "› first line") || !strings.Contains(view, "  second line") {
 		t.Fatalf("composer did not render ctrl+j multiline input:\n%s", view)
+	}
+	if strings.Contains(view, "› second line") {
+		t.Fatalf("composer repeated prompt marker on continuation row:\n%s", view)
 	}
 	if strings.Contains(view, "first linesecond line") {
 		t.Fatalf("composer collapsed ctrl+j newline into one row:\n%s", view)
 	}
+}
+
+func TestComposerPromptOnlyRendersOnFirstRow(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	model = updated.(Model)
+	model.Input.Composer.SetValue(strings.Repeat("\n", 5))
+	model.layout()
+
+	rows := renderedComposerRows(t, model)
+	if len(rows) < 2 {
+		t.Fatalf("composer rows = %#v, want multiple rows", rows)
+	}
+	if !strings.HasPrefix(rows[0], "› ") {
+		t.Fatalf("first composer row = %q, want prompt marker", rows[0])
+	}
+	for i, row := range rows[1:] {
+		if strings.HasPrefix(row, "›") {
+			t.Fatalf("composer row %d repeated prompt marker: %#v", i+2, rows)
+		}
+	}
+}
+
+func renderedComposerRows(t *testing.T, model Model) []string {
+	t.Helper()
+	view := ansi.Strip(model.View().Content)
+	lines := strings.Split(view, "\n")
+	firstSeparator := -1
+	for i, line := range lines {
+		if line == "" || strings.Trim(line, "─") != "" {
+			continue
+		}
+		if firstSeparator < 0 {
+			firstSeparator = i
+			continue
+		}
+		return lines[firstSeparator+1 : i]
+	}
+	t.Fatalf("view did not contain shell separators:\n%s", view)
+	return nil
 }
 
 func TestProgressLineFitsWidthAfterResize(t *testing.T) {

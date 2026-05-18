@@ -5,7 +5,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
+
+const composerPrompt = "› "
 
 func (m Model) View() tea.View {
 	if !m.App.Ready {
@@ -64,7 +67,7 @@ func (m Model) renderShell() string {
 	b.WriteString("\n")
 
 	// Composer
-	b.WriteString(m.Input.Composer.View())
+	b.WriteString(m.renderComposer())
 	b.WriteString("\n")
 
 	// Bottom separator
@@ -75,6 +78,27 @@ func (m Model) renderShell() string {
 	b.WriteString(m.statusLine())
 
 	return b.String()
+}
+
+func (m Model) renderComposer() string {
+	return renderComposerView(m.Input.Composer.View(), m.shellWidth())
+}
+
+func renderComposerView(view string, width int) string {
+	rows := strings.Split(view, "\n")
+	continuationPrompt := strings.Repeat(" ", composerPromptWidth())
+	for i := range rows {
+		prompt := continuationPrompt
+		if i == 0 {
+			prompt = composerPrompt
+		}
+		rows[i] = fitLine(prompt+rows[i], width)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func composerPromptWidth() int {
+	return ansi.StringWidth(composerPrompt)
 }
 
 func (m Model) shellWidth() int {
