@@ -240,7 +240,7 @@ func (m Model) renderEntry(e session.Entry) string {
 				b.WriteString(m.st.system.Render("• Thinking..."))
 				b.WriteString("\n")
 			} else {
-				b.WriteString(m.st.system.Render("• Thinking"))
+				b.WriteString(m.st.system.Render("• Thinking..."))
 				b.WriteString("\n")
 				b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 				b.WriteString("\n")
@@ -252,7 +252,7 @@ func (m Model) renderEntry(e session.Entry) string {
 				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 			}
 			if e.Reasoning != "" {
-				b.WriteString(m.st.system.Render("• Thinking"))
+				b.WriteString(m.st.system.Render("• Thinking..."))
 				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 			}
 			b.WriteString(m.st.agent.Render("• "))
