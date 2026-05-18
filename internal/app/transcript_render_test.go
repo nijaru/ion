@@ -67,6 +67,22 @@ func TestRenderEntryDoesNotDisplayTimestamp(t *testing.T) {
 	}
 }
 
+func TestRenderMultilineUserEntryIndentsContinuationRows(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.User,
+		Content: "first line\nsecond line",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "› first line\n  second line" {
+		t.Fatalf("rendered user entry = %q, want indented continuation row", got)
+	}
+	if strings.Contains(got, "› second line") {
+		t.Fatalf("rendered user entry repeated prompt marker: %q", got)
+	}
+}
+
 func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{BashOutput: "summary"}
