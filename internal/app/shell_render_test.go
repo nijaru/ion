@@ -617,6 +617,23 @@ func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
 	}
 }
 
+func TestStatusLineShowsSmallContextUsageWithoutZeroK(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:         &stubSession{events: make(chan session.Event)},
+		contextLimit: 128_000,
+	}
+	model.Progress.ContextTokens = 999
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "999/128k (0%)") {
+		t.Fatalf("status line = %q, want exact small context usage", line)
+	}
+	if strings.Contains(line, "0k/") {
+		t.Fatalf("status line rounded small context usage to zero: %q", line)
+	}
+}
+
 func TestStatusLineShowsConfiguredSessionCostBudget(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{MaxSessionCost: 0.25}

@@ -275,7 +275,7 @@ func (m Model) renderMarkdownTable(table *extensionast.Table, source []byte, dep
 		}
 	}
 	if m.App.Width > 0 && total > tableWidth {
-		return renderMarkdownTablePlain(indent, headers, rows)
+		return renderMarkdownTablePlain(indent, headers, rows, tableWidth)
 	}
 
 	borderTop := indent + "┌" + joinWidths(widths, "┬", "─") + "┐"
@@ -346,7 +346,12 @@ func renderTableInline(node ast.Node, source []byte) string {
 	return b.String()
 }
 
-func renderMarkdownTablePlain(indent string, headers []string, rows []markdownTableRow) []string {
+func renderMarkdownTablePlain(
+	indent string,
+	headers []string,
+	rows []markdownTableRow,
+	width int,
+) []string {
 	var lines []string
 	for _, r := range rows {
 		for i, header := range headers {
@@ -357,7 +362,7 @@ func renderMarkdownTablePlain(indent string, headers []string, rows []markdownTa
 			if value == "" {
 				continue
 			}
-			lines = append(lines, indent+header+": "+value)
+			lines = append(lines, fitLine(indent+header+": "+value, width))
 		}
 		lines = append(lines, "")
 	}

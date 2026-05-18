@@ -291,10 +291,18 @@ func runtimeStatusSummary(m Model) string {
 }
 
 func compactCount(n int) string {
-	if n >= 1000 {
+	switch {
+	case n < 1000:
+		return fmt.Sprintf("%d", n)
+	case n < 10_000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	case n < 999_500:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	case n < 10_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000.0)
+	default:
+		return fmt.Sprintf("%dM", (n+500_000)/1_000_000)
 	}
-	return fmt.Sprintf("%d", n)
 }
 
 func isIdleStatus(status string) bool {
