@@ -22,14 +22,37 @@ func (m Model) openSessionPicker() (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	sessions, err := m.Model.Store.ListSessions(context.Background(), m.App.Workdir)
-	if err != nil {
-		m.Picker.Session = &sessionPickerState{err: fmt.Sprintf("failed to list sessions: %v", err)}
+	m.Picker.SessionLoadRequest++
+	requestID := m.Picker.SessionLoadRequest
+	m.Picker.Session = &sessionPickerState{
+		loading: true,
+		request: requestID,
+	}
+	return m, loadSessionPickerItems(requestID, m.Model.Store, m.App.Workdir)
+}
+
+func loadSessionPickerItems(requestID uint64, store storage.Store, workdir string) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := store.ListSessions(context.Background(), workdir)
+		return sessionPickerLoadedMsg{requestID: requestID, sessions: sessions, err: err}
+	}
+}
+
+func (m Model) handleSessionPickerLoaded(msg sessionPickerLoadedMsg) (Model, tea.Cmd) {
+	if m.Picker.Session == nil ||
+		m.Picker.Session.request == 0 ||
+		m.Picker.Session.request != msg.requestID ||
+		msg.requestID != m.Picker.SessionLoadRequest {
 		return m, nil
 	}
-
-	items := make([]sessionPickerItem, 0, len(sessions))
-	for _, info := range sessions {
+	if msg.err != nil {
+		m.Picker.Session = &sessionPickerState{
+			err: fmt.Sprintf("failed to list sessions: %v", msg.err),
+		}
+		return m, nil
+	}
+	items := make([]sessionPickerItem, 0, len(msg.sessions))
+	for _, info := range msg.sessions {
 		if !storage.IsConversationSessionInfo(info) {
 			continue
 		}
@@ -170,6 +193,11 @@ func (m Model) renderSessionPicker() string {
 	if m.Picker.Session.err != "" {
 		b.WriteString(m.shellPaddedLine(m.st.warn, m.Picker.Session.err))
 		b.WriteString("\n")
+	}
+	if m.Picker.Session.loading {
+		b.WriteString(m.shellPaddedLine(m.st.dim, "Loading sessions..."))
+		b.WriteString("\n")
+		return b.String()
 	}
 	if len(m.Picker.Session.filtered) == 0 {
 		b.WriteString(m.shellPaddedLine(m.st.dim, "No matching sessions"))
