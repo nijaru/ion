@@ -1680,7 +1680,7 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	)
 
 	updated, cmd = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = resolveModelPickerLoad(t, updated, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, updated, cmd)
 	if requests < 2 {
 		t.Fatalf("local api requests = %d, want fresh reprobe after cached failure", requests)
 	}
@@ -1692,6 +1692,124 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	}
 	if got := model.Picker.Overlay.cfg.Endpoint; got != endpoint {
 		t.Fatalf("model picker endpoint = %q, want %q", got, endpoint)
+	}
+}
+
+func TestProviderPickerSelectionReturnsBeforeEndpointProbeCompletes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3.6:27b"}]}`))
+	}))
+	defer srv.Close()
+
+	endpoint := srv.URL + "/v1"
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "config.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\nendpoint = \""+endpoint+"\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Endpoint != endpoint {
+				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
+			}
+			return []registry.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	model, cmd := model.openProviderPicker()
+	if cmd != nil {
+		t.Fatalf("provider picker returned unexpected command %T", cmd)
+	}
+	model.Picker.Overlay.index = pickerIndex(
+		pickerDisplayItems(model.Picker.Overlay),
+		"openai-compatible",
+	)
+
+	type pickerResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan pickerResult, 1)
+	go func() {
+		updated, nextCmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		returned <- pickerResult{model: updated, cmd: nextCmd}
+	}()
+
+	var result pickerResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider picker selection blocked on endpoint probe")
+	}
+	if result.cmd == nil {
+		t.Fatal("provider picker selection returned nil command")
+	}
+	if result.model.Picker.ProviderSelectionRequest == 0 {
+		t.Fatal("provider selection request was not marked in progress")
+	}
+	if result.model.Picker.Overlay == nil || !result.model.Picker.Overlay.loading {
+		t.Fatalf("provider picker overlay = %#v, want loading", result.model.Picker.Overlay)
+	}
+	select {
+	case <-started:
+		t.Fatal("endpoint probe ran before Bubble Tea command execution")
+	default:
+	}
+
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- result.cmd()
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider selection command did not probe endpoint")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("provider selection command returned before probe completed: %T", msg)
+	default:
+	}
+
+	close(release)
+	msg := <-loaded
+	resolved, ok := msg.(providerSelectionResolvedMsg)
+	if !ok || resolved.err != nil {
+		t.Fatalf("provider selection result = %#v, want success", msg)
+	}
+	updated, nextCmd := result.model.Update(resolved)
+	model = updated.(Model)
+	model = resolveModelPickerLoad(t, model, nextCmd)
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
 	}
 }
 
@@ -1767,7 +1885,7 @@ func TestProviderPickerNonListingSelectionUsesPickerPreset(t *testing.T) {
 	}
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated
+	model, cmd = resolveProviderSelection(t, updated, cmd)
 
 	if cmd == nil {
 		t.Fatal("expected non-listing provider selection notice")
@@ -1932,9 +2050,10 @@ func TestProviderItemsShowSingleOpenAICompatibleEndpoint(t *testing.T) {
 	found = false
 	for _, item := range items {
 		if item.Value == "openai-compatible" && item.Label == "127.0.0.1:1" {
-			if item.Detail != "OpenAI-compatible • Not running" {
+			if item.Detail != "OpenAI-compatible • Configured" &&
+				item.Detail != "OpenAI-compatible • Not running" {
 				t.Fatalf(
-					"OpenAI-compatible detail = %q, want endpoint type and readiness",
+					"OpenAI-compatible detail = %q, want endpoint type and cached/configured state",
 					item.Detail,
 				)
 			}
@@ -1970,9 +2089,9 @@ func TestProviderItemsUseConfiguredLocalAPIEndpointWhenRuntimeProviderDiffers(t 
 		if item.Label != strings.TrimPrefix(srv.URL, "http://") {
 			t.Fatalf("OpenAI-compatible label = %q, want endpoint host", item.Label)
 		}
-		if item.Detail != "OpenAI-compatible • Ready" {
+		if item.Detail != "OpenAI-compatible • Configured" {
 			t.Fatalf(
-				"OpenAI-compatible detail = %q, want endpoint type and readiness",
+				"OpenAI-compatible detail = %q, want endpoint type and configured state",
 				item.Detail,
 			)
 		}
@@ -1997,9 +2116,9 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 
 	model := readyModel(t)
 	updated, cmd := model.handleCommand("/provider anthropic")
-	model = updated
+	model, cmd = resolveProviderSelection(t, updated, cmd)
 	if cmd != nil {
-		t.Fatalf("unexpected provider command %T", cmd)
+		t.Fatalf("provider setup returned unexpected command %T", cmd)
 	}
 	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
 		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
@@ -2228,8 +2347,9 @@ func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testin
 
 	model := readyModel(t)
 	model, cmd := model.handleCommand("/provider openai-compatible")
+	model, cmd = resolveProviderSelection(t, model, cmd)
 	if cmd != nil {
-		t.Fatalf("unexpected provider command %T", cmd)
+		t.Fatalf("provider setup returned unexpected command %T", cmd)
 	}
 	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
 		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)

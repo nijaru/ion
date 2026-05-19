@@ -215,6 +215,7 @@ func isLocalBusyStatus(status string) bool {
 	trimmed := strings.TrimSpace(status)
 	return trimmed == "Switching runtime..." ||
 		trimmed == "Loading session..." ||
+		trimmed == "Checking provider..." ||
 		isCompactingStatus(trimmed)
 }
 

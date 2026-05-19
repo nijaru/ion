@@ -164,7 +164,7 @@ func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
 
 	updated, cmd := model.handleCommand("/provider anthropic")
-	model = resolveModelPickerLoad(t, updated, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, updated, cmd)
 
 	if capture.cfg != nil {
 		t.Fatalf("backend config = %#v, want provider staged only in picker", capture.cfg)
@@ -352,7 +352,7 @@ func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	})
 
 	updated, cmd := model.handleCommand("/provider openrouter")
-	model = resolveModelPickerLoad(t, updated, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, updated, cmd)
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
 	}

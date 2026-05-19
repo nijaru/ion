@@ -846,7 +846,12 @@ func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {
 }
 
 func TestLocalErrorClearsLocalBusyStatus(t *testing.T) {
-	for _, status := range []string{"Compacting context...", "Switching runtime...", "Loading session..."} {
+	for _, status := range []string{
+		"Compacting context...",
+		"Switching runtime...",
+		"Loading session...",
+		"Checking provider...",
+	} {
 		t.Run(status, func(t *testing.T) {
 			model := readyModel(t)
 			model.Progress.Compacting = isCompactingStatus(status)

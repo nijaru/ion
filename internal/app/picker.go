@@ -183,6 +183,9 @@ func providerItemEndpointDisplay(cfg *config.Config, detail string) string {
 }
 
 func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone, bool) {
+	if def.ID == providers.OpenAICompatibleID {
+		return openAICompatibleProviderDetail(cfg, def)
+	}
 	detail, ready := providers.CredentialStateContext(
 		context.Background(),
 		cfgForProvider(cfg, def.ID),
@@ -194,12 +197,45 @@ func providerDetail(cfg *config.Config, def providers.Definition) (string, picke
 	return detail, pickerToneWarn, ready
 }
 
+func openAICompatibleProviderDetail(
+	cfg *config.Config,
+	def providers.Definition,
+) (string, pickerTone, bool) {
+	providerCfg := cfgForProvider(cfg, def.ID)
+	if providers.RequiresAuth(providerCfg, def) &&
+		providers.ResolvedAuthToken(providerCfg, def) == "" {
+		return fmt.Sprintf("Set %s", providers.MissingAuthDetail(providerCfg, def)),
+			pickerToneWarn,
+			false
+	}
+	if endpoint, ready, ok := providers.CachedLocalAPIState(providerCfg); ok {
+		if ready {
+			return "Ready at " + providers.EndpointDisplayName(endpoint), pickerToneDefault, true
+		}
+		return "Not running", pickerToneDefault, false
+	}
+	if strings.TrimSpace(providerCfg.Endpoint) != "" {
+		return "Configured", pickerToneDefault, false
+	}
+	return "Set endpoint", pickerToneWarn, false
+}
+
 func providerSortRank(cfg *config.Config, provider string) int {
 	def, ok := providers.Lookup(provider)
 	if !ok {
 		return 99
 	}
-	rank := providers.SortRank(cfgForProvider(cfg, def.ID), def)
+	_, _, ready := providerDetail(cfg, def)
+	isLocal := def.Kind == providers.KindLocal || def.ID == providers.OpenAICompatibleID
+	rank := 3
+	switch {
+	case ready && !isLocal:
+		rank = 0
+	case ready && isLocal:
+		rank = 1
+	case !ready && isLocal:
+		rank = 2
+	}
 	if rank != 3 {
 		return rank
 	}

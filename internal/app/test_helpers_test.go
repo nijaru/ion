@@ -304,6 +304,26 @@ func resolveModelPickerLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
 	return next
 }
 
+func resolveProviderSelection(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return model, nil
+	}
+	msg := cmd()
+	updated, nextCmd := model.Update(msg)
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected Model after provider selection")
+	}
+	return next, nextCmd
+}
+
+func resolveProviderSelectionAndModelLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
+	t.Helper()
+	model, nextCmd := resolveProviderSelection(t, model, cmd)
+	return resolveModelPickerLoad(t, model, nextCmd)
+}
+
 func stubModelCatalog(
 	t *testing.T,
 	fn func(context.Context, *config.Config) ([]registry.ModelMetadata, error),

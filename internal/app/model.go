@@ -84,6 +84,14 @@ type resumeSessionSelectedMsg struct {
 	cfg       *config.Config
 }
 
+type providerSelectionResolvedMsg struct {
+	requestID uint64
+	provider  string
+	preset    modelPreset
+	selection providerSelection
+	err       error
+}
+
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
@@ -290,11 +298,12 @@ type InFlightState struct {
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
-	Overlay            *pickerOverlayState
-	Session            *sessionPickerState
-	Setup              *setupPromptState
-	ModelLoadRequest   uint64
-	SessionLoadRequest uint64
+	Overlay                  *pickerOverlayState
+	Session                  *sessionPickerState
+	Setup                    *setupPromptState
+	ModelLoadRequest         uint64
+	SessionLoadRequest       uint64
+	ProviderSelectionRequest uint64
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -759,6 +768,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resumeSessionSelectedMsg:
 		return m.handleResumeSessionSelected(msg)
+
+	case providerSelectionResolvedMsg:
+		return m.handleProviderSelectionResolved(msg)
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)
