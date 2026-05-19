@@ -1146,6 +1146,94 @@ func TestRuntimeSwitchMarksPrintedTranscriptForNotice(t *testing.T) {
 	}
 }
 
+func runResumeStoredSessionCommand(t *testing.T, model Model, sessionID string) (Model, tea.Msg) {
+	t.Helper()
+
+	updated, cmd := model.resumeStoredSessionByID(sessionID)
+	if cmd == nil {
+		t.Fatal("resumeStoredSessionByID returned nil command")
+	}
+	first := cmd()
+	selected, ok := first.(resumeSessionSelectedMsg)
+	if !ok {
+		t.Fatalf("expected resumeSessionSelectedMsg, got %T", first)
+	}
+	nextModel, nextCmd := updated.Update(selected)
+	updated = nextModel.(Model)
+	if nextCmd == nil {
+		t.Fatal("resumeSessionSelectedMsg returned nil runtime switch command")
+	}
+	return updated, nextCmd()
+}
+
+type blockingResumeStore struct {
+	resumeOnlyStore
+	started chan struct{}
+	release chan struct{}
+	session storage.Session
+}
+
+func (s *blockingResumeStore) ResumeSession(
+	ctx context.Context,
+	id string,
+) (storage.Session, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.session, nil
+}
+
+func TestResumeStoredSessionReturnsBeforeInspectionCompletes(t *testing.T) {
+	store := &blockingResumeStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		session: &stubStorageSession{
+			id:    "session-1",
+			model: "openai/gpt-4.1",
+		},
+	}
+	model := readyModel(t)
+	model.Model.Store = store
+	model.Model.Config = &config.Config{Provider: "openai", Model: "gpt-4.1"}
+
+	updated, cmd := model.resumeStoredSessionByID("session-1")
+	if cmd == nil {
+		t.Fatal("resumeStoredSessionByID returned nil command")
+	}
+	if updated.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("resumeStoredSessionByID did not mark runtime switch in progress")
+	}
+	select {
+	case <-store.started:
+		t.Fatal("ResumeSession ran before Bubble Tea command execution")
+	default:
+	}
+
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- cmd()
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resume command did not inspect stored session")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("resume command returned before inspection completed: %T", msg)
+	default:
+	}
+
+	close(store.release)
+	msg := <-loaded
+	if _, ok := msg.(resumeSessionSelectedMsg); !ok {
+		t.Fatalf("resume command result = %T, want resumeSessionSelectedMsg", msg)
+	}
+}
+
 func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1184,8 +1272,7 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 		},
 	)
 
-	model, cmd := model.resumeStoredSessionByID("session-1")
-	msg := cmd()
+	_, msg := runResumeStoredSessionCommand(t, model, "session-1")
 
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
@@ -1246,8 +1333,7 @@ func TestResumeStoredSessionPreservesOpenAICompatibleEndpoint(t *testing.T) {
 		},
 	)
 
-	model, cmd := model.resumeStoredSessionByID("session-1")
-	msg := cmd()
+	_, msg := runResumeStoredSessionCommand(t, model, "session-1")
 
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)

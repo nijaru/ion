@@ -17,9 +17,34 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 		return m, cmdError("session store not available")
 	}
 
-	resumed, err := m.Model.Store.ResumeSession(context.Background(), sessionID)
+	m.Model.RuntimeSwitchRequest++
+	switchID := m.Model.RuntimeSwitchRequest
+	m.Progress.Status = "Loading session..."
+	store := m.Model.Store
+	return m, func() tea.Msg {
+		cfg, err := m.storedSessionConfig(context.Background(), store, sessionID)
+		if err != nil {
+			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
+		}
+		return resumeSessionSelectedMsg{
+			switchID:  switchID,
+			sessionID: sessionID,
+			cfg:       cfg,
+		}
+	}
+}
+
+func (m Model) storedSessionConfig(
+	ctx context.Context,
+	store storage.Store,
+	sessionID string,
+) (*config.Config, error) {
+	resumed, err := store.ResumeSession(ctx, sessionID)
 	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resume session %s: %v", sessionID, err))
+		return nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+	}
+	if resumed == nil {
+		return nil, fmt.Errorf("failed to resume session %s: missing session", sessionID)
 	}
 	defer func() {
 		_ = resumed.Close()
@@ -28,15 +53,21 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 	meta := resumed.Meta()
 	provider, modelName := splitStoredSessionModel(meta.Model)
 	if provider == "" || modelName == "" {
-		return m, cmdError(fmt.Sprintf("session %s is missing provider/model metadata", sessionID))
+		return nil, fmt.Errorf("session %s is missing provider/model metadata", sessionID)
 	}
-
 	cfg, err := m.configForStoredSession(provider, modelName)
 	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to apply session metadata: %v", err))
+		return nil, fmt.Errorf("failed to apply session metadata: %w", err)
 	}
-	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
-	return m.resumeRuntimeCommand(cfg, notice, sessionID)
+	return cfg, nil
+}
+
+func (m Model) handleResumeSessionSelected(msg resumeSessionSelectedMsg) (Model, tea.Cmd) {
+	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+		return m, nil
+	}
+	notice := session.Entry{Role: session.System, Content: "Resumed session " + msg.sessionID}
+	return m.resumeRuntimeCommand(msg.cfg, notice, msg.sessionID)
 }
 
 func (m Model) configForStoredSession(provider, model string) (*config.Config, error) {
