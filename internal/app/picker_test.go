@@ -2228,7 +2228,7 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 		}
 	}
 	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model, cmd = resolveModelPickerSetup(t, model, cmd)
+	model, cmd = resolveSetupPromptSave(t, model, cmd)
 	model = resolveModelPickerLoad(t, model, cmd)
 
 	if model.Picker.Setup != nil {
@@ -2239,6 +2239,86 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	}
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
+func TestSetupPromptSaveReturnsBeforeCredentialWriteCompletes(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	oldSaveProviderKey := saveProviderKey
+	saveProviderKey = func(provider, key string) error {
+		close(started)
+		<-release
+		return nil
+	}
+	t.Cleanup(func() {
+		saveProviderKey = oldSaveProviderKey
+	})
+
+	model := readyModel(t)
+	model, cmd := model.openAPIKeyPrompt(
+		&config.Config{Provider: "openrouter"},
+		"openrouter",
+		presetPrimary,
+	)
+	if cmd != nil {
+		t.Fatalf("unexpected API key prompt command %T", cmd)
+	}
+	for _, r := range "sk-or-test" {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+
+	type promptResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan promptResult, 1)
+	go func() {
+		updated, nextCmd := model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		returned <- promptResult{model: updated, cmd: nextCmd}
+	}()
+
+	var result promptResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("setup prompt blocked on credential write")
+	}
+	if result.cmd == nil {
+		t.Fatal("setup prompt returned nil save command")
+	}
+	if result.model.Picker.Setup == nil || !result.model.Picker.Setup.saving {
+		t.Fatalf("setup prompt = %#v, want saving state", result.model.Picker.Setup)
+	}
+	select {
+	case <-started:
+		t.Fatal("credential write ran before Bubble Tea command execution")
+	default:
+	}
+
+	saved := make(chan tea.Msg, 1)
+	go func() {
+		saved <- result.cmd()
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("setup save command did not write credential")
+	}
+	select {
+	case msg := <-saved:
+		t.Fatalf("setup save returned before credential write completed: %T", msg)
+	default:
+	}
+
+	close(release)
+	msg := <-saved
+	if _, ok := msg.(setupPromptSavedMsg); !ok {
+		t.Fatalf("setup save result = %T, want setupPromptSavedMsg", msg)
 	}
 }
 
@@ -2325,6 +2405,7 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 		}
 	}
 	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = resolveSetupPromptSave(t, model, cmd)
 	model, cmd = resolveModelPickerSetup(t, model, cmd)
 	model = resolveModelPickerLoad(t, model, cmd)
 

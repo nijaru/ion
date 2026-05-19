@@ -303,6 +303,10 @@ func (m Model) renderSetupPrompt() string {
 		b.WriteString(m.shellPaddedLine(m.st.warn, prompt.err))
 		b.WriteString("\n")
 	}
+	if prompt.saving {
+		b.WriteString(m.shellPaddedLine(m.st.dim, "Saving..."))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.shellPaddedLine(lipgloss.NewStyle(), "> "+value))
 	b.WriteString("\n")
 	b.WriteString(m.shellPaddedLine(m.st.dim, help))

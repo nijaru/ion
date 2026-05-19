@@ -13,6 +13,12 @@ import (
 	"github.com/nijaru/ion/internal/providers"
 )
 
+var (
+	loadStableConfig = config.LoadStable
+	saveConfigFile   = config.Save
+	saveProviderKey  = credentials.SaveAPIKey
+)
+
 func (m Model) openAPIKeyPrompt(
 	cfg *config.Config,
 	provider string,
@@ -72,6 +78,9 @@ func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Picker.Setup == nil {
 		return m, nil
 	}
+	if m.Picker.Setup.saving {
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
 		m.Picker.Setup = nil
@@ -94,6 +103,9 @@ func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) handleSetupPromptPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if m.Picker.Setup == nil {
+		return m, nil
+	}
+	if m.Picker.Setup.saving {
 		return m, nil
 	}
 	content := inlinePasteText(msg.Content)
@@ -121,37 +133,83 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 			m.Picker.Setup.err = "API key cannot be empty"
 			return m, nil
 		}
-		if err := credentials.SaveAPIKey(prompt.provider, key); err != nil {
-			m.Picker.Setup.err = err.Error()
-			return m, nil
-		}
+		m.Picker.SetupSaveRequest++
+		requestID := m.Picker.SetupSaveRequest
+		prompt.saving = true
+		prompt.request = requestID
+		prompt.err = ""
+		m.Progress.Status = "Saving provider setup..."
 		cfg := prompt.cfg
-		m.Picker.Setup = nil
-		return m.openModelPickerForPreset(&cfg, prompt.preset)
+		provider := prompt.provider
+		preset := prompt.preset
+		return m, func() tea.Msg {
+			err := saveProviderKey(provider, key)
+			return setupPromptSavedMsg{
+				requestID: requestID,
+				cfg:       cfg,
+				preset:    preset,
+				err:       err,
+			}
+		}
 	case setupPromptEndpoint:
 		endpoint, err := normalizeOpenAICompatibleEndpoint(prompt.value)
 		if err != nil {
 			m.Picker.Setup.err = err.Error()
 			return m, nil
 		}
-		stable, err := config.LoadStable()
-		if err != nil {
-			m.Picker.Setup.err = err.Error()
-			return m, nil
-		}
-		stable.Endpoint = endpoint
-		if err := config.Save(stable); err != nil {
-			m.Picker.Setup.err = err.Error()
-			return m, nil
-		}
+		m.Picker.SetupSaveRequest++
+		requestID := m.Picker.SetupSaveRequest
+		prompt.saving = true
+		prompt.request = requestID
+		prompt.err = ""
+		m.Progress.Status = "Saving provider setup..."
 		cfg := prompt.cfg
 		cfg.Endpoint = endpoint
-		m.Picker.Setup = nil
-		return m.openModelPickerForPreset(&cfg, prompt.preset)
+		preset := prompt.preset
+		return m, func() tea.Msg {
+			stable, err := loadStableConfig()
+			if err != nil {
+				return setupPromptSavedMsg{requestID: requestID, err: err}
+			}
+			stable.Endpoint = endpoint
+			if err := saveConfigFile(stable); err != nil {
+				return setupPromptSavedMsg{requestID: requestID, err: err}
+			}
+			return setupPromptSavedMsg{
+				requestID: requestID,
+				cfg:       cfg,
+				preset:    preset,
+			}
+		}
 	default:
 		m.Picker.Setup = nil
 		return m, nil
 	}
+}
+
+func (m Model) handleSetupPromptSaved(msg setupPromptSavedMsg) (Model, tea.Cmd) {
+	if msg.requestID == 0 || msg.requestID != m.Picker.SetupSaveRequest {
+		return m, nil
+	}
+	m.Picker.SetupSaveRequest = 0
+	if m.Picker.Setup == nil || m.Picker.Setup.request != msg.requestID {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.Picker.Setup.saving = false
+		m.Picker.Setup.request = 0
+		m.Picker.Setup.err = msg.err.Error()
+		if isLocalBusyStatus(m.Progress.Status) {
+			m.Progress.Status = ""
+		}
+		return m, nil
+	}
+	m.Picker.Setup = nil
+	if isLocalBusyStatus(m.Progress.Status) {
+		m.Progress.Status = ""
+	}
+	cfg := msg.cfg
+	return m.openModelPickerForPreset(&cfg, msg.preset)
 }
 
 func trimLastRune(value string) string {
