@@ -18,9 +18,6 @@ import (
 )
 
 func (b *Backend) Open(ctx context.Context) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	providerName := b.Provider()
 	modelName := b.Model()
 	cfg := b.configSnapshot()
@@ -34,13 +31,22 @@ func (b *Backend) Open(ctx context.Context) error {
 		return fmt.Errorf("No model configured. Use /model. Set ION_MODEL for scripts.")
 	}
 
-	if b.ionStore != nil {
-		if cs, ok := b.ionStore.(interface{ Canto() *session.SQLiteStore }); ok {
-			b.store = cs.Canto()
+	b.mu.Lock()
+	ionStore := b.ionStore
+	store := b.store
+	cwd := ""
+	if b.sess != nil {
+		cwd = b.sess.Meta().CWD
+	}
+	b.mu.Unlock()
+
+	if ionStore != nil {
+		if cs, ok := ionStore.(interface{ Canto() *session.SQLiteStore }); ok {
+			store = cs.Canto()
 		}
 	}
 
-	if b.store == nil {
+	if store == nil {
 		return fmt.Errorf("ion store not initialized")
 	}
 
@@ -51,10 +57,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	p = configureRetryProvider(p, cfg, b.events)
 	p = useProviderRetryOnly(p)
 	p = observeProviderRequests(p)
-	b.compactLLM = p
-	b.llm = p
 
-	cwd := b.Meta()["cwd"]
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
@@ -65,7 +68,6 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 
 	registry := tool.NewRegistry()
-	b.tools = registry
 
 	registry.Register(tools.NewBashWithEnvironment(cwd, b.executorEnvironmentPolicy()))
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
@@ -93,18 +95,18 @@ func (b *Backend) Open(ctx context.Context) error {
 		registry.Register(NewSubagentTool(b, personas))
 	}
 
-	b.steering = newSteeringMutator()
+	steering := newSteeringMutator()
 
 	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
-		agent.WithMutators(b.steering),
+		agent.WithMutators(steering),
 	}
 	harness, err := cantofw.NewHarness("ion").
 		Instructions(instructions).
 		Model(modelName).
 		Provider(p).
 		Registry(registry).
-		SessionStore(b.store).
+		SessionStore(store).
 		AgentOptions(agentOptions...).
 		RuntimeOptions(runtime.WithOverflowRecovery(
 			p.IsContextOverflow,
@@ -128,7 +130,15 @@ func (b *Backend) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	b.mu.Lock()
+	b.store = store
+	b.compactLLM = p
+	b.llm = p
+	b.tools = registry
+	b.steering = steering
 	b.harness = harness
+	b.mu.Unlock()
 
 	return nil
 }

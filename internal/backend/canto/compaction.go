@@ -38,7 +38,7 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
 	store := b.store
 	provider := b.compactLLM
-	sessionID := b.ID()
+	sessionID := b.idLocked()
 	model := b.Model()
 	limit := b.ContextLimit()
 	b.mu.Unlock()
@@ -66,7 +66,7 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
-	sessionID := b.ID()
+	sessionID := b.idLocked()
 	store := b.store
 	b.mu.Unlock()
 
