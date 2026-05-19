@@ -49,6 +49,26 @@ func (s *blockingSubmitSession) SubmitTurn(ctx context.Context, turn string) err
 	return nil
 }
 
+type blockingSteeringSession struct {
+	steeringStubSession
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSteeringSession) SteerTurn(
+	ctx context.Context,
+	text string,
+) (session.SteeringResult, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return session.SteeringResult{}, ctx.Err()
+	}
+	s.steers = append(s.steers, text)
+	return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+}
+
 func TestSubmitTextReturnsBeforeBackendSubmitCompletes(t *testing.T) {
 	sess := &blockingSubmitSession{
 		stubSession: stubSession{events: make(chan session.Event)},
@@ -116,6 +136,75 @@ func TestSubmitTextReturnsBeforeBackendSubmitCompletes(t *testing.T) {
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "slow turn" {
 		t.Fatalf("submits = %#v, want slow turn", sess.submits)
+	}
+}
+
+func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
+	sess := &blockingSteeringSession{
+		steeringStubSession: steeringStubSession{
+			stubSession: stubSession{events: make(chan session.Event)},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{BusyInput: "steer"}
+	model.Input.Composer.SetValue("steer slowly")
+	model.InFlight.Thinking = true
+	model.InFlight.PendingTools = map[string]*session.Entry{
+		"call-1": {Role: session.Tool, Title: "bash"},
+	}
+
+	type busyResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan busyResult, 1)
+	go func() {
+		updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		returned <- busyResult{model: updated.(Model), cmd: cmd}
+	}()
+
+	var result busyResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("busy input blocked on steering")
+	}
+	if got := result.model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared while steering command runs", got)
+	}
+	select {
+	case <-sess.started:
+		t.Fatal("steering ran before Bubble Tea command execution")
+	default:
+	}
+
+	steered := make(chan tea.Msg, 1)
+	go func() {
+		steered <- result.cmd()
+	}()
+	select {
+	case <-sess.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("steering command did not call SteerTurn")
+	}
+	select {
+	case msg := <-steered:
+		t.Fatalf("steering command returned before SteerTurn completed: %T", msg)
+	default:
+	}
+
+	close(sess.release)
+	msg := <-steered
+	resultMsg, ok := msg.(steeringResultMsg)
+	if !ok || resultMsg.err != nil ||
+		resultMsg.result.Outcome != session.SteeringAccepted {
+		t.Fatalf("steering result = %#v, want accepted", msg)
+	}
+	if len(sess.steers) != 1 || sess.steers[0] != "steer slowly" {
+		t.Fatalf("steers = %#v, want steer slowly", sess.steers)
 	}
 }
 
@@ -905,6 +994,19 @@ func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 
+	if cmd == nil {
+		t.Fatal("expected steering command")
+	}
+	msg := cmd()
+	result, ok := msg.(steeringResultMsg)
+	if !ok {
+		t.Fatalf("steering command returned %T, want steeringResultMsg", msg)
+	}
+	if result.err != nil || result.result.Outcome != session.SteeringAccepted {
+		t.Fatalf("steering result = %#v, want accepted", result)
+	}
+	updated, cmd = model.Update(result)
+	model = updated.(Model)
 	if len(sess.steers) != 1 || sess.steers[0] != "use the smaller test" {
 		t.Fatalf("steers = %#v, want submitted steering", sess.steers)
 	}
@@ -916,6 +1018,38 @@ func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected steering notice command")
+	}
+}
+
+func TestBusyInputQueuesWhenSteeringDeclines(t *testing.T) {
+	sess := &steeringStubSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+		result:      session.SteeringResult{Outcome: session.SteeringQueued},
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{BusyInput: "steer"}
+	model.Input.Composer.SetValue("queue instead")
+	model.InFlight.Thinking = true
+	model.InFlight.PendingTools = map[string]*session.Entry{
+		"call-1": {Role: session.Tool, Title: "bash"},
+	}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	result, ok := cmd().(steeringResultMsg)
+	if !ok {
+		t.Fatalf("steering command returned unexpected result")
+	}
+	updated, cmd = model.Update(result)
+	model = updated.(Model)
+
+	if len(model.InFlight.QueuedTurns) != 1 ||
+		model.InFlight.QueuedTurns[0] != "queue instead" {
+		t.Fatalf("queued turns = %#v, want fallback queue", model.InFlight.QueuedTurns)
+	}
+	if cmd == nil {
+		t.Fatal("expected queued follow-up notice command")
 	}
 }
 

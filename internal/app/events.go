@@ -200,22 +200,35 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 		!m.Progress.Compacting &&
 		len(m.InFlight.PendingTools) > 0 {
 		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
-			result, err := steering.SteerTurn(context.Background(), text)
-			if err == nil && result.Outcome == session.SteeringAccepted {
-				m.resetComposerDraft()
-				return m, m.printEntries(session.Entry{
-					Role:    session.System,
-					Content: "Steering current turn",
-				})
-			}
+			m.resetComposerDraft()
+			return m, steerTurnCmd(steering, text)
 		}
 	}
 
+	return m.queueBusyInput(text)
+}
+
+func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := steering.SteerTurn(context.Background(), text)
+		return steeringResultMsg{text: text, result: result, err: err}
+	}
+}
+
+func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: "Steering current turn",
+		})
+	}
+	return m.queueBusyInput(msg.text)
+}
+
+func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
 	m.resetComposerDraft()
-	return m, m.printEntries(
-		session.Entry{Role: session.System, Content: "Queued follow-up"},
-	)
+	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
