@@ -2322,6 +2322,56 @@ func TestSetupPromptSaveReturnsBeforeCredentialWriteCompletes(t *testing.T) {
 	}
 }
 
+func TestAPIKeySetupDoesNotExposeSecretInTUIOrSessionStorage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	const secret = "sk-or-secret-test"
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+	model, cmd := model.openAPIKeyPrompt(
+		&config.Config{Provider: "openrouter"},
+		"openrouter",
+		presetPrimary,
+	)
+	if cmd != nil {
+		t.Fatalf("unexpected API key prompt command %T", cmd)
+	}
+	for _, r := range secret {
+		model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("typing returned command %T", cmd)
+		}
+	}
+
+	renderedPrompt := ansi.Strip(model.renderSetupPrompt())
+	if strings.Contains(renderedPrompt, secret) {
+		t.Fatalf("setup prompt rendered secret:\n%s", renderedPrompt)
+	}
+	if !strings.Contains(renderedPrompt, strings.Repeat("•", len([]rune(secret)))) {
+		t.Fatalf("setup prompt did not render masked key:\n%s", renderedPrompt)
+	}
+
+	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = resolveSetupPromptSave(t, model, cmd)
+	if model.Picker.Setup != nil {
+		t.Fatal("setup prompt should close after saving key")
+	}
+	if got, ok := credentials.LookupAPIKey("openrouter"); !ok || got != secret {
+		t.Fatalf("saved credential = (%q, %v), want secret true", got, ok)
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("API key setup printed a transcript entry")
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("API key setup appended session storage events: %#v", storageSess.appends)
+	}
+	if cmd == nil {
+		t.Fatal("expected model picker follow-up command after API key save")
+	}
+}
+
 func TestSetupPromptPasteUpdatesPromptWithoutChangingComposer(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("draft")
