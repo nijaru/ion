@@ -107,6 +107,13 @@ type modelPickerSetupResolvedMsg struct {
 	err       error
 }
 
+type setupPromptSavedMsg struct {
+	requestID uint64
+	cfg       config.Config
+	preset    modelPreset
+	err       error
+}
+
 type sessionCompactedMsg struct {
 	notice string
 }
@@ -233,6 +240,8 @@ type setupPromptState struct {
 	preset       modelPreset
 	cfg          config.Config
 	err          string
+	saving       bool
+	request      uint64
 }
 
 type progressMode int
@@ -313,6 +322,7 @@ type PickerState struct {
 	ModelLoadRequest         uint64
 	SessionLoadRequest       uint64
 	ProviderSelectionRequest uint64
+	SetupSaveRequest         uint64
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -783,6 +793,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelPickerSetupResolvedMsg:
 		return m.handleModelPickerSetupResolved(msg)
+
+	case setupPromptSavedMsg:
+		return m.handleSetupPromptSaved(msg)
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)

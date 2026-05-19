@@ -295,7 +295,8 @@ func (m Model) localCommandBusy() bool {
 	return m.InFlight.Thinking ||
 		m.Progress.Compacting ||
 		m.Model.RuntimeSwitchRequest != 0 ||
-		m.Picker.ProviderSelectionRequest != 0
+		m.Picker.ProviderSelectionRequest != 0 ||
+		m.Picker.SetupSaveRequest != 0
 }
 
 func (m Model) localCommandBusyMessage(action string) string {
@@ -304,6 +305,9 @@ func (m Model) localCommandBusyMessage(action string) string {
 	}
 	if m.Picker.ProviderSelectionRequest != 0 {
 		return "Wait for the provider check to finish before " + action + "."
+	}
+	if m.Picker.SetupSaveRequest != 0 {
+		return "Wait for provider setup to finish before " + action + "."
 	}
 	return "Finish or cancel the current turn before " + action + "."
 }

@@ -338,6 +338,20 @@ func resolveModelPickerSetup(t *testing.T, model Model, cmd tea.Cmd) (Model, tea
 	return next, nextCmd
 }
 
+func resolveSetupPromptSave(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return model, nil
+	}
+	msg := cmd()
+	updated, nextCmd := model.Update(msg)
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("expected Model after setup prompt save")
+	}
+	return next, nextCmd
+}
+
 func stubModelCatalog(
 	t *testing.T,
 	fn func(context.Context, *config.Config) ([]registry.ModelMetadata, error),
