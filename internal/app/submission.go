@@ -52,6 +52,7 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
+	draft := text
 	text = m.expandMarkers(text)
 
 	if !strings.HasPrefix(text, "/") {
@@ -78,31 +79,48 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.Progress.Status = ""
 	m.Progress.LastError = ""
 	m.InFlight.Thinking = true
-	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
-		m.clearActiveTurnState(true)
-		m.Progress.Compacting = false
-		m.Progress.Mode = stateReady
-		m.Progress.Status = ""
-		m.Progress.StatusUpdatedAt = time.Time{}
-		m.Progress.LastError = ""
-		m.Progress.TurnStartedAt = time.Time{}
-		return m, cmdError(sessionErrorDisplay(err))
-	}
-
-	historyText, historyChanged := m.appendInputHistory(text)
-	var historyCmd tea.Cmd
-	if historyChanged {
-		historyCmd = m.persistInputHistory(context.Background(), historyText)
-	}
 	m.resetComposerDraft()
+	return m, submitTurnCmd(m.Model.Session, text, draft)
+}
 
-	if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
-		return m, sequenceCmds(
-			persistErrorCmd("persist routing decision", err),
-			historyCmd,
-		)
+func submitTurnCmd(sess session.AgentSession, text, draft string) tea.Cmd {
+	return func() tea.Msg {
+		if err := sess.SubmitTurn(context.Background(), text); err != nil {
+			return turnSubmitResultMsg{text: text, draft: draft, err: err}
+		}
+		return turnSubmitResultMsg{text: text, draft: draft}
 	}
-	return m, historyCmd
+}
+
+func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil {
+		historyText, historyChanged := m.appendInputHistory(msg.text)
+		var historyCmd tea.Cmd
+		if historyChanged {
+			historyCmd = m.persistInputHistory(context.Background(), historyText)
+		}
+		if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
+			return m, sequenceCmds(
+				persistErrorCmd("persist routing decision", err),
+				historyCmd,
+			)
+		}
+		if msg.rearm {
+			return m, sequenceCmds(historyCmd, m.awaitSessionEvent())
+		}
+		return m, historyCmd
+	}
+	m.clearActiveTurnState(true)
+	m.Progress.Compacting = false
+	m.Progress.Mode = stateReady
+	m.Progress.Status = ""
+	m.Progress.StatusUpdatedAt = time.Time{}
+	m.Progress.LastError = ""
+	m.Progress.TurnStartedAt = time.Time{}
+	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
+		m.setComposerDraft(msg.draft)
+	}
+	return m, cmdError(sessionErrorDisplay(msg.err))
 }
 
 func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
@@ -126,7 +144,18 @@ func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
 		if cmd == nil {
 			return next, next.awaitSessionEvent()
 		}
-		return next, tea.Sequence(cmd, next.awaitSessionEvent())
+		return next, rearmSubmitResultCmd(cmd)
 	}
 	return next, sequenceCmds(cmd, next.awaitSessionEvent())
+}
+
+func rearmSubmitResultCmd(submitCmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		msg := submitCmd()
+		if result, ok := msg.(turnSubmitResultMsg); ok {
+			result.rearm = true
+			return result
+		}
+		return msg
+	}
 }

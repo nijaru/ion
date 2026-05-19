@@ -15,6 +15,110 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
+func applySubmitResult(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd()
+	result, ok := msg.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T, want turnSubmitResultMsg", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("submit command error = %v", result.err)
+	}
+	updated, nextCmd := model.Update(result)
+	return updated.(Model), nextCmd
+}
+
+type blockingSubmitSession struct {
+	stubSession
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSubmitSession) SubmitTurn(ctx context.Context, turn string) error {
+	close(s.started)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	s.submits = append(s.submits, turn)
+	return nil
+}
+
+func TestSubmitTextReturnsBeforeBackendSubmitCompletes(t *testing.T) {
+	sess := &blockingSubmitSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	model := New(
+		stubBackend{
+			sess:     sess,
+			provider: "openai",
+			model:    "model-a",
+		},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	type submitResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan submitResult, 1)
+	go func() {
+		updated, cmd := model.submitText("slow turn")
+		returned <- submitResult{model: updated, cmd: cmd}
+	}()
+
+	var result submitResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("submitText blocked on backend SubmitTurn")
+	}
+	if !result.model.InFlight.Thinking {
+		t.Fatal("submitText did not mark turn in flight")
+	}
+	select {
+	case <-sess.started:
+		t.Fatal("backend SubmitTurn ran before Bubble Tea command execution")
+	default:
+	}
+
+	submitted := make(chan tea.Msg, 1)
+	go func() {
+		submitted <- result.cmd()
+	}()
+	select {
+	case <-sess.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("submit command did not call backend SubmitTurn")
+	}
+	select {
+	case msg := <-submitted:
+		t.Fatalf("submit command returned before backend completed: %T", msg)
+	default:
+	}
+
+	close(sess.release)
+	msg := <-submitted
+	if submit, ok := msg.(turnSubmitResultMsg); !ok || submit.err != nil {
+		t.Fatalf("submit result = %#v, want success", msg)
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "slow turn" {
+		t.Fatalf("submits = %#v, want slow turn", sess.submits)
+	}
+}
+
 func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{}
@@ -38,8 +142,9 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	model.Progress.TotalCost = 0.012
 	model.Progress.ReasoningEffort = "medium"
 
-	updated, _ := model.submitText("route this")
+	updated, cmd := model.submitText("route this")
 	model = updated
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 {
 		t.Fatalf("submits = %v, want one turn", sess.submits)
@@ -92,11 +197,12 @@ func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 	updated, cmd := model.submitText("keep going")
 	model = updated
 
-	if len(sess.submits) != 1 || sess.submits[0] != "keep going" {
-		t.Fatalf("submitted turns = %#v, want keep going", sess.submits)
-	}
+	model, cmd = applySubmitResult(t, model, cmd)
 	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "persist routing decision") {
 		t.Fatalf("error = %v, want routing persistence error", err)
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "keep going" {
+		t.Fatalf("submitted turns = %#v, want keep going", sess.submits)
 	}
 	if model.App.PrintedTranscript {
 		t.Fatal("submit should wait for ordered session event before printing user message")
@@ -281,9 +387,7 @@ func TestSubmitComposerConsumesPasteMarkersAfterAcceptedPrompt(t *testing.T) {
 	updated, cmd := model.submitComposer()
 	model = updated
 
-	if cmd != nil {
-		t.Fatalf("command = %T, want no immediate transcript print", cmd())
-	}
+	model, _ = applySubmitResult(t, model, cmd)
 	if model.App.PrintedTranscript {
 		t.Fatal("accepted prompt should wait for ordered session event before printing user message")
 	}
@@ -342,8 +446,9 @@ func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 		nil,
 	)
 
-	updated, _ := model.submitText("hello")
+	updated, cmd := model.submitText("hello")
 	model = updated
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "hello" {
 		t.Fatalf("submitted turns = %#v, want hello", sess.submits)
@@ -662,8 +767,9 @@ func TestSubmitTextDoesNotBlockOnPriorTurnBudget(t *testing.T) {
 	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
 	model.Progress.CurrentTurnCost = 0.011
 
-	updated, _ := model.submitText("try again smaller")
+	updated, cmd := model.submitText("try again smaller")
 	model = updated
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 {
 		t.Fatalf("submitted turns = %v, want one", sess.submits)
@@ -747,13 +853,31 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	if nextCmd == nil {
 		t.Fatal("expected queued turn submission command")
 	}
+	submitMsg := nextCmd()
+	submitResult, ok := submitMsg.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("queued follow-up command returned %T, want turnSubmitResultMsg", submitMsg)
+	}
+	if submitResult.err != nil || !submitResult.rearm {
+		t.Fatalf("queued submit result = %#v, want successful rearmed submit", submitResult)
+	}
+	next, nextCmd = model.Update(submitResult)
+	model = next.(Model)
+	if nextCmd == nil {
+		t.Fatal("expected queued submit result to re-arm session event wait")
+	}
+	eventResult := make(chan tea.Msg, 1)
+	go func() {
+		eventResult <- nextCmd()
+	}()
+	sess.events <- session.UserMessage{Message: "follow up"}
+	rawEventMsg := <-eventResult
+	eventMsg, ok := rawEventMsg.(sessionEventMsg)
+	if !ok {
+		t.Fatalf("queued follow-up command returned %T, want sessionEventMsg", rawEventMsg)
+	}
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
-	}
-	sess.events <- session.UserMessage{Message: "follow up"}
-	eventMsg, ok := nextCmd().(sessionEventMsg)
-	if !ok {
-		t.Fatalf("queued follow-up command returned %T, want sessionEventMsg", eventMsg)
 	}
 	if _, ok := eventMsg.event.(session.UserMessage); !ok {
 		t.Fatalf("queued follow-up event = %T, want UserMessage", eventMsg.event)
@@ -944,6 +1068,22 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("progress mode before submit result = %v, want ionizing", model.Progress.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd()
+	result, ok := msg.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T, want turnSubmitResultMsg", msg)
+	}
+	if result.err == nil || result.err.Error() != "backend unavailable" {
+		t.Fatalf("submit result error = %v, want backend unavailable", result.err)
+	}
+	updated, cmd = model.Update(result)
+	model = updated.(Model)
 	if model.Progress.Mode != stateReady {
 		t.Fatalf("progress mode = %v, want ready after immediate rejection", model.Progress.Mode)
 	}
@@ -958,9 +1098,6 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	}
 	if len(sess.submits) != 0 {
 		t.Fatalf("submit count = %d, want 0 after immediate failure", len(sess.submits))
-	}
-	if cmd == nil {
-		t.Fatal("expected local error command")
 	}
 	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "backend unavailable" {
 		t.Fatalf("local error = %v, want backend unavailable", err)
@@ -1002,8 +1139,9 @@ func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
 	model.Progress.Status = "Running bash..."
 	model.Input.Composer.SetValue("try again")
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if model.Progress.Mode != stateIonizing {
 		t.Fatalf("progress mode = %v, want ionizing", model.Progress.Mode)

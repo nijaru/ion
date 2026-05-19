@@ -15,7 +15,7 @@ import (
 )
 
 type stubBackend struct {
-	sess         *stubSession
+	sess         session.AgentSession
 	provider     string
 	model        string
 	providerSet  bool
