@@ -107,6 +107,13 @@ type queuedTurnMsg struct {
 	rearmSessionEvents bool
 }
 
+type turnSubmitResultMsg struct {
+	text  string
+	draft string
+	err   error
+	rearm bool
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -752,6 +759,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case queuedTurnMsg:
 		return m.handleQueuedTurn(msg)
+
+	case turnSubmitResultMsg:
+		return m.handleTurnSubmitResult(msg)
 
 	case tea.PasteMsg:
 		if m.Picker.Session != nil {

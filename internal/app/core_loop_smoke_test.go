@@ -21,8 +21,9 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	model, sess, store, stored := newCoreLoopSmokeModel(t)
 
 	model.Input.Composer.SetValue("run smoke")
-	updated, _ := model.Update(sendKeyMsg())
+	updated, cmd := model.Update(sendKeyMsg())
 	model = updated.(Model)
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "run smoke" {
 		t.Fatalf("submitted turns = %#v, want run smoke", sess.submits)
@@ -91,8 +92,9 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 	model = updated.(Model)
 
 	model.Input.Composer.SetValue("inspect workspace")
-	updated, _ = model.Update(sendKeyMsg())
+	updated, cmd := model.Update(sendKeyMsg())
 	model = updated.(Model)
+	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "inspect workspace" {
 		t.Fatalf("submitted turns = %#v, want inspect workspace", sess.submits)

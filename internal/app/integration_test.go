@@ -46,8 +46,9 @@ func TestIntegrationFullLoop(t *testing.T) {
 	// 4. Submit a turn
 	model.Input.Composer.SetValue("hi")
 	// simulate ctrl+s (m.sendKey)
-	updated, _ := model.Update(sendKeyMsg())
+	updated, cmd := model.Update(sendKeyMsg())
 	model = updated.(Model)
+	model, _ = applySubmitResult(t, model, cmd)
 
 	// Wait for async backend script to finish
 	timeout := time.After(500 * time.Millisecond)
