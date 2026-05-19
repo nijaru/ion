@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/session"
@@ -232,6 +234,57 @@ func TestTokenUsageSeparatesSessionTotalsFromContextEstimate(t *testing.T) {
 			model.Progress.TotalCost,
 			model.Progress.CurrentTurnCost,
 		)
+	}
+}
+
+func TestTokenUsagePersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, cmd := model.Update(session.TokenUsage{Input: 10, Output: 2, Cost: 0.01})
+	model = next.(Model)
+
+	if model.Progress.TokensSent != 10 || model.Progress.TokensReceived != 2 {
+		t.Fatalf(
+			"token totals = %d/%d, want 10/2",
+			model.Progress.TokensSent,
+			model.Progress.TokensReceived,
+		)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 1)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		usage, ok := event.(storage.TokenUsage)
+		if !ok {
+			t.Fatalf("append event = %#v, want token usage", event)
+		}
+		if usage.Input != 10 || usage.Output != 2 || usage.Cost != 0.01 {
+			t.Fatalf("token usage = %#v, want 10/2/0.01", usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("token persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("token persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one token usage append", storageSess.appends)
 	}
 }
 
@@ -825,6 +878,71 @@ func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
 		t.Fatalf("status = %q, want Thinking...", model.Progress.Status)
 	}
 	requireSequenceCmd(t, cmd)
+	msgs := runSequencePrefix(t, cmd, 1)
+	if len(msgs) != 1 {
+		t.Fatalf("persistence messages = %d, want 1", len(msgs))
+	}
+	if err := localErrorFromMsg(t, msgs[0]); !strings.Contains(err.Error(), "persist status: disk full") {
+		t.Fatalf("persistence error = %v, want status append failure", err)
+	}
+}
+
+type blockingAppendStorage struct {
+	stubStorageSession
+	entered chan any
+	release chan struct{}
+}
+
+func (s *blockingAppendStorage) Append(ctx context.Context, event any) error {
+	s.entered <- event
+	<-s.release
+	return s.stubStorageSession.Append(ctx, event)
+}
+
+func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, cmd := model.Update(session.StatusChanged{Status: "Thinking..."})
+	model = next.(Model)
+
+	if model.Progress.Status != "Thinking..." {
+		t.Fatalf("status = %q, want Thinking...", model.Progress.Status)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends during Update = %#v, want none", storageSess.appends)
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 1)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		if status, ok := event.(storage.Status); !ok || status.Status != "Thinking..." {
+			t.Fatalf("append event = %#v, want status", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("status persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one status append", storageSess.appends)
+	}
 }
 
 func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {

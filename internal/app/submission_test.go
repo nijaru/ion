@@ -572,15 +572,15 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	model.InFlight.ReasonBuf = "reasoning"
 	model.InFlight.AgentCommitted = true
 
-	updated, _ := model.handleSessionEvent(session.TokenUsage{
+	updated, cmd := model.handleSessionEvent(session.TokenUsage{
 		Input:  1000,
 		Output: 100,
 		Cost:   0.011,
 	})
 	model = updated
 
-	if sess.cancels != 1 {
-		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	if sess.cancels != 0 {
+		t.Fatalf("cancels before command execution = %d, want 0", sess.cancels)
 	}
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
@@ -597,6 +597,16 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 		model.InFlight.AgentCommitted ||
 		model.Progress.LastToolUseID != "" {
 		t.Fatalf("in-flight state not cleared after budget cancel: %#v", model.InFlight)
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends before command execution = %#v, want none", storageSess.appends)
+	}
+	if cmd == nil {
+		t.Fatal("expected cancellation command")
+	}
+	runSequencePrefix(t, cmd, 4)
+	if sess.cancels != 1 {
+		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
 	}
 	var decision storage.RoutingDecision
 	var system storage.System
@@ -635,13 +645,28 @@ func TestTokenUsagePersistenceErrorStillCancelsOverBudgetTurn(t *testing.T) {
 	updated, cmd := model.handleSessionEvent(session.TokenUsage{Cost: 0.011})
 	model = updated
 
-	if sess.cancels != 1 {
-		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	if sess.cancels != 0 {
+		t.Fatalf("cancels before command execution = %d, want 0", sess.cancels)
 	}
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
 	}
-	requireSequenceCmd(t, cmd)
+	if cmd == nil {
+		t.Fatal("expected cancellation command")
+	}
+	msgs := runSequencePrefix(t, cmd, 4)
+	if sess.cancels != 1 {
+		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
+	}
+	var persistErrors int
+	for _, msg := range msgs {
+		if _, ok := msg.(localErrorMsg); ok {
+			persistErrors++
+		}
+	}
+	if persistErrors == 0 {
+		t.Fatalf("command messages = %#v, want persistence error", msgs)
+	}
 }
 
 func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {
@@ -740,6 +765,13 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected cancellation print command")
 	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancels before command execution = %d, want 0", sess.cancels)
+	}
+	runCommandTree(t, cmd)
+	if sess.cancels != 1 {
+		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
+	}
 	if !model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("expected cancel to drain late turn events")
 	}
@@ -826,6 +858,33 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	model = updated.(Model)
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "fresh" {
 		t.Fatalf("fresh turn delta not accepted: %#v", model.InFlight.Pending)
+	}
+}
+
+func TestCancelTurnCmdCallsBackend(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+
+	msg := cancelTurnCmd(sess)()
+	result, ok := msg.(turnCancelResultMsg)
+	if !ok {
+		t.Fatalf("cancel command message = %T, want turnCancelResultMsg", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("cancel command error = %v", result.err)
+	}
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+}
+
+func TestCancelTurnCmdReportsMissingSession(t *testing.T) {
+	msg := cancelTurnCmd(nil)()
+	result, ok := msg.(turnCancelResultMsg)
+	if !ok {
+		t.Fatalf("cancel command message = %T, want turnCancelResultMsg", msg)
+	}
+	if result.err == nil {
+		t.Fatal("cancel command error = nil, want missing-session error")
 	}
 }
 
@@ -1174,9 +1233,13 @@ func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"queued"}
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
 
+	if cmd == nil {
+		t.Fatal("expected cancel command")
+	}
+	runCommandTree(t, cmd)
 	if sess.cancels != 1 {
 		t.Fatalf("cancels = %d, want 1", sess.cancels)
 	}

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"time"
 
@@ -233,14 +232,11 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
 		p.Status = msg.Status
 	}
-	if err := m.persistEntry(storage.Status{
+	return m, sequenceCmds(m.persistEntryCmd("persist status", storage.Status{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(msg.Timestamp),
-	}); err != nil {
-		return m, m.persistErrorAndAwait("persist status", err)
-	}
-	return m, m.awaitSessionEvent()
+	}), m.awaitSessionEvent())
 }
 
 func sessionErrorDisplay(err error) string {
@@ -265,28 +261,24 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	m.Progress.CurrentTurnInput += msg.Input
 	m.Progress.CurrentTurnOutput += msg.Output
 	m.Progress.CurrentTurnCost += msg.Cost
-	var cmds []tea.Cmd
-	if err := m.persistEntry(storage.TokenUsage{
+	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", storage.TokenUsage{
 		Type:   "token_usage",
 		Input:  msg.Input,
 		Output: msg.Output,
 		Cost:   msg.Cost,
 		TS:     entryUnix(msg.Timestamp),
-	}); err != nil {
-		cmds = append(cmds, persistErrorCmd("persist token usage", err))
-	}
+	})}
 	if reason := m.configuredBudgetStopReason(); reason != "" &&
 		reason != m.Progress.BudgetStopReason {
 		m.Progress.BudgetStopReason = reason
-		if err := m.persistEntry(m.routingDecision("stop", "budget_limit", reason)); err != nil {
-			cmds = append(cmds, persistErrorCmd("persist routing stop", err))
-		}
+		cmds = append(
+			cmds,
+			m.persistEntryCmd(
+				"persist routing stop",
+				m.routingDecision("stop", "budget_limit", reason),
+			),
+		)
 		if m.InFlight.Thinking {
-			if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
-				cmds = append(cmds, persistErrorCmd("cancel over-budget turn", err))
-				cmds = append(cmds, m.awaitSessionEvent())
-				return m, sequenceCmds(cmds...)
-			}
 			m.clearActiveTurnState(true)
 			m.InFlight.DrainUntilTurnStarted = true
 			m.InFlight.DrainStartedAt = time.Now()
@@ -297,14 +289,17 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				Timestamp: msg.Timestamp,
 				Content:   "Canceled: " + reason,
 			}
-			if err := m.persistEntry(storage.System{
+			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", storage.System{
 				Type:    "system",
 				Content: entry.Content,
 				TS:      entryUnix(msg.Timestamp),
-			}); err != nil {
-				cmds = append(cmds, persistErrorCmd("persist budget cancellation", err))
-			}
-			cmds = append([]tea.Cmd{m.printEntries(entry)}, cmds...)
+			}))
+			cmds = append([]tea.Cmd{
+				tea.Batch(
+					m.printEntries(entry),
+					cancelTurnCmd(m.Model.Session),
+				),
+			}, cmds...)
 			cmds = append(cmds, m.awaitSessionEvent())
 			return m, sequenceCmds(cmds...)
 		}

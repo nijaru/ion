@@ -158,6 +158,10 @@ type steeringResultMsg struct {
 	err    error
 }
 
+type turnCancelResultMsg struct {
+	err error
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -842,6 +846,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case steeringResultMsg:
 		return m.handleSteeringResult(msg)
+
+	case turnCancelResultMsg:
+		return m.handleTurnCancelResult(msg)
 
 	case tea.PasteMsg:
 		if m.Picker.Session != nil {

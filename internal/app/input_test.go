@@ -349,8 +349,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should remain clear while running")
 	}
-	if sess.cancels != 1 {
-		t.Fatalf("cancel count = %d, want 1", sess.cancels)
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
 	}
 	if model.InFlight.Thinking {
 		t.Fatal("thinking should be false after ctrl+c cancel")
@@ -360,6 +360,10 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	}
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
+	}
+	runCommandTree(t, cmd)
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
 	}
 }
 
@@ -501,8 +505,8 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("esc while running should print durable cancellation")
 	}
-	if sess.cancels != 1 {
-		t.Fatalf("cancel count = %d, want 1", sess.cancels)
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
 	}
 	if model.InFlight.Thinking {
 		t.Fatal("thinking should be false after esc cancel")
@@ -516,6 +520,10 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	system, ok := stored.appends[0].(storage.System)
 	if !ok || system.Content != "Canceled by user" {
 		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
+	}
+	runCommandTree(t, cmd)
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
 	}
 }
 
