@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -12,9 +13,6 @@ import (
 )
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
-	if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
-		return m, persistErrorCmd("cancel turn", err)
-	}
 	m.clearActiveTurnState(true)
 	m.InFlight.DrainUntilTurnStarted = true
 	m.InFlight.DrainStartedAt = time.Now()
@@ -28,9 +26,31 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 		Content: entry.Content,
 		TS:      now(),
 	}); err != nil {
-		return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist cancellation", err))
+		return m, tea.Batch(
+			tea.Sequence(m.printEntries(entry), persistErrorCmd("persist cancellation", err)),
+			cancelTurnCmd(m.Model.Session),
+		)
 	}
-	return m, m.printEntries(entry)
+	return m, tea.Batch(m.printEntries(entry), cancelTurnCmd(m.Model.Session))
+}
+
+func cancelTurnCmd(sess session.AgentSession) tea.Cmd {
+	return func() tea.Msg {
+		if sess == nil {
+			return turnCancelResultMsg{err: errors.New("session unavailable")}
+		}
+		if err := sess.CancelTurn(context.Background()); err != nil {
+			return turnCancelResultMsg{err: err}
+		}
+		return turnCancelResultMsg{}
+	}
+}
+
+func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, persistErrorCmd("cancel turn", msg.err)
+	}
+	return m, nil
 }
 
 func (m *Model) clearActiveTurnState(clearQueued bool) {

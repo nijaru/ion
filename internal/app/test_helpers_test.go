@@ -168,6 +168,31 @@ func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	return messages
 }
 
+func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
+	t.Helper()
+	if cmd == nil || limit <= 0 {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	value := reflect.ValueOf(msg)
+	cmdType := reflect.TypeOf((tea.Cmd)(nil))
+	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType {
+		return []tea.Msg{msg}
+	}
+	var messages []tea.Msg
+	for i := 0; i < value.Len() && i < limit; i++ {
+		child, ok := value.Index(i).Interface().(tea.Cmd)
+		if !ok {
+			t.Fatalf("sequence element %d = %T, want tea.Cmd", i, value.Index(i).Interface())
+		}
+		messages = append(messages, runCommandTree(t, child)...)
+	}
+	return messages
+}
+
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
 func (s *stubSession) Resume(ctx context.Context, id string) error { return nil }
 func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {

@@ -23,6 +23,19 @@ func (m Model) persistErrorAndAwait(action string, err error) tea.Cmd {
 	return sequenceCmds(persistErrorCmd(action, err), m.awaitSessionEvent())
 }
 
+func (m Model) persistEntryCmd(action string, entry any) tea.Cmd {
+	storageSession := m.Model.Storage
+	if storageSession == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := storageSession.Append(context.Background(), entry); err != nil {
+			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
+		}
+		return nil
+	}
+}
+
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	filtered := cmds[:0]
 	for _, cmd := range cmds {
