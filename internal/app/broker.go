@@ -213,7 +213,9 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 
 func isLocalBusyStatus(status string) bool {
 	trimmed := strings.TrimSpace(status)
-	return trimmed == "Switching runtime..." || isCompactingStatus(trimmed)
+	return trimmed == "Switching runtime..." ||
+		trimmed == "Loading session..." ||
+		isCompactingStatus(trimmed)
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
