@@ -24,6 +24,9 @@ the latest session.
 
 - Ion is the product: CLI/TUI UX, slash commands, provider/model selection,
   settings/state, display projection, workspace policy, and coding-tool UX.
+- Ion's product roadmap is Pi -> Pi+: stabilize a Pi-level core first, then
+  add extra capabilities only when they make the coding workflow better without
+  destabilizing the core loop.
 - Canto is the framework: agent loop, ordered runtime events, durable session
   history, provider-visible context, tool lifecycle, retry/cancel settlement,
   provider transforms, compaction, and harness primitives.
