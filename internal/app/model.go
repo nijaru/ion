@@ -114,6 +114,15 @@ type setupPromptSavedMsg struct {
 	err       error
 }
 
+type settingsCommandMsg struct {
+	requestID     uint64
+	summary       string
+	transition    runtimeTransition
+	hasTransition bool
+	notice        string
+	err           error
+}
+
 type sessionCompactedMsg struct {
 	notice string
 }
@@ -288,6 +297,7 @@ type ModelState struct {
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
+	SettingsRequest      uint64
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -796,6 +806,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupPromptSavedMsg:
 		return m.handleSetupPromptSaved(msg)
+
+	case settingsCommandMsg:
+		return m.handleSettingsCommandResult(msg)
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)

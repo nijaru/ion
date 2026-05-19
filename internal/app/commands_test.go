@@ -1412,6 +1412,76 @@ func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandSaveReturnsBeforeConfigWriteCompletes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	oldSaveConfigFile := saveConfigFile
+	started := make(chan struct{})
+	release := make(chan struct{})
+	saveConfigFile = func(cfg *config.Config) error {
+		close(started)
+		<-release
+		return oldSaveConfigFile(cfg)
+	}
+	t.Cleanup(func() {
+		saveConfigFile = oldSaveConfigFile
+	})
+
+	type settingsResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	model := readyModel(t)
+	returned := make(chan settingsResult, 1)
+	go func() {
+		updated, nextCmd := model.handleCommand("/settings read full")
+		returned <- settingsResult{model: updated, cmd: nextCmd}
+	}()
+
+	var result settingsResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("settings command blocked on config write")
+	}
+	if result.cmd == nil {
+		t.Fatal("settings command returned nil save command")
+	}
+	if result.model.Model.SettingsRequest == 0 {
+		t.Fatal("settings command did not mark settings request active")
+	}
+	if result.model.Progress.Status != "Saving settings..." {
+		t.Fatalf("status = %q, want Saving settings...", result.model.Progress.Status)
+	}
+	select {
+	case <-started:
+		t.Fatal("config write ran before Bubble Tea command execution")
+	default:
+	}
+
+	saved := make(chan tea.Msg, 1)
+	go func() {
+		saved <- result.cmd()
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("settings save command did not write config")
+	}
+	select {
+	case msg := <-saved:
+		t.Fatalf("settings save returned before config write completed: %T", msg)
+	default:
+	}
+
+	close(release)
+	msg := <-saved
+	if _, ok := msg.(settingsCommandMsg); !ok {
+		t.Fatalf("settings save result = %T, want settingsCommandMsg", msg)
+	}
+}
+
 func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1425,22 +1495,22 @@ func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected read setting command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 	model, cmd = model.handleCommand("/settings write summary")
 	if cmd == nil {
 		t.Fatal("expected write setting command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 	model, cmd = model.handleCommand("/settings bash summary")
 	if cmd == nil {
 		t.Fatal("expected bash setting command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 	model, cmd = model.handleCommand("/settings thinking collapsed")
 	if cmd == nil {
 		t.Fatal("expected thinking setting command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 
 	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
 	if err != nil {
@@ -1494,7 +1564,7 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected settings command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 
 	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
 	if err != nil {
@@ -1550,7 +1620,7 @@ func TestSettingsCommandPreservesRuntimeSelection(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected settings command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 
 	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
 	if err != nil {
@@ -1613,7 +1683,7 @@ func TestSettingsCommandPreservesFastRuntimeSelection(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected settings command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 
 	if model.Model.Config == nil ||
 		model.Model.Config.Model != "gpt-4.1" ||
@@ -1649,7 +1719,7 @@ func TestSettingsToolAutoClearsStableOverride(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected settings command")
 	}
-	_ = cmd()
+	model, _ = resolveSettingsCommand(t, model, cmd)
 
 	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
 	if err != nil {
