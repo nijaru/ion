@@ -101,6 +101,9 @@ func (m Model) openModelPickerForPreset(
 	if !providers.SupportsModelListing(cfg) {
 		return m, cmdError(providerModelEntryNotice(cfg.Provider))
 	}
+	if providers.IsOpenAICompatible(cfg.Provider) {
+		return m.beginModelPickerSetupCheck(cfg, preset)
+	}
 	setup, err := providerSetupPrompt(context.Background(), cfg)
 	if err != nil {
 		return m, cmdError(err.Error())
@@ -112,6 +115,79 @@ func (m Model) openModelPickerForPreset(
 		return m.openEndpointPrompt(cfg, preset)
 	}
 	return m.openReadyModelPickerForPreset(cfg, preset)
+}
+
+func (m Model) beginModelPickerSetupCheck(
+	cfg *config.Config,
+	preset modelPreset,
+) (Model, tea.Cmd) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	m.Picker.ModelLoadRequest++
+	requestID := m.Picker.ModelLoadRequest
+	items := m.modelPickerFavoriteItems(cfg, nil)
+	m.clearProgressError()
+	m.Picker.Overlay = &pickerOverlayState{
+		title: "Pick " + presetTitle(preset) + " model: " + modelPickerProviderTitle(
+			cfg.Provider,
+		),
+		items:    clonePickerItems(items),
+		filtered: clonePickerItems(items),
+		index:    pickerIndex(items, configuredModelForPreset(cfg, preset)),
+		purpose:  pickerPurposeModel,
+		preset:   preset,
+		cfg:      cfg,
+		loading:  true,
+		request:  requestID,
+		setup:    true,
+	}
+	return m, checkModelPickerSetup(requestID, cfg, preset)
+}
+
+func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset modelPreset) tea.Cmd {
+	cfgCopy := config.Config{}
+	if cfg != nil {
+		cfgCopy = *cfg
+	}
+	return func() tea.Msg {
+		setup, err := providerSetupPrompt(context.Background(), &cfgCopy)
+		return modelPickerSetupResolvedMsg{
+			requestID: requestID,
+			cfg:       cfgCopy,
+			preset:    preset,
+			setup:     setup,
+			err:       err,
+		}
+	}
+}
+
+func (m Model) handleModelPickerSetupResolved(
+	msg modelPickerSetupResolvedMsg,
+) (Model, tea.Cmd) {
+	overlay := m.Picker.Overlay
+	if overlay == nil ||
+		overlay.purpose != pickerPurposeModel ||
+		!overlay.setup ||
+		overlay.request != msg.requestID ||
+		msg.requestID != m.Picker.ModelLoadRequest {
+		return m, nil
+	}
+	if msg.err != nil {
+		overlay.loading = false
+		overlay.setup = false
+		overlay.err = msg.err.Error()
+		return m, nil
+	}
+	cfg := msg.cfg
+	switch msg.setup {
+	case setupPromptAPIKey:
+		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
+	case setupPromptEndpoint:
+		return m.openEndpointPrompt(&cfg, msg.preset)
+	default:
+		return m.openReadyModelPickerForPreset(&cfg, msg.preset)
+	}
 }
 
 func (m Model) beginProviderSelection(
@@ -397,6 +473,9 @@ func (m Model) startupPickerCmd() tea.Cmd {
 		overlay.request == 0 ||
 		overlay.cfg == nil {
 		return nil
+	}
+	if overlay.setup {
+		return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.modelPreset())
 	}
 	return loadModelPickerItems(overlay.request, overlay.cfg)
 }

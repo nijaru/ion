@@ -99,6 +99,14 @@ type modelPickerLoadedMsg struct {
 	err       error
 }
 
+type modelPickerSetupResolvedMsg struct {
+	requestID uint64
+	cfg       config.Config
+	preset    modelPreset
+	setup     setupPromptKind
+	err       error
+}
+
 type sessionCompactedMsg struct {
 	notice string
 }
@@ -205,6 +213,7 @@ type pickerOverlayState struct {
 	loading  bool
 	err      string
 	request  uint64
+	setup    bool
 }
 
 type completionState struct {
@@ -771,6 +780,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case providerSelectionResolvedMsg:
 		return m.handleProviderSelectionResolved(msg)
+
+	case modelPickerSetupResolvedMsg:
+		return m.handleModelPickerSetupResolved(msg)
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)
