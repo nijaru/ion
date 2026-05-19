@@ -12,52 +12,96 @@ import (
 )
 
 func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
+	turn, err := b.prepareSubmittedTurn(ctx, input)
+	if err != nil {
+		return err
+	}
+
+	b.wg.Go(func() {
+		b.runTurn(turn.ctx, turn.id, input, turn.cancel, turn.streamer)
+	})
+
+	return nil
+}
+
+type submittedTurn struct {
+	id       uint64
+	ctx      context.Context
+	cancel   context.CancelFunc
+	streamer promptStreamer
+}
+
+func (b *Backend) prepareSubmittedTurn(
+	ctx context.Context,
+	input string,
+) (submittedTurn, error) {
 	b.mu.Lock()
 	if b.harness == nil {
 		b.mu.Unlock()
-		return fmt.Errorf("backend not initialized")
+		return submittedTurn{}, fmt.Errorf("backend not initialized")
 	}
 	if b.turn.active {
 		b.mu.Unlock()
-		return fmt.Errorf("turn already in progress")
+		return submittedTurn{}, fmt.Errorf("turn already in progress")
 	}
-	if lazy, ok := b.sess.(interface {
-		Ensure(context.Context) (storage.Session, error)
-	}); ok {
-		sess, err := lazy.Ensure(ctx)
-		if err != nil {
-			b.mu.Unlock()
-			return fmt.Errorf("open session: %w", err)
-		}
-		b.sess = sess
-	}
-
+	sess := b.sess
 	sessionID := b.ID()
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	if b.ionStore != nil {
-		if err := b.ionStore.UpdateSession(ctx, storage.SessionInfo{
-			ID:          sessionID,
-			Model:       storageModelName(b.Provider(), b.Model()),
-			LastPreview: input,
-			Title:       input,
-		}); err != nil {
-			b.mu.Unlock()
-			return fmt.Errorf("update session metadata: %w", err)
-		}
-	}
-
+	ionStore := b.ionStore
+	modelName := storageModelName(b.Provider(), b.Model())
 	turnCtx, cancel := context.WithCancel(ctx)
 	turnID := b.turn.start(cancel)
 	harnessSession := b.harness.Session(sessionID)
 	b.mu.Unlock()
 
-	b.wg.Go(func() {
-		b.runTurn(turnCtx, turnID, input, cancel, harnessSession)
-	})
+	abort := func(err error) (submittedTurn, error) {
+		cancel()
+		b.finishTurnIfActive(turnID)
+		return submittedTurn{}, err
+	}
 
-	return nil
+	if lazy, ok := sess.(interface {
+		Ensure(context.Context) (storage.Session, error)
+	}); ok {
+		materialized, err := lazy.Ensure(turnCtx)
+		if err != nil {
+			return abort(fmt.Errorf("open session: %w", err))
+		}
+		sess = materialized
+		b.mu.Lock()
+		if b.turn.activeFor(turnID) {
+			b.sess = materialized
+			sessionID = b.ID()
+			if sessionID == "" {
+				sessionID = "default"
+			}
+			harnessSession = b.harness.Session(sessionID)
+		}
+		b.mu.Unlock()
+	}
+
+	if ionStore != nil {
+		if err := ionStore.UpdateSession(turnCtx, storage.SessionInfo{
+			ID:          sessionID,
+			Model:       modelName,
+			LastPreview: input,
+			Title:       input,
+		}); err != nil {
+			return abort(fmt.Errorf("update session metadata: %w", err))
+		}
+	}
+	if !b.isActiveTurn(turnID) {
+		return abort(context.Canceled)
+	}
+
+	return submittedTurn{
+		id:       turnID,
+		ctx:      turnCtx,
+		cancel:   cancel,
+		streamer: harnessSession,
+	}, nil
 }
 
 type promptStreamer interface {
@@ -259,6 +303,12 @@ func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.turn.finish(turnID)
+}
+
+func (b *Backend) isActiveTurn(turnID uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.turn.activeFor(turnID)
 }
 
 func (b *Backend) finishActiveTurn(turnID uint64) {

@@ -68,6 +68,90 @@ func (s *eventTypeFailingCantoStore) Fork(
 	return sess.WithWriter(s), nil
 }
 
+type failingMetadataStore struct {
+	err error
+}
+
+func (s failingMetadataStore) OpenSession(
+	context.Context,
+	string,
+	string,
+	string,
+) (storage.Session, error) {
+	return nil, errors.New("unexpected OpenSession")
+}
+
+func (s failingMetadataStore) ResumeSession(context.Context, string) (storage.Session, error) {
+	return nil, errors.New("unexpected ResumeSession")
+}
+
+func (s failingMetadataStore) ListSessions(context.Context, string) ([]storage.SessionInfo, error) {
+	return nil, errors.New("unexpected ListSessions")
+}
+
+func (s failingMetadataStore) GetRecentSession(
+	context.Context,
+	string,
+) (*storage.SessionInfo, error) {
+	return nil, errors.New("unexpected GetRecentSession")
+}
+
+func (s failingMetadataStore) AddInput(context.Context, string, string) error {
+	return errors.New("unexpected AddInput")
+}
+
+func (s failingMetadataStore) GetInputs(context.Context, string, int) ([]string, error) {
+	return nil, errors.New("unexpected GetInputs")
+}
+
+func (s failingMetadataStore) UpdateSession(context.Context, storage.SessionInfo) error {
+	return s.err
+}
+
+func (s failingMetadataStore) Close() error {
+	return nil
+}
+
+type blockingMetadataStore struct {
+	failingMetadataStore
+	started chan struct{}
+}
+
+func (s blockingMetadataStore) UpdateSession(ctx context.Context, _ storage.SessionInfo) error {
+	close(s.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type staticStorageSession struct {
+	id   string
+	meta storage.Metadata
+}
+
+func (s staticStorageSession) ID() string { return s.id }
+
+func (s staticStorageSession) Meta() storage.Metadata { return s.meta }
+
+func (s staticStorageSession) Append(context.Context, any) error {
+	return errors.New("unexpected Append")
+}
+
+func (s staticStorageSession) Entries(context.Context) ([]ionsession.Entry, error) {
+	return nil, errors.New("unexpected Entries")
+}
+
+func (s staticStorageSession) LastStatus(context.Context) (string, error) {
+	return "", errors.New("unexpected LastStatus")
+}
+
+func (s staticStorageSession) Usage(context.Context) (int, int, float64, error) {
+	return 0, 0, 0, errors.New("unexpected Usage")
+}
+
+func (s staticStorageSession) Close() error {
+	return nil
+}
+
 func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())
@@ -128,6 +212,87 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	if after[0].LastPreview != "hi" {
 		t.Fatalf("last preview = %q, want hi", after[0].LastPreview)
 	}
+}
+
+func TestSubmitTurnMetadataUpdateFailureDoesNotLeaveActiveTurn(t *testing.T) {
+	updateErr := errors.New("metadata update failed")
+	b := New()
+	b.harness = &cantofw.Harness{}
+	b.SetStore(failingMetadataStore{err: updateErr})
+	b.SetSession(staticStorageSession{
+		id: "session-id",
+		meta: storage.Metadata{
+			ID:     "session-id",
+			CWD:    "/tmp/ion-test",
+			Model:  "openai/model-a",
+			Branch: "main",
+		},
+	})
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+
+	err := b.SubmitTurn(t.Context(), "hi")
+	if !errors.Is(err, updateErr) {
+		t.Fatalf("SubmitTurn error = %v, want metadata update failure", err)
+	}
+	if b.turn.active {
+		t.Fatal("metadata update failure left a turn active")
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestCancelTurnDuringMetadataUpdateDoesNotWaitForStore(t *testing.T) {
+	b := New()
+	b.harness = &cantofw.Harness{}
+	started := make(chan struct{})
+	b.SetStore(blockingMetadataStore{started: started})
+	b.SetSession(staticStorageSession{
+		id: "session-id",
+		meta: storage.Metadata{
+			ID:     "session-id",
+			CWD:    "/tmp/ion-test",
+			Model:  "openai/model-a",
+			Branch: "main",
+		},
+	})
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- b.SubmitTurn(t.Context(), "hi")
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for metadata update")
+	}
+
+	cancelDone := make(chan error, 1)
+	go func() {
+		cancelDone <- b.CancelTurn(t.Context())
+	}()
+
+	select {
+	case err := <-cancelDone:
+		if err != nil {
+			t.Fatalf("cancel turn: %v", err)
+		}
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("CancelTurn waited for metadata update")
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitTurn error = %v, want context canceled", err)
+		}
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for SubmitTurn to exit after cancel")
+	}
+	if b.turn.active {
+		t.Fatal("canceled metadata update left a turn active")
+	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
