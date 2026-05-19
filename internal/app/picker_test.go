@@ -359,6 +359,132 @@ func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
 	}
 }
 
+type blockingSessionListStore struct {
+	resumeOnlyStore
+	started  chan struct{}
+	release  chan struct{}
+	sessions []storage.SessionInfo
+}
+
+func (s *blockingSessionListStore) ListSessions(
+	ctx context.Context,
+	cwd string,
+) ([]storage.SessionInfo, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.sessions, nil
+}
+
+func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
+	store := &blockingSessionListStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		sessions: []storage.SessionInfo{{
+			ID:          "sess-1",
+			Title:       "Resume task",
+			LastPreview: "continue work",
+			Model:       "openai/model-a",
+		}},
+	}
+	model := readyModel(t)
+	model.Model.Store = store
+
+	type pickerResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan pickerResult, 1)
+	go func() {
+		updated, cmd := model.openSessionPicker()
+		returned <- pickerResult{model: updated, cmd: cmd}
+	}()
+
+	var result pickerResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("openSessionPicker blocked on ListSessions")
+	}
+	if result.model.Picker.Session == nil || !result.model.Picker.Session.loading {
+		t.Fatalf("session picker state = %#v, want loading", result.model.Picker.Session)
+	}
+	select {
+	case <-store.started:
+		t.Fatal("ListSessions ran before Bubble Tea command execution")
+	default:
+	}
+
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- result.cmd()
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session picker command did not call ListSessions")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("session picker command returned before ListSessions completed: %T", msg)
+	default:
+	}
+
+	close(store.release)
+	msg := <-loaded
+	loadedMsg, ok := msg.(sessionPickerLoadedMsg)
+	if !ok || loadedMsg.err != nil {
+		t.Fatalf("session picker result = %#v, want loaded sessions", msg)
+	}
+	if loadedMsg.requestID != result.model.Picker.Session.request {
+		t.Fatalf(
+			"session picker request = %d, want %d",
+			loadedMsg.requestID,
+			result.model.Picker.Session.request,
+		)
+	}
+	updated, cmd := result.model.Update(loadedMsg)
+	result.model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("loaded session picker command = %T, want nil", cmd)
+	}
+	if result.model.Picker.Session == nil ||
+		len(result.model.Picker.Session.items) != 1 ||
+		result.model.Picker.Session.items[0].info.ID != "sess-1" {
+		t.Fatalf("session picker items = %#v", result.model.Picker.Session)
+	}
+}
+
+func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.SessionLoadRequest = 2
+	model.Picker.Session = &sessionPickerState{
+		loading: true,
+		request: 2,
+	}
+
+	updated, cmd := model.Update(sessionPickerLoadedMsg{
+		requestID: 1,
+		sessions: []storage.SessionInfo{{
+			ID:    "stale",
+			Title: "stale session",
+		}},
+	})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("stale session picker command = %T, want nil", cmd)
+	}
+	if model.Picker.Session == nil ||
+		!model.Picker.Session.loading ||
+		len(model.Picker.Session.items) != 0 {
+		t.Fatalf("session picker state = %#v, want unchanged loading state", model.Picker.Session)
+	}
+}
+
 func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
 	items := []sessionPickerItem{
 		{info: storage.SessionInfo{

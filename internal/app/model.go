@@ -124,12 +124,20 @@ type sessionPickerItem struct {
 	info storage.SessionInfo
 }
 
+type sessionPickerLoadedMsg struct {
+	requestID uint64
+	sessions  []storage.SessionInfo
+	err       error
+}
+
 type sessionPickerState struct {
 	items    []sessionPickerItem
 	filtered []sessionPickerItem
 	index    int
 	query    string
 	err      string
+	loading  bool
+	request  uint64
 }
 
 type pickerPurpose int
@@ -276,10 +284,11 @@ type InFlightState struct {
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
-	Overlay          *pickerOverlayState
-	Session          *sessionPickerState
-	Setup            *setupPromptState
-	ModelLoadRequest uint64
+	Overlay            *pickerOverlayState
+	Session            *sessionPickerState
+	Setup              *setupPromptState
+	ModelLoadRequest   uint64
+	SessionLoadRequest uint64
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -744,6 +753,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)
+
+	case sessionPickerLoadedMsg:
+		return m.handleSessionPickerLoaded(msg)
 
 	case sessionCompactedMsg:
 		return m.handleSessionCompacted(msg)
