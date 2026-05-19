@@ -1358,6 +1358,104 @@ func TestOpenModelPickerDoesNotFetchBeforeReturning(t *testing.T) {
 	}
 }
 
+func TestOpenModelPickerReturnsBeforeEndpointProbeCompletes(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3.6:27b"}]}`))
+	}))
+	defer srv.Close()
+
+	endpoint := srv.URL + "/v1"
+	stubModelCatalog(
+		t,
+		func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+			if cfg.Endpoint != endpoint {
+				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
+			}
+			return []registry.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+		},
+	)
+
+	model := readyModel(t)
+	type pickerResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan pickerResult, 1)
+	go func() {
+		updated, cmd := model.openModelPickerWithConfig(&config.Config{
+			Provider: "openai-compatible",
+			Model:    "qwen3.6:27b",
+			Endpoint: endpoint,
+		})
+		returned <- pickerResult{model: updated, cmd: cmd}
+	}()
+
+	var result pickerResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("openModelPickerWithConfig blocked on endpoint probe")
+	}
+	if result.cmd == nil {
+		t.Fatal("expected model picker setup command")
+	}
+	if result.model.Picker.Overlay == nil ||
+		!result.model.Picker.Overlay.loading ||
+		!result.model.Picker.Overlay.setup {
+		t.Fatalf("picker overlay = %#v, want setup loading model picker", result.model.Picker.Overlay)
+	}
+	select {
+	case <-started:
+		t.Fatal("endpoint probe ran before Bubble Tea command execution")
+	default:
+	}
+
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- result.cmd()
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model picker setup command did not probe endpoint")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("model picker setup command returned before probe completed: %T", msg)
+	default:
+	}
+
+	close(release)
+	msg := <-loaded
+	resolved, ok := msg.(modelPickerSetupResolvedMsg)
+	if !ok || resolved.err != nil || resolved.setup != 0 {
+		t.Fatalf("model picker setup result = %#v, want ready provider", msg)
+	}
+	updated, nextCmd := result.model.Update(resolved)
+	model = updated.(Model)
+	model = resolveModelPickerLoad(t, model, nextCmd)
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
 func TestOpenModelPickerUsesFreshCacheWithoutRefresh(t *testing.T) {
 	withOpenRouterKey(t)
 	oldListModelsForConfig := listModelsForConfig
@@ -2130,6 +2228,7 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 		}
 	}
 	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = resolveModelPickerSetup(t, model, cmd)
 	model = resolveModelPickerLoad(t, model, cmd)
 
 	if model.Picker.Setup != nil {
@@ -2226,6 +2325,7 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 		}
 	}
 	model, cmd = model.handleSetupPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = resolveModelPickerSetup(t, model, cmd)
 	model = resolveModelPickerLoad(t, model, cmd)
 
 	stable, err := config.LoadStable()

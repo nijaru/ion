@@ -243,6 +243,10 @@ func TestWithModelPickerDownOpenAICompatibleEndpointOpensSetupPrompt(t *testing.
 			Endpoint: "http://127.0.0.1:1/v1",
 		}).
 		WithModelPicker()
+	model, cmd := resolveModelPickerSetup(t, model, model.startupPickerCmd())
+	if cmd != nil {
+		t.Fatalf("setup prompt returned unexpected command %T", cmd)
+	}
 	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
 		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)
 	}
