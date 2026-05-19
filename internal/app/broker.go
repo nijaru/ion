@@ -139,13 +139,11 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	}
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.printEntries(entry))
-	if err := m.persistEntry(storage.System{
+	cmds = append(cmds, m.persistEntryCmd("persist stream close error", storage.System{
 		Type:    "system",
 		Content: entry.Content,
 		TS:      now(),
-	}); err != nil {
-		cmds = append(cmds, persistErrorCmd("persist stream close error", err))
-	}
+	}))
 	return m, sequenceCmds(cmds...)
 }
 
@@ -161,9 +159,10 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	var cmds []tea.Cmd
 	if limit, ok := classifyProviderLimitError(err); ok {
 		displayErr = limit.display()
-		if err := m.persistEntry(m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
-			cmds = append(cmds, persistErrorCmd("persist routing stop", err))
-		}
+		cmds = append(
+			cmds,
+			m.persistEntryCmd("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)),
+		)
 	}
 	m.Progress.LastError = displayErr
 	m.Progress.LastTurnSummary = turnSummary{}
@@ -180,13 +179,11 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	printErr := m.printEntries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
 	if awaitTerminal {
-		if err := m.persistEntry(storage.System{
+		cmds = append(cmds, m.persistEntryCmd("persist session error", storage.System{
 			Type:    "system",
 			Content: entry.Content,
 			TS:      now(),
-		}); err != nil {
-			cmds = append(cmds, persistErrorCmd("persist session error", err))
-		}
+		}))
 	}
 	if !awaitTerminal {
 		return m, sequenceCmds(cmds...)
