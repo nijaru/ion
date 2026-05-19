@@ -79,10 +79,13 @@ func (b *Backend) ContextLimit() int {
 }
 
 func (b *Backend) ToolSurface() backend.ToolSurface {
-	if b.tools == nil {
+	b.mu.Lock()
+	tools := b.tools
+	b.mu.Unlock()
+	if tools == nil {
 		return backend.ToolSurface{}
 	}
-	names := b.tools.Names()
+	names := tools.Names()
 	threshold := prompt.DefaultLazyThreshold
 	environment := ""
 	if slices.Contains(names, "bash") {
@@ -99,8 +102,11 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	status := "Ready"
-	if b.sess != nil {
-		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
+	b.mu.Lock()
+	sess := b.sess
+	b.mu.Unlock()
+	if sess != nil {
+		if s, err := sess.LastStatus(context.Background()); err == nil && s != "" {
 			status = s
 		} else {
 			status = "Connected via Canto"
@@ -113,7 +119,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 }
 
 func (b *Backend) Session() ionsession.AgentSession {
-	return b
+	return &Session{backend: b}
 }
 
 func (b *Backend) SetStore(s storage.Store) {
@@ -128,11 +134,15 @@ func (b *Backend) SetSession(s storage.Session) {
 	b.sess = s
 }
 
-func (b *Backend) Events() <-chan ionsession.Event {
-	return b.events
+func (s *Session) Events() <-chan ionsession.Event {
+	return s.backend.events
 }
 
-func (b *Backend) ID() string {
+func (s *Session) ID() string {
+	return s.backend.id()
+}
+
+func (b *Backend) id() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.idLocked()
@@ -145,7 +155,11 @@ func (b *Backend) idLocked() string {
 	return ""
 }
 
-func (b *Backend) Meta() map[string]string {
+func (s *Session) Meta() map[string]string {
+	return s.backend.meta()
+}
+
+func (b *Backend) meta() map[string]string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.sess != nil {

@@ -178,10 +178,10 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	if storage.IsMaterialized(storageSession) {
 		t.Fatal("lazy session materialized during backend open")
@@ -194,10 +194,10 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 		t.Fatalf("sessions before submit = %#v, want none", before)
 	}
 
-	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	if !storage.IsMaterialized(storageSession) {
 		t.Fatal("lazy session not materialized by submit")
@@ -230,7 +230,7 @@ func TestSubmitTurnMetadataUpdateFailureDoesNotLeaveActiveTurn(t *testing.T) {
 	})
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
 
-	err := b.SubmitTurn(t.Context(), "hi")
+	err := b.Session().SubmitTurn(t.Context(), "hi")
 	if !errors.Is(err, updateErr) {
 		t.Fatalf("SubmitTurn error = %v, want metadata update failure", err)
 	}
@@ -258,7 +258,7 @@ func TestCancelTurnDuringMetadataUpdateDoesNotWaitForStore(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- b.SubmitTurn(t.Context(), "hi")
+		done <- b.Session().SubmitTurn(t.Context(), "hi")
 	}()
 
 	select {
@@ -269,7 +269,7 @@ func TestCancelTurnDuringMetadataUpdateDoesNotWaitForStore(t *testing.T) {
 
 	cancelDone := make(chan error, 1)
 	go func() {
-		cancelDone <- b.CancelTurn(t.Context())
+		cancelDone <- b.Session().CancelTurn(t.Context())
 	}()
 
 	select {
@@ -338,16 +338,16 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "write the smoke file"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "write the smoke file"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	events := b.Events()
+	events := b.Session().Events()
 	var (
 		seenWriteStart  bool
 		seenWriteResult bool
@@ -444,12 +444,12 @@ func TestSubmitTurnEmptyAssistantResponseEmitsSessionError(t *testing.T) {
 		Model:    "model-a",
 		Endpoint: "http://localhost:8080/v1",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "return nothing"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "return nothing"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
@@ -457,7 +457,7 @@ func TestSubmitTurnEmptyAssistantResponseEmitsSessionError(t *testing.T) {
 	timeout := time.After(backendEventWaitTimeout)
 	for {
 		select {
-		case ev, ok := <-b.Events():
+		case ev, ok := <-b.Session().Events():
 			if !ok {
 				t.Fatal("event stream closed before empty-response turn finished")
 			}
@@ -524,16 +524,16 @@ func TestSubmitTurnBashEmitsToolOutputDeltas(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run the streaming command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run the streaming command"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	events := b.Events()
+	events := b.Session().Events()
 	var (
 		deltas []string
 		result string
@@ -629,16 +629,16 @@ func TestSubmitTurnStreamingDeltaPersistenceErrorFinishesTurn(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run the streaming command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run the streaming command"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	events := b.Events()
+	events := b.Session().Events()
 	var sawError bool
 	timeout := time.After(backendEventWaitTimeout)
 	for {
@@ -717,16 +717,16 @@ func TestSubmitTurnBashTruncatesStreamedToolResult(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run the large streaming command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run the large streaming command"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	events := b.Events()
+	events := b.Session().Events()
 	var (
 		deltaBytes int
 		resultErr  error
@@ -812,13 +812,13 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	turnCtx, cancel := context.WithCancel(ctx)
-	if err := b.SubmitTurn(turnCtx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(turnCtx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
@@ -835,7 +835,7 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("provider stream context was not canceled")
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 }
 
 func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
@@ -874,12 +874,12 @@ func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 	select {
@@ -887,13 +887,13 @@ func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for provider stream")
 	}
-	if err := b.CancelTurn(ctx); err != nil {
+	if err := b.Session().CancelTurn(ctx); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
 
 	for {
 		select {
-		case ev := <-b.Events():
+		case ev := <-b.Session().Events():
 			switch msg := ev.(type) {
 			case ionsession.AgentMessage:
 				t.Fatalf("late assistant reached Ion after cancel: %#v", msg)
@@ -963,16 +963,16 @@ func TestSubmitTurnCancelDuringToolSuppressesLateToolEvents(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run a long command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run a long command"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	events := b.Events()
+	events := b.Session().Events()
 	seenTool := false
 	for !seenTool {
 		select {
@@ -988,7 +988,7 @@ func TestSubmitTurnCancelDuringToolSuppressesLateToolEvents(t *testing.T) {
 		}
 	}
 
-	if err := b.CancelTurn(ctx); err != nil {
+	if err := b.Session().CancelTurn(ctx); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
 	waitForTurnFinishedAfterError(t, events)
@@ -1070,14 +1070,14 @@ func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if err := b.SubmitTurn(turnCtx, "first"); err != nil {
+	if err := b.Session().SubmitTurn(turnCtx, "first"); err != nil {
 		t.Fatalf("submit first turn: %v", err)
 	}
 
@@ -1087,13 +1087,13 @@ func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 		t.Fatal("timed out waiting for provider stream")
 	}
 
-	err = b.SubmitTurn(ctx, "second")
+	err = b.Session().SubmitTurn(ctx, "second")
 	if err == nil || !strings.Contains(err.Error(), "turn already in progress") {
 		t.Fatalf("second SubmitTurn error = %v, want turn already in progress", err)
 	}
 
 	cancel()
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 }
 
 func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) {
@@ -1134,12 +1134,12 @@ func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) 
 			ContextLimit: 100,
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "cancel before compaction finishes"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "cancel before compaction finishes"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 	select {
@@ -1147,10 +1147,10 @@ func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for proactive compaction token check")
 	}
-	if err := b.CancelTurn(ctx); err != nil {
+	if err := b.Session().CancelTurn(ctx); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 }
 
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
@@ -1161,7 +1161,7 @@ func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- b.Resume(ctx, "session-id")
+		done <- b.Session().Resume(ctx, "session-id")
 	}()
 
 	select {
@@ -1177,10 +1177,10 @@ func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 func TestCloseIsIdempotent(t *testing.T) {
 	b := New()
 
-	if err := b.Close(); err != nil {
+	if err := b.Session().Close(); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	if err := b.Session().Close(); err != nil {
 		t.Fatalf("second close: %v", err)
 	}
 }
@@ -1230,20 +1230,20 @@ func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run a failing command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run a failing command"); err != nil {
 		t.Fatalf("submit first turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
-	if err := b.SubmitTurn(ctx, "can you continue after that failure?"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "can you continue after that failure?"); err != nil {
 		t.Fatalf("submit follow-up turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 3 {
@@ -1304,24 +1304,24 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "first turn fails"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "first turn fails"); err != nil {
 		t.Fatalf("submit failing turn: %v", err)
 	}
-	errEvent := waitForSessionError(t, b.Events())
+	errEvent := waitForSessionError(t, b.Session().Events())
 	if !strings.Contains(errEvent.Err.Error(), providerErr.Error()) {
 		t.Fatalf("error = %v, want provider error", errEvent.Err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
-	if err := b.SubmitTurn(ctx, "second turn recovers"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "second turn recovers"); err != nil {
 		t.Fatalf("submit recovery turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 2 {
@@ -1370,11 +1370,11 @@ func TestRunTurnReportsStreamEndWithoutTerminalEvent(t *testing.T) {
 		}),
 	)
 
-	errEvent := waitForSessionError(t, b.Events())
+	errEvent := waitForSessionError(t, b.Session().Events())
 	if !strings.Contains(errEvent.Err.Error(), "turn stream ended without terminal session event") {
 		t.Fatalf("error = %v, want missing terminal event", errEvent.Err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 	if b.turn.active {
 		t.Fatal("turn remained active after missing terminal stream error")
 	}
@@ -1397,7 +1397,7 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 		}),
 	)
 
-	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("cancellation stream error did not emit TurnFinished")
 	}
 	assertNoBackendEvent(t, b)
@@ -1444,13 +1444,13 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 	case <-time.After(backendEventWaitTimeout):
 		t.Fatal("timed out waiting for prompt stream")
 	}
-	if err := b.CancelTurn(t.Context()); err != nil {
+	if err := b.Session().CancelTurn(t.Context()); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
 	assertNoBackendEvent(t, b)
 
 	close(release)
-	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("canceled stream settlement did not emit TurnFinished")
 	}
 	assertNoBackendEvent(t, b)
@@ -1502,7 +1502,7 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	case <-time.After(backendEventWaitTimeout):
 		t.Fatal("timed out waiting for prompt stream")
 	}
-	if err := b.CancelTurn(t.Context()); err != nil {
+	if err := b.Session().CancelTurn(t.Context()); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
 	nextTurnID := b.turn.start(func() {})
@@ -1540,7 +1540,7 @@ func rawToolCompletedOutputInfo(t *testing.T, b *Backend, toolUseID string) (int
 	if b.harness == nil || b.harness.Runner == nil {
 		return 0, false
 	}
-	events, err := b.harness.Runner.Events(t.Context(), b.ID())
+	events, err := b.harness.Runner.Events(t.Context(), b.Session().ID())
 	if err != nil {
 		t.Fatalf("raw events: %v", err)
 	}

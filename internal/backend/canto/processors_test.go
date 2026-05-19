@@ -140,15 +140,15 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 1 {

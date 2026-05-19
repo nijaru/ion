@@ -54,16 +54,16 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	first.SetStore(store)
 	first.SetSession(storageSession)
 	first.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
-	if err := first.Open(ctx); err != nil {
+	if err := first.Session().Open(ctx); err != nil {
 		t.Fatalf("open first backend: %v", err)
 	}
-	defer func() { _ = first.Close() }()
+	defer func() { _ = first.Session().Close() }()
 
-	if err := first.SubmitTurn(ctx, "first question"); err != nil {
+	if err := first.Session().SubmitTurn(ctx, "first question"); err != nil {
 		t.Fatalf("submit first turn: %v", err)
 	}
-	waitForTurnFinished(t, first.Events())
-	if err := first.Close(); err != nil {
+	waitForTurnFinished(t, first.Session().Events())
+	if err := first.Session().Close(); err != nil {
 		t.Fatalf("close first backend: %v", err)
 	}
 
@@ -76,19 +76,19 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	second.SetStore(store)
 	second.SetSession(resumedSession)
 	second.SetConfig(&config.Config{Provider: "openrouter", Model: "model-b"})
-	if err := second.Resume(ctx, storageSession.ID()); err != nil {
+	if err := second.Session().Resume(ctx, storageSession.ID()); err != nil {
 		t.Fatalf("resume second backend: %v", err)
 	}
-	defer func() { _ = second.Close() }()
+	defer func() { _ = second.Session().Close() }()
 
-	if got := second.ID(); got != storageSession.ID() {
+	if got := second.Session().ID(); got != storageSession.ID() {
 		t.Fatalf("second backend session ID = %q, want %q", got, storageSession.ID())
 	}
 
-	if err := second.SubmitTurn(ctx, "second question"); err != nil {
+	if err := second.Session().SubmitTurn(ctx, "second question"); err != nil {
 		t.Fatalf("submit second turn: %v", err)
 	}
-	waitForTurnFinished(t, second.Events())
+	waitForTurnFinished(t, second.Session().Events())
 
 	calls := secondProvider.Calls()
 	if len(calls) != 1 {
@@ -173,16 +173,16 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := first.Open(ctx); err != nil {
+	if err := first.Session().Open(ctx); err != nil {
 		t.Fatalf("open first backend: %v", err)
 	}
-	defer func() { _ = first.Close() }()
+	defer func() { _ = first.Session().Close() }()
 
-	if err := first.SubmitTurn(ctx, "run the smoke command"); err != nil {
+	if err := first.Session().SubmitTurn(ctx, "run the smoke command"); err != nil {
 		t.Fatalf("submit first turn: %v", err)
 	}
-	waitForTurnFinished(t, first.Events())
-	if err := first.Close(); err != nil {
+	waitForTurnFinished(t, first.Session().Events())
+	if err := first.Session().Close(); err != nil {
 		t.Fatalf("close first backend: %v", err)
 	}
 
@@ -201,15 +201,15 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := second.Resume(ctx, storageSession.ID()); err != nil {
+	if err := second.Session().Resume(ctx, storageSession.ID()); err != nil {
 		t.Fatalf("resume backend: %v", err)
 	}
-	defer func() { _ = second.Close() }()
+	defer func() { _ = second.Session().Close() }()
 
-	if err := second.SubmitTurn(ctx, "reply continued if the earlier tool result said ion-smoke"); err != nil {
+	if err := second.Session().SubmitTurn(ctx, "reply continued if the earlier tool result said ion-smoke"); err != nil {
 		t.Fatalf("submit follow-up turn: %v", err)
 	}
-	waitForTurnFinished(t, second.Events())
+	waitForTurnFinished(t, second.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 3 {
@@ -320,15 +320,15 @@ func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "new user"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "new user"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 1 {

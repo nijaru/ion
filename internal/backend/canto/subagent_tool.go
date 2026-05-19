@@ -109,7 +109,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 
 	result, err := harness.Runner.Delegate(
 		ctx,
-		t.backend.ID(),
+		t.backend.id(),
 		input.childSpec(childID(persona.Name), childAgent, persona),
 	)
 	if err != nil {

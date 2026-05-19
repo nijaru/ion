@@ -39,7 +39,7 @@ func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	committed, ok := ev1.(ionsession.AgentMessage)
 	if !ok {
 		t.Fatalf("first event = %T, want AgentMessage", ev1)
@@ -48,7 +48,7 @@ func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 		t.Fatalf("committed message = %#v", committed)
 	}
 
-	ev2 := receiveEvent(t, b.Events())
+	ev2 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev2.(ionsession.TurnFinished); !ok {
 		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
@@ -67,7 +67,7 @@ func TestTranslateEventsCommitsUserFromMessageAdded(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	committed, ok := ev1.(ionsession.UserMessage)
 	if !ok {
 		t.Fatalf("first event = %T, want UserMessage", ev1)
@@ -76,7 +76,7 @@ func TestTranslateEventsCommitsUserFromMessageAdded(t *testing.T) {
 		t.Fatalf("committed user message = %#v", committed)
 	}
 
-	ev2 := receiveEvent(t, b.Events())
+	ev2 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev2.(ionsession.TurnFinished); !ok {
 		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
@@ -91,7 +91,7 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
 		t.Fatalf("first event = %T, want TurnFinished", ev1)
 	}
@@ -116,7 +116,7 @@ func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
 	if b.turn.cancel != nil {
 		t.Fatal("cancel func remained set after terminal event translation")
 	}
-	ev := receiveEvent(t, b.Events())
+	ev := receiveEvent(t, b.Session().Events())
 	if _, ok := ev.(ionsession.TurnFinished); !ok {
 		t.Fatalf("event = %T, want TurnFinished", ev)
 	}
@@ -132,7 +132,7 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
 		t.Fatalf("first event = %T, want TurnFinished", ev1)
 	}
@@ -149,7 +149,7 @@ func TestTranslateEventsReportsDeadlineTerminalError(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	errEvent, ok := ev1.(ionsession.Error)
 	if !ok {
 		t.Fatalf("first event = %T, want Error", ev1)
@@ -158,7 +158,7 @@ func TestTranslateEventsReportsDeadlineTerminalError(t *testing.T) {
 		t.Fatalf("error = %v, want deadline exceeded", errEvent.Err)
 	}
 
-	ev2 := receiveEvent(t, b.Events())
+	ev2 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev2.(ionsession.TurnFinished); !ok {
 		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
@@ -178,7 +178,7 @@ func TestFinishTurnWithErrorReportsDeadlineExceeded(t *testing.T) {
 	if b.turn.cancel != nil {
 		t.Fatal("cancel func remained set after deadline terminal")
 	}
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	errEvent, ok := ev1.(ionsession.Error)
 	if !ok {
 		t.Fatalf("first event = %T, want Error", ev1)
@@ -186,12 +186,12 @@ func TestFinishTurnWithErrorReportsDeadlineExceeded(t *testing.T) {
 	if !strings.Contains(errEvent.Err.Error(), context.DeadlineExceeded.Error()) {
 		t.Fatalf("error = %v, want deadline exceeded", errEvent.Err)
 	}
-	ev2 := receiveEvent(t, b.Events())
+	ev2 := receiveEvent(t, b.Session().Events())
 	if _, ok := ev2.(ionsession.TurnFinished); !ok {
 		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
 	select {
-	case ev := <-b.Events():
+	case ev := <-b.Session().Events():
 		t.Fatalf("deadline terminal emitted extra event: %#v", ev)
 	default:
 	}
@@ -203,7 +203,7 @@ func TestTerminalErrorAfterCancelFinishesQuietly(t *testing.T) {
 	b.turn.active = true
 	b.turn.cancel = func() {}
 
-	if err := b.CancelTurn(t.Context()); err != nil {
+	if err := b.Session().CancelTurn(t.Context()); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
 	assertNoBackendEvent(t, b)
@@ -211,11 +211,11 @@ func TestTerminalErrorAfterCancelFinishesQuietly(t *testing.T) {
 	if !b.emitTurnError(7, ionsession.BaseNow(), errors.New("late provider error")) {
 		t.Fatal("late terminal error did not settle canceled turn")
 	}
-	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("late terminal error did not finish canceled turn")
 	}
 	select {
-	case ev := <-b.Events():
+	case ev := <-b.Session().Events():
 		t.Fatalf("late terminal error emitted event after cancel: %#v", ev)
 	default:
 	}
@@ -249,7 +249,7 @@ func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
 	translateSessionEvents(t.Context(), b, events, 7)
 
 	select {
-	case ev := <-b.Events():
+	case ev := <-b.Session().Events():
 		t.Fatalf("inactive turn emitted event: %#v", ev)
 	default:
 	}
@@ -266,7 +266,7 @@ func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 	}, 7, &turnUsageTracker{})
 
 	select {
-	case ev := <-b.Events():
+	case ev := <-b.Session().Events():
 		t.Fatalf("inactive turn emitted chunk event: %#v", ev)
 	default:
 	}
@@ -282,7 +282,7 @@ func TestTranslateRunEventEmitsThinkingDeltaFromReasoningChunk(t *testing.T) {
 		Chunk: llm.Chunk{Reasoning: "thinking through it"},
 	}, 7, &turnUsageTracker{})
 
-	ev := receiveEvent(t, b.Events())
+	ev := receiveEvent(t, b.Session().Events())
 	delta, ok := ev.(ionsession.ThinkingDelta)
 	if !ok {
 		t.Fatalf("event = %T, want ThinkingDelta", ev)
@@ -307,7 +307,7 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 			Cost:         0.01,
 		}},
 	}, 7, usage)
-	first, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	first, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("first event is not TokenUsage")
 	}
@@ -323,7 +323,7 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 			Cost:         0.015,
 		}},
 	}, 7, usage)
-	second, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	second, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("second event is not TokenUsage")
 	}
@@ -345,7 +345,7 @@ func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 			OutputTokens: 2,
 		}},
 	}, 7, usage)
-	_ = receiveEvent(t, b.Events())
+	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventSession,
@@ -355,7 +355,7 @@ func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 			Output: "ok",
 		}),
 	}, 7, usage)
-	_ = receiveEvent(t, b.Events())
+	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
@@ -364,7 +364,7 @@ func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 			OutputTokens: 3,
 		}},
 	}, 7, usage)
-	next, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	next, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("next event is not TokenUsage")
 	}
@@ -390,7 +390,7 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev1 := receiveEvent(t, b.Events())
+	ev1 := receiveEvent(t, b.Session().Events())
 	started, ok := ev1.(ionsession.ToolCallStarted)
 	if !ok {
 		t.Fatalf("first event = %T, want ToolCallStarted", ev1)
@@ -398,9 +398,9 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	if started.ToolUseID != "tool-call-1" {
 		t.Fatalf("started id = %q, want tool-call-1", started.ToolUseID)
 	}
-	_ = receiveEvent(t, b.Events()) // status
+	_ = receiveEvent(t, b.Session().Events()) // status
 
-	ev3 := receiveEvent(t, b.Events())
+	ev3 := receiveEvent(t, b.Session().Events())
 	result, ok := ev3.(ionsession.ToolResult)
 	if !ok {
 		t.Fatalf("third event = %T, want ToolResult", ev3)
@@ -422,7 +422,7 @@ func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev := receiveEvent(t, b.Events())
+	ev := receiveEvent(t, b.Session().Events())
 	delta, ok := ev.(ionsession.ToolOutputDelta)
 	if !ok {
 		t.Fatalf("event = %T, want ToolOutputDelta", ev)
@@ -448,7 +448,7 @@ func TestTranslateEventsPreservesToolCompletedError(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	ev := receiveEvent(t, b.Events())
+	ev := receiveEvent(t, b.Session().Events())
 	result, ok := ev.(ionsession.ToolResult)
 	if !ok {
 		t.Fatalf("event = %T, want ToolResult", ev)
@@ -480,16 +480,16 @@ func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 0)
 
-	requested, ok := receiveEvent(t, b.Events()).(ionsession.ChildRequested)
+	requested, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildRequested)
 	if !ok {
 		t.Fatal("first event is not ChildRequested")
 	}
 	if requested.AgentName != "explorer-123" {
 		t.Fatalf("requested agent name = %q, want child id", requested.AgentName)
 	}
-	_ = receiveEvent(t, b.Events()) // request status
+	_ = receiveEvent(t, b.Session().Events()) // request status
 
-	started, ok := receiveEvent(t, b.Events()).(ionsession.ChildStarted)
+	started, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildStarted)
 	if !ok {
 		t.Fatal("third event is not ChildStarted")
 	}
@@ -539,7 +539,7 @@ func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 
 			translateSessionEvents(t.Context(), b, events, 0)
 
-			ev := receiveEvent(t, b.Events())
+			ev := receiveEvent(t, b.Session().Events())
 			switch tt.want {
 			case "completed":
 				if _, ok := ev.(ionsession.ChildCompleted); !ok {
@@ -558,7 +558,7 @@ func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {
-	case ev := <-b.Events():
+	case ev := <-b.Session().Events():
 		t.Fatalf("unexpected backend event: %#v", ev)
 	default:
 	}

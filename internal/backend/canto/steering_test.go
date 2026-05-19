@@ -87,7 +87,7 @@ func TestSteeringMutatorKeepsOtherSessionsPending(t *testing.T) {
 
 func TestBackendSteerTurnQueuesWithoutActiveTurn(t *testing.T) {
 	backend := &Backend{steering: newSteeringMutator()}
-	result, err := backend.SteerTurn(t.Context(), "later")
+	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "later")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
 		steering: newSteeringMutator(),
 		turn:     turnState{active: true},
 	}
-	result, err := backend.SteerTurn(t.Context(), "later")
+	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "later")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
 			activeToolIDs: map[string]struct{}{"tool-call-1": {}},
 		},
 	}
-	result, err := backend.SteerTurn(t.Context(), "use the test output")
+	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "use the test output")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
 	}
@@ -180,17 +180,17 @@ func TestBackendSteeringAppearsInNextProviderRequestAfterTool(t *testing.T) {
 		Model:    "model-a",
 		Endpoint: "http://localhost:8080/v1",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "run the slow command"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "run the slow command"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForToolStarted(t, b.Events(), "bash")
+	waitForToolStarted(t, b.Session().Events(), "bash")
 
-	result, err := b.SteerTurn(ctx, "use the smaller test")
+	result, err := backendSteeringSession(t, b).SteerTurn(ctx, "use the smaller test")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestBackendSteeringAppearsInNextProviderRequestAfterTool(t *testing.T) {
 		t.Fatalf("steering outcome = %q, want accepted", result.Outcome)
 	}
 
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 2 {
@@ -210,6 +210,15 @@ func TestBackendSteeringAppearsInNextProviderRequestAfterTool(t *testing.T) {
 	if !requestHasMessage(calls[1].Messages, llm.RoleUser, "use the smaller test") {
 		t.Fatalf("second provider request missing steering context: %#v", calls[1].Messages)
 	}
+}
+
+func backendSteeringSession(t *testing.T, b *Backend) ionsession.SteeringSession {
+	t.Helper()
+	steering, ok := b.Session().(ionsession.SteeringSession)
+	if !ok {
+		t.Fatal("canto session does not implement steering")
+	}
+	return steering
 }
 
 func waitForToolStarted(t *testing.T, events <-chan ionsession.Event, toolName string) {

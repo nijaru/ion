@@ -55,10 +55,10 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	compacted, err := b.Compact(ctx)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
 	first.SetStore(store)
 	first.SetSession(storageSession)
 	first.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := first.Open(ctx); err != nil {
+	if err := first.Session().Open(ctx); err != nil {
 		t.Fatalf("open first backend: %v", err)
 	}
 	if compacted, err := first.Compact(ctx); err != nil {
@@ -170,7 +170,7 @@ func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
 	} else if !compacted {
 		t.Fatal("expected compacted=true")
 	}
-	if err := first.Close(); err != nil {
+	if err := first.Session().Close(); err != nil {
 		t.Fatalf("close first backend: %v", err)
 	}
 
@@ -191,15 +191,15 @@ func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
 	second.SetStore(store)
 	second.SetSession(resumedSession)
 	second.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100_000})
-	if err := second.Resume(ctx, storageSession.ID()); err != nil {
+	if err := second.Session().Resume(ctx, storageSession.ID()); err != nil {
 		t.Fatalf("resume backend: %v", err)
 	}
-	defer func() { _ = second.Close() }()
+	defer func() { _ = second.Session().Close() }()
 
-	if err := second.SubmitTurn(ctx, "continue from compacted context"); err != nil {
+	if err := second.Session().SubmitTurn(ctx, "continue from compacted context"); err != nil {
 		t.Fatalf("submit follow-up turn: %v", err)
 	}
-	waitForTurnFinished(t, second.Events())
+	waitForTurnFinished(t, second.Session().Events())
 
 	calls := followUpProvider.Calls()
 	if len(calls) != 1 {
@@ -310,12 +310,12 @@ func TestSubmitTurnDoesNotProactivelyCompactStalePreCompactionUsage(t *testing.T
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "continue from summary"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "continue from summary"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestSubmitTurnDoesNotProactivelyCompactStalePreCompactionUsage(t *testing.T
 	finished := false
 	for !finished {
 		select {
-		case ev := <-b.Events():
+		case ev := <-b.Session().Events():
 			switch msg := ev.(type) {
 			case ionsession.StatusChanged:
 				statuses = append(statuses, msg.Status)
@@ -390,15 +390,15 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "overflow recovery please"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "overflow recovery please"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	events := b.Events()
+	events := b.Session().Events()
 	seenCompactingStatus := false
 	finished := false
 	for !finished {
@@ -525,15 +525,15 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "proactive compaction please"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "proactive compaction please"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	events := b.Events()
+	events := b.Session().Events()
 	var statuses []string
 	finished := false
 	for !finished {
@@ -626,20 +626,20 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "do not send this after compaction failure"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "do not send this after compaction failure"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
 
-	errEvent := waitForSessionError(t, b.Events())
+	errEvent := waitForSessionError(t, b.Session().Events())
 	if !strings.Contains(errEvent.Err.Error(), "compaction provider failed") {
 		t.Fatalf("error = %v, want compaction provider failure", errEvent.Err)
 	}
-	waitForTurnFinishedAfterError(t, b.Events())
+	waitForTurnFinishedAfterError(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 1 {

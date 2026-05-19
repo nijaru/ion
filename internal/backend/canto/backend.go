@@ -7,6 +7,7 @@ import (
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -40,3 +41,15 @@ func New() *Backend {
 		turn:   newTurnState(),
 	}
 }
+
+// Session is Ion's native AgentSession adapter over Canto's harness session.
+// Backend owns product/runtime configuration; Session owns turn control.
+type Session struct {
+	backend *Backend
+}
+
+var (
+	_ backend.Backend            = (*Backend)(nil)
+	_ ionsession.AgentSession    = (*Session)(nil)
+	_ ionsession.SteeringSession = (*Session)(nil)
+)
