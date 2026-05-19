@@ -114,6 +114,12 @@ type turnSubmitResultMsg struct {
 	rearm bool
 }
 
+type steeringResultMsg struct {
+	text   string
+	result session.SteeringResult
+	err    error
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -762,6 +768,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnSubmitResultMsg:
 		return m.handleTurnSubmitResult(msg)
+
+	case steeringResultMsg:
+		return m.handleSteeringResult(msg)
 
 	case tea.PasteMsg:
 		if m.Picker.Session != nil {
