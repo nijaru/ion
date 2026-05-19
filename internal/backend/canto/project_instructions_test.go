@@ -58,15 +58,15 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "load instructions"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "load instructions"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := mockProvider.Calls()
 	if len(calls) != 1 {

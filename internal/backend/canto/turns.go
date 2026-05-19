@@ -11,7 +11,11 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
+func (s *Session) SubmitTurn(ctx context.Context, input string) error {
+	return s.backend.submitTurn(ctx, input)
+}
+
+func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	turn, err := b.prepareSubmittedTurn(ctx, input)
 	if err != nil {
 		return err
@@ -334,7 +338,14 @@ func (b *Backend) isCancelingTurn(turnID uint64) bool {
 	return b.turn.isCanceling(turnID)
 }
 
-func (b *Backend) SteerTurn(
+func (s *Session) SteerTurn(
+	ctx context.Context,
+	text string,
+) (ionsession.SteeringResult, error) {
+	return s.backend.steerTurn(ctx, text)
+}
+
+func (b *Backend) steerTurn(
 	ctx context.Context,
 	text string,
 ) (ionsession.SteeringResult, error) {
@@ -357,7 +368,11 @@ func (b *Backend) SteerTurn(
 	return steering.Submit(ctx, sessionID, text)
 }
 
-func (b *Backend) CancelTurn(_ context.Context) error {
+func (s *Session) CancelTurn(ctx context.Context) error {
+	return s.backend.cancelTurn(ctx)
+}
+
+func (b *Backend) cancelTurn(context.Context) error {
 	b.mu.Lock()
 	cancel, _ := b.turn.requestCancel()
 	b.mu.Unlock()

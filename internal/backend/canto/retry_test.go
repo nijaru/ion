@@ -53,15 +53,15 @@ func TestOpenRetriesTransientProviderErrors(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "retry this request"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "retry this request"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 2 {
@@ -112,20 +112,20 @@ func TestRetryRecoveryWaitsThroughToolLoop(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	if retry, ok := retryProviderInChain(b.llm); ok {
 		retry.Config.MinInterval = time.Millisecond
 		retry.Config.MaxInterval = time.Millisecond
 	}
 
-	if err := b.SubmitTurn(ctx, "retry with tool"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "retry with tool"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 3 {
@@ -187,10 +187,10 @@ func TestRetryExhaustionDoesNotEscalateProviderError(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	retry, ok := retryProviderInChain(b.llm)
 	if !ok {
@@ -199,11 +199,11 @@ func TestRetryExhaustionDoesNotEscalateProviderError(t *testing.T) {
 	retry.Config.MinInterval = time.Millisecond
 	retry.Config.MaxInterval = time.Millisecond
 
-	if err := b.SubmitTurn(ctx, "retry until terminal"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "retry until terminal"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	msg := waitForSessionError(t, b.Events())
-	waitForTurnFinishedAfterError(t, b.Events())
+	msg := waitForSessionError(t, b.Session().Events())
+	waitForTurnFinishedAfterError(t, b.Session().Events())
 
 	if strings.Contains(msg.Err.Error(), "escalation exhausted") {
 		t.Fatalf("error leaked agent escalation wording: %v", msg.Err)
@@ -245,10 +245,10 @@ func TestSetConfigUpdatesWrappedRetryProvider(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	retry, ok := retryProviderInChain(b.llm)
 	if !ok {

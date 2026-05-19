@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	cantofw "github.com/nijaru/canto"
@@ -17,7 +18,11 @@ import (
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
-func (b *Backend) Open(ctx context.Context) error {
+func (s *Session) Open(ctx context.Context) error {
+	return s.backend.open(ctx)
+}
+
+func (b *Backend) open(ctx context.Context) error {
 	providerName := b.Provider()
 	modelName := b.Model()
 	cfg := b.configSnapshot()
@@ -143,19 +148,58 @@ func (b *Backend) Open(ctx context.Context) error {
 	return nil
 }
 
-func (b *Backend) Resume(ctx context.Context, sessionID string) error {
+func (s *Session) Resume(ctx context.Context, sessionID string) error {
+	return s.backend.resume(ctx, sessionID)
+}
+
+func (b *Backend) resume(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session ID required")
+	}
+
+	b.mu.Lock()
+	if b.turn.active {
+		b.mu.Unlock()
+		return fmt.Errorf("cannot resume session while turn is in progress")
+	}
+	current := b.sess
+	ionStore := b.ionStore
+	b.mu.Unlock()
+
+	if current == nil || strings.TrimSpace(current.ID()) != sessionID {
+		if ionStore == nil {
+			return fmt.Errorf("session %s is not loaded", sessionID)
+		}
+		resumed, err := ionStore.ResumeSession(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("resume session %s: %w", sessionID, err)
+		}
+		b.mu.Lock()
+		if b.turn.active {
+			b.mu.Unlock()
+			_ = resumed.Close()
+			return fmt.Errorf("cannot resume session while turn is in progress")
+		}
+		b.sess = resumed
+		b.mu.Unlock()
+	}
+
 	b.mu.Lock()
 	needOpen := b.harness == nil
 	b.mu.Unlock()
-
 	if needOpen {
-		return b.Open(ctx)
+		return b.open(ctx)
 	}
 
 	return nil
 }
 
-func (b *Backend) Close() error {
+func (s *Session) Close() error {
+	return s.backend.close()
+}
+
+func (b *Backend) close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
 		cancel := b.turn.cancel

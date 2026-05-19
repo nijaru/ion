@@ -42,10 +42,10 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	surface := b.ToolSurface()
 	want := []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
@@ -105,10 +105,10 @@ func TestToolSurfaceIgnoresParkedSandboxEnv(t *testing.T) {
 		Model:    "model-a",
 		Endpoint: "http://localhost:8080/v1",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	if surface := b.ToolSurface(); surface.Sandbox != "" {
 		t.Fatalf("tool sandbox = %q, want empty while sandbox is parked", surface.Sandbox)
@@ -142,10 +142,10 @@ func TestSkillToolSurfaceIsOptIn(t *testing.T) {
 		Endpoint:   "http://localhost:8080/v1",
 		SkillTools: "read",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	surface := b.ToolSurface()
 	if !slices.Contains(surface.Names, "read_skill") {
@@ -182,13 +182,13 @@ func TestSubagentToolSurfaceIsOptIn(t *testing.T) {
 		Model:    "model-a",
 		Endpoint: "http://localhost:8080/v1",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
 	if surface := b.ToolSurface(); slices.Contains(surface.Names, "subagent") {
 		t.Fatalf("default tool surface = %#v, want no subagent", surface.Names)
 	}
-	if err := b.Close(); err != nil {
+	if err := b.Session().Close(); err != nil {
 		t.Fatalf("close default backend: %v", err)
 	}
 
@@ -210,10 +210,10 @@ func TestSubagentToolSurfaceIsOptIn(t *testing.T) {
 		Endpoint:      "http://localhost:8080/v1",
 		SubagentTools: "on",
 	})
-	if err := withSubagent.Open(ctx); err != nil {
+	if err := withSubagent.Session().Open(ctx); err != nil {
 		t.Fatalf("open subagent backend: %v", err)
 	}
-	defer func() { _ = withSubagent.Close() }()
+	defer func() { _ = withSubagent.Session().Close() }()
 
 	surface := withSubagent.ToolSurface()
 	if !slices.Contains(surface.Names, "subagent") {
@@ -262,15 +262,15 @@ func TestSubagentToolExecutesWhenOptedIn(t *testing.T) {
 		Endpoint:      "http://localhost:8080/v1",
 		SubagentTools: "on",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "delegate a read-only inspection"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "delegate a read-only inspection"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	calls := provider.Calls()
 	if len(calls) != 3 {

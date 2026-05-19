@@ -83,20 +83,20 @@ func TestSetConfigUpdatesOpenReasoningProcessor(t *testing.T) {
 		Model:           "model-a",
 		ReasoningEffort: "low",
 	})
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
 	b.SetConfig(&config.Config{
 		Provider:        "openai",
 		Model:           "model-a",
 		ReasoningEffort: "high",
 	})
-	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	if gotReasoning != "high" {
 		t.Fatalf("reasoning effort = %q, want high from latest SetConfig", gotReasoning)
@@ -137,7 +137,7 @@ func TestCancelTurnDuringOpenDoesNotWaitForProviderSetup(t *testing.T) {
 
 	openDone := make(chan error, 1)
 	go func() {
-		openDone <- b.Open(ctx)
+		openDone <- b.Session().Open(ctx)
 	}()
 
 	select {
@@ -148,7 +148,7 @@ func TestCancelTurnDuringOpenDoesNotWaitForProviderSetup(t *testing.T) {
 
 	cancelDone := make(chan error, 1)
 	go func() {
-		cancelDone <- b.CancelTurn(t.Context())
+		cancelDone <- b.Session().CancelTurn(t.Context())
 	}()
 
 	select {
@@ -169,7 +169,7 @@ func TestCancelTurnDuringOpenDoesNotWaitForProviderSetup(t *testing.T) {
 	case <-time.After(backendEventWaitTimeout):
 		t.Fatal("timed out waiting for Open to finish")
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 }
 
 type reasoningFauxProvider struct {
@@ -215,15 +215,15 @@ func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	if err := b.Open(ctx); err != nil {
+	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer func() { _ = b.Close() }()
+	defer func() { _ = b.Session().Close() }()
 
-	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	waitForTurnFinished(t, b.Session().Events())
 
 	sessions, err := store.ListSessions(ctx, cwd)
 	if err != nil {
