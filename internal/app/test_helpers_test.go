@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -137,6 +138,34 @@ func requireSequenceCmd(t *testing.T, cmd tea.Cmd) {
 	if got := fmt.Sprintf("%T", cmd()); got != "tea.sequenceMsg" {
 		t.Fatalf("command = %s, want tea.sequenceMsg", got)
 	}
+}
+
+func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	value := reflect.ValueOf(msg)
+	if value.Kind() != reflect.Slice {
+		return []tea.Msg{msg}
+	}
+	cmdType := reflect.TypeOf((tea.Cmd)(nil))
+	if value.Type().Elem() != cmdType {
+		return []tea.Msg{msg}
+	}
+	var messages []tea.Msg
+	for i := range value.Len() {
+		child, ok := value.Index(i).Interface().(tea.Cmd)
+		if !ok {
+			t.Fatalf("sequence element %d = %T, want tea.Cmd", i, value.Index(i).Interface())
+		}
+		messages = append(messages, runCommandTree(t, child)...)
+	}
+	return messages
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
