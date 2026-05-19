@@ -233,39 +233,10 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		)
 
 	case "/cost":
-		inputTokens, outputTokens, totalCost := m.Progress.TokensSent, m.Progress.TokensReceived, m.Progress.TotalCost
-		if m.Model.Storage != nil {
-			input, output, cost, err := m.Model.Storage.Usage(context.Background())
-			if err != nil {
-				return m, cmdError(fmt.Sprintf("failed to load session usage: %v", err))
-			}
-			inputTokens = input
-			outputTokens = output
-			totalCost = cost
-		}
-		if totalCost <= 0 {
-			if m.Model.Config != nil &&
-				(m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
-				return m, func() tea.Msg {
-					return sessionCostMsg{
-						notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost),
-					}
-				}
-			}
-			return m, func() tea.Msg {
-				return sessionCostMsg{notice: "No API cost tracked for this session"}
-			}
-		}
-		return m, func() tea.Msg {
-			return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
-		}
+		return m, m.sessionCostCmd()
 
 	case "/session":
-		notice, err := m.sessionInfoNotice()
-		if err != nil {
-			return m, cmdError(err.Error())
-		}
-		return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
+		return m, m.sessionInfoCmd()
 
 	case "/compact":
 		if m.Model.Storage != nil && !storage.IsMaterialized(m.Model.Storage) {

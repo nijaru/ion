@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -890,6 +891,93 @@ func TestSessionInfoNoticeDoesNotMaterializeLazySession(t *testing.T) {
 	}
 	if recent != nil {
 		t.Fatalf("recent session after session info = %#v, want nil", recent)
+	}
+}
+
+type blockingSessionInfoStorage struct {
+	stubStorageSession
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSessionInfoStorage) Usage(
+	ctx context.Context,
+) (int, int, float64, error) {
+	select {
+	case <-s.started:
+	default:
+		close(s.started)
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return 0, 0, 0, ctx.Err()
+	}
+	return s.stubStorageSession.Usage(ctx)
+}
+
+func TestSessionCommandReturnsBeforeStorageCompletes(t *testing.T) {
+	storageSess := &blockingSessionInfoStorage{
+		stubStorageSession: stubStorageSession{
+			id:       "session-1",
+			model:    "openai/gpt-4.1",
+			usageIn:  1200,
+			usageOut: 300,
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	type commandResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan commandResult, 1)
+	go func() {
+		updated, cmd := model.handleCommand("/session")
+		returned <- commandResult{model: updated, cmd: cmd}
+	}()
+
+	var result commandResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("/session blocked on storage")
+	}
+	if result.cmd == nil {
+		t.Fatal("/session returned nil command")
+	}
+	select {
+	case <-storageSess.started:
+		t.Fatal("session storage read ran before Bubble Tea command execution")
+	default:
+	}
+
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- result.cmd()
+	}()
+	select {
+	case <-storageSess.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("/session command did not read storage")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("/session command returned before storage completed: %T", msg)
+	default:
+	}
+
+	close(storageSess.release)
+	msg := <-loaded
+	entries, ok := msg.(localEntriesMsg)
+	if !ok || len(entries.entries) != 1 {
+		t.Fatalf("/session command result = %#v, want localEntriesMsg", msg)
+	}
+	if !strings.Contains(entries.entries[0].Content, "tokens: input 1200, output 300") {
+		t.Fatalf("session notice = %q, want usage", entries.entries[0].Content)
 	}
 }
 

@@ -54,6 +54,45 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 }
 
+func (m Model) sessionCostCmd() tea.Cmd {
+	return func() tea.Msg {
+		inputTokens := m.Progress.TokensSent
+		outputTokens := m.Progress.TokensReceived
+		totalCost := m.Progress.TotalCost
+		if m.Model.Storage != nil {
+			input, output, cost, err := m.Model.Storage.Usage(context.Background())
+			if err != nil {
+				return localErrorMsg{err: fmt.Errorf("failed to load session usage: %w", err)}
+			}
+			inputTokens = input
+			outputTokens = output
+			totalCost = cost
+		}
+		if totalCost <= 0 {
+			if m.Model.Config != nil &&
+				(m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
+				return sessionCostMsg{
+					notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+				}
+			}
+			return sessionCostMsg{notice: "No API cost tracked for this session"}
+		}
+		return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
+	}
+}
+
+func (m Model) sessionInfoCmd() tea.Cmd {
+	return func() tea.Msg {
+		notice, err := m.sessionInfoNotice()
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		return localEntriesMsg{
+			entries: []session.Entry{{Role: session.System, Content: notice}},
+		}
+	}
+}
+
 func (m Model) sessionInfoNotice() (string, error) {
 	sessionID := ""
 	if m.Model.Storage != nil {
