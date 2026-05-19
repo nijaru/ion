@@ -820,6 +820,64 @@ func TestSessionErrorPersistenceFailureKeepsReducerArmed(t *testing.T) {
 		t.Fatalf("queued turns = %v, want cleared", model.InFlight.QueuedTurns)
 	}
 	requireSequenceCmd(t, cmd)
+	msgs := runSequencePrefix(t, cmd, 2)
+	var foundPersistError bool
+	for _, msg := range msgs {
+		if local, ok := msg.(localErrorMsg); ok &&
+			strings.Contains(local.err.Error(), "persist session error: disk full") {
+			foundPersistError = true
+		}
+	}
+	if !foundPersistError {
+		t.Fatalf("command messages = %#v, want session persistence error", msgs)
+	}
+}
+
+func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, cmd := model.Update(session.Error{Err: errors.New("backend failed")})
+	model = next.(Model)
+
+	if model.Progress.Mode != stateError || model.Progress.LastError != "backend failed" {
+		t.Fatalf("progress = %v/%q, want backend failed error", model.Progress.Mode, model.Progress.LastError)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 2)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		system, ok := event.(storage.System)
+		if !ok {
+			t.Fatalf("append event = %#v, want system", event)
+		}
+		if !strings.Contains(system.Content, "backend failed") {
+			t.Fatalf("system content = %q, want backend failed", system.Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session error persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session error persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one system append", storageSess.appends)
+	}
 }
 
 func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
@@ -841,12 +899,13 @@ func TestSessionErrorSoftensEmptyAssistantResponse(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, _ := model.Update(session.Error{
+	next, cmd := model.Update(session.Error{
 		Err: errors.New(
 			"assistant response has no content, reasoning, thinking blocks, or tool calls",
 		),
 	})
 	model = next.(Model)
+	runSequencePrefix(t, cmd, 2)
 
 	want := "Provider returned an empty response. Try again or switch models."
 	if model.Progress.LastError != want {
@@ -1000,8 +1059,9 @@ func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("error, status code: 429 Too Many Requests: rate limit exceeded")
-	next, _ := model.Update(session.Error{Err: err})
+	next, cmd := model.Update(session.Error{Err: err})
 	model = next.(Model)
+	runSequencePrefix(t, cmd, 3)
 
 	if !strings.HasPrefix(model.Progress.LastError, "API rate limit: ") {
 		t.Fatalf("last error = %q, want API rate limit prefix", model.Progress.LastError)
@@ -1036,8 +1096,9 @@ func TestSessionErrorClassifiesProviderQuotaLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("insufficient_quota: billing hard limit has been reached")
-	next, _ := model.Update(session.Error{Err: err})
+	next, cmd := model.Update(session.Error{Err: err})
 	model = next.(Model)
+	runSequencePrefix(t, cmd, 2)
 
 	if !strings.HasPrefix(model.Progress.LastError, "API quota or usage limit: ") {
 		t.Fatalf("last error = %q, want quota limit prefix", model.Progress.LastError)

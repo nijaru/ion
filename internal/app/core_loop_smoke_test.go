@@ -221,6 +221,7 @@ func TestCoreLoopSmokeStreamCloseDuringTurnStopsBusyState(t *testing.T) {
 	if model.Progress.LastError != "session event stream closed" {
 		t.Fatalf("last error = %q, want stream closed", model.Progress.LastError)
 	}
+	runSequencePrefix(t, cmd, 2)
 
 	resumed, err := store.ResumeSession(context.Background(), stored.ID())
 	if err != nil {
@@ -252,8 +253,9 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStarted{})
 	model = updated.(Model)
-	updated, _ = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd := model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
 	model = updated.(Model)
+	runSequencePrefix(t, cmd, 2)
 
 	if model.Progress.Mode != stateError {
 		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
@@ -282,8 +284,9 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
 	model = updated.(Model)
 	runSequencePrefix(t, cmd, 1)
-	updated, _ = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
 	model = updated.(Model)
+	runSequencePrefix(t, cmd, 3)
 
 	if model.Progress.Mode != stateError {
 		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
