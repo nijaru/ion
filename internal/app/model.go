@@ -78,6 +78,12 @@ type runtimeSwitchErrorMsg struct {
 	err      error
 }
 
+type resumeSessionSelectedMsg struct {
+	switchID  uint64
+	sessionID string
+	cfg       *config.Config
+}
+
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
@@ -750,6 +756,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runtimeSwitchErrorMsg:
 		return m.handleRuntimeSwitchError(msg)
+
+	case resumeSessionSelectedMsg:
+		return m.handleResumeSessionSelected(msg)
 
 	case modelPickerLoadedMsg:
 		return m.handleModelPickerLoaded(msg)
