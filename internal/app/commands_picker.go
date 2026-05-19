@@ -114,6 +114,89 @@ func (m Model) openModelPickerForPreset(
 	return m.openReadyModelPickerForPreset(cfg, preset)
 }
 
+func (m Model) beginProviderSelection(
+	cfg *config.Config,
+	provider string,
+	preset modelPreset,
+) (Model, tea.Cmd) {
+	updated, err := updateProviderSelection(cfg, provider)
+	if err != nil {
+		return m, cmdError(err.Error())
+	}
+
+	m.Picker.ProviderSelectionRequest++
+	requestID := m.Picker.ProviderSelectionRequest
+	m.Progress.Status = "Checking provider..."
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
+		m.Picker.Overlay.loading = true
+		m.Picker.Overlay.err = ""
+		m.Picker.Overlay.request = requestID
+	}
+	cfgCopy := *updated
+	return m, func() tea.Msg {
+		selection, err := providerSelectionForConfig(context.Background(), &cfgCopy, preset)
+		return providerSelectionResolvedMsg{
+			requestID: requestID,
+			provider:  cfgCopy.Provider,
+			preset:    preset,
+			selection: selection,
+			err:       err,
+		}
+	}
+}
+
+func (m Model) handleProviderSelectionResolved(
+	msg providerSelectionResolvedMsg,
+) (Model, tea.Cmd) {
+	if msg.requestID == 0 || msg.requestID != m.Picker.ProviderSelectionRequest {
+		return m, nil
+	}
+	m.Picker.ProviderSelectionRequest = 0
+	if m.Picker.Overlay != nil &&
+		m.Picker.Overlay.purpose == pickerPurposeProvider &&
+		m.Picker.Overlay.request == msg.requestID {
+		m.Picker.Overlay.loading = false
+		m.Picker.Overlay.request = 0
+	}
+	if msg.err != nil {
+		if msg.selection.cfg == nil {
+			m.Picker.Overlay = nil
+		}
+		return m.handleLocalError(msg.err)
+	}
+	return m.applyProviderSelection(msg.selection, msg.provider, msg.preset)
+}
+
+func (m Model) applyProviderSelection(
+	selection providerSelection,
+	provider string,
+	preset modelPreset,
+) (Model, tea.Cmd) {
+	m.clearProgressError()
+	if selection.setup != 0 {
+		switch selection.setup {
+		case setupPromptAPIKey:
+			return m.openAPIKeyPrompt(selection.cfg, provider, preset)
+		case setupPromptEndpoint:
+			return m.openEndpointPrompt(selection.cfg, preset)
+		}
+	}
+
+	m.Picker.Overlay = nil
+	if !selection.supportsModelListing {
+		var commitErr error
+		m, commitErr = m.commitRuntimeTransition(selection.transition)
+		if commitErr != nil {
+			return m, runtimeTransitionErrorCmd(commitErr)
+		}
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: providerModelEntryNotice(selection.cfg.Provider),
+		})
+	}
+	return m.openReadyModelPickerForPreset(selection.cfg, preset)
+}
+
 func (m Model) openReadyModelPickerForPreset(
 	cfg *config.Config,
 	preset modelPreset,
@@ -515,40 +598,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
 		preset := m.Picker.Overlay.modelPreset()
-		selection, err := m.providerSelection(
-			context.Background(),
-			&cfg,
-			selected.Value,
-			preset,
-		)
-		if err != nil {
-			if selection.cfg == nil {
-				m.Picker.Overlay = nil
-			}
-			return m, cmdError(err.Error())
-		}
-		if selection.setup != 0 {
-			switch selection.setup {
-			case setupPromptAPIKey:
-				return m.openAPIKeyPrompt(selection.cfg, selected.Value, preset)
-			case setupPromptEndpoint:
-				return m.openEndpointPrompt(selection.cfg, preset)
-			}
-		}
-		m.clearProgressError()
-		m.Picker.Overlay = nil
-		if !selection.supportsModelListing {
-			var commitErr error
-			m, commitErr = m.commitRuntimeTransition(selection.transition)
-			if commitErr != nil {
-				return m, runtimeTransitionErrorCmd(commitErr)
-			}
-			return m, m.printEntries(session.Entry{
-				Role:    session.System,
-				Content: providerModelEntryNotice(selection.cfg.Provider),
-			})
-		}
-		return m.openReadyModelPickerForPreset(selection.cfg, preset)
+		return m.beginProviderSelection(&cfg, selected.Value, preset)
 
 	case pickerPurposeModel:
 		preset := m.Picker.Overlay.modelPreset()

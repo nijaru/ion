@@ -134,6 +134,14 @@ func (m Model) providerSelection(
 	if err != nil {
 		return providerSelection{}, err
 	}
+	return providerSelectionForConfig(ctx, updated, preset)
+}
+
+func providerSelectionForConfig(
+	ctx context.Context,
+	updated *config.Config,
+	preset modelPreset,
+) (providerSelection, error) {
 	setup, err := providerSetupPrompt(ctx, updated)
 	if err != nil {
 		return providerSelection{cfg: updated}, err

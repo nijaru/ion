@@ -136,36 +136,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		selection, err := m.providerSelection(
-			context.Background(),
-			cfg,
-			name,
-			m.activePreset(),
-		)
-		if err != nil {
-			return m, cmdError(err.Error())
-		}
-		if selection.setup != 0 {
-			switch selection.setup {
-			case setupPromptAPIKey:
-				return m.openAPIKeyPrompt(selection.cfg, name, m.activePreset())
-			case setupPromptEndpoint:
-				return m.openEndpointPrompt(selection.cfg, m.activePreset())
-			}
-		}
-		m.clearProgressError()
-		if !selection.supportsModelListing {
-			var commitErr error
-			m, commitErr = m.commitRuntimeTransition(selection.transition)
-			if commitErr != nil {
-				return m, runtimeTransitionErrorCmd(commitErr)
-			}
-			return m, m.printEntries(session.Entry{
-				Role:    session.System,
-				Content: providerModelEntryNotice(selection.cfg.Provider),
-			})
-		}
-		return m.openReadyModelPickerForPreset(selection.cfg, m.activePreset())
+		return m.beginProviderSelection(cfg, name, m.activePreset())
 
 	case "/login":
 		cfg, err := m.commandConfig()
@@ -350,12 +321,18 @@ func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Confi
 }
 
 func (m Model) localCommandBusy() bool {
-	return m.InFlight.Thinking || m.Progress.Compacting || m.Model.RuntimeSwitchRequest != 0
+	return m.InFlight.Thinking ||
+		m.Progress.Compacting ||
+		m.Model.RuntimeSwitchRequest != 0 ||
+		m.Picker.ProviderSelectionRequest != 0
 }
 
 func (m Model) localCommandBusyMessage(action string) string {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return "Wait for the runtime switch to finish before " + action + "."
+	}
+	if m.Picker.ProviderSelectionRequest != 0 {
+		return "Wait for the provider check to finish before " + action + "."
 	}
 	return "Finish or cancel the current turn before " + action + "."
 }

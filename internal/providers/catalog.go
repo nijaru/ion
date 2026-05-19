@@ -463,6 +463,20 @@ func ProbeLocalAPIFresh(ctx context.Context, cfg *config.Config) (string, bool) 
 	return probeLocalAPI(ctx, cfg, false)
 }
 
+func CachedLocalAPIState(cfg *config.Config) (endpoint string, ready bool, ok bool) {
+	for _, target := range localAPIProbeTargets(cfg) {
+		if target == "" {
+			continue
+		}
+		cached, hit := localProbeCached(target)
+		if !hit {
+			continue
+		}
+		return cached.endpoint, cached.ready, true
+	}
+	return "", false, false
+}
+
 func probeLocalAPI(ctx context.Context, cfg *config.Config, useCache bool) (string, bool) {
 	for _, endpoint := range localAPIProbeTargets(cfg) {
 		if endpoint == "" {

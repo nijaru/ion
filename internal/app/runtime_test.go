@@ -286,7 +286,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated
-	model = resolveModelPickerLoad(t, model, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, model, cmd)
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker to open")
 	}
@@ -343,7 +343,7 @@ func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 	}
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = resolveModelPickerLoad(t, updated, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, updated, cmd)
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
 	}
@@ -395,7 +395,7 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 	}
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated
+	model, cmd = resolveProviderSelection(t, updated, cmd)
 	if cmd == nil {
 		t.Fatal("expected non-listing provider selection notice")
 	}
@@ -439,7 +439,7 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 	updated, cmd := model.handleCommand("/provider anthropic")
 	model = updated
 
-	model = resolveModelPickerLoad(t, model, cmd)
+	model = resolveProviderSelectionAndModelLoad(t, model, cmd)
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
 		t.Fatalf(
 			"stale error not cleared: mode=%v err=%q",
