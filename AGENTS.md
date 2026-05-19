@@ -31,7 +31,7 @@ A standalone terminal coding agent — same category as Claude Code, Codex, pi. 
 
 **Primary path** (all new features go here first):
 ```
-ion TUI → CantoBackend → canto framework → provider API (Anthropic, OpenAI, OpenRouter)
+ion TUI → CantoBackend → canto framework → provider API
 ```
 
 ACP/subscription bridges are parked during phase-1 Pi parity. They do not drive
@@ -75,12 +75,36 @@ tk log <id> "finding"
 tk done <id>
 ```
 
+## Dogfood Issue Tracking
+
+User-reported Ion behavior bugs are dogfood regressions until proven otherwise.
+Handle them with evidence, not memory.
+
+- Before answering "do you remember", "is this fixed", "what was the last
+  issue", or "how close are we", search `tk`, `.tasks/`, `ai/STATUS.md`,
+  `ai/PLAN.md`, and recent commits for the exact symptom, error text,
+  provider/model, command, session id, or file path. If no record exists, say so
+  and create one before guessing.
+- Each regression gets a focused `tk` task unless the exact issue already has
+  one. `tk-ag0j` is a dogfood watch lane, not a bucket for bug details.
+- The task description or logs must capture the exact transcript/error snippet,
+  provider/model/endpoint/command/session when known, expected versus actual
+  behavior, owner area (`core`, `TUI`, `provider/runtime`, `storage/replay`,
+  `tooling`, or `config`), likely files, repro command, root cause, fix summary,
+  test/tmux/live evidence, and remaining caveats.
+- Broad audit tasks are not substitutes for focused regression tasks. Close a
+  regression only after the focused task records the fix, code/test paths, exact
+  verification commands, and any scenario-matrix update.
+- Keep repeatable bug details in `tk` logs. Keep `ai/STATUS.md` and
+  `ai/PLAN.md` at the phase/focus level. Only change this file for durable
+  operating rules that should apply across sessions.
+
 ## Rules
 
 - Treat Go as the active implementation language.
 - Treat `archive/rust/` as read-only reference unless explicitly migrating something out of it.
 - Do not let archived Rust docs drive new design decisions on `main`.
-- Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> approval -> cancel -> error -> persist/replay loop is reliable and covered by tests.
+- Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> cancel -> error -> persist/replay loop is reliable and covered by tests.
 - Use scriptable CLI/print mode as the first automation surface for core-loop regressions. When TUI behavior is in scope, use `tmux` or another PTY capture and read the captured terminal text to exercise the real Bubble Tea UI: launch header, help, local commands, live turn spacing, `--continue`/`/resume` replay, duplicate transcript symptoms, stale status lines, and footer rendering. Only use image screenshots when a visual-specific layout issue cannot be judged from terminal text.
 - Work from the high-level core-loop design down to code. Do not keep fixing isolated bug slices unless the file group has been reviewed against the active audit plan.
 - Use priority bands as guidance, not rigid tiers: core loop first; reliability table stakes such as minimal resume/continue and compaction when they protect context survival; product table stakes next; polish later; experimental/SOTA ideas last.
@@ -90,7 +114,7 @@ tk done <id>
 - Pi is opinionated and intentionally minimal. Follow Pi's internal patterns by default, but allow deliberate Ion/Canto differences when they keep phase-1 core simple, improve correctness, or preserve an obvious phase-2 Pi+ extension path.
 - Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may keep its own UI/product choices and add SOTA capabilities when they preserve core simplicity.
 - Use `tk` for all multi-step work.
-- When a user reports a bug, create or update a `tk` task immediately.
+- When a user reports a bug, follow the Dogfood Issue Tracking process above.
 - If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
 - During core-loop stabilization, develop Canto and Ion as tightly coupled local workstreams: audit/fix Canto-owned contracts in `../canto`, run Canto tests, commit/push coherent Canto fixes when requested/appropriate, then update Ion's Canto dependency and re-run Ion tests.
 - Do not do another broad `ai/` sweep unless a specific subsystem points to stale or conflicting context. Use `ai/STATUS.md`, `ai/PLAN.md`, and the active core-loop reset/audit docs, then move to source review.
