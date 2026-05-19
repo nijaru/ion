@@ -45,7 +45,7 @@ func (b *Backend) prepareSubmittedTurn(
 		return submittedTurn{}, fmt.Errorf("turn already in progress")
 	}
 	sess := b.sess
-	sessionID := b.ID()
+	sessionID := b.idLocked()
 	if sessionID == "" {
 		sessionID = "default"
 	}
@@ -73,7 +73,7 @@ func (b *Backend) prepareSubmittedTurn(
 		b.mu.Lock()
 		if b.turn.activeFor(turnID) {
 			b.sess = materialized
-			sessionID = b.ID()
+			sessionID = b.idLocked()
 			if sessionID == "" {
 				sessionID = "default"
 			}
@@ -341,7 +341,7 @@ func (b *Backend) SteerTurn(
 	b.mu.Lock()
 	active := b.turn.active
 	activeTool := b.turn.hasActiveTool()
-	sessionID := b.ID()
+	sessionID := b.idLocked()
 	steering := b.steering
 	b.mu.Unlock()
 

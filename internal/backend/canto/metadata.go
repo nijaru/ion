@@ -117,10 +117,14 @@ func (b *Backend) Session() ionsession.AgentSession {
 }
 
 func (b *Backend) SetStore(s storage.Store) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.ionStore = s
 }
 
 func (b *Backend) SetSession(s storage.Session) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.sess = s
 }
 
@@ -129,6 +133,12 @@ func (b *Backend) Events() <-chan ionsession.Event {
 }
 
 func (b *Backend) ID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.idLocked()
+}
+
+func (b *Backend) idLocked() string {
 	if b.sess != nil {
 		return b.sess.ID()
 	}
@@ -136,6 +146,8 @@ func (b *Backend) ID() string {
 }
 
 func (b *Backend) Meta() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.sess != nil {
 		m := b.sess.Meta()
 		return map[string]string{
