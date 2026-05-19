@@ -1,81 +1,78 @@
-# ion
+# ion Agent Instructions
 
-Go rewrite of a fast, lightweight inline coding agent.
+Ion is a terminal coding agent built on the Canto framework. Keep this file
+durable: it should explain how agents work in this repo, not what happened in
+the latest session.
 
-## Architecture & Philosophy
+## Source Of Truth
 
-ion is a specialized coding application built on top of the **canto** framework.
+- Start every non-trivial session by reading `ai/README.md`, `ai/STATUS.md`,
+  `ai/PLAN.md`, and `tk ready`.
+- Treat `AGENTS.md` as stable operating policy.
+- Treat `ai/STATUS.md` as current phase/focus/blockers.
+- Treat `ai/PLAN.md` as the active work sequence.
+- Treat `ai/DESIGN.md` and `ai/design/*` as architecture and contract detail.
+- Treat `tk` as the ledger for exact work items, bug reports, root causes, and
+  verification evidence.
+- Keep `ai/` and `.tasks/` local-only operating context. Do not commit them
+  unless the user explicitly changes that policy.
+- Do not put session-specific task ids, bug transcripts, command output, or
+  completion claims in this file. Put those in `tk` and, when they affect the
+  project state, summarize them in `ai/STATUS.md` or `ai/PLAN.md`.
 
-- **canto (The Framework):** Provides general-purpose agent primitives (Layer 3): LLM streaming, append-only session logging, agent loop, tool registry, and memory. It is the "Rails" of the agent stack.
-- **ion (The Application):** A TUI-based coding environment (Layer 4) that uses canto's primitives to implement a specific developer workflow. It is a "Rails app."
+## Project Boundary
 
-| Layer | Responsibility | Component |
-| ----- | -------------- | --------- |
-| **4** | **Application** | ion (TUI, Coding tools, Workspace logic) |
-| **3** | **Framework** | canto (Session log, Agent loop, Tooling, Memory) |
-| **2** | **Logic** | llm (Provider interface, Token counting, Cost) |
-| **1** | **Transport** | http (API clients, SSE, JSON-RPC) |
+- Ion is the product: CLI/TUI UX, slash commands, provider/model selection,
+  settings/state, display projection, workspace policy, and coding-tool UX.
+- Canto is the framework: agent loop, ordered runtime events, durable session
+  history, provider-visible context, tool lifecycle, retry/cancel settlement,
+  provider transforms, compaction, and harness primitives.
+- Keep the Canto/Ion split. If Ion needs to duplicate framework-owned behavior,
+  fix or extend Canto first, import the exact revision, then simplify Ion.
+- The native Canto path is the primary path. ACP, subscription bridges,
+  subagents, background agents, sandbox modes, branch views, workflows, and
+  other Pi+ features stay parked unless `ai/PLAN.md` and `tk` explicitly
+  promote one.
+- Ion is `v0.0.0`. Clean breaks are allowed; do not add compatibility shims,
+  fallback branches, or migration scaffolding unless the user asks for them.
 
-Current stabilization policy:
+## Core Product Bar
 
-- Keep the Canto/Ion split. Do not permanently merge Canto into Ion as a shortcut.
-- Treat Ion as the acceptance test for Canto until Ion's native minimal agent loop is stable.
-- Do not expand Canto as a public/general framework while Ion exposes core-loop bugs.
-- Fix framework-owned defects in Canto first, then import the exact Canto revision into Ion.
-- Prefer targeted rewrites of broken modules over bug-slice patching or whole-repo rewrites.
-- If a module acts as a second agent loop, second transcript writer, hidden session materializer, or unbounded feature host inside the native path, redesign that module from the desired final shape.
+Phase 1 targets a stable Pi-level core, not a visual clone of Pi:
 
-## What ion is
-
-A standalone terminal coding agent — same category as Claude Code, Codex, pi. Talks directly to LLM APIs, manages its own tools/memory/sessions. **Not a wrapper. Not a bridge.**
-
-**Primary path** (all new features go here first):
-```
-ion TUI → CantoBackend → canto framework → provider API
-```
-
-ACP/subscription bridges are parked during phase-1 Pi parity. They do not drive
-Ion's design, default CLI/TUI surface, or core-loop tests. Reconnect them later
-only after the native Canto path is stable.
-
-## Active Components
-
-| Component | Purpose |
-| --------- | ------- |
-| `internal/app` | Bubble Tea v2 host UI: transcript, composer, viewport, and footer. |
-| `AgentSession` | Canonical host-facing boundary (SubmitTurn, Events, Cancel). |
-| `CantoBackend` | Primary agent core — canto framework, full feature set. |
-| `ACPBackend` | Parked CLI/subscription bridge code; compile-covered only, not phase-1 scope. |
-| `archive/rust/` | Historical reference only; not active implementation guidance. |
-
-## Project Structure
-
-| Directory | Purpose |
-| --------- | ------- |
-| `cmd/ion/` | Main entry point and CLI flag parsing. |
-| `internal/` | Application-specific packages (UI, Backend adapters, Local storage). |
-| `ai/` | Active design memory and task context (local-only). |
-| `.tasks/` | Task tracking (`tk`) state (local-only). |
-
-## Historical Checkpoint
-
-- Use the Git tag `stable-rnk` for the last known stable Rust/RNK-era mainline.
-- Do not move or rewrite that tag.
-
-## Commands
-
-```bash
-go test ./...
-go run ./cmd/ion
-
-tk ls
-tk ready
-tk show <id>
-tk log <id> "finding"
-tk done <id>
+```text
+submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
 ```
 
-## Dogfood Issue Tracking
+- Use Pi as the primary internal reference for session history,
+  provider-visible context, event ordering, tool lifecycle, cancel/error
+  settlement, persistence/replay, and runtime state ownership.
+- Use Codex, Claude Code, Amp, Droid, OpenCode, Cursor, Zed, and similar tools
+  only as references for specific tradeoffs. Do not widen the core surface
+  because another agent has a feature.
+- Keep the default native path small and trusted until the core loop and TUI are
+  boring under deterministic tests, tmux, and live-provider dogfood.
+
+## Work Method
+
+- Read before changing: target file, immediate callers, shared utilities,
+  relevant Canto boundary code, `ai/` context, and the active `tk` task.
+- Use the `go-expert` skill for non-trivial Go changes.
+- Reproduce user-reported behavior before fixing when reproduction is possible.
+- Prefer contract-first fixes over patch-first fixes in the core loop:
+  1. identify the owner, Canto or Ion;
+  2. add or update focused tests for the invariant;
+  3. fix Canto first for framework-owned defects;
+  4. import the exact Canto revision into Ion;
+  5. simplify the Ion adapter/reducer after the contract is fixed.
+- Make targeted rewrites of broken modules when they remove duplicate ownership
+  or hidden state. Do not do broad churn unrelated to the task.
+- Use `tk` for all multi-step work. Log concrete findings while they are fresh:
+  files reviewed, root cause, fix, commands run, residual risk.
+- Short prompts like `proceed`, `what's next`, or `hows it look` mean: verify
+  repo truth first, select the next clear slice from `ai/`/`tk`, and execute it.
+
+## Dogfood Regressions
 
 User-reported Ion behavior bugs are dogfood regressions until proven otherwise.
 Handle them with evidence, not memory.
@@ -83,74 +80,72 @@ Handle them with evidence, not memory.
 - Before answering "do you remember", "is this fixed", "what was the last
   issue", or "how close are we", search `tk`, `.tasks/`, `ai/STATUS.md`,
   `ai/PLAN.md`, and recent commits for the exact symptom, error text,
-  provider/model, command, session id, or file path. If no record exists, say so
-  and create one before guessing.
-- Each regression gets a focused `tk` task unless the exact issue already has
-  one. `tk-ag0j` is a dogfood watch lane, not a bucket for bug details.
-- The task description or logs must capture the exact transcript/error snippet,
+  provider/model, command, session id, or file path.
+- If no record exists, say so and create a focused `tk` task instead of
+  guessing.
+- Each regression task should capture: exact transcript/error snippet,
   provider/model/endpoint/command/session when known, expected versus actual
-  behavior, owner area (`core`, `TUI`, `provider/runtime`, `storage/replay`,
-  `tooling`, or `config`), likely files, repro command, root cause, fix summary,
-  test/tmux/live evidence, and remaining caveats.
+  behavior, owner area, likely files, repro, root cause, fix summary,
+  deterministic/tmux/live evidence, and remaining caveats.
 - Broad audit tasks are not substitutes for focused regression tasks. Close a
-  regression only after the focused task records the fix, code/test paths, exact
-  verification commands, and any scenario-matrix update.
-- Keep repeatable bug details in `tk` logs. Keep `ai/STATUS.md` and
-  `ai/PLAN.md` at the phase/focus level. Only change this file for durable
-  operating rules that should apply across sessions.
+  regression only after the focused task records the fix, code/test paths,
+  exact verification commands, and any scenario-matrix update.
 
-## Rules
+## TUI Work
 
-- Treat Go as the active implementation language.
-- Treat `archive/rust/` as read-only reference unless explicitly migrating something out of it.
-- Do not let archived Rust docs drive new design decisions on `main`.
-- Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> cancel -> error -> persist/replay loop is reliable and covered by tests.
-- Use scriptable CLI/print mode as the first automation surface for core-loop regressions. When TUI behavior is in scope, use `tmux` or another PTY capture and read the captured terminal text to exercise the real Bubble Tea UI: launch header, help, local commands, live turn spacing, `--continue`/`/resume` replay, duplicate transcript symptoms, stale status lines, and footer rendering. Only use image screenshots when a visual-specific layout issue cannot be judged from terminal text.
-- Work from the high-level core-loop design down to code. Do not keep fixing isolated bug slices unless the file group has been reviewed against the active audit plan.
-- Use priority bands as guidance, not rigid tiers: core loop first; reliability table stakes such as minimal resume/continue and compaction when they protect context survival; product table stakes next; polish later; experimental/SOTA ideas last.
-- Advanced ideas from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and similar agents are references, not mandates. Adopt them only when they simplify Ion or clearly improve the core coding workflow.
-- For core-loop and TUI planning/review, compare against local references when useful: `/Users/nick/github/badlogic/pi-mono` as the simple reliable baseline, `/Users/nick/github/openai/codex` as the richer open-source CLI/session/tooling baseline, and Claude Code / Claude-like implementations as product references. Use references to clarify behavior, not to copy features wholesale.
-- Pi parity is primarily an internal architecture target: session history, provider-visible context, event ordering, tool lifecycle, cancel/error settlement, persistence/replay, and runtime state ownership. Do not copy Pi UI/UX wholesale; use Pi and other agents to validate TUI behavior only where it affects correctness, simplicity, or state clarity.
-- Pi is opinionated and intentionally minimal. Follow Pi's internal patterns by default, but allow deliberate Ion/Canto differences when they keep phase-1 core simple, improve correctness, or preserve an obvious phase-2 Pi+ extension path.
-- Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may keep its own UI/product choices and add SOTA capabilities when they preserve core simplicity.
-- Use `tk` for all multi-step work.
-- When a user reports a bug, follow the Dogfood Issue Tracking process above.
-- If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
-- During core-loop stabilization, develop Canto and Ion as tightly coupled local workstreams: audit/fix Canto-owned contracts in `../canto`, run Canto tests, commit/push coherent Canto fixes when requested/appropriate, then update Ion's Canto dependency and re-run Ion tests.
-- Do not do another broad `ai/` sweep unless a specific subsystem points to stale or conflicting context. Use `ai/STATUS.md`, `ai/PLAN.md`, and the active core-loop reset/audit docs, then move to source review.
-- Ion is `v0.0.0` unstable. There are no backwards guarantees.
-- Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
-- Keep global Ion files under `~/.ion/`.
-- Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, subagent paths, cost limits, verbosity.
-- Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state.
-- Provider API keys entered through Ion belong in `~/.ion/credentials.toml` with private file permissions, not in config or state.
-- Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write settings/state.
-- Prefer hardcoded defaults for ion-owned behavior. Add persistent state only when the value is machine-owned and genuinely needs to survive sessions.
+- Ion uses Bubble Tea v2. Use the `bubbletea` skill for non-trivial TUI
+  changes.
+- Keep the TUI as projection/control over runtime events. It must not own a
+  second provider-visible transcript, second agent loop, or hidden session
+  materializer.
+- For TUI behavior, use tmux or another PTY text capture to test the real
+  inline terminal path: launch header, composer, multiline input, transcript
+  commits, separators, status/footer, pickers, cancel, resume, and resize.
+- Unit tests are still required for reducer/state-machine behavior; tmux smoke
+  catches terminal integration bugs those tests cannot see.
 
-## Go Idioms
+## Config And State
 
-Use the `go-expert` skill for full guidance. Key modern idioms:
+- Keep Ion global files under `~/.ion/`.
+- Stable user-editable settings belong in `~/.ion/config.toml`.
+- Mutable runtime choices belong in `~/.ion/state.toml`.
+- Provider API keys entered through Ion belong in `~/.ion/credentials.toml`
+  with private file permissions.
+- Do not persist provider/model automatically at startup. Only explicit user
+  edits or TUI actions should write settings/state.
+- Prefer hardcoded defaults for Ion-owned behavior. Add persistent state only
+  when the value is machine-owned and genuinely needs to survive sessions.
 
-- `slices` / `maps` packages — not manual loops or `sort.Slice`
-- `iter.Seq` / `iter.Seq2` — range-over-function iterators (Go 1.23+)
-- `sync.WaitGroup.Go` — replaces `Add(1); go func() { defer Done() }()`
-- `errors.AsType[T](err)` — type-safe error unwrapping (Go 1.26)
-- `t.Context()` in tests — not `context.TODO()`
+## Verification
 
-## Reference
+- Run focused tests for the changed owner first.
+- For normal Go changes, run `go test ./... -count=1 -timeout 300s`,
+  `go vet ./...`, and `git diff --check`.
+- Run race subsets for state-machine, cancellation, streaming, storage, or TUI
+  concurrency changes.
+- Run tmux smoke for TUI behavior changes.
+- Run live provider smoke last for provider/tool-loop changes. Use the live
+  provider named by `ai/STATUS.md`, the active task, or the user.
+- Report exact commands. If a gate is skipped, say why.
 
-**Start here:**
+## Commands
 
-- `ai/STATUS.md` — current state, open questions, key file index
-- `ai/DESIGN.md` — architecture overview and event flow
-- `ai/DECISIONS.md` — append-only architectural decision log
+```bash
+go test ./... -count=1 -timeout 300s
+go vet ./...
+git diff --check
 
-**Topic specs (`ai/specs/`):**
+tk ready
+tk show <id>
+tk log <id> "finding"
+tk done <id>
+```
 
-- `subscription-providers.md` — provider table, ToS rationale, backend selection logic
-- `acp-integration.md` — ACP protocol, event mapping, known gaps
-- `status-and-config.md` — status line specs, config source of truth, model metadata rules
+## References
 
-**Historical Rust docs:**
-
-- `archive/rust/docs/`
+- `ai/README.md` - index of active context files.
+- `ai/STATUS.md` - current phase, focus, blockers, and latest evidence.
+- `ai/PLAN.md` - active work sequence and deferred work.
+- `ai/DESIGN.md` - current architecture.
+- `ai/DECISIONS.md` - durable decisions and recent decision log.
+- `/Users/nick/github/badlogic/pi-mono` - primary phase-1 internal reference.
