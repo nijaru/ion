@@ -129,8 +129,12 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 		nil,
 	)
 
-	updated, _ := model.submitText("/help")
+	updated, cmd := model.submitText("/help")
 	model = updated
+	if cmd == nil {
+		t.Fatal("expected input history command")
+	}
+	runCommandTree(t, cmd)
 
 	inputs, err := store.GetInputs(ctx, cwd, 1)
 	if err != nil {
@@ -138,6 +142,68 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	}
 	if len(inputs) != 1 || inputs[0] != "/help" {
 		t.Fatalf("inputs = %#v, want persisted slash command", inputs)
+	}
+}
+
+type blockingInputStore struct {
+	resumeOnlyStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingInputStore) AddInput(ctx context.Context, cwd, content string) error {
+	close(s.started)
+	<-s.release
+	return nil
+}
+
+func TestPersistInputHistoryReturnsBeforeStoreWriteCompletes(t *testing.T) {
+	store := &blockingInputStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Store = store
+	model.App.Workdir = t.TempDir()
+
+	returned := make(chan tea.Cmd, 1)
+	go func() {
+		returned <- model.persistInputHistory(context.Background(), "hello")
+	}()
+
+	var cmd tea.Cmd
+	select {
+	case cmd = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("persistInputHistory blocked on store write")
+	}
+	if cmd == nil {
+		t.Fatal("persistInputHistory returned nil command")
+	}
+	select {
+	case <-store.started:
+		t.Fatal("input history write ran before Bubble Tea command execution")
+	default:
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("input history command did not write to store")
+	}
+	select {
+	case msg := <-done:
+		t.Fatalf("input history command returned before store write completed: %T", msg)
+	default:
+	}
+
+	close(store.release)
+	if msg := <-done; msg != nil {
+		t.Fatalf("input history command result = %T, want nil", msg)
 	}
 }
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -80,8 +81,12 @@ func (m Model) persistInputHistory(ctx context.Context, text string) tea.Cmd {
 	if m.Model.Store == nil || strings.TrimSpace(m.App.Workdir) == "" {
 		return nil
 	}
-	if err := m.Model.Store.AddInput(ctx, m.App.Workdir, text); err != nil {
-		return persistErrorCmd("persist input history", err)
+	store := m.Model.Store
+	workdir := m.App.Workdir
+	return func() tea.Msg {
+		if err := store.AddInput(ctx, workdir, text); err != nil {
+			return localErrorMsg{err: fmt.Errorf("persist input history: %w", err)}
+		}
+		return nil
 	}
-	return nil
 }
