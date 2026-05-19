@@ -11,15 +11,23 @@ import (
 )
 
 func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
-	cfg, err := config.LoadStable()
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-	}
 	if len(fields) == 1 {
-		return m, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: m.settingsSummary(cfg),
-		})
+		if m.Model.SettingsRequest != 0 {
+			return m, cmdError(m.localCommandBusyMessage("loading settings"))
+		}
+		m.Model.SettingsRequest++
+		requestID := m.Model.SettingsRequest
+		m.Progress.Status = "Loading settings..."
+		return m, func() tea.Msg {
+			cfg, err := loadStableConfig()
+			if err != nil {
+				return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to load config: %w", err)}
+			}
+			return settingsCommandMsg{
+				requestID: requestID,
+				summary:   m.settingsSummary(cfg),
+			}
+		}
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
@@ -27,16 +35,87 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		)
 	}
 
-	updated := *cfg
 	key := strings.ToLower(strings.TrimSpace(fields[1]))
 	value := strings.ToLower(strings.TrimSpace(fields[2]))
+	if _, _, err := settingsConfigUpdate(&config.Config{}, key, value); err != nil {
+		return m, cmdError(err.Error())
+	}
+	m.Model.SettingsRequest++
+	requestID := m.Model.SettingsRequest
+	m.Progress.Status = "Saving settings..."
+	activeCfg := m.Model.Config
+	preset := m.activePreset()
+	return m, func() tea.Msg {
+		stableCfg, err := loadStableConfig()
+		if err != nil {
+			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to load config: %w", err)}
+		}
+		updated, notice, err := settingsConfigUpdate(stableCfg, key, value)
+		if err != nil {
+			return settingsCommandMsg{requestID: requestID, err: err}
+		}
+		if err := saveConfigFile(&updated); err != nil {
+			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to save config: %w", err)}
+		}
+		runtimeCfg, err := loadConfigFile()
+		if err != nil {
+			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to reload runtime config: %w", err)}
+		}
+		mergeRuntimeSelection(runtimeCfg, activeCfg)
+		backendCfg, err := m.runtimeConfigForPreset(runtimeCfg, preset)
+		if err != nil {
+			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to resolve active preset: %w", err)}
+		}
+		return settingsCommandMsg{
+			requestID:     requestID,
+			transition:    newRuntimeTransition(runtimeCfg, backendCfg, preset, ""),
+			hasTransition: true,
+			notice:        notice,
+		}
+	}
+}
+
+func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.Cmd) {
+	if msg.requestID == 0 || msg.requestID != m.Model.SettingsRequest {
+		return m, nil
+	}
+	m.Model.SettingsRequest = 0
+	if isLocalBusyStatus(m.Progress.Status) {
+		m.Progress.Status = ""
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	if msg.summary != "" {
+		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.summary})
+	}
+	if !msg.hasTransition {
+		return m, nil
+	}
+	var err error
+	m, err = m.commitRuntimeTransition(msg.transition)
+	if err != nil {
+		return m, runtimeTransitionErrorCmd(err)
+	}
+	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+}
+
+func settingsConfigUpdate(
+	cfg *config.Config,
+	key string,
+	value string,
+) (config.Config, string, error) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	updated := *cfg
 	var notice string
 
 	switch key {
 	case "retry":
 		enabled, ok := parseOnOff(value)
 		if !ok {
-			return m, cmdError("usage: /settings retry on|off")
+			return config.Config{}, "", fmt.Errorf("usage: /settings retry on|off")
 		}
 		updated.RetryUntilCancelled = &enabled
 		if enabled {
@@ -47,42 +126,42 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	case "tool", "tools":
 		verbosity, ok := parseToolVerbosity(value)
 		if !ok {
-			return m, cmdError("usage: /settings tool auto|full|collapsed|hidden")
+			return config.Config{}, "", fmt.Errorf("usage: /settings tool auto|full|collapsed|hidden")
 		}
 		updated.ToolVerbosity = verbosity
 		notice = "Tool display: " + displayToolVerbosity(verbosity)
 	case "read":
 		output := config.NormalizeReadOutput(value)
 		if output == "" {
-			return m, cmdError("usage: /settings read full|summary|hidden")
+			return config.Config{}, "", fmt.Errorf("usage: /settings read full|summary|hidden")
 		}
 		updated.ReadOutput = output
 		notice = "Read output: " + displayReadOutput(output)
 	case "write":
 		output := config.NormalizeWriteOutput(value)
 		if output == "" {
-			return m, cmdError("usage: /settings write diff|summary|hidden")
+			return config.Config{}, "", fmt.Errorf("usage: /settings write diff|summary|hidden")
 		}
 		updated.WriteOutput = output
 		notice = "Write output: " + displayWriteOutput(output)
 	case "bash":
 		output := config.NormalizeBashOutput(value)
 		if output == "" {
-			return m, cmdError("usage: /settings bash full|summary|hidden")
+			return config.Config{}, "", fmt.Errorf("usage: /settings bash full|summary|hidden")
 		}
 		updated.BashOutput = output
 		notice = "Bash output: " + displayBashOutput(output)
 	case "thinking":
 		verbosity := config.NormalizeVerbosity(value)
 		if verbosity == "" {
-			return m, cmdError("usage: /settings thinking full|collapsed|hidden")
+			return config.Config{}, "", fmt.Errorf("usage: /settings thinking full|collapsed|hidden")
 		}
 		updated.ThinkingVerbosity = verbosity
 		notice = "Thinking display: " + verbosity
 	case "busy", "busy_input":
 		mode := config.NormalizeBusyInput(value)
 		if mode == "" {
-			return m, cmdError("usage: /settings busy queue|steer")
+			return config.Config{}, "", fmt.Errorf("usage: /settings busy queue|steer")
 		}
 		if mode == "queue" {
 			updated.BusyInput = ""
@@ -91,28 +170,9 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		}
 		notice = "Busy input: " + mode
 	default:
-		return m, cmdError("usage: /settings [retry|tool|read|write|bash|thinking|busy] ...")
+		return config.Config{}, "", fmt.Errorf("usage: /settings [retry|tool|read|write|bash|thinking|busy] ...")
 	}
-
-	if err := config.Save(&updated); err != nil {
-		return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
-	}
-	runtimeCfg, err := config.Load()
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to reload runtime config: %v", err))
-	}
-	mergeRuntimeSelection(runtimeCfg, m.Model.Config)
-	backendCfg, err := m.runtimeConfigForActivePreset(runtimeCfg)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-	}
-	transition := newRuntimeTransition(runtimeCfg, backendCfg, m.activePreset(), "")
-	var commitErr error
-	m, commitErr = m.commitRuntimeTransition(transition)
-	if commitErr != nil {
-		return m, runtimeTransitionErrorCmd(commitErr)
-	}
-	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
+	return updated, notice, nil
 }
 
 func (m Model) settingsSummary(cfg *config.Config) string {

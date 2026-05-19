@@ -15,6 +15,7 @@ import (
 
 var (
 	loadStableConfig = config.LoadStable
+	loadConfigFile   = config.Load
 	saveConfigFile   = config.Save
 	saveProviderKey  = credentials.SaveAPIKey
 )
