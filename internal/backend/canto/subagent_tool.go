@@ -209,6 +209,14 @@ func (b *Backend) newChildAgent(
 	if cfg == nil {
 		return nil, fmt.Errorf("subagent config is not initialized")
 	}
+	b.mu.Lock()
+	tools := b.tools
+	harness := b.harness
+	provider := b.llm
+	b.mu.Unlock()
+	if tools == nil || harness == nil || harness.Agent == nil || provider == nil {
+		return nil, fmt.Errorf("subagent runtime is not initialized")
+	}
 	preset := registry.PresetPrimary
 	if persona.ModelSlot == subagents.ModelSlotFast && strings.TrimSpace(cfg.FastModel) != "" {
 		preset = registry.PresetFast
@@ -221,15 +229,12 @@ func (b *Backend) newChildAgent(
 		return nil, fmt.Errorf("subagent %s resolved empty model", persona.Name)
 	}
 
-	scopedTools, err := b.tools.Subset(persona.Tools...)
+	scopedTools, err := tools.Subset(persona.Tools...)
 	if err != nil {
 		return nil, err
 	}
 
-	if b.harness == nil || b.harness.Agent == nil {
-		return nil, fmt.Errorf("subagent runtime is not initialized")
-	}
-	parent, ok := b.harness.Agent.(interface{ Instructions() string })
+	parent, ok := harness.Agent.(interface{ Instructions() string })
 	if !ok {
 		return nil, fmt.Errorf("subagent parent agent does not expose instructions")
 	}
@@ -240,7 +245,7 @@ func (b *Backend) newChildAgent(
 		reflexionProcessor(),
 	}
 	return agent.New(
-		persona.Name, instructions, runtimeCfg.Model, b.llm, scopedTools,
+		persona.Name, instructions, runtimeCfg.Model, provider, scopedTools,
 		agent.WithRequestProcessors(requestProcessors...),
 	), nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/runtime"
 	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/subagents"
 )
 
@@ -160,6 +161,16 @@ func TestSubagentContextModeNoneRejectsExtraContext(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "context must be empty") {
 		t.Fatalf("parseSubagentInput error = %v, want context rejection", err)
+	}
+}
+
+func TestNewChildAgentRequiresRuntimeState(t *testing.T) {
+	b := New()
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+
+	_, err := b.newChildAgent(t.Context(), subagents.Persona{Name: "explorer"})
+	if err == nil || !strings.Contains(err.Error(), "subagent runtime is not initialized") {
+		t.Fatalf("newChildAgent error = %v, want runtime not initialized", err)
 	}
 }
 

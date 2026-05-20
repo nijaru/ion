@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +169,76 @@ func TestCancelTurnDuringOpenDoesNotWaitForProviderSetup(t *testing.T) {
 		}
 	case <-time.After(backendEventWaitTimeout):
 		t.Fatal("timed out waiting for Open to finish")
+	}
+	defer func() { _ = b.Session().Close() }()
+}
+
+func TestSetConfigDuringOpenDoesNotRaceWithProviderPublish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	providerStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		close(providerStarted)
+		select {
+		case <-releaseProvider:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return llm.NewFauxProvider("openai", llm.FauxStep{Content: "ok"}), nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+
+	openDone := make(chan error, 1)
+	go func() {
+		openDone <- b.Session().Open(ctx)
+	}()
+
+	select {
+	case <-providerStarted:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for provider setup")
+	}
+
+	var stop atomic.Bool
+	configDone := make(chan struct{})
+	go func() {
+		defer close(configDone)
+		for !stop.Load() {
+			b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+		}
+	}()
+
+	close(releaseProvider)
+	select {
+	case err := <-openDone:
+		if err != nil {
+			t.Fatalf("open backend: %v", err)
+		}
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for Open to finish")
+	}
+	stop.Store(true)
+	select {
+	case <-configDone:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for SetConfig loop")
 	}
 	defer func() { _ = b.Session().Close() }()
 }

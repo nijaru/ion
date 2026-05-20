@@ -19,17 +19,26 @@ func (b *Backend) Name() string {
 }
 
 func (b *Backend) SetConfig(cfg *config.Config) {
-	b.cfgMu.Lock()
-	if cfg == nil {
-		b.cfg = nil
-		b.cfgMu.Unlock()
-		return
+	var copied *config.Config
+	if cfg != nil {
+		cfgCopy := *cfg
+		copied = &cfgCopy
 	}
-	copied := *cfg
-	b.cfg = &copied
+
+	b.cfgMu.Lock()
+	b.cfg = copied
 	b.cfgMu.Unlock()
-	if retry, ok := retryProviderInChain(b.compactLLM); ok {
-		retry.Config.RetryForever = copied.RetryUntilCancelledEnabled()
+
+	b.updateRetryConfig(copied)
+}
+
+func (b *Backend) updateRetryConfig(cfg *config.Config) {
+	b.mu.Lock()
+	provider := b.compactLLM
+	b.mu.Unlock()
+
+	if retry, ok := retryProviderInChain(provider); ok {
+		retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 		retry.Config.RetryForeverTransportOnly = true
 	}
 }
