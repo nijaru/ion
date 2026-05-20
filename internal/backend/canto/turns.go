@@ -202,21 +202,21 @@ func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool)
 	if usage == nil {
 		return ionsession.TokenUsage{}, false
 	}
-	input := usage.InputTokens
-	output := usage.OutputTokens
-	total := usage.TotalTokens
-	if total == 0 {
-		total = input + output
+	current, ok := tokenUsageFromCantoUsage(*usage)
+	if !ok {
+		return ionsession.TokenUsage{}, false
 	}
-	cost := usage.Cost
-	if t.seen && (input < t.input || output < t.output || total < t.total || cost < t.cost) {
+	if t.seen && (current.Input < t.input ||
+		current.Output < t.output ||
+		current.Total < t.total ||
+		current.Cost < t.cost) {
 		t.reset()
 	}
 
-	deltaInput := input
-	deltaOutput := output
-	deltaTotal := total
-	deltaCost := cost
+	deltaInput := current.Input
+	deltaOutput := current.Output
+	deltaTotal := current.Total
+	deltaCost := current.Cost
 	if t.seen {
 		deltaInput -= t.input
 		deltaOutput -= t.output
@@ -225,10 +225,10 @@ func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool)
 	}
 
 	t.seen = true
-	t.input = input
-	t.output = output
-	t.total = total
-	t.cost = cost
+	t.input = current.Input
+	t.output = current.Output
+	t.total = current.Total
+	t.cost = current.Cost
 
 	if deltaInput == 0 && deltaOutput == 0 && deltaTotal == 0 && deltaCost == 0 {
 		return ionsession.TokenUsage{}, false
@@ -238,6 +238,22 @@ func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool)
 		Output: deltaOutput,
 		Total:  deltaTotal,
 		Cost:   deltaCost,
+	}, true
+}
+
+func tokenUsageFromCantoUsage(usage llm.Usage) (ionsession.TokenUsage, bool) {
+	total := usage.TotalTokens
+	if total == 0 {
+		total = usage.InputTokens + usage.OutputTokens
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && total == 0 && usage.Cost == 0 {
+		return ionsession.TokenUsage{}, false
+	}
+	return ionsession.TokenUsage{
+		Input:  usage.InputTokens,
+		Output: usage.OutputTokens,
+		Total:  total,
+		Cost:   usage.Cost,
 	}, true
 }
 

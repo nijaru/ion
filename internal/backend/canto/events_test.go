@@ -666,6 +666,41 @@ func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsChildCompletedEmitsUsage(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewChildCompletedEvent("session-id", csession.ChildCompletedData{
+		ChildID: "explorer-123",
+		Summary: "done",
+		Usage: llm.Usage{
+			InputTokens:  12,
+			OutputTokens: 5,
+			TotalTokens:  23,
+			Cost:         0.0042,
+		},
+	})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 0)
+
+	completed, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildCompleted)
+	if !ok {
+		t.Fatalf("first event = %T, want ChildCompleted", completed)
+	}
+	if completed.AgentName != "explorer-123" || completed.Result != "done" {
+		t.Fatalf("completed child = %#v", completed)
+	}
+
+	usage, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatalf("second event = %T, want TokenUsage", usage)
+	}
+	if usage.Input != 12 || usage.Output != 5 || usage.Total != 23 || usage.Cost != 0.0042 {
+		t.Fatalf("token usage = %#v", usage)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {
