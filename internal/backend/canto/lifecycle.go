@@ -101,6 +101,11 @@ func (b *Backend) open(ctx context.Context) error {
 	}
 
 	steering := newSteeringMutator()
+	compaction := compactionRuntime{
+		provider:  p,
+		model:     modelName,
+		maxTokens: contextLimitFromConfig(cfg),
+	}
 
 	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
@@ -120,7 +125,7 @@ func (b *Backend) open(ctx context.Context) error {
 					Base:   ionsession.BaseNow(),
 					Status: "Compacting context...",
 				}
-				_, err := b.compactSession(ctx, sess)
+				_, err := compaction.compactSession(ctx, sess)
 				if err == nil {
 					b.events <- ionsession.StatusChanged{
 						Base:   ionsession.BaseNow(),

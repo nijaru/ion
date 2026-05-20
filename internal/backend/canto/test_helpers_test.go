@@ -115,6 +115,17 @@ type blockingCountProvider struct {
 	once    sync.Once
 }
 
+type blockingFirstCountProvider struct {
+	*ctesting.FauxProvider
+	mu             sync.Mutex
+	id             string
+	tokens         int
+	entered        chan struct{}
+	release        chan struct{}
+	once           sync.Once
+	generateModels []string
+}
+
 type blockingStreamProvider struct {
 	compactProvider
 	streamCtx chan context.Context
@@ -216,6 +227,46 @@ func (p *blockingCountProvider) CountTokens(
 	})
 	<-ctx.Done()
 	return 0, ctx.Err()
+}
+
+func (p *blockingFirstCountProvider) ID() string {
+	return p.id
+}
+
+func (p *blockingFirstCountProvider) Generate(
+	ctx context.Context,
+	req *llm.Request,
+) (*llm.Response, error) {
+	p.mu.Lock()
+	p.generateModels = append(p.generateModels, req.Model)
+	p.mu.Unlock()
+	return &llm.Response{Content: "condensed summary"}, nil
+}
+
+func (p *blockingFirstCountProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
+	block := false
+	p.once.Do(func() {
+		close(p.entered)
+		block = true
+	})
+	if block {
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	return p.tokens, nil
+}
+
+func (p *blockingFirstCountProvider) GenerateModels() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.generateModels...)
 }
 
 func (p *overflowRecoveryProvider) IsContextOverflow(err error) bool {

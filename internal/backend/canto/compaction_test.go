@@ -577,6 +577,86 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnProactiveCompactionUsesTurnRuntimeSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-proactive-snapshot",
+		"openai/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+	)
+
+	provider := &blockingFirstCountProvider{
+		FauxProvider: ctesting.NewFauxProvider(
+			"openai",
+			ctesting.Step{Content: "reply after snapshot compaction"},
+		),
+		id:      "openai",
+		tokens:  80,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "proactive compaction uses stable runtime"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	select {
+	case <-provider.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for proactive compaction token check")
+	}
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-b", ContextLimit: 200})
+	close(provider.release)
+
+	waitForTurnFinished(t, b.Session().Events())
+
+	models := provider.GenerateModels()
+	if len(models) != 1 || models[0] != "model-a" {
+		t.Fatalf("compaction Generate models = %#v, want [model-a]", models)
+	}
+}
+
 func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

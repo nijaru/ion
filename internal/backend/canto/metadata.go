@@ -53,15 +53,15 @@ func (b *Backend) configSnapshot() *config.Config {
 	return &copied
 }
 
-func (b *Backend) Provider() string {
-	if cfg := b.configSnapshot(); cfg != nil && cfg.Provider != "" {
+func providerFromConfig(cfg *config.Config) string {
+	if cfg != nil && cfg.Provider != "" {
 		return cfg.Provider
 	}
 	return os.Getenv("ION_PROVIDER")
 }
 
-func (b *Backend) Model() string {
-	if cfg := b.configSnapshot(); cfg != nil && cfg.Model != "" {
+func modelFromConfig(cfg *config.Config) string {
+	if cfg != nil && cfg.Model != "" {
 		return cfg.Model
 	}
 	m := os.Getenv("ION_MODEL")
@@ -71,20 +71,31 @@ func (b *Backend) Model() string {
 	return m
 }
 
-func (b *Backend) ContextLimit() int {
-	cfg := b.configSnapshot()
+func contextLimitFromConfig(cfg *config.Config) int {
 	if cfg != nil && cfg.ContextLimit > 0 {
 		return cfg.ContextLimit
 	}
 	if limit, ok := registry.CachedContextLimitForConfig(cfg); ok {
 		return limit
 	}
-	provider := b.Provider()
-	model := b.Model()
+	provider := providerFromConfig(cfg)
+	model := modelFromConfig(cfg)
 	if limit, ok := registry.CachedContextLimit(provider, model); ok {
 		return limit
 	}
 	return 0
+}
+
+func (b *Backend) Provider() string {
+	return providerFromConfig(b.configSnapshot())
+}
+
+func (b *Backend) Model() string {
+	return modelFromConfig(b.configSnapshot())
+}
+
+func (b *Backend) ContextLimit() int {
+	return contextLimitFromConfig(b.configSnapshot())
 }
 
 func (b *Backend) ToolSurface() backend.ToolSurface {
