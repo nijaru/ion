@@ -711,6 +711,160 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	}
 }
 
+func TestChildRequestedPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	next, cmd := model.Update(session.ChildRequested{
+		AgentName: "worker-1",
+		Query:     "inspect the repo",
+	})
+	model = next.(Model)
+
+	if model.InFlight.Subagents["worker-1"] == nil {
+		t.Fatal("subagent progress missing after request")
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends during Update = %#v, want none", storageSess.appends)
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 2)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		subagent, ok := event.(storage.Subagent)
+		if !ok {
+			t.Fatalf("append event = %#v, want subagent", event)
+		}
+		if subagent.Name != "worker-1" ||
+			subagent.Content != "Started: inspect the repo" ||
+			subagent.IsError {
+			t.Fatalf("subagent append = %#v, want started worker-1", subagent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subagent request persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("subagent request persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one subagent append", storageSess.appends)
+	}
+}
+
+func TestChildCompletionPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+	model.InFlight.Subagents["worker-1"] = &SubagentProgress{
+		ID:     "worker-1",
+		Name:   "worker-1",
+		Status: "Started",
+	}
+
+	next, cmd := model.Update(session.ChildCompleted{
+		AgentName: "worker-1",
+		Result:    "done",
+	})
+	model = next.(Model)
+
+	if model.InFlight.Subagents["worker-1"] != nil {
+		t.Fatalf("subagent progress = %#v, want cleared", model.InFlight.Subagents["worker-1"])
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends during Update = %#v, want none", storageSess.appends)
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 2)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		subagent, ok := event.(storage.Subagent)
+		if !ok {
+			t.Fatalf("append event = %#v, want subagent", event)
+		}
+		if subagent.Name != "worker-1" ||
+			subagent.Content != "Completed: done" ||
+			subagent.IsError {
+			t.Fatalf("subagent append = %#v, want completed worker-1", subagent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subagent completion persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("subagent completion persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one subagent append", storageSess.appends)
+	}
+}
+
+func TestChildFailurePersistenceFailureKeepsReducerArmed(t *testing.T) {
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+	model.InFlight.Subagents["worker-2"] = &SubagentProgress{
+		ID:     "worker-2",
+		Name:   "worker-2",
+		Status: "Started",
+	}
+
+	next, cmd := model.Update(session.ChildFailed{
+		AgentName: "worker-2",
+		Error:     "boom",
+	})
+	model = next.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "Subagent failed: boom" {
+		t.Fatalf("last error = %q, want subagent failure", model.Progress.LastError)
+	}
+	if model.InFlight.Subagents["worker-2"] != nil {
+		t.Fatalf("subagent progress = %#v, want cleared", model.InFlight.Subagents["worker-2"])
+	}
+	requireSequenceCmd(t, cmd)
+	msgs := runSequencePrefix(t, cmd, 2)
+	var foundPersistError bool
+	for _, msg := range msgs {
+		if local, ok := msg.(localErrorMsg); ok &&
+			strings.Contains(local.err.Error(), "persist subagent failure: disk full") {
+			foundPersistError = true
+		}
+	}
+	if !foundPersistError {
+		t.Fatalf("command messages = %#v, want subagent persistence error", msgs)
+	}
+}
+
 func TestChildCompletedDuringTurnDoesNotMarkParentComplete(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true

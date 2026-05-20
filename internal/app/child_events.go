@@ -40,25 +40,23 @@ func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd)
 	m.InFlight.Subagents[msg.AgentName] = p
 	m.Progress.Mode = stateWorking
 
-	if err := m.persistEntry(storage.Subagent{
-		Type:    "subagent",
-		Name:    msg.AgentName,
-		Content: "Started: " + msg.Query,
-		IsError: false,
-		TS:      now(),
-	}); err != nil {
-		return m, tea.Sequence(m.printEntries(session.Entry{
-			Role:    session.Subagent,
-			Title:   p.Name,
-			Content: "Started: " + p.Intent,
-		}), persistErrorCmd("persist subagent start", err), m.awaitSessionEvent())
-	}
-	return m, tea.Sequence(m.printEntries(session.Entry{
+	entry := session.Entry{
 		Role:      session.Subagent,
 		Timestamp: msg.Timestamp,
 		Title:     p.Name,
 		Content:   "Started: " + p.Intent,
-	}), m.awaitSessionEvent())
+	}
+	return m, sequenceCmds(
+		m.printEntries(entry),
+		m.persistEntryCmd("persist subagent start", storage.Subagent{
+			Type:    "subagent",
+			Name:    msg.AgentName,
+			Content: entry.Content,
+			IsError: false,
+			TS:      now(),
+		}),
+		m.awaitSessionEvent(),
+	)
 }
 
 func (m Model) handleChildStarted(msg session.ChildStarted) (Model, tea.Cmd) {
@@ -100,20 +98,17 @@ func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd)
 		m.Progress.Mode = stateComplete
 	}
 
-	if err := m.persistEntry(storage.Subagent{
-		Type:    "subagent",
-		Name:    msg.AgentName,
-		Content: committed.Content,
-		IsError: false,
-		TS:      now(),
-	}); err != nil {
-		return m, tea.Sequence(
-			m.printEntries(committed),
-			persistErrorCmd("persist subagent completion", err),
-			m.awaitSessionEvent(),
-		)
-	}
-	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
+	return m, sequenceCmds(
+		m.printEntries(committed),
+		m.persistEntryCmd("persist subagent completion", storage.Subagent{
+			Type:    "subagent",
+			Name:    msg.AgentName,
+			Content: committed.Content,
+			IsError: false,
+			TS:      now(),
+		}),
+		m.awaitSessionEvent(),
+	)
 }
 
 func (m Model) handleChildBlocked(msg session.ChildBlocked) (Model, tea.Cmd) {
@@ -144,18 +139,15 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 	m.Progress.Mode = stateError
 	m.Progress.LastError = "Subagent failed: " + msg.Error
 
-	if err := m.persistEntry(storage.Subagent{
-		Type:    "subagent",
-		Name:    msg.AgentName,
-		Content: committed.Content,
-		IsError: true,
-		TS:      now(),
-	}); err != nil {
-		return m, tea.Sequence(
-			m.printEntries(committed),
-			persistErrorCmd("persist subagent failure", err),
-			m.awaitSessionEvent(),
-		)
-	}
-	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
+	return m, sequenceCmds(
+		m.printEntries(committed),
+		m.persistEntryCmd("persist subagent failure", storage.Subagent{
+			Type:    "subagent",
+			Name:    msg.AgentName,
+			Content: committed.Content,
+			IsError: true,
+			TS:      now(),
+		}),
+		m.awaitSessionEvent(),
+	)
 }

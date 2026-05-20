@@ -190,8 +190,12 @@ loop:
 	for {
 		select {
 		case ev := <-b.Events():
-			updated, _ := model.Update(ev)
+			updated, cmd := model.Update(ev)
 			model = updated.(Model)
+			switch ev.(type) {
+			case session.ChildRequested, session.ChildCompleted, session.ChildFailed:
+				runSequencePrefix(t, cmd, 2)
+			}
 			if _, ok := ev.(session.TurnFinished); ok {
 				break loop
 			}
