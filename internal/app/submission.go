@@ -21,17 +21,15 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	m.Progress.Status = ""
 	m.Progress.StatusUpdatedAt = time.Time{}
 	entry := session.Entry{Role: session.System, Content: reason}
-	if err := m.persistEntry(storage.System{
-		Type:    "system",
-		Content: entry.Content,
-		TS:      now(),
-	}); err != nil {
-		return m, tea.Batch(
-			tea.Sequence(m.printEntries(entry), persistErrorCmd("persist cancellation", err)),
-			cancelTurnCmd(m.Model.Session),
-		)
-	}
-	return m, tea.Batch(m.printEntries(entry), cancelTurnCmd(m.Model.Session))
+	return m, sequenceCmds(
+		m.printEntries(entry),
+		m.persistEntryCmd("persist cancellation", storage.System{
+			Type:    "system",
+			Content: entry.Content,
+			TS:      now(),
+		}),
+		cancelTurnCmd(m.Model.Session),
+	)
 }
 
 func cancelTurnCmd(sess session.AgentSession) tea.Cmd {

@@ -514,14 +514,17 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
 	}
+	if len(stored.appends) != 0 {
+		t.Fatalf("appends before command execution = %#v, want none", stored.appends)
+	}
+	runCommandTree(t, cmd)
 	if len(stored.appends) != 1 {
-		t.Fatalf("appends = %#v, want one cancellation entry", stored.appends)
+		t.Fatalf("appends after command execution = %#v, want one cancellation entry", stored.appends)
 	}
 	system, ok := stored.appends[0].(storage.System)
 	if !ok || system.Content != "Canceled by user" {
 		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}
-	runCommandTree(t, cmd)
 	if sess.cancels != 1 {
 		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
 	}
