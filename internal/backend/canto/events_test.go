@@ -311,8 +311,8 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	if !ok {
 		t.Fatal("first event is not TokenUsage")
 	}
-	if first.Input != 10 || first.Output != 0 || first.Cost != 0.01 {
-		t.Fatalf("first usage = %#v, want 10/0/0.01", first)
+	if first.Input != 10 || first.Output != 0 || first.Total != 10 || first.Cost != 0.01 {
+		t.Fatalf("first usage = %#v, want 10/0/10/0.01", first)
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
@@ -327,8 +327,49 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	if !ok {
 		t.Fatal("second event is not TokenUsage")
 	}
-	if second.Input != 0 || second.Output != 5 || math.Abs(second.Cost-0.005) > 1e-9 {
-		t.Fatalf("second usage = %#v, want 0/5/0.005", second)
+	if second.Input != 0 || second.Output != 5 || second.Total != 5 || math.Abs(second.Cost-0.005) > 1e-9 {
+		t.Fatalf("second usage = %#v, want 0/5/5/0.005", second)
+	}
+}
+
+func TestTranslateRunEventUsesProviderTotalUsageDelta(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+	usage := &turnUsageTracker{}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  10,
+			OutputTokens: 2,
+			TotalTokens:  20,
+			Cost:         0.01,
+		}},
+	}, 7, usage)
+	first, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatal("first event is not TokenUsage")
+	}
+	if first.Input != 10 || first.Output != 2 || first.Total != 20 || first.Cost != 0.01 {
+		t.Fatalf("first usage = %#v, want 10/2/20/0.01", first)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  10,
+			OutputTokens: 5,
+			TotalTokens:  24,
+			Cost:         0.015,
+		}},
+	}, 7, usage)
+	second, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatal("second event is not TokenUsage")
+	}
+	if second.Input != 0 || second.Output != 3 || second.Total != 4 || math.Abs(second.Cost-0.005) > 1e-9 {
+		t.Fatalf("second usage = %#v, want 0/3/4/0.005", second)
 	}
 }
 

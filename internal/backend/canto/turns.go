@@ -187,6 +187,7 @@ type turnUsageTracker struct {
 	seen   bool
 	input  int
 	output int
+	total  int
 	cost   float64
 }
 
@@ -200,32 +201,39 @@ func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool)
 	}
 	input := usage.InputTokens
 	output := usage.OutputTokens
+	total := usage.TotalTokens
+	if total == 0 {
+		total = input + output
+	}
 	cost := usage.Cost
-	if t.seen && (input < t.input || output < t.output || cost < t.cost) {
+	if t.seen && (input < t.input || output < t.output || total < t.total || cost < t.cost) {
 		t.reset()
 	}
 
 	deltaInput := input
 	deltaOutput := output
+	deltaTotal := total
 	deltaCost := cost
 	if t.seen {
 		deltaInput -= t.input
 		deltaOutput -= t.output
+		deltaTotal -= t.total
 		deltaCost -= t.cost
 	}
 
 	t.seen = true
 	t.input = input
 	t.output = output
+	t.total = total
 	t.cost = cost
 
-	if deltaInput == 0 && deltaOutput == 0 && deltaCost == 0 {
+	if deltaInput == 0 && deltaOutput == 0 && deltaTotal == 0 && deltaCost == 0 {
 		return ionsession.TokenUsage{}, false
 	}
 	return ionsession.TokenUsage{
 		Input:  deltaInput,
 		Output: deltaOutput,
-		Total:  deltaInput + deltaOutput,
+		Total:  deltaTotal,
 		Cost:   deltaCost,
 	}, true
 }
