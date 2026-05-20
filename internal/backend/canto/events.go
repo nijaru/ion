@@ -132,6 +132,10 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				AgentName: data.ChildID,
 				Result:    data.Summary,
 			}
+			if usage, ok := tokenUsageFromCantoUsage(data.Usage); ok {
+				usage.Base = base
+				b.events <- usage
+			}
 		}
 	case session.ChildBlocked:
 		var data session.ChildBlockedData
