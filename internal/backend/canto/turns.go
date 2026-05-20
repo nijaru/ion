@@ -84,6 +84,9 @@ func (b *Backend) prepareSubmittedTurn(
 			harnessSession = b.harness.Session(sessionID)
 		}
 		b.mu.Unlock()
+		if !b.isActiveTurn(turnID) {
+			return abort(context.Canceled)
+		}
 	}
 
 	if ionStore != nil {
