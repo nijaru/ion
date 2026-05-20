@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,52 @@ func TestSteeringMutatorKeepsOtherSessionsPending(t *testing.T) {
 	}
 	if len(entries) != 1 || !strings.Contains(entries[0].Message.Content, "second") {
 		t.Fatalf("other entries = %#v, want deferred second steering", entries)
+	}
+}
+
+func TestSteeringMutatorDropsAppliedItemsAfterLaterAppendFailure(t *testing.T) {
+	mutator := newSteeringMutator()
+	if _, err := mutator.Submit(t.Context(), "s1", "first steering"); err != nil {
+		t.Fatalf("submit first: %v", err)
+	}
+	if _, err := mutator.Submit(t.Context(), "s1", "second steering"); err != nil {
+		t.Fatalf("submit second: %v", err)
+	}
+
+	writeErr := errors.New("persist steering")
+	writer := &failingAfterNWriter{failAt: 4, err: writeErr}
+	sess := csession.New("s1").WithWriter(writer)
+
+	if err := mutator.Mutate(t.Context(), nil, "", sess); !errors.Is(err, writeErr) {
+		t.Fatalf("mutate error = %v, want %v", err, writeErr)
+	}
+
+	writer.failAt = 0
+	if err := mutator.Mutate(t.Context(), nil, "", sess); err != nil {
+		t.Fatalf("retry mutate: %v", err)
+	}
+
+	entries, err := sess.EffectiveEntries()
+	if err != nil {
+		t.Fatalf("effective entries: %v", err)
+	}
+
+	var firstCount, secondCount int
+	for _, entry := range entries {
+		if strings.Contains(entry.Message.Content, "first steering") {
+			firstCount++
+		}
+		if strings.Contains(entry.Message.Content, "second steering") {
+			secondCount++
+		}
+	}
+	if firstCount != 1 || secondCount != 1 {
+		t.Fatalf(
+			"steering context counts first=%d second=%d, want first=1 second=1; entries=%#v",
+			firstCount,
+			secondCount,
+			entries,
+		)
 	}
 }
 
@@ -260,4 +307,18 @@ func steeringEvents(events []csession.Event) ([]steeringEvent, error) {
 		}
 	}
 	return out, nil
+}
+
+type failingAfterNWriter struct {
+	failAt int
+	saves  int
+	err    error
+}
+
+func (w *failingAfterNWriter) Save(_ context.Context, _ csession.Event) error {
+	w.saves++
+	if w.failAt > 0 && w.saves == w.failAt {
+		return w.err
+	}
+	return nil
 }
