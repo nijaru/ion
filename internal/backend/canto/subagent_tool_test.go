@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/runtime"
 	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/canto/tool"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/subagents"
 )
@@ -172,6 +174,50 @@ func TestNewChildAgentRequiresRuntimeState(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "subagent runtime is not initialized") {
 		t.Fatalf("newChildAgent error = %v, want runtime not initialized", err)
 	}
+}
+
+func TestSubagentToolExecuteSnapshotsRuntimeState(t *testing.T) {
+	provider := llm.NewFauxProvider("local-api")
+	registry := tool.NewRegistry()
+	parentAgent := agent.New("parent", "instructions", "model-a", provider, registry)
+	harness := &cantofw.Harness{Agent: parentAgent}
+
+	b := New()
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a"})
+	b.mu.Lock()
+	b.tools = registry
+	b.llm = provider
+	b.harness = harness
+	b.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			b.mu.Lock()
+			b.harness = harness
+			b.mu.Unlock()
+		}
+	})
+
+	subagent := NewSubagentTool(b, []subagents.Persona{{Name: "explorer"}})
+	for range 100 {
+		_, err := subagent.Execute(ctx, `{"agent":"explorer","task":"inspect"}`)
+		if err == nil || !strings.Contains(err.Error(), "subagent runtime is not initialized") {
+			t.Fatalf("execute error = %v, want runtime not initialized", err)
+		}
+	}
+	cancel()
+	<-done
+	wg.Wait()
 }
 
 func TestSubagentForkContextUsesProviderVisibleParentSnapshot(t *testing.T) {
