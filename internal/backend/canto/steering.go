@@ -56,22 +56,31 @@ func (m *steeringMutator) Mutate(
 	_ string,
 	sess *csession.Session,
 ) error {
-	items := m.pendingFor(sess.ID())
+	sessionID := sess.ID()
+	items := m.pendingFor(sessionID)
 	if len(items) == 0 {
 		return nil
 	}
 
+	applied := 0
+	dropApplied := func(err error) error {
+		if applied > 0 {
+			m.drop(sessionID, applied)
+		}
+		return err
+	}
+
 	for _, item := range items {
-		pending := csession.NewEvent(sess.ID(), csession.ExternalInput, steeringEvent{
+		pending := csession.NewEvent(sessionID, csession.ExternalInput, steeringEvent{
 			Kind:   steeringKind,
 			Status: "pending",
 			Input:  item,
 		})
 		if err := sess.Append(ctx, pending); err != nil {
-			return err
+			return dropApplied(err)
 		}
 
-		contextEvent := csession.NewContext(sess.ID(), csession.ContextEntry{
+		contextEvent := csession.NewContext(sessionID, csession.ContextEntry{
 			Kind:      csession.ContextKindGeneric,
 			Placement: csession.ContextPlacementHistory,
 			Content:   steeringContext(item),
@@ -81,19 +90,20 @@ func (m *steeringMutator) Mutate(
 			"pending_event_id": pending.ID.String(),
 		}
 		if err := sess.Append(ctx, contextEvent); err != nil {
-			return err
+			return dropApplied(err)
 		}
 
-		if err := sess.Append(ctx, csession.NewEvent(sess.ID(), csession.ExternalInput, steeringEvent{
+		if err := sess.Append(ctx, csession.NewEvent(sessionID, csession.ExternalInput, steeringEvent{
 			Kind:           steeringKind,
 			Status:         "consumed",
 			PendingEventID: pending.ID.String(),
 		})); err != nil {
-			return err
+			return dropApplied(err)
 		}
+		applied++
 	}
 
-	m.drop(sess.ID(), len(items))
+	m.drop(sessionID, applied)
 	return nil
 }
 
