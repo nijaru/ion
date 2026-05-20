@@ -861,6 +861,98 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 }
 
+func TestCancelRunningTurnPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+	model.InFlight.Thinking = true
+
+	next, cmd := model.cancelRunningTurn("Canceled by user")
+	model = next
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends during Update = %#v, want none", storageSess.appends)
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancels before command execution = %d, want 0", sess.cancels)
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 3)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		system, ok := event.(storage.System)
+		if !ok {
+			t.Fatalf("append event = %#v, want cancellation system entry", event)
+		}
+		if system.Content != "Canceled by user" {
+			t.Fatalf("system content = %q, want Canceled by user", system.Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation persistence command did not start append")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel ran before persistence completed: %d", sess.cancels)
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation command sequence did not finish")
+	}
+	if sess.cancels != 1 {
+		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command execution = %#v, want one cancellation entry", storageSess.appends)
+	}
+}
+
+func TestCancelRunningTurnPersistenceFailureStillCancels(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+	model.InFlight.Thinking = true
+
+	next, cmd := model.cancelRunningTurn("Canceled by user")
+	model = next
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+	msgs := runSequencePrefix(t, cmd, 3)
+	if sess.cancels != 1 {
+		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
+	}
+	var foundPersistError bool
+	for _, msg := range msgs {
+		if local, ok := msg.(localErrorMsg); ok &&
+			strings.Contains(local.err.Error(), "persist cancellation: disk full") {
+			foundPersistError = true
+		}
+	}
+	if !foundPersistError {
+		t.Fatalf("command messages = %#v, want cancellation persistence error", msgs)
+	}
+}
+
 func TestCancelTurnCmdCallsBackend(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 
