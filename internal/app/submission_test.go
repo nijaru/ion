@@ -233,11 +233,15 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 
 	updated, cmd := model.submitText("route this")
 	model = updated
-	model, _ = applySubmitResult(t, model, cmd)
+	model, cmd = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 {
 		t.Fatalf("submits = %v, want one turn", sess.submits)
 	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends before command execution = %#v, want none", storageSess.appends)
+	}
+	runCommandTree(t, cmd)
 	var decision storage.RoutingDecision
 	for _, event := range storageSess.appends {
 		if e, ok := event.(storage.RoutingDecision); ok {
@@ -276,6 +280,65 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	}
 }
 
+func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+
+	updated, submitCmd := model.submitText("route this")
+	model = updated
+	submitMsg := submitCmd()
+	result, ok := submitMsg.(turnSubmitResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("submit result = %#v, want successful turnSubmitResultMsg", submitMsg)
+	}
+	updatedModel, cmd := model.Update(result)
+	model = updatedModel.(Model)
+
+	if len(sess.submits) != 1 || sess.submits[0] != "route this" {
+		t.Fatalf("submits = %#v, want route this", sess.submits)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during submit result Update: %#v", event)
+	default:
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("appends during submit result Update = %#v, want none", storageSess.appends)
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runCommandTree(t, cmd)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		decision, ok := event.(storage.RoutingDecision)
+		if !ok {
+			t.Fatalf("append event = %#v, want routing decision", event)
+		}
+		if decision.Decision != "use_model" || decision.Reason != "active_preset" {
+			t.Fatalf("routing decision = %#v, want active preset model use", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("routing persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("routing persistence command did not finish")
+	}
+	if len(storageSess.appends) != 1 {
+		t.Fatalf("appends after command = %#v, want one routing decision", storageSess.appends)
+	}
+}
+
 func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
@@ -287,8 +350,16 @@ func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 	model = updated
 
 	model, cmd = applySubmitResult(t, model, cmd)
-	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "persist routing decision") {
-		t.Fatalf("error = %v, want routing persistence error", err)
+	msgs := runCommandTree(t, cmd)
+	var foundPersistError bool
+	for _, msg := range msgs {
+		if local, ok := msg.(localErrorMsg); ok &&
+			strings.Contains(local.err.Error(), "persist routing decision") {
+			foundPersistError = true
+		}
+	}
+	if !foundPersistError {
+		t.Fatalf("command messages = %#v, want routing persistence error", msgs)
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "keep going" {
 		t.Fatalf("submitted turns = %#v, want keep going", sess.submits)
@@ -1106,15 +1177,20 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	if nextCmd == nil {
 		t.Fatal("expected queued submit result to re-arm session event wait")
 	}
-	eventResult := make(chan tea.Msg, 1)
+	eventResult := make(chan []tea.Msg, 1)
 	go func() {
-		eventResult <- nextCmd()
+		eventResult <- runCommandTree(t, nextCmd)
 	}()
 	sess.events <- session.UserMessage{Message: "follow up"}
-	rawEventMsg := <-eventResult
-	eventMsg, ok := rawEventMsg.(sessionEventMsg)
-	if !ok {
-		t.Fatalf("queued follow-up command returned %T, want sessionEventMsg", rawEventMsg)
+	var eventMsg sessionEventMsg
+	for _, msg := range <-eventResult {
+		if ev, ok := msg.(sessionEventMsg); ok {
+			eventMsg = ev
+			break
+		}
+	}
+	if eventMsg.event == nil {
+		t.Fatal("queued follow-up command did not return sessionEventMsg")
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
