@@ -88,11 +88,15 @@ func (s *turnState) markToolActive(id uint64, toolID string) {
 	s.activeToolIDs[toolID] = struct{}{}
 }
 
-func (s *turnState) markToolComplete(id uint64, toolID string) {
+func (s *turnState) markToolComplete(id uint64, toolID string) (bool, bool) {
 	if toolID == "" || s.seq != id {
-		return
+		return false, s.hasActiveTool()
+	}
+	if _, ok := s.activeToolIDs[toolID]; !ok {
+		return false, s.hasActiveTool()
 	}
 	delete(s.activeToolIDs, toolID)
+	return true, s.hasActiveTool()
 }
 
 func (s *turnState) clearTools() {
