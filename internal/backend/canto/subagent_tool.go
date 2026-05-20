@@ -102,14 +102,14 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 		return "", err
 	}
 
-	harness := t.backend.harness
-	if harness == nil || harness.Runner == nil {
-		return "", fmt.Errorf("subagent runtime is not initialized")
+	runner, parentSessionID, err := t.backend.subagentRuntimeSnapshot()
+	if err != nil {
+		return "", err
 	}
 
-	result, err := harness.Runner.Delegate(
+	result, err := runner.Delegate(
 		ctx,
-		t.backend.id(),
+		parentSessionID,
 		input.childSpec(childID(persona.Name), childAgent, persona),
 	)
 	if err != nil {
@@ -122,6 +122,15 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 		return "", fmt.Errorf("subagent %s ended with status %s", persona.Name, result.Status)
 	}
 	return strings.TrimSpace(result.Summary), nil
+}
+
+func (b *Backend) subagentRuntimeSnapshot() (*runtime.Runner, string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.harness == nil || b.harness.Runner == nil {
+		return nil, "", fmt.Errorf("subagent runtime is not initialized")
+	}
+	return b.harness.Runner, b.idLocked(), nil
 }
 
 func parseSubagentInput(args string) (normalizedSubagentInput, error) {
