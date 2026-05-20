@@ -140,6 +140,20 @@ func requireSequenceCmd(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
+func settleRuntimeTransitionCmd(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected runtime transition command")
+	}
+	msg := cmd()
+	updated, nextCmd := model.Update(msg)
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("updated model = %T, want Model", updated)
+	}
+	return next, nextCmd
+}
+
 func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
 	if cmd == nil {

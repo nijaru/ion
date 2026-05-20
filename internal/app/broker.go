@@ -210,6 +210,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 func isLocalBusyStatus(status string) bool {
 	trimmed := strings.TrimSpace(status)
 	return trimmed == "Switching runtime..." ||
+		trimmed == "Saving runtime settings..." ||
 		trimmed == "Loading session..." ||
 		trimmed == "Checking provider..." ||
 		trimmed == "Saving provider setup..." ||

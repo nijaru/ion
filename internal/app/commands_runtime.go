@@ -130,12 +130,7 @@ func (m Model) switchRuntimeCommand(
 	transition = transition.withActivePresetPersistence()
 
 	if m.Model.Switcher == nil {
-		var err error
-		m, err = m.commitRuntimeTransition(transition)
-		if err != nil {
-			return m, runtimeTransitionErrorCmd(err)
-		}
-		return m, m.printEntries(notice)
+		return m.beginRuntimeTransitionCommit(transition, notice)
 	}
 
 	oldSession := m.Model.Session
@@ -192,12 +187,7 @@ func (m Model) resumeRuntimeCommand(
 	transition := resumeSelectionTransition(cfg)
 
 	if m.Model.Switcher == nil {
-		var err error
-		m, err = m.commitRuntimeTransition(transition)
-		if err != nil {
-			return m, runtimeTransitionErrorCmd(err)
-		}
-		return m, m.printEntries(notice)
+		return m.beginRuntimeTransitionCommit(transition, notice)
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := transition.snapshot.backendConfig

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -615,6 +616,71 @@ func TestExternalEditorFinishedUpdatesComposer(t *testing.T) {
 	}
 	if got := updated.Input.Composer.Height(); got != 2 {
 		t.Fatalf("composer height = %d, want 2", got)
+	}
+}
+
+func TestExternalEditorReturnsBeforeBufferWriteCompletes(t *testing.T) {
+	previousWrite := writeExternalEditorBufferFile
+	previousEditor := externalEditorName
+	t.Cleanup(func() {
+		writeExternalEditorBufferFile = previousWrite
+		externalEditorName = previousEditor
+	})
+
+	writeStarted := make(chan string, 1)
+	releaseWrite := make(chan struct{})
+	writeExternalEditorBufferFile = func(content string) (string, error) {
+		writeStarted <- content
+		<-releaseWrite
+		return "", errors.New("write failed")
+	}
+	externalEditorName = func() string {
+		return "false"
+	}
+
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("external editor should return a command")
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	select {
+	case content := <-writeStarted:
+		t.Fatalf("buffer write ran before Bubble Tea command execution with content %q", content)
+	default:
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	select {
+	case content := <-writeStarted:
+		if content != "draft" {
+			t.Fatalf("buffer content = %q, want draft", content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external editor command did not start buffer write")
+	}
+	select {
+	case msg := <-done:
+		t.Fatalf("external editor command returned before buffer write completed: %T", msg)
+	default:
+	}
+
+	close(releaseWrite)
+	msg := <-done
+	finished, ok := msg.(externalEditorFinishedMsg)
+	if !ok {
+		t.Fatalf("command result = %T, want externalEditorFinishedMsg", msg)
+	}
+	if finished.err == nil || !strings.Contains(finished.err.Error(), "write failed") {
+		t.Fatalf("command err = %v, want write failed", finished.err)
 	}
 }
 

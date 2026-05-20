@@ -73,6 +73,13 @@ type runtimeSwitchedMsg struct {
 	showStatus    bool
 }
 
+type runtimeTransitionCommittedMsg struct {
+	switchID   uint64
+	transition runtimeTransition
+	notice     session.Entry
+	err        error
+}
+
 type runtimeSwitchErrorMsg struct {
 	switchID uint64
 	err      error
@@ -795,6 +802,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runtimeSwitchedMsg:
 		return m.handleRuntimeSwitched(msg)
+
+	case runtimeTransitionCommittedMsg:
+		return m.handleRuntimeTransitionCommitted(msg)
 
 	case runtimeSwitchErrorMsg:
 		return m.handleRuntimeSwitchError(msg)

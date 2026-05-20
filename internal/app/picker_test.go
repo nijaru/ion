@@ -1180,6 +1180,10 @@ func TestModelPickerSelectingExistingFastModelActivatesFastPreset(t *testing.T) 
 	if cmd == nil {
 		t.Fatal("expected model selection notice")
 	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected model selection print command")
+	}
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
 	}
@@ -1224,6 +1228,12 @@ func TestThinkingPickerCommitUpdatesAppConfig(t *testing.T) {
 	model = updated
 	if cmd == nil {
 		t.Fatal("expected thinking selection notice")
+	}
+	next, nextCmd := model.Update(cmd())
+	model = next.(Model)
+	cmd = nextCmd
+	if cmd == nil {
+		t.Fatal("expected thinking selection print command")
 	}
 	if capture.cfg == nil || capture.cfg.ReasoningEffort != "high" {
 		t.Fatalf("backend config = %#v, want high reasoning", capture.cfg)
@@ -1987,6 +1997,10 @@ func TestProviderPickerNonListingSelectionUsesPickerPreset(t *testing.T) {
 
 	if cmd == nil {
 		t.Fatal("expected non-listing provider selection notice")
+	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected non-listing provider selection print command")
 	}
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast picker target", model.App.ActivePreset)

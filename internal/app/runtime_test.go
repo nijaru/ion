@@ -399,6 +399,10 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 	if cmd == nil {
 		t.Fatal("expected non-listing provider selection notice")
 	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected non-listing provider selection print command")
+	}
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
 		t.Fatalf(
 			"stale error not cleared: mode=%v err=%q",
@@ -909,6 +913,10 @@ func TestResumeRuntimeWithoutSwitcherUpdatesAppConfig(t *testing.T) {
 	model = updated
 	if cmd == nil {
 		t.Fatal("expected resume notice")
+	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected resume print command")
 	}
 	if capture.cfg == nil ||
 		capture.cfg.Provider != "openrouter" ||
