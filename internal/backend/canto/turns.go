@@ -396,11 +396,11 @@ func (b *Backend) markToolActive(turnID uint64, id string) {
 	b.turn.markToolActive(turnID, id)
 }
 
-func (b *Backend) markToolComplete(turnID uint64, id string) {
+func (b *Backend) markToolComplete(turnID uint64, id string) (bool, bool) {
 	if id == "" {
-		return
+		return false, false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.turn.markToolComplete(turnID, id)
+	return b.turn.markToolComplete(turnID, id)
 }

@@ -461,6 +461,76 @@ func TestTranslateEventsPreservesToolCompletedError(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsRestoresThinkingAfterLastActiveTool(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	events := make(chan csession.Event, 4)
+	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
+		ID:        "tool-call-1",
+		Tool:      "bash",
+		Arguments: "echo one",
+	})
+	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
+		ID:        "tool-call-2",
+		Tool:      "read",
+		Arguments: "file.txt",
+	})
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-1",
+		Tool:   "bash",
+		Output: "one",
+	})
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-2",
+		Tool:   "read",
+		Output: "two",
+	})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 7)
+
+	_ = receiveEvent(t, b.Session().Events()) // first tool started
+	_ = receiveEvent(t, b.Session().Events()) // first running status
+	_ = receiveEvent(t, b.Session().Events()) // second tool started
+	_ = receiveEvent(t, b.Session().Events()) // second running status
+	_ = receiveEvent(t, b.Session().Events()) // first tool result; one tool remains active
+	_ = receiveEvent(t, b.Session().Events()) // second tool result
+
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatal("event is not StatusChanged")
+	}
+	if status.Status != "Thinking..." {
+		t.Fatalf("status = %q, want Thinking...", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestTranslateEventsDoesNotRestoreThinkingForUntrackedTool(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	events := make(chan csession.Event, 1)
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-1",
+		Tool:   "bash",
+		Output: "ok",
+	})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 7)
+
+	ev := receiveEvent(t, b.Session().Events())
+	_, ok := ev.(ionsession.ToolResult)
+	if !ok {
+		t.Fatalf("event = %T, want ToolResult", ev)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 2)

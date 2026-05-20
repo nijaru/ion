@@ -66,7 +66,7 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		}
 	case session.ToolCompleted:
 		if data, ok, err := ev.ToolCompletedData(); err == nil && ok {
-			b.markToolComplete(turnID, data.ID)
+			tracked, remaining := b.markToolComplete(turnID, data.ID)
 			var execErr error
 			if data.Error != "" {
 				execErr = fmt.Errorf("%s", data.Error)
@@ -77,6 +77,9 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				ToolName:  data.Tool,
 				Result:    data.Output,
 				Error:     execErr,
+			}
+			if tracked && !remaining {
+				b.events <- ionsession.StatusChanged{Base: base, Status: "Thinking..."}
 			}
 		}
 	case session.ToolOutputDelta:
