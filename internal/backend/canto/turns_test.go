@@ -123,6 +123,16 @@ func (s blockingMetadataStore) UpdateSession(ctx context.Context, _ storage.Sess
 	return ctx.Err()
 }
 
+type recordingMetadataStore struct {
+	failingMetadataStore
+	updates int
+}
+
+func (s *recordingMetadataStore) UpdateSession(context.Context, storage.SessionInfo) error {
+	s.updates++
+	return nil
+}
+
 type staticStorageSession struct {
 	id   string
 	meta storage.Metadata
@@ -150,6 +160,18 @@ func (s staticStorageSession) Usage(context.Context) (int, int, float64, error) 
 
 func (s staticStorageSession) Close() error {
 	return nil
+}
+
+type blockingLazySession struct {
+	staticStorageSession
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s blockingLazySession) Ensure(context.Context) (storage.Session, error) {
+	close(s.started)
+	<-s.release
+	return s.staticStorageSession, nil
 }
 
 func TestSubmitTurnMaterializesLazySession(t *testing.T) {
@@ -291,6 +313,60 @@ func TestCancelTurnDuringMetadataUpdateDoesNotWaitForStore(t *testing.T) {
 	}
 	if b.turn.active {
 		t.Fatal("canceled metadata update left a turn active")
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestCancelTurnDuringLazySessionOpenSkipsMetadataUpdate(t *testing.T) {
+	b := New()
+	b.harness = &cantofw.Harness{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	metadata := &recordingMetadataStore{}
+	b.SetStore(metadata)
+	b.SetSession(blockingLazySession{
+		staticStorageSession: staticStorageSession{
+			id: "session-id",
+			meta: storage.Metadata{
+				ID:     "session-id",
+				CWD:    "/tmp/ion-test",
+				Model:  "openai/model-a",
+				Branch: "main",
+			},
+		},
+		started: started,
+		release: release,
+	})
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Session().SubmitTurn(t.Context(), "hi")
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for lazy session open")
+	}
+	if err := b.Session().CancelTurn(t.Context()); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitTurn error = %v, want context canceled", err)
+		}
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for SubmitTurn to exit after cancel")
+	}
+	if metadata.updates != 0 {
+		t.Fatalf("metadata updates = %d, want none after cancel", metadata.updates)
+	}
+	if b.turn.active {
+		t.Fatal("canceled lazy open left a turn active")
 	}
 	assertNoBackendEvent(t, b)
 }
