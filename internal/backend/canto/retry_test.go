@@ -280,7 +280,9 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	wrapped := configureRetryProvider(
 		provider,
 		&config.Config{RetryUntilCancelled: &retryUntilCancelled},
-		events,
+		func(event llm.RetryEvent) {
+			events <- retryStatusEvent(event)
+		},
 	)
 	retry, ok := wrapped.(*llm.RetryProvider)
 	if !ok {
@@ -320,6 +322,58 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	default:
 		t.Fatal("expected retry status event")
 	}
+}
+
+func TestRetryStatusRequiresActiveTurn(t *testing.T) {
+	provider := &retryProvider{
+		FauxProvider: ctesting.NewFauxProvider("openai"),
+	}
+	b := New()
+	wrapped := configureRetryProvider(
+		provider,
+		&config.Config{},
+		b.emitProviderRetryStatus,
+	)
+	retry, ok := wrapped.(*llm.RetryProvider)
+	if !ok {
+		t.Fatalf("wrapped provider = %T, want *llm.RetryProvider", wrapped)
+	}
+
+	retry.Config.OnRetry(llm.RetryEvent{
+		Attempt: 1,
+		Delay:   time.Second,
+		Err:     transientStreamErr,
+	})
+	assertNoBackendEvent(t, b)
+
+	b.mu.Lock()
+	b.turn.seq = 7
+	b.turn.active = true
+	b.mu.Unlock()
+
+	retry.Config.OnRetry(llm.RetryEvent{
+		Attempt: 2,
+		Delay:   2 * time.Second,
+		Err:     transientStreamErr,
+	})
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("event = %T, want StatusChanged", status)
+	}
+	if !strings.Contains(status.Status, "Retrying in 2s") {
+		t.Fatalf("status = %q, want retry delay", status.Status)
+	}
+
+	b.mu.Lock()
+	b.turn.requestCancel()
+	b.mu.Unlock()
+
+	retry.Config.OnRetry(llm.RetryEvent{
+		Attempt: 3,
+		Delay:   3 * time.Second,
+		Err:     transientStreamErr,
+	})
+	assertNoBackendEvent(t, b)
 }
 
 func TestRetryStatusLabelsTransportErrors(t *testing.T) {

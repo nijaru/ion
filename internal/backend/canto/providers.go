@@ -20,7 +20,7 @@ var providerFactory = newProvider
 func configureRetryProvider(
 	p llm.Provider,
 	cfg *config.Config,
-	events chan<- ionsession.Event,
+	onRetry func(llm.RetryEvent),
 ) llm.Provider {
 	if retry, ok := p.(*llm.RetryProvider); ok {
 		return retry
@@ -28,10 +28,22 @@ func configureRetryProvider(
 	retry := llm.NewRetryProvider(p)
 	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 	retry.Config.RetryForeverTransportOnly = true
-	retry.Config.OnRetry = func(event llm.RetryEvent) {
-		events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: retryStatus(event)}
-	}
+	retry.Config.OnRetry = onRetry
 	return retry
+}
+
+func (b *Backend) emitProviderRetryStatus(event llm.RetryEvent) {
+	b.mu.Lock()
+	active := b.turn.active
+	b.mu.Unlock()
+	if !active {
+		return
+	}
+	b.events <- retryStatusEvent(event)
+}
+
+func retryStatusEvent(event llm.RetryEvent) ionsession.StatusChanged {
+	return ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: retryStatus(event)}
 }
 
 type providerRetryOwner struct {
