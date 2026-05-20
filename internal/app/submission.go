@@ -117,16 +117,14 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		if historyChanged {
 			historyCmd = m.persistInputHistory(context.Background(), historyText)
 		}
-		if err := m.persistEntry(m.routingDecision("use_model", "active_preset", "")); err != nil {
-			return m, sequenceCmds(
-				persistErrorCmd("persist routing decision", err),
-				historyCmd,
-			)
-		}
+		routingCmd := m.persistEntryCmd(
+			"persist routing decision",
+			m.routingDecision("use_model", "active_preset", ""),
+		)
 		if msg.rearm {
-			return m, sequenceCmds(historyCmd, m.awaitSessionEvent())
+			return m, sequenceCmds(routingCmd, historyCmd, m.awaitSessionEvent())
 		}
-		return m, historyCmd
+		return m, sequenceCmds(routingCmd, historyCmd)
 	}
 	m.clearActiveTurnState(true)
 	m.Progress.Compacting = false

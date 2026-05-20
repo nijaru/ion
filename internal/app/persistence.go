@@ -53,16 +53,6 @@ func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	}
 }
 
-func (m Model) persistEntry(entry any) error {
-	if m.Model.Storage == nil {
-		return nil
-	}
-	if err := m.Model.Storage.Append(context.Background(), entry); err != nil {
-		return err
-	}
-	return nil
-}
-
 func entryUnix(timestamp time.Time) int64 {
 	if timestamp.IsZero() {
 		return now()
