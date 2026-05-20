@@ -260,12 +260,7 @@ func (m Model) applyProviderSelection(
 
 	m.Picker.Overlay = nil
 	if !selection.supportsModelListing {
-		var commitErr error
-		m, commitErr = m.commitRuntimeTransition(selection.transition)
-		if commitErr != nil {
-			return m, runtimeTransitionErrorCmd(commitErr)
-		}
-		return m, m.printEntries(session.Entry{
+		return m.beginRuntimeTransitionCommit(selection.transition, session.Entry{
 			Role:    session.System,
 			Content: providerModelEntryNotice(selection.cfg.Provider),
 		})
@@ -721,13 +716,9 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		var commitErr error
-		m, commitErr = m.commitRuntimeTransition(transition)
-		if commitErr != nil {
-			return m, runtimeTransitionErrorCmd(commitErr)
-		}
 		m.Picker.Overlay = nil
-		return m, m.printEntries(
+		return m.beginRuntimeTransitionCommit(
+			transition,
 			session.Entry{
 				Role:    session.System,
 				Content: "Thinking set to " + thinkingDisplayName(level),

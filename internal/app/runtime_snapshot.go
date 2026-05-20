@@ -9,6 +9,7 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/session"
 )
 
 type runtimeTransition struct {
@@ -33,6 +34,8 @@ type providerSelection struct {
 	transition           runtimeTransition
 	setup                setupPromptKind
 }
+
+var saveRuntimeState = config.SaveRuntimeState
 
 func newRuntimeSnapshot(
 	appCfg *config.Config,
@@ -97,8 +100,12 @@ func (t runtimeTransition) withActivePresetPersistence() runtimeTransition {
 	return t
 }
 
+func (t runtimeTransition) needsPersistence() bool {
+	return t.persistState || t.persistReasoning || t.persistActivePreset
+}
+
 func (t runtimeTransition) persist() error {
-	if !t.persistState && !t.persistReasoning && !t.persistActivePreset {
+	if !t.needsPersistence() {
 		return nil
 	}
 	update := config.RuntimeStateUpdate{
@@ -110,18 +117,63 @@ func (t runtimeTransition) persist() error {
 		ReasoningEffort:     t.persistReasoningText,
 		PersistReasoning:    t.persistReasoning,
 	}
-	if err := config.SaveRuntimeState(update); err != nil {
+	if err := saveRuntimeState(update); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 	return nil
 }
 
 func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
-	if err := t.persist(); err != nil {
-		return m, err
+	if t.needsPersistence() {
+		return m, fmt.Errorf("runtime transition requires asynchronous persistence")
 	}
 	m.applyRuntimeSnapshot(t.snapshot)
 	return m, nil
+}
+
+func (m Model) beginRuntimeTransitionCommit(
+	t runtimeTransition,
+	notice session.Entry,
+) (Model, tea.Cmd) {
+	if !t.needsPersistence() {
+		var err error
+		m, err = m.commitRuntimeTransition(t)
+		if err != nil {
+			return m, runtimeTransitionErrorCmd(err)
+		}
+		return m, m.printEntries(notice)
+	}
+	m.Model.RuntimeSwitchRequest++
+	switchID := m.Model.RuntimeSwitchRequest
+	m.Progress.Status = "Saving runtime settings..."
+	return m, func() tea.Msg {
+		if err := t.persist(); err != nil {
+			return runtimeTransitionCommittedMsg{switchID: switchID, err: err}
+		}
+		return runtimeTransitionCommittedMsg{
+			switchID:   switchID,
+			transition: t,
+			notice:     notice,
+		}
+	}
+}
+
+func (m Model) handleRuntimeTransitionCommitted(
+	msg runtimeTransitionCommittedMsg,
+) (Model, tea.Cmd) {
+	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+		return m, nil
+	}
+	m.Model.RuntimeSwitchRequest = 0
+	if isLocalBusyStatus(m.Progress.Status) {
+		m.Progress.Status = ""
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	m.applyRuntimeSnapshot(msg.transition.snapshot)
+	m.clearProgressError()
+	return m, m.printEntries(msg.notice)
 }
 
 func (m Model) providerSelection(

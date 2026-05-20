@@ -115,12 +115,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		var commitErr error
-		m, commitErr = m.commitRuntimeTransition(transition)
-		if commitErr != nil {
-			return m, runtimeTransitionErrorCmd(commitErr)
-		}
-		return m, m.printEntries(
+		return m.beginRuntimeTransitionCommit(
+			transition,
 			session.Entry{
 				Role:    session.System,
 				Content: "Thinking set to " + thinkingDisplayName(level),

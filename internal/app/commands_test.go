@@ -20,7 +20,7 @@ import (
 	"github.com/nijaru/ion/internal/testutil"
 )
 
-func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
+func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 	tests := []struct {
 		name        string
 		command     string
@@ -54,6 +54,15 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 			if model.Picker.Overlay != nil {
 				t.Fatal("expected no picker to open")
 			}
+			if model.Progress.Status != "Saving runtime settings..." {
+				t.Fatalf("status = %q, want saving runtime settings", model.Progress.Status)
+			}
+			msg := cmd()
+			updated, printCmd := model.Update(msg)
+			model = updated.(Model)
+			if printCmd == nil {
+				t.Fatal("expected runtime commit to print a notice")
+			}
 
 			data, err := os.ReadFile(filepath.Join(home, ".ion", "state.toml"))
 			if err != nil {
@@ -62,10 +71,94 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 			if got := string(data); got != tc.expected {
 				t.Fatalf("state = %q, want %q", got, tc.expected)
 			}
-			if model.Progress.Status == "" {
-				t.Fatal("expected status to be updated after direct config command")
+			if model.Progress.Status != "" {
+				t.Fatalf("status = %q, want cleared after runtime commit", model.Progress.Status)
 			}
 		})
+	}
+}
+
+func TestThinkingCommandReturnsBeforeRuntimeStateWriteCompletes(t *testing.T) {
+	previousSave := saveRuntimeState
+	defer func() { saveRuntimeState = previousSave }()
+	entered := make(chan config.RuntimeStateUpdate, 1)
+	release := make(chan struct{})
+	saveRuntimeState = func(update config.RuntimeStateUpdate) error {
+		entered <- update
+		<-release
+		return nil
+	}
+
+	capture := &configCaptureBackend{
+		stubBackend: stubBackend{provider: "openai", model: "gpt-4.1"},
+	}
+	model := readyModel(t)
+	model.Model.Backend = capture
+	model.Model.Config = &config.Config{
+		Provider:        "openai",
+		Model:           "gpt-4.1",
+		ReasoningEffort: "auto",
+	}
+	model.Progress.ReasoningEffort = "auto"
+
+	updated, cmd := model.handleCommand("/thinking high")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected thinking command")
+	}
+	if model.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("runtime switch request was not armed")
+	}
+	select {
+	case update := <-entered:
+		t.Fatalf("runtime state save ran during Update: %#v", update)
+	default:
+	}
+	if capture.cfg != nil {
+		t.Fatalf("backend config updated during Update: %#v", capture.cfg)
+	}
+	if model.Progress.ReasoningEffort != "auto" {
+		t.Fatalf("progress reasoning = %q, want auto before commit settles", model.Progress.ReasoningEffort)
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	select {
+	case update := <-entered:
+		if !update.PersistReasoning ||
+			update.ReasoningPreset != "primary" ||
+			update.ReasoningEffort != "high" {
+			t.Fatalf("runtime state update = %#v, want primary high reasoning", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime state save command did not start")
+	}
+	close(release)
+	var msg tea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runtime state save command did not finish")
+	}
+
+	next, printCmd := model.Update(msg)
+	model = next.(Model)
+	if printCmd == nil {
+		t.Fatal("expected thinking commit notice")
+	}
+	if model.Model.RuntimeSwitchRequest != 0 {
+		t.Fatalf("runtime switch request = %d, want cleared", model.Model.RuntimeSwitchRequest)
+	}
+	if capture.cfg == nil || capture.cfg.ReasoningEffort != "high" {
+		t.Fatalf("backend config = %#v, want high reasoning", capture.cfg)
+	}
+	if model.Progress.ReasoningEffort != "high" {
+		t.Fatalf("progress reasoning = %q, want high", model.Progress.ReasoningEffort)
+	}
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared", model.Progress.Status)
 	}
 }
 
@@ -116,6 +209,10 @@ func TestModelCommandUsesBackendProviderWhenConfigMissing(t *testing.T) {
 	model = updated
 	if cmd == nil {
 		t.Fatal("expected /model with active provider to return a notice command")
+	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected model selection print command")
 	}
 	if capture.cfg == nil ||
 		capture.cfg.Provider != "openai" ||
@@ -453,6 +550,10 @@ func TestModelCommandWithoutSwitcherUpdatesAppConfig(t *testing.T) {
 	model = updated
 	if cmd == nil {
 		t.Fatal("expected model command notice")
+	}
+	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("expected model selection print command")
 	}
 	if capture.cfg == nil || capture.cfg.Model != "gpt-4.1-new" {
 		t.Fatalf("backend config = %#v, want new model", capture.cfg)

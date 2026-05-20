@@ -16,6 +16,11 @@ type externalEditorFinishedMsg struct {
 	err     error
 }
 
+var (
+	externalEditorName            = externalEditor
+	writeExternalEditorBufferFile = writeExternalEditorBuffer
+)
+
 func (m Model) openExternalEditor() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, m.printEntries(session.Entry{
@@ -23,30 +28,34 @@ func (m Model) openExternalEditor() (Model, tea.Cmd) {
 			Content: m.localCommandBusyMessage("opening the external editor"),
 		})
 	}
-	path, err := writeExternalEditorBuffer(m.expandMarkers(m.Input.Composer.Value()))
-	if err != nil {
-		return m, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: "Editor failed: " + err.Error(),
-		})
-	}
-	editor := externalEditor()
-	cmd := externalEditorCommand(editor, path)
-	return m, tea.ExecProcess(cmd, func(runErr error) tea.Msg {
-		defer os.Remove(path)
-		if runErr != nil {
-			return externalEditorFinishedMsg{
-				err: fmt.Errorf("%s failed: %w", editor, runErr),
-			}
-		}
-		data, err := os.ReadFile(path)
+	return m, openExternalEditorCmd(m.expandMarkers(m.Input.Composer.Value()))
+}
+
+func openExternalEditorCmd(content string) tea.Cmd {
+	return func() tea.Msg {
+		path, err := writeExternalEditorBufferFile(content)
 		if err != nil {
-			return externalEditorFinishedMsg{
-				err: fmt.Errorf("read editor buffer: %w", err),
-			}
+			return externalEditorFinishedMsg{err: err}
 		}
-		return externalEditorFinishedMsg{content: string(data)}
-	})
+
+		editor := externalEditorName()
+		cmd := externalEditorCommand(editor, path)
+		return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
+			defer os.Remove(path)
+			if runErr != nil {
+				return externalEditorFinishedMsg{
+					err: fmt.Errorf("%s failed: %w", editor, runErr),
+				}
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return externalEditorFinishedMsg{
+					err: fmt.Errorf("read editor buffer: %w", err),
+				}
+			}
+			return externalEditorFinishedMsg{content: string(data)}
+		})()
+	}
 }
 
 func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Model, tea.Cmd) {
