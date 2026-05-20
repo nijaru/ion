@@ -153,7 +153,11 @@ func (b *Backend) runTurn(
 }
 
 func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
-	shouldCompact, err := b.shouldProactivelyCompact(ctx)
+	if !b.acceptsTurnEvent(turnID) {
+		return nil
+	}
+	runtime := b.compactionRuntimeSnapshot()
+	shouldCompact, err := runtime.shouldProactivelyCompact(ctx)
 	if err != nil {
 		return err
 	}
@@ -161,7 +165,7 @@ func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
 		return nil
 	}
 	b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
-	if _, err := b.Compact(ctx); err != nil {
+	if _, err := runtime.compact(ctx); err != nil {
 		return err
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/canto/governor"
+	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/config"
@@ -34,20 +35,41 @@ func compactionMessage(extra string) string {
 	return ionCompactionGuidance + "\n\nUser guidance:\n" + extra
 }
 
-func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
+type compactionRuntime struct {
+	store     session.Store
+	provider  llm.Provider
+	sessionID string
+	model     string
+	maxTokens int
+}
+
+func (b *Backend) compactionRuntimeSnapshot() compactionRuntime {
+	cfg := b.configSnapshot()
+	runtime := compactionRuntime{
+		model:     modelFromConfig(cfg),
+		maxTokens: contextLimitFromConfig(cfg),
+	}
+
 	b.mu.Lock()
-	store := b.store
-	provider := b.compactLLM
-	sessionID := b.idLocked()
-	model := b.Model()
-	limit := b.ContextLimit()
+	runtime.store = b.store
+	runtime.provider = b.compactLLM
+	runtime.sessionID = b.idLocked()
 	b.mu.Unlock()
 
-	if store == nil || provider == nil || sessionID == "" || model == "" || limit <= 0 {
+	return runtime
+}
+
+func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
+	return b.compactionRuntimeSnapshot().shouldProactivelyCompact(ctx)
+}
+
+func (r compactionRuntime) shouldProactivelyCompact(ctx context.Context) (bool, error) {
+	if r.store == nil || r.provider == nil || r.sessionID == "" ||
+		r.model == "" || r.maxTokens <= 0 {
 		return false, nil
 	}
 
-	sess, err := store.Load(ctx, sessionID)
+	sess, err := r.store.Load(ctx, r.sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -56,49 +78,46 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	threshold := int(float64(limit) * proactiveCompactThreshold)
+	threshold := int(float64(r.maxTokens) * proactiveCompactThreshold)
 	if threshold <= 0 {
-		threshold = limit
+		threshold = r.maxTokens
 	}
-	used := prompt.EstimateMessagesTokens(ctx, provider, model, messages)
-	return used >= threshold && used < limit, nil
+	used := prompt.EstimateMessagesTokens(ctx, r.provider, r.model, messages)
+	return used >= threshold && used < r.maxTokens, nil
 }
 
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
-	b.mu.Lock()
-	sessionID := b.idLocked()
-	store := b.store
-	b.mu.Unlock()
+	return b.compactionRuntimeSnapshot().compact(ctx)
+}
 
-	if store == nil {
+func (r compactionRuntime) compact(ctx context.Context) (bool, error) {
+	if r.store == nil {
 		return false, fmt.Errorf("backend store not initialized")
 	}
-	if sessionID == "" {
+	if r.sessionID == "" {
 		return false, fmt.Errorf("session not initialized")
 	}
 
-	sess, err := store.Load(ctx, sessionID)
+	sess, err := r.store.Load(ctx, r.sessionID)
 	if err != nil {
 		return false, err
 	}
-	return b.compactSession(ctx, sess)
+	return r.compactSession(ctx, sess)
 }
 
 func (b *Backend) compactSession(ctx context.Context, sess *session.Session) (bool, error) {
-	b.mu.Lock()
-	provider := b.compactLLM
-	model := b.Model()
-	maxTokens := b.ContextLimit()
-	b.mu.Unlock()
+	return b.compactionRuntimeSnapshot().compactSession(ctx, sess)
+}
 
-	if provider == nil {
+func (r compactionRuntime) compactSession(ctx context.Context, sess *session.Session) (bool, error) {
+	if r.provider == nil {
 		return false, fmt.Errorf("backend compaction provider not initialized")
 	}
-	if model == "" {
+	if r.model == "" {
 		return false, fmt.Errorf("model not configured")
 	}
-	if maxTokens <= 0 {
-		return false, fmt.Errorf("context limit unavailable for model %s", model)
+	if r.maxTokens <= 0 {
+		return false, fmt.Errorf("context limit unavailable for model %s", r.model)
 	}
 
 	dataDir, err := config.DefaultDataDir()
@@ -106,8 +125,8 @@ func (b *Backend) compactSession(ctx context.Context, sess *session.Session) (bo
 		return false, err
 	}
 
-	result, err := governor.CompactSession(ctx, provider, model, sess, governor.CompactOptions{
-		MaxTokens:  maxTokens,
+	result, err := governor.CompactSession(ctx, r.provider, r.model, sess, governor.CompactOptions{
+		MaxTokens:  r.maxTokens,
 		OffloadDir: filepath.Join(dataDir, "artifacts"),
 		Message:    compactionMessage(""),
 	})
