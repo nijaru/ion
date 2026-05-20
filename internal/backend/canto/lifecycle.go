@@ -59,7 +59,7 @@ func (b *Backend) open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	p = configureRetryProvider(p, cfg, b.events)
+	p = configureRetryProvider(p, cfg, b.emitProviderRetryStatus)
 	p = useProviderRetryOnly(p)
 	p = observeProviderRequests(p)
 
