@@ -266,3 +266,73 @@ func TestPickerReducerProviderSelectionSettlement(t *testing.T) {
 		)
 	}
 }
+
+func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
+	model := readyModel(t)
+	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
+	model.pickerReducer().openSetup(setupPromptState{
+		kind:  setupPromptEndpoint,
+		value: "fedora",
+		err:   "old error",
+	})
+	if model.Picker.Overlay != nil {
+		t.Fatalf("overlay = %#v, want closed when setup opens", model.Picker.Overlay)
+	}
+
+	model.pickerReducer().appendSetupValue(":11434")
+	if got := model.Picker.Setup.value; got != "fedora:11434" {
+		t.Fatalf("setup value = %q, want endpoint text", got)
+	}
+	if model.Picker.Setup.err != "" {
+		t.Fatalf("setup error = %q, want cleared after edit", model.Picker.Setup.err)
+	}
+	model.pickerReducer().backspaceSetupValue()
+	if got := model.Picker.Setup.value; got != "fedora:1143" {
+		t.Fatalf("setup value = %q, want last rune removed", got)
+	}
+
+	requestID, ok := model.pickerReducer().beginSetupSave()
+	if !ok {
+		t.Fatal("beginSetupSave returned ok=false")
+	}
+	if model.Picker.SetupSaveRequest != requestID ||
+		!model.Picker.Setup.saving ||
+		model.Picker.Setup.request != requestID {
+		t.Fatalf(
+			"setup save state = setup=%#v request=%d, want saving request",
+			model.Picker.Setup,
+			model.Picker.SetupSaveRequest,
+		)
+	}
+	if model.pickerReducer().failSetupSave(requestID+1, "stale") {
+		t.Fatal("stale setup save failure settled")
+	}
+	if !model.pickerReducer().failSetupSave(requestID, "disk unavailable") {
+		t.Fatal("current setup save failure did not settle")
+	}
+	if model.Picker.SetupSaveRequest != 0 ||
+		model.Picker.Setup.saving ||
+		model.Picker.Setup.request != 0 ||
+		model.Picker.Setup.err != "disk unavailable" {
+		t.Fatalf(
+			"setup failure state = setup=%#v request=%d, want visible error",
+			model.Picker.Setup,
+			model.Picker.SetupSaveRequest,
+		)
+	}
+
+	requestID, ok = model.pickerReducer().beginSetupSave()
+	if !ok {
+		t.Fatal("second beginSetupSave returned ok=false")
+	}
+	if !model.pickerReducer().completeSetupSave(requestID) {
+		t.Fatal("current setup save success did not settle")
+	}
+	if model.Picker.Setup != nil || model.Picker.SetupSaveRequest != 0 {
+		t.Fatalf(
+			"setup success state = setup=%#v request=%d, want closed",
+			model.Picker.Setup,
+			model.Picker.SetupSaveRequest,
+		)
+	}
+}
