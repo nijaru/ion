@@ -38,27 +38,66 @@ func (r pickerReducer) beginModelOverlayLoad(state pickerOverlayState) uint64 {
 	return requestID
 }
 
-func (r pickerReducer) modelSetupOverlay(requestID uint64) (*pickerOverlayState, bool) {
+func (r pickerReducer) modelSetupRequestMatches(requestID uint64) bool {
 	overlay := r.picker.Overlay
 	if overlay == nil ||
 		overlay.purpose != pickerPurposeModel ||
 		!overlay.setup ||
 		overlay.request != requestID ||
 		requestID != r.picker.ModelLoadRequest {
-		return nil, false
+		return false
 	}
-	return overlay, true
+	return true
 }
 
-func (r pickerReducer) modelLoadOverlay(requestID uint64) (*pickerOverlayState, bool) {
+func (r pickerReducer) failModelSetup(requestID uint64, message string) bool {
+	if !r.modelSetupRequestMatches(requestID) {
+		return false
+	}
+	r.picker.Overlay.loading = false
+	r.picker.Overlay.setup = false
+	r.picker.Overlay.err = message
+	return true
+}
+
+func (r pickerReducer) modelLoadRequestMatches(requestID uint64) bool {
 	overlay := r.picker.Overlay
 	if overlay == nil ||
 		overlay.purpose != pickerPurposeModel ||
 		overlay.request != requestID ||
 		requestID != r.picker.ModelLoadRequest {
-		return nil, false
+		return false
 	}
-	return overlay, true
+	return true
+}
+
+func (r pickerReducer) failModelLoad(requestID uint64, message string) bool {
+	if !r.modelLoadRequestMatches(requestID) {
+		return false
+	}
+	r.picker.Overlay.loading = false
+	r.picker.Overlay.err = message
+	if len(r.picker.Overlay.items) == 0 {
+		r.picker.Overlay.filtered = nil
+	}
+	return true
+}
+
+func (r pickerReducer) completeModelLoad(
+	requestID uint64,
+	items []pickerItem,
+	selectedValue string,
+) bool {
+	if !r.modelLoadRequestMatches(requestID) {
+		return false
+	}
+	r.picker.Overlay.loading = false
+	r.picker.Overlay.err = ""
+	r.picker.Overlay.items = items
+	r.picker.Overlay.filtered = clonePickerItems(items)
+	r.picker.Overlay.index = pickerIndex(items, selectedValue)
+	r.refreshOverlayFilter()
+	return true
 }
 
 func (r pickerReducer) closeOverlay() {

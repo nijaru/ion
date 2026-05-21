@@ -104,6 +104,7 @@ type providerSelectionResolvedMsg struct {
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
+	preset    modelPreset
 	items     []pickerItem
 	err       error
 }

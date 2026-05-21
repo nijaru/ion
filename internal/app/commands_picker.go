@@ -160,14 +160,11 @@ func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset modelPre
 func (m Model) handleModelPickerSetupResolved(
 	msg modelPickerSetupResolvedMsg,
 ) (Model, tea.Cmd) {
-	overlay, ok := m.pickerReducer().modelSetupOverlay(msg.requestID)
-	if !ok {
+	if !m.pickerReducer().modelSetupRequestMatches(msg.requestID) {
 		return m, nil
 	}
 	if msg.err != nil {
-		overlay.loading = false
-		overlay.setup = false
-		overlay.err = msg.err.Error()
+		m.pickerReducer().failModelSetup(msg.requestID, msg.err.Error())
 		return m, nil
 	}
 	cfg := msg.cfg
@@ -273,7 +270,7 @@ func (m Model) openReadyModelPickerForPreset(
 	if fresh {
 		return m, nil
 	}
-	return m, loadModelPickerItems(requestID, cfg)
+	return m, loadModelPickerItems(requestID, cfg, preset)
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
@@ -419,7 +416,7 @@ func modelPickerProviderTitle(provider string) string {
 	return provider
 }
 
-func loadModelPickerItems(requestID uint64, cfg *config.Config) tea.Cmd {
+func loadModelPickerItems(requestID uint64, cfg *config.Config, preset modelPreset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -429,6 +426,7 @@ func loadModelPickerItems(requestID uint64, cfg *config.Config) tea.Cmd {
 		return modelPickerLoadedMsg{
 			requestID: requestID,
 			cfg:       cfgCopy,
+			preset:    preset,
 			items:     items,
 			err:       err,
 		}
@@ -447,40 +445,35 @@ func (m Model) startupPickerCmd() tea.Cmd {
 	if overlay.setup {
 		return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.modelPreset())
 	}
-	return loadModelPickerItems(overlay.request, overlay.cfg)
+	return loadModelPickerItems(overlay.request, overlay.cfg, overlay.modelPreset())
 }
 
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
-	overlay, ok := m.pickerReducer().modelLoadOverlay(msg.requestID)
-	if !ok {
+	if !m.pickerReducer().modelLoadRequestMatches(msg.requestID) {
 		return m, nil
 	}
-
-	overlay.loading = false
-	overlay.err = ""
 	if msg.err != nil {
-		overlay.err = fmt.Sprintf("Failed to list models for %s: %v", msg.cfg.Provider, msg.err)
-		if len(overlay.items) == 0 {
-			overlay.filtered = nil
-		}
+		m.pickerReducer().failModelLoad(
+			msg.requestID,
+			fmt.Sprintf("Failed to list models for %s: %v", msg.cfg.Provider, msg.err),
+		)
 		return m, nil
 	}
 	if len(msg.items) == 0 {
-		overlay.err = fmt.Sprintf("No models available for provider %s", msg.cfg.Provider)
-		if len(overlay.items) == 0 {
-			overlay.filtered = nil
-		}
+		m.pickerReducer().failModelLoad(
+			msg.requestID,
+			fmt.Sprintf("No models available for provider %s", msg.cfg.Provider),
+		)
 		return m, nil
 	}
 
 	cfg := &msg.cfg
 	combined := m.modelPickerItemsForCatalog(cfg, msg.items)
-	overlay.items = combined
-	overlay.filtered = clonePickerItems(combined)
-	overlay.index = pickerIndex(combined, configuredModelForPreset(cfg, overlay.modelPreset()))
-	if overlay.query != "" {
-		refreshPickerFilter(&m)
-	}
+	m.pickerReducer().completeModelLoad(
+		msg.requestID,
+		combined,
+		configuredModelForPreset(cfg, msg.preset),
+	)
 	return m, nil
 }
 

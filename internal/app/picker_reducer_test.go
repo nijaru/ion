@@ -161,11 +161,27 @@ func TestPickerReducerOverlayLoadRequestsFenceStaleResults(t *testing.T) {
 	if model.Picker.Overlay == nil || model.Picker.Overlay.request != requestID {
 		t.Fatalf("overlay = %#v, want request %d", model.Picker.Overlay, requestID)
 	}
-	if _, ok := model.pickerReducer().modelLoadOverlay(requestID - 1); ok {
+	if model.pickerReducer().modelLoadRequestMatches(requestID - 1) {
 		t.Fatal("stale model load request matched overlay")
 	}
-	if overlay, ok := model.pickerReducer().modelLoadOverlay(requestID); !ok || overlay == nil {
-		t.Fatalf("current model load did not match: overlay=%#v ok=%v", overlay, ok)
+	if !model.pickerReducer().modelLoadRequestMatches(requestID) {
+		t.Fatal("current model load did not match")
+	}
+	if model.pickerReducer().failModelLoad(requestID-1, "stale") {
+		t.Fatal("stale model load failure was applied")
+	}
+	if !model.pickerReducer().completeModelLoad(
+		requestID,
+		[]pickerItem{{Label: "GPT", Value: "gpt"}},
+		"gpt",
+	) {
+		t.Fatal("current model load completion was not applied")
+	}
+	if model.Picker.Overlay.loading ||
+		model.Picker.Overlay.err != "" ||
+		len(model.Picker.Overlay.items) != 1 ||
+		model.Picker.Overlay.index != 0 {
+		t.Fatalf("model overlay after load = %#v, want loaded GPT item", model.Picker.Overlay)
 	}
 }
 
