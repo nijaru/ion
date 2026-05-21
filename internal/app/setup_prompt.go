@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -37,14 +36,13 @@ func (m Model) openAPIKeyPrompt(
 	}
 	cfgCopy := *cfg
 	cfgCopy.Provider = def.ID
-	m.Picker.Overlay = nil
-	m.Picker.Setup = &setupPromptState{
+	m.pickerReducer().openSetup(setupPromptState{
 		kind:         setupPromptAPIKey,
 		provider:     def.ID,
 		providerName: def.DisplayName,
 		preset:       preset,
 		cfg:          cfgCopy,
-	}
+	})
 	return m, nil
 }
 
@@ -63,15 +61,14 @@ func (m Model) openEndpointPrompt(cfg *config.Config, preset modelPreset) (Model
 	}
 	cfgCopy := *cfg
 	cfgCopy.Provider = providers.OpenAICompatibleID
-	m.Picker.Overlay = nil
-	m.Picker.Setup = &setupPromptState{
+	m.pickerReducer().openSetup(setupPromptState{
 		kind:         setupPromptEndpoint,
 		provider:     providers.OpenAICompatibleID,
 		providerName: providers.DisplayName(providers.OpenAICompatibleID),
 		value:        strings.TrimSpace(cfgCopy.Endpoint),
 		preset:       preset,
 		cfg:          cfgCopy,
-	}
+	})
 	return m, nil
 }
 
@@ -84,19 +81,16 @@ func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
-		m.Picker.Setup = nil
+		m.pickerReducer().closeSetup()
 		return m, nil
 	case "backspace":
-		if m.Picker.Setup.value != "" {
-			m.Picker.Setup.value = trimLastRune(m.Picker.Setup.value)
-		}
+		m.pickerReducer().backspaceSetupValue()
 		return m, nil
 	case "enter":
 		return m.commitSetupPrompt()
 	default:
 		if text, ok := keyTextInput(msg); ok {
-			m.Picker.Setup.value += text
-			m.Picker.Setup.err = ""
+			m.pickerReducer().appendSetupValue(text)
 		}
 		return m, nil
 	}
@@ -113,8 +107,7 @@ func (m Model) handleSetupPromptPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if content == "" {
 		return m, nil
 	}
-	m.Picker.Setup.value += content
-	m.Picker.Setup.err = ""
+	m.pickerReducer().appendSetupValue(content)
 	return m, nil
 }
 
@@ -124,21 +117,21 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.localCommandBusy() {
-		prompt.err = m.localCommandBusyMessage("saving provider setup")
-		return m, cmdError(prompt.err)
+		message := m.localCommandBusyMessage("saving provider setup")
+		m.pickerReducer().setSetupError(message)
+		return m, cmdError(message)
 	}
 	switch prompt.kind {
 	case setupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
 		if key == "" {
-			m.Picker.Setup.err = "API key cannot be empty"
+			m.pickerReducer().setSetupError("API key cannot be empty")
 			return m, nil
 		}
-		m.Picker.SetupSaveRequest++
-		requestID := m.Picker.SetupSaveRequest
-		prompt.saving = true
-		prompt.request = requestID
-		prompt.err = ""
+		requestID, ok := m.pickerReducer().beginSetupSave()
+		if !ok {
+			return m, nil
+		}
 		m.Progress.Status = "Saving provider setup..."
 		cfg := prompt.cfg
 		provider := prompt.provider
@@ -155,14 +148,13 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 	case setupPromptEndpoint:
 		endpoint, err := normalizeOpenAICompatibleEndpoint(prompt.value)
 		if err != nil {
-			m.Picker.Setup.err = err.Error()
+			m.pickerReducer().setSetupError(err.Error())
 			return m, nil
 		}
-		m.Picker.SetupSaveRequest++
-		requestID := m.Picker.SetupSaveRequest
-		prompt.saving = true
-		prompt.request = requestID
-		prompt.err = ""
+		requestID, ok := m.pickerReducer().beginSetupSave()
+		if !ok {
+			return m, nil
+		}
 		m.Progress.Status = "Saving provider setup..."
 		cfg := prompt.cfg
 		cfg.Endpoint = endpoint
@@ -183,42 +175,29 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 			}
 		}
 	default:
-		m.Picker.Setup = nil
+		m.pickerReducer().closeSetup()
 		return m, nil
 	}
 }
 
 func (m Model) handleSetupPromptSaved(msg setupPromptSavedMsg) (Model, tea.Cmd) {
-	if msg.requestID == 0 || msg.requestID != m.Picker.SetupSaveRequest {
-		return m, nil
-	}
-	m.Picker.SetupSaveRequest = 0
-	if m.Picker.Setup == nil || m.Picker.Setup.request != msg.requestID {
-		return m, nil
-	}
 	if msg.err != nil {
-		m.Picker.Setup.saving = false
-		m.Picker.Setup.request = 0
-		m.Picker.Setup.err = msg.err.Error()
+		if !m.pickerReducer().failSetupSave(msg.requestID, msg.err.Error()) {
+			return m, nil
+		}
 		if isLocalBusyStatus(m.Progress.Status) {
 			m.Progress.Status = ""
 		}
 		return m, nil
 	}
-	m.Picker.Setup = nil
+	if !m.pickerReducer().completeSetupSave(msg.requestID) {
+		return m, nil
+	}
 	if isLocalBusyStatus(m.Progress.Status) {
 		m.Progress.Status = ""
 	}
 	cfg := msg.cfg
 	return m.openModelPickerForPreset(&cfg, msg.preset)
-}
-
-func trimLastRune(value string) string {
-	if value == "" {
-		return ""
-	}
-	_, size := utf8.DecodeLastRuneInString(value)
-	return value[:len(value)-size]
 }
 
 func normalizeOpenAICompatibleEndpoint(raw string) (string, error) {

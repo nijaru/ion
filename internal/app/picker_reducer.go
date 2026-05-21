@@ -65,6 +65,76 @@ func (r pickerReducer) closeOverlay() {
 	r.picker.Overlay = nil
 }
 
+func (r pickerReducer) openSetup(state setupPromptState) {
+	r.picker.Overlay = nil
+	r.picker.Setup = &state
+}
+
+func (r pickerReducer) closeSetup() {
+	r.picker.Setup = nil
+}
+
+func (r pickerReducer) appendSetupValue(text string) {
+	if r.picker.Setup == nil || text == "" {
+		return
+	}
+	r.picker.Setup.value += text
+	r.picker.Setup.err = ""
+}
+
+func (r pickerReducer) backspaceSetupValue() {
+	if r.picker.Setup == nil || r.picker.Setup.value == "" {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(r.picker.Setup.value)
+	r.picker.Setup.value = r.picker.Setup.value[:len(r.picker.Setup.value)-size]
+}
+
+func (r pickerReducer) setSetupError(message string) {
+	if r.picker.Setup != nil {
+		r.picker.Setup.err = message
+	}
+}
+
+func (r pickerReducer) beginSetupSave() (uint64, bool) {
+	if r.picker.Setup == nil {
+		return 0, false
+	}
+	r.picker.SetupSaveRequest++
+	requestID := r.picker.SetupSaveRequest
+	r.picker.Setup.saving = true
+	r.picker.Setup.request = requestID
+	r.picker.Setup.err = ""
+	return requestID, true
+}
+
+func (r pickerReducer) failSetupSave(requestID uint64, message string) bool {
+	if !r.setupSaveMatches(requestID) {
+		return false
+	}
+	r.picker.SetupSaveRequest = 0
+	r.picker.Setup.saving = false
+	r.picker.Setup.request = 0
+	r.picker.Setup.err = message
+	return true
+}
+
+func (r pickerReducer) completeSetupSave(requestID uint64) bool {
+	if !r.setupSaveMatches(requestID) {
+		return false
+	}
+	r.picker.SetupSaveRequest = 0
+	r.picker.Setup = nil
+	return true
+}
+
+func (r pickerReducer) setupSaveMatches(requestID uint64) bool {
+	return requestID != 0 &&
+		requestID == r.picker.SetupSaveRequest &&
+		r.picker.Setup != nil &&
+		r.picker.Setup.request == requestID
+}
+
 func (r pickerReducer) appendOverlayQuery(text string) {
 	if r.picker.Overlay == nil || text == "" {
 		return
