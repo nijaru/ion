@@ -277,9 +277,6 @@ func openRuntime(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 	if input.PreserveSession && targetSessionID == "" && input.Current.Session != nil {
 		targetSessionID = input.Current.Session.ID()
 	}
-	if input.Current.Session != nil {
-		_ = input.Current.Session.CancelTurn(ctx)
-	}
 	cfgCopy := input.Transition.Snapshot.BackendConfig
 	backend, sess, storageSess, err := input.Switcher(ctx, &cfgCopy, targetSessionID)
 	if err != nil {

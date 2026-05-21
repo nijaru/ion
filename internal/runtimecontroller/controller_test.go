@@ -62,14 +62,51 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 		!snapshot.Materialized {
 		t.Fatalf("snapshot = %#v, want accepted runtime state", snapshot)
 	}
-	if oldSession.cancels != 1 {
-		t.Fatalf("old session cancels = %d, want 1", oldSession.cancels)
+	if oldSession.cancels != 0 {
+		t.Fatalf("old session cancels = %d, want 0 before accepted switch is applied", oldSession.cancels)
+	}
+}
+
+func TestSwitchLeavesCurrentRuntimeUntouchedWhenOpenFails(t *testing.T) {
+	openErr := errors.New("provider unavailable")
+	oldSession := &fakeSession{id: "old"}
+	oldStorage := &fakeStorage{id: "old"}
+
+	_, err := Switch(t.Context(), SwitchInput{
+		Switcher: func(
+			context.Context,
+			*config.Config,
+			string,
+		) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return nil, nil, nil, openErr
+		},
+		Transition: NewTransition(
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			PresetPrimary,
+			"",
+		).WithStatePersistence(),
+		Current:   Handles{Session: oldSession, Storage: oldStorage},
+		SaveState: func(config.RuntimeStateUpdate) error { return nil },
+	})
+	if !errors.Is(err, openErr) {
+		t.Fatalf("switch error = %v, want open error", err)
+	}
+	if oldSession.cancels != 0 {
+		t.Fatalf("old session cancels = %d, want 0 after failed open", oldSession.cancels)
+	}
+	if oldSession.closed {
+		t.Fatal("old session was closed after failed open")
+	}
+	if oldStorage.closed {
+		t.Fatal("old storage was closed after failed open")
 	}
 }
 
 func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 	persistErr := errors.New("state file unavailable")
 	oldSession := &fakeSession{id: "old"}
+	oldStorage := &fakeStorage{id: "old"}
 	newSession := &fakeSession{id: "new"}
 	newStorage := &fakeStorage{id: "new"}
 
@@ -87,7 +124,7 @@ func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 			PresetPrimary,
 			"",
 		).WithStatePersistence(),
-		Current:   Handles{Session: oldSession},
+		Current:   Handles{Session: oldSession, Storage: oldStorage},
 		SaveState: func(config.RuntimeStateUpdate) error { return persistErr },
 	})
 	if !errors.Is(err, persistErr) {
@@ -102,10 +139,18 @@ func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 	if oldSession.closed {
 		t.Fatal("old session was closed before accepted switch")
 	}
+	if oldSession.cancels != 0 {
+		t.Fatalf("old session cancels = %d, want 0 after persistence failure", oldSession.cancels)
+	}
+	if oldStorage.closed {
+		t.Fatal("old storage was closed before accepted switch")
+	}
 }
 
 func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T) {
 	replayErr := errors.New("bad transcript")
+	oldSession := &fakeSession{id: "old"}
+	oldStorage := &fakeStorage{id: "old"}
 	newSession := &fakeSession{id: "resumed"}
 	newStorage := &fakeStorage{id: "resumed", entriesErr: replayErr}
 	saveCalled := false
@@ -124,6 +169,7 @@ func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T
 			PresetPrimary,
 			"",
 		).WithActivePresetPersistence(),
+		Current:   Handles{Session: oldSession, Storage: oldStorage},
 		SessionID: "resumed",
 		SaveState: func(config.RuntimeStateUpdate) error {
 			saveCalled = true
@@ -141,6 +187,15 @@ func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T
 	}
 	if !newStorage.closed {
 		t.Fatal("new storage was not closed after transcript load failure")
+	}
+	if oldSession.cancels != 0 {
+		t.Fatalf("old session cancels = %d, want 0 after failed resume", oldSession.cancels)
+	}
+	if oldSession.closed {
+		t.Fatal("old session was closed after failed resume")
+	}
+	if oldStorage.closed {
+		t.Fatal("old storage was closed after failed resume")
 	}
 }
 
