@@ -25,6 +25,7 @@ func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	if err != nil {
 		return err
 	}
+	b.acceptTurn(submitted.id)
 
 	b.wg.Go(func() {
 		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, turn)
@@ -45,13 +46,13 @@ func (b *Backend) prepareSubmittedTurn(
 	input string,
 ) (submittedTurn, error) {
 	b.mu.Lock()
-	if b.harness == nil {
-		b.mu.Unlock()
-		return submittedTurn{}, fmt.Errorf("backend not initialized")
-	}
 	if b.turn.active {
 		b.mu.Unlock()
 		return submittedTurn{}, fmt.Errorf("turn already in progress")
+	}
+	if b.harness == nil {
+		b.mu.Unlock()
+		return submittedTurn{}, fmt.Errorf("backend not initialized")
 	}
 	sess := b.sess
 	sessionID := b.idLocked()
@@ -309,9 +310,15 @@ func (b *Backend) clearActiveTurn(turnID uint64) {
 
 func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
 	b.mu.Lock()
-	if b.turn.activeFor(turnID) {
+	if b.turn.activeFor(turnID) && !b.turn.isCanceling(turnID) {
 		b.turn.cancel = cancel
 	}
+	b.mu.Unlock()
+}
+
+func (b *Backend) acceptTurn(turnID uint64) {
+	b.mu.Lock()
+	b.turn.accept(turnID)
 	b.mu.Unlock()
 }
 

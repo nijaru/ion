@@ -24,10 +24,13 @@ func TestTurnStateFinishClearsCancelAndTools(t *testing.T) {
 	}
 }
 
-func TestTurnStateRequestCancelTracksSettlementWithoutBlockingNextTurn(t *testing.T) {
+func TestTurnStateRequestCancelKeepsTurnActiveUntilSettlement(t *testing.T) {
 	state := newTurnState()
 	var canceled bool
 	turnID := state.start(func() { canceled = true })
+	if !state.accept(turnID) {
+		t.Fatal("accept returned false for active turn")
+	}
 	state.markToolActive(turnID, "tool-call-1")
 
 	cancel, active := state.requestCancel()
@@ -41,8 +44,11 @@ func TestTurnStateRequestCancelTracksSettlementWithoutBlockingNextTurn(t *testin
 	if !canceled {
 		t.Fatal("returned cancel func did not run")
 	}
-	if state.active {
-		t.Fatal("turn remained active after cancel request")
+	if !state.active {
+		t.Fatal("turn became inactive before cancel settlement")
+	}
+	if !state.activeFor(turnID) {
+		t.Fatal("canceling turn stopped blocking new submissions before settlement")
 	}
 	if !state.isCanceling(turnID) {
 		t.Fatal("turn was not marked canceling")
@@ -56,6 +62,13 @@ func TestTurnStateRequestCancelTracksSettlementWithoutBlockingNextTurn(t *testin
 	if state.hasActiveTool() {
 		t.Fatal("active tools remained after cancelActive")
 	}
+	cancel, active = state.requestCancel()
+	if !active {
+		t.Fatal("second requestCancel reported inactive turn before settlement")
+	}
+	if cancel != nil {
+		t.Fatal("second requestCancel returned a duplicate cancel func")
+	}
 	if !state.finish(turnID) {
 		t.Fatal("finish returned false for current canceling turn")
 	}
@@ -64,9 +77,35 @@ func TestTurnStateRequestCancelTracksSettlementWithoutBlockingNextTurn(t *testin
 	}
 }
 
+func TestTurnStateRequestCancelBeforeAcceptanceUnblocksImmediately(t *testing.T) {
+	state := newTurnState()
+	turnID := state.start(func() {})
+
+	cancel, active := state.requestCancel()
+	if !active {
+		t.Fatal("requestCancel reported inactive turn")
+	}
+	if cancel == nil {
+		t.Fatal("requestCancel returned nil cancel")
+	}
+	if state.active {
+		t.Fatal("pre-accept cancel left turn active")
+	}
+	if !state.isCanceling(turnID) {
+		t.Fatal("pre-accept cancel did not track canceled turn")
+	}
+	if !state.finish(turnID) {
+		t.Fatal("finish returned false for pre-accept canceled turn")
+	}
+	if state.isCanceling(turnID) {
+		t.Fatal("pre-accept cancel marker remained after finish")
+	}
+}
+
 func TestTurnStateSuppressesCanceledSettlementAfterNextTurnStarts(t *testing.T) {
 	state := newTurnState()
 	canceledTurn := state.start(func() {})
+	state.accept(canceledTurn)
 
 	state.requestCancel()
 	nextTurn := state.start(func() {})

@@ -1699,6 +1699,28 @@ func TestAcceptSubmittedTurnReturnsCantoSubmitError(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestSubmitTurnRejectsWhileAcceptedCancelIsSettling(t *testing.T) {
+	b := New()
+	b.mu.Lock()
+	turnID := b.turn.start(func() {})
+	b.turn.accept(turnID)
+	b.turn.requestCancel()
+	b.mu.Unlock()
+
+	err := b.Session().SubmitTurn(t.Context(), "next")
+	if err == nil || !strings.Contains(err.Error(), "turn already in progress") {
+		t.Fatalf("SubmitTurn error = %v, want turn already in progress", err)
+	}
+
+	b.mu.Lock()
+	active := b.turn.activeFor(turnID)
+	canceling := b.turn.isCanceling(turnID)
+	b.mu.Unlock()
+	if !active || !canceling {
+		t.Fatalf("turn active/canceling = %v/%v, want true/true", active, canceling)
+	}
+}
+
 type turnSubmitFunc func(context.Context, string) (cantoTurnHandle, error)
 
 func (f turnSubmitFunc) submit(

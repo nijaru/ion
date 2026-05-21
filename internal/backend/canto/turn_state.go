@@ -9,6 +9,7 @@ import (
 type turnState struct {
 	seq           uint64
 	active        bool
+	accepted      bool
 	cancel        context.CancelFunc
 	activeToolIDs map[string]struct{}
 	canceled      map[uint64]struct{}
@@ -24,15 +25,26 @@ func newTurnState() turnState {
 func (s *turnState) start(cancel context.CancelFunc) uint64 {
 	s.seq++
 	s.active = true
+	s.accepted = false
 	s.cancel = cancel
 	s.clearTools()
 	return s.seq
 }
 
+func (s *turnState) accept(id uint64) bool {
+	if !s.activeFor(id) {
+		return false
+	}
+	s.accepted = true
+	return true
+}
+
 func (s *turnState) finish(id uint64) bool {
 	if s.seq == id && s.active {
 		s.active = false
+		s.accepted = false
 		s.cancel = nil
+		delete(s.canceled, id)
 		s.clearTools()
 		return true
 	}
@@ -47,9 +59,14 @@ func (s *turnState) requestCancel() (context.CancelFunc, bool) {
 	if !s.active {
 		return nil, false
 	}
+	if _, ok := s.canceled[s.seq]; ok {
+		return nil, true
+	}
 	cancel := s.cancel
 	s.cancel = nil
-	s.active = false
+	if !s.accepted {
+		s.active = false
+	}
 	if s.canceled == nil {
 		s.canceled = make(map[uint64]struct{})
 	}
