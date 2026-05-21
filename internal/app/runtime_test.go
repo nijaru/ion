@@ -257,6 +257,36 @@ func TestRuntimeTransitionCommitPreservesAcceptedSessionSnapshot(t *testing.T) {
 	}
 }
 
+func TestRuntimeTransitionCommittedPreservesAcceptedSessionSnapshot(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 12
+	model.Model.Storage = &stubStorageSession{
+		id:     "session-1",
+		model:  "openai/gpt-4.1",
+		branch: "main",
+	}
+	model.Progress.Status = "Saving runtime settings..."
+
+	updated, _ := model.Update(runtimeTransitionCommittedMsg{
+		switchID: 12,
+		transition: newRuntimeTransition(
+			&config.Config{Provider: "openai", Model: "gpt-4.1", ReasoningEffort: "high"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1", ReasoningEffort: "high"},
+			presetPrimary,
+			"",
+		),
+		notice: session.Entry{Role: session.System, Content: "Runtime changed"},
+	})
+	model = updated.(Model)
+
+	if got := model.Model.Runtime.materializedSessionID(); got != "session-1" {
+		t.Fatalf("snapshot session id = %q, want current accepted session", got)
+	}
+	if model.Model.RuntimeSwitchRequest != 0 {
+		t.Fatalf("runtime switch request = %d, want cleared", model.Model.RuntimeSwitchRequest)
+	}
+}
+
 func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
