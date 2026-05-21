@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cantofw "github.com/nijaru/canto"
+	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
@@ -1430,7 +1431,7 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	}
 }
 
-func TestRunTurnReportsStreamEndWithoutTerminalEvent(t *testing.T) {
+func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	events := make(chan cantofw.RunEvent)
@@ -1441,19 +1442,40 @@ func TestRunTurnReportsStreamEndWithoutTerminalEvent(t *testing.T) {
 		turnID,
 		"hi",
 		func() {},
-		promptStreamFunc(func(context.Context, string) (<-chan cantofw.RunEvent, error) {
-			return events, nil
+		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
+			return &fakeCantoTurn{events: events}, nil
+		}),
+	)
+
+	assertNoBackendEvent(t, b)
+	if b.turn.active {
+		t.Fatal("turn remained active after Canto settlement")
+	}
+}
+
+func TestRunTurnReportsCantoResultErrorWithoutLifecycle(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	events := make(chan cantofw.RunEvent)
+	close(events)
+	resultErr := errors.New("provider failed")
+
+	b.runTurn(
+		t.Context(),
+		turnID,
+		"hi",
+		func() {},
+		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
+			return &fakeCantoTurn{events: events, resultErr: resultErr}, nil
 		}),
 	)
 
 	errEvent := waitForSessionError(t, b.Session().Events())
-	if !strings.Contains(errEvent.Err.Error(), "turn stream ended without terminal session event") {
-		t.Fatalf("error = %v, want missing terminal event", errEvent.Err)
+	if !errors.Is(errEvent.Err, resultErr) {
+		t.Fatalf("error = %v, want result error", errEvent.Err)
 	}
 	waitForTurnFinished(t, b.Session().Events())
-	if b.turn.active {
-		t.Fatal("turn remained active after missing terminal stream error")
-	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
@@ -1468,8 +1490,8 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 		turnID,
 		"hi",
 		func() {},
-		promptStreamFunc(func(context.Context, string) (<-chan cantofw.RunEvent, error) {
-			return events, nil
+		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
+			return &fakeCantoTurn{events: events}, nil
 		}),
 	)
 
@@ -1495,7 +1517,7 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 			turnID,
 			"hi",
 			cancel,
-			promptStreamFunc(func(ctx context.Context, _ string) (<-chan cantofw.RunEvent, error) {
+			turnSubmitFunc(func(ctx context.Context, _ string) (cantoTurnHandle, error) {
 				close(ready)
 				go func() {
 					defer close(events)
@@ -1510,7 +1532,7 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 					}
 					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
 				}()
-				return events, nil
+				return &fakeCantoTurn{events: events}, nil
 			}),
 		)
 	}()
@@ -1553,7 +1575,7 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 			oldTurnID,
 			"old",
 			cancel,
-			promptStreamFunc(func(ctx context.Context, _ string) (<-chan cantofw.RunEvent, error) {
+			turnSubmitFunc(func(ctx context.Context, _ string) (cantoTurnHandle, error) {
 				close(ready)
 				go func() {
 					defer close(events)
@@ -1568,7 +1590,7 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 					}
 					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
 				}()
-				return events, nil
+				return &fakeCantoTurn{events: events}, nil
 			}),
 		)
 	}()
@@ -1595,13 +1617,40 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	}
 }
 
-type promptStreamFunc func(context.Context, string) (<-chan cantofw.RunEvent, error)
+type turnSubmitFunc func(context.Context, string) (cantoTurnHandle, error)
 
-func (f promptStreamFunc) PromptStream(
+func (f turnSubmitFunc) submit(
 	ctx context.Context,
 	message string,
-) (<-chan cantofw.RunEvent, error) {
+) (cantoTurnHandle, error) {
 	return f(ctx, message)
+}
+
+type fakeCantoTurn struct {
+	events    <-chan cantofw.RunEvent
+	cancel    func()
+	result    agent.StepResult
+	resultErr error
+}
+
+func (t *fakeCantoTurn) Events() <-chan cantofw.RunEvent {
+	return t.events
+}
+
+func (t *fakeCantoTurn) Cancel(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if t.cancel != nil {
+		t.cancel()
+	}
+	return nil
+}
+
+func (t *fakeCantoTurn) Result() (agent.StepResult, error) {
+	return t.result, t.resultErr
 }
 
 func tailString(s string, max int) string {

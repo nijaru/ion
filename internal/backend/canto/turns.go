@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	cantofw "github.com/nijaru/canto"
+	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -21,17 +22,17 @@ func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	}
 
 	b.wg.Go(func() {
-		b.runTurn(turn.ctx, turn.id, input, turn.cancel, turn.streamer)
+		b.runTurn(turn.ctx, turn.id, input, turn.cancel, turn.submitter)
 	})
 
 	return nil
 }
 
 type submittedTurn struct {
-	id       uint64
-	ctx      context.Context
-	cancel   context.CancelFunc
-	streamer promptStreamer
+	id        uint64
+	ctx       context.Context
+	cancel    context.CancelFunc
+	submitter turnSubmitter
 }
 
 func (b *Backend) prepareSubmittedTurn(
@@ -103,15 +104,32 @@ func (b *Backend) prepareSubmittedTurn(
 	}
 
 	return submittedTurn{
-		id:       turnID,
-		ctx:      turnCtx,
-		cancel:   cancel,
-		streamer: harnessSession,
+		id:        turnID,
+		ctx:       turnCtx,
+		cancel:    cancel,
+		submitter: cantoSessionTurnSubmitter{session: harnessSession},
 	}, nil
 }
 
-type promptStreamer interface {
-	PromptStream(context.Context, string) (<-chan cantofw.RunEvent, error)
+type turnSubmitter interface {
+	submit(context.Context, string) (cantoTurnHandle, error)
+}
+
+type cantoSessionTurnSubmitter struct {
+	session *cantofw.Session
+}
+
+func (s cantoSessionTurnSubmitter) submit(
+	ctx context.Context,
+	message string,
+) (cantoTurnHandle, error) {
+	return s.session.Submit(ctx, message)
+}
+
+type cantoTurnHandle interface {
+	Events() <-chan cantofw.RunEvent
+	Cancel(context.Context) error
+	Result() (agent.StepResult, error)
 }
 
 func (b *Backend) runTurn(
@@ -119,32 +137,29 @@ func (b *Backend) runTurn(
 	turnID uint64,
 	input string,
 	cancel context.CancelFunc,
-	streamer promptStreamer,
+	submitter turnSubmitter,
 ) {
-	defer b.finishActiveTurn(turnID)
+	defer b.clearActiveTurn(turnID)
 	defer cancel()
 
-	runEvents, err := streamer.PromptStream(ctx, input)
+	turn, err := submitter.submit(ctx, input)
 	if err != nil {
 		b.finishTurnWithError(turnID, err)
 		return
 	}
+	b.bindTurnCancel(turnID, func() {
+		cancel()
+		_ = turn.Cancel(context.Background())
+	})
+
 	terminal := false
-	for event := range runEvents {
+	for event := range turn.Events() {
 		if b.translateRunEvent(ctx, event, turnID) {
 			terminal = true
 		}
 	}
-	if !terminal && b.acceptsTurnEvent(turnID) {
-		if err := ctx.Err(); err != nil {
-			b.finishTurnWithError(turnID, err)
-			return
-		}
-		b.emitTurnError(
-			turnID,
-			ionsession.BaseNow(),
-			fmt.Errorf("turn stream ended without terminal session event"),
-		)
+	if _, err := turn.Result(); err != nil && !terminal && b.acceptsTurnEvent(turnID) {
+		b.finishTurnWithError(turnID, err)
 	}
 }
 
@@ -265,15 +280,18 @@ func (b *Backend) isActiveTurn(turnID uint64) bool {
 	return b.turn.activeFor(turnID)
 }
 
-func (b *Backend) finishActiveTurn(turnID uint64) {
+func (b *Backend) clearActiveTurn(turnID uint64) {
 	b.mu.Lock()
-	if !b.turn.finish(turnID) {
-		b.mu.Unlock()
-		return
+	b.turn.finish(turnID)
+	b.mu.Unlock()
+}
+
+func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
+	b.mu.Lock()
+	if b.turn.activeFor(turnID) {
+		b.turn.cancel = cancel
 	}
 	b.mu.Unlock()
-
-	b.events <- ionsession.TurnFinished{}
 }
 
 func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
