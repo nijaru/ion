@@ -1276,6 +1276,74 @@ func TestTranslateRunEventProjectsWaitLifecycle(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateRunEventProjectsApprovalLifecycle(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleApproval,
+			Status: cantofw.RunLifecycleRequested,
+			Approval: &cantofw.RunApprovalLifecycle{
+				ID:        "approval-1",
+				Tool:      "bash",
+				Operation: "run",
+				Resource:  "make test",
+			},
+		},
+	}, 7)
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("first event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Approval requested for bash..." {
+		t.Fatalf("status = %q, want approval request", status.Status)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleApproval,
+			Status: cantofw.RunLifecycleCompleted,
+			Approval: &cantofw.RunApprovalLifecycle{
+				ID:       "approval-1",
+				Decision: "allow",
+				Reason:   "safe",
+			},
+		},
+	}, 7)
+	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Approval allow." {
+		t.Fatalf("status = %q, want approval decision", status.Status)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleApproval,
+			Status: cantofw.RunLifecycleCanceled,
+			Approval: &cantofw.RunApprovalLifecycle{
+				ID:     "approval-1",
+				Tool:   "bash",
+				Reason: "context canceled",
+			},
+		},
+	}, 7)
+	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("third event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Approval canceled." {
+		t.Fatalf("status = %q, want approval canceled", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {

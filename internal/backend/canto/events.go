@@ -297,6 +297,9 @@ func (b *Backend) translateRunSessionEvent(
 	case cantofw.RunLifecycleWait:
 		b.translateRunWaitLifecycle(base, lifecycle)
 		return false
+	case cantofw.RunLifecycleApproval:
+		b.translateRunApprovalLifecycle(base, lifecycle)
+		return false
 	case cantofw.RunLifecycleCompaction:
 		switch lifecycle.Status {
 		case cantofw.RunLifecycleStarted:
@@ -392,6 +395,44 @@ func (b *Backend) translateRunChildLifecycle(
 			Base:      base,
 			AgentName: child.ID,
 			Reason:    child.Reason,
+		}
+	}
+}
+
+func (b *Backend) translateRunApprovalLifecycle(
+	base ionsession.Base,
+	lifecycle *cantofw.RunLifecycle,
+) {
+	if lifecycle == nil || lifecycle.Approval == nil {
+		return
+	}
+	approval := lifecycle.Approval
+	switch lifecycle.Status {
+	case cantofw.RunLifecycleRequested:
+		target := strings.TrimSpace(approval.Tool)
+		if target == "" {
+			target = strings.TrimSpace(approval.Operation)
+		}
+		if target == "" {
+			target = "tool call"
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Approval requested for %s...", target),
+		}
+	case cantofw.RunLifecycleCompleted:
+		decision := strings.TrimSpace(string(approval.Decision))
+		if decision == "" {
+			decision = "resolved"
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Approval %s.", decision),
+		}
+	case cantofw.RunLifecycleCanceled:
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: "Approval canceled.",
 		}
 	}
 }
