@@ -59,19 +59,32 @@ func (b *Backend) compactionRuntimeSnapshot() compactionRuntime {
 	return runtime
 }
 
-func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
-	return b.compactionRuntimeSnapshot().shouldProactivelyCompact(ctx)
+func (r compactionRuntime) compactBeforeRun(
+	ctx context.Context,
+	sess *session.Session,
+) error {
+	shouldCompact, err := r.shouldProactivelyCompact(ctx, sess)
+	if err != nil || !shouldCompact {
+		return err
+	}
+	_, err = r.compactSession(ctx, sess)
+	return err
 }
 
-func (r compactionRuntime) shouldProactivelyCompact(ctx context.Context) (bool, error) {
-	if r.store == nil || r.provider == nil || r.sessionID == "" ||
-		r.model == "" || r.maxTokens <= 0 {
-		return false, nil
-	}
+func (r compactionRuntime) compactAfterOverflow(
+	ctx context.Context,
+	sess *session.Session,
+) error {
+	_, err := r.compactSession(ctx, sess)
+	return err
+}
 
-	sess, err := r.store.Load(ctx, r.sessionID)
-	if err != nil {
-		return false, err
+func (r compactionRuntime) shouldProactivelyCompact(
+	ctx context.Context,
+	sess *session.Session,
+) (bool, error) {
+	if r.provider == nil || sess == nil || r.model == "" || r.maxTokens <= 0 {
+		return false, nil
 	}
 	messages, err := sess.EffectiveMessages()
 	if err != nil {
@@ -109,7 +122,10 @@ func (b *Backend) compactSession(ctx context.Context, sess *session.Session) (bo
 	return b.compactionRuntimeSnapshot().compactSession(ctx, sess)
 }
 
-func (r compactionRuntime) compactSession(ctx context.Context, sess *session.Session) (bool, error) {
+func (r compactionRuntime) compactSession(
+	ctx context.Context,
+	sess *session.Session,
+) (bool, error) {
 	if r.provider == nil {
 		return false, fmt.Errorf("backend compaction provider not initialized")
 	}
