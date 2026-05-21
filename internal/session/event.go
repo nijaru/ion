@@ -217,6 +217,15 @@ type ChildFailed struct {
 
 func (e ChildFailed) isEvent() {}
 
+// ChildCanceled fires when the child execution is canceled.
+type ChildCanceled struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Reason    string `json:"reason"`
+}
+
+func (e ChildCanceled) isEvent() {}
+
 // TokenUsage fires when the agent reports its token consumption.
 type TokenUsage struct {
 	Base

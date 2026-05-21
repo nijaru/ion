@@ -171,10 +171,10 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 	case session.ChildCanceled:
 		var data session.ChildCanceledData
 		if err := ev.UnmarshalData(&data); err == nil {
-			b.events <- ionsession.ChildFailed{
+			b.events <- ionsession.ChildCanceled{
 				Base:      base,
 				AgentName: data.ChildID,
-				Error:     "Canceled: " + data.Reason,
+				Reason:    data.Reason,
 			}
 		}
 	}

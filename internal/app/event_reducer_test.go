@@ -826,6 +826,68 @@ func TestChildCompletionPersistenceReturnsBeforeStorageAppendCompletes(t *testin
 	}
 }
 
+func TestChildCancellationDoesNotMarkParentFailed(t *testing.T) {
+	storageSess := &blockingAppendStorage{
+		entered: make(chan any, 1),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+	model.InFlight.Thinking = true
+	model.Progress.Mode = stateWorking
+	model.InFlight.Subagents["worker-2"] = &SubagentProgress{
+		ID:     "worker-2",
+		Name:   "worker-2",
+		Status: "Started",
+	}
+
+	next, cmd := model.Update(session.ChildCanceled{
+		AgentName: "worker-2",
+		Reason:    "user stopped it",
+	})
+	model = next.(Model)
+
+	if model.InFlight.Subagents["worker-2"] != nil {
+		t.Fatalf("subagent progress = %#v, want cleared", model.InFlight.Subagents["worker-2"])
+	}
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("progress mode = %v, want parent turn to keep running", model.Progress.Mode)
+	}
+	if strings.Contains(model.Progress.LastError, "Subagent failed") {
+		t.Fatalf("last error = %q, want no subagent failure", model.Progress.LastError)
+	}
+	select {
+	case event := <-storageSess.entered:
+		t.Fatalf("append ran during Update: %#v", event)
+	default:
+	}
+
+	done := make(chan []tea.Msg, 1)
+	go func() {
+		done <- runSequencePrefix(t, cmd, 2)
+	}()
+	select {
+	case event := <-storageSess.entered:
+		subagent, ok := event.(storage.Subagent)
+		if !ok {
+			t.Fatalf("append event = %#v, want subagent", event)
+		}
+		if subagent.Name != "worker-2" ||
+			subagent.Content != "Canceled: user stopped it" ||
+			subagent.IsError {
+			t.Fatalf("subagent append = %#v, want non-error cancellation", subagent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subagent cancellation persistence command did not start append")
+	}
+	close(storageSess.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("subagent cancellation persistence command did not finish")
+	}
+}
+
 func TestChildFailurePersistenceFailureKeepsReducerArmed(t *testing.T) {
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)

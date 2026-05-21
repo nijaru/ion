@@ -151,3 +151,47 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 		m.awaitSessionEvent(),
 	)
 }
+
+func (m Model) handleChildCanceled(msg session.ChildCanceled) (Model, tea.Cmd) {
+	p, ok := m.InFlight.Subagents[msg.AgentName]
+	if !ok {
+		return m, m.awaitSessionEvent()
+	}
+	p.Status = "Canceled"
+	p.Output = childCanceledContent(msg.Reason)
+	committed := session.Entry{
+		Role:      session.Subagent,
+		Timestamp: msg.Timestamp,
+		Title:     p.Name,
+		Content:   p.Output,
+	}
+	delete(m.InFlight.Subagents, msg.AgentName)
+	m.Progress.Status = ""
+	switch {
+	case len(m.InFlight.Subagents) > 0:
+		m.Progress.Mode = stateWorking
+	case m.InFlight.Thinking:
+		m.Progress.Mode = stateIonizing
+	default:
+		m.Progress.Mode = stateComplete
+	}
+
+	return m, sequenceCmds(
+		m.printEntries(committed),
+		m.persistEntryCmd("persist subagent cancellation", storage.Subagent{
+			Type:    "subagent",
+			Name:    msg.AgentName,
+			Content: committed.Content,
+			IsError: false,
+			TS:      now(),
+		}),
+		m.awaitSessionEvent(),
+	)
+}
+
+func childCanceledContent(reason string) string {
+	if reason == "" {
+		return "Canceled"
+	}
+	return "Canceled: " + reason
+}

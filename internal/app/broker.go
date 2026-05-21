@@ -103,6 +103,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.ChildFailed:
 		return m.handleChildFailed(msg)
 
+	case session.ChildCanceled:
+		return m.handleChildCanceled(msg)
+
 	case session.Error:
 		return m.handleSessionError(msg.Err, true)
 	}

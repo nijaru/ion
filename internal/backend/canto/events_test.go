@@ -658,7 +658,7 @@ func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 				ChildID: "explorer-123",
 				Reason:  "user",
 			}),
-			want: "failed",
+			want: "canceled",
 		},
 	}
 
@@ -681,10 +681,38 @@ func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 				if _, ok := ev.(ionsession.ChildFailed); !ok {
 					t.Fatalf("event = %T, want ChildFailed", ev)
 				}
+			case "canceled":
+				if _, ok := ev.(ionsession.ChildCanceled); !ok {
+					t.Fatalf("event = %T, want ChildCanceled", ev)
+				}
 			}
 			assertNoBackendEvent(t, b)
 		})
 	}
+}
+
+func TestTranslateEventsChildCanceledIsNotFailure(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewChildCanceledEvent("session-id", csession.ChildCanceledData{
+		ChildID: "explorer-123",
+		Reason:  "user stopped it",
+	})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 0)
+
+	canceled, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildCanceled)
+	if !ok {
+		t.Fatalf("event = %T, want ChildCanceled", canceled)
+	}
+	if canceled.AgentName != "explorer-123" {
+		t.Fatalf("agent = %q, want child id", canceled.AgentName)
+	}
+	if canceled.Reason != "user stopped it" {
+		t.Fatalf("reason = %q, want cancellation reason", canceled.Reason)
+	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsChildCompletedEmitsUsage(t *testing.T) {

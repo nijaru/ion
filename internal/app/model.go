@@ -893,6 +893,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		session.ChildCompleted,
 		session.ChildBlocked,
 		session.ChildFailed,
+		session.ChildCanceled,
 		session.Error:
 		return m.handleSessionEvent(msg.(session.Event))
 	}
