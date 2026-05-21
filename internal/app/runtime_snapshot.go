@@ -9,30 +9,9 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/runtimecontroller"
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 )
-
-type runtimeTransition struct {
-	snapshot             runtimeSnapshot
-	persistState         bool
-	persistReasoning     bool
-	persistActivePreset  bool
-	persistReasoningSlot modelPreset
-	persistReasoningText string
-}
-
-type runtimeSnapshot struct {
-	appConfig     config.Config
-	backendConfig config.Config
-	preset        modelPreset
-	provider      string
-	model         string
-	reasoning     string
-	sessionID     string
-	materialized  bool
-	status        string
-}
 
 type providerSelection struct {
 	cfg                  *config.Config
@@ -49,33 +28,7 @@ func newRuntimeSnapshot(
 	preset modelPreset,
 	status string,
 ) runtimeSnapshot {
-	if appCfg == nil {
-		appCfg = backendCfg
-	}
-
-	var appCopy config.Config
-	if appCfg != nil {
-		appCopy = *appCfg
-	}
-
-	backendCopy := appCopy
-	if backendCfg != nil {
-		backendCopy = *backendCfg
-	}
-
-	if preset == "" {
-		preset = presetPrimary
-	}
-
-	return runtimeSnapshot{
-		appConfig:     appCopy,
-		backendConfig: backendCopy,
-		preset:        preset,
-		provider:      strings.TrimSpace(backendCopy.Provider),
-		model:         strings.TrimSpace(backendCopy.Model),
-		reasoning:     normalizeThinkingValue(backendCopy.ReasoningEffort),
-		status:        status,
-	}
+	return runtimecontroller.NewSnapshot(appCfg, backendCfg, preset, status)
 }
 
 func newRuntimeTransition(
@@ -84,70 +37,15 @@ func newRuntimeTransition(
 	preset modelPreset,
 	status string,
 ) runtimeTransition {
-	return runtimeTransition{
-		snapshot: newRuntimeSnapshot(appCfg, backendCfg, preset, status),
-	}
-}
-
-func (t runtimeTransition) withStatus(status string) runtimeTransition {
-	t.snapshot.status = status
-	return t
-}
-
-func (t runtimeTransition) withRuntimeHandles(handles runtimeHandles) runtimeTransition {
-	t.snapshot = t.snapshot.withRuntimeHandles(handles)
-	return t
-}
-
-func (t runtimeTransition) withStatePersistence() runtimeTransition {
-	t.persistState = true
-	return t
-}
-
-func (t runtimeTransition) withReasoningPersistence(
-	preset modelPreset,
-	effort string,
-) runtimeTransition {
-	t.persistReasoning = true
-	t.persistReasoningSlot = preset
-	t.persistReasoningText = effort
-	return t
-}
-
-func (t runtimeTransition) withActivePresetPersistence() runtimeTransition {
-	t.persistActivePreset = true
-	return t
-}
-
-func (t runtimeTransition) needsPersistence() bool {
-	return t.persistState || t.persistReasoning || t.persistActivePreset
-}
-
-func (t runtimeTransition) persist() error {
-	if !t.needsPersistence() {
-		return nil
-	}
-	update := config.RuntimeStateUpdate{
-		Config:              &t.snapshot.appConfig,
-		PersistConfig:       t.persistState,
-		ActivePreset:        t.snapshot.preset.String(),
-		PersistActivePreset: t.persistActivePreset,
-		ReasoningPreset:     t.persistReasoningSlot.String(),
-		ReasoningEffort:     t.persistReasoningText,
-		PersistReasoning:    t.persistReasoning,
-	}
-	if err := saveRuntimeState(update); err != nil {
-		return fmt.Errorf("save state: %w", err)
-	}
-	return nil
+	return runtimecontroller.NewTransition(appCfg, backendCfg, preset, status)
 }
 
 func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
-	if t.needsPersistence() {
+	if t.NeedsPersistence() {
 		return m, fmt.Errorf("runtime transition requires asynchronous persistence")
 	}
-	t = t.withRuntimeHandles(m.runtimeHandles())
-	m.applyRuntimeSnapshot(t.snapshot)
+	t = t.WithHandles(m.runtimeHandles())
+	m.applyRuntimeSnapshot(t.Snapshot)
 	return m, nil
 }
 
@@ -155,7 +53,7 @@ func (m Model) beginRuntimeTransitionCommit(
 	t runtimeTransition,
 	notice session.Entry,
 ) (Model, tea.Cmd) {
-	if !t.needsPersistence() {
+	if !t.NeedsPersistence() {
 		var err error
 		m, err = m.commitRuntimeTransition(t)
 		if err != nil {
@@ -167,7 +65,7 @@ func (m Model) beginRuntimeTransitionCommit(
 	switchID := m.Model.RuntimeSwitchRequest
 	m.Progress.Status = "Saving runtime settings..."
 	return m, func() tea.Msg {
-		if err := t.persist(); err != nil {
+		if err := t.Persist(saveRuntimeState); err != nil {
 			return runtimeTransitionCommittedMsg{switchID: switchID, err: err}
 		}
 		return runtimeTransitionCommittedMsg{
@@ -191,8 +89,8 @@ func (m Model) handleRuntimeTransitionCommitted(
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	transition := msg.transition.withRuntimeHandles(m.runtimeHandles())
-	m.applyRuntimeSnapshot(transition.snapshot)
+	transition := msg.transition.WithHandles(m.runtimeHandles())
+	m.applyRuntimeSnapshot(transition.Snapshot)
 	m.clearProgressError()
 	return m, m.printEntries(msg.notice)
 }
@@ -232,7 +130,7 @@ func providerSelectionForConfig(
 			updated,
 			preset,
 			noModelConfiguredStatus(),
-		).withStatePersistence().withActivePresetPersistence()
+		).WithStatePersistence().WithActivePresetPersistence()
 	}
 	return selection, nil
 }
@@ -276,7 +174,7 @@ func (m Model) modelSelectionTransition(
 		return runtimeTransition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
-		withStatePersistence()
+		WithStatePersistence()
 	return transition, runtimeCfg, nil
 }
 
@@ -291,7 +189,7 @@ func (m Model) thinkingSelectionTransition(
 		return runtimeTransition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
-		withReasoningPersistence(preset, level)
+		WithReasoningPersistence(preset, level)
 	return transition, runtimeCfg, nil
 }
 
@@ -301,7 +199,7 @@ func resumeSelectionTransition(cfg *config.Config) runtimeTransition {
 		cfg,
 		presetPrimary,
 		"",
-	).withActivePresetPersistence()
+	).WithActivePresetPersistence()
 }
 
 func runtimeTransitionErrorCmd(err error) tea.Cmd {
@@ -314,18 +212,18 @@ func runtimeTransitionErrorCmd(err error) tea.Cmd {
 }
 
 func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
-	appCfg := snapshot.appConfig
-	backendCfg := snapshot.backendConfig
+	appCfg := snapshot.AppConfig
+	backendCfg := snapshot.BackendConfig
 
 	if m.Model.Backend != nil {
 		m.Model.Backend.SetConfig(&backendCfg)
 	}
 	m.Model.Config = &appCfg
 	m.Model.Runtime = snapshot
-	m.App.ActivePreset = snapshot.preset
-	m.Progress.ReasoningEffort = snapshot.reasoning
-	if snapshot.status != "" {
-		m.Progress.Status = snapshot.status
+	m.App.ActivePreset = snapshot.Preset
+	m.Progress.ReasoningEffort = snapshot.Reasoning
+	if snapshot.Status != "" {
+		m.Progress.Status = snapshot.Status
 	}
 }
 
@@ -333,55 +231,19 @@ func newAcceptedRuntime(
 	transition runtimeTransition,
 	handles runtimeHandles,
 ) acceptedRuntime {
-	return acceptedRuntime{
-		transition: transition.withRuntimeHandles(handles),
-		handles:    handles,
-	}
+	return runtimecontroller.NewAccepted(transition, handles)
 }
 
 func (m Model) runtimeHandles() runtimeHandles {
 	return runtimeHandles{
-		backend: m.Model.Backend,
-		session: m.Model.Session,
-		storage: m.Model.Storage,
+		Backend: m.Model.Backend,
+		Session: m.Model.Session,
+		Storage: m.Model.Storage,
 	}
-}
-
-func (s runtimeSnapshot) withRuntimeHandles(handles runtimeHandles) runtimeSnapshot {
-	if s.provider == "" && handles.backend != nil {
-		s.provider = strings.TrimSpace(handles.backend.Provider())
-	}
-	if s.model == "" && handles.backend != nil {
-		s.model = strings.TrimSpace(handles.backend.Model())
-	}
-	if s.reasoning == "" {
-		s.reasoning = config.DefaultReasoningEffort
-	}
-	s.sessionID, s.materialized = runtimeSessionState(handles)
-	return s
-}
-
-func runtimeSessionState(handles runtimeHandles) (string, bool) {
-	if handles.storage != nil {
-		id := strings.TrimSpace(handles.storage.ID())
-		return id, storage.IsMaterialized(handles.storage)
-	}
-	if handles.session == nil {
-		return "", false
-	}
-	id := strings.TrimSpace(handles.session.ID())
-	return id, id != ""
-}
-
-func (s runtimeSnapshot) materializedSessionID() string {
-	if !s.materialized {
-		return ""
-	}
-	return strings.TrimSpace(s.sessionID)
 }
 
 func (m Model) runtimeProvider() string {
-	if provider := strings.TrimSpace(m.Model.Runtime.provider); provider != "" {
+	if provider := strings.TrimSpace(m.Model.Runtime.Provider); provider != "" {
 		return provider
 	}
 	if m.Model.Backend == nil {
@@ -391,7 +253,7 @@ func (m Model) runtimeProvider() string {
 }
 
 func (m Model) runtimeModel() string {
-	if model := strings.TrimSpace(m.Model.Runtime.model); model != "" {
+	if model := strings.TrimSpace(m.Model.Runtime.Model); model != "" {
 		return model
 	}
 	if m.Model.Backend == nil {

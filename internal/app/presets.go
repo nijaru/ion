@@ -8,16 +8,8 @@ import (
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/runtimecontroller"
 )
-
-func (p modelPreset) String() string {
-	switch p {
-	case presetFast:
-		return string(presetFast)
-	default:
-		return string(presetPrimary)
-	}
-}
 
 func (m Model) activePreset() modelPreset {
 	switch m.App.ActivePreset {
@@ -42,10 +34,7 @@ func presetTitle(preset modelPreset) string {
 }
 
 func modelPresetFromString(value string) modelPreset {
-	if config.NormalizeActivePreset(value) == string(presetFast) {
-		return presetFast
-	}
-	return presetPrimary
+	return runtimecontroller.PresetFromString(value)
 }
 
 func (m Model) runtimeConfigForPreset(

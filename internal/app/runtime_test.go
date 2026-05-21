@@ -150,9 +150,9 @@ func runtimeSwitchMsgForTest(
 		runtime: newAcceptedRuntime(
 			newRuntimeTransition(appCfg, runtimeCfg, preset, status),
 			runtimeHandles{
-				backend: backend,
-				session: sess,
-				storage: storageSess,
+				Backend: backend,
+				Session: sess,
+				Storage: storageSess,
 			},
 		),
 	}
@@ -187,12 +187,12 @@ func TestRuntimeSwitchAcceptedSnapshotIncludesRuntimeMetadata(t *testing.T) {
 	model = updated.(Model)
 
 	snapshot := model.Model.Runtime
-	if snapshot.provider != "openai" ||
-		snapshot.model != "gpt-4.1-mini" ||
-		snapshot.reasoning != "low" ||
-		snapshot.preset != presetFast ||
-		snapshot.sessionID != "session-1" ||
-		!snapshot.materialized {
+	if snapshot.Provider != "openai" ||
+		snapshot.Model != "gpt-4.1-mini" ||
+		snapshot.Reasoning != "low" ||
+		snapshot.Preset != presetFast ||
+		snapshot.SessionID != "session-1" ||
+		!snapshot.Materialized {
 		t.Fatalf("runtime snapshot = %#v, want accepted runtime metadata", snapshot)
 	}
 	if got := runtimeStatusSummary(model); !strings.Contains(got, "Model: gpt-4.1-mini") {
@@ -219,10 +219,10 @@ func TestRuntimeSwitchSnapshotTracksLazySessionWithoutResumingIt(t *testing.T) {
 	))
 	model = updated.(Model)
 
-	if model.Model.Runtime.sessionID == "" {
+	if model.Model.Runtime.SessionID == "" {
 		t.Fatal("runtime snapshot session id is empty, want lazy session identity tracked")
 	}
-	if model.Model.Runtime.materialized {
+	if model.Model.Runtime.Materialized {
 		t.Fatal("runtime snapshot marked lazy session as materialized")
 	}
 	if got := model.ResumeSessionID(); got != "" {
@@ -249,7 +249,7 @@ func TestRuntimeTransitionCommitPreservesAcceptedSessionSnapshot(t *testing.T) {
 		t.Fatalf("commit runtime transition: %v", err)
 	}
 
-	if got := model.Model.Runtime.materializedSessionID(); got != "session-1" {
+	if got := model.Model.Runtime.MaterializedSessionID(); got != "session-1" {
 		t.Fatalf("snapshot session id = %q, want current accepted session", got)
 	}
 	if got := model.Progress.ReasoningEffort; got != "high" {
@@ -279,7 +279,7 @@ func TestRuntimeTransitionCommittedPreservesAcceptedSessionSnapshot(t *testing.T
 	})
 	model = updated.(Model)
 
-	if got := model.Model.Runtime.materializedSessionID(); got != "session-1" {
+	if got := model.Model.Runtime.MaterializedSessionID(); got != "session-1" {
 		t.Fatalf("snapshot session id = %q, want current accepted session", got)
 	}
 	if model.Model.RuntimeSwitchRequest != 0 {

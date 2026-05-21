@@ -455,6 +455,10 @@ func NormalizeActivePreset(value string) string {
 	return normalizeActivePreset(value)
 }
 
+func NormalizeReasoningEffort(value string) string {
+	return normalizeReasoningEffort(value)
+}
+
 func normalizeActivePreset(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "primary":

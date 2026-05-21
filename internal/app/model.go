@@ -12,6 +12,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/runtimecontroller"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
@@ -47,25 +48,22 @@ const (
 
 const pendingActionTimeout = 1500 * time.Millisecond
 
-type modelPreset string
+type modelPreset = runtimecontroller.Preset
 
 const (
-	presetPrimary modelPreset = "primary"
-	presetFast    modelPreset = "fast"
+	presetPrimary = runtimecontroller.PresetPrimary
+	presetFast    = runtimecontroller.PresetFast
 )
 
-type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
+type runtimeSwitcher = runtimecontroller.Switcher
 
-type runtimeHandles struct {
-	backend backend.Backend
-	session session.AgentSession
-	storage storage.Session
-}
+type runtimeHandles = runtimecontroller.Handles
 
-type acceptedRuntime struct {
-	transition runtimeTransition
-	handles    runtimeHandles
-}
+type runtimeSnapshot = runtimecontroller.Snapshot
+
+type runtimeTransition = runtimecontroller.Transition
+
+type acceptedRuntime = runtimecontroller.Accepted
 
 type runtimeSwitchedMsg struct {
 	switchID      uint64
@@ -523,7 +521,7 @@ func (m Model) WithConfigForRuntimePreset(
 		runtimeCfg,
 		modelPresetFromString(preset),
 		"",
-	).withRuntimeHandles(m.runtimeHandles())
+	).WithHandles(m.runtimeHandles())
 	m.applyRuntimeSnapshot(snapshot)
 	return m
 }

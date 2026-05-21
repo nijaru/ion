@@ -34,8 +34,8 @@ func TestPrintEntriesAndRuntimeReplayUseTranscriptReducer(t *testing.T) {
 	model.App.PrintedTranscript = false
 	msg := runtimeSwitchedMsg{
 		runtime: acceptedRuntime{
-			transition: runtimeTransition{
-				snapshot: runtimeSnapshot{},
+			Transition: runtimeTransition{
+				Snapshot: runtimeSnapshot{},
 			},
 		},
 		printLines: []string{"ion v0.0.0", "--- resumed ---"},

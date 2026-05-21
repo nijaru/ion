@@ -92,7 +92,7 @@ func (m Model) sessionInfoCmd() tea.Cmd {
 }
 
 func (m Model) sessionInfoNotice() (string, error) {
-	sessionID := m.Model.Runtime.materializedSessionID()
+	sessionID := m.Model.Runtime.MaterializedSessionID()
 	if m.Model.Storage != nil {
 		if sessionID == "" && storage.IsMaterialized(m.Model.Storage) {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
