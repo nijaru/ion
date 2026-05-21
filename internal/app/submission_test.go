@@ -38,6 +38,11 @@ type blockingSubmitSession struct {
 	release chan struct{}
 }
 
+type materializingSubmitSession struct {
+	stubSession
+	lazy *storage.LazySession
+}
+
 func (s *blockingSubmitSession) SubmitTurn(ctx context.Context, turn string) error {
 	close(s.started)
 	select {
@@ -47,6 +52,13 @@ func (s *blockingSubmitSession) SubmitTurn(ctx context.Context, turn string) err
 	}
 	s.submits = append(s.submits, turn)
 	return nil
+}
+
+func (s *materializingSubmitSession) SubmitTurn(ctx context.Context, turn string) error {
+	if _, err := s.lazy.Ensure(ctx); err != nil {
+		return err
+	}
+	return s.stubSession.SubmitTurn(ctx, turn)
 }
 
 type blockingSteeringSession struct {
@@ -277,6 +289,101 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	}
 	if decision.SessionCost != 0.012 {
 		t.Fatalf("session cost = %f, want 0.012", decision.SessionCost)
+	}
+}
+
+func TestSubmitTextRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *testing.T) {
+	store, err := storage.NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/gpt-4.1", "main")
+	sess := &materializingSubmitSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+		lazy:        lazy,
+	}
+	model := New(
+		stubBackend{
+			sess:     sess,
+			provider: "openai",
+			model:    "gpt-4.1",
+		},
+		lazy,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	).WithConfig(&config.Config{Provider: "openai", Model: "gpt-4.1"})
+
+	if got := model.Model.Runtime.MaterializedSessionID(); got != "" {
+		t.Fatalf("snapshot session id before submit = %q, want empty", got)
+	}
+
+	updated, cmd := model.submitText("hello")
+	model = updated
+	model, _ = applySubmitResult(t, model, cmd)
+
+	if !storage.IsMaterialized(lazy) {
+		t.Fatal("lazy session did not materialize during submit")
+	}
+	if got := model.Model.Runtime.MaterializedSessionID(); got != lazy.ID() {
+		t.Fatalf("snapshot session id = %q, want %q", got, lazy.ID())
+	}
+	if got := model.ResumeSessionID(); got != lazy.ID() {
+		t.Fatalf("resume session id = %q, want %q", got, lazy.ID())
+	}
+}
+
+func TestSubmitErrorRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *testing.T) {
+	store, err := storage.NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/gpt-4.1", "main")
+	sess := &materializingSubmitSession{
+		stubSession: stubSession{
+			events:    make(chan session.Event),
+			submitErr: errors.New("provider rejected turn"),
+		},
+		lazy: lazy,
+	}
+	model := New(
+		stubBackend{
+			sess:     sess,
+			provider: "openai",
+			model:    "gpt-4.1",
+		},
+		lazy,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	).WithConfig(&config.Config{Provider: "openai", Model: "gpt-4.1"})
+
+	updated, cmd := model.submitText("hello")
+	model = updated
+	msg := cmd()
+	result, ok := msg.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit result = %T, want turnSubmitResultMsg", msg)
+	}
+	if result.err == nil {
+		t.Fatal("submit result error is nil")
+	}
+	next, _ := model.Update(result)
+	model = next.(Model)
+
+	if !storage.IsMaterialized(lazy) {
+		t.Fatal("lazy session did not materialize during submit")
+	}
+	if got := model.Model.Runtime.MaterializedSessionID(); got != lazy.ID() {
+		t.Fatalf("snapshot session id = %q, want %q", got, lazy.ID())
 	}
 }
 

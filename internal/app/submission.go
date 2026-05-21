@@ -84,6 +84,7 @@ func submitTurnCmd(sess session.AgentSession, text, draft string) tea.Cmd {
 }
 
 func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
+	m.refreshRuntimeSessionSnapshot()
 	if msg.err == nil {
 		historyText, historyChanged := m.appendInputHistory(msg.text)
 		var historyCmd tea.Cmd

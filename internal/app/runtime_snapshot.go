@@ -222,6 +222,12 @@ func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
 	m.progressReducer().applyRuntimeSnapshot(snapshot)
 }
 
+func (m *Model) refreshRuntimeSessionSnapshot() {
+	sessionID, materialized := runtimecontroller.SessionState(m.runtimeHandles())
+	m.Model.Runtime.SessionID = sessionID
+	m.Model.Runtime.Materialized = materialized
+}
+
 func newAcceptedRuntime(
 	transition runtimeTransition,
 	handles runtimeHandles,
