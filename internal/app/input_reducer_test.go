@@ -27,6 +27,28 @@ func TestInputReducerResetComposerDraftClearsCompletionAndPasteMarkers(t *testin
 	}
 }
 
+func TestInputReducerCompletionAndPasteMarkerOwnership(t *testing.T) {
+	model := readyModel(t)
+
+	model.inputReducer().setCompletionItems([]completionItem{{Label: "/settings"}})
+	if model.Input.Completion == nil ||
+		len(model.Input.Completion.items) != 1 ||
+		model.Input.Completion.items[0].Label != "/settings" {
+		t.Fatalf("completion = %#v, want /settings item", model.Input.Completion)
+	}
+
+	model.inputReducer().setCompletionItems(nil)
+	if model.Input.Completion != nil {
+		t.Fatalf("completion = %#v, want nil after empty completion set", model.Input.Completion)
+	}
+
+	model.PasteMarkers = map[string]pasteMarker{"[paste #1]": {content: "expanded"}}
+	model.inputReducer().clearPasteMarkers()
+	if len(model.PasteMarkers) != 0 {
+		t.Fatalf("paste markers = %#v, want cleared", model.PasteMarkers)
+	}
+}
+
 func TestInputReducerAppendHistoryTrimsDedupesCapsAndResetsCursor(t *testing.T) {
 	model := readyModel(t)
 	for i := range maxInputHistoryEntries {

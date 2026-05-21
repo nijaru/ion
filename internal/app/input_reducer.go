@@ -31,7 +31,7 @@ func (r inputReducer) insertComposerText(value string) {
 
 func (r inputReducer) resetComposerDraft() {
 	r.input.Composer.Reset()
-	r.input.Completion = nil
+	r.clearCompletion()
 	if r.pasteMarkers != nil {
 		*r.pasteMarkers = make(map[string]pasteMarker)
 	}
@@ -66,6 +66,25 @@ func (r inputReducer) appendHistory(text string) (string, bool) {
 func (r inputReducer) setHistory(inputs []string) {
 	r.input.History = inputs
 	r.resetHistoryCursor()
+}
+
+func (r inputReducer) setCompletionItems(items []completionItem) {
+	if len(items) == 0 {
+		r.clearCompletion()
+		return
+	}
+	r.input.Completion = &completionState{items: items}
+}
+
+func (r inputReducer) clearCompletion() {
+	r.input.Completion = nil
+}
+
+func (r inputReducer) clearPasteMarkers() {
+	if r.pasteMarkers == nil {
+		return
+	}
+	*r.pasteMarkers = make(map[string]pasteMarker)
 }
 
 func (r inputReducer) previousHistoryDraft(current string) (string, bool) {

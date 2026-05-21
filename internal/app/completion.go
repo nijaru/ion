@@ -8,11 +8,7 @@ const maxComposerCompletions = 5
 
 func (m *Model) refreshComposerCompletions() {
 	items := m.composerCompletionItems()
-	if len(items) == 0 {
-		m.Input.Completion = nil
-		return
-	}
-	m.Input.Completion = &completionState{items: items}
+	m.inputReducer().setCompletionItems(items)
 }
 
 func (m Model) composerCompletionItems() []completionItem {

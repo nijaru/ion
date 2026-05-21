@@ -25,7 +25,7 @@ func (m *Model) insertComposerText(value string) {
 }
 
 func (m *Model) clearPasteMarkers() {
-	m.PasteMarkers = make(map[string]pasteMarker)
+	m.inputReducer().clearPasteMarkers()
 }
 
 func (m *Model) resetHistoryCursor() {
