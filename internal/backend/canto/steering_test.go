@@ -17,7 +17,8 @@ import (
 
 func TestSteeringMutatorConsumesPendingAtProviderBoundary(t *testing.T) {
 	mutator := newSteeringMutator()
-	result, err := mutator.Submit(t.Context(), "s1", "use the smaller test")
+	ctx := csession.WithTurnID(t.Context(), "turn-1")
+	result, err := mutator.Submit(ctx, "s1", "turn-1", "use the smaller test")
 	if err != nil {
 		t.Fatalf("submit steering: %v", err)
 	}
@@ -26,10 +27,10 @@ func TestSteeringMutatorConsumesPendingAtProviderBoundary(t *testing.T) {
 	}
 
 	sess := csession.New("s1")
-	if err := mutator.Mutate(t.Context(), nil, "", sess); err != nil {
+	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
 		t.Fatalf("mutate steering: %v", err)
 	}
-	if err := mutator.Mutate(t.Context(), nil, "", sess); err != nil {
+	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
 		t.Fatalf("second mutate steering: %v", err)
 	}
 
@@ -61,20 +62,21 @@ func TestSteeringMutatorConsumesPendingAtProviderBoundary(t *testing.T) {
 
 func TestSteeringMutatorKeepsOtherSessionsPending(t *testing.T) {
 	mutator := newSteeringMutator()
-	if _, err := mutator.Submit(t.Context(), "s1", "first"); err != nil {
+	ctx := csession.WithTurnID(t.Context(), "turn-1")
+	if _, err := mutator.Submit(ctx, "s1", "turn-1", "first"); err != nil {
 		t.Fatalf("submit s1: %v", err)
 	}
-	if _, err := mutator.Submit(t.Context(), "s2", "second"); err != nil {
+	if _, err := mutator.Submit(ctx, "s2", "turn-1", "second"); err != nil {
 		t.Fatalf("submit s2: %v", err)
 	}
 
 	sess := csession.New("s1")
-	if err := mutator.Mutate(t.Context(), nil, "", sess); err != nil {
+	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
 		t.Fatalf("mutate s1: %v", err)
 	}
 
 	other := csession.New("s2")
-	if err := mutator.Mutate(t.Context(), nil, "", other); err != nil {
+	if err := mutator.Mutate(ctx, nil, "", other); err != nil {
 		t.Fatalf("mutate s2: %v", err)
 	}
 	entries, err := other.EffectiveEntries()
@@ -88,10 +90,11 @@ func TestSteeringMutatorKeepsOtherSessionsPending(t *testing.T) {
 
 func TestSteeringMutatorDropsAppliedItemsAfterLaterAppendFailure(t *testing.T) {
 	mutator := newSteeringMutator()
-	if _, err := mutator.Submit(t.Context(), "s1", "first steering"); err != nil {
+	ctx := csession.WithTurnID(t.Context(), "turn-1")
+	if _, err := mutator.Submit(ctx, "s1", "turn-1", "first steering"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	if _, err := mutator.Submit(t.Context(), "s1", "second steering"); err != nil {
+	if _, err := mutator.Submit(ctx, "s1", "turn-1", "second steering"); err != nil {
 		t.Fatalf("submit second: %v", err)
 	}
 
@@ -99,12 +102,12 @@ func TestSteeringMutatorDropsAppliedItemsAfterLaterAppendFailure(t *testing.T) {
 	writer := &failingAfterNWriter{failAt: 4, err: writeErr}
 	sess := csession.New("s1").WithWriter(writer)
 
-	if err := mutator.Mutate(t.Context(), nil, "", sess); !errors.Is(err, writeErr) {
+	if err := mutator.Mutate(ctx, nil, "", sess); !errors.Is(err, writeErr) {
 		t.Fatalf("mutate error = %v, want %v", err, writeErr)
 	}
 
 	writer.failAt = 0
-	if err := mutator.Mutate(t.Context(), nil, "", sess); err != nil {
+	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
 		t.Fatalf("retry mutate: %v", err)
 	}
 
@@ -129,6 +132,51 @@ func TestSteeringMutatorDropsAppliedItemsAfterLaterAppendFailure(t *testing.T) {
 			secondCount,
 			entries,
 		)
+	}
+}
+
+func TestSteeringMutatorDoesNotApplyStaleTurnSteering(t *testing.T) {
+	mutator := newSteeringMutator()
+	if _, err := mutator.Submit(
+		csession.WithTurnID(t.Context(), "old-turn"),
+		"s1",
+		"old-turn",
+		"stale steering",
+	); err != nil {
+		t.Fatalf("submit stale steering: %v", err)
+	}
+
+	sess := csession.New("s1")
+	if err := mutator.Mutate(
+		csession.WithTurnID(t.Context(), "next-turn"),
+		nil,
+		"",
+		sess,
+	); err != nil {
+		t.Fatalf("mutate next turn: %v", err)
+	}
+
+	entries, err := sess.EffectiveEntries()
+	if err != nil {
+		t.Fatalf("effective entries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %#v, want stale steering dropped", entries)
+	}
+	if err := mutator.Mutate(
+		csession.WithTurnID(t.Context(), "old-turn"),
+		nil,
+		"",
+		sess,
+	); err != nil {
+		t.Fatalf("mutate old turn after stale drop: %v", err)
+	}
+	entries, err = sess.EffectiveEntries()
+	if err != nil {
+		t.Fatalf("effective entries after old turn: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries after old turn = %#v, want stale steering gone", entries)
 	}
 }
 
@@ -157,13 +205,31 @@ func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
 	}
 }
 
-func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
+func TestBackendSteerTurnQueuesBeforeCantoTurnAcceptance(t *testing.T) {
+	turn := newTurnState()
+	turnID := turn.start(func() {})
+	turn.markToolActive(turnID, "tool-call-1")
 	backend := &Backend{
 		steering: newSteeringMutator(),
-		turn: turnState{
-			active:        true,
-			activeToolIDs: map[string]struct{}{"tool-call-1": {}},
-		},
+		turn:     turn,
+	}
+	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "too early")
+	if err != nil {
+		t.Fatalf("steer turn: %v", err)
+	}
+	if result.Outcome != ionsession.SteeringQueued {
+		t.Fatalf("outcome = %q, want queued before Canto turn acceptance", result.Outcome)
+	}
+}
+
+func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
+	turn := newTurnState()
+	turnID := turn.start(func() {})
+	turn.accept(turnID, "turn-1")
+	turn.markToolActive(turnID, "tool-call-1")
+	backend := &Backend{
+		steering: newSteeringMutator(),
+		turn:     turn,
 	}
 	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "use the test output")
 	if err != nil {
@@ -174,7 +240,7 @@ func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
 	}
 
 	sess := csession.New("default")
-	if err := backend.steering.Mutate(t.Context(), nil, "", sess); err != nil {
+	if err := backend.steering.Mutate(csession.WithTurnID(t.Context(), "turn-1"), nil, "", sess); err != nil {
 		t.Fatalf("mutate steering: %v", err)
 	}
 	entries, err := sess.EffectiveEntries()
@@ -183,6 +249,45 @@ func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
 	}
 	if len(entries) != 1 || !strings.Contains(entries[0].Message.Content, "use the test output") {
 		t.Fatalf("entries = %#v, want accepted steering context", entries)
+	}
+}
+
+func TestBackendSteeringClearsPendingAtTurnSettlement(t *testing.T) {
+	turn := newTurnState()
+	turnID := turn.start(func() {})
+	turn.accept(turnID, "turn-1")
+	turn.markToolActive(turnID, "tool-call-1")
+	backend := &Backend{
+		steering: newSteeringMutator(),
+		turn:     turn,
+	}
+
+	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "do not leak")
+	if err != nil {
+		t.Fatalf("steer turn: %v", err)
+	}
+	if result.Outcome != ionsession.SteeringAccepted {
+		t.Fatalf("outcome = %q, want accepted", result.Outcome)
+	}
+	if !backend.finishTurnIfActive(turnID) {
+		t.Fatal("finishTurnIfActive returned false")
+	}
+
+	sess := csession.New("default")
+	if err := backend.steering.Mutate(
+		csession.WithTurnID(t.Context(), "turn-2"),
+		nil,
+		"",
+		sess,
+	); err != nil {
+		t.Fatalf("mutate next turn: %v", err)
+	}
+	entries, err := sess.EffectiveEntries()
+	if err != nil {
+		t.Fatalf("effective entries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %#v, want no leaked steering", entries)
 	}
 }
 

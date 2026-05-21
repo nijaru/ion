@@ -28,7 +28,7 @@ func TestTurnStateRequestCancelKeepsTurnActiveUntilSettlement(t *testing.T) {
 	state := newTurnState()
 	var canceled bool
 	turnID := state.start(func() { canceled = true })
-	if !state.accept(turnID) {
+	if !state.accept(turnID, "canto-turn") {
 		t.Fatal("accept returned false for active turn")
 	}
 	state.markToolActive(turnID, "tool-call-1")
@@ -105,7 +105,7 @@ func TestTurnStateRequestCancelBeforeAcceptanceUnblocksImmediately(t *testing.T)
 func TestTurnStateSuppressesCanceledSettlementAfterNextTurnStarts(t *testing.T) {
 	state := newTurnState()
 	canceledTurn := state.start(func() {})
-	state.accept(canceledTurn)
+	state.accept(canceledTurn, "canto-turn")
 
 	state.requestCancel()
 	nextTurn := state.start(func() {})

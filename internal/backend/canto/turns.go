@@ -25,7 +25,7 @@ func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	if err != nil {
 		return err
 	}
-	b.acceptTurn(submitted.id)
+	b.acceptTurn(submitted.id, turn.ID())
 
 	b.wg.Go(func() {
 		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, turn)
@@ -146,6 +146,7 @@ func (s cantoSessionTurnSubmitter) submit(
 }
 
 type cantoTurnHandle interface {
+	ID() string
 	Events() <-chan cantofw.RunEvent
 	Cancel(context.Context) error
 	Result() (agent.StepResult, error)
@@ -292,8 +293,13 @@ func (b *Backend) claimTerminalTurn(turnID uint64) bool {
 
 func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.turn.finish(turnID)
+	sessionID, cantoTurnID, steering := b.activeSteeringLocked(turnID)
+	finished := b.turn.finish(turnID)
+	b.mu.Unlock()
+	if finished && steering != nil && cantoTurnID != "" {
+		steering.dropTurn(sessionID, cantoTurnID)
+	}
+	return finished
 }
 
 func (b *Backend) isActiveTurn(turnID uint64) bool {
@@ -304,8 +310,12 @@ func (b *Backend) isActiveTurn(turnID uint64) bool {
 
 func (b *Backend) clearActiveTurn(turnID uint64) {
 	b.mu.Lock()
-	b.turn.finish(turnID)
+	sessionID, cantoTurnID, steering := b.activeSteeringLocked(turnID)
+	finished := b.turn.finish(turnID)
 	b.mu.Unlock()
+	if finished && steering != nil && cantoTurnID != "" {
+		steering.dropTurn(sessionID, cantoTurnID)
+	}
 }
 
 func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
@@ -316,10 +326,21 @@ func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
 	b.mu.Unlock()
 }
 
-func (b *Backend) acceptTurn(turnID uint64) {
+func (b *Backend) acceptTurn(turnID uint64, cantoTurnID string) {
 	b.mu.Lock()
-	b.turn.accept(turnID)
+	b.turn.accept(turnID, cantoTurnID)
 	b.mu.Unlock()
+}
+
+func (b *Backend) activeSteeringLocked(turnID uint64) (string, string, *steeringMutator) {
+	if !b.turn.activeFor(turnID) {
+		return "", "", nil
+	}
+	sessionID := b.idLocked()
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return sessionID, b.turn.cantoIDFor(turnID), b.steering
 }
 
 func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
@@ -348,11 +369,12 @@ func (b *Backend) steerTurn(
 	b.mu.Lock()
 	active := b.turn.active
 	activeTool := b.turn.hasActiveTool()
+	cantoTurnID := b.turn.cantoIDFor(b.turn.seq)
 	sessionID := b.idLocked()
 	steering := b.steering
 	b.mu.Unlock()
 
-	if !active || !activeTool || steering == nil {
+	if !active || !activeTool || steering == nil || cantoTurnID == "" {
 		return ionsession.SteeringResult{
 			Outcome: ionsession.SteeringQueued,
 			Notice:  "No active provider boundary is available.",
@@ -361,7 +383,7 @@ func (b *Backend) steerTurn(
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	return steering.Submit(ctx, sessionID, text)
+	return steering.Submit(ctx, sessionID, cantoTurnID, text)
 }
 
 func (s *Session) CancelTurn(ctx context.Context) error {

@@ -1703,7 +1703,7 @@ func TestSubmitTurnRejectsWhileAcceptedCancelIsSettling(t *testing.T) {
 	b := New()
 	b.mu.Lock()
 	turnID := b.turn.start(func() {})
-	b.turn.accept(turnID)
+	b.turn.accept(turnID, "canto-turn")
 	b.turn.requestCancel()
 	b.mu.Unlock()
 
@@ -1731,10 +1731,18 @@ func (f turnSubmitFunc) submit(
 }
 
 type fakeCantoTurn struct {
+	id        string
 	events    <-chan cantofw.RunEvent
 	cancel    func()
 	result    agent.StepResult
 	resultErr error
+}
+
+func (t *fakeCantoTurn) ID() string {
+	if t.id == "" {
+		return "fake-canto-turn"
+	}
+	return t.id
 }
 
 func (t *fakeCantoTurn) Events() <-chan cantofw.RunEvent {

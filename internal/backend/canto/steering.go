@@ -16,7 +16,12 @@ const steeringKind = "ion_steering"
 
 type steeringMutator struct {
 	mu      sync.Mutex
-	pending map[string][]string
+	pending map[string][]pendingSteering
+}
+
+type pendingSteering struct {
+	turnID string
+	text   string
 }
 
 type steeringEvent struct {
@@ -27,21 +32,29 @@ type steeringEvent struct {
 }
 
 func newSteeringMutator() *steeringMutator {
-	return &steeringMutator{pending: make(map[string][]string)}
+	return &steeringMutator{pending: make(map[string][]pendingSteering)}
 }
 
 func (m *steeringMutator) Submit(
 	_ context.Context,
 	sessionID string,
+	turnID string,
 	text string,
 ) (ionsession.SteeringResult, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ionsession.SteeringResult{}, fmt.Errorf("steering text is empty")
 	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return ionsession.SteeringResult{}, fmt.Errorf("steering turn id is empty")
+	}
 
 	m.mu.Lock()
-	m.pending[sessionID] = append(m.pending[sessionID], text)
+	m.pending[sessionID] = append(m.pending[sessionID], pendingSteering{
+		turnID: turnID,
+		text:   text,
+	})
 	m.mu.Unlock()
 
 	return ionsession.SteeringResult{
@@ -57,7 +70,12 @@ func (m *steeringMutator) Mutate(
 	sess *csession.Session,
 ) error {
 	sessionID := sess.ID()
-	items := m.pendingFor(sessionID)
+	turnID := csession.TurnIDFromContext(ctx)
+	if turnID == "" {
+		return nil
+	}
+	m.dropOtherTurns(sessionID, turnID)
+	items := m.pendingFor(sessionID, turnID)
 	if len(items) == 0 {
 		return nil
 	}
@@ -65,7 +83,7 @@ func (m *steeringMutator) Mutate(
 	applied := 0
 	dropApplied := func(err error) error {
 		if applied > 0 {
-			m.drop(sessionID, applied)
+			m.drop(sessionID, turnID, applied)
 		}
 		return err
 	}
@@ -103,7 +121,7 @@ func (m *steeringMutator) Mutate(
 		applied++
 	}
 
-	m.drop(sessionID, applied)
+	m.drop(sessionID, turnID, applied)
 	return nil
 }
 
@@ -111,25 +129,87 @@ func (m *steeringMutator) Effects() prompt.SideEffects {
 	return prompt.SideEffects{Session: true}
 }
 
-func (m *steeringMutator) pendingFor(sessionID string) []string {
+func (m *steeringMutator) pendingFor(sessionID string, turnID string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	items := m.pending[sessionID]
 	if len(items) == 0 {
 		return nil
 	}
-	return append([]string(nil), items...)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.turnID == turnID {
+			out = append(out, item.text)
+		}
+	}
+	return out
 }
 
-func (m *steeringMutator) drop(sessionID string, n int) {
+func (m *steeringMutator) drop(sessionID string, turnID string, n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	items := m.pending[sessionID]
-	if n >= len(items) {
+	if n <= 0 || len(items) == 0 {
+		return
+	}
+	remaining := items[:0]
+	dropped := 0
+	for _, item := range items {
+		if item.turnID == turnID && dropped < n {
+			dropped++
+			continue
+		}
+		remaining = append(remaining, item)
+	}
+	if len(remaining) == 0 {
 		delete(m.pending, sessionID)
 		return
 	}
-	m.pending[sessionID] = append([]string(nil), items[n:]...)
+	m.pending[sessionID] = append([]pendingSteering(nil), remaining...)
+}
+
+func (m *steeringMutator) dropTurn(sessionID string, turnID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dropTurnLocked(sessionID, turnID)
+}
+
+func (m *steeringMutator) dropOtherTurns(sessionID string, turnID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := m.pending[sessionID]
+	if len(items) == 0 {
+		return
+	}
+	remaining := items[:0]
+	for _, item := range items {
+		if item.turnID == turnID {
+			remaining = append(remaining, item)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(m.pending, sessionID)
+		return
+	}
+	m.pending[sessionID] = append([]pendingSteering(nil), remaining...)
+}
+
+func (m *steeringMutator) dropTurnLocked(sessionID string, turnID string) {
+	items := m.pending[sessionID]
+	if len(items) == 0 {
+		return
+	}
+	remaining := items[:0]
+	for _, item := range items {
+		if item.turnID != turnID {
+			remaining = append(remaining, item)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(m.pending, sessionID)
+		return
+	}
+	m.pending[sessionID] = append([]pendingSteering(nil), remaining...)
 }
 
 func steeringContext(input string) string {
