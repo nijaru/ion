@@ -98,25 +98,25 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 	}
 	model := readyModel(t)
 
-	updated, _ := model.Update(runtimeSwitchedMsg{
-		cfg: &config.Config{
+	updated, _ := model.Update(runtimeSwitchMsgForTest(
+		&config.Config{
 			Provider:            "openai",
 			Model:               "gpt-4.1",
 			ReasoningEffort:     "high",
 			FastModel:           "gpt-4.1-mini",
 			FastReasoningEffort: "low",
 		},
-		runtimeCfg: &config.Config{
+		&config.Config{
 			Provider:        "openai",
 			Model:           "gpt-4.1-mini",
 			ReasoningEffort: "low",
 		},
-		preset:  presetFast,
-		backend: capture,
-		session: &stubSession{events: make(chan session.Event)},
-		storage: &stubStorageSession{id: "session-1", branch: "main"},
-		status:  "ready",
-	})
+		presetFast,
+		"ready",
+		capture,
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	))
 	model = updated.(Model)
 
 	if model.App.ActivePreset != presetFast {
@@ -134,6 +134,27 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 	}
 	if model.Progress.ReasoningEffort != "low" {
 		t.Fatalf("progress reasoning = %q, want runtime reasoning", model.Progress.ReasoningEffort)
+	}
+}
+
+func runtimeSwitchMsgForTest(
+	appCfg *config.Config,
+	runtimeCfg *config.Config,
+	preset modelPreset,
+	status string,
+	backend backend.Backend,
+	sess session.AgentSession,
+	storageSess storage.Session,
+) runtimeSwitchedMsg {
+	return runtimeSwitchedMsg{
+		runtime: acceptedRuntime{
+			transition: newRuntimeTransition(appCfg, runtimeCfg, preset, status),
+			handles: runtimeHandles{
+				backend: backend,
+				session: sess,
+				storage: storageSess,
+			},
+		},
 	}
 }
 
@@ -491,13 +512,17 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 		},
 	)
 
-	next, _ := model.Update(runtimeSwitchedMsg{
-		backend: testutil.New(),
-		session: testutil.New(),
-		storage: newStorage,
-		status:  "ready",
-		notice:  "Switched model to gpt-4.1",
-	})
+	msg := runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		testutil.New(),
+		testutil.New(),
+		newStorage,
+	)
+	msg.notice = "Switched model to gpt-4.1"
+	next, _ := model.Update(msg)
 	model = next.(Model)
 
 	if len(newStorage.appends) != 0 {
@@ -514,12 +539,15 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 	model.Progress.LastError = "old error"
 	model.Progress.LastTurnSummary = turnSummary{Elapsed: time.Second, Input: 1, Output: 2, Cost: 3}
 
-	next, _ := model.Update(runtimeSwitchedMsg{
-		backend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session: &stubSession{events: make(chan session.Event)},
-		storage: &stubStorageSession{id: "session-1", branch: "main"},
-		status:  "ready",
-	})
+	next, _ := model.Update(runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	))
 	model = next.(Model)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
@@ -543,12 +571,15 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 	model.Model.Session = oldSession
 	waitOld := model.awaitSessionEvent()
 
-	next, _ := model.Update(runtimeSwitchedMsg{
-		backend: stubBackend{sess: newSession},
-		session: newSession,
-		storage: &stubStorageSession{id: "session-1", branch: "main"},
-		status:  "ready",
-	})
+	next, _ := model.Update(runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		stubBackend{sess: newSession},
+		newSession,
+		&stubStorageSession{id: "session-1", branch: "main"},
+	))
 	model = next.(Model)
 
 	oldSession.events <- session.AgentDelta{Delta: "stale output"}
@@ -1067,16 +1098,19 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
-	updated, cmd := model.Update(runtimeSwitchedMsg{
-		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session:       &stubSession{events: make(chan session.Event)},
-		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"ion v0.0.0", "~/tmp/test • main", "", "--- resumed ---"},
-		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
-		status:        "Connected via Canto",
-		notice:        "Resumed session session-1",
-		showStatus:    false,
-	})
+	msg := runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"Connected via Canto",
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	)
+	msg.printLines = []string{"ion v0.0.0", "~/tmp/test • main", "", "--- resumed ---"}
+	msg.replayEntries = []session.Entry{{Role: session.User, Content: "hello"}}
+	msg.notice = "Resumed session session-1"
+	updated, cmd := model.Update(msg)
 	model = updated.(Model)
 
 	if model.Progress.Status != "Connected via Canto" {
@@ -1092,14 +1126,18 @@ func TestRuntimeSwitchMarksPrintedTranscriptForReplay(t *testing.T) {
 	model.App.PrintedTranscript = false
 	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
-	updated, _ := model.Update(runtimeSwitchedMsg{
-		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session:       &stubSession{events: make(chan session.Event)},
-		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"ion v0.0.0", "--- resumed ---"},
-		replayEntries: []session.Entry{{Role: session.Agent, Content: "restored answer"}},
-		status:        "ready",
-	})
+	msg := runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	)
+	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
+	msg.replayEntries = []session.Entry{{Role: session.Agent, Content: "restored answer"}}
+	updated, _ := model.Update(msg)
 	model = updated.(Model)
 
 	if !model.App.PrintedTranscript {
@@ -1115,13 +1153,17 @@ func TestRuntimeSwitchMarksPrintedTranscriptForHeaderOnlyReplay(t *testing.T) {
 	model.App.PrintedTranscript = false
 	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
-	updated, _ := model.Update(runtimeSwitchedMsg{
-		backend:    stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session:    &stubSession{events: make(chan session.Event)},
-		storage:    &stubStorageSession{id: "session-1", branch: "main"},
-		printLines: []string{"ion v0.0.0", "--- resumed ---"},
-		status:     "ready",
-	})
+	msg := runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	)
+	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
+	updated, _ := model.Update(msg)
 	model = updated.(Model)
 
 	if !model.App.PrintedTranscript {
@@ -1137,13 +1179,17 @@ func TestRuntimeSwitchMarksPrintedTranscriptForNotice(t *testing.T) {
 	model.App.PrintedTranscript = false
 	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
-	updated, _ := model.Update(runtimeSwitchedMsg{
-		backend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session: &stubSession{events: make(chan session.Event)},
-		storage: &stubStorageSession{id: "session-1", branch: "main"},
-		status:  "ready",
-		notice:  "Switched to fast",
-	})
+	msg := runtimeSwitchMsgForTest(
+		nil,
+		nil,
+		"",
+		"ready",
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	)
+	msg.notice = "Switched to fast"
+	updated, _ := model.Update(msg)
 	model = updated.(Model)
 
 	if !model.App.PrintedTranscript {

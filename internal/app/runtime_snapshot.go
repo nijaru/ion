@@ -80,6 +80,11 @@ func newRuntimeTransition(
 	}
 }
 
+func (t runtimeTransition) withStatus(status string) runtimeTransition {
+	t.snapshot.status = status
+	return t
+}
+
 func (t runtimeTransition) withStatePersistence() runtimeTransition {
 	t.persistState = true
 	return t
