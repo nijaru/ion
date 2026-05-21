@@ -6,7 +6,6 @@ import (
 
 	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/llm"
-	csession "github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -135,10 +134,9 @@ func (b *Backend) runTurn(
 		b.finishTurnWithError(turnID, err)
 		return
 	}
-	usage := &turnUsageTracker{}
 	terminal := false
 	for event := range runEvents {
-		if b.translateRunEvent(ctx, event, turnID, usage) {
+		if b.translateRunEvent(ctx, event, turnID) {
 			terminal = true
 		}
 	}
@@ -186,61 +184,6 @@ func (b *Backend) finishTurnWithError(turnID uint64, err error) {
 	b.emitTurnError(turnID, base, err)
 }
 
-type turnUsageTracker struct {
-	seen   bool
-	input  int
-	output int
-	total  int
-	cost   float64
-}
-
-func (t *turnUsageTracker) reset() {
-	*t = turnUsageTracker{}
-}
-
-func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool) {
-	if usage == nil {
-		return ionsession.TokenUsage{}, false
-	}
-	current, ok := tokenUsageFromCantoUsage(*usage)
-	if !ok {
-		return ionsession.TokenUsage{}, false
-	}
-	if t.seen && (current.Input < t.input ||
-		current.Output < t.output ||
-		current.Total < t.total ||
-		current.Cost < t.cost) {
-		t.reset()
-	}
-
-	deltaInput := current.Input
-	deltaOutput := current.Output
-	deltaTotal := current.Total
-	deltaCost := current.Cost
-	if t.seen {
-		deltaInput -= t.input
-		deltaOutput -= t.output
-		deltaTotal -= t.total
-		deltaCost -= t.cost
-	}
-
-	t.seen = true
-	t.input = current.Input
-	t.output = current.Output
-	t.total = current.Total
-	t.cost = current.Cost
-
-	if deltaInput == 0 && deltaOutput == 0 && deltaTotal == 0 && deltaCost == 0 {
-		return ionsession.TokenUsage{}, false
-	}
-	return ionsession.TokenUsage{
-		Input:  deltaInput,
-		Output: deltaOutput,
-		Total:  deltaTotal,
-		Cost:   deltaCost,
-	}, true
-}
-
 func tokenUsageFromCantoUsage(usage llm.Usage) (ionsession.TokenUsage, bool) {
 	total := usage.TotalTokens
 	if total == 0 {
@@ -257,11 +200,17 @@ func tokenUsageFromCantoUsage(usage llm.Usage) (ionsession.TokenUsage, bool) {
 	}, true
 }
 
+func tokenUsageFromRunUsage(usage *cantofw.RunUsage) (ionsession.TokenUsage, bool) {
+	if usage == nil || usage.Kind != cantofw.RunUsageProviderDelta {
+		return ionsession.TokenUsage{}, false
+	}
+	return tokenUsageFromCantoUsage(usage.Delta)
+}
+
 func (b *Backend) translateRunEvent(
 	ctx context.Context,
 	event cantofw.RunEvent,
 	turnID uint64,
-	usage *turnUsageTracker,
 ) bool {
 	if !b.acceptsTurnEvent(turnID) {
 		return false
@@ -280,20 +229,14 @@ func (b *Backend) translateRunEvent(
 		if chunk.Content != "" {
 			b.events <- ionsession.AgentDelta{Base: base, Delta: chunk.Content}
 		}
-		if usage != nil {
-			msg, ok := usage.delta(chunk.Usage)
-			if !ok {
-				return false
-			}
-			msg.Base = base
-			b.events <- msg
+		msg, ok := tokenUsageFromRunUsage(event.Usage)
+		if !ok {
+			return false
 		}
+		msg.Base = base
+		b.events <- msg
 	case cantofw.RunEventSession:
-		terminal := b.translateEvent(ctx, event.Event, turnID)
-		if usage != nil && event.Event.Type == csession.ToolCompleted {
-			usage.reset()
-		}
-		return terminal
+		return b.translateRunSessionEvent(ctx, event, turnID)
 	case cantofw.RunEventError:
 		if event.Err == nil {
 			return false
@@ -430,4 +373,10 @@ func (b *Backend) markToolComplete(turnID uint64, id string) (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.turn.markToolComplete(turnID, id)
+}
+
+func (b *Backend) setActiveTools(turnID uint64, tools []cantofw.RunToolLifecycle) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.turn.setActiveTools(turnID, tools)
 }
