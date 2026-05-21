@@ -129,12 +129,12 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	if !m.InFlight.Thinking {
 		return m, nil
 	}
-	m.clearActiveTurnState(true)
+	m.turnReducer().clearActiveState(true)
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
 	m.Progress.Status = ""
 	m.Progress.LastError = "session event stream closed"
-	m.recordFinishedTurnSummary()
+	m.turnReducer().recordFinishedTurnSummary(time.Now())
 
 	entry := session.Entry{
 		Role:    session.System,
@@ -151,9 +151,8 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	m.clearActiveTurnState(true)
-	m.InFlight.DrainUntilTurnStarted = true
-	m.InFlight.DrainStartedAt = time.Now()
+	m.turnReducer().clearActiveState(true)
+	m.turnReducer().beginDrain(time.Now())
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
 	m.Progress.Status = ""
@@ -164,20 +163,15 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		displayErr = limit.display()
 		cmds = append(
 			cmds,
-			m.persistEntryCmd("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)),
+			m.persistEntryCmd(
+				"persist routing stop",
+				m.routingDecision("stop", limit.reason, limit.raw),
+			),
 		)
 	}
 	m.Progress.LastError = displayErr
 	m.Progress.LastTurnSummary = turnSummary{}
-	if !m.Progress.TurnStartedAt.IsZero() {
-		m.Progress.LastTurnSummary = turnSummary{
-			Elapsed: time.Since(m.Progress.TurnStartedAt),
-			Input:   m.Progress.CurrentTurnInput,
-			Output:  m.Progress.CurrentTurnOutput,
-			Cost:    m.Progress.CurrentTurnCost,
-		}
-	}
-	m.Progress.TurnStartedAt = time.Time{}
+	m.turnReducer().recordFinishedTurnSummary(time.Now())
 	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
 	printErr := m.printEntries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
@@ -255,13 +249,7 @@ func sessionErrorDisplay(err error) string {
 }
 
 func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
-	m.Progress.TokensSent += msg.Input
-	m.Progress.TokensReceived += msg.Output
-	m.Progress.ContextTokens += tokenUsageTotal(msg)
-	m.Progress.TotalCost += msg.Cost
-	m.Progress.CurrentTurnInput += msg.Input
-	m.Progress.CurrentTurnOutput += msg.Output
-	m.Progress.CurrentTurnCost += msg.Cost
+	m.turnReducer().applyTokenUsage(msg)
 	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", storage.TokenUsage{
 		Type:   "token_usage",
 		Input:  msg.Input,
@@ -280,9 +268,8 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 			),
 		)
 		if m.InFlight.Thinking {
-			m.clearActiveTurnState(true)
-			m.InFlight.DrainUntilTurnStarted = true
-			m.InFlight.DrainStartedAt = time.Now()
+			m.turnReducer().clearActiveState(true)
+			m.turnReducer().beginDrain(time.Now())
 			m.Progress.Mode = stateCancelled
 			m.Progress.Status = ""
 			entry := session.Entry{
@@ -310,21 +297,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
-	m.InFlight.Thinking = true
-	m.InFlight.DrainUntilTurnStarted = false
-	m.Progress.Compacting = false
-	m.Progress.Mode = stateIonizing
-	m.Progress.Status = ""
-	m.Progress.LastError = ""
-	m.Progress.TurnStartedAt = time.Now()
-	m.Progress.CurrentTurnInput = 0
-	m.Progress.CurrentTurnOutput = 0
-	m.Progress.CurrentTurnCost = 0
-	m.Progress.ContextTokens = 0
-	m.Progress.BudgetStopReason = ""
-	m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
-	m.InFlight.PendingTools = nil
-	m.InFlight.AgentCommitted = false
+	m.turnReducer().startTurn(msg.Timestamp, time.Now())
 	return m, m.awaitSessionEvent()
 }
 
@@ -339,12 +312,16 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	m.InFlight.Thinking = false
 	var cmds []tea.Cmd
 
-	assistantCompleted, printAssistant := m.finishPendingAssistant()
-	cmds = appendCmd(cmds, printAssistant)
-	cmds = m.finishTurnMode(assistantCompleted, cmds)
-	m.recordFinishedTurnSummary()
+	assistant, assistantCompleted, printAssistant := m.turnReducer().finishPendingAssistant()
+	if printAssistant {
+		cmds = append(cmds, m.printEntries(assistant))
+	}
+	if entry, ok := m.turnReducer().finishTurnMode(assistantCompleted); ok {
+		cmds = append(cmds, m.printEntries(entry))
+	}
+	m.turnReducer().recordFinishedTurnSummary(time.Now())
 
-	if queued := m.popQueuedTurn(); queued != "" {
+	if queued := m.turnReducer().popQueuedTurn(); queued != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{text: queued, rearmSessionEvents: true}
 		})
@@ -353,87 +330,6 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
 	cmds = append(cmds, m.awaitSessionEvent())
 	return m, tea.Sequence(cmds...)
-}
-
-func (m *Model) finishPendingAssistant() (bool, tea.Cmd) {
-	assistantCompleted := m.InFlight.AgentCommitted
-	if !m.InFlight.AgentCommitted &&
-		m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
-		(strings.TrimSpace(m.InFlight.Pending.Content) != "" ||
-			strings.TrimSpace(m.InFlight.Pending.Reasoning) != "" ||
-			strings.TrimSpace(m.InFlight.ReasonBuf) != "") {
-		if strings.TrimSpace(m.InFlight.Pending.Reasoning) == "" {
-			m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
-		}
-		entry := *m.InFlight.Pending
-		m.clearPendingAssistant()
-		return true, m.printEntries(entry)
-	}
-	if m.InFlight.AgentCommitted {
-		m.clearPendingAssistant()
-	}
-	return assistantCompleted, nil
-}
-
-func (m *Model) clearPendingAssistant() {
-	m.InFlight.Pending = nil
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-}
-
-func (m *Model) finishTurnMode(assistantCompleted bool, cmds []tea.Cmd) []tea.Cmd {
-	switch {
-	case m.Progress.Mode == stateError:
-		m.clearActiveTurnState(true)
-		m.InFlight.QueuedTurns = nil
-		m.Progress.Status = ""
-	case m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "":
-		m.clearActiveTurnState(true)
-		m.Progress.Mode = stateCancelled
-		m.InFlight.QueuedTurns = nil
-		m.Progress.Status = ""
-	case !assistantCompleted:
-		m.clearActiveTurnState(true)
-		m.Progress.Mode = stateError
-		m.Progress.LastError = "turn finished without assistant response"
-		m.InFlight.QueuedTurns = nil
-		m.Progress.Status = ""
-		cmds = append(cmds, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: "Error: turn finished without assistant response",
-		}))
-	default:
-		m.Progress.Mode = stateComplete
-	}
-	return cmds
-}
-
-func (m *Model) recordFinishedTurnSummary() {
-	if !m.Progress.TurnStartedAt.IsZero() {
-		m.Progress.LastTurnSummary = turnSummary{
-			Elapsed: time.Since(m.Progress.TurnStartedAt),
-			Input:   m.Progress.CurrentTurnInput,
-			Output:  m.Progress.CurrentTurnOutput,
-			Cost:    m.Progress.CurrentTurnCost,
-		}
-	}
-	m.Progress.TurnStartedAt = time.Time{}
-}
-
-func (m *Model) popQueuedTurn() string {
-	if len(m.InFlight.QueuedTurns) == 0 {
-		return ""
-	}
-	queued := m.InFlight.QueuedTurns[0]
-	m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
-	return queued
-}
-
-func appendCmd(cmds []tea.Cmd, cmd tea.Cmd) []tea.Cmd {
-	if cmd == nil {
-		return cmds
-	}
-	return append(cmds, cmd)
 }
 
 func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
@@ -535,9 +431,7 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cm
 }
 
 func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
-	if entry := m.pendingToolEntry(msg.ToolUseID); entry != nil {
-		entry.Content += msg.Delta
-	}
+	m.turnReducer().appendToolOutput(msg.ToolUseID, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
@@ -546,18 +440,7 @@ func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID
 	}
-	if pending := m.pendingToolEntry(toolUseID); pending != nil {
-		pending.Content = msg.Result
-		pending.IsError = msg.Error != nil
-		setEntryTimestamp(pending, msg.Timestamp)
-		entry := *pending
-		m.clearPendingTool(toolUseID, pending)
-		if len(m.InFlight.PendingTools) == 0 {
-			m.Progress.Mode = stateIonizing
-			m.Progress.Status = ""
-			m.Progress.ContextTokens = 0
-		}
-
+	if entry, ok := m.turnReducer().completeToolResult(toolUseID, msg); ok {
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
 	return m, m.awaitSessionEvent()
@@ -568,30 +451,4 @@ func tokenUsageTotal(msg session.TokenUsage) int {
 		return msg.Total
 	}
 	return msg.Input + msg.Output
-}
-
-func (m Model) pendingToolEntry(toolUseID string) *session.Entry {
-	if toolUseID != "" {
-		return m.InFlight.PendingTools[toolUseID]
-	}
-	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
-		return m.InFlight.Pending
-	}
-	return nil
-}
-
-func (m *Model) clearPendingTool(toolUseID string, entry *session.Entry) {
-	if toolUseID != "" {
-		delete(m.InFlight.PendingTools, toolUseID)
-	}
-	if len(m.InFlight.PendingTools) == 0 {
-		m.InFlight.PendingTools = nil
-	}
-	if m.InFlight.Pending == entry {
-		m.InFlight.Pending = nil
-		for _, id := range sortedKeys(m.InFlight.PendingTools) {
-			m.InFlight.Pending = m.InFlight.PendingTools[id]
-			break
-		}
-	}
 }
