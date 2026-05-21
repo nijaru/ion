@@ -124,11 +124,6 @@ func (b *Backend) runTurn(
 	defer b.finishActiveTurn(turnID)
 	defer cancel()
 
-	if err := b.compactBeforeTurn(ctx, turnID); err != nil {
-		b.finishTurnWithError(turnID, err)
-		return
-	}
-
 	runEvents, err := streamer.PromptStream(ctx, input)
 	if err != nil {
 		b.finishTurnWithError(turnID, err)
@@ -151,25 +146,6 @@ func (b *Backend) runTurn(
 			fmt.Errorf("turn stream ended without terminal session event"),
 		)
 	}
-}
-
-func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
-	if !b.acceptsTurnEvent(turnID) {
-		return nil
-	}
-	runtime := b.compactionRuntimeSnapshot()
-	shouldCompact, err := runtime.shouldProactivelyCompact(ctx)
-	if err != nil {
-		return err
-	}
-	if !shouldCompact || !b.acceptsTurnEvent(turnID) {
-		return nil
-	}
-	b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
-	if _, err := runtime.compact(ctx); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (b *Backend) finishTurnWithError(turnID uint64, err error) {

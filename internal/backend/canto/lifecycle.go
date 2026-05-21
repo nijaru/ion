@@ -15,7 +15,6 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionconfig "github.com/nijaru/ion/internal/config"
-	ionsession "github.com/nijaru/ion/internal/session"
 )
 
 func (s *Session) Open(ctx context.Context) error {
@@ -111,6 +110,14 @@ func (b *Backend) open(ctx context.Context) error {
 		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
 		agent.WithMutators(steering),
 	}
+	runtimeOptions := []runtime.Option{
+		runtime.WithBeforeRun(compaction.compactBeforeRun),
+		runtime.WithOverflowRecovery(
+			p.IsContextOverflow,
+			compaction.compactAfterOverflow,
+			1,
+		),
+	}
 	harness, err := cantofw.NewHarness("ion").
 		Instructions(instructions).
 		Model(modelName).
@@ -118,24 +125,7 @@ func (b *Backend) open(ctx context.Context) error {
 		Registry(registry).
 		SessionStore(store).
 		AgentOptions(agentOptions...).
-		RuntimeOptions(runtime.WithOverflowRecovery(
-			p.IsContextOverflow,
-			func(ctx context.Context, sess *session.Session) error {
-				b.events <- ionsession.StatusChanged{
-					Base:   ionsession.BaseNow(),
-					Status: "Compacting context...",
-				}
-				_, err := compaction.compactSession(ctx, sess)
-				if err == nil {
-					b.events <- ionsession.StatusChanged{
-						Base:   ionsession.BaseNow(),
-						Status: "Thinking...",
-					}
-				}
-				return err
-			},
-			1,
-		)).
+		RuntimeOptions(runtimeOptions...).
 		Build()
 	if err != nil {
 		return err
