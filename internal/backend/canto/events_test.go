@@ -1134,6 +1134,103 @@ func TestTranslateEventsChildCompletedEmitsUsage(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateRunEventProjectsChildLifecycle(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleChild,
+			Status: cantofw.RunLifecycleRequested,
+			Child: &cantofw.RunChildLifecycle{
+				ID:        "explorer-123",
+				SessionID: "child-session",
+				Task:      "inspect policy flow",
+			},
+		},
+	}, 7)
+	requested, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildRequested)
+	if !ok {
+		t.Fatalf("first event = %T, want ChildRequested", requested)
+	}
+	if requested.AgentName != "explorer-123" || requested.Query != "inspect policy flow" {
+		t.Fatalf("requested child = %#v", requested)
+	}
+	_ = receiveEvent(t, b.Session().Events()) // request status
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleChild,
+			Status: cantofw.RunLifecycleUpdated,
+			Child: &cantofw.RunChildLifecycle{
+				ID:      "explorer-123",
+				Message: "partial output",
+			},
+		},
+	}, 7)
+	delta, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildDelta)
+	if !ok {
+		t.Fatalf("third event = %T, want ChildDelta", delta)
+	}
+	if delta.AgentName != "explorer-123" || delta.Delta != "partial output" {
+		t.Fatalf("child delta = %#v", delta)
+	}
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("fourth event = %T, want StatusChanged", status)
+	}
+	if !strings.Contains(status.Status, "partial output") {
+		t.Fatalf("status = %q, want child message", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestTranslateRunEventProjectsChildCompletionUsage(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleChild,
+			Status: cantofw.RunLifecycleCompleted,
+			Usage: &cantofw.RunUsage{
+				Kind: cantofw.RunUsageChild,
+				Delta: llm.Usage{
+					InputTokens:  12,
+					OutputTokens: 5,
+					TotalTokens:  23,
+					Cost:         0.0042,
+				},
+			},
+			Child: &cantofw.RunChildLifecycle{
+				ID:      "explorer-123",
+				Summary: "done",
+			},
+		},
+	}, 7)
+
+	completed, ok := receiveEvent(t, b.Session().Events()).(ionsession.ChildCompleted)
+	if !ok {
+		t.Fatalf("first event = %T, want ChildCompleted", completed)
+	}
+	if completed.AgentName != "explorer-123" || completed.Result != "done" {
+		t.Fatalf("completed child = %#v", completed)
+	}
+	usage, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatalf("second event = %T, want TokenUsage", usage)
+	}
+	if usage.Input != 12 || usage.Output != 5 || usage.Total != 23 || usage.Cost != 0.0042 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {

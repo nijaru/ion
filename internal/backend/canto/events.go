@@ -291,6 +291,9 @@ func (b *Backend) translateRunSessionEvent(
 			b.events <- ionsession.StatusChanged{Base: base, Status: status}
 		}
 		return false
+	case cantofw.RunLifecycleChild:
+		b.translateRunChildLifecycle(base, lifecycle)
+		return false
 	case cantofw.RunLifecycleCompaction:
 		switch lifecycle.Status {
 		case cantofw.RunLifecycleStarted:
@@ -308,6 +311,86 @@ func (b *Backend) translateRunSessionEvent(
 		return b.translateEvent(ctx, ev, turnID)
 	}
 	return false
+}
+
+func (b *Backend) translateRunChildLifecycle(
+	base ionsession.Base,
+	lifecycle *cantofw.RunLifecycle,
+) {
+	if lifecycle == nil || lifecycle.Child == nil {
+		return
+	}
+	child := lifecycle.Child
+	switch lifecycle.Status {
+	case cantofw.RunLifecycleRequested:
+		b.events <- ionsession.ChildRequested{
+			Base:      base,
+			AgentName: child.ID,
+			Query:     child.Task,
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Requesting child agent %s...", child.ID),
+		}
+	case cantofw.RunLifecycleStarted:
+		b.events <- ionsession.ChildStarted{
+			Base:      base,
+			AgentName: child.ID,
+			SessionID: child.SessionID,
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Child agent %s started (%s)", child.ID, child.SessionID),
+		}
+	case cantofw.RunLifecycleUpdated:
+		message := strings.TrimSpace(child.Message)
+		status := message
+		if status == "" {
+			status = strings.TrimSpace(child.Status)
+		}
+		if message != "" {
+			b.events <- ionsession.ChildDelta{
+				Base:      base,
+				AgentName: child.ID,
+				Delta:     child.Message,
+			}
+		}
+		if status != "" {
+			b.events <- ionsession.StatusChanged{
+				Base:   base,
+				Status: fmt.Sprintf("Child agent %s: %s", child.ID, status),
+			}
+		}
+	case cantofw.RunLifecycleCompleted:
+		b.events <- ionsession.ChildCompleted{
+			Base:      base,
+			AgentName: child.ID,
+			Result:    child.Summary,
+		}
+		b.emitRunUsage(base, lifecycle.Usage)
+	case cantofw.RunLifecycleBlocked:
+		b.events <- ionsession.ChildBlocked{
+			Base:      base,
+			AgentName: child.ID,
+			Reason:    child.Reason,
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Child agent %s blocked", child.ID),
+		}
+	case cantofw.RunLifecycleFailed:
+		b.events <- ionsession.ChildFailed{
+			Base:      base,
+			AgentName: child.ID,
+			Error:     child.Error,
+		}
+	case cantofw.RunLifecycleCanceled:
+		b.events <- ionsession.ChildCanceled{
+			Base:      base,
+			AgentName: child.ID,
+			Reason:    child.Reason,
+		}
+	}
 }
 
 func activeToolsStatus(tools []cantofw.RunToolLifecycle) string {
