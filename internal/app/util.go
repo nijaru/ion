@@ -117,10 +117,7 @@ func (m *Model) holdEnterForLargePrint(lines int) {
 	if delay > printSubmitHoldMax {
 		delay = printSubmitHoldMax
 	}
-	if delay > m.Input.PrintHoldDelay {
-		m.Input.PrintHoldDelay = delay
-	}
-	m.Input.DelayNextEnter = true
+	m.inputReducer().holdEnter(delay)
 }
 
 func (m Model) printHoldActive() bool {
@@ -191,11 +188,11 @@ func (m *Model) clearProgressError() {
 }
 
 func (m *Model) clearPendingAction() {
-	m.Input.Pending = pendingActionNone
+	m.inputReducer().clearPendingAction()
 }
 
 func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
-	m.Input.Pending = action
+	m.inputReducer().armPendingAction(action)
 	switch action {
 	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
 	default:

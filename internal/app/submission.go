@@ -113,8 +113,7 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 	if m.printHoldActive() {
 		return m, m.scheduleDeferredEnter()
 	}
-	m.Input.DeferredEnter = false
-	m.Input.PrintHoldDelay = 0
+	m.inputReducer().finishDeferredEnter()
 	return m.submitComposer()
 }
 
