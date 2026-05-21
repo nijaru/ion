@@ -38,6 +38,7 @@ type projectedToolCompletion struct {
 	ID        string                     `json:"id"`
 	Data      csession.ToolCompletedData `json:"data"`
 	Timestamp time.Time                  `json:"timestamp,omitzero"`
+	Displayed bool                       `json:"displayed,omitzero"`
 }
 
 func (s *cantoSession) displayProjection(ctx context.Context) (displayProjection, error) {
@@ -154,7 +155,7 @@ func (p *displayProjection) applyEntryEvent(workdir string, ev csession.Event) {
 	case csession.ToolStarted:
 		p.applyToolStarted(ev)
 	case csession.ToolCompleted:
-		p.applyToolCompleted(ev)
+		p.applyToolCompleted(ev, false)
 	case csession.TurnCompleted:
 		p.flushCompletedTools(workdir)
 		p.clearToolState()
@@ -214,6 +215,10 @@ func (p *displayProjection) applyToolMessage(
 	ev csession.Event,
 	msg llm.Message,
 ) {
+	if completion, ok := p.toolCompletion(msg.ToolID); ok && completion.Displayed {
+		p.removeTool(msg.ToolID)
+		return
+	}
 	tool := p.toolHistoryForMessage(msg)
 	entry, ok := displayHistoryEntry(workdir, csession.HistoryEntry{
 		EventID:   ev.ID.String(),
@@ -251,7 +256,7 @@ func (p *displayProjection) applyToolStarted(ev csession.Event) {
 	p.toolStarts[data.ID] = data
 }
 
-func (p *displayProjection) applyToolCompleted(ev csession.Event) {
+func (p *displayProjection) applyToolCompleted(ev csession.Event, displayed bool) {
 	data, ok, err := ev.ToolCompletedData()
 	if err != nil || !ok || data.ID == "" {
 		return
@@ -263,6 +268,7 @@ func (p *displayProjection) applyToolCompleted(ev csession.Event) {
 		ID:        data.ID,
 		Data:      data,
 		Timestamp: ev.Timestamp,
+		Displayed: displayed,
 	})
 }
 
@@ -411,7 +417,7 @@ func (p *displayProjection) trackToolStateOnly(ev csession.Event) {
 	case csession.ToolStarted:
 		p.applyToolStarted(ev)
 	case csession.ToolCompleted:
-		p.applyToolCompleted(ev)
+		p.applyToolCompleted(ev, true)
 	case csession.TurnCompleted:
 		p.clearToolState()
 	}

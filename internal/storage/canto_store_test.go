@@ -1385,6 +1385,85 @@ func TestCantoStoreDisplayProjectionRecoversIncrementalToolCompletion(t *testing
 	}
 }
 
+func TestCantoStoreDisplayProjectionDoesNotDuplicateRecoveredToolMessage(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "seed",
+	})
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
+	})); err != nil {
+		t.Fatalf("append read call: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+		Tool:      "read",
+		ID:        "tool-read",
+		Arguments: `{"file_path":"AGENTS.md"}`,
+	})); err != nil {
+		t.Fatalf("append read start: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+		Tool:   "read",
+		ID:     "tool-read",
+		Output: "recovered contents",
+	})); err != nil {
+		t.Fatalf("append read completion: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("seed projection entries: %v", err)
+	}
+	if toolEntryCount(entries) != 1 {
+		t.Fatalf("seed entries = %#v, want one recovered tool entry", entries)
+	}
+
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:    llm.RoleTool,
+		ToolID:  "tool-read",
+		Name:    "read",
+		Content: "recovered contents",
+	})); err != nil {
+		t.Fatalf("append provider-visible tool message: %v", err)
+	}
+
+	entries, err = sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("incremental entries: %v", err)
+	}
+	if toolEntryCount(entries) != 1 {
+		t.Fatalf("incremental entries = %#v, want one tool entry after matching tool message", entries)
+	}
+}
+
+func toolEntryCount(entries []ionsession.Entry) int {
+	count := 0
+	for _, entry := range entries {
+		if entry.Role == ionsession.Tool {
+			count++
+		}
+	}
+	return count
+}
+
 func BenchmarkCantoStoreDisplayProjectionCachedEntries(b *testing.B) {
 	root := b.TempDir()
 	storeAny, err := NewCantoStore(root)
