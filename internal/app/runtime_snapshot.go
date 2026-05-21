@@ -191,7 +191,8 @@ func (m Model) handleRuntimeTransitionCommitted(
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	m.applyRuntimeSnapshot(msg.transition.snapshot)
+	transition := msg.transition.withRuntimeHandles(m.runtimeHandles())
+	m.applyRuntimeSnapshot(transition.snapshot)
 	m.clearProgressError()
 	return m, m.printEntries(msg.notice)
 }
