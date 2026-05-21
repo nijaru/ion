@@ -216,6 +216,7 @@ func (b *Backend) translateRunSessionEvent(
 		if !lifecycle.Terminal {
 			break
 		}
+		b.emitRunUsage(base, lifecycle.Usage)
 		if lifecycle.Status == cantofw.RunLifecycleFailed &&
 			!lifecycle.Canceled &&
 			!isCancellationTerminal(lifecycle.Error) {

@@ -440,6 +440,90 @@ func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 	}
 }
 
+func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	usage := &cantofw.RunUsage{
+		Kind: cantofw.RunUsageTurn,
+		Delta: llm.Usage{
+			InputTokens:  3,
+			OutputTokens: 4,
+			TotalTokens:  7,
+			Cost:         0.25,
+		},
+		Cumulative: llm.Usage{
+			InputTokens:  3,
+			OutputTokens: 4,
+			TotalTokens:  7,
+			Cost:         0.25,
+		},
+	}
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+			Usage: usage.Cumulative,
+		}),
+		Usage: usage,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:     cantofw.RunLifecycleTurn,
+			Status:   cantofw.RunLifecycleCompleted,
+			Terminal: true,
+			Usage:    usage,
+		},
+	}, 7)
+
+	msg, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatalf("first event = %T, want TokenUsage", msg)
+	}
+	if msg.Input != 3 || msg.Output != 4 || msg.Total != 7 || msg.Cost != 0.25 {
+		t.Fatalf("terminal usage = %#v, want 3/4/7/0.25", msg)
+	}
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("second event is not TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventResult,
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageTurn,
+			Delta: llm.Usage{
+				InputTokens:  5,
+				OutputTokens: 6,
+				TotalTokens:  11,
+				Cost:         0.33,
+			},
+			Cumulative: llm.Usage{
+				InputTokens:  5,
+				OutputTokens: 6,
+				TotalTokens:  11,
+				Cost:         0.33,
+			},
+		},
+	}, 7)
+
+	msg, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatalf("first event = %T, want TokenUsage", msg)
+	}
+	if msg.Input != 5 || msg.Output != 6 || msg.Total != 11 || msg.Cost != 0.33 {
+		t.Fatalf("terminal usage = %#v, want 5/6/11/0.33", msg)
+	}
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("second event is not TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	b := New()
 	b.turn.seq = 7

@@ -192,10 +192,19 @@ func tokenUsageFromCantoUsage(usage llm.Usage) (ionsession.TokenUsage, bool) {
 }
 
 func tokenUsageFromRunUsage(usage *cantofw.RunUsage) (ionsession.TokenUsage, bool) {
-	if usage == nil || usage.Kind != cantofw.RunUsageProviderDelta {
+	if usage == nil {
 		return ionsession.TokenUsage{}, false
 	}
 	return tokenUsageFromCantoUsage(usage.Delta)
+}
+
+func (b *Backend) emitRunUsage(base ionsession.Base, usage *cantofw.RunUsage) {
+	msg, ok := tokenUsageFromRunUsage(usage)
+	if !ok {
+		return
+	}
+	msg.Base = base
+	b.events <- msg
 }
 
 func (b *Backend) translateRunEvent(
@@ -220,12 +229,7 @@ func (b *Backend) translateRunEvent(
 		if chunk.Content != "" {
 			b.events <- ionsession.AgentDelta{Base: base, Delta: chunk.Content}
 		}
-		msg, ok := tokenUsageFromRunUsage(event.Usage)
-		if !ok {
-			return false
-		}
-		msg.Base = base
-		b.events <- msg
+		b.emitRunUsage(base, event.Usage)
 	case cantofw.RunEventSession:
 		return b.translateRunSessionEvent(ctx, event, turnID)
 	case cantofw.RunEventError:
@@ -237,7 +241,9 @@ func (b *Backend) translateRunEvent(
 		}
 		return b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
 	case cantofw.RunEventResult:
-		return b.emitTurnFinished(turnID, ionsession.BaseNow())
+		base := ionsession.BaseNow()
+		b.emitRunUsage(base, event.Usage)
+		return b.emitTurnFinished(turnID, base)
 	}
 	return false
 }
