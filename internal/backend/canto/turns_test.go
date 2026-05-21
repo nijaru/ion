@@ -1633,7 +1633,9 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	b := New()
 	ctx, cancel := context.WithCancel(t.Context())
+	b.mu.Lock()
 	oldTurnID := b.turn.start(cancel)
+	b.mu.Unlock()
 	ready := make(chan struct{})
 	release := make(chan struct{})
 	events := make(chan cantofw.RunEvent)
@@ -1674,7 +1676,9 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	if err := b.Session().CancelTurn(t.Context()); err != nil {
 		t.Fatalf("cancel turn: %v", err)
 	}
+	b.mu.Lock()
 	nextTurnID := b.turn.start(func() {})
+	b.mu.Unlock()
 
 	close(release)
 	select {
@@ -1683,7 +1687,7 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 		t.Fatal("timed out waiting for old runTurn to exit")
 	}
 	assertNoBackendEvent(t, b)
-	if !b.turn.activeFor(nextTurnID) {
+	if !b.isActiveTurn(nextTurnID) {
 		t.Fatal("old canceled settlement finished the next turn")
 	}
 }

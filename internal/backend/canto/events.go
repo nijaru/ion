@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/llm"
@@ -186,6 +187,13 @@ func ionEventBase(ev session.Event) ionsession.Base {
 	return ionsession.BaseAt(ev.Timestamp)
 }
 
+func runEventBase(event cantofw.RunEvent) ionsession.Base {
+	if !event.Event.Timestamp.IsZero() {
+		return ionEventBase(event.Event)
+	}
+	return ionsession.BaseNow()
+}
+
 func isCancellationTerminal(errText string) bool {
 	return strings.Contains(errText, context.Canceled.Error())
 }
@@ -204,13 +212,17 @@ func (b *Backend) translateRunSessionEvent(
 	ev := event.Event
 	lifecycle := event.Lifecycle
 	if lifecycle == nil {
-		return b.translateEvent(ctx, ev, turnID)
+		if event.Type == cantofw.RunEventSession {
+			return b.translateEvent(ctx, ev, turnID)
+		}
+		return false
 	}
-	if b.isCancelingTurn(turnID) && ev.Type != session.TurnCompleted {
+	if b.isCancelingTurn(turnID) &&
+		(event.Type != cantofw.RunEventSession || ev.Type != session.TurnCompleted) {
 		return false
 	}
 
-	base := ionEventBase(ev)
+	base := runEventBase(event)
 	switch lifecycle.Type {
 	case cantofw.RunLifecycleTurn:
 		if !lifecycle.Terminal {
@@ -286,13 +298,33 @@ func (b *Backend) translateRunSessionEvent(
 		}
 		return false
 	case cantofw.RunLifecycleRetry:
-		status := "Retrying..."
-		if lifecycle.Retry != nil && lifecycle.Retry.Scope == "overflow_recovery" {
-			status = "Recovering from context overflow..."
-		}
-		b.events <- ionsession.StatusChanged{Base: base, Status: status}
+		b.events <- ionsession.StatusChanged{Base: base, Status: retryLifecycleStatus(lifecycle.Retry)}
 		return false
 	}
 
-	return b.translateEvent(ctx, ev, turnID)
+	if event.Type == cantofw.RunEventSession {
+		return b.translateEvent(ctx, ev, turnID)
+	}
+	return false
+}
+
+func retryLifecycleStatus(retry *cantofw.RunRetryLifecycle) string {
+	if retry == nil {
+		return "Retrying..."
+	}
+	if retry.Scope == "overflow_recovery" {
+		return "Recovering from context overflow..."
+	}
+	if retry.Scope != "provider" {
+		return "Retrying..."
+	}
+	var err error
+	if strings.TrimSpace(retry.Error) != "" {
+		err = fmt.Errorf("%s", retry.Error)
+	}
+	return retryStatus(llm.RetryEvent{
+		Attempt: retry.Attempt,
+		Delay:   time.Duration(retry.DelayMillis) * time.Millisecond,
+		Err:     err,
+	})
 }

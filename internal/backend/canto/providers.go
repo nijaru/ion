@@ -12,38 +12,19 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/providers"
-	ionsession "github.com/nijaru/ion/internal/session"
 )
 
 var providerFactory = newProvider
 
-func configureRetryProvider(
-	p llm.Provider,
-	cfg *config.Config,
-	onRetry func(llm.RetryEvent),
-) llm.Provider {
+func configureRetryProvider(p llm.Provider, cfg *config.Config) llm.Provider {
 	retry, ok := p.(*llm.RetryProvider)
 	if !ok {
 		retry = llm.NewRetryProvider(p)
 	}
 	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 	retry.Config.RetryForeverTransportOnly = true
-	retry.Config.OnRetry = onRetry
+	retry.Config.OnRetry = nil
 	return retry
-}
-
-func (b *Backend) emitProviderRetryStatus(event llm.RetryEvent) {
-	b.mu.Lock()
-	active := b.turn.active
-	b.mu.Unlock()
-	if !active {
-		return
-	}
-	b.events <- retryStatusEvent(event)
-}
-
-func retryStatusEvent(event llm.RetryEvent) ionsession.StatusChanged {
-	return ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: retryStatus(event)}
 }
 
 type providerRetryOwner struct {

@@ -232,6 +232,8 @@ func (b *Backend) translateRunEvent(
 		b.emitRunUsage(base, event.Usage)
 	case cantofw.RunEventSession:
 		return b.translateRunSessionEvent(ctx, event, turnID)
+	case cantofw.RunEventRetry:
+		return b.translateRunSessionEvent(ctx, event, turnID)
 	case cantofw.RunEventError:
 		if event.Err == nil {
 			return false
