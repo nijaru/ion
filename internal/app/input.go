@@ -22,17 +22,17 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	provider := ""
-	model := ""
+	provider := m.runtimeProvider()
+	model := m.runtimeModel()
 	limit := 0
 	if m.Model.Backend != nil {
-		if value := m.Model.Backend.Provider(); value != "" {
-			provider = m.st.dim.Render(value)
-		}
-		if value := m.Model.Backend.Model(); value != "" {
-			model = m.st.dim.Render(m.statusModelLabel(value))
-		}
 		limit = m.Model.Backend.ContextLimit()
+	}
+	if provider != "" {
+		provider = m.st.dim.Render(provider)
+	}
+	if model != "" {
+		model = m.st.dim.Render(m.statusModelLabel(model))
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
 	dir := m.st.dim.Render(statusWorkdirLabel(m.App.Workdir))

@@ -94,9 +94,9 @@ func (m Model) sessionInfoCmd() tea.Cmd {
 }
 
 func (m Model) sessionInfoNotice() (string, error) {
-	sessionID := ""
+	sessionID := m.Model.Runtime.materializedSessionID()
 	if m.Model.Storage != nil {
-		if storage.IsMaterialized(m.Model.Storage) {
+		if sessionID == "" && storage.IsMaterialized(m.Model.Storage) {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
 		}
 	} else if m.Model.Session != nil {
@@ -106,8 +106,8 @@ func (m Model) sessionInfoNotice() (string, error) {
 		sessionID = "none"
 	}
 
-	provider := strings.TrimSpace(m.Model.Backend.Provider())
-	model := strings.TrimSpace(m.Model.Backend.Model())
+	provider := m.runtimeProvider()
+	model := m.runtimeModel()
 	if provider == "" {
 		provider = "unknown"
 	}

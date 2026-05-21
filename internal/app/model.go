@@ -309,6 +309,7 @@ type ModelState struct {
 	Store                storage.Store
 	Switcher             runtimeSwitcher
 	Config               *config.Config
+	Runtime              runtimeSnapshot
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
@@ -517,7 +518,12 @@ func (m Model) WithConfigForRuntimePreset(
 	if cfg == nil {
 		return m
 	}
-	snapshot := newRuntimeSnapshot(cfg, runtimeCfg, modelPresetFromString(preset), "")
+	snapshot := newRuntimeSnapshot(
+		cfg,
+		runtimeCfg,
+		modelPresetFromString(preset),
+		"",
+	).withRuntimeHandles(m.runtimeHandles())
 	m.applyRuntimeSnapshot(snapshot)
 	return m
 }
@@ -551,10 +557,10 @@ func (m Model) configurationStatus() string {
 	if m.Model.Backend == nil {
 		return ""
 	}
-	if strings.TrimSpace(m.Model.Backend.Provider()) == "" {
+	if m.runtimeProvider() == "" {
 		return noProviderConfiguredStatus()
 	}
-	if strings.TrimSpace(m.Model.Backend.Model()) == "" {
+	if m.runtimeModel() == "" {
 		return noModelConfiguredStatus()
 	}
 	return ""
@@ -727,12 +733,8 @@ func (e providerLimitError) display() string {
 }
 
 func (m Model) routingDecision(decision, reason, stopReason string) storage.RoutingDecision {
-	provider := ""
-	model := ""
-	if m.Model.Backend != nil {
-		provider = m.Model.Backend.Provider()
-		model = m.Model.Backend.Model()
-	}
+	provider := m.runtimeProvider()
+	model := m.runtimeModel()
 	var maxSessionCost, maxTurnCost float64
 	if m.Model.Config != nil {
 		maxSessionCost = m.Model.Config.MaxSessionCost

@@ -196,10 +196,10 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
 		if runtimeCfg.Provider == "" {
-			runtimeCfg.Provider = m.Model.Backend.Provider()
+			runtimeCfg.Provider = m.runtimeProvider()
 		}
 		if runtimeCfg.Model == "" {
-			runtimeCfg.Model = m.Model.Backend.Model()
+			runtimeCfg.Model = m.runtimeModel()
 		}
 		if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
 			return m, cmdError("cannot " + command + " without an active provider and model")
@@ -270,11 +270,12 @@ func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Confi
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	if strings.TrimSpace(cfg.Provider) != "" || m.Model.Backend == nil {
+	provider := m.runtimeProvider()
+	if strings.TrimSpace(cfg.Provider) != "" || provider == "" {
 		return cfg
 	}
 
-	def, ok := providers.Lookup(m.Model.Backend.Provider())
+	def, ok := providers.Lookup(provider)
 	if !ok || def.Runtime != providers.RuntimeNative {
 		return cfg
 	}

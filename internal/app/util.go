@@ -266,10 +266,10 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 
 func runtimeStatusSummary(m Model) string {
 	lines := []string{"Permissions: trusted by default"}
-	if provider := strings.TrimSpace(m.Model.Backend.Provider()); provider != "" {
+	if provider := m.runtimeProvider(); provider != "" {
 		lines = append(lines, "Provider: "+provider)
 	}
-	if model := strings.TrimSpace(m.Model.Backend.Model()); model != "" {
+	if model := m.runtimeModel(); model != "" {
 		lines = append(lines, "Model: "+model)
 	}
 	if summarizer, ok := m.Model.Backend.(backend.ToolSummarizer); ok {

@@ -105,6 +105,9 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 }
 
 func (m Model) currentMaterializedSessionID() string {
+	if id := m.Model.Runtime.materializedSessionID(); id != "" {
+		return id
+	}
 	if m.Model.Session == nil {
 		return ""
 	}
@@ -162,14 +165,14 @@ func (m Model) switchRuntimeCommand(
 		}
 		return runtimeSwitchedMsg{
 			switchID: requestID,
-			runtime: acceptedRuntime{
-				transition: transition.withStatus(backend.Bootstrap().Status),
-				handles: runtimeHandles{
+			runtime: newAcceptedRuntime(
+				transition.withStatus(backend.Bootstrap().Status),
+				runtimeHandles{
 					backend: backend,
 					session: sess,
 					storage: storageSess,
 				},
-			},
+			),
 			previous: runtimeHandles{
 				session: oldSession,
 				storage: oldStorage,
@@ -231,14 +234,14 @@ func (m Model) resumeRuntimeCommand(
 		}
 		return runtimeSwitchedMsg{
 			switchID: switchID,
-			runtime: acceptedRuntime{
-				transition: transition.withStatus(backend.Bootstrap().Status),
-				handles: runtimeHandles{
+			runtime: newAcceptedRuntime(
+				transition.withStatus(backend.Bootstrap().Status),
+				runtimeHandles{
 					backend: backend,
 					session: sess,
 					storage: storageSess,
 				},
-			},
+			),
 			previous: runtimeHandles{
 				session: oldSession,
 				storage: oldStorage,
