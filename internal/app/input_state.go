@@ -12,15 +12,14 @@ import (
 const maxInputHistoryEntries = 200
 
 func (m *Model) updateComposer(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
+	cmd := m.inputReducer().updateComposer(msg)
 	m.relayoutComposer()
 	m.refreshComposerCompletions()
 	return cmd
 }
 
 func (m *Model) insertComposerText(value string) {
-	m.Input.Composer.InsertString(value)
+	m.inputReducer().insertComposerText(value)
 	m.relayoutComposer()
 	m.refreshComposerCompletions()
 }
@@ -30,38 +29,22 @@ func (m *Model) clearPasteMarkers() {
 }
 
 func (m *Model) resetHistoryCursor() {
-	m.Input.HistoryIdx = -1
-	m.Input.HistoryDraft = ""
+	m.inputReducer().resetHistoryCursor()
 }
 
 func (m *Model) resetComposerDraft() {
-	m.Input.Composer.Reset()
-	m.Input.Completion = nil
-	m.clearPasteMarkers()
+	m.inputReducer().resetComposerDraft()
 	m.relayoutComposer()
 }
 
 func (m *Model) setComposerDraft(value string) {
-	m.Input.Composer.SetValue(value)
+	m.inputReducer().setComposerDraft(value)
 	m.relayoutComposer()
 	m.refreshComposerCompletions()
 }
 
 func (m *Model) appendInputHistory(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-	if len(m.Input.History) > 0 && m.Input.History[len(m.Input.History)-1] == text {
-		m.resetHistoryCursor()
-		return "", false
-	}
-	m.Input.History = append(m.Input.History, text)
-	if overflow := len(m.Input.History) - maxInputHistoryEntries; overflow > 0 {
-		m.Input.History = append([]string(nil), m.Input.History[overflow:]...)
-	}
-	m.resetHistoryCursor()
-	return text, true
+	return m.inputReducer().appendHistory(text)
 }
 
 func (m *Model) loadInputHistory(ctx context.Context) {
@@ -73,8 +56,7 @@ func (m *Model) loadInputHistory(ctx context.Context) {
 		return
 	}
 	slices.Reverse(inputs)
-	m.Input.History = inputs
-	m.resetHistoryCursor()
+	m.inputReducer().setHistory(inputs)
 }
 
 func (m Model) persistInputHistory(ctx context.Context, text string) tea.Cmd {

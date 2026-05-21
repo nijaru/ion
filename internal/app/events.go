@@ -117,14 +117,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter":
 		if m.Input.DelayNextEnter {
 			m.clearPendingAction()
-			m.Input.DelayNextEnter = false
-			m.Input.DeferredEnter = true
-			m.Input.PrintHoldUntil = time.Now().Add(m.Input.PrintHoldDelay)
+			m.inputReducer().startDeferredEnter(time.Now().Add(m.Input.PrintHoldDelay))
 			return m, m.scheduleDeferredEnter()
 		}
 		if m.printHoldActive() {
 			m.clearPendingAction()
-			m.Input.DeferredEnter = true
+			m.inputReducer().markDeferredEnter()
 			return m, m.scheduleDeferredEnter()
 		}
 		return m.submitComposer()
@@ -137,14 +135,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "up", "ctrl+p":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
-			if m.Input.HistoryIdx == -1 {
-				m.Input.HistoryDraft = m.Input.Composer.Value()
-				m.Input.HistoryIdx = len(m.Input.History) - 1
-				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
-				return m, nil
-			} else if m.Input.HistoryIdx > 0 {
-				m.Input.HistoryIdx--
-				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
+			if draft, ok := m.inputReducer().previousHistoryDraft(
+				m.Input.Composer.Value(),
+			); ok {
+				m.setComposerDraft(draft)
 				return m, nil
 			}
 		}
@@ -152,14 +146,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "down", "ctrl+n":
 		m.clearPendingAction()
-		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 && m.Input.HistoryIdx != -1 {
-			if m.Input.HistoryIdx < len(m.Input.History)-1 {
-				m.Input.HistoryIdx++
-				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
-				return m, nil
-			} else {
-				draft := m.Input.HistoryDraft
-				m.resetHistoryCursor()
+		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 &&
+			m.inputReducer().browsingHistory() {
+			if draft, ok := m.inputReducer().nextHistoryDraft(); ok {
 				m.setComposerDraft(draft)
 				return m, nil
 			}
