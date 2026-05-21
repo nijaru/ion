@@ -1510,6 +1510,45 @@ func TestRunTurnUsesCantoResultEventAsTerminal(t *testing.T) {
 	}
 }
 
+func TestRunTurnSuppressesDuplicateTerminalAfterCantoSettlement(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	events := make(chan cantofw.RunEvent, 2)
+	events <- cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewTurnCompletedEvent(
+			"session-id",
+			csession.TurnCompletedData{},
+		),
+	}
+	events <- cantofw.RunEvent{
+		Type:   cantofw.RunEventResult,
+		Result: agent.StepResult{Content: "done"},
+	}
+	close(events)
+
+	b.runTurn(
+		t.Context(),
+		turnID,
+		"hi",
+		func() {},
+		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
+			return &fakeCantoTurn{
+				events: events,
+				result: agent.StepResult{Content: "done"},
+			}, nil
+		}),
+	)
+
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("Canto settlement did not emit TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+	if b.turn.active {
+		t.Fatal("turn remained active after durable terminal settlement")
+	}
+}
+
 func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})

@@ -83,6 +83,44 @@ func TestTranslateEventsCommitsUserFromMessageAdded(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateEventsPreservesUserCommitBeforeTurnStarted(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 3)
+	events <- csession.NewEvent("session-id", csession.MessageAdded, llm.Message{
+		Role:    llm.RoleUser,
+		Content: "inspect the workspace",
+	})
+	events <- csession.NewTurnStartedEvent("session-id", csession.TurnStartedData{
+		AgentID: "ion",
+	})
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 0)
+
+	committed, ok := receiveEvent(t, b.Session().Events()).(ionsession.UserMessage)
+	if !ok {
+		t.Fatalf("first event = %T, want UserMessage", committed)
+	}
+	if committed.Message != "inspect the workspace" {
+		t.Fatalf("committed user message = %#v", committed)
+	}
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnStarted); !ok {
+		t.Fatal("second event is not TurnStarted")
+	}
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("third event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Thinking..." {
+		t.Fatalf("status = %q, want Thinking...", status.Status)
+	}
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("fourth event is not TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 1)
