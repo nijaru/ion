@@ -609,6 +609,27 @@ func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsChildProgressStatusOnlySkipsEmptyDelta(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewChildProgressedEvent("session-id", csession.ChildProgressedData{
+		ChildID: "explorer-123",
+		Status:  "waiting for approval",
+	})
+	close(events)
+
+	translateSessionEvents(t.Context(), b, events, 0)
+
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("event = %T, want StatusChanged", status)
+	}
+	if !strings.Contains(status.Status, "waiting for approval") {
+		t.Fatalf("status = %q, want child progress status", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateEventsChildTerminalDoesNotEmitReadyStatus(t *testing.T) {
 	tests := []struct {
 		name  string
