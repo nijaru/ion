@@ -152,6 +152,23 @@ func (s *cantoStore) init() error {
                 )`,
 		`CREATE INDEX IF NOT EXISTS idx_inputs_cwd ON inputs(cwd)`,
 		`CREATE INDEX IF NOT EXISTS idx_meta_cwd ON session_meta(cwd)`,
+		`CREATE TABLE IF NOT EXISTS session_display_projection (
+			session_id TEXT PRIMARY KEY,
+			cutoff_seq INTEGER NOT NULL DEFAULT 0,
+			cutoff_event_id TEXT,
+			entries_json BLOB NOT NULL,
+			last_status TEXT,
+			usage_input INTEGER NOT NULL DEFAULT 0,
+			usage_output INTEGER NOT NULL DEFAULT 0,
+			usage_cost REAL NOT NULL DEFAULT 0,
+			pending_input INTEGER NOT NULL DEFAULT 0,
+			pending_output INTEGER NOT NULL DEFAULT 0,
+			pending_cost REAL NOT NULL DEFAULT 0,
+			tool_calls_json TEXT NOT NULL DEFAULT '{}',
+			tool_starts_json TEXT NOT NULL DEFAULT '{}',
+			tool_completions_json TEXT NOT NULL DEFAULT '[]',
+			updated_at INTEGER
+		)`,
 	}
 	for _, q := range queries {
 		if _, err := s.db.Exec(q); err != nil {
@@ -160,6 +177,15 @@ func (s *cantoStore) init() error {
 	}
 	if err := s.ensureColumn("session_meta", "name TEXT"); err != nil {
 		return err
+	}
+	for _, column := range []string{
+		"tool_calls_json TEXT NOT NULL DEFAULT '{}'",
+		"tool_starts_json TEXT NOT NULL DEFAULT '{}'",
+		"tool_completions_json TEXT NOT NULL DEFAULT '[]'",
+	} {
+		if err := s.ensureColumn("session_display_projection", column); err != nil {
+			return err
+		}
 	}
 	return nil
 }

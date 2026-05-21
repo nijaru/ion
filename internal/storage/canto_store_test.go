@@ -17,7 +17,7 @@ import (
 )
 
 func appendCantoMessage(
-	t *testing.T,
+	t testing.TB,
 	store *cantoStore,
 	ctx context.Context,
 	sessionID string,
@@ -30,7 +30,7 @@ func appendCantoMessage(
 }
 
 func appendLegacyCantoMessage(
-	t *testing.T,
+	t testing.TB,
 	store *cantoStore,
 	ctx context.Context,
 	sessionID string,
@@ -1113,6 +1113,310 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	}
 	if !entries[2].Timestamp.Equal(toolAt) {
 		t.Fatalf("tool timestamp = %s, want %s", entries[2].Timestamp, toolAt)
+	}
+}
+
+func TestCantoStoreDisplayProjectionUsesStoredCutoffForIncrementalReplay(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, filepath.Join(t.TempDir(), "repo"), "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "first",
+	})
+	if err := sess.Append(ctx, TokenUsage{Input: 4, Output: 1, Cost: 0.01}); err != nil {
+		t.Fatalf("append first usage: %v", err)
+	}
+	if err := sess.Append(ctx, Status{
+		Status: "Network error. Retrying in 2s... Ctrl+C stops.",
+	}); err != nil {
+		t.Fatalf("append retry status: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("seed entries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Content != "first" {
+		t.Fatalf("seed entries = %#v, want first message", entries)
+	}
+	input, output, cost, err := sess.Usage(ctx)
+	if err != nil {
+		t.Fatalf("seed usage: %v", err)
+	}
+	if input != 4 || output != 1 || cost != 0.01 {
+		t.Fatalf("seed usage = %d/%d/%f, want 4/1/0.01", input, output, cost)
+	}
+	status, err := sess.LastStatus(ctx)
+	if err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+	if status == "" {
+		t.Fatal("seed status is empty, want retry status")
+	}
+
+	if _, err := store.db.ExecContext(
+		ctx,
+		"UPDATE events SET data = ? WHERE session_id = ? AND seq = 1",
+		[]byte("{not-json"),
+		sess.ID(),
+	); err != nil {
+		t.Fatalf("corrupt projected prefix: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "second",
+	})
+	if err := sess.Append(ctx, TokenUsage{Input: 6, Output: 2, Cost: 0.02}); err != nil {
+		t.Fatalf("append second usage: %v", err)
+	}
+
+	entries, err = sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("incremental entries: %v", err)
+	}
+	if len(entries) != 2 ||
+		entries[0].Content != "first" ||
+		entries[1].Content != "second" {
+		t.Fatalf("incremental entries = %#v, want stored first plus new second", entries)
+	}
+	input, output, cost, err = sess.Usage(ctx)
+	if err != nil {
+		t.Fatalf("incremental usage: %v", err)
+	}
+	if input != 10 || output != 3 || cost != 0.03 {
+		t.Fatalf("incremental usage = %d/%d/%f, want 10/3/0.03", input, output, cost)
+	}
+	status, err = sess.LastStatus(ctx)
+	if err != nil {
+		t.Fatalf("incremental status: %v", err)
+	}
+	if status != "" {
+		t.Fatalf("incremental status = %q, want cleared by new message", status)
+	}
+}
+
+func TestCantoStoreDisplayProjectionAppliesIncrementalContext(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, filepath.Join(t.TempDir(), "repo"), "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "seed",
+	})
+	if _, err := sess.Entries(ctx); err != nil {
+		t.Fatalf("seed entries: %v", err)
+	}
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewContext(sess.ID(), csession.ContextEntry{
+		Kind:    csession.ContextKindSummary,
+		Content: "summary context",
+	})); err != nil {
+		t.Fatalf("append context: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
+	}
+	if entries[1].Role != ionsession.System || entries[1].Content != "summary context" {
+		t.Fatalf("context entry = %#v", entries[1])
+	}
+}
+
+func TestCantoStoreDisplayProjectionPreservesIncrementalToolLifecycleDisplay(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	workdir := filepath.Join(t.TempDir(), "repo")
+	sess, err := store.OpenSession(ctx, workdir, "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "seed",
+	})
+	if _, err := sess.Entries(ctx); err != nil {
+		t.Fatalf("seed entries: %v", err)
+	}
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
+	})); err != nil {
+		t.Fatalf("append read call: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+		Tool:      "read",
+		ID:        "tool-read",
+		Arguments: `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
+	})); err != nil {
+		t.Fatalf("append read start: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+		Tool:   "read",
+		ID:     "tool-read",
+		Output: "tool output",
+	})); err != nil {
+		t.Fatalf("append read completion: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:    llm.RoleTool,
+		ToolID:  "tool-read",
+		Name:    "read",
+		Content: "tool output",
+	})); err != nil {
+		t.Fatalf("append read message: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
+	}
+	if entries[1].Role != ionsession.Tool ||
+		entries[1].Title != "Read(AGENTS.md)" ||
+		entries[1].Content != "tool output" {
+		t.Fatalf("incremental tool entry = %#v", entries[1])
+	}
+}
+
+func TestCantoStoreDisplayProjectionRecoversIncrementalToolCompletion(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "seed",
+	})
+	if _, err := sess.Entries(ctx); err != nil {
+		t.Fatalf("seed entries: %v", err)
+	}
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
+	})); err != nil {
+		t.Fatalf("append read call: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+		Tool:      "read",
+		ID:        "tool-read",
+		Arguments: `{"file_path":"AGENTS.md"}`,
+	})); err != nil {
+		t.Fatalf("append read start: %v", err)
+	}
+	completedAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+		Tool:   "read",
+		ID:     "tool-read",
+		Output: "recovered contents",
+	}), completedAt)); err != nil {
+		t.Fatalf("append read completion: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewTurnCompletedEvent(sess.ID(), csession.TurnCompletedData{})); err != nil {
+		t.Fatalf("append turn completion: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
+	}
+	if entries[1].Role != ionsession.Tool ||
+		entries[1].Title != "Read(AGENTS.md)" ||
+		entries[1].Content != "recovered contents" {
+		t.Fatalf("recovered incremental tool entry = %#v", entries[1])
+	}
+	if !entries[1].Timestamp.Equal(completedAt) {
+		t.Fatalf("recovered tool timestamp = %s, want %s", entries[1].Timestamp, completedAt)
+	}
+}
+
+func BenchmarkCantoStoreDisplayProjectionCachedEntries(b *testing.B) {
+	root := b.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		b.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, filepath.Join(b.TempDir(), "repo"), "model-a", "main")
+	if err != nil {
+		b.Fatalf("open session: %v", err)
+	}
+	for i := range 2_000 {
+		appendCantoMessage(b, store, ctx, sess.ID(), llm.Message{
+			Role:    llm.RoleUser,
+			Content: "message " + strconv.Itoa(i),
+		})
+	}
+	if _, err := sess.Entries(ctx); err != nil {
+		b.Fatalf("seed entries: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		entries, err := sess.Entries(ctx)
+		if err != nil {
+			b.Fatalf("entries: %v", err)
+		}
+		if len(entries) != 2_000 {
+			b.Fatalf("entries = %d, want 2000", len(entries))
+		}
 	}
 }
 

@@ -118,32 +118,11 @@ func modelVisibleAppendError(event any) error {
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
+	projection, err := s.displayProjection(ctx)
 	if err != nil {
 		return "", err
 	}
-
-	var lastStatus string
-	for _, ev := range sess.Events() {
-		if ev.Type == session.EventType("status_changed") {
-			var data struct {
-				Status string `json:"status"`
-			}
-			if err := ev.UnmarshalData(&data); err != nil {
-				continue
-			}
-			if isDurableResumeStatus(data.Status) {
-				lastStatus = strings.TrimSpace(data.Status)
-			} else {
-				lastStatus = ""
-			}
-			continue
-		}
-		if lastStatus != "" && clearsDurableResumeStatus(ev.Type) {
-			lastStatus = ""
-		}
-	}
-	return lastStatus, nil
+	return projection.lastStatus, nil
 }
 
 func isDurableResumeStatus(status string) bool {
@@ -174,40 +153,11 @@ func clearsDurableResumeStatus(eventType session.EventType) bool {
 }
 
 func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
+	projection, err := s.displayProjection(ctx)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-
-	var total usageAccumulator
-	var pending usageAccumulator
-
-	for _, ev := range sess.Events() {
-		switch ev.Type {
-		case session.TurnStarted:
-			total.add(pending)
-			pending = usageAccumulator{}
-		case session.EventType("token_usage"):
-			var data struct {
-				Input  int     `json:"input"`
-				Output int     `json:"output"`
-				Cost   float64 `json:"cost"`
-			}
-			if err := ev.UnmarshalData(&data); err == nil {
-				pending.addValues(data.Input, data.Output, data.Cost)
-			}
-		case session.TurnCompleted:
-			data, ok, err := ev.TurnCompletedData()
-			if err == nil && ok && usageHasValue(data.Usage) {
-				total.addUsage(data.Usage)
-			} else {
-				total.add(pending)
-			}
-			pending = usageAccumulator{}
-		}
-	}
-	total.add(pending)
-
+	total := projection.totals()
 	return total.input, total.output, total.cost, nil
 }
 

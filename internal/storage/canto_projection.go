@@ -12,11 +12,14 @@ import (
 )
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
-	if err != nil {
-		return nil, err
-	}
+	projection, err := s.displayProjection(ctx)
+	return append([]ionsession.Entry(nil), projection.entries...), err
+}
 
+func displayEntriesFromSession(
+	workdir string,
+	sess *session.Session,
+) ([]ionsession.Entry, error) {
 	history, err := sess.EffectiveEntries()
 	if err != nil {
 		return nil, err
@@ -26,7 +29,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
 		if entry.EventID == "" {
-			if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
+			if display, ok := displayHistoryEntry(workdir, entry); ok {
 				entries = append(entries, display)
 			}
 			continue
@@ -41,7 +44,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	for _, ev := range events {
 		eventID := ev.ID.String()
 		if entry, ok := effectiveByEventID[eventID]; ok {
-			if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
+			if display, ok := displayHistoryEntry(workdir, entry); ok {
 				display = withEntryTimestamp(display, ev.Timestamp)
 				entries = append(entries, display)
 			}
@@ -60,7 +63,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		if entry.EventID == "" || seenEffective[entry.EventID] {
 			continue
 		}
-		if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
+		if display, ok := displayHistoryEntry(workdir, entry); ok {
 			entries = append(entries, display)
 		}
 	}
