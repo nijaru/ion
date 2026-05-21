@@ -284,9 +284,11 @@ func (b *Backend) translateRunSessionEvent(
 				Result:    tool.Output,
 				Error:     execErr,
 			}
-			if len(lifecycle.ActiveTools) == 0 {
-				b.events <- ionsession.StatusChanged{Base: base, Status: "Thinking..."}
+			status := activeToolsStatus(lifecycle.ActiveTools)
+			if status == "" {
+				status = "Thinking..."
 			}
+			b.events <- ionsession.StatusChanged{Base: base, Status: status}
 		}
 		return false
 	case cantofw.RunLifecycleCompaction:
@@ -306,6 +308,30 @@ func (b *Backend) translateRunSessionEvent(
 		return b.translateEvent(ctx, ev, turnID)
 	}
 	return false
+}
+
+func activeToolsStatus(tools []cantofw.RunToolLifecycle) string {
+	active := 0
+	name := ""
+	for _, tool := range tools {
+		if tool.ID == "" {
+			continue
+		}
+		active++
+		if name == "" {
+			name = strings.TrimSpace(tool.Name)
+		}
+	}
+	switch {
+	case active == 0:
+		return ""
+	case active == 1 && name != "":
+		return fmt.Sprintf("Running %s...", name)
+	case active == 1:
+		return "Running tool..."
+	default:
+		return fmt.Sprintf("Running %d tools...", active)
+	}
 }
 
 func retryLifecycleStatus(retry *cantofw.RunRetryLifecycle) string {

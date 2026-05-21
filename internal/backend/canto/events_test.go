@@ -676,6 +676,46 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateRunEventProjectsRemainingActiveToolStatus(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+			ID:     "tool-call-1",
+			Tool:   "bash",
+			Output: "ok",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleTool,
+			Status: cantofw.RunLifecycleCompleted,
+			Tool: &cantofw.RunToolLifecycle{
+				ID:     "tool-call-1",
+				Name:   "bash",
+				Output: "ok",
+			},
+			ActiveTools: []cantofw.RunToolLifecycle{{
+				ID:   "tool-call-2",
+				Name: "read",
+			}},
+		},
+	}, 7)
+
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.ToolResult); !ok {
+		t.Fatal("first event is not ToolResult")
+	}
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Running read..." {
+		t.Fatalf("status = %q, want remaining active tool", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
