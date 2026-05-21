@@ -281,9 +281,9 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		meta := msg.runtime.handles.storage.Meta()
 		m.App.Branch = meta.Branch
 	}
-	m.clearActiveTurnState(true)
+	m.turnReducer().clearActiveState(true)
 	m.Progress.Mode = stateReady
-	m.Progress.LastTurnSummary = turnSummary{}
+	m.turnReducer().resetFinishedTurnSummary()
 	m.clearPendingAction()
 	m.Progress.TokensSent = 0
 	m.Progress.TokensReceived = 0

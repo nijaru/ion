@@ -40,9 +40,7 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 	m.Progress.ContextTokens = 0
 	m.clearProgressError()
 	cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
-	if len(m.InFlight.QueuedTurns) > 0 {
-		queued := m.InFlight.QueuedTurns[0]
-		m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
+	if queued := m.turnReducer().popQueuedTurn(); queued != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{text: queued, rearmSessionEvents: false}
 		})

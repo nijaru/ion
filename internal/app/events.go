@@ -226,18 +226,16 @@ func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
-	m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
+	m.turnReducer().queueTurn(text)
 	m.resetComposerDraft()
 	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	if len(m.InFlight.QueuedTurns) == 0 {
+	queued := m.turnReducer().drainQueuedTurnsText()
+	if queued == "" {
 		return m, nil
 	}
-	queued := strings.Join(m.InFlight.QueuedTurns, "\n")
-	m.InFlight.QueuedTurns = nil
-
 	current := strings.TrimSpace(m.Input.Composer.Value())
 	if current != "" {
 		queued = current + "\n" + queued

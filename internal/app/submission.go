@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,13 +12,7 @@ import (
 )
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
-	m.clearActiveTurnState(true)
-	m.InFlight.DrainUntilTurnStarted = true
-	m.InFlight.DrainStartedAt = time.Now()
-	m.Progress.Compacting = false
-	m.Progress.Mode = stateCancelled
-	m.Progress.Status = ""
-	m.Progress.StatusUpdatedAt = time.Time{}
+	m.turnReducer().cancelActiveTurn()
 	entry := session.Entry{Role: session.System, Content: reason}
 	return m, sequenceCmds(
 		m.printEntries(entry),
@@ -51,23 +44,6 @@ func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) 
 	return m, nil
 }
 
-func (m *Model) clearActiveTurnState(clearQueued bool) {
-	m.InFlight.Thinking = false
-	m.InFlight.Pending = nil
-	m.InFlight.PendingTools = nil
-	m.InFlight.Subagents = make(map[string]*SubagentProgress)
-	if clearQueued {
-		m.InFlight.QueuedTurns = nil
-	}
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-	m.InFlight.AgentCommitted = false
-	m.InFlight.DrainUntilTurnStarted = false
-	m.InFlight.DrainStartedAt = time.Time{}
-	m.Progress.LastToolUseID = ""
-	m.Progress.ContextTokens = 0
-}
-
 func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	draft := text
@@ -93,10 +69,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		return m, sequenceCmds(cmd, historyCmd)
 	}
 
-	m.Progress.Mode = stateIonizing
-	m.Progress.Status = ""
-	m.Progress.LastError = ""
-	m.InFlight.Thinking = true
+	m.turnReducer().startSubmit()
 	m.resetComposerDraft()
 	return m, submitTurnCmd(m.Model.Session, text, draft)
 }
@@ -126,13 +99,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		}
 		return m, sequenceCmds(routingCmd, historyCmd)
 	}
-	m.clearActiveTurnState(true)
-	m.Progress.Compacting = false
-	m.Progress.Mode = stateReady
-	m.Progress.Status = ""
-	m.Progress.StatusUpdatedAt = time.Time{}
-	m.Progress.LastError = ""
-	m.Progress.TurnStartedAt = time.Time{}
+	m.turnReducer().rejectSubmit()
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
 		m.setComposerDraft(msg.draft)
 	}
