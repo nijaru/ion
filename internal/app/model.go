@@ -56,19 +56,23 @@ const (
 
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
+type runtimeHandles struct {
+	backend backend.Backend
+	session session.AgentSession
+	storage storage.Session
+}
+
+type acceptedRuntime struct {
+	transition runtimeTransition
+	handles    runtimeHandles
+}
+
 type runtimeSwitchedMsg struct {
 	switchID      uint64
-	cfg           *config.Config
-	runtimeCfg    *config.Config
-	backend       backend.Backend
-	session       session.AgentSession
-	storage       storage.Session
-	oldSession    session.AgentSession
-	oldStorage    storage.Session
-	preset        modelPreset
+	runtime       acceptedRuntime
+	previous      runtimeHandles
 	printLines    []string
 	replayEntries []session.Entry
-	status        string
 	notice        string
 	showStatus    bool
 }

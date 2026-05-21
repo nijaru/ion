@@ -141,8 +141,6 @@ func (m Model) switchRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := transition.snapshot.backendConfig
-	appCfgCopy := transition.snapshot.appConfig
-	preset := transition.snapshot.preset
 	m.Model.RuntimeSwitchRequest++
 	requestID := m.Model.RuntimeSwitchRequest
 	m.Progress.Status = "Switching runtime..."
@@ -163,16 +161,19 @@ func (m Model) switchRuntimeCommand(
 			}
 		}
 		return runtimeSwitchedMsg{
-			switchID:   requestID,
-			cfg:        &appCfgCopy,
-			runtimeCfg: &cfgCopy,
-			preset:     preset,
-			backend:    backend,
-			session:    sess,
-			storage:    storageSess,
-			oldSession: oldSession,
-			oldStorage: oldStorage,
-			status:     backend.Bootstrap().Status,
+			switchID: requestID,
+			runtime: acceptedRuntime{
+				transition: transition.withStatus(backend.Bootstrap().Status),
+				handles: runtimeHandles{
+					backend: backend,
+					session: sess,
+					storage: storageSess,
+				},
+			},
+			previous: runtimeHandles{
+				session: oldSession,
+				storage: oldStorage,
+			},
 			notice:     notice.Content,
 			showStatus: preserveSession,
 		}
@@ -191,8 +192,6 @@ func (m Model) resumeRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := transition.snapshot.backendConfig
-	appCfgCopy := transition.snapshot.appConfig
-	preset := transition.snapshot.preset
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
 	oldStorage := m.Model.Storage
@@ -231,18 +230,21 @@ func (m Model) resumeRuntimeCommand(
 			}
 		}
 		return runtimeSwitchedMsg{
-			switchID:      switchID,
-			cfg:           &appCfgCopy,
-			runtimeCfg:    &cfgCopy,
-			preset:        preset,
-			backend:       backend,
-			session:       sess,
-			storage:       storageSess,
-			oldSession:    oldSession,
-			oldStorage:    oldStorage,
+			switchID: switchID,
+			runtime: acceptedRuntime{
+				transition: transition.withStatus(backend.Bootstrap().Status),
+				handles: runtimeHandles{
+					backend: backend,
+					session: sess,
+					storage: storageSess,
+				},
+			},
+			previous: runtimeHandles{
+				session: oldSession,
+				storage: oldStorage,
+			},
 			printLines:    printLines,
 			replayEntries: entries,
-			status:        backend.Bootstrap().Status,
 			notice:        notice.Content,
 			showStatus:    false,
 		}
@@ -251,7 +253,7 @@ func (m Model) resumeRuntimeCommand(
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
-		closeSwitchedRuntime(msg.session, msg.storage)
+		closeRuntimeHandles(msg.runtime.handles)
 		return m, nil
 	}
 
@@ -262,34 +264,18 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Model.RuntimeSwitchRequest = 0
-	preset := msg.preset
-	if preset == "" {
-		preset = presetPrimary
-	}
-	m.Model.Backend = msg.backend
-	m.Model.Session = msg.session
-	m.Model.Storage = msg.storage
-	if msg.cfg != nil || msg.runtimeCfg != nil {
-		snapshot := newRuntimeSnapshot(msg.cfg, msg.runtimeCfg, preset, msg.status)
-		m.applyRuntimeSnapshot(snapshot)
-	} else {
-		m.Model.Config = nil
-		m.App.ActivePreset = preset
-		m.Progress.Status = msg.status
-	}
-	if msg.oldSession != nil {
-		_ = msg.oldSession.Close()
-	}
-	if msg.oldStorage != nil {
-		_ = msg.oldStorage.Close()
-	}
+	m.Model.Backend = msg.runtime.handles.backend
+	m.Model.Session = msg.runtime.handles.session
+	m.Model.Storage = msg.runtime.handles.storage
+	m.applyRuntimeSnapshot(msg.runtime.transition.snapshot)
+	closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
 	m.Picker.Overlay = nil
 	m.Picker.Session = nil
 	m.Picker.Setup = nil
 	m.clearProgressError()
-	if msg.storage != nil {
-		meta := msg.storage.Meta()
+	if msg.runtime.handles.storage != nil {
+		meta := msg.runtime.handles.storage.Meta()
 		m.App.Branch = meta.Branch
 	}
 	m.clearActiveTurnState(true)
@@ -300,8 +286,8 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Progress.TokensReceived = 0
 	m.Progress.ContextTokens = 0
 	m.Progress.TotalCost = 0
-	if msg.storage != nil {
-		if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
+	if msg.runtime.handles.storage != nil {
+		if input, output, cost, err := msg.runtime.handles.storage.Usage(context.Background()); err == nil {
 			m.Progress.TokensSent = input
 			m.Progress.TokensReceived = output
 			m.Progress.TotalCost = cost
@@ -325,10 +311,11 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 			m.printEntries(session.Entry{Role: session.System, Content: msg.notice}),
 		)
 	}
-	if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
+	status := msg.runtime.transition.snapshot.status
+	if msg.showStatus && strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		cmds = append(
 			cmds,
-			m.printEntries(session.Entry{Role: session.System, Content: msg.status}),
+			m.printEntries(session.Entry{Role: session.System, Content: status}),
 		)
 	}
 	return append(cmds, m.awaitSessionEvent())
@@ -343,11 +330,15 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 }
 
 func closeSwitchedRuntime(sess session.AgentSession, storageSess storage.Session) {
-	if sess != nil {
-		_ = sess.Close()
+	closeRuntimeHandles(runtimeHandles{session: sess, storage: storageSess})
+}
+
+func closeRuntimeHandles(handles runtimeHandles) {
+	if handles.session != nil {
+		_ = handles.session.Close()
 	}
-	if storageSess != nil {
-		_ = storageSess.Close()
+	if handles.storage != nil {
+		_ = handles.storage.Close()
 	}
 }
 
