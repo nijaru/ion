@@ -75,7 +75,7 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 		return nil
 	}
 	lines := make([]string, 0, len(entries))
-	m.App.PrintedTranscript = true
+	m.transcriptReducer().markPrinted()
 	lines = append(lines, m.RenderEntries(entries...)...)
 	physicalLines := physicalLineCount(lines)
 	m.holdEnterForLargePrint(physicalLines)
@@ -88,7 +88,7 @@ func (m *Model) printHelp(content string) tea.Cmd {
 		return nil
 	}
 	lines := make([]string, 0, strings.Count(content, "\n")+1)
-	m.App.PrintedTranscript = true
+	m.transcriptReducer().markPrinted()
 	for i, line := range strings.Split(content, "\n") {
 		lines = append(lines, m.renderHelpLine(i, line))
 	}
