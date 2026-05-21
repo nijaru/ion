@@ -1,6 +1,10 @@
 package canto
 
-import "context"
+import (
+	"context"
+
+	cantofw "github.com/nijaru/canto"
+)
 
 type turnState struct {
 	seq           uint64
@@ -97,6 +101,22 @@ func (s *turnState) markToolComplete(id uint64, toolID string) (bool, bool) {
 	}
 	delete(s.activeToolIDs, toolID)
 	return true, s.hasActiveTool()
+}
+
+func (s *turnState) setActiveTools(id uint64, tools []cantofw.RunToolLifecycle) {
+	if !s.activeFor(id) {
+		return
+	}
+	if s.activeToolIDs == nil {
+		s.activeToolIDs = make(map[string]struct{})
+	}
+	s.clearTools()
+	for _, tool := range tools {
+		if tool.ID == "" {
+			continue
+		}
+		s.activeToolIDs[tool.ID] = struct{}{}
+	}
 }
 
 func (s *turnState) clearTools() {

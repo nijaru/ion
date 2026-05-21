@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -193,4 +194,104 @@ func isContextOverflowTerminal(errText string) bool {
 	errText = strings.ToLower(errText)
 	return strings.Contains(errText, "context_length_exceeded") ||
 		(strings.Contains(errText, "context") && strings.Contains(errText, "token"))
+}
+
+func (b *Backend) translateRunSessionEvent(
+	ctx context.Context,
+	event cantofw.RunEvent,
+	turnID uint64,
+) bool {
+	ev := event.Event
+	lifecycle := event.Lifecycle
+	if lifecycle == nil {
+		return b.translateEvent(ctx, ev, turnID)
+	}
+	if b.isCancelingTurn(turnID) && ev.Type != session.TurnCompleted {
+		return false
+	}
+
+	base := ionEventBase(ev)
+	switch lifecycle.Type {
+	case cantofw.RunLifecycleTurn:
+		if !lifecycle.Terminal {
+			break
+		}
+		if lifecycle.Status == cantofw.RunLifecycleFailed &&
+			!lifecycle.Canceled &&
+			!isCancellationTerminal(lifecycle.Error) {
+			if isContextOverflowTerminal(lifecycle.Error) {
+				return false
+			}
+			errText := strings.TrimSpace(lifecycle.Error)
+			if errText == "" {
+				errText = "turn failed"
+			}
+			b.emitTurnError(turnID, base, fmt.Errorf("%s", errText))
+			return true
+		}
+		b.emitTurnFinished(turnID, base)
+		return true
+	case cantofw.RunLifecycleTool:
+		if lifecycle.Tool == nil {
+			return b.translateEvent(ctx, ev, turnID)
+		}
+		tool := lifecycle.Tool
+		b.setActiveTools(turnID, lifecycle.ActiveTools)
+		switch lifecycle.Status {
+		case cantofw.RunLifecycleStarted:
+			b.events <- ionsession.ToolCallStarted{
+				Base:      base,
+				ToolUseID: tool.ID,
+				ToolName:  tool.Name,
+				Args:      tool.Arguments,
+			}
+			b.events <- ionsession.StatusChanged{
+				Base:   base,
+				Status: fmt.Sprintf("Running %s...", tool.Name),
+			}
+		case cantofw.RunLifecycleUpdated:
+			if tool.Delta != "" {
+				b.events <- ionsession.ToolOutputDelta{
+					Base:      base,
+					ToolUseID: tool.ID,
+					Delta:     tool.Delta,
+				}
+			}
+		case cantofw.RunLifecycleCompleted,
+			cantofw.RunLifecycleFailed,
+			cantofw.RunLifecycleCanceled:
+			var execErr error
+			if tool.Error != "" {
+				execErr = fmt.Errorf("%s", tool.Error)
+			}
+			b.events <- ionsession.ToolResult{
+				Base:      base,
+				ToolUseID: tool.ID,
+				ToolName:  tool.Name,
+				Result:    tool.Output,
+				Error:     execErr,
+			}
+			if len(lifecycle.ActiveTools) == 0 {
+				b.events <- ionsession.StatusChanged{Base: base, Status: "Thinking..."}
+			}
+		}
+		return false
+	case cantofw.RunLifecycleCompaction:
+		switch lifecycle.Status {
+		case cantofw.RunLifecycleStarted:
+			b.events <- ionsession.StatusChanged{Base: base, Status: "Compacting context..."}
+		case cantofw.RunLifecycleCompleted:
+			b.events <- ionsession.StatusChanged{Base: base, Status: "Context compacted."}
+		}
+		return false
+	case cantofw.RunLifecycleRetry:
+		status := "Retrying..."
+		if lifecycle.Retry != nil && lifecycle.Retry.Scope == "overflow_recovery" {
+			status = "Recovering from context overflow..."
+		}
+		b.events <- ionsession.StatusChanged{Base: base, Status: status}
+		return false
+	}
+
+	return b.translateEvent(ctx, ev, turnID)
 }

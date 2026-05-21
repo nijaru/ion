@@ -263,7 +263,7 @@ func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type:  cantofw.RunEventChunk,
 		Chunk: llm.Chunk{Content: "late chunk"},
-	}, 7, &turnUsageTracker{})
+	}, 7)
 
 	select {
 	case ev := <-b.Session().Events():
@@ -280,7 +280,7 @@ func TestTranslateRunEventEmitsThinkingDeltaFromReasoningChunk(t *testing.T) {
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type:  cantofw.RunEventChunk,
 		Chunk: llm.Chunk{Reasoning: "thinking through it"},
-	}, 7, &turnUsageTracker{})
+	}, 7)
 
 	ev := receiveEvent(t, b.Session().Events())
 	delta, ok := ev.(ionsession.ThinkingDelta)
@@ -297,16 +297,18 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
-	usage := &turnUsageTracker{}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  10,
-			OutputTokens: 0,
-			Cost:         0.01,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				InputTokens:  10,
+				OutputTokens: 0,
+				Cost:         0.01,
+			},
+		},
+	}, 7)
 	first, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("first event is not TokenUsage")
@@ -317,17 +319,21 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  10,
-			OutputTokens: 5,
-			Cost:         0.015,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				OutputTokens: 5,
+				TotalTokens:  5,
+				Cost:         0.005,
+			},
+		},
+	}, 7)
 	second, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("second event is not TokenUsage")
 	}
-	if second.Input != 0 || second.Output != 5 || second.Total != 5 || math.Abs(second.Cost-0.005) > 1e-9 {
+	if second.Input != 0 || second.Output != 5 || second.Total != 5 ||
+		math.Abs(second.Cost-0.005) > 1e-9 {
 		t.Fatalf("second usage = %#v, want 0/5/5/0.005", second)
 	}
 }
@@ -336,17 +342,19 @@ func TestTranslateRunEventUsesProviderTotalUsageDelta(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
-	usage := &turnUsageTracker{}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  10,
-			OutputTokens: 2,
-			TotalTokens:  20,
-			Cost:         0.01,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				InputTokens:  10,
+				OutputTokens: 2,
+				TotalTokens:  20,
+				Cost:         0.01,
+			},
+		},
+	}, 7)
 	first, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("first event is not TokenUsage")
@@ -357,35 +365,40 @@ func TestTranslateRunEventUsesProviderTotalUsageDelta(t *testing.T) {
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  10,
-			OutputTokens: 5,
-			TotalTokens:  24,
-			Cost:         0.015,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				OutputTokens: 3,
+				TotalTokens:  4,
+				Cost:         0.005,
+			},
+		},
+	}, 7)
 	second, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("second event is not TokenUsage")
 	}
-	if second.Input != 0 || second.Output != 3 || second.Total != 4 || math.Abs(second.Cost-0.005) > 1e-9 {
+	if second.Input != 0 || second.Output != 3 || second.Total != 4 ||
+		math.Abs(second.Cost-0.005) > 1e-9 {
 		t.Fatalf("second usage = %#v, want 0/3/4/0.005", second)
 	}
 }
 
-func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
+func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
-	usage := &turnUsageTracker{}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  10,
-			OutputTokens: 2,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				InputTokens:  10,
+				OutputTokens: 2,
+			},
+		},
+	}, 7)
 	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
@@ -395,16 +408,29 @@ func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 			Tool:   "bash",
 			Output: "ok",
 		}),
-	}, 7, usage)
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleTool,
+			Status: cantofw.RunLifecycleCompleted,
+			Tool: &cantofw.RunToolLifecycle{
+				ID:     "tool-call-1",
+				Name:   "bash",
+				Output: "ok",
+			},
+		},
+	}, 7)
+	_ = receiveEvent(t, b.Session().Events())
 	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type: cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Usage: &llm.Usage{
-			InputTokens:  12,
-			OutputTokens: 3,
-		}},
-	}, 7, usage)
+		Usage: &cantofw.RunUsage{
+			Kind: cantofw.RunUsageProviderDelta,
+			Delta: llm.Usage{
+				InputTokens:  12,
+				OutputTokens: 3,
+			},
+		},
+	}, 7)
 	next, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
 		t.Fatal("next event is not TokenUsage")
@@ -412,6 +438,202 @@ func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 	if next.Input != 12 || next.Output != 3 {
 		t.Fatalf("next usage = %#v, want new request total 12/3", next)
 	}
+}
+
+func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
+			ID:        "tool-call-1",
+			Tool:      "bash",
+			Arguments: "git status",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleTool,
+			Status: cantofw.RunLifecycleStarted,
+			Tool: &cantofw.RunToolLifecycle{
+				ID:        "tool-call-1",
+				Name:      "bash",
+				Arguments: "git status",
+			},
+			ActiveTools: []cantofw.RunToolLifecycle{{
+				ID:   "tool-call-1",
+				Name: "bash",
+			}},
+		},
+	}, 7)
+
+	started, ok := receiveEvent(t, b.Session().Events()).(ionsession.ToolCallStarted)
+	if !ok {
+		t.Fatalf("first event = %T, want ToolCallStarted", started)
+	}
+	if started.ToolUseID != "tool-call-1" || started.ToolName != "bash" ||
+		started.Args != "git status" {
+		t.Fatalf("started tool = %#v", started)
+	}
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Running bash..." {
+		t.Fatalf("status = %q, want Running bash...", status.Status)
+	}
+	if !b.turn.hasActiveTool() {
+		t.Fatal("Canto active tool snapshot did not mark the Ion turn active")
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewEvent("session-id", csession.ToolOutputDelta, map[string]string{
+			"id":    "tool-call-1",
+			"delta": "partial output",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleTool,
+			Status: cantofw.RunLifecycleUpdated,
+			Tool: &cantofw.RunToolLifecycle{
+				ID:    "tool-call-1",
+				Name:  "bash",
+				Delta: "partial output",
+			},
+			ActiveTools: []cantofw.RunToolLifecycle{{
+				ID:   "tool-call-1",
+				Name: "bash",
+			}},
+		},
+	}, 7)
+
+	delta, ok := receiveEvent(t, b.Session().Events()).(ionsession.ToolOutputDelta)
+	if !ok {
+		t.Fatalf("third event = %T, want ToolOutputDelta", delta)
+	}
+	if delta.ToolUseID != "tool-call-1" || delta.Delta != "partial output" {
+		t.Fatalf("tool delta = %#v", delta)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+			ID:     "tool-call-1",
+			Tool:   "bash",
+			Output: "ok",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleTool,
+			Status: cantofw.RunLifecycleCompleted,
+			Tool: &cantofw.RunToolLifecycle{
+				ID:     "tool-call-1",
+				Name:   "bash",
+				Output: "ok",
+			},
+		},
+	}, 7)
+
+	result, ok := receiveEvent(t, b.Session().Events()).(ionsession.ToolResult)
+	if !ok {
+		t.Fatalf("fourth event = %T, want ToolResult", result)
+	}
+	if result.ToolUseID != "tool-call-1" || result.ToolName != "bash" ||
+		result.Result != "ok" || result.Error != nil {
+		t.Fatalf("tool result = %#v", result)
+	}
+	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("fifth event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Thinking..." {
+		t.Fatalf("status = %q, want Thinking...", status.Status)
+	}
+	if b.turn.hasActiveTool() {
+		t.Fatal("Canto active tool snapshot did not clear the Ion active tool")
+	}
+	assertNoBackendEvent(t, b)
+}
+
+func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type:  cantofw.RunEventSession,
+		Event: csession.NewCompactionStartedEvent("session-id", csession.CompactionStartedData{}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleCompaction,
+			Status: cantofw.RunLifecycleStarted,
+		},
+	}, 7)
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("first event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Compacting context..." {
+		t.Fatalf("status = %q, want Compacting context...", status.Status)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type:  cantofw.RunEventSession,
+		Event: csession.NewEscalationRetriedEvent("session-id", csession.EscalationRetriedData{}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleRetry,
+			Status: cantofw.RunLifecycleRetrying,
+			Retry:  &cantofw.RunRetryLifecycle{Scope: "overflow_recovery"},
+		},
+	}, 7)
+	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Recovering from context overflow..." {
+		t.Fatalf("status = %q, want overflow recovery", status.Status)
+	}
+
+	terminal := b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+			Error: "context_length_exceeded",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:     cantofw.RunLifecycleTurn,
+			Status:   cantofw.RunLifecycleFailed,
+			Terminal: true,
+			Error:    "context_length_exceeded",
+		},
+	}, 7)
+	if terminal {
+		t.Fatal("context-overflow terminal event claimed the Ion turn")
+	}
+
+	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+			Error: "provider failed",
+		}),
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:     cantofw.RunLifecycleTurn,
+			Status:   cantofw.RunLifecycleFailed,
+			Terminal: true,
+			Error:    "provider failed",
+		},
+	}, 7)
+	if !terminal {
+		t.Fatal("failed Canto turn lifecycle did not claim the Ion turn")
+	}
+	errEvent, ok := receiveEvent(t, b.Session().Events()).(ionsession.Error)
+	if !ok {
+		t.Fatalf("third event = %T, want Error", errEvent)
+	}
+	if errEvent.Err == nil || errEvent.Err.Error() != "provider failed" {
+		t.Fatalf("error = %v, want provider failed", errEvent.Err)
+	}
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("fourth event is not TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsPreservesToolUseID(t *testing.T) {
