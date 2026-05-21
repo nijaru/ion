@@ -117,12 +117,24 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 	case session.ChildProgressed:
 		var data session.ChildProgressedData
 		if err := ev.UnmarshalData(&data); err == nil {
-			b.events <- ionsession.ChildDelta{
-				Base:      base,
-				AgentName: data.ChildID,
-				Delta:     data.Message,
+			message := strings.TrimSpace(data.Message)
+			status := message
+			if status == "" {
+				status = strings.TrimSpace(data.Status)
 			}
-			b.events <- ionsession.StatusChanged{Base: base, Status: fmt.Sprintf("Child agent %s: %s", data.ChildID, data.Message)}
+			if message != "" {
+				b.events <- ionsession.ChildDelta{
+					Base:      base,
+					AgentName: data.ChildID,
+					Delta:     data.Message,
+				}
+			}
+			if status != "" {
+				b.events <- ionsession.StatusChanged{
+					Base:   base,
+					Status: fmt.Sprintf("Child agent %s: %s", data.ChildID, status),
+				}
+			}
 		}
 	case session.ChildCompleted:
 		var data session.ChildCompletedData
