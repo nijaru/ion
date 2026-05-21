@@ -228,9 +228,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
 	closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
-	m.Picker.Overlay = nil
-	m.Picker.Session = nil
-	m.Picker.Setup = nil
+	m.pickerReducer().closeAll()
 	m.clearProgressError()
 	if msg.runtime.Handles.Storage != nil {
 		meta := msg.runtime.Handles.Storage.Meta()

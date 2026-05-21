@@ -104,6 +104,12 @@ func (r pickerReducer) closeOverlay() {
 	r.picker.Overlay = nil
 }
 
+func (r pickerReducer) closeAll() {
+	r.picker.Overlay = nil
+	r.picker.Session = nil
+	r.picker.Setup = nil
+}
+
 func (r pickerReducer) openSetup(state setupPromptState) {
 	r.picker.Overlay = nil
 	r.picker.Setup = &state

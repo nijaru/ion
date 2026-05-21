@@ -248,6 +248,19 @@ func TestPickerReducerOverlayQueryAndPaging(t *testing.T) {
 	}
 }
 
+func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
+	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
+	model.Picker.Setup = &setupPromptState{kind: setupPromptAPIKey}
+
+	model.pickerReducer().closeAll()
+
+	if model.Picker.Overlay != nil || model.Picker.Session != nil || model.Picker.Setup != nil {
+		t.Fatalf("picker state = %#v, want all surfaces closed", model.Picker)
+	}
+}
+
 func TestPickerReducerProviderSelectionSettlement(t *testing.T) {
 	model := readyModel(t)
 	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
