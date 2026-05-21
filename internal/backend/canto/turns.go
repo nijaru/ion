@@ -25,7 +25,9 @@ func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	if err != nil {
 		return err
 	}
-	b.acceptTurn(submitted.id, turn.ID())
+	if !b.acceptSubmittedCantoTurn(submitted, turn) {
+		return context.Canceled
+	}
 
 	b.wg.Go(func() {
 		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, turn)
@@ -128,6 +130,32 @@ func (b *Backend) acceptSubmittedTurn(
 		return nil, err
 	}
 	return turn, nil
+}
+
+func (b *Backend) acceptSubmittedCantoTurn(
+	submitted submittedTurn,
+	turn cantoTurnHandle,
+) bool {
+	if b.acceptTurn(submitted.id, turn.ID()) {
+		return true
+	}
+	b.wg.Go(func() {
+		b.drainRejectedTurn(submitted.id, submitted.cancel, turn)
+	})
+	return false
+}
+
+func (b *Backend) drainRejectedTurn(
+	turnID uint64,
+	cancel context.CancelFunc,
+	turn cantoTurnHandle,
+) {
+	defer b.finishTurnIfActive(turnID)
+	defer cancel()
+	_ = turn.Cancel(context.Background())
+	for range turn.Events() {
+	}
+	_, _ = turn.Result()
 }
 
 type turnSubmitter interface {
@@ -326,10 +354,11 @@ func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
 	b.mu.Unlock()
 }
 
-func (b *Backend) acceptTurn(turnID uint64, cantoTurnID string) {
+func (b *Backend) acceptTurn(turnID uint64, cantoTurnID string) bool {
 	b.mu.Lock()
-	b.turn.accept(turnID, cantoTurnID)
+	accepted := b.turn.accept(turnID, cantoTurnID)
 	b.mu.Unlock()
+	return accepted
 }
 
 func (b *Backend) activeSteeringLocked(turnID uint64) (string, string, *steeringMutator) {

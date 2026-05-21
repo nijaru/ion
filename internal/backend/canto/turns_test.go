@@ -1699,6 +1699,55 @@ func TestAcceptSubmittedTurnReturnsCantoSubmitError(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestSubmittedCantoTurnRejectedIfCanceledBeforeAcceptance(t *testing.T) {
+	b := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	b.mu.Lock()
+	turnID := b.turn.start(cancel)
+	b.mu.Unlock()
+
+	events := make(chan cantofw.RunEvent)
+	close(events)
+	canceled := make(chan struct{}, 1)
+	turn := &fakeCantoTurn{
+		events: events,
+		cancel: func() {
+			select {
+			case canceled <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	if err := b.cancelTurn(t.Context()); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	if b.acceptSubmittedCantoTurn(
+		submittedTurn{id: turnID, ctx: ctx, cancel: cancel},
+		turn,
+	) {
+		t.Fatal("accepted Canto turn after Ion turn was canceled pre-acceptance")
+	}
+	b.wg.Wait()
+
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("rejected Canto turn was not canceled")
+	}
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("turn context error = %v, want context.Canceled", ctx.Err())
+	}
+	b.mu.Lock()
+	active := b.turn.activeFor(turnID)
+	canceling := b.turn.isCanceling(turnID)
+	b.mu.Unlock()
+	if active || canceling {
+		t.Fatalf("turn active/canceling = %v/%v, want false/false", active, canceling)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func TestSubmitTurnRejectsWhileAcceptedCancelIsSettling(t *testing.T) {
 	b := New()
 	b.mu.Lock()
