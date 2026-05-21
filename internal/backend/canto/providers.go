@@ -22,10 +22,10 @@ func configureRetryProvider(
 	cfg *config.Config,
 	onRetry func(llm.RetryEvent),
 ) llm.Provider {
-	if retry, ok := p.(*llm.RetryProvider); ok {
-		return retry
+	retry, ok := p.(*llm.RetryProvider)
+	if !ok {
+		retry = llm.NewRetryProvider(p)
 	}
-	retry := llm.NewRetryProvider(p)
 	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 	retry.Config.RetryForeverTransportOnly = true
 	retry.Config.OnRetry = onRetry
