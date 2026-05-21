@@ -139,3 +139,130 @@ func TestPickerReducerSessionSelectionPaging(t *testing.T) {
 		t.Fatalf("index = %d, want one page above final item", got)
 	}
 }
+
+func TestPickerReducerOverlayLoadRequestsFenceStaleResults(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.ModelLoadRequest = 7
+
+	model.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
+		purpose: pickerPurposeProvider,
+	})
+	if got := model.Picker.ModelLoadRequest; got != 8 {
+		t.Fatalf("model load request = %d, want 8", got)
+	}
+
+	requestID := model.pickerReducer().beginModelOverlayLoad(pickerOverlayState{
+		purpose: pickerPurposeModel,
+		loading: true,
+	})
+	if requestID != 9 {
+		t.Fatalf("request id = %d, want 9", requestID)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.request != requestID {
+		t.Fatalf("overlay = %#v, want request %d", model.Picker.Overlay, requestID)
+	}
+	if _, ok := model.pickerReducer().modelLoadOverlay(requestID - 1); ok {
+		t.Fatal("stale model load request matched overlay")
+	}
+	if overlay, ok := model.pickerReducer().modelLoadOverlay(requestID); !ok || overlay == nil {
+		t.Fatalf("current model load did not match: overlay=%#v ok=%v", overlay, ok)
+	}
+}
+
+func TestPickerReducerOverlayQueryAndPaging(t *testing.T) {
+	model := readyModel(t)
+	model.pickerReducer().openOverlay(pickerOverlayState{
+		items: []pickerItem{
+			{
+				Label:  "Alpha",
+				Value:  "alpha",
+				Search: pickerSearchIndex("Alpha", "alpha", "", "", nil),
+			},
+			{Label: "Beta", Value: "beta", Search: pickerSearchIndex("Beta", "beta", "", "", nil)},
+			{
+				Label:  "Gamma",
+				Value:  "gamma",
+				Search: pickerSearchIndex("Gamma", "gamma", "", "", nil),
+			},
+		},
+		filtered: []pickerItem{
+			{Label: "Alpha", Value: "alpha"},
+			{Label: "Beta", Value: "beta"},
+			{Label: "Gamma", Value: "gamma"},
+		},
+		index: 2,
+	})
+
+	model.pickerReducer().appendOverlayQuery("be")
+	if got := model.Picker.Overlay.query; got != "be" {
+		t.Fatalf("query = %q, want be", got)
+	}
+	if len(model.Picker.Overlay.filtered) != 1 ||
+		model.Picker.Overlay.filtered[0].Value != "beta" ||
+		model.Picker.Overlay.index != 0 {
+		t.Fatalf(
+			"filtered = %#v index=%d, want beta at index 0",
+			model.Picker.Overlay.filtered,
+			model.Picker.Overlay.index,
+		)
+	}
+
+	model.pickerReducer().backspaceOverlayQuery()
+	if got := model.Picker.Overlay.query; got != "b" {
+		t.Fatalf("query = %q, want b", got)
+	}
+	model.Picker.Overlay.query = ""
+	model.Picker.Overlay.index = 99
+	model.pickerReducer().refreshOverlayFilter()
+	if len(model.Picker.Overlay.filtered) != 3 || model.Picker.Overlay.index != 2 {
+		t.Fatalf(
+			"filtered = %#v index=%d, want all items with clamped index 2",
+			model.Picker.Overlay.filtered,
+			model.Picker.Overlay.index,
+		)
+	}
+
+	model.pickerReducer().pageOverlaySelection(-1)
+	if got := model.Picker.Overlay.index; got != 0 {
+		t.Fatalf("index = %d, want 0 after page up clamp", got)
+	}
+	model.pickerReducer().moveOverlaySelection(10)
+	if got := model.Picker.Overlay.index; got != 2 {
+		t.Fatalf("index = %d, want max clamp 2", got)
+	}
+}
+
+func TestPickerReducerProviderSelectionSettlement(t *testing.T) {
+	model := readyModel(t)
+	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
+
+	requestID := model.pickerReducer().beginProviderSelection()
+	model.pickerReducer().markProviderOverlayLoading(requestID)
+	if model.Picker.Overlay == nil ||
+		!model.Picker.Overlay.loading ||
+		model.Picker.Overlay.request != requestID {
+		t.Fatalf("provider overlay = %#v, want loading request", model.Picker.Overlay)
+	}
+	if model.pickerReducer().settleProviderSelection(requestID + 1) {
+		t.Fatal("stale provider selection settled")
+	}
+	if !model.Picker.Overlay.loading || model.Picker.ProviderSelectionRequest != requestID {
+		t.Fatalf(
+			"stale settlement changed state: overlay=%#v request=%d",
+			model.Picker.Overlay,
+			model.Picker.ProviderSelectionRequest,
+		)
+	}
+	if !model.pickerReducer().settleProviderSelection(requestID) {
+		t.Fatal("current provider selection did not settle")
+	}
+	if model.Picker.ProviderSelectionRequest != 0 ||
+		model.Picker.Overlay.loading ||
+		model.Picker.Overlay.request != 0 {
+		t.Fatalf(
+			"provider settlement state = overlay=%#v request=%d, want idle",
+			model.Picker.Overlay,
+			model.Picker.ProviderSelectionRequest,
+		)
+	}
+}

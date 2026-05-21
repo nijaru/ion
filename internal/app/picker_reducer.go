@@ -21,6 +21,141 @@ func (r pickerReducer) showSessionUnavailable() {
 	r.picker.Session = &sessionPickerState{err: "session store not available"}
 }
 
+func (r pickerReducer) openOverlay(state pickerOverlayState) {
+	r.picker.Overlay = &state
+}
+
+func (r pickerReducer) openOverlayInvalidatingModelLoads(state pickerOverlayState) {
+	r.picker.ModelLoadRequest++
+	r.openOverlay(state)
+}
+
+func (r pickerReducer) beginModelOverlayLoad(state pickerOverlayState) uint64 {
+	r.picker.ModelLoadRequest++
+	requestID := r.picker.ModelLoadRequest
+	state.request = requestID
+	r.openOverlay(state)
+	return requestID
+}
+
+func (r pickerReducer) modelSetupOverlay(requestID uint64) (*pickerOverlayState, bool) {
+	overlay := r.picker.Overlay
+	if overlay == nil ||
+		overlay.purpose != pickerPurposeModel ||
+		!overlay.setup ||
+		overlay.request != requestID ||
+		requestID != r.picker.ModelLoadRequest {
+		return nil, false
+	}
+	return overlay, true
+}
+
+func (r pickerReducer) modelLoadOverlay(requestID uint64) (*pickerOverlayState, bool) {
+	overlay := r.picker.Overlay
+	if overlay == nil ||
+		overlay.purpose != pickerPurposeModel ||
+		overlay.request != requestID ||
+		requestID != r.picker.ModelLoadRequest {
+		return nil, false
+	}
+	return overlay, true
+}
+
+func (r pickerReducer) closeOverlay() {
+	r.picker.Overlay = nil
+}
+
+func (r pickerReducer) appendOverlayQuery(text string) {
+	if r.picker.Overlay == nil || text == "" {
+		return
+	}
+	r.picker.Overlay.query += text
+	r.refreshOverlayFilter()
+}
+
+func (r pickerReducer) backspaceOverlayQuery() {
+	if r.picker.Overlay == nil || r.picker.Overlay.query == "" {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(r.picker.Overlay.query)
+	r.picker.Overlay.query = r.picker.Overlay.query[:len(r.picker.Overlay.query)-size]
+	r.refreshOverlayFilter()
+}
+
+func (r pickerReducer) moveOverlaySelection(delta int) {
+	if r.picker.Overlay == nil {
+		return
+	}
+	items := pickerDisplayItems(r.picker.Overlay)
+	if len(items) == 0 {
+		return
+	}
+	next := r.picker.Overlay.index + delta
+	if next < 0 {
+		next = 0
+	}
+	if max := len(items) - 1; next > max {
+		next = max
+	}
+	r.picker.Overlay.index = next
+}
+
+func (r pickerReducer) pageOverlaySelection(delta int) {
+	r.moveOverlaySelection(delta * pickerPageSize)
+}
+
+func (r pickerReducer) refreshOverlayFilter() {
+	if r.picker.Overlay == nil {
+		return
+	}
+	query := strings.TrimSpace(r.picker.Overlay.query)
+	if query == "" {
+		r.picker.Overlay.filtered = append([]pickerItem(nil), r.picker.Overlay.items...)
+		if len(r.picker.Overlay.filtered) == 0 {
+			r.picker.Overlay.index = 0
+			return
+		}
+		if r.picker.Overlay.index >= len(r.picker.Overlay.filtered) {
+			r.picker.Overlay.index = len(r.picker.Overlay.filtered) - 1
+		}
+		return
+	}
+	r.picker.Overlay.filtered = rankedPickerItems(r.picker.Overlay.items, query)
+	if len(r.picker.Overlay.filtered) == 0 {
+		r.picker.Overlay.index = 0
+		return
+	}
+	r.picker.Overlay.index = 0
+}
+
+func (r pickerReducer) beginProviderSelection() uint64 {
+	r.picker.ProviderSelectionRequest++
+	return r.picker.ProviderSelectionRequest
+}
+
+func (r pickerReducer) markProviderOverlayLoading(requestID uint64) {
+	if r.picker.Overlay == nil || r.picker.Overlay.purpose != pickerPurposeProvider {
+		return
+	}
+	r.picker.Overlay.loading = true
+	r.picker.Overlay.err = ""
+	r.picker.Overlay.request = requestID
+}
+
+func (r pickerReducer) settleProviderSelection(requestID uint64) bool {
+	if requestID == 0 || requestID != r.picker.ProviderSelectionRequest {
+		return false
+	}
+	r.picker.ProviderSelectionRequest = 0
+	if r.picker.Overlay != nil &&
+		r.picker.Overlay.purpose == pickerPurposeProvider &&
+		r.picker.Overlay.request == requestID {
+		r.picker.Overlay.loading = false
+		r.picker.Overlay.request = 0
+	}
+	return true
+}
+
 func (r pickerReducer) beginSessionLoad() uint64 {
 	r.picker.Overlay = nil
 	r.picker.SessionLoadRequest++

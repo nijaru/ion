@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -60,8 +59,7 @@ func (m Model) openProviderPickerForPreset(
 	}
 	items := providerItems(cfg)
 	m.clearProgressError()
-	m.Picker.ModelLoadRequest++
-	m.Picker.Overlay = &pickerOverlayState{
+	m.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
 		title:    "Pick a provider",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
@@ -69,7 +67,7 @@ func (m Model) openProviderPickerForPreset(
 		purpose:  pickerPurposeProvider,
 		preset:   preset,
 		cfg:      cfg,
-	}
+	})
 	return m, nil
 }
 
@@ -124,11 +122,9 @@ func (m Model) beginModelPickerSetupCheck(
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	m.Picker.ModelLoadRequest++
-	requestID := m.Picker.ModelLoadRequest
 	items := m.modelPickerFavoriteItems(cfg, nil)
 	m.clearProgressError()
-	m.Picker.Overlay = &pickerOverlayState{
+	requestID := m.pickerReducer().beginModelOverlayLoad(pickerOverlayState{
 		title: "Pick " + presetTitle(preset) + " model: " + modelPickerProviderTitle(
 			cfg.Provider,
 		),
@@ -139,9 +135,8 @@ func (m Model) beginModelPickerSetupCheck(
 		preset:   preset,
 		cfg:      cfg,
 		loading:  true,
-		request:  requestID,
 		setup:    true,
-	}
+	})
 	return m, checkModelPickerSetup(requestID, cfg, preset)
 }
 
@@ -165,12 +160,8 @@ func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset modelPre
 func (m Model) handleModelPickerSetupResolved(
 	msg modelPickerSetupResolvedMsg,
 ) (Model, tea.Cmd) {
-	overlay := m.Picker.Overlay
-	if overlay == nil ||
-		overlay.purpose != pickerPurposeModel ||
-		!overlay.setup ||
-		overlay.request != msg.requestID ||
-		msg.requestID != m.Picker.ModelLoadRequest {
+	overlay, ok := m.pickerReducer().modelSetupOverlay(msg.requestID)
+	if !ok {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -200,14 +191,9 @@ func (m Model) beginProviderSelection(
 		return m, cmdError(err.Error())
 	}
 
-	m.Picker.ProviderSelectionRequest++
-	requestID := m.Picker.ProviderSelectionRequest
+	requestID := m.pickerReducer().beginProviderSelection()
 	m.Progress.Status = "Checking provider..."
-	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
-		m.Picker.Overlay.loading = true
-		m.Picker.Overlay.err = ""
-		m.Picker.Overlay.request = requestID
-	}
+	m.pickerReducer().markProviderOverlayLoading(requestID)
 	cfgCopy := *updated
 	return m, func() tea.Msg {
 		selection, err := providerSelectionForConfig(context.Background(), &cfgCopy, preset)
@@ -224,19 +210,12 @@ func (m Model) beginProviderSelection(
 func (m Model) handleProviderSelectionResolved(
 	msg providerSelectionResolvedMsg,
 ) (Model, tea.Cmd) {
-	if msg.requestID == 0 || msg.requestID != m.Picker.ProviderSelectionRequest {
+	if !m.pickerReducer().settleProviderSelection(msg.requestID) {
 		return m, nil
-	}
-	m.Picker.ProviderSelectionRequest = 0
-	if m.Picker.Overlay != nil &&
-		m.Picker.Overlay.purpose == pickerPurposeProvider &&
-		m.Picker.Overlay.request == msg.requestID {
-		m.Picker.Overlay.loading = false
-		m.Picker.Overlay.request = 0
 	}
 	if msg.err != nil {
 		if msg.selection.cfg == nil {
-			m.Picker.Overlay = nil
+			m.pickerReducer().closeOverlay()
 		}
 		return m.handleLocalError(msg.err)
 	}
@@ -258,7 +237,7 @@ func (m Model) applyProviderSelection(
 		}
 	}
 
-	m.Picker.Overlay = nil
+	m.pickerReducer().closeOverlay()
 	if !selection.supportsModelListing {
 		return m.beginRuntimeTransitionCommit(selection.transition, session.Entry{
 			Role:    session.System,
@@ -272,8 +251,6 @@ func (m Model) openReadyModelPickerForPreset(
 	cfg *config.Config,
 	preset modelPreset,
 ) (Model, tea.Cmd) {
-	m.Picker.ModelLoadRequest++
-	requestID := m.Picker.ModelLoadRequest
 	cached, fresh, ok := cachedModelItemsForProvider(cfg)
 	items := m.modelPickerItemsForCatalog(cfg, cached)
 	loading := !fresh
@@ -281,7 +258,7 @@ func (m Model) openReadyModelPickerForPreset(
 		items = m.modelPickerFavoriteItems(cfg, nil)
 	}
 	m.clearProgressError()
-	m.Picker.Overlay = &pickerOverlayState{
+	requestID := m.pickerReducer().beginModelOverlayLoad(pickerOverlayState{
 		title: "Pick " + presetTitle(preset) + " model: " + modelPickerProviderTitle(
 			cfg.Provider,
 		),
@@ -292,8 +269,7 @@ func (m Model) openReadyModelPickerForPreset(
 		preset:   preset,
 		cfg:      cfg,
 		loading:  loading,
-		request:  requestID,
-	}
+	})
 	if fresh {
 		return m, nil
 	}
@@ -330,15 +306,14 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 			nil,
 		)
 	}
-	m.Picker.ModelLoadRequest++
-	m.Picker.Overlay = &pickerOverlayState{
+	m.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
 		title:    "Pick a " + m.activePresetTitle() + " thinking level",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
 		index:    pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort)),
 		purpose:  pickerPurposeThinking,
 		cfg:      cfg,
-	}
+	})
 	return m, nil
 }
 
@@ -476,11 +451,8 @@ func (m Model) startupPickerCmd() tea.Cmd {
 }
 
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
-	overlay := m.Picker.Overlay
-	if overlay == nil ||
-		overlay.purpose != pickerPurposeModel ||
-		overlay.request != msg.requestID ||
-		msg.requestID != m.Picker.ModelLoadRequest {
+	overlay, ok := m.pickerReducer().modelLoadOverlay(msg.requestID)
+	if !ok {
 		return m, nil
 	}
 
@@ -566,14 +538,10 @@ func thinkingDisplayName(value string) string {
 func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m, nil
 	case "backspace":
-		if len(m.Picker.Overlay.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.Picker.Overlay.query)
-			m.Picker.Overlay.query = m.Picker.Overlay.query[:len(m.Picker.Overlay.query)-size]
-			refreshPickerFilter(&m)
-		}
+		m.pickerReducer().backspaceOverlayQuery()
 		return m, nil
 	case "tab":
 		if m.Picker.Overlay.purpose == pickerPurposeProvider {
@@ -599,37 +567,22 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "pgup", "pageup":
-		if m.Picker.Overlay.index > 0 {
-			m.Picker.Overlay.index -= pickerPageSize
-			if m.Picker.Overlay.index < 0 {
-				m.Picker.Overlay.index = 0
-			}
-		}
+		m.pickerReducer().pageOverlaySelection(-1)
 		return m, nil
 	case "pgdown", "pagedown":
-		if max := len(pickerDisplayItems(m.Picker.Overlay)); max > 0 {
-			m.Picker.Overlay.index += pickerPageSize
-			if m.Picker.Overlay.index >= max {
-				m.Picker.Overlay.index = max - 1
-			}
-		}
+		m.pickerReducer().pageOverlaySelection(1)
 		return m, nil
 	case "up":
-		if m.Picker.Overlay.index > 0 {
-			m.Picker.Overlay.index--
-		}
+		m.pickerReducer().moveOverlaySelection(-1)
 		return m, nil
 	case "down":
-		if m.Picker.Overlay.index < len(pickerDisplayItems(m.Picker.Overlay))-1 {
-			m.Picker.Overlay.index++
-		}
+		m.pickerReducer().moveOverlaySelection(1)
 		return m, nil
 	case "enter":
 		return m.commitPickerSelection()
 	default:
 		if text, ok := keyTextInput(msg); ok {
-			m.Picker.Overlay.query += text
-			refreshPickerFilter(&m)
+			m.pickerReducer().appendOverlayQuery(text)
 			return m, nil
 		}
 		return m, nil
@@ -644,8 +597,7 @@ func (m Model) handlePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if content == "" {
 		return m, nil
 	}
-	m.Picker.Overlay.query += content
-	refreshPickerFilter(&m)
+	m.pickerReducer().appendOverlayQuery(content)
 	return m, nil
 }
 
@@ -655,7 +607,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 	items := pickerDisplayItems(m.Picker.Overlay)
 	if len(items) == 0 {
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m, nil
 	}
 
@@ -665,7 +617,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		cfg = *m.Picker.Overlay.cfg
 	}
 	if m.localCommandBusy() && pickerSelectionRequiresIdle(m.Picker.Overlay.purpose) {
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
 	}
 
@@ -686,14 +638,14 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 				strings.TrimSpace(currentCfg.Model),
 				strings.TrimSpace(selected.Value),
 			) {
-			m.Picker.Overlay = nil
+			m.pickerReducer().closeOverlay()
 			return m, nil
 		}
 		transition, _, err := m.modelSelectionTransition(&cfg, preset, selected.Value)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
 		return m.switchRuntimeCommand(
 			transition,
@@ -709,14 +661,14 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		if currentCfg.Provider != "" &&
 			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
-			m.Picker.Overlay = nil
+			m.pickerReducer().closeOverlay()
 			return m, nil
 		}
 		transition, _, err := m.thinkingSelectionTransition(&cfg, m.activePreset(), level)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m.beginRuntimeTransitionCommit(
 			transition,
 			session.Entry{
@@ -726,10 +678,10 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		)
 	case pickerPurposeCommand:
 		m.setComposerDraft(selected.Value + " ")
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m, nil
 	default:
-		m.Picker.Overlay = nil
+		m.pickerReducer().closeOverlay()
 		return m, nil
 	}
 }

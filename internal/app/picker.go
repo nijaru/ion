@@ -330,29 +330,7 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 }
 
 func refreshPickerFilter(m *Model) {
-	if m.Picker.Overlay == nil {
-		return
-	}
-	query := strings.TrimSpace(m.Picker.Overlay.query)
-	if query == "" {
-		m.Picker.Overlay.filtered = append([]pickerItem(nil), m.Picker.Overlay.items...)
-		if len(m.Picker.Overlay.filtered) == 0 {
-			m.Picker.Overlay.index = 0
-			return
-		}
-		if m.Picker.Overlay.index >= len(m.Picker.Overlay.filtered) {
-			m.Picker.Overlay.index = len(m.Picker.Overlay.filtered) - 1
-		}
-		return
-	} else {
-		filtered := rankedPickerItems(m.Picker.Overlay.items, query)
-		m.Picker.Overlay.filtered = filtered
-	}
-	if len(m.Picker.Overlay.filtered) == 0 {
-		m.Picker.Overlay.index = 0
-		return
-	}
-	m.Picker.Overlay.index = 0
+	m.pickerReducer().refreshOverlayFilter()
 }
 
 func pickerDisplayItems(p *pickerOverlayState) []pickerItem {

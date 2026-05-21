@@ -495,14 +495,14 @@ func commonPrefix(values []string) string {
 func (m Model) openCommandPicker(prefix string) Model {
 	items := slashCommandItems()
 	query := strings.TrimPrefix(strings.TrimSpace(prefix), "/")
-	m.Picker.Overlay = &pickerOverlayState{
+	m.pickerReducer().openOverlay(pickerOverlayState{
 		title:    "Pick a command",
 		items:    items,
 		filtered: clonePickerItems(items),
 		index:    0,
 		query:    query,
 		purpose:  pickerPurposeCommand,
-	}
+	})
 	refreshPickerFilter(&m)
 	return m
 }
