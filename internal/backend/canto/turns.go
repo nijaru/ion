@@ -237,6 +237,7 @@ func (b *Backend) translateRunEvent(
 		}
 		return b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
 	case cantofw.RunEventResult:
+		return b.emitTurnFinished(turnID, ionsession.BaseNow())
 	}
 	return false
 }

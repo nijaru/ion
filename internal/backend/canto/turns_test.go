@@ -1478,6 +1478,38 @@ func TestRunTurnReportsCantoResultErrorWithoutLifecycle(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestRunTurnUsesCantoResultEventAsTerminal(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	events := make(chan cantofw.RunEvent, 1)
+	events <- cantofw.RunEvent{
+		Type:   cantofw.RunEventResult,
+		Result: agent.StepResult{Content: "done"},
+	}
+	close(events)
+
+	b.runTurn(
+		t.Context(),
+		turnID,
+		"hi",
+		func() {},
+		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
+			return &fakeCantoTurn{
+				events: events,
+				result: agent.StepResult{Content: "done"},
+			}, nil
+		}),
+	)
+
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("Canto result event did not emit TurnFinished")
+	}
+	assertNoBackendEvent(t, b)
+	if b.turn.active {
+		t.Fatal("turn remained active after result terminal")
+	}
+}
+
 func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
