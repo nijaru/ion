@@ -11,10 +11,13 @@ func (m *Model) progressReducer() progressReducer {
 }
 
 func (r progressReducer) beginLocalStatus(status string) {
-	r.setStatus(status)
+	r.setLocalStatus(status)
 }
 
 func (r progressReducer) clearLocalBusyStatus() {
+	if r.progress.LocalStatus != "" {
+		r.setLocalStatus("")
+	}
 	if isLocalBusyStatus(r.progress.Status) {
 		r.setStatus("")
 	}
@@ -74,4 +77,13 @@ func (r progressReducer) setStatus(status string) {
 		return
 	}
 	r.progress.StatusUpdatedAt = time.Now()
+}
+
+func (r progressReducer) setLocalStatus(status string) {
+	r.progress.LocalStatus = status
+	if status == "" {
+		r.progress.LocalStatusAt = time.Time{}
+		return
+	}
+	r.progress.LocalStatusAt = time.Now()
 }

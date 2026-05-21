@@ -879,8 +879,8 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected runtime switch command")
 	}
-	if model.Progress.Status != "Switching runtime..." {
-		t.Fatalf("status = %q, want switching status", model.Progress.Status)
+	if model.Progress.LocalStatus != "Switching runtime..." {
+		t.Fatalf("local status = %q, want switching status", model.Progress.LocalStatus)
 	}
 	rawMsg := cmd()
 	msg, ok := rawMsg.(runtimeSwitchedMsg)

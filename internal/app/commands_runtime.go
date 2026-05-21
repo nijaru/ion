@@ -237,6 +237,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		m.App.Branch = meta.Branch
 	}
 	m.turnReducer().clearActiveState(true)
+	m.progressReducer().clearLocalBusyStatus()
 	m.progressReducer().markRuntimeReady()
 	m.turnReducer().resetFinishedTurnSummary()
 	m.clearPendingAction()

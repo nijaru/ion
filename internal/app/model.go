@@ -355,6 +355,8 @@ type ProgressState struct {
 	LastError         string
 	Status            string
 	StatusUpdatedAt   time.Time
+	LocalStatus       string
+	LocalStatusAt     time.Time
 	ReasoningEffort   string
 	TurnStartedAt     time.Time
 	CurrentTurnInput  int

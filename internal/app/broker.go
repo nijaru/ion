@@ -172,6 +172,9 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	m.turnReducer().clearLocalErrorIfIdle()
+	if !m.InFlight.Thinking {
+		m.progressReducer().clearLocalBusyStatus()
+	}
 	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
 	return m, m.printEntries(entry)
 }

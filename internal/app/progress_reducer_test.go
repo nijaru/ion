@@ -6,19 +6,19 @@ func TestProgressReducerLocalStatusLifecycle(t *testing.T) {
 	model := readyModel(t)
 
 	model.progressReducer().beginLocalStatus("Saving settings...")
-	if model.Progress.Status != "Saving settings..." {
-		t.Fatalf("status = %q, want Saving settings...", model.Progress.Status)
+	if model.Progress.LocalStatus != "Saving settings..." {
+		t.Fatalf("local status = %q, want Saving settings...", model.Progress.LocalStatus)
 	}
-	if model.Progress.StatusUpdatedAt.IsZero() {
-		t.Fatal("status timestamp was not recorded")
+	if model.Progress.LocalStatusAt.IsZero() {
+		t.Fatal("local status timestamp was not recorded")
 	}
 
 	model.progressReducer().clearLocalBusyStatus()
-	if model.Progress.Status != "" {
-		t.Fatalf("status = %q, want cleared", model.Progress.Status)
+	if model.Progress.LocalStatus != "" {
+		t.Fatalf("local status = %q, want cleared", model.Progress.LocalStatus)
 	}
-	if !model.Progress.StatusUpdatedAt.IsZero() {
-		t.Fatalf("status timestamp = %v, want zero", model.Progress.StatusUpdatedAt)
+	if !model.Progress.LocalStatusAt.IsZero() {
+		t.Fatalf("local status timestamp = %v, want zero", model.Progress.LocalStatusAt)
 	}
 }
 

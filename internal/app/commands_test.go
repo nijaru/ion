@@ -54,8 +54,8 @@ func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 			if model.Picker.Overlay != nil {
 				t.Fatal("expected no picker to open")
 			}
-			if model.Progress.Status != "Saving runtime settings..." {
-				t.Fatalf("status = %q, want saving runtime settings", model.Progress.Status)
+			if model.Progress.LocalStatus != "Saving runtime settings..." {
+				t.Fatalf("local status = %q, want saving runtime settings", model.Progress.LocalStatus)
 			}
 			msg := cmd()
 			updated, printCmd := model.Update(msg)
@@ -71,8 +71,11 @@ func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 			if got := string(data); got != tc.expected {
 				t.Fatalf("state = %q, want %q", got, tc.expected)
 			}
-			if model.Progress.Status != "" {
-				t.Fatalf("status = %q, want cleared after runtime commit", model.Progress.Status)
+			if model.Progress.LocalStatus != "" {
+				t.Fatalf(
+					"local status = %q, want cleared after runtime commit",
+					model.Progress.LocalStatus,
+				)
 			}
 		})
 	}
@@ -157,8 +160,8 @@ func TestThinkingCommandReturnsBeforeRuntimeStateWriteCompletes(t *testing.T) {
 	if model.Progress.ReasoningEffort != "high" {
 		t.Fatalf("progress reasoning = %q, want high", model.Progress.ReasoningEffort)
 	}
-	if model.Progress.Status != "" {
-		t.Fatalf("status = %q, want cleared", model.Progress.Status)
+	if model.Progress.LocalStatus != "" {
+		t.Fatalf("local status = %q, want cleared", model.Progress.LocalStatus)
 	}
 }
 
@@ -1552,8 +1555,11 @@ func TestSettingsCommandSaveReturnsBeforeConfigWriteCompletes(t *testing.T) {
 	if result.model.Model.SettingsRequest == 0 {
 		t.Fatal("settings command did not mark settings request active")
 	}
-	if result.model.Progress.Status != "Saving settings..." {
-		t.Fatalf("status = %q, want Saving settings...", result.model.Progress.Status)
+	if result.model.Progress.LocalStatus != "Saving settings..." {
+		t.Fatalf(
+			"local status = %q, want Saving settings...",
+			result.model.Progress.LocalStatus,
+		)
 	}
 	select {
 	case <-started:
@@ -1580,6 +1586,44 @@ func TestSettingsCommandSaveReturnsBeforeConfigWriteCompletes(t *testing.T) {
 	msg := <-saved
 	if _, ok := msg.(settingsCommandMsg); !ok {
 		t.Fatalf("settings save result = %T, want settingsCommandMsg", msg)
+	}
+}
+
+func TestSettingsSummaryDoesNotOverwriteActiveTurnStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Progress.Mode = stateWorking
+	model.Progress.Status = "Running bash..."
+
+	updated, cmd := model.handleCommand("/settings")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected settings summary command")
+	}
+	if model.Progress.Status != "Running bash..." {
+		t.Fatalf("turn status = %q, want preserved tool status", model.Progress.Status)
+	}
+	if model.Progress.LocalStatus != "Loading settings..." {
+		t.Fatalf("local status = %q, want Loading settings...", model.Progress.LocalStatus)
+	}
+	line := ansi.Strip(model.progressLine())
+	if !strings.Contains(line, "Running bash...") || strings.Contains(line, "Loading settings") {
+		t.Fatalf("progress line = %q, want active turn status over local status", line)
+	}
+
+	msg := cmd()
+	next, printCmd := model.Update(msg)
+	model = next.(Model)
+	if printCmd == nil {
+		t.Fatal("expected settings summary print command")
+	}
+	if model.Progress.Status != "Running bash..." {
+		t.Fatalf("turn status after settings = %q, want preserved", model.Progress.Status)
+	}
+	if model.Progress.LocalStatus != "" {
+		t.Fatalf("local status after settings = %q, want cleared", model.Progress.LocalStatus)
 	}
 }
 
