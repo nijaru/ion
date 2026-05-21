@@ -50,9 +50,9 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
 - Use Pi as the primary internal reference for session history,
   provider-visible context, event ordering, tool lifecycle, cancel/error
   settlement, persistence/replay, and runtime state ownership.
-- Use Codex, Claude Code, Amp, Droid, OpenCode, Cursor, Zed, and similar tools
-  only as references for specific tradeoffs. Do not widen the core surface
-  because another agent has a feature.
+- Use Codex app, Codex CLI, Claude Code, Amp, Droid, OpenCode, Cursor, Zed,
+  and similar tools only as references for specific tradeoffs. Do not widen the
+  core surface because another agent has a feature.
 - Keep the default native path small and trusted until the core loop and TUI are
   boring under deterministic tests, tmux, and live-provider dogfood.
 
