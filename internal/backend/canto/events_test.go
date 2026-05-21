@@ -1231,6 +1231,51 @@ func TestTranslateRunEventProjectsChildCompletionUsage(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
+func TestTranslateRunEventProjectsWaitLifecycle(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleWait,
+			Status: cantofw.RunLifecycleStarted,
+			Wait: &cantofw.RunWaitLifecycle{
+				Reason:     "approval required",
+				ExternalID: "approver-1",
+			},
+		},
+	}, 7)
+	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("first event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Waiting for approval required..." {
+		t.Fatalf("status = %q, want wait reason", status.Status)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Lifecycle: &cantofw.RunLifecycle{
+			Type:   cantofw.RunLifecycleWait,
+			Status: cantofw.RunLifecycleCompleted,
+			Wait: &cantofw.RunWaitLifecycle{
+				Reason:     "approval complete",
+				ExternalID: "approver-1",
+			},
+		},
+	}, 7)
+	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", status)
+	}
+	if status.Status != "Wait resolved." {
+		t.Fatalf("status = %q, want wait resolved", status.Status)
+	}
+	assertNoBackendEvent(t, b)
+}
+
 func assertNoBackendEvent(t *testing.T, b *Backend) {
 	t.Helper()
 	select {

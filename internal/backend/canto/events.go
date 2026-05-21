@@ -294,6 +294,9 @@ func (b *Backend) translateRunSessionEvent(
 	case cantofw.RunLifecycleChild:
 		b.translateRunChildLifecycle(base, lifecycle)
 		return false
+	case cantofw.RunLifecycleWait:
+		b.translateRunWaitLifecycle(base, lifecycle)
+		return false
 	case cantofw.RunLifecycleCompaction:
 		switch lifecycle.Status {
 		case cantofw.RunLifecycleStarted:
@@ -389,6 +392,31 @@ func (b *Backend) translateRunChildLifecycle(
 			Base:      base,
 			AgentName: child.ID,
 			Reason:    child.Reason,
+		}
+	}
+}
+
+func (b *Backend) translateRunWaitLifecycle(
+	base ionsession.Base,
+	lifecycle *cantofw.RunLifecycle,
+) {
+	if lifecycle == nil || lifecycle.Wait == nil {
+		return
+	}
+	switch lifecycle.Status {
+	case cantofw.RunLifecycleStarted:
+		reason := strings.TrimSpace(lifecycle.Wait.Reason)
+		if reason == "" {
+			reason = "external input"
+		}
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: fmt.Sprintf("Waiting for %s...", reason),
+		}
+	case cantofw.RunLifecycleCompleted:
+		b.events <- ionsession.StatusChanged{
+			Base:   base,
+			Status: "Wait resolved.",
 		}
 	}
 }
