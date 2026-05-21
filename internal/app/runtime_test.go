@@ -147,14 +147,113 @@ func runtimeSwitchMsgForTest(
 	storageSess storage.Session,
 ) runtimeSwitchedMsg {
 	return runtimeSwitchedMsg{
-		runtime: acceptedRuntime{
-			transition: newRuntimeTransition(appCfg, runtimeCfg, preset, status),
-			handles: runtimeHandles{
+		runtime: newAcceptedRuntime(
+			newRuntimeTransition(appCfg, runtimeCfg, preset, status),
+			runtimeHandles{
 				backend: backend,
 				session: sess,
 				storage: storageSess,
 			},
+		),
+	}
+}
+
+func TestRuntimeSwitchAcceptedSnapshotIncludesRuntimeMetadata(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(runtimeSwitchMsgForTest(
+		&config.Config{
+			Provider:            "openai",
+			Model:               "gpt-4.1",
+			ReasoningEffort:     "high",
+			FastModel:           "gpt-4.1-mini",
+			FastReasoningEffort: "low",
 		},
+		&config.Config{
+			Provider:        "openai",
+			Model:           "gpt-4.1-mini",
+			ReasoningEffort: "low",
+		},
+		presetFast,
+		"ready",
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "gpt-4.1-mini",
+		},
+		&stubSession{events: make(chan session.Event)},
+		&stubStorageSession{id: "session-1", branch: "main"},
+	))
+	model = updated.(Model)
+
+	snapshot := model.Model.Runtime
+	if snapshot.provider != "openai" ||
+		snapshot.model != "gpt-4.1-mini" ||
+		snapshot.reasoning != "low" ||
+		snapshot.preset != presetFast ||
+		snapshot.sessionID != "session-1" ||
+		!snapshot.materialized {
+		t.Fatalf("runtime snapshot = %#v, want accepted runtime metadata", snapshot)
+	}
+	if got := runtimeStatusSummary(model); !strings.Contains(got, "Model: gpt-4.1-mini") {
+		t.Fatalf("status = %q, want accepted runtime model", got)
+	}
+}
+
+func TestRuntimeSwitchSnapshotTracksLazySessionWithoutResumingIt(t *testing.T) {
+	model := readyModel(t)
+	lazy := storage.NewLazySession(&resumeOnlyStore{}, "/tmp/test", "openai/gpt-4.1", "main")
+
+	updated, _ := model.Update(runtimeSwitchMsgForTest(
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		presetPrimary,
+		"ready",
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "gpt-4.1",
+		},
+		&stubSession{events: make(chan session.Event)},
+		lazy,
+	))
+	model = updated.(Model)
+
+	if model.Model.Runtime.sessionID == "" {
+		t.Fatal("runtime snapshot session id is empty, want lazy session identity tracked")
+	}
+	if model.Model.Runtime.materialized {
+		t.Fatal("runtime snapshot marked lazy session as materialized")
+	}
+	if got := model.ResumeSessionID(); got != "" {
+		t.Fatalf("resume session id = %q, want empty for unmaterialized accepted runtime", got)
+	}
+}
+
+func TestRuntimeTransitionCommitPreservesAcceptedSessionSnapshot(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Storage = &stubStorageSession{
+		id:     "session-1",
+		model:  "openai/gpt-4.1",
+		branch: "main",
+	}
+
+	var err error
+	model, err = model.commitRuntimeTransition(newRuntimeTransition(
+		&config.Config{Provider: "openai", Model: "gpt-4.1", ReasoningEffort: "high"},
+		&config.Config{Provider: "openai", Model: "gpt-4.1", ReasoningEffort: "high"},
+		presetPrimary,
+		"",
+	))
+	if err != nil {
+		t.Fatalf("commit runtime transition: %v", err)
+	}
+
+	if got := model.Model.Runtime.materializedSessionID(); got != "session-1" {
+		t.Fatalf("snapshot session id = %q, want current accepted session", got)
+	}
+	if got := model.Progress.ReasoningEffort; got != "high" {
+		t.Fatalf("reasoning = %q, want high", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 type runtimeTransition struct {
@@ -25,6 +26,11 @@ type runtimeSnapshot struct {
 	appConfig     config.Config
 	backendConfig config.Config
 	preset        modelPreset
+	provider      string
+	model         string
+	reasoning     string
+	sessionID     string
+	materialized  bool
 	status        string
 }
 
@@ -65,6 +71,9 @@ func newRuntimeSnapshot(
 		appConfig:     appCopy,
 		backendConfig: backendCopy,
 		preset:        preset,
+		provider:      strings.TrimSpace(backendCopy.Provider),
+		model:         strings.TrimSpace(backendCopy.Model),
+		reasoning:     normalizeThinkingValue(backendCopy.ReasoningEffort),
 		status:        status,
 	}
 }
@@ -82,6 +91,11 @@ func newRuntimeTransition(
 
 func (t runtimeTransition) withStatus(status string) runtimeTransition {
 	t.snapshot.status = status
+	return t
+}
+
+func (t runtimeTransition) withRuntimeHandles(handles runtimeHandles) runtimeTransition {
+	t.snapshot = t.snapshot.withRuntimeHandles(handles)
 	return t
 }
 
@@ -132,6 +146,7 @@ func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
 	if t.needsPersistence() {
 		return m, fmt.Errorf("runtime transition requires asynchronous persistence")
 	}
+	t = t.withRuntimeHandles(m.runtimeHandles())
 	m.applyRuntimeSnapshot(t.snapshot)
 	return m, nil
 }
@@ -305,9 +320,81 @@ func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
 		m.Model.Backend.SetConfig(&backendCfg)
 	}
 	m.Model.Config = &appCfg
+	m.Model.Runtime = snapshot
 	m.App.ActivePreset = snapshot.preset
-	m.Progress.ReasoningEffort = normalizeThinkingValue(backendCfg.ReasoningEffort)
+	m.Progress.ReasoningEffort = snapshot.reasoning
 	if snapshot.status != "" {
 		m.Progress.Status = snapshot.status
 	}
+}
+
+func newAcceptedRuntime(
+	transition runtimeTransition,
+	handles runtimeHandles,
+) acceptedRuntime {
+	return acceptedRuntime{
+		transition: transition.withRuntimeHandles(handles),
+		handles:    handles,
+	}
+}
+
+func (m Model) runtimeHandles() runtimeHandles {
+	return runtimeHandles{
+		backend: m.Model.Backend,
+		session: m.Model.Session,
+		storage: m.Model.Storage,
+	}
+}
+
+func (s runtimeSnapshot) withRuntimeHandles(handles runtimeHandles) runtimeSnapshot {
+	if s.provider == "" && handles.backend != nil {
+		s.provider = strings.TrimSpace(handles.backend.Provider())
+	}
+	if s.model == "" && handles.backend != nil {
+		s.model = strings.TrimSpace(handles.backend.Model())
+	}
+	if s.reasoning == "" {
+		s.reasoning = config.DefaultReasoningEffort
+	}
+	s.sessionID, s.materialized = runtimeSessionState(handles)
+	return s
+}
+
+func runtimeSessionState(handles runtimeHandles) (string, bool) {
+	if handles.storage != nil {
+		id := strings.TrimSpace(handles.storage.ID())
+		return id, storage.IsMaterialized(handles.storage)
+	}
+	if handles.session == nil {
+		return "", false
+	}
+	id := strings.TrimSpace(handles.session.ID())
+	return id, id != ""
+}
+
+func (s runtimeSnapshot) materializedSessionID() string {
+	if !s.materialized {
+		return ""
+	}
+	return strings.TrimSpace(s.sessionID)
+}
+
+func (m Model) runtimeProvider() string {
+	if provider := strings.TrimSpace(m.Model.Runtime.provider); provider != "" {
+		return provider
+	}
+	if m.Model.Backend == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Model.Backend.Provider())
+}
+
+func (m Model) runtimeModel() string {
+	if model := strings.TrimSpace(m.Model.Runtime.model); model != "" {
+		return model
+	}
+	if m.Model.Backend == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Model.Backend.Model())
 }
