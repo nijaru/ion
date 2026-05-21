@@ -32,6 +32,13 @@ the latest session.
   provider transforms, compaction, and harness primitives.
 - Keep the Canto/Ion split. If Ion needs to duplicate framework-owned behavior,
   fix or extend Canto first, import the exact revision, then simplify Ion.
+- When `ai/PLAN.md` selects an optimal-core redesign lane, treat scratch-design
+  gaps as proactive implementation work. Do not wait for each weak ownership
+  boundary to appear as a dogfood bug before replacing it.
+- P1 remains Pi-level: use Pi as the primary core control; use Codex app/CLI
+  and Claude Code for P1 performance and UX lessons; keep AX, DSPy, GEPA,
+  Slate, Droid, and richer multi-agent/workflow systems in Phase 2/Pi+ unless
+  they expose a primitive needed for P1 correctness.
 - The native Canto path is the primary path. ACP, subscription bridges,
   subagents, background agents, sandbox modes, branch views, workflows, and
   other Pi+ features stay parked unless `ai/PLAN.md` and `tk` explicitly
