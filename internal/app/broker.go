@@ -42,6 +42,8 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				return m, m.awaitSessionEvent()
 			}
 			turn.finishDrain()
+		case session.TurnFinished:
+			turn.finishDrain()
 		default:
 			return m, m.awaitSessionEvent()
 		}

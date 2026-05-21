@@ -334,6 +334,7 @@ type InFlightState struct {
 	StreamBuf             string                       // accumulates AgentDelta (mirrors pending.Content)
 	QueuedTurns           []string                     // follow-up turns queued during agent work
 	Thinking              bool
+	Canceling             bool
 	AgentCommitted        bool // true once AgentMessage owns the turn transcript
 	DrainUntilTurnStarted bool
 	DrainStartedAt        time.Time

@@ -27,6 +27,7 @@ func (r turnReducer) clearActiveState(clearQueued bool) {
 	if clearQueued {
 		r.inFlight.QueuedTurns = nil
 	}
+	r.inFlight.Canceling = false
 	r.inFlight.StreamBuf = ""
 	r.inFlight.ReasonBuf = ""
 	r.inFlight.AgentCommitted = false
@@ -150,7 +151,7 @@ func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (sessio
 		return session.Entry{}, true
 	}
 	r.clearActiveState(true)
-	r.beginDrain(time.Now())
+	r.inFlight.Thinking = true
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
 	return session.Entry{
@@ -162,6 +163,8 @@ func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (sessio
 
 func (r turnReducer) cancelActiveTurn() {
 	r.clearActiveState(true)
+	r.inFlight.Thinking = true
+	r.inFlight.Canceling = true
 	r.beginDrain(time.Now())
 	r.progress.Compacting = false
 	r.progress.Mode = stateCancelled
@@ -222,8 +225,13 @@ func (r turnReducer) finishTurnMode(assistantCompleted bool) (session.Entry, boo
 	case r.progress.Mode == stateError:
 		r.clearActiveState(true)
 		r.progress.Status = ""
-	case r.progress.Mode == stateCancelled || r.progress.BudgetStopReason != "":
+	case r.progress.BudgetStopReason != "":
 		r.clearActiveState(true)
+		r.progress.Mode = stateCancelled
+		r.progress.Status = ""
+	case r.progress.Mode == stateCancelled:
+		preserveQueued := r.inFlight.Canceling
+		r.clearActiveState(!preserveQueued)
 		r.progress.Mode = stateCancelled
 		r.progress.Status = ""
 	case !assistantCompleted:

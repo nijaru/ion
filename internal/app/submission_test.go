@@ -953,6 +953,13 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	if !model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("expected cancel to drain late turn events")
 	}
+	if !model.InFlight.Thinking || !model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel state = thinking %v canceling %v, want true/true",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
+	}
 	drainStartedAt := model.InFlight.DrainStartedAt
 	if drainStartedAt.IsZero() {
 		t.Fatal("expected cancel to record drain fence timestamp")
@@ -985,7 +992,6 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		session.ToolCallStarted{ToolUseID: "tool-1", ToolName: "bash", Args: "echo stale"},
 		session.ToolResult{ToolUseID: "tool-1", ToolName: "bash", Result: "stale"},
 		session.StatusChanged{Status: "Ready"},
-		session.TurnFinished{},
 	} {
 		updated, _ := model.Update(ev)
 		model = updated.(Model)
@@ -1005,6 +1011,43 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatalf("late cancelled-turn events changed visible state: %#v", model.InFlight)
 	}
 
+	model.Input.Composer.SetValue("after cancel")
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "after cancel" {
+		t.Fatalf("queued turns = %#v, want [after cancel]", model.InFlight.QueuedTurns)
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected queued follow-up notice while cancel is settling")
+	}
+
+	updated, cmd = model.Update(session.TurnFinished{})
+	model = updated.(Model)
+	if model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("cancel terminal did not clear drain fence")
+	}
+	if model.InFlight.Thinking || model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel terminal state = thinking %v canceling %v, want false/false",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
+	}
+	if cmd == nil {
+		t.Fatal("expected queued turn command after cancel terminal")
+	}
+	msg := cmd()
+	queued, ok := msg.(queuedTurnMsg)
+	if !ok {
+		t.Fatalf("queued command returned %T, want queuedTurnMsg", msg)
+	}
+	if queued.text != "after cancel" || !queued.rearmSessionEvents {
+		t.Fatalf("queued message = %#v, want rearmed after cancel", queued)
+	}
+
 	updated, cmd = model.Update(session.UserMessage{
 		Base:    session.BaseAt(drainStartedAt.Add(time.Millisecond)),
 		Message: "fresh prompt",
@@ -1012,9 +1055,6 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("fresh user message after cancel did not print")
-	}
-	if model.InFlight.DrainUntilTurnStarted {
-		t.Fatal("fresh user message did not clear drain fence")
 	}
 
 	updated, _ = model.Update(session.TurnStarted{

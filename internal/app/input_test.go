@@ -353,8 +353,12 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	if sess.cancels != 0 {
 		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
 	}
-	if model.InFlight.Thinking {
-		t.Fatal("thinking should be false after ctrl+c cancel")
+	if !model.InFlight.Thinking || !model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel state = thinking %v canceling %v, want true/true",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
 	}
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
@@ -509,8 +513,12 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if sess.cancels != 0 {
 		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
 	}
-	if model.InFlight.Thinking {
-		t.Fatal("thinking should be false after esc cancel")
+	if !model.InFlight.Thinking || !model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel state = thinking %v canceling %v, want true/true",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
 	}
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
