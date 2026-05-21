@@ -35,10 +35,7 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 }
 
 func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) {
-	m.Progress.Compacting = false
-	m.Progress.Status = "Ready"
-	m.Progress.ContextTokens = 0
-	m.clearProgressError()
+	m.progressReducer().completeCompaction()
 	cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
 	if queued := m.turnReducer().popQueuedTurn(); queued != "" {
 		cmds = append(cmds, func() tea.Msg {

@@ -41,6 +41,22 @@ func (r turnReducer) beginDrain(startedAt time.Time) {
 	r.inFlight.DrainStartedAt = startedAt
 }
 
+func (r turnReducer) drainingUntilTurnStarted() bool {
+	return r.inFlight.DrainUntilTurnStarted
+}
+
+func (r turnReducer) shouldDrainLateEvent(timestamp time.Time) bool {
+	if r.inFlight.DrainStartedAt.IsZero() || timestamp.IsZero() {
+		return false
+	}
+	return !timestamp.After(r.inFlight.DrainStartedAt)
+}
+
+func (r turnReducer) finishDrain() {
+	r.inFlight.DrainUntilTurnStarted = false
+	r.inFlight.DrainStartedAt = time.Time{}
+}
+
 func (r turnReducer) startSubmit() {
 	r.progress.Mode = stateIonizing
 	r.progress.Status = ""
@@ -68,6 +84,82 @@ func (r turnReducer) applyTokenUsage(msg session.TokenUsage) {
 	r.progress.CurrentTurnCost += msg.Cost
 }
 
+func (r turnReducer) streamClosed(now time.Time) (session.Entry, bool) {
+	if !r.inFlight.Thinking {
+		return session.Entry{}, false
+	}
+	r.clearActiveState(true)
+	r.progress.Compacting = false
+	r.progress.Mode = stateError
+	r.progress.Status = ""
+	r.progress.LastError = "session event stream closed"
+	r.recordFinishedTurnSummary(now)
+	return session.Entry{
+		Role:    session.System,
+		Content: "Error: " + r.progress.LastError,
+	}, true
+}
+
+func (r turnReducer) failTurn(displayErr string, now time.Time) {
+	r.clearActiveState(true)
+	r.beginDrain(now)
+	r.progress.Compacting = false
+	r.progress.Mode = stateError
+	r.progress.Status = ""
+	r.progress.StatusUpdatedAt = time.Time{}
+	r.progress.LastError = displayErr
+	r.progress.LastTurnSummary = turnSummary{}
+	r.recordFinishedTurnSummary(now)
+}
+
+func (r turnReducer) clearLocalErrorIfIdle() {
+	if r.inFlight.Thinking {
+		return
+	}
+	r.progress.Compacting = false
+	if isLocalBusyStatus(r.progress.Status) {
+		r.progress.Status = ""
+	}
+	if r.progress.Mode == stateError {
+		r.progress.Mode = stateReady
+	}
+	r.progress.LastError = ""
+}
+
+func (r turnReducer) applyStatusChanged(msg session.StatusChanged) {
+	if msg.AgentID == "" {
+		r.progress.Status = msg.Status
+		r.progress.StatusUpdatedAt = msg.Timestamp
+		if r.progress.StatusUpdatedAt.IsZero() {
+			r.progress.StatusUpdatedAt = time.Now()
+		}
+		r.progress.Compacting = isCompactingStatus(msg.Status)
+		return
+	}
+	if p, ok := r.inFlight.Subagents[msg.AgentID]; ok {
+		p.Status = msg.Status
+	}
+}
+
+func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (session.Entry, bool) {
+	if reason == "" || reason == r.progress.BudgetStopReason {
+		return session.Entry{}, false
+	}
+	r.progress.BudgetStopReason = reason
+	if !r.inFlight.Thinking {
+		return session.Entry{}, true
+	}
+	r.clearActiveState(true)
+	r.beginDrain(time.Now())
+	r.progress.Mode = stateCancelled
+	r.progress.Status = ""
+	return session.Entry{
+		Role:      session.System,
+		Timestamp: timestamp,
+		Content:   "Canceled: " + reason,
+	}, true
+}
+
 func (r turnReducer) cancelActiveTurn() {
 	r.clearActiveState(true)
 	r.beginDrain(time.Now())
@@ -75,6 +167,10 @@ func (r turnReducer) cancelActiveTurn() {
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
 	r.progress.StatusUpdatedAt = time.Time{}
+}
+
+func (r turnReducer) stopThinking() {
+	r.inFlight.Thinking = false
 }
 
 func (r turnReducer) startTurn(timestamp, startedAt time.Time) {
@@ -182,57 +278,4 @@ func (r turnReducer) popQueuedTurn() string {
 	queued := r.inFlight.QueuedTurns[0]
 	r.inFlight.QueuedTurns = r.inFlight.QueuedTurns[1:]
 	return queued
-}
-
-func (r turnReducer) appendToolOutput(toolUseID, delta string) {
-	if entry := r.pendingToolEntry(toolUseID); entry != nil {
-		entry.Content += delta
-	}
-}
-
-func (r turnReducer) completeToolResult(
-	toolUseID string,
-	msg session.ToolResult,
-) (session.Entry, bool) {
-	pending := r.pendingToolEntry(toolUseID)
-	if pending == nil {
-		return session.Entry{}, false
-	}
-	pending.Content = msg.Result
-	pending.IsError = msg.Error != nil
-	setEntryTimestamp(pending, msg.Timestamp)
-	entry := *pending
-	r.clearPendingTool(toolUseID, pending)
-	if len(r.inFlight.PendingTools) == 0 {
-		r.progress.Mode = stateIonizing
-		r.progress.Status = ""
-		r.progress.ContextTokens = 0
-	}
-	return entry, true
-}
-
-func (r turnReducer) pendingToolEntry(toolUseID string) *session.Entry {
-	if toolUseID != "" {
-		return r.inFlight.PendingTools[toolUseID]
-	}
-	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Tool {
-		return r.inFlight.Pending
-	}
-	return nil
-}
-
-func (r turnReducer) clearPendingTool(toolUseID string, entry *session.Entry) {
-	if toolUseID != "" {
-		delete(r.inFlight.PendingTools, toolUseID)
-	}
-	if len(r.inFlight.PendingTools) == 0 {
-		r.inFlight.PendingTools = nil
-	}
-	if r.inFlight.Pending == entry {
-		r.inFlight.Pending = nil
-		for _, id := range sortedKeys(r.inFlight.PendingTools) {
-			r.inFlight.Pending = r.inFlight.PendingTools[id]
-			break
-		}
-	}
 }

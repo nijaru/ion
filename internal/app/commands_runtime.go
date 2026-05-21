@@ -20,7 +20,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
-	m.Progress.Status = "Loading session..."
+	m.progressReducer().beginLocalStatus("Loading session...")
 	store := m.Model.Store
 	return m, func() tea.Msg {
 		cfg, err := m.storedSessionConfig(context.Background(), store, sessionID)
@@ -141,7 +141,7 @@ func (m Model) switchRuntimeCommand(
 	current := m.runtimeHandles()
 	m.Model.RuntimeSwitchRequest++
 	requestID := m.Model.RuntimeSwitchRequest
-	m.Progress.Status = "Switching runtime..."
+	m.progressReducer().beginLocalStatus("Switching runtime...")
 
 	return m, func() tea.Msg {
 		result, err := runtimecontroller.Switch(context.Background(), runtimecontroller.SwitchInput{
@@ -179,7 +179,7 @@ func (m Model) resumeRuntimeCommand(
 	current := m.runtimeHandles()
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
-	m.Progress.Status = "Switching runtime..."
+	m.progressReducer().beginLocalStatus("Switching runtime...")
 	return m, func() tea.Msg {
 		result, err := runtimecontroller.Resume(context.Background(), runtimecontroller.ResumeInput{
 			Switcher:   switcher,
@@ -237,18 +237,13 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		m.App.Branch = meta.Branch
 	}
 	m.turnReducer().clearActiveState(true)
-	m.Progress.Mode = stateReady
+	m.progressReducer().markRuntimeReady()
 	m.turnReducer().resetFinishedTurnSummary()
 	m.clearPendingAction()
-	m.Progress.TokensSent = 0
-	m.Progress.TokensReceived = 0
-	m.Progress.ContextTokens = 0
-	m.Progress.TotalCost = 0
+	m.progressReducer().resetSessionUsage()
 	if msg.runtime.Handles.Storage != nil {
 		if input, output, cost, err := msg.runtime.Handles.Storage.Usage(context.Background()); err == nil {
-			m.Progress.TokensSent = input
-			m.Progress.TokensReceived = output
-			m.Progress.TotalCost = cost
+			m.progressReducer().applySessionUsage(input, output, cost)
 		}
 	}
 	m.resetHistoryCursor()

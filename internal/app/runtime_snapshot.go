@@ -63,7 +63,7 @@ func (m Model) beginRuntimeTransitionCommit(
 	}
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
-	m.Progress.Status = "Saving runtime settings..."
+	m.progressReducer().beginLocalStatus("Saving runtime settings...")
 	return m, func() tea.Msg {
 		if err := t.Persist(saveRuntimeState); err != nil {
 			return runtimeTransitionCommittedMsg{switchID: switchID, err: err}
@@ -83,9 +83,7 @@ func (m Model) handleRuntimeTransitionCommitted(
 		return m, nil
 	}
 	m.Model.RuntimeSwitchRequest = 0
-	if isLocalBusyStatus(m.Progress.Status) {
-		m.Progress.Status = ""
-	}
+	m.progressReducer().clearLocalBusyStatus()
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
@@ -221,10 +219,7 @@ func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
 	m.Model.Config = &appCfg
 	m.Model.Runtime = snapshot
 	m.App.ActivePreset = snapshot.Preset
-	m.Progress.ReasoningEffort = snapshot.Reasoning
-	if snapshot.Status != "" {
-		m.Progress.Status = snapshot.Status
-	}
+	m.progressReducer().applyRuntimeSnapshot(snapshot)
 }
 
 func newAcceptedRuntime(

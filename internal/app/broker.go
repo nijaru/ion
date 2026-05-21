@@ -29,20 +29,19 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 
 // handleSessionEvent processes events from the agent session channel.
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
-	if m.InFlight.DrainUntilTurnStarted {
+	turn := m.turnReducer()
+	if turn.drainingUntilTurnStarted() {
 		switch msg := ev.(type) {
 		case session.UserMessage:
-			if m.shouldDrainLateEvent(msg.Timestamp) {
+			if turn.shouldDrainLateEvent(msg.Timestamp) {
 				return m, m.awaitSessionEvent()
 			}
-			m.InFlight.DrainUntilTurnStarted = false
-			m.InFlight.DrainStartedAt = time.Time{}
+			turn.finishDrain()
 		case session.TurnStarted:
-			if m.shouldDrainLateEvent(msg.Timestamp) {
+			if turn.shouldDrainLateEvent(msg.Timestamp) {
 				return m, m.awaitSessionEvent()
 			}
-			m.InFlight.DrainUntilTurnStarted = false
-			m.InFlight.DrainStartedAt = time.Time{}
+			turn.finishDrain()
 		default:
 			return m, m.awaitSessionEvent()
 		}
@@ -126,19 +125,9 @@ func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
 }
 
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
-	if !m.InFlight.Thinking {
+	entry, ok := m.turnReducer().streamClosed(time.Now())
+	if !ok {
 		return m, nil
-	}
-	m.turnReducer().clearActiveState(true)
-	m.Progress.Compacting = false
-	m.Progress.Mode = stateError
-	m.Progress.Status = ""
-	m.Progress.LastError = "session event stream closed"
-	m.turnReducer().recordFinishedTurnSummary(time.Now())
-
-	entry := session.Entry{
-		Role:    session.System,
-		Content: "Error: " + m.Progress.LastError,
 	}
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.printEntries(entry))
@@ -151,12 +140,6 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	m.turnReducer().clearActiveState(true)
-	m.turnReducer().beginDrain(time.Now())
-	m.Progress.Compacting = false
-	m.Progress.Mode = stateError
-	m.Progress.Status = ""
-	m.Progress.StatusUpdatedAt = time.Time{}
 	displayErr := sessionErrorDisplay(err)
 	var cmds []tea.Cmd
 	if limit, ok := classifyProviderLimitError(err); ok {
@@ -169,9 +152,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 			),
 		)
 	}
-	m.Progress.LastError = displayErr
-	m.Progress.LastTurnSummary = turnSummary{}
-	m.turnReducer().recordFinishedTurnSummary(time.Now())
+	m.turnReducer().failTurn(displayErr, time.Now())
 	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
 	printErr := m.printEntries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
@@ -190,16 +171,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 }
 
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
-	if !m.InFlight.Thinking {
-		m.Progress.Compacting = false
-		if isLocalBusyStatus(m.Progress.Status) {
-			m.Progress.Status = ""
-		}
-		if m.Progress.Mode == stateError {
-			m.Progress.Mode = stateReady
-		}
-		m.Progress.LastError = ""
-	}
+	m.turnReducer().clearLocalErrorIfIdle()
 	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
 	return m, m.printEntries(entry)
 }
@@ -217,16 +189,7 @@ func isLocalBusyStatus(status string) bool {
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
-	if msg.AgentID == "" {
-		m.Progress.Status = msg.Status
-		m.Progress.StatusUpdatedAt = msg.Timestamp
-		if m.Progress.StatusUpdatedAt.IsZero() {
-			m.Progress.StatusUpdatedAt = time.Now()
-		}
-		m.Progress.Compacting = isCompactingStatus(msg.Status)
-	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-		p.Status = msg.Status
-	}
+	m.turnReducer().applyStatusChanged(msg)
 	return m, sequenceCmds(m.persistEntryCmd("persist status", storage.Status{
 		Type:   "status",
 		Status: msg.Status,
@@ -259,7 +222,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	})}
 	if reason := m.configuredBudgetStopReason(); reason != "" &&
 		reason != m.Progress.BudgetStopReason {
-		m.Progress.BudgetStopReason = reason
+		entry, _ := m.turnReducer().applyBudgetStop(reason, msg.Timestamp)
 		cmds = append(
 			cmds,
 			m.persistEntryCmd(
@@ -267,16 +230,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				m.routingDecision("stop", "budget_limit", reason),
 			),
 		)
-		if m.InFlight.Thinking {
-			m.turnReducer().clearActiveState(true)
-			m.turnReducer().beginDrain(time.Now())
-			m.Progress.Mode = stateCancelled
-			m.Progress.Status = ""
-			entry := session.Entry{
-				Role:      session.System,
-				Timestamp: msg.Timestamp,
-				Content:   "Canceled: " + reason,
-			}
+		if entry.Content != "" {
 			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", storage.System{
 				Type:    "system",
 				Content: entry.Content,
@@ -301,15 +255,8 @@ func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) shouldDrainLateEvent(timestamp time.Time) bool {
-	if m.InFlight.DrainStartedAt.IsZero() || timestamp.IsZero() {
-		return false
-	}
-	return !timestamp.After(m.InFlight.DrainStartedAt)
-}
-
 func (m Model) handleTurnFinished() (Model, tea.Cmd) {
-	m.InFlight.Thinking = false
+	m.turnReducer().stopThinking()
 	var cmds []tea.Cmd
 
 	assistant, assistantCompleted, printAssistant := m.turnReducer().finishPendingAssistant()
@@ -333,34 +280,12 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 }
 
 func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
-	if msg.AgentID == "" && m.InFlight.AgentCommitted {
-		return m, m.awaitSessionEvent()
-	}
-	if msg.AgentID == "" {
-		m.InFlight.ReasonBuf += msg.Delta
-	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-		p.Reasoning += msg.Delta
-	}
+	m.turnReducer().appendThinkingDelta(msg.AgentID, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
-	if msg.AgentID == "" && m.InFlight.AgentCommitted {
-		return m, m.awaitSessionEvent()
-	}
-	if msg.AgentID == "" {
-		m.Progress.Mode = stateStreaming
-		if m.InFlight.Pending == nil || m.InFlight.Pending.Role != session.Agent {
-			m.InFlight.Pending = &session.Entry{
-				Role:      session.Agent,
-				Timestamp: msg.Timestamp,
-			}
-		}
-		m.InFlight.Pending.Content += msg.Delta
-		m.InFlight.StreamBuf = m.InFlight.Pending.Content
-	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-		p.Output += msg.Delta
-	}
+	m.turnReducer().appendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
 	return m, m.awaitSessionEvent()
 }
 
@@ -368,65 +293,18 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
 		return m.handleSubagentMessage(msg)
 	}
-	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
-		if msg.Message != "" {
-			m.InFlight.Pending.Content = msg.Message
-		}
-		m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
-		if msg.Reasoning != "" {
-			m.InFlight.Pending.Reasoning = msg.Reasoning
-		}
-		setEntryTimestamp(m.InFlight.Pending, msg.Timestamp)
-		entry := *m.InFlight.Pending
-		m.InFlight.Pending = nil
-		m.InFlight.StreamBuf = ""
-		m.InFlight.ReasonBuf = ""
-		if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
-			return m, m.awaitSessionEvent()
-		}
-
-		m.InFlight.AgentCommitted = true
+	if entry, ok := m.turnReducer().commitAgentMessage(msg); ok {
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
-	entry := session.Entry{
-		Role:      session.Agent,
-		Timestamp: msg.Timestamp,
-		Content:   msg.Message,
-		Reasoning: m.InFlight.ReasonBuf,
-	}
-	if msg.Reasoning != "" {
-		entry.Reasoning = msg.Reasoning
-	}
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-	if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
-		return m, m.awaitSessionEvent()
-	}
-	m.InFlight.AgentCommitted = true
-	return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cmd) {
-	m.Progress.Mode = stateWorking
-	m.Progress.LastToolUseID = msg.ToolUseID
-	if m.Progress.LastToolUseID == "" {
-		m.Progress.LastToolUseID = session.ShortID()
-	}
-	entry := &session.Entry{
-		Role:      session.Tool,
-		Timestamp: msg.Timestamp,
-		Title:     privacy.Redact(m.formatToolTitle(msg.ToolName, msg.Args)),
-	}
-	if m.InFlight.PendingTools == nil {
-		m.InFlight.PendingTools = make(map[string]*session.Entry)
-	}
-	m.InFlight.PendingTools[m.Progress.LastToolUseID] = entry
-	if m.InFlight.Pending == nil || m.InFlight.Pending.Role == session.Tool ||
-		(m.InFlight.Pending.Role == session.Agent &&
-			m.InFlight.Pending.Content == "" &&
-			m.InFlight.ReasonBuf == "") {
-		m.InFlight.Pending = entry
-	}
+	m.turnReducer().startToolCall(
+		msg.ToolUseID,
+		msg.Timestamp,
+		privacy.Redact(m.formatToolTitle(msg.ToolName, msg.Args)),
+	)
 	return m, m.awaitSessionEvent()
 }
 

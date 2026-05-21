@@ -479,16 +479,14 @@ func New(
 
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
-		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
+		m.progressReducer().setReasoningEffort(normalizeThinkingValue(cfg.ReasoningEffort))
 	} else {
-		m.Progress.ReasoningEffort = config.DefaultReasoningEffort
+		m.progressReducer().setReasoningEffort(config.DefaultReasoningEffort)
 	}
 
 	if s != nil {
 		if input, output, cost, err := s.Usage(context.Background()); err == nil {
-			m.Progress.TokensSent = input
-			m.Progress.TokensReceived = output
-			m.Progress.TotalCost = cost
+			m.progressReducer().applySessionUsage(input, output, cost)
 		}
 	}
 	m.loadInputHistory(context.Background())

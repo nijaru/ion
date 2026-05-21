@@ -162,3 +162,60 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 		)
 	}
 }
+
+func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+
+	child := model.turnReducer().requestChild("worker", "inspect")
+	if child.Name != "worker" ||
+		child.Intent != "inspect" ||
+		model.Progress.Mode != stateWorking {
+		t.Fatalf("requested child = %#v progress=%#v", child, model.Progress)
+	}
+
+	if !model.turnReducer().startChild("worker") {
+		t.Fatal("startChild returned false")
+	}
+	if !model.turnReducer().appendChildDelta("worker", "partial") {
+		t.Fatal("appendChildDelta returned false")
+	}
+	if got := model.InFlight.Subagents["worker"].Output; got != "partial" {
+		t.Fatalf("child output = %q, want partial", got)
+	}
+
+	entry, ok := model.turnReducer().completeChild("worker", "done", time.Time{})
+	if !ok {
+		t.Fatal("completeChild returned false")
+	}
+	if entry.Role != session.Subagent ||
+		entry.Title != "worker" ||
+		entry.Content != "Completed: done" {
+		t.Fatalf("completion entry = %#v", entry)
+	}
+	if len(model.InFlight.Subagents) != 0 ||
+		model.Progress.Status != "" ||
+		model.Progress.Mode != stateIonizing {
+		t.Fatalf("settled state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
+	}
+}
+
+func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
+	model := readyModel(t)
+	model.turnReducer().requestChild("worker", "inspect")
+
+	entry, ok := model.turnReducer().failChild("worker", "boom", time.Time{})
+	if !ok {
+		t.Fatal("failChild returned false")
+	}
+	if entry.Role != session.Subagent ||
+		!entry.IsError ||
+		entry.Content != "Failed: boom" {
+		t.Fatalf("failure entry = %#v", entry)
+	}
+	if len(model.InFlight.Subagents) != 0 ||
+		model.Progress.Mode != stateError ||
+		model.Progress.LastError != "Subagent failed: boom" {
+		t.Fatalf("failure state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
+	}
+}

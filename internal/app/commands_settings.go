@@ -17,11 +17,14 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		}
 		m.Model.SettingsRequest++
 		requestID := m.Model.SettingsRequest
-		m.Progress.Status = "Loading settings..."
+		m.progressReducer().beginLocalStatus("Loading settings...")
 		return m, func() tea.Msg {
 			cfg, err := loadStableConfig()
 			if err != nil {
-				return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to load config: %w", err)}
+				return settingsCommandMsg{
+					requestID: requestID,
+					err:       fmt.Errorf("failed to load config: %w", err),
+				}
 			}
 			return settingsCommandMsg{
 				requestID: requestID,
@@ -42,29 +45,41 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	m.Model.SettingsRequest++
 	requestID := m.Model.SettingsRequest
-	m.Progress.Status = "Saving settings..."
+	m.progressReducer().beginLocalStatus("Saving settings...")
 	activeCfg := m.Model.Config
 	preset := m.activePreset()
 	return m, func() tea.Msg {
 		stableCfg, err := loadStableConfig()
 		if err != nil {
-			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to load config: %w", err)}
+			return settingsCommandMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("failed to load config: %w", err),
+			}
 		}
 		updated, notice, err := settingsConfigUpdate(stableCfg, key, value)
 		if err != nil {
 			return settingsCommandMsg{requestID: requestID, err: err}
 		}
 		if err := saveConfigFile(&updated); err != nil {
-			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to save config: %w", err)}
+			return settingsCommandMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("failed to save config: %w", err),
+			}
 		}
 		runtimeCfg, err := loadConfigFile()
 		if err != nil {
-			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to reload runtime config: %w", err)}
+			return settingsCommandMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("failed to reload runtime config: %w", err),
+			}
 		}
 		mergeRuntimeSelection(runtimeCfg, activeCfg)
 		backendCfg, err := m.runtimeConfigForPreset(runtimeCfg, preset)
 		if err != nil {
-			return settingsCommandMsg{requestID: requestID, err: fmt.Errorf("failed to resolve active preset: %w", err)}
+			return settingsCommandMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("failed to resolve active preset: %w", err),
+			}
 		}
 		return settingsCommandMsg{
 			requestID:     requestID,
@@ -80,9 +95,7 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 		return m, nil
 	}
 	m.Model.SettingsRequest = 0
-	if isLocalBusyStatus(m.Progress.Status) {
-		m.Progress.Status = ""
-	}
+	m.progressReducer().clearLocalBusyStatus()
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
@@ -126,7 +139,9 @@ func settingsConfigUpdate(
 	case "tool", "tools":
 		verbosity, ok := parseToolVerbosity(value)
 		if !ok {
-			return config.Config{}, "", fmt.Errorf("usage: /settings tool auto|full|collapsed|hidden")
+			return config.Config{}, "", fmt.Errorf(
+				"usage: /settings tool auto|full|collapsed|hidden",
+			)
 		}
 		updated.ToolVerbosity = verbosity
 		notice = "Tool display: " + displayToolVerbosity(verbosity)
@@ -154,7 +169,9 @@ func settingsConfigUpdate(
 	case "thinking":
 		verbosity := config.NormalizeVerbosity(value)
 		if verbosity == "" {
-			return config.Config{}, "", fmt.Errorf("usage: /settings thinking full|collapsed|hidden")
+			return config.Config{}, "", fmt.Errorf(
+				"usage: /settings thinking full|collapsed|hidden",
+			)
 		}
 		updated.ThinkingVerbosity = verbosity
 		notice = "Thinking display: " + verbosity
@@ -170,7 +187,9 @@ func settingsConfigUpdate(
 		}
 		notice = "Busy input: " + mode
 	default:
-		return config.Config{}, "", fmt.Errorf("usage: /settings [retry|tool|read|write|bash|thinking|busy] ...")
+		return config.Config{}, "", fmt.Errorf(
+			"usage: /settings [retry|tool|read|write|bash|thinking|busy] ...",
+		)
 	}
 	return updated, notice, nil
 }

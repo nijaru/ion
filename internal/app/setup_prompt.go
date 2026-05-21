@@ -132,7 +132,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		m.Progress.Status = "Saving provider setup..."
+		m.progressReducer().beginLocalStatus("Saving provider setup...")
 		cfg := prompt.cfg
 		provider := prompt.provider
 		preset := prompt.preset
@@ -155,7 +155,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		m.Progress.Status = "Saving provider setup..."
+		m.progressReducer().beginLocalStatus("Saving provider setup...")
 		cfg := prompt.cfg
 		cfg.Endpoint = endpoint
 		preset := prompt.preset
@@ -185,17 +185,13 @@ func (m Model) handleSetupPromptSaved(msg setupPromptSavedMsg) (Model, tea.Cmd) 
 		if !m.pickerReducer().failSetupSave(msg.requestID, msg.err.Error()) {
 			return m, nil
 		}
-		if isLocalBusyStatus(m.Progress.Status) {
-			m.Progress.Status = ""
-		}
+		m.progressReducer().clearLocalBusyStatus()
 		return m, nil
 	}
 	if !m.pickerReducer().completeSetupSave(msg.requestID) {
 		return m, nil
 	}
-	if isLocalBusyStatus(m.Progress.Status) {
-		m.Progress.Status = ""
-	}
+	m.progressReducer().clearLocalBusyStatus()
 	cfg := msg.cfg
 	return m.openModelPickerForPreset(&cfg, msg.preset)
 }

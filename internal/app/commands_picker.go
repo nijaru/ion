@@ -192,7 +192,7 @@ func (m Model) beginProviderSelection(
 	}
 
 	requestID := m.pickerReducer().beginProviderSelection()
-	m.Progress.Status = "Checking provider..."
+	m.progressReducer().beginLocalStatus("Checking provider...")
 	m.pickerReducer().markProviderOverlayLoading(requestID)
 	cfgCopy := *updated
 	return m, func() tea.Msg {

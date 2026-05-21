@@ -181,10 +181,7 @@ func isHelpSectionLine(line string) bool {
 }
 
 func (m *Model) clearProgressError() {
-	if m.Progress.Mode == stateError {
-		m.Progress.Mode = stateReady
-	}
-	m.Progress.LastError = ""
+	m.progressReducer().clearError()
 }
 
 func (m *Model) clearPendingAction() {
