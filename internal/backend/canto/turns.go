@@ -16,13 +16,18 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 }
 
 func (b *Backend) submitTurn(ctx context.Context, input string) error {
-	turn, err := b.prepareSubmittedTurn(ctx, input)
+	submitted, err := b.prepareSubmittedTurn(ctx, input)
+	if err != nil {
+		return err
+	}
+
+	turn, err := b.acceptSubmittedTurn(submitted, input)
 	if err != nil {
 		return err
 	}
 
 	b.wg.Go(func() {
-		b.runTurn(turn.ctx, turn.id, input, turn.cancel, turn.submitter)
+		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, turn)
 	})
 
 	return nil
@@ -111,6 +116,19 @@ func (b *Backend) prepareSubmittedTurn(
 	}, nil
 }
 
+func (b *Backend) acceptSubmittedTurn(
+	submitted submittedTurn,
+	input string,
+) (cantoTurnHandle, error) {
+	turn, err := submitted.submitter.submit(submitted.ctx, input)
+	if err != nil {
+		submitted.cancel()
+		b.finishTurnIfActive(submitted.id)
+		return nil, err
+	}
+	return turn, nil
+}
+
 type turnSubmitter interface {
 	submit(context.Context, string) (cantoTurnHandle, error)
 }
@@ -135,18 +153,12 @@ type cantoTurnHandle interface {
 func (b *Backend) runTurn(
 	ctx context.Context,
 	turnID uint64,
-	input string,
 	cancel context.CancelFunc,
-	submitter turnSubmitter,
+	turn cantoTurnHandle,
 ) {
 	defer b.clearActiveTurn(turnID)
 	defer cancel()
 
-	turn, err := submitter.submit(ctx, input)
-	if err != nil {
-		b.finishTurnWithError(turnID, err)
-		return
-	}
 	b.bindTurnCancel(turnID, func() {
 		cancel()
 		_ = turn.Cancel(context.Background())

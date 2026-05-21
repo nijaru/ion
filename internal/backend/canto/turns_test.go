@@ -1440,11 +1440,8 @@ func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T)
 	b.runTurn(
 		t.Context(),
 		turnID,
-		"hi",
 		func() {},
-		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
-			return &fakeCantoTurn{events: events}, nil
-		}),
+		&fakeCantoTurn{events: events},
 	)
 
 	assertNoBackendEvent(t, b)
@@ -1463,11 +1460,8 @@ func TestRunTurnReportsCantoResultErrorWithoutLifecycle(t *testing.T) {
 	b.runTurn(
 		t.Context(),
 		turnID,
-		"hi",
 		func() {},
-		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
-			return &fakeCantoTurn{events: events, resultErr: resultErr}, nil
-		}),
+		&fakeCantoTurn{events: events, resultErr: resultErr},
 	)
 
 	errEvent := waitForSessionError(t, b.Session().Events())
@@ -1491,14 +1485,11 @@ func TestRunTurnUsesCantoResultEventAsTerminal(t *testing.T) {
 	b.runTurn(
 		t.Context(),
 		turnID,
-		"hi",
 		func() {},
-		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
-			return &fakeCantoTurn{
-				events: events,
-				result: agent.StepResult{Content: "done"},
-			}, nil
-		}),
+		&fakeCantoTurn{
+			events: events,
+			result: agent.StepResult{Content: "done"},
+		},
 	)
 
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
@@ -1530,14 +1521,11 @@ func TestRunTurnSuppressesDuplicateTerminalAfterCantoSettlement(t *testing.T) {
 	b.runTurn(
 		t.Context(),
 		turnID,
-		"hi",
 		func() {},
-		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
-			return &fakeCantoTurn{
-				events: events,
-				result: agent.StepResult{Content: "done"},
-			}, nil
-		}),
+		&fakeCantoTurn{
+			events: events,
+			result: agent.StepResult{Content: "done"},
+		},
 	)
 
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
@@ -1559,11 +1547,8 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 	b.runTurn(
 		t.Context(),
 		turnID,
-		"hi",
 		func() {},
-		turnSubmitFunc(func(context.Context, string) (cantoTurnHandle, error) {
-			return &fakeCantoTurn{events: events}, nil
-		}),
+		&fakeCantoTurn{events: events},
 	)
 
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
@@ -1583,28 +1568,25 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		close(ready)
+		go func() {
+			defer close(events)
+			<-ctx.Done()
+			<-release
+			events <- cantofw.RunEvent{
+				Type: cantofw.RunEventSession,
+				Event: csession.NewTurnCompletedEvent(
+					"session-id",
+					csession.TurnCompletedData{Error: context.Canceled.Error()},
+				),
+			}
+			events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+		}()
 		b.runTurn(
 			ctx,
 			turnID,
-			"hi",
 			cancel,
-			turnSubmitFunc(func(ctx context.Context, _ string) (cantoTurnHandle, error) {
-				close(ready)
-				go func() {
-					defer close(events)
-					<-ctx.Done()
-					<-release
-					events <- cantofw.RunEvent{
-						Type: cantofw.RunEventSession,
-						Event: csession.NewTurnCompletedEvent(
-							"session-id",
-							csession.TurnCompletedData{Error: context.Canceled.Error()},
-						),
-					}
-					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
-				}()
-				return &fakeCantoTurn{events: events}, nil
-			}),
+			&fakeCantoTurn{events: events},
 		)
 	}()
 
@@ -1643,28 +1625,25 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		close(ready)
+		go func() {
+			defer close(events)
+			<-ctx.Done()
+			<-release
+			events <- cantofw.RunEvent{
+				Type: cantofw.RunEventSession,
+				Event: csession.NewTurnCompletedEvent(
+					"session-id",
+					csession.TurnCompletedData{Error: context.Canceled.Error()},
+				),
+			}
+			events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+		}()
 		b.runTurn(
 			ctx,
 			oldTurnID,
-			"old",
 			cancel,
-			turnSubmitFunc(func(ctx context.Context, _ string) (cantoTurnHandle, error) {
-				close(ready)
-				go func() {
-					defer close(events)
-					<-ctx.Done()
-					<-release
-					events <- cantofw.RunEvent{
-						Type: cantofw.RunEventSession,
-						Event: csession.NewTurnCompletedEvent(
-							"session-id",
-							csession.TurnCompletedData{Error: context.Canceled.Error()},
-						),
-					}
-					events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
-				}()
-				return &fakeCantoTurn{events: events}, nil
-			}),
+			&fakeCantoTurn{events: events},
 		)
 	}()
 
@@ -1690,6 +1669,34 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 	if !b.isActiveTurn(nextTurnID) {
 		t.Fatal("old canceled settlement finished the next turn")
 	}
+}
+
+func TestAcceptSubmittedTurnReturnsCantoSubmitError(t *testing.T) {
+	b := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	turnID := b.turn.start(cancel)
+	submitErr := errors.New("canto submit failed before acceptance")
+
+	turn, err := b.acceptSubmittedTurn(submittedTurn{
+		id:     turnID,
+		ctx:    ctx,
+		cancel: cancel,
+		submitter: turnSubmitFunc(
+			func(context.Context, string) (cantoTurnHandle, error) {
+				return nil, submitErr
+			},
+		),
+	}, "hi")
+	if !errors.Is(err, submitErr) {
+		t.Fatalf("acceptSubmittedTurn error = %v, want %v", err, submitErr)
+	}
+	if turn != nil {
+		t.Fatalf("accepted turn = %#v, want nil", turn)
+	}
+	if b.turn.active {
+		t.Fatal("turn remained active after submit rejection")
+	}
+	assertNoBackendEvent(t, b)
 }
 
 type turnSubmitFunc func(context.Context, string) (cantoTurnHandle, error)
