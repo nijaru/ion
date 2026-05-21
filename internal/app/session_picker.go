@@ -16,18 +16,12 @@ import (
 )
 
 func (m Model) openSessionPicker() (Model, tea.Cmd) {
-	m.Picker.Overlay = nil
 	if m.Model.Store == nil {
-		m.Picker.Session = &sessionPickerState{err: "session store not available"}
+		m.pickerReducer().showSessionUnavailable()
 		return m, nil
 	}
 
-	m.Picker.SessionLoadRequest++
-	requestID := m.Picker.SessionLoadRequest
-	m.Picker.Session = &sessionPickerState{
-		loading: true,
-		request: requestID,
-	}
+	requestID := m.pickerReducer().beginSessionLoad()
 	return m, loadSessionPickerItems(requestID, m.Model.Store, m.App.Workdir)
 }
 
@@ -39,35 +33,7 @@ func loadSessionPickerItems(requestID uint64, store storage.Store, workdir strin
 }
 
 func (m Model) handleSessionPickerLoaded(msg sessionPickerLoadedMsg) (Model, tea.Cmd) {
-	if m.Picker.Session == nil ||
-		m.Picker.Session.request == 0 ||
-		m.Picker.Session.request != msg.requestID ||
-		msg.requestID != m.Picker.SessionLoadRequest {
-		return m, nil
-	}
-	if msg.err != nil {
-		m.Picker.Session = &sessionPickerState{
-			err: fmt.Sprintf("failed to list sessions: %v", msg.err),
-		}
-		return m, nil
-	}
-	items := make([]sessionPickerItem, 0, len(msg.sessions))
-	for _, info := range msg.sessions {
-		if !storage.IsConversationSessionInfo(info) {
-			continue
-		}
-		items = append(items, sessionPickerItem{info: info})
-	}
-
-	state := &sessionPickerState{
-		items:    items,
-		filtered: append([]sessionPickerItem(nil), items...),
-		index:    0,
-	}
-	if len(items) == 0 {
-		state.err = "no recent sessions in this workspace"
-	}
-	m.Picker.Session = state
+	m.pickerReducer().applySessionLoad(msg.requestID, msg.sessions, msg.err)
 	return m, nil
 }
 
@@ -78,52 +44,33 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
-		m.Picker.Session = nil
+		m.pickerReducer().closeSession()
 		return m, nil
 	case "backspace":
-		if len(m.Picker.Session.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.Picker.Session.query)
-			m.Picker.Session.query = m.Picker.Session.query[:len(m.Picker.Session.query)-size]
-			m.refreshSessionPickerFilter()
-		}
+		m.pickerReducer().backspaceSessionQuery(m.App.Workdir)
 		return m, nil
 	case "up":
-		if m.Picker.Session.index > 0 {
-			m.Picker.Session.index--
-		}
+		m.pickerReducer().moveSessionSelection(-1)
 		return m, nil
 	case "down":
-		if m.Picker.Session.index < len(m.Picker.Session.filtered)-1 {
-			m.Picker.Session.index++
-		}
+		m.pickerReducer().moveSessionSelection(1)
 		return m, nil
 	case "pgup", "pageup":
-		if m.Picker.Session.index > 0 {
-			m.Picker.Session.index -= pickerPageSize
-			if m.Picker.Session.index < 0 {
-				m.Picker.Session.index = 0
-			}
-		}
+		m.pickerReducer().pageSessionSelection(-1)
 		return m, nil
 	case "pgdown", "pagedown":
-		if max := len(m.Picker.Session.filtered); max > 0 {
-			m.Picker.Session.index += pickerPageSize
-			if m.Picker.Session.index >= max {
-				m.Picker.Session.index = max - 1
-			}
-		}
+		m.pickerReducer().pageSessionSelection(1)
 		return m, nil
 	case "enter":
-		if len(m.Picker.Session.filtered) == 0 {
+		selected, ok := m.pickerReducer().selectedSession()
+		if !ok {
 			return m, nil
 		}
-		selected := m.Picker.Session.filtered[m.Picker.Session.index]
-		m.Picker.Session = nil
-		return m.resumeStoredSessionByID(selected.info.ID)
+		m.pickerReducer().closeSession()
+		return m.resumeStoredSessionByID(selected.ID)
 	default:
 		if text, ok := keyTextInput(msg); ok {
-			m.Picker.Session.query += text
-			m.refreshSessionPickerFilter()
+			m.pickerReducer().appendSessionQuery(text, m.App.Workdir)
 		}
 		return m, nil
 	}
@@ -137,34 +84,8 @@ func (m Model) handleSessionPickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if content == "" {
 		return m, nil
 	}
-	m.Picker.Session.query += content
-	m.refreshSessionPickerFilter()
+	m.pickerReducer().appendSessionQuery(content, m.App.Workdir)
 	return m, nil
-}
-
-func (m Model) refreshSessionPickerFilter() {
-	if m.Picker.Session == nil {
-		return
-	}
-	query := strings.TrimSpace(m.Picker.Session.query)
-	if query == "" {
-		m.Picker.Session.filtered = append([]sessionPickerItem(nil), m.Picker.Session.items...)
-		if len(m.Picker.Session.filtered) == 0 {
-			m.Picker.Session.index = 0
-			return
-		}
-		if m.Picker.Session.index >= len(m.Picker.Session.filtered) {
-			m.Picker.Session.index = len(m.Picker.Session.filtered) - 1
-		}
-		return
-	} else {
-		m.Picker.Session.filtered = rankedSessionPickerItems(m.Picker.Session.items, query, m.App.Workdir)
-	}
-	if len(m.Picker.Session.filtered) == 0 {
-		m.Picker.Session.index = 0
-		return
-	}
-	m.Picker.Session.index = 0
 }
 
 func (m Model) renderSessionPicker() string {
