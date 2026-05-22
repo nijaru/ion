@@ -6,8 +6,8 @@ tool is available unless `subagent_tools = "on"` is explicitly configured.
 
 Ion has implementation pieces for focused delegation through Canto child
 sessions, explicit context transfer, and compact inline display. Default
-registration remains off so the normal model-visible surface stays at the eight
-core coding tools.
+registration remains off so the normal model-visible surface stays focused on
+the core coding tools.
 
 The target default personas are:
 
