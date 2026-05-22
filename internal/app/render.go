@@ -62,10 +62,8 @@ func (m Model) renderShell() string {
 		b.WriteString("\n")
 	}
 
-	if m.shellTopSeparatorVisible() {
-		b.WriteString(m.st.sep.Render(m.shellSeparator()))
-		b.WriteString("\n")
-	}
+	b.WriteString(m.st.sep.Render(m.shellSeparator()))
+	b.WriteString("\n")
 
 	// Composer
 	b.WriteString(m.renderComposer())
@@ -87,18 +85,6 @@ func (m Model) renderShell() string {
 
 func (m Model) renderComposer() string {
 	return renderComposerView(m.Input.Composer.View(), m.shellWidth())
-}
-
-func (m Model) shellTopSeparatorVisible() bool {
-	if m.Progress.Compacting {
-		return false
-	}
-	switch m.Progress.Mode {
-	case stateIonizing, stateStreaming, stateWorking:
-		return false
-	default:
-		return true
-	}
 }
 
 func renderComposerView(view string, width int) string {

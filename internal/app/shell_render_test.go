@@ -387,9 +387,68 @@ func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 		!strings.Contains(view, "Running bash...") {
 		t.Fatalf("view = %q, want one blank row between active tool and shell progress", view)
 	}
-	if strings.Contains(view, "Running bash...\n─") {
-		t.Fatalf("view = %q, want no top separator directly below running progress", view)
+	if !lineAfterContainsOnly(view, "Running bash...", "─") {
+		t.Fatalf("view = %q, want shell top separator below running progress", view)
 	}
+}
+
+func TestViewKeepsShellTopSeparatorDuringActiveProgress(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		configure func(*Model)
+		want      string
+	}{
+		{
+			name: "ionizing",
+			configure: func(m *Model) {
+				m.Progress.Mode = stateIonizing
+			},
+			want: "Ionizing...",
+		},
+		{
+			name: "streaming",
+			configure: func(m *Model) {
+				m.Progress.Mode = stateStreaming
+			},
+			want: "Streaming...",
+		},
+		{
+			name: "working",
+			configure: func(m *Model) {
+				m.Progress.Mode = stateWorking
+				m.Progress.Status = "Running bash..."
+			},
+			want: "Running bash...",
+		},
+		{
+			name: "compacting",
+			configure: func(m *Model) {
+				m.Progress.Compacting = true
+			},
+			want: "Compacting context...",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			model := readyModel(t)
+			tt.configure(&model)
+
+			view := ansi.Strip(model.View().Content)
+			if !lineAfterContainsOnly(view, tt.want, "─") {
+				t.Fatalf("view = %q, want shell top separator after %q", view, tt.want)
+			}
+		})
+	}
+}
+
+func lineAfterContainsOnly(view, needle, chars string) bool {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, needle) {
+			continue
+		}
+		return i+1 < len(lines) && strings.Trim(lines[i+1], chars) == ""
+	}
+	return false
 }
 
 func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
