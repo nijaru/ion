@@ -39,7 +39,9 @@ func TestParseMarkdownPersonaRequiresFrontmatter(t *testing.T) {
 }
 
 func TestParseMarkdownPersonaAcceptsCRLFFrontmatter(t *testing.T) {
-	persona, err := ParseMarkdown("---\r\nname: scout\r\ndescription: Quick scouting.\r\nmodel: fast\r\ntools: [read]\r\n---\r\nFind files.\r\n")
+	persona, err := ParseMarkdown(
+		"---\r\nname: scout\r\ndescription: Quick scouting.\r\nmodel: fast\r\ntools: [read]\r\n---\r\nFind files.\r\n",
+	)
 	if err != nil {
 		t.Fatalf("ParseMarkdown returned error: %v", err)
 	}

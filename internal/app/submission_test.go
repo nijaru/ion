@@ -656,7 +656,9 @@ func TestSubmitComposerConsumesPasteMarkersAfterAcceptedPrompt(t *testing.T) {
 
 	model, _ = applySubmitResult(t, model, cmd)
 	if model.App.PrintedTranscript {
-		t.Fatal("accepted prompt should wait for ordered session event before printing user message")
+		t.Fatal(
+			"accepted prompt should wait for ordered session event before printing user message",
+		)
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "summarize expanded paste content" {
 		t.Fatalf("submits = %#v, want expanded paste content", sess.submits)
@@ -1137,7 +1139,10 @@ func TestCancelRunningTurnPersistenceReturnsBeforeStorageAppendCompletes(t *test
 		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
 	}
 	if len(storageSess.appends) != 1 {
-		t.Fatalf("appends after command execution = %#v, want one cancellation entry", storageSess.appends)
+		t.Fatalf(
+			"appends after command execution = %#v, want one cancellation entry",
+			storageSess.appends,
+		)
 	}
 }
 

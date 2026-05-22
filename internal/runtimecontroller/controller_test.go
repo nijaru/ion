@@ -51,7 +51,8 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 	if result.Previous.Session != oldSession || result.Previous.Storage != oldStorage {
 		t.Fatalf("previous handles = %#v, want current handles", result.Previous)
 	}
-	if result.Runtime.Handles.Session != newSession || result.Runtime.Handles.Storage != newStorage {
+	if result.Runtime.Handles.Session != newSession ||
+		result.Runtime.Handles.Storage != newStorage {
 		t.Fatalf("accepted handles = %#v, want new handles", result.Runtime.Handles)
 	}
 	snapshot := result.Runtime.Transition.Snapshot
@@ -63,7 +64,10 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 		t.Fatalf("snapshot = %#v, want accepted runtime state", snapshot)
 	}
 	if oldSession.cancels != 0 {
-		t.Fatalf("old session cancels = %d, want 0 before accepted switch is applied", oldSession.cancels)
+		t.Fatalf(
+			"old session cancels = %d, want 0 before accepted switch is applied",
+			oldSession.cancels,
+		)
 	}
 }
 

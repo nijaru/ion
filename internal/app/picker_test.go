@@ -1429,7 +1429,10 @@ func TestOpenModelPickerReturnsBeforeEndpointProbeCompletes(t *testing.T) {
 	if result.model.Picker.Overlay == nil ||
 		!result.model.Picker.Overlay.loading ||
 		!result.model.Picker.Overlay.setup {
-		t.Fatalf("picker overlay = %#v, want setup loading model picker", result.model.Picker.Overlay)
+		t.Fatalf(
+			"picker overlay = %#v, want setup loading model picker",
+			result.model.Picker.Overlay,
+		)
 	}
 	select {
 	case <-started:

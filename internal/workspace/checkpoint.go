@@ -87,7 +87,11 @@ func NewCheckpointStore(path string) *CheckpointStore {
 	return &CheckpointStore{path: path}
 }
 
-func (s *CheckpointStore) Create(ctx context.Context, workspacePath string, paths []string) (Checkpoint, error) {
+func (s *CheckpointStore) Create(
+	ctx context.Context,
+	workspacePath string,
+	paths []string,
+) (Checkpoint, error) {
 	if err := ctx.Err(); err != nil {
 		return Checkpoint{}, err
 	}
@@ -212,13 +216,20 @@ func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (Re
 	return plan, nil
 }
 
-func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint, opts RestoreOptions) (RestoreReport, error) {
+func (s *CheckpointStore) Restore(
+	ctx context.Context,
+	cp Checkpoint,
+	opts RestoreOptions,
+) (RestoreReport, error) {
 	plan, err := s.AnalyzeRestore(ctx, cp)
 	if err != nil {
 		return RestoreReport{}, err
 	}
 	if len(plan.Conflicts) > 0 && !opts.AllowConflicts {
-		return RestoreReport{}, fmt.Errorf("restore would change %d path(s); pass confirmation to continue", len(plan.Conflicts))
+		return RestoreReport{}, fmt.Errorf(
+			"restore would change %d path(s); pass confirmation to continue",
+			len(plan.Conflicts),
+		)
 	}
 
 	rootPath, err := normalizePath(cp.Workspace)
@@ -309,7 +320,11 @@ func restoreAction(state PathState) RestoreAction {
 	}
 }
 
-func snapshotPath(ctx context.Context, root *os.Root, path, blobPath string) (CheckpointEntry, error) {
+func snapshotPath(
+	ctx context.Context,
+	root *os.Root,
+	path, blobPath string,
+) (CheckpointEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return CheckpointEntry{}, err
 	}
@@ -324,7 +339,11 @@ func snapshotPath(ctx context.Context, root *os.Root, path, blobPath string) (Ch
 		return CheckpointEntry{Path: path, State: PathDir, Mode: info.Mode()}, nil
 	}
 	if !info.Mode().IsRegular() {
-		return CheckpointEntry{}, fmt.Errorf("checkpoint %s: unsupported file mode %s", path, info.Mode())
+		return CheckpointEntry{}, fmt.Errorf(
+			"checkpoint %s: unsupported file mode %s",
+			path,
+			info.Mode(),
+		)
 	}
 	data, err := root.ReadFile(path)
 	if err != nil {
@@ -377,7 +396,8 @@ func normalizeCheckpointPath(name string) (string, error) {
 	if name == "" || name == "." {
 		return "", fmt.Errorf("checkpoint path is required")
 	}
-	if filepath.IsAbs(name) || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") || name == ".." {
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") ||
+		name == ".." {
 		return "", fmt.Errorf("checkpoint path escapes workspace: %s", name)
 	}
 	return path.Clean(name), nil

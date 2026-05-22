@@ -122,7 +122,10 @@ func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, 
 		}
 		return ModelMetadata{}, fmt.Errorf("model %s not found for provider %s", model, provider)
 	}
-	return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
+	return ModelMetadata{}, fmt.Errorf(
+		"no live metadata catalog configured for provider %s",
+		provider,
+	)
 }
 
 func cachePath() string {
@@ -148,6 +151,6 @@ func saveCache() {
 		return
 	}
 	path := cachePath()
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	_ = os.WriteFile(path, data, 0644)
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, data, 0o644)
 }

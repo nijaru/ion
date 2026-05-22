@@ -16,7 +16,11 @@ const (
 	PresetSummary Preset = "summary"
 )
 
-func ResolveRuntimeConfig(ctx context.Context, cfg *config.Config, preset Preset) (*config.Config, error) {
+func ResolveRuntimeConfig(
+	ctx context.Context,
+	cfg *config.Config,
+	preset Preset,
+) (*config.Config, error) {
 	if cfg == nil {
 		return &config.Config{}, nil
 	}
@@ -27,12 +31,16 @@ func ResolveRuntimeConfig(ctx context.Context, cfg *config.Config, preset Preset
 
 	switch preset {
 	case PresetPrimary:
-		out.ReasoningEffort = normalizeRequiredReasoning(out.ReasoningEffort, config.DefaultReasoningEffort)
+		out.ReasoningEffort = normalizeRequiredReasoning(
+			out.ReasoningEffort,
+			config.DefaultReasoningEffort,
+		)
 		return &out, nil
 	case PresetFast:
 		return resolveFastRuntimeConfig(&out, cfg)
 	case PresetSummary:
-		if strings.TrimSpace(cfg.SummaryModel) == "" && strings.TrimSpace(cfg.SummaryReasoningEffort) == "" {
+		if strings.TrimSpace(cfg.SummaryModel) == "" &&
+			strings.TrimSpace(cfg.SummaryReasoningEffort) == "" {
 			if strings.TrimSpace(cfg.FastModel) != "" {
 				return resolveFastRuntimeConfig(&out, cfg)
 			}

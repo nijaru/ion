@@ -528,7 +528,10 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	}
 	runCommandTree(t, cmd)
 	if len(stored.appends) != 1 {
-		t.Fatalf("appends after command execution = %#v, want one cancellation entry", stored.appends)
+		t.Fatalf(
+			"appends after command execution = %#v, want one cancellation entry",
+			stored.appends,
+		)
 	}
 	system, ok := stored.appends[0].(storage.System)
 	if !ok || system.Content != "Canceled by user" {

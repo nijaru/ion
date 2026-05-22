@@ -78,7 +78,9 @@ func (a *mockAgent) SetSessionConfigOption(
 	context.Context,
 	acp.SetSessionConfigOptionRequest,
 ) (acp.SetSessionConfigOptionResponse, error) {
-	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
+	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(
+		acp.AgentMethodSessionSetConfigOption,
+	)
 }
 
 func (a *mockAgent) SetSessionMode(
@@ -687,7 +689,11 @@ func TestACPTerminalOutputHonorsByteLimit(t *testing.T) {
 		t.Fatalf("TerminalOutput second read: %v", err)
 	}
 	if resp.Output != "" || resp.Truncated {
-		t.Fatalf("second output = (%q, truncated=%v), want empty non-truncated", resp.Output, resp.Truncated)
+		t.Fatalf(
+			"second output = (%q, truncated=%v), want empty non-truncated",
+			resp.Output,
+			resp.Truncated,
+		)
 	}
 }
 

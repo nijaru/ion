@@ -80,7 +80,10 @@ func TestMultilineHistoryNavigation(t *testing.T) {
 	model = updated.(Model)
 
 	if model.Input.HistoryIdx != 1 {
-		t.Fatalf("expected second history item (idx 1), but HistoryIdx is %d", model.Input.HistoryIdx)
+		t.Fatalf(
+			"expected second history item (idx 1), but HistoryIdx is %d",
+			model.Input.HistoryIdx,
+		)
 	}
 	if got := model.Input.Composer.Value(); got != "second item" {
 		t.Fatalf("expected 'second item', got %q", got)

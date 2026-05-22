@@ -55,7 +55,10 @@ func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 				t.Fatal("expected no picker to open")
 			}
 			if model.Progress.LocalStatus != "Saving runtime settings..." {
-				t.Fatalf("local status = %q, want saving runtime settings", model.Progress.LocalStatus)
+				t.Fatalf(
+					"local status = %q, want saving runtime settings",
+					model.Progress.LocalStatus,
+				)
 			}
 			msg := cmd()
 			updated, printCmd := model.Update(msg)
@@ -121,7 +124,10 @@ func TestThinkingCommandReturnsBeforeRuntimeStateWriteCompletes(t *testing.T) {
 		t.Fatalf("backend config updated during Update: %#v", capture.cfg)
 	}
 	if model.Progress.ReasoningEffort != "auto" {
-		t.Fatalf("progress reasoning = %q, want auto before commit settles", model.Progress.ReasoningEffort)
+		t.Fatalf(
+			"progress reasoning = %q, want auto before commit settles",
+			model.Progress.ReasoningEffort,
+		)
 	}
 
 	done := make(chan tea.Msg, 1)

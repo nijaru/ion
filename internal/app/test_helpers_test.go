@@ -167,7 +167,7 @@ func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	if value.Kind() != reflect.Slice {
 		return []tea.Msg{msg}
 	}
-	cmdType := reflect.TypeOf((tea.Cmd)(nil))
+	cmdType := reflect.TypeOf(tea.Cmd(nil))
 	if value.Type().Elem() != cmdType {
 		return []tea.Msg{msg}
 	}
@@ -192,7 +192,7 @@ func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 		return nil
 	}
 	value := reflect.ValueOf(msg)
-	cmdType := reflect.TypeOf((tea.Cmd)(nil))
+	cmdType := reflect.TypeOf(tea.Cmd(nil))
 	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType {
 		return []tea.Msg{msg}
 	}

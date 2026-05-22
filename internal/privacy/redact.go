@@ -11,7 +11,9 @@ var redactors = []struct {
 		replacement: `${1}[redacted-secret]`,
 	},
 	{
-		pattern:     regexp.MustCompile(`(?i)\b((?:api[_-]?key|token|secret|password|passwd|pwd)\s*[:=]\s*["']?)[^"',}\s]+`),
+		pattern: regexp.MustCompile(
+			`(?i)\b((?:api[_-]?key|token|secret|password|passwd|pwd)\s*[:=]\s*["']?)[^"',}\s]+`,
+		),
 		replacement: `${1}[redacted-secret]`,
 	},
 	{
@@ -23,7 +25,9 @@ var redactors = []struct {
 		replacement: `[redacted-email]`,
 	},
 	{
-		pattern:     regexp.MustCompile(`(?:\+?1[\s.-]?)?(?:\([2-9][0-9]{2}\)|[2-9][0-9]{2})[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}`),
+		pattern: regexp.MustCompile(
+			`(?:\+?1[\s.-]?)?(?:\([2-9][0-9]{2}\)|[2-9][0-9]{2})[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}`,
+		),
 		replacement: `[redacted-phone]`,
 	},
 }

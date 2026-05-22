@@ -1061,7 +1061,11 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 	model = next.(Model)
 
 	if model.Progress.Mode != stateError || model.Progress.LastError != "backend failed" {
-		t.Fatalf("progress = %v/%q, want backend failed error", model.Progress.Mode, model.Progress.LastError)
+		t.Fatalf(
+			"progress = %v/%q, want backend failed error",
+			model.Progress.Mode,
+			model.Progress.LastError,
+		)
 	}
 	select {
 	case event := <-storageSess.entered:
@@ -1157,7 +1161,10 @@ func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("persistence messages = %d, want 1", len(msgs))
 	}
-	if err := localErrorFromMsg(t, msgs[0]); !strings.Contains(err.Error(), "persist status: disk full") {
+	if err := localErrorFromMsg(t, msgs[0]); !strings.Contains(
+		err.Error(),
+		"persist status: disk full",
+	) {
 		t.Fatalf("persistence error = %v, want status append failure", err)
 	}
 }

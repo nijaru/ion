@@ -131,12 +131,14 @@ func (p *displayProjection) applyEvents(workdir string, events []csession.Event)
 }
 
 func (p *displayProjection) applyEntryEvent(workdir string, ev csession.Event) {
-	if snapshot, ok, err := ev.ProjectionSnapshot(); err == nil && ok && usableDisplaySnapshot(snapshot) {
+	if snapshot, ok, err := ev.ProjectionSnapshot(); err == nil && ok &&
+		usableDisplaySnapshot(snapshot) {
 		p.entries = displaySnapshotEntries(workdir, snapshot)
 		p.clearToolState()
 		return
 	}
-	if snapshot, ok, err := ev.CompactionSnapshot(); err == nil && ok && usableDisplaySnapshot(snapshot) {
+	if snapshot, ok, err := ev.CompactionSnapshot(); err == nil && ok &&
+		usableDisplaySnapshot(snapshot) {
 		p.entries = displaySnapshotEntries(workdir, snapshot)
 		p.clearToolState()
 		return
@@ -545,10 +547,16 @@ func (s *cantoStore) loadDisplayProjection(
 	}
 	projection.ensureToolState()
 	if err := decodeProjectionJSON(rawToolCalls, &projection.toolCalls); err != nil {
-		return displayProjection{}, false, fmt.Errorf("decode display projection tool calls: %w", err)
+		return displayProjection{}, false, fmt.Errorf(
+			"decode display projection tool calls: %w",
+			err,
+		)
 	}
 	if err := decodeProjectionJSON(rawToolStarts, &projection.toolStarts); err != nil {
-		return displayProjection{}, false, fmt.Errorf("decode display projection tool starts: %w", err)
+		return displayProjection{}, false, fmt.Errorf(
+			"decode display projection tool starts: %w",
+			err,
+		)
 	}
 	if err := decodeProjectionJSON(rawToolCompletions, &projection.toolCompletions); err != nil {
 		return displayProjection{}, false, fmt.Errorf(

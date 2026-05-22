@@ -1450,7 +1450,10 @@ func TestCantoStoreDisplayProjectionDoesNotDuplicateRecoveredToolMessage(t *test
 		t.Fatalf("incremental entries: %v", err)
 	}
 	if toolEntryCount(entries) != 1 {
-		t.Fatalf("incremental entries = %#v, want one tool entry after matching tool message", entries)
+		t.Fatalf(
+			"incremental entries = %#v, want one tool entry after matching tool message",
+			entries,
+		)
 	}
 }
 

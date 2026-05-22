@@ -161,8 +161,11 @@ func benchmarkSessionPickerItems(count int, workdir string) []sessionPickerItem 
 				UpdatedAt:    now.Add(-time.Duration(i) * time.Minute),
 				MessageCount: i%80 + 1,
 				Title:        fmt.Sprintf("feature investigation %04d", i),
-				Summary:      fmt.Sprintf("summary for turn cluster %04d with picker ranking text", i),
-				LastPreview:  fmt.Sprintf("last preview message for feature %02d", i%32),
+				Summary: fmt.Sprintf(
+					"summary for turn cluster %04d with picker ranking text",
+					i,
+				),
+				LastPreview: fmt.Sprintf("last preview message for feature %02d", i%32),
 			},
 		})
 	}
@@ -172,7 +175,8 @@ func benchmarkSessionPickerItems(count int, workdir string) []sessionPickerItem 
 func benchmarkReplayEntries(count int) []session.Entry {
 	entries := make([]session.Entry, 0, count)
 	for i := range count {
-		entries = append(entries,
+		entries = append(
+			entries,
 			session.Entry{
 				Role:    session.User,
 				Content: fmt.Sprintf("Please inspect the runtime transition path for case %d.", i),

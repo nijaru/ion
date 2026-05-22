@@ -14,8 +14,17 @@ func TestNormalizeOTLPEndpoint(t *testing.T) {
 		wantInsecure bool
 	}{
 		{name: "host port", input: "localhost:4317", wantEndpoint: "localhost:4317"},
-		{name: "https url", input: "https://otel.example.com:4317", wantEndpoint: "otel.example.com:4317"},
-		{name: "http url", input: "http://localhost:4317", wantEndpoint: "localhost:4317", wantInsecure: true},
+		{
+			name:         "https url",
+			input:        "https://otel.example.com:4317",
+			wantEndpoint: "otel.example.com:4317",
+		},
+		{
+			name:         "http url",
+			input:        "http://localhost:4317",
+			wantEndpoint: "localhost:4317",
+			wantInsecure: true,
+		},
 		{name: "empty", input: " ", wantEndpoint: ""},
 	}
 

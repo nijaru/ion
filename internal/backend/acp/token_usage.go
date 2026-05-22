@@ -49,10 +49,12 @@ func tokenUsageFromMeta(meta any) (session.TokenUsage, bool) {
 
 	for _, candidate := range usageCandidates(root) {
 		usage := session.TokenUsage{
-			Input: fieldInt(candidate,
+			Input: fieldInt(
+				candidate,
 				"input", "inputTokens", "input_tokens", "promptTokens", "prompt_tokens",
 			),
-			Output: fieldInt(candidate,
+			Output: fieldInt(
+				candidate,
 				"output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens",
 			),
 			Cost: fieldFloat(candidate, "cost", "costUSD", "cost_usd"),
