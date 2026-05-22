@@ -25,140 +25,7 @@ type Edit struct {
 func (e *Edit) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "edit",
-		Description: "Modify a file by replacing exact text with new text. Provide the exact string to find and its replacement. Use this for targeted changes.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"file_path": map[string]any{
-					"type":        "string",
-					"description": "File to modify, relative to the current directory or absolute.",
-				},
-				"old_string": map[string]any{
-					"type":        "string",
-					"description": "The exact text to replace (must exist in file)",
-				},
-				"new_string": map[string]any{
-					"type":        "string",
-					"description": "The replacement text (must differ from old_string)",
-				},
-				"replace_all": map[string]any{
-					"type":        "boolean",
-					"description": "Replace all occurrences (default: false, requires unique match)",
-				},
-				"expected_replacements": map[string]any{
-					"type":        "integer",
-					"description": "Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
-				},
-			},
-			"required": []string{"file_path", "old_string", "new_string"},
-		},
-	}
-}
-
-func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		FilePath   string `json:"file_path"`
-		OldString  string `json:"old_string"`
-		NewString  string `json:"new_string"`
-		ReplaceAll bool   `json:"replace_all"`
-		Expected   int    `json:"expected_replacements"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return "", err
-	}
-	if err := validateEditStrings(input.OldString, input.NewString); err != nil {
-		return "", err
-	}
-
-	absPath, err := e.mutationPath(input.FilePath)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	content, err := os.ReadFile(absPath)
-	if err != nil {
-		return "", err
-	}
-
-	strContent := string(content)
-	oldString, newString := matchEditStrings(strContent, input.OldString, input.NewString)
-	count, err := replacementCount(
-		input.FilePath,
-		strContent,
-		oldString,
-		input.ReplaceAll,
-		input.Expected,
-	)
-	if err != nil {
-		return "", err
-	}
-
-	var newContent string
-	if input.ReplaceAll {
-		newContent = strings.Replace(strContent, oldString, newString, -1)
-	} else {
-		newContent = strings.Replace(strContent, oldString, newString, 1)
-	}
-
-	if _, err := e.checkpointPaths(ctx, input.FilePath); err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return "", err
-	}
-	tmpPath, err := writeEditTempFile(absPath, []byte(newContent), info.Mode().Perm())
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", err
-	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", err
-	}
-
-	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, strContent, newContent)
-	return limitToolOutput(fmt.Sprintf(
-		"Replaced %d occurrence(s) in %s.\n\n%s",
-		count,
-		input.FilePath,
-		diff,
-	)), nil
-}
-
-// MultiEdit tool
-type MultiEdit struct {
-	FileTool
-}
-
-type editReplacement struct {
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
-	Expected   int    `json:"expected_replacements"`
-}
-
-type matchedReplacement struct {
-	editIndex int
-	start     int
-	end       int
-	newString string
-}
-
-func (m *MultiEdit) Spec() llm.Spec {
-	return llm.Spec{
-		Name:        "multi_edit",
-		Description: "Apply multiple targeted text replacements to one file after validating every operation against the original content.",
+		Description: "Apply one or more targeted exact text replacements to one file after validating every operation against the original content.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -167,7 +34,8 @@ func (m *MultiEdit) Spec() llm.Spec {
 					"description": "File to modify, relative to the current directory or absolute.",
 				},
 				"edits": map[string]any{
-					"type": "array",
+					"type":        "array",
+					"description": "One or more targeted replacements. Each edit is matched against the original file, not another edit's output.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -197,7 +65,7 @@ func (m *MultiEdit) Spec() llm.Spec {
 	}
 }
 
-func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
+func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	var input struct {
 		FilePath string            `json:"file_path"`
 		Edits    []editReplacement `json:"edits"`
@@ -209,7 +77,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("edits must contain at least one operation")
 	}
 
-	absPath, err := m.mutationPath(input.FilePath)
+	absPath, err := e.mutationPath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
@@ -231,7 +99,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if _, err := m.checkpointPaths(ctx, input.FilePath); err != nil {
+	if _, err := e.checkpointPaths(ctx, input.FilePath); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -259,6 +127,20 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		input.FilePath,
 		diff,
 	)), nil
+}
+
+type editReplacement struct {
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all"`
+	Expected   int    `json:"expected_replacements"`
+}
+
+type matchedReplacement struct {
+	editIndex int
+	start     int
+	end       int
+	newString string
 }
 
 func writeEditTempFile(path string, data []byte, mode os.FileMode) (string, error) {
@@ -329,7 +211,7 @@ func applyEditReplacements(
 		}
 	}
 	if len(matches) == 0 {
-		return "", 0, fmt.Errorf("multi_edit produced no replacements in %s", filePath)
+		return "", 0, fmt.Errorf("edit produced no replacements in %s", filePath)
 	}
 
 	slices.SortFunc(matches, func(a, b matchedReplacement) int {
@@ -357,7 +239,7 @@ func applyEditReplacements(
 		newContent = newContent[:match.start] + match.newString + newContent[match.end:]
 	}
 	if newContent == content {
-		return "", 0, fmt.Errorf("multi_edit produced no content changes in %s", filePath)
+		return "", 0, fmt.Errorf("edit produced no content changes in %s", filePath)
 	}
 	return newContent, len(matches), nil
 }

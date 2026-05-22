@@ -21,10 +21,6 @@ func (e *Edit) Metadata() tool.Metadata {
 	return mutatingWorkspaceMetadata()
 }
 
-func (m *MultiEdit) Metadata() tool.Metadata {
-	return mutatingWorkspaceMetadata()
-}
-
 func (l *List) Metadata() tool.Metadata {
 	return readOnlyWorkspaceMetadata()
 }

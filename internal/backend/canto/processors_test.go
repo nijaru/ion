@@ -161,7 +161,6 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 		"glob",
 		"grep",
 		"list",
-		"multi_edit",
 		"read",
 		"write",
 	}

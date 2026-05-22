@@ -48,7 +48,7 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	defer func() { _ = b.Session().Close() }()
 
 	surface := b.ToolSurface()
-	want := []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
+	want := []string{"bash", "edit", "glob", "grep", "list", "read", "write"}
 	if surface.Count != len(want) {
 		t.Fatalf("tool count = %d, want %d", surface.Count, len(want))
 	}
@@ -151,8 +151,8 @@ func TestSkillToolSurfaceIsOptIn(t *testing.T) {
 	if !slices.Contains(surface.Names, "read_skill") {
 		t.Fatalf("tool surface = %#v, want read_skill", surface.Names)
 	}
-	if surface.Count != 9 {
-		t.Fatalf("tool count = %d, want 9", surface.Count)
+	if surface.Count != 8 {
+		t.Fatalf("tool count = %d, want 8", surface.Count)
 	}
 }
 

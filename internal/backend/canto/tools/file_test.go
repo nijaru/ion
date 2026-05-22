@@ -20,6 +20,18 @@ func newTestFileTool(t *testing.T, cwd string) *FileTool {
 	}
 }
 
+func marshalEditArgs(t *testing.T, filePath string, edits ...map[string]any) string {
+	t.Helper()
+	args, err := json.Marshal(map[string]any{
+		"file_path": filePath,
+		"edits":     edits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(args)
+}
+
 func TestFileTools(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -258,12 +270,11 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("read = %q, want %q", res, wantRead)
 		}
 
-		editArgs, _ := json.Marshal(map[string]any{
-			"file_path":  filePath,
+		editArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string": "alpha\nbeta",
 			"new_string": "one\ntwo",
 		})
-		if _, err := e.Execute(context.Background(), string(editArgs)); err != nil {
+		if _, err := e.Execute(context.Background(), editArgs); err != nil {
 			t.Fatalf("edit failed: %v", err)
 		}
 		data, err := os.ReadFile(filepath.Join(tmpDir, filePath))
@@ -283,12 +294,11 @@ func TestFileTools(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, filePath), []byte(content), 0o644)
 
 		// Replace unique
-		editArgs, _ := json.Marshal(map[string]any{
-			"file_path":  filePath,
+		editArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string": "bar",
 			"new_string": "qux",
 		})
-		_, err := e.Execute(context.Background(), string(editArgs))
+		_, err := e.Execute(context.Background(), editArgs)
 		if err != nil {
 			t.Fatalf("edit failed: %v", err)
 		}
@@ -301,12 +311,11 @@ func TestFileTools(t *testing.T) {
 		executable := "script.sh"
 		executablePath := filepath.Join(tmpDir, executable)
 		os.WriteFile(executablePath, []byte("#!/bin/sh\necho before\n"), 0o755)
-		modeArgs, _ := json.Marshal(map[string]any{
-			"file_path":  executable,
+		modeArgs := marshalEditArgs(t, executable, map[string]any{
 			"old_string": "before",
 			"new_string": "after",
 		})
-		if _, err := e.Execute(context.Background(), string(modeArgs)); err != nil {
+		if _, err := e.Execute(context.Background(), modeArgs); err != nil {
 			t.Fatalf("edit executable failed: %v", err)
 		}
 		info, err := os.Stat(executablePath)
@@ -326,12 +335,11 @@ func TestFileTools(t *testing.T) {
 
 		// Fail on non-unique without replace_all
 		os.WriteFile(filepath.Join(tmpDir, filePath), []byte("aa\naa"), 0o644)
-		failArgs, _ := json.Marshal(map[string]any{
-			"file_path":  filePath,
+		failArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string": "aa",
 			"new_string": "bb",
 		})
-		_, err = e.Execute(context.Background(), string(failArgs))
+		_, err = e.Execute(context.Background(), failArgs)
 		if err == nil {
 			t.Error("expected error for non-unique match, got nil")
 		}
@@ -340,14 +348,13 @@ func TestFileTools(t *testing.T) {
 		}
 
 		// Succeed on non-unique with replace_all
-		allArgs, _ := json.Marshal(map[string]any{
-			"file_path":             filePath,
+		allArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string":            "aa",
 			"new_string":            "bb",
 			"replace_all":           true,
 			"expected_replacements": 2,
 		})
-		_, err = e.Execute(context.Background(), string(allArgs))
+		_, err = e.Execute(context.Background(), allArgs)
 		if err != nil {
 			t.Fatalf("edit all failed: %v", err)
 		}
@@ -357,34 +364,31 @@ func TestFileTools(t *testing.T) {
 		}
 
 		os.WriteFile(filepath.Join(tmpDir, filePath), []byte("xx\nxx"), 0o644)
-		wrongExpectedArgs, _ := json.Marshal(map[string]any{
-			"file_path":             filePath,
+		wrongExpectedArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string":            "xx",
 			"new_string":            "yy",
 			"replace_all":           true,
 			"expected_replacements": 1,
 		})
-		if _, err := e.Execute(context.Background(), string(wrongExpectedArgs)); err == nil ||
+		if _, err := e.Execute(context.Background(), wrongExpectedArgs); err == nil ||
 			!strings.Contains(err.Error(), "expected 1 replacement(s)") ||
 			!strings.Contains(err.Error(), "line(s) 1, 2") {
 			t.Fatalf("expected replacement-count error with line numbers, got %v", err)
 		}
 
-		emptyOldArgs, _ := json.Marshal(map[string]any{
-			"file_path":  filePath,
+		emptyOldArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string": "",
 			"new_string": "x",
 		})
-		if _, err := e.Execute(context.Background(), string(emptyOldArgs)); err == nil {
+		if _, err := e.Execute(context.Background(), emptyOldArgs); err == nil {
 			t.Fatal("expected empty old_string to fail")
 		}
 
-		noopArgs, _ := json.Marshal(map[string]any{
-			"file_path":  filePath,
+		noopArgs := marshalEditArgs(t, filePath, map[string]any{
 			"old_string": "bb",
 			"new_string": "bb",
 		})
-		if _, err := e.Execute(context.Background(), string(noopArgs)); err == nil {
+		if _, err := e.Execute(context.Background(), noopArgs); err == nil {
 			t.Fatal("expected no-op edit to fail")
 		}
 	})
@@ -399,12 +403,11 @@ func TestFileTools(t *testing.T) {
 			t.Skipf("symlink unavailable: %v", err)
 		}
 
-		args, _ := json.Marshal(map[string]any{
-			"file_path":  "outside-edit-link.txt",
+		args := marshalEditArgs(t, "outside-edit-link.txt", map[string]any{
 			"old_string": "outside",
 			"new_string": "changed",
 		})
-		if _, err := e.Execute(context.Background(), string(args)); err != nil {
+		if _, err := e.Execute(context.Background(), args); err != nil {
 			t.Fatalf("edit through symlink failed: %v", err)
 		}
 
@@ -417,8 +420,8 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("MultiEdit", func(t *testing.T) {
-		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
+	t.Run("Edit multiple replacements", func(t *testing.T) {
+		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
 
 		f1 := "file1.txt"
 		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld\n"), 0o755)
@@ -429,29 +432,28 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		args, _ := json.Marshal(map[string]any{
-			"file_path": f1,
-			"edits": []map[string]any{
-				{
-					"old_string": "world",
-					"new_string": "ion",
-				},
-				{
-					"old_string": "hello",
-					"new_string": "hi",
-				},
+		args := marshalEditArgs(
+			t,
+			f1,
+			map[string]any{
+				"old_string": "world",
+				"new_string": "ion",
 			},
-		})
+			map[string]any{
+				"old_string": "hello",
+				"new_string": "hi",
+			},
+		)
 
-		res, err := m.Execute(context.Background(), string(args))
+		res, err := e.Execute(context.Background(), args)
 		if err != nil {
-			t.Fatalf("multi_edit failed: %v", err)
+			t.Fatalf("edit failed: %v", err)
 		}
 		if strings.Contains(res, "Checkpoint: ") {
-			t.Fatalf("multi_edit result leaked checkpoint id: %q", res)
+			t.Fatalf("edit result leaked checkpoint id: %q", res)
 		}
 		if !strings.Contains(res, "Applied 2 edit(s) with 2 replacement(s) in file1.txt.") {
-			t.Fatalf("multi_edit result = %q, want concise success", res)
+			t.Fatalf("edit result = %q, want concise success", res)
 		}
 
 		// Verify content
@@ -473,51 +475,41 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := f1Info.Mode().Perm(); got != 0o755 {
-			t.Fatalf("multi_edit changed file mode to %v, want 0755", got)
+			t.Fatalf("edit changed file mode to %v, want 0755", got)
 		}
 		tempContent, err := os.ReadFile(filepath.Join(tmpDir, f1+".tmp"))
 		if err != nil {
-			t.Fatalf("user temp file missing after multi_edit: %v", err)
+			t.Fatalf("user temp file missing after edit: %v", err)
 		}
 		if string(tempContent) != "user temp" {
 			t.Fatalf("user temp file = %q, want preserved", tempContent)
 		}
 
-		emptyArgs, _ := json.Marshal(map[string]any{"edits": []map[string]any{}})
-		if _, err := m.Execute(context.Background(), string(emptyArgs)); err == nil {
-			t.Fatal("expected empty multi_edit to fail")
+		emptyArgs, _ := json.Marshal(map[string]any{"file_path": f1, "edits": []map[string]any{}})
+		if _, err := e.Execute(context.Background(), string(emptyArgs)); err == nil {
+			t.Fatal("expected empty edits to fail")
 		}
 
-		badArgs, _ := json.Marshal(map[string]any{
-			"file_path": f1,
-			"edits": []map[string]any{
-				{
-					"old_string": "",
-					"new_string": "x",
-				},
-			},
+		badArgs := marshalEditArgs(t, f1, map[string]any{
+			"old_string": "",
+			"new_string": "x",
 		})
-		if _, err := m.Execute(context.Background(), string(badArgs)); err == nil {
-			t.Fatal("expected multi_edit with empty old_string to fail")
+		if _, err := e.Execute(context.Background(), badArgs); err == nil {
+			t.Fatal("expected edit with empty old_string to fail")
 		}
 
-		ambiguousArgs, _ := json.Marshal(map[string]any{
-			"file_path": f1,
-			"edits": []map[string]any{
-				{
-					"old_string": "i",
-					"new_string": "O",
-				},
-			},
+		ambiguousArgs := marshalEditArgs(t, f1, map[string]any{
+			"old_string": "i",
+			"new_string": "O",
 		})
-		if _, err := m.Execute(context.Background(), string(ambiguousArgs)); err == nil ||
+		if _, err := e.Execute(context.Background(), ambiguousArgs); err == nil ||
 			!strings.Contains(err.Error(), "line(s)") {
-			t.Fatalf("expected ambiguous multi_edit error with line numbers, got %v", err)
+			t.Fatalf("expected ambiguous edit error with line numbers, got %v", err)
 		}
 	})
 
-	t.Run("MultiEdit supports trusted symlinks", func(t *testing.T) {
-		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
+	t.Run("Edit multiple replacements supports trusted symlinks", func(t *testing.T) {
+		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
 		outside := filepath.Join(t.TempDir(), "outside-multi-edit.txt")
 		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -526,17 +518,12 @@ func TestFileTools(t *testing.T) {
 			t.Skipf("symlink unavailable: %v", err)
 		}
 
-		args, _ := json.Marshal(map[string]any{
-			"file_path": "outside-multi-edit-link.txt",
-			"edits": []map[string]any{
-				{
-					"old_string": "outside",
-					"new_string": "changed",
-				},
-			},
+		args := marshalEditArgs(t, "outside-multi-edit-link.txt", map[string]any{
+			"old_string": "outside",
+			"new_string": "changed",
 		})
-		if _, err := m.Execute(context.Background(), string(args)); err != nil {
-			t.Fatalf("multi_edit through symlink failed: %v", err)
+		if _, err := e.Execute(context.Background(), args); err != nil {
+			t.Fatalf("edit through symlink failed: %v", err)
 		}
 
 		outsideData, err := os.ReadFile(outside)

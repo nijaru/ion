@@ -195,7 +195,7 @@ func acpToolKind(name string) acp.ToolKind {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "read":
 		return acp.ToolKindRead
-	case "write", "edit", "multi_edit":
+	case "write", "edit":
 		return acp.ToolKindEdit
 	case "list", "grep", "glob":
 		return acp.ToolKindSearch

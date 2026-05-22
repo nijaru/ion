@@ -239,9 +239,9 @@ assert_contains "/tools"
 assert_contains "/settings"
 
 send_line "/tools"
-assert_contains "Tools: 8"
+assert_contains "Tools: 7"
 assert_contains "bash env inherited"
-assert_contains "bash, edit, glob, grep, list, multi_edit, read, write"
+assert_contains "bash, edit, glob, grep, list, read, write"
 assert_not_contains "eager"
 assert_not_contains "verify"
 

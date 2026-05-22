@@ -77,7 +77,6 @@ func (b *Backend) open(ctx context.Context) error {
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
-	registry.Register(&tools.MultiEdit{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})

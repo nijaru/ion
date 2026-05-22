@@ -37,8 +37,8 @@ func TestPromptPreludeBudgetReport(t *testing.T) {
 		t.Fatalf("marshal tool specs: %v", err)
 	}
 
-	if len(specs) != 8 {
-		t.Fatalf("P1 tool spec count = %d, want 8", len(specs))
+	if len(specs) != 7 {
+		t.Fatalf("P1 tool spec count = %d, want 7", len(specs))
 	}
 	if len(coreRuntime) > maxCoreRuntimePromptChars {
 		t.Fatalf(
@@ -81,7 +81,6 @@ func p1ToolSpecs(cwd string) []llm.Spec {
 		&tools.Read{FileTool: *fileTool},
 		&tools.Write{FileTool: *fileTool},
 		&tools.Edit{FileTool: *fileTool},
-		&tools.MultiEdit{FileTool: *fileTool},
 		&tools.List{FileTool: *fileTool},
 		&tools.Grep{SearchTool: *searchTool},
 		&tools.Glob{SearchTool: *searchTool},

@@ -77,8 +77,6 @@ func knownName(name string) (string, bool) {
 		return "Write", true
 	case "edit":
 		return "Edit", true
-	case "multi_edit":
-		return "Edit", true
 	case "list":
 		return "List", true
 	case "grep":
@@ -100,7 +98,7 @@ func primaryArg(name, args string) (string, argKind, bool) {
 			return value, kind, true
 		}
 		return "", kindText, false
-	case "read", "write", "edit", "multi_edit":
+	case "read", "write", "edit":
 		return jsonStringArg(args, "file_path", kindPath)
 	case "list":
 		return jsonStringArg(args, "path", kindPath)
@@ -155,7 +153,7 @@ const (
 
 func titleArgKind(verb string) argKind {
 	switch strings.ToLower(strings.TrimSpace(verb)) {
-	case "read", "write", "edit", "multi_edit", "list":
+	case "read", "write", "edit", "list":
 		return kindPath
 	default:
 		return kindText

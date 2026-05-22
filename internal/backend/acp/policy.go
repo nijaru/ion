@@ -54,7 +54,6 @@ func NewPolicyEngine() *PolicyEngine {
 			"list":       CategoryRead,
 			"write":      CategoryWrite,
 			"edit":       CategoryWrite,
-			"multi_edit": CategoryWrite,
 			"bash":       CategoryExecute,
 			"mcp":        CategorySensitive,
 			"subagent":   CategorySensitive,

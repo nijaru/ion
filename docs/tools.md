@@ -3,7 +3,7 @@
 The default model-visible native tool surface is deliberately small:
 
 ```text
-bash, read, write, edit, multi_edit, list, grep, glob
+bash, read, write, edit, list, grep, glob
 ```
 
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
@@ -53,11 +53,11 @@ Large model-visible tool results are truncated with an explicit marker that
 includes the cutoff and omitted byte count. If the model needs the omitted
 content, it should rerun the tool with a narrower command, path, or line range.
 
-Native `write`, `edit`, and `multi_edit` remain separate. `multi_edit` is
-intentionally single-file: it validates every replacement against the original
-file content, rejects overlapping edits, checkpoints once, writes one temporary
-file, and finalizes with one rename. Cross-file changes should be emitted as
-separate serialized tool calls.
+Native `write` remains separate from targeted edits. Native `edit` accepts an
+`edits` array for one or more exact replacements in a single file. It validates
+every replacement against the original file content, rejects overlapping edits,
+checkpoints once, writes one temporary file, and finalizes with one rename.
+Cross-file changes should be emitted as separate serialized tool calls.
 
 Ion keeps its model-visible tool wrappers rather than directly exposing
 Canto's stable `coding` package tools. Canto remains the framework substrate;
@@ -71,12 +71,12 @@ Ion owns install UX, trust policy, prompt exposure, and whether those tools are
 model-visible at all. Ion's current `/skills` command is read-only discovery,
 not activation.
 
-Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
-they mutate files. Checkpoints are kept as recovery metadata, but `/rewind`
-polish is deferred and should not be treated as part of the default
-model-visible tool surface.
+Native `write` and `edit` create pre-change checkpoints before they mutate
+files. Checkpoints are kept as recovery metadata, but `/rewind` polish is
+deferred and should not be treated as part of the default model-visible tool
+surface.
 
-Structured edits require exact `old_string` matches. Use
+Structured edits require exact `old_string` matches inside `edits[]`. Use
 `expected_replacements` with broad replacements so Ion can fail before writing
 when the file contains a different number of matches. Ambiguous edit failures
 include line numbers. LF snippets copied from `read` can still match CRLF/BOM

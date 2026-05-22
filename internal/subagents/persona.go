@@ -59,7 +59,6 @@ func Builtins() []Persona {
 				"list",
 				"write",
 				"edit",
-				"multi_edit",
 				"bash",
 			},
 			Prompt: "Implement only the assigned task. Keep changes scoped, verify them, and summarize changed files and test results.",
