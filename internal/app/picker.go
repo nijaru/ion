@@ -349,32 +349,37 @@ type pickerSearchField struct {
 }
 
 type rankedPickerItem struct {
-	item  pickerItem
-	score int
-	index int
+	item     pickerItem
+	score    int
+	index    int
+	labelKey string
+	valueKey string
 }
 
 func rankedPickerItems(items []pickerItem, query string) []pickerItem {
+	search := preparePickerSearchQuery(query)
 	ranked := make([]rankedPickerItem, 0, len(items))
 	for i, item := range items {
-		score, ok := pickerSearchScore(query, pickerSearchFields(item)...)
+		score, ok := pickerSearchScorePrepared(search, pickerSearchFields(item))
 		if !ok {
 			continue
 		}
 		ranked = append(ranked, rankedPickerItem{
-			item:  item,
-			score: score,
-			index: i,
+			item:     item,
+			score:    score,
+			index:    i,
+			labelKey: strings.ToLower(item.Label),
+			valueKey: strings.ToLower(item.Value),
 		})
 	}
 	slices.SortFunc(ranked, func(a, b rankedPickerItem) int {
 		if a.score != b.score {
 			return a.score - b.score
 		}
-		if cmp := strings.Compare(strings.ToLower(a.item.Label), strings.ToLower(b.item.Label)); cmp != 0 {
+		if cmp := strings.Compare(a.labelKey, b.labelKey); cmp != 0 {
 			return cmp
 		}
-		if cmp := strings.Compare(strings.ToLower(a.item.Value), strings.ToLower(b.item.Value)); cmp != 0 {
+		if cmp := strings.Compare(a.valueKey, b.valueKey); cmp != 0 {
 			return cmp
 		}
 		return a.index - b.index
@@ -407,20 +412,39 @@ func pickerSearchFields(item pickerItem) []pickerSearchField {
 	return fields
 }
 
-func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
+type pickerSearchQuery struct {
+	value  string
+	tokens []string
+}
+
+func preparePickerSearchQuery(query string) pickerSearchQuery {
 	q := normalizeSearchQuery(query)
 	if q == "" {
+		return pickerSearchQuery{}
+	}
+	tokens := strings.Fields(q)
+	if len(tokens) <= 1 {
+		tokens = nil
+	}
+	return pickerSearchQuery{value: q, tokens: tokens}
+}
+
+func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
+	return pickerSearchScorePrepared(preparePickerSearchQuery(query), fields)
+}
+
+func pickerSearchScorePrepared(query pickerSearchQuery, fields []pickerSearchField) (int, bool) {
+	if query.value == "" {
 		return 0, true
 	}
-	queryTokens := strings.Fields(q)
-	if len(queryTokens) > 1 {
-		return multiTokenPickerSearchScore(queryTokens, fields...)
+	if len(query.tokens) > 1 {
+		return multiTokenPickerSearchScore(query.tokens, fields)
 	}
 
 	best := int(^uint(0) >> 1)
 	matched := false
 	for _, field := range fields {
-		score, ok := searchFieldScore(q, field.value)
+		score, ok := searchFieldScore(query.value, field.value)
 		if !ok {
 			continue
 		}
@@ -433,7 +457,7 @@ func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
 	return best, matched
 }
 
-func multiTokenPickerSearchScore(tokens []string, fields ...pickerSearchField) (int, bool) {
+func multiTokenPickerSearchScore(tokens []string, fields []pickerSearchField) (int, bool) {
 	total := 0
 	for _, token := range tokens {
 		best := int(^uint(0) >> 1)

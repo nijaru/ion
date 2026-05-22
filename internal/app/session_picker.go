@@ -173,39 +173,52 @@ func (m Model) renderSessionPicker() string {
 
 func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []sessionPickerItem {
 	type rankedItem struct {
-		item  sessionPickerItem
-		score int
-		index int
+		item           sessionPickerItem
+		score          int
+		index          int
+		titleKey       string
+		summaryKey     string
+		lastPreviewKey string
 	}
 
+	search := preparePickerSearchQuery(query)
+	cwdBase := normalizeSearchQuery(filepath.Base(cwd))
+	cwdSearch := normalizeSearchQuery(cwd)
 	ranked := make([]rankedItem, 0, len(items))
 	for i, item := range items {
-		score, ok := pickerSearchScore(
-			query,
-			pickerSearchField{value: normalizeSearchQuery(item.info.ID), weight: 0},
-			pickerSearchField{value: normalizeSearchQuery(item.info.Title), weight: 3},
-			pickerSearchField{value: normalizeSearchQuery(item.info.Summary), weight: 4},
-			pickerSearchField{value: normalizeSearchQuery(item.info.LastPreview), weight: 5},
-			pickerSearchField{value: normalizeSearchQuery(filepath.Base(cwd)), weight: 10},
-			pickerSearchField{value: normalizeSearchQuery(cwd), weight: 12},
-		)
+		fields := [...]pickerSearchField{
+			{value: normalizeSearchQuery(item.info.ID), weight: 0},
+			{value: normalizeSearchQuery(item.info.Title), weight: 3},
+			{value: normalizeSearchQuery(item.info.Summary), weight: 4},
+			{value: normalizeSearchQuery(item.info.LastPreview), weight: 5},
+			{value: cwdBase, weight: 10},
+			{value: cwdSearch, weight: 12},
+		}
+		score, ok := pickerSearchScorePrepared(search, fields[:])
 		if !ok {
 			continue
 		}
-		ranked = append(ranked, rankedItem{item: item, score: score, index: i})
+		ranked = append(ranked, rankedItem{
+			item:           item,
+			score:          score,
+			index:          i,
+			titleKey:       strings.ToLower(item.info.Title),
+			summaryKey:     strings.ToLower(item.info.Summary),
+			lastPreviewKey: strings.ToLower(item.info.LastPreview),
+		})
 	}
 
 	slices.SortFunc(ranked, func(a, b rankedItem) int {
 		if a.score != b.score {
 			return a.score - b.score
 		}
-		if cmp := strings.Compare(strings.ToLower(a.item.info.Title), strings.ToLower(b.item.info.Title)); cmp != 0 {
+		if cmp := strings.Compare(a.titleKey, b.titleKey); cmp != 0 {
 			return cmp
 		}
-		if cmp := strings.Compare(strings.ToLower(a.item.info.Summary), strings.ToLower(b.item.info.Summary)); cmp != 0 {
+		if cmp := strings.Compare(a.summaryKey, b.summaryKey); cmp != 0 {
 			return cmp
 		}
-		if cmp := strings.Compare(strings.ToLower(a.item.info.LastPreview), strings.ToLower(b.item.info.LastPreview)); cmp != 0 {
+		if cmp := strings.Compare(a.lastPreviewKey, b.lastPreviewKey); cmp != 0 {
 			return cmp
 		}
 		return a.index - b.index
