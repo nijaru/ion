@@ -353,7 +353,7 @@ func TestTranslateRunEventProjectsProviderRetryLifecycle(t *testing.T) {
 	b.mu.Unlock()
 
 	terminal := b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventRetry,
+		Payload: cantofw.RunRetryPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleRetry,
 			Status: cantofw.RunLifecycleRetrying,
@@ -391,7 +391,7 @@ func TestTranslateRunEventProjectsProviderRetryLifecycle(t *testing.T) {
 	b.mu.Unlock()
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventRetry,
+		Payload: cantofw.RunRetryPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleRetry,
 			Status: cantofw.RunLifecycleRetrying,

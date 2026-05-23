@@ -299,8 +299,7 @@ func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 	b.turn.active = false
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type:  cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Content: "late chunk"},
+		Payload: cantofw.RunChunkPayload{Chunk: llm.Chunk{Content: "late chunk"}},
 	}, 7)
 
 	select {
@@ -316,8 +315,7 @@ func TestTranslateRunEventEmitsThinkingDeltaFromReasoningChunk(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type:  cantofw.RunEventChunk,
-		Chunk: llm.Chunk{Reasoning: "thinking through it"},
+		Payload: cantofw.RunChunkPayload{Chunk: llm.Chunk{Reasoning: "thinking through it"}},
 	}, 7)
 
 	ev := receiveEvent(t, b.Session().Events())
@@ -337,7 +335,7 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -356,7 +354,7 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -382,7 +380,7 @@ func TestTranslateRunEventUsesProviderTotalUsageDelta(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -402,7 +400,7 @@ func TestTranslateRunEventUsesProviderTotalUsageDelta(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -428,7 +426,7 @@ func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -440,12 +438,14 @@ func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
-			ID:     "tool-call-1",
-			Tool:   "bash",
-			Output: "ok",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewToolCompletedEvent(
+			"session-id",
+			csession.ToolCompletedData{
+				ID:     "tool-call-1",
+				Tool:   "bash",
+				Output: "ok",
+			},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleCompleted,
@@ -460,7 +460,7 @@ func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 	_ = receiveEvent(t, b.Session().Events())
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventChunk,
+		Payload: cantofw.RunChunkPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageProviderDelta,
 			Delta: llm.Usage{
@@ -499,10 +499,10 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 		},
 	}
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
-			Usage: usage.Cumulative,
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
+			"session-id",
+			csession.TurnCompletedData{Usage: usage.Cumulative},
+		)},
 		Usage: usage,
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:     cantofw.RunLifecycleTurn,
@@ -531,7 +531,7 @@ func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventResult,
+		Payload: cantofw.RunResultPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageTurn,
 			Delta: llm.Usage{
@@ -568,12 +568,14 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
-			ID:        "tool-call-1",
-			Tool:      "bash",
-			Arguments: "git status",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewToolStartedEvent(
+			"session-id",
+			csession.ToolStartedData{
+				ID:        "tool-call-1",
+				Tool:      "bash",
+				Arguments: "git status",
+			},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleStarted,
@@ -609,11 +611,14 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewEvent("session-id", csession.ToolOutputDelta, map[string]string{
-			"id":    "tool-call-1",
-			"delta": "partial output",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewEvent(
+			"session-id",
+			csession.ToolOutputDelta,
+			map[string]string{
+				"id":    "tool-call-1",
+				"delta": "partial output",
+			},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleUpdated,
@@ -638,12 +643,14 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
-			ID:     "tool-call-1",
-			Tool:   "bash",
-			Output: "ok",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewToolCompletedEvent(
+			"session-id",
+			csession.ToolCompletedData{
+				ID:     "tool-call-1",
+				Tool:   "bash",
+				Output: "ok",
+			},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleCompleted,
@@ -682,12 +689,14 @@ func TestTranslateRunEventProjectsRemainingActiveToolStatus(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
-			ID:     "tool-call-1",
-			Tool:   "bash",
-			Output: "ok",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewToolCompletedEvent(
+			"session-id",
+			csession.ToolCompletedData{
+				ID:     "tool-call-1",
+				Tool:   "bash",
+				Output: "ok",
+			},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleCompleted,
@@ -722,8 +731,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type:  cantofw.RunEventSession,
-		Event: csession.NewCompactionStartedEvent("session-id", csession.CompactionStartedData{}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewCompactionStartedEvent(
+			"session-id",
+			csession.CompactionStartedData{},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleCompaction,
 			Status: cantofw.RunLifecycleStarted,
@@ -738,8 +749,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type:  cantofw.RunEventSession,
-		Event: csession.NewEscalationRetriedEvent("session-id", csession.EscalationRetriedData{}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewEscalationRetriedEvent(
+			"session-id",
+			csession.EscalationRetriedData{},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleRetry,
 			Status: cantofw.RunLifecycleRetrying,
@@ -755,10 +768,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	}
 
 	terminal := b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
-			Error: "context_length_exceeded",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
+			"session-id",
+			csession.TurnCompletedData{Error: "context_length_exceeded"},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:     cantofw.RunLifecycleTurn,
 			Status:   cantofw.RunLifecycleFailed,
@@ -771,10 +784,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	}
 
 	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
-			Error: "provider failed",
-		}),
+		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
+			"session-id",
+			csession.TurnCompletedData{Error: "provider failed"},
+		)},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:     cantofw.RunLifecycleTurn,
 			Status:   cantofw.RunLifecycleFailed,
@@ -1140,7 +1153,7 @@ func TestTranslateRunEventProjectsChildLifecycle(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleChild,
 			Status: cantofw.RunLifecycleRequested,
@@ -1161,7 +1174,7 @@ func TestTranslateRunEventProjectsChildLifecycle(t *testing.T) {
 	_ = receiveEvent(t, b.Session().Events()) // request status
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleChild,
 			Status: cantofw.RunLifecycleUpdated,
@@ -1194,7 +1207,7 @@ func TestTranslateRunEventProjectsChildCompletionUsage(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleChild,
 			Status: cantofw.RunLifecycleCompleted,
@@ -1237,7 +1250,7 @@ func TestTranslateRunEventProjectsWaitLifecycle(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleWait,
 			Status: cantofw.RunLifecycleStarted,
@@ -1256,7 +1269,7 @@ func TestTranslateRunEventProjectsWaitLifecycle(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleWait,
 			Status: cantofw.RunLifecycleCompleted,
@@ -1282,7 +1295,7 @@ func TestTranslateRunEventProjectsApprovalLifecycle(t *testing.T) {
 	b.turn.active = true
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleApproval,
 			Status: cantofw.RunLifecycleRequested,
@@ -1303,7 +1316,7 @@ func TestTranslateRunEventProjectsApprovalLifecycle(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleApproval,
 			Status: cantofw.RunLifecycleCompleted,
@@ -1323,7 +1336,7 @@ func TestTranslateRunEventProjectsApprovalLifecycle(t *testing.T) {
 	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
+		Payload: cantofw.RunSessionPayload{},
 		Lifecycle: &cantofw.RunLifecycle{
 			Type:   cantofw.RunLifecycleApproval,
 			Status: cantofw.RunLifecycleCanceled,

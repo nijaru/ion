@@ -188,8 +188,8 @@ func ionEventBase(ev session.Event) ionsession.Base {
 }
 
 func runEventBase(event cantofw.RunEvent) ionsession.Base {
-	if !event.Event.Timestamp.IsZero() {
-		return ionEventBase(event.Event)
+	if sessionEvent, ok := event.SessionEvent(); ok && !sessionEvent.Timestamp.IsZero() {
+		return ionEventBase(sessionEvent)
 	}
 	return ionsession.BaseNow()
 }
@@ -209,16 +209,15 @@ func (b *Backend) translateRunSessionEvent(
 	event cantofw.RunEvent,
 	turnID uint64,
 ) bool {
-	ev := event.Event
+	ev, hasSessionEvent := event.SessionEvent()
 	lifecycle := event.Lifecycle
 	if lifecycle == nil {
-		if event.Type == cantofw.RunEventSession {
+		if hasSessionEvent {
 			return b.translateEvent(ctx, ev, turnID)
 		}
 		return false
 	}
-	if b.isCancelingTurn(turnID) &&
-		(event.Type != cantofw.RunEventSession || ev.Type != session.TurnCompleted) {
+	if b.isCancelingTurn(turnID) && (!hasSessionEvent || ev.Type != session.TurnCompleted) {
 		return false
 	}
 
@@ -246,7 +245,10 @@ func (b *Backend) translateRunSessionEvent(
 		return true
 	case cantofw.RunLifecycleTool:
 		if lifecycle.Tool == nil {
-			return b.translateEvent(ctx, ev, turnID)
+			if hasSessionEvent {
+				return b.translateEvent(ctx, ev, turnID)
+			}
+			return false
 		}
 		tool := lifecycle.Tool
 		b.setActiveTools(turnID, lifecycle.ActiveTools)
@@ -313,7 +315,7 @@ func (b *Backend) translateRunSessionEvent(
 		return false
 	}
 
-	if event.Type == cantofw.RunEventSession {
+	if hasSessionEvent {
 		return b.translateEvent(ctx, ev, turnID)
 	}
 	return false

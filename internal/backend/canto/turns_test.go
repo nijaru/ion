@@ -1477,8 +1477,7 @@ func TestRunTurnUsesCantoResultEventAsTerminal(t *testing.T) {
 	turnID := b.turn.start(func() {})
 	events := make(chan cantofw.RunEvent, 1)
 	events <- cantofw.RunEvent{
-		Type:   cantofw.RunEventResult,
-		Result: agent.StepResult{Content: "done"},
+		Payload: cantofw.RunResultPayload{Result: agent.StepResult{Content: "done"}},
 	}
 	close(events)
 
@@ -1506,15 +1505,13 @@ func TestRunTurnSuppressesDuplicateTerminalAfterCantoSettlement(t *testing.T) {
 	turnID := b.turn.start(func() {})
 	events := make(chan cantofw.RunEvent, 2)
 	events <- cantofw.RunEvent{
-		Type: cantofw.RunEventSession,
-		Event: csession.NewTurnCompletedEvent(
+		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
 			"session-id",
 			csession.TurnCompletedData{},
-		),
+		)},
 	}
 	events <- cantofw.RunEvent{
-		Type:   cantofw.RunEventResult,
-		Result: agent.StepResult{Content: "done"},
+		Payload: cantofw.RunResultPayload{Result: agent.StepResult{Content: "done"}},
 	}
 	close(events)
 
@@ -1541,7 +1538,7 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	events := make(chan cantofw.RunEvent, 1)
-	events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+	events <- cantofw.RunEvent{Payload: cantofw.RunErrorPayload{Err: context.Canceled}}
 	close(events)
 
 	b.runTurn(
@@ -1574,13 +1571,12 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 			<-ctx.Done()
 			<-release
 			events <- cantofw.RunEvent{
-				Type: cantofw.RunEventSession,
-				Event: csession.NewTurnCompletedEvent(
+				Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
 					"session-id",
 					csession.TurnCompletedData{Error: context.Canceled.Error()},
-				),
+				)},
 			}
-			events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+			events <- cantofw.RunEvent{Payload: cantofw.RunErrorPayload{Err: context.Canceled}}
 		}()
 		b.runTurn(
 			ctx,
@@ -1631,13 +1627,12 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 			<-ctx.Done()
 			<-release
 			events <- cantofw.RunEvent{
-				Type: cantofw.RunEventSession,
-				Event: csession.NewTurnCompletedEvent(
+				Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
 					"session-id",
 					csession.TurnCompletedData{Error: context.Canceled.Error()},
-				),
+				)},
 			}
-			events <- cantofw.RunEvent{Type: cantofw.RunEventError, Err: context.Canceled}
+			events <- cantofw.RunEvent{Payload: cantofw.RunErrorPayload{Err: context.Canceled}}
 		}()
 		b.runTurn(
 			ctx,

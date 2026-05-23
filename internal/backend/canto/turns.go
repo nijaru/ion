@@ -258,12 +258,12 @@ func (b *Backend) translateRunEvent(
 		return false
 	}
 
-	switch event.Type {
-	case cantofw.RunEventChunk:
+	switch payload := event.Payload.(type) {
+	case cantofw.RunChunkPayload:
 		if b.isCancelingTurn(turnID) {
 			return false
 		}
-		chunk := event.Chunk
+		chunk := payload.Chunk
 		base := ionsession.BaseNow()
 		if chunk.Reasoning != "" {
 			b.events <- ionsession.ThinkingDelta{Base: base, Delta: chunk.Reasoning}
@@ -272,19 +272,19 @@ func (b *Backend) translateRunEvent(
 			b.events <- ionsession.AgentDelta{Base: base, Delta: chunk.Content}
 		}
 		b.emitRunUsage(base, event.Usage)
-	case cantofw.RunEventSession:
+	case cantofw.RunSessionPayload:
 		return b.translateRunSessionEvent(ctx, event, turnID)
-	case cantofw.RunEventRetry:
+	case cantofw.RunRetryPayload:
 		return b.translateRunSessionEvent(ctx, event, turnID)
-	case cantofw.RunEventError:
-		if event.Err == nil {
+	case cantofw.RunErrorPayload:
+		if payload.Err == nil {
 			return false
 		}
-		if b.isCancelingTurn(turnID) || isCancellationTerminal(event.Err.Error()) {
+		if b.isCancelingTurn(turnID) || isCancellationTerminal(payload.Err.Error()) {
 			return b.emitTurnFinished(turnID, ionsession.BaseNow())
 		}
-		return b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
-	case cantofw.RunEventResult:
+		return b.emitTurnError(turnID, ionsession.BaseNow(), payload.Err)
+	case cantofw.RunResultPayload:
 		base := ionsession.BaseNow()
 		b.emitRunUsage(base, event.Usage)
 		return b.emitTurnFinished(turnID, base)
