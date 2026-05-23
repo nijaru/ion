@@ -43,6 +43,7 @@ type Config struct {
 	BusyInput              string            `toml:"busy_input,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
 	SubagentTools          string            `toml:"subagent_tools,omitempty"`
+	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
 }
 
@@ -169,6 +170,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
 	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
+	cfg.ToolMode = normalizeToolMode(cfg.ToolMode)
 	cfg.ToolEnv = normalizeToolEnv(cfg.ToolEnv)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
@@ -339,6 +341,10 @@ func Save(cfg *Config) error {
 	out.SubagentTools = normalizeSubagentTools(out.SubagentTools)
 	if out.SubagentTools == "off" {
 		out.SubagentTools = ""
+	}
+	out.ToolMode = normalizeToolMode(out.ToolMode)
+	if out.ToolMode == "coding" {
+		out.ToolMode = ""
 	}
 	out.ToolEnv = normalizeToolEnv(out.ToolEnv)
 	if out.ToolEnv == "inherit" {
@@ -553,6 +559,13 @@ func (c *Config) SubagentToolMode() string {
 	return normalizeSubagentTools(c.SubagentTools)
 }
 
+func (c *Config) ActiveToolMode() string {
+	if c == nil {
+		return "coding"
+	}
+	return normalizeToolMode(c.ToolMode)
+}
+
 func (c *Config) ToolEnvMode() string {
 	if c == nil {
 		return "inherit"
@@ -705,6 +718,21 @@ func normalizeSubagentTools(value string) string {
 		return "on"
 	default:
 		return "off"
+	}
+}
+
+func NormalizeToolMode(value string) string {
+	return normalizeToolMode(value)
+}
+
+func normalizeToolMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "read", "readonly", "read-only", "read_only":
+		return "read"
+	case "all", "full":
+		return "all"
+	default:
+		return "coding"
 	}
 }
 

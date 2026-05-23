@@ -55,6 +55,12 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
 		t.Fatalf("tool surface = %#v, want %#v", surface.Names, want)
 	}
+	if surface.Mode != "coding" {
+		t.Fatalf("tool mode = %q, want coding", surface.Mode)
+	}
+	if strings.Join(surface.ActiveNames, ",") != strings.Join(want, ",") {
+		t.Fatalf("active tools = %#v, want %#v", surface.ActiveNames, want)
+	}
 	if surface.Environment != "inherit" {
 		t.Fatalf("tool environment = %q, want inherit", surface.Environment)
 	}
@@ -74,6 +80,20 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 			"filtered tool environment = %q, want inherit_without_provider_keys",
 			surface.Environment,
 		)
+	}
+
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+		ToolMode: "read",
+	})
+	surface = b.ToolSurface()
+	if surface.Mode != "read" {
+		t.Fatalf("tool mode = %q, want read", surface.Mode)
+	}
+	if got := strings.Join(surface.ActiveNames, ","); got != "glob,grep,list,read" {
+		t.Fatalf("active tools = %q, want read-only tools", got)
 	}
 }
 

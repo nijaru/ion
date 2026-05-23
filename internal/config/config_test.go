@@ -903,6 +903,29 @@ func TestNormalizeSubagentTools(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolMode(t *testing.T) {
+	for input, want := range map[string]string{
+		"":          "coding",
+		"coding":    "coding",
+		"read":      "read",
+		"readonly":  "read",
+		"read-only": "read",
+		"all":       "all",
+		"full":      "all",
+		"weird":     "coding",
+	} {
+		if got := normalizeToolMode(input); got != want {
+			t.Fatalf("normalizeToolMode(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := (&Config{}).ActiveToolMode(); got != "coding" {
+		t.Fatalf("active tool mode = %q, want coding", got)
+	}
+	if got := (&Config{ToolMode: "read-only"}).ActiveToolMode(); got != "read" {
+		t.Fatalf("active tool mode = %q, want read", got)
+	}
+}
+
 func TestSubagentToolModeDefaultsOff(t *testing.T) {
 	if got := (&Config{}).SubagentToolMode(); got != "off" {
 		t.Fatalf("subagent tool mode = %q, want off", got)

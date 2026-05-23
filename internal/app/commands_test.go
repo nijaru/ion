@@ -1941,3 +1941,18 @@ func TestToolSurfaceSummaryReportsLazyWhenEnabled(t *testing.T) {
 		t.Fatalf("summary = %q, want lazy tool notice", got)
 	}
 }
+
+func TestToolSurfaceSummaryReportsActiveMode(t *testing.T) {
+	got := toolSurfaceSummary(backend.ToolSurface{
+		Count:       7,
+		Names:       []string{"bash", "edit", "glob", "grep", "list", "read", "write"},
+		ActiveNames: []string{"glob", "grep", "list", "read"},
+		Mode:        "read",
+	})
+	if !strings.Contains(got, "Active (read): glob, grep, list, read") {
+		t.Fatalf("summary = %q, want active read mode", got)
+	}
+	if !strings.Contains(got, "Registered: bash, edit, glob, grep, list, read, write") {
+		t.Fatalf("summary = %q, want registered tools", got)
+	}
+}

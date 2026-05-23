@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -312,6 +313,95 @@ func TestSubmitTurnRecordsProviderChangeWhenModelMatches(t *testing.T) {
 		selections[0].Model != "shared-model" ||
 		selections[1].Model != "shared-model" {
 		t.Fatalf("model selections = %#v, want openai then openrouter", selections)
+	}
+}
+
+func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("openai", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider: "openai",
+		Model:    "model-a",
+		ToolMode: "read",
+	})
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Session().Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
+	}
+	if got := strings.Join(specNames(calls[0].Tools), ","); got != "glob,grep,list,read" {
+		t.Fatalf("provider tools = %q, want read-only tools", got)
+	}
+
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatal("expected canto-backed store")
+	}
+	cantoSess, err := cantoStore.Canto().Load(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	settings, err := cantoSess.EffectiveSettings()
+	if err != nil {
+		t.Fatalf("effective settings: %v", err)
+	}
+	if !settings.HasTools || strings.Join(settings.ActiveTools, ",") != "glob,grep,list,read" {
+		t.Fatalf("settings = %#v, want read-only active tools", settings)
+	}
+
+	toolsIdx, userIdx := -1, -1
+	for i, event := range cantoSess.Events() {
+		switch event.Type {
+		case csession.ToolsChanged:
+			selection, ok, err := event.ToolSelection()
+			if err != nil {
+				t.Fatalf("decode tool selection: %v", err)
+			}
+			if ok && strings.Join(selection.Names, ",") == "glob,grep,list,read" {
+				toolsIdx = i
+			}
+		case csession.MessageAdded:
+			var msg llm.Message
+			if err := event.UnmarshalData(&msg); err != nil {
+				t.Fatalf("decode message: %v", err)
+			}
+			if msg.Role == llm.RoleUser && msg.TextContent() == "hi" {
+				userIdx = i
+			}
+		}
+	}
+	if toolsIdx < 0 || userIdx < 0 {
+		t.Fatalf("event indexes tools=%d user=%d, want both present", toolsIdx, userIdx)
+	}
+	if toolsIdx > userIdx {
+		t.Fatalf("tool selection must precede user message: tools=%d user=%d", toolsIdx, userIdx)
 	}
 }
 

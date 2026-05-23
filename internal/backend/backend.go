@@ -36,6 +36,8 @@ type ToolSurface struct {
 	LazyThreshold int
 	LazyEnabled   bool
 	Names         []string
+	ActiveNames   []string
+	Mode          string
 	Sandbox       string
 	Environment   string
 }

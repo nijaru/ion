@@ -252,10 +252,19 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 		suffix = " (" + strings.Join(parts, "; ") + ")"
 	}
 	names := strings.Join(surface.Names, ", ")
-	if names == "" {
-		return fmt.Sprintf("Tools: %d%s", surface.Count, suffix)
+	lines := []string{fmt.Sprintf("Tools: %d%s", surface.Count, suffix)}
+	if names != "" {
+		lines = append(lines, "Registered: "+names)
 	}
-	return fmt.Sprintf("Tools: %d%s\n%s", surface.Count, suffix, names)
+	activeNames := surface.ActiveNames
+	if len(activeNames) > 0 && !slices.Equal(activeNames, surface.Names) {
+		mode := strings.TrimSpace(surface.Mode)
+		if mode == "" {
+			mode = "coding"
+		}
+		lines = append(lines, fmt.Sprintf("Active (%s): %s", mode, strings.Join(activeNames, ", ")))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func runtimeStatusSummary(m Model) string {

@@ -34,7 +34,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
-			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden|busy queue|steer]",
+			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|tool_mode coding|read|all|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden|busy queue|steer]",
 		)
 	}
 
@@ -145,6 +145,17 @@ func settingsConfigUpdate(
 		}
 		updated.ToolVerbosity = verbosity
 		notice = "Tool display: " + displayToolVerbosity(verbosity)
+	case "tool_mode", "toolmode", "active_tools":
+		mode := config.NormalizeToolMode(value)
+		if mode == "coding" && value != "coding" {
+			return config.Config{}, "", fmt.Errorf("usage: /settings tool_mode coding|read|all")
+		}
+		if mode == "coding" {
+			updated.ToolMode = ""
+		} else {
+			updated.ToolMode = mode
+		}
+		notice = "Tool mode: " + mode
 	case "read":
 		output := config.NormalizeReadOutput(value)
 		if output == "" {
@@ -188,7 +199,7 @@ func settingsConfigUpdate(
 		notice = "Busy input: " + mode
 	default:
 		return config.Config{}, "", fmt.Errorf(
-			"usage: /settings [retry|tool|read|write|bash|thinking|busy] ...",
+			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy] ...",
 		)
 	}
 	return updated, notice, nil
@@ -203,6 +214,7 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"",
 		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
 		"  tool display: " + displayToolVerbosity(cfg.ToolVerbosity),
+		"  tool mode: " + cfg.ActiveToolMode(),
 		"  read output: " + displayReadOutput(cfg.ReadOutput),
 		"  write output: " + displayWriteOutput(cfg.WriteOutput),
 		"  bash output: " + displayBashOutput(cfg.BashOutput),
@@ -213,6 +225,7 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"",
 		"  /settings retry on|off",
 		"  /settings tool auto|full|collapsed|hidden",
+		"  /settings tool_mode coding|read|all",
 		"  /settings read full|summary|hidden",
 		"  /settings write diff|summary|hidden",
 		"  /settings bash full|summary|hidden",

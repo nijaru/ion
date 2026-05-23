@@ -106,6 +106,12 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 		return backend.ToolSurface{}
 	}
 	names := tools.Names()
+	cfg := b.configSnapshot()
+	mode := "coding"
+	if cfg != nil {
+		mode = cfg.ActiveToolMode()
+	}
+	activeNames := activeToolNamesForMode(mode, names)
 	threshold := prompt.DefaultLazyThreshold
 	environment := ""
 	if slices.Contains(names, "bash") {
@@ -116,6 +122,8 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 		LazyThreshold: threshold,
 		LazyEnabled:   len(names) > threshold,
 		Names:         names,
+		ActiveNames:   activeNames,
+		Mode:          mode,
 		Environment:   environment,
 	}
 }
