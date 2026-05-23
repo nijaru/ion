@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -487,6 +488,151 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 			t.Fatal("timed out waiting for write turn")
 		}
 	}
+}
+
+func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "ai"), 0o755); err != nil {
+		t.Fatalf("mkdir ai: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cwd, "ai", "STATUS.md"),
+		[]byte("phase: p1\nfocus: needle path\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	readCall := toolCall(
+		t,
+		"read-call-1",
+		"read",
+		map[string]any{"file_path": "ai/STATUS.md", "limit": 2},
+	)
+	globCall := toolCall(
+		t,
+		"glob-call-1",
+		"glob",
+		map[string]any{"pattern": filepath.Join(cwd, "ai", "*.md")},
+	)
+	grepCall := toolCall(
+		t,
+		"grep-call-1",
+		"grep",
+		map[string]any{
+			"pattern": "needle",
+			"path":    "ai",
+			"glob":    "*.md",
+			"literal": true,
+			"limit":   1,
+		},
+	)
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{readCall, globCall, grepCall}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "read status.md and search ai notes"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	results := map[string]string{}
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-b.Session().Events():
+			if !ok {
+				t.Fatal("event stream closed before file-tool turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolResult:
+				results[msg.ToolName] = msg.Result
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				if !strings.Contains(results["read"], "phase: p1") {
+					t.Fatalf("read result = %q, want status contents", results["read"])
+				}
+				if !strings.Contains(results["glob"], "ai/STATUS.md") {
+					t.Fatalf("glob result = %q, want ai/STATUS.md", results["glob"])
+				}
+				if !strings.Contains(results["grep"], "STATUS.md") ||
+					!strings.Contains(results["grep"], "needle path") {
+					t.Fatalf("grep result = %q, want status needle match", results["grep"])
+				}
+				calls := provider.Calls()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and post-tool requests", len(calls))
+				}
+				for _, want := range []string{"phase: p1", "ai/STATUS.md", "needle path"} {
+					if !requestHasMessage(calls[1].Messages, llm.RoleTool, want) {
+						t.Fatalf("post-tool request missing %q in tool messages", want)
+					}
+				}
+				entries, err := storageSession.Entries(ctx)
+				if err != nil {
+					t.Fatalf("entries: %v", err)
+				}
+				for _, want := range []string{"phase: p1", "ai/STATUS.md", "needle path"} {
+					if !entryExists(entries, ionsession.Tool, want) {
+						t.Fatalf("persisted entries missing tool result containing %q", want)
+					}
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for file-tool turn")
+		}
+	}
+}
+
+func toolCall(t *testing.T, id, name string, args map[string]any) llm.Call {
+	t.Helper()
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal %s args: %v", name, err)
+	}
+	call := llm.Call{ID: id, Type: "function"}
+	call.Function.Name = name
+	call.Function.Arguments = string(encoded)
+	return call
 }
 
 func TestSubmitTurnEmptyAssistantResponseEmitsSessionError(t *testing.T) {
