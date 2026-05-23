@@ -170,7 +170,7 @@ func (s cantoSessionTurnSubmitter) submit(
 	ctx context.Context,
 	message string,
 ) (cantoTurnHandle, error) {
-	return s.session.Submit(ctx, message)
+	return s.session.Submit(ctx, cantofw.TextPrompt(message))
 }
 
 type cantoTurnHandle interface {
