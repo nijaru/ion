@@ -54,6 +54,6 @@ cat <<'EOF'
 Phase 1 acceptance wrapper finished.
 
 This is not a completion claim unless race and live gates were included and the
-scenario matrix in ai/review/phase-1-architecture-reset-2026-05-18.md is logged
-as covered.
+active P1 matrix in ai/review/p1-tui-inline-scenario-matrix-2026-05-23.md is
+logged as covered.
 EOF

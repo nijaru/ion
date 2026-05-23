@@ -129,6 +129,19 @@ assert_visible_separator_line_count_at_most() {
   fi
 }
 
+assert_visible_separator_line_count() {
+  local want="$1"
+  local count
+  capture_visible
+  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  if ((count != want)); then
+    echo "visible separator-only lines: got $count, want $want" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
 wait_contains() {
   local needle="$1"
   local timeout="${2:-20}"
@@ -157,8 +170,20 @@ start_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$ION_HOME\" ION_PROVIDER=\"$ION_PROVIDER_SMOKE\" ION_MODEL=\"$ION_MODEL_SMOKE\" go run ./... $args"
+    "cd \"$ROOT\" && HOME=\"$ION_HOME\" ION_PROVIDER=\"$ION_PROVIDER_SMOKE\" ION_MODEL=\"$ION_MODEL_SMOKE\" go run ./cmd/ion $args"
   wait_contains "Type a message" 30
+}
+
+start_smoke_ion() {
+  local mode="$1"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session \
+    -d \
+    -s "$SESSION" \
+    -x "$WIDTH" \
+    -y "$HEIGHT" \
+    "cd \"$ROOT\" && HOME=\"$ION_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$TMP_DIR/store-$mode\""
+  wait_contains "Type a message" 60
 }
 
 send_line() {
@@ -216,6 +241,38 @@ send_command_picker_filter_smoke() {
   sleep 0.5
 }
 
+send_deterministic_p1_tui_smoke() {
+  start_smoke_ion "complete"
+  assert_contains "Tools: 7 registered"
+  send_line "run deterministic p1 matrix"
+  wait_contains "[smoke] active progress" 30
+  assert_visible_contains "Type a message"
+  assert_visible_separator_line_count 2
+  wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
+  assert_visible_separator_line_count 2
+  send_line "queued while active"
+  wait_contains "Queued follow-up" 30
+  assert_visible_contains "1 queued"
+  wait_contains "ion-tmux-smoke" 60
+  wait_contains "Complete" 60
+  assert_visible_separator_line_count 2
+
+  start_smoke_ion "cancel"
+  send_line "run cancel matrix"
+  wait_contains "[smoke] waiting for cancel" 30
+  assert_visible_separator_line_count 2
+  tmux send-keys -t "$SESSION" Escape
+  wait_contains "Canceled by user" 30
+  assert_visible_contains "Canceled"
+  assert_visible_separator_line_count 2
+
+  start_smoke_ion "error"
+  send_line "run error matrix"
+  wait_contains "Error: smoke provider failure" 30
+  assert_contains "× Error"
+  assert_visible_separator_line_count 2
+}
+
 start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
@@ -260,7 +317,10 @@ assert_contains "Type a message"
 assert_visible_line_count_at_most "• Ready" 1
 assert_visible_separator_line_count_at_most 2
 
+send_deterministic_p1_tui_smoke
+
 if [[ "$LIVE" == "1" ]]; then
+  start_ion
   send_line 'Use the bash tool exactly once to run `sleep 3; echo ion-tmux-smoke`, then reply with the single word done.'
   wait_contains "Bash(sleep 3; echo ion-tmux-smoke)" 90
   send_line "what happened?"
