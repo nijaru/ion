@@ -59,6 +59,8 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/jsonschema-go v0.4.2 h1:tmrUohrwoLZZS/P3x7ex0WAVknEkBZM46iALbcqoRA8=
+github.com/google/jsonschema-go v0.4.2/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e h1:ijClszYn+mADRFY17kjQEVQ1XRhq2/JR1M3sGqeJoxs=
 github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e/go.mod h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=
 github.com/google/renameio v1.0.1 h1:Lh/jXZmvZxb0BBeSY5VKEfidcbcbenKjZFzM/q0fSeU=
@@ -85,8 +87,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d h1:zf4g9wK8q+c8wRLj5fvbIVSHw45t9A30LAdrv5tOvFk=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d/go.mod h1:+a9vDBa2salNkUtRNdC9qKMjlDuX6JZABlfsk0f9TvE=
-github.com/nijaru/canto v0.0.0-20260523001129-5f313f68bb06 h1:kVUAjc9bDi3QzfU0F07sw2k2mmYyxg6sM390WeQvaWU=
-github.com/nijaru/canto v0.0.0-20260523001129-5f313f68bb06/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
+github.com/nijaru/canto v0.0.0-20260523003006-6ea20b838f69 h1:24D4ExyI/pZyEBJqg58UPYH1W07zc/SA62jvhT/OJec=
+github.com/nijaru/canto v0.0.0-20260523003006-6ea20b838f69/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=
 github.com/oklog/ulid/v2 v2.1.1/go.mod h1:rcEKHmBBKfef9DhnvX7y1HZBYxjXb0cP5ExxNsTT1QQ=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
