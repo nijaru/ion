@@ -136,7 +136,7 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
-func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
+func TestTranslateEventsActiveTurnWaitsForSettledEvent(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
@@ -148,16 +148,10 @@ func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 7)
 
-	if b.turn.active {
-		t.Fatal("turn remained active after terminal event translation")
+	if !b.turn.active {
+		t.Fatal("turn finished before settled event")
 	}
-	if b.turn.cancel != nil {
-		t.Fatal("cancel func remained set after terminal event translation")
-	}
-	ev := receiveEvent(t, b.Session().Events())
-	if _, ok := ev.(ionsession.TurnFinished); !ok {
-		t.Fatalf("event = %T, want TurnFinished", ev)
-	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {

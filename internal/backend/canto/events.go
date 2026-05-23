@@ -50,7 +50,14 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 			if isContextOverflowTerminal(data.Error) {
 				return false
 			}
+			if turnID != 0 {
+				b.emitTurnErrorOnce(turnID, base, fmt.Errorf("%s", data.Error))
+				return true
+			}
 			b.emitTurnError(turnID, base, fmt.Errorf("%s", data.Error))
+			return true
+		}
+		if turnID != 0 {
 			return true
 		}
 		b.emitTurnFinished(turnID, base)
