@@ -65,7 +65,8 @@ func (b *Backend) prepareSubmittedTurn(
 		sessionID = "default"
 	}
 	ionStore := b.ionStore
-	modelName := storageModelName(b.Provider(), b.Model())
+	cfg := b.configSnapshot()
+	modelName := storageModelName(providerFromConfig(cfg), modelFromConfig(cfg))
 	turnCtx, cancel := context.WithCancel(ctx)
 	turnID := b.turn.start(cancel)
 	harnessSession := b.harness.Session(sessionID)
@@ -112,6 +113,9 @@ func (b *Backend) prepareSubmittedTurn(
 	}
 	if !b.isActiveTurn(turnID) {
 		return abort(context.Canceled)
+	}
+	if err := syncCantoSessionSettings(turnCtx, harnessSession, cfg); err != nil {
+		return abort(fmt.Errorf("sync session settings: %w", err))
 	}
 
 	return submittedTurn{
