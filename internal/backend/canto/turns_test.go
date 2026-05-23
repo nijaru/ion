@@ -1441,6 +1441,7 @@ func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T)
 		t.Context(),
 		turnID,
 		func() {},
+		nil,
 		&fakeCantoTurn{events: events},
 	)
 
@@ -1461,6 +1462,7 @@ func TestRunTurnReportsCantoResultErrorWithoutLifecycle(t *testing.T) {
 		t.Context(),
 		turnID,
 		func() {},
+		nil,
 		&fakeCantoTurn{events: events, resultErr: resultErr},
 	)
 
@@ -1485,6 +1487,7 @@ func TestRunTurnUsesCantoResultEventAsTerminal(t *testing.T) {
 		t.Context(),
 		turnID,
 		func() {},
+		nil,
 		&fakeCantoTurn{
 			events: events,
 			result: agent.StepResult{Content: "done"},
@@ -1519,6 +1522,7 @@ func TestRunTurnSuppressesDuplicateTerminalAfterCantoSettlement(t *testing.T) {
 		t.Context(),
 		turnID,
 		func() {},
+		nil,
 		&fakeCantoTurn{
 			events: events,
 			result: agent.StepResult{Content: "done"},
@@ -1545,6 +1549,7 @@ func TestRunTurnTreatsCancellationRunEventAsQuietTerminal(t *testing.T) {
 		t.Context(),
 		turnID,
 		func() {},
+		nil,
 		&fakeCantoTurn{events: events},
 	)
 
@@ -1582,6 +1587,7 @@ func TestCancelTurnWaitsForStreamSettlement(t *testing.T) {
 			ctx,
 			turnID,
 			cancel,
+			nil,
 			&fakeCantoTurn{events: events},
 		)
 	}()
@@ -1638,6 +1644,7 @@ func TestCanceledStreamSettlementDoesNotFinishNextTurn(t *testing.T) {
 			ctx,
 			oldTurnID,
 			cancel,
+			nil,
 			&fakeCantoTurn{events: events},
 		)
 	}()

@@ -2,7 +2,9 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/agent"
@@ -30,7 +32,7 @@ func (b *Backend) submitTurn(ctx context.Context, input string) error {
 	}
 
 	b.wg.Go(func() {
-		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, turn)
+		b.runTurn(submitted.ctx, submitted.id, submitted.cancel, submitted.session, turn)
 	})
 
 	return nil
@@ -40,6 +42,7 @@ type submittedTurn struct {
 	id        uint64
 	ctx       context.Context
 	cancel    context.CancelFunc
+	session   *cantofw.Session
 	submitter turnSubmitter
 }
 
@@ -115,6 +118,7 @@ func (b *Backend) prepareSubmittedTurn(
 		id:        turnID,
 		ctx:       turnCtx,
 		cancel:    cancel,
+		session:   harnessSession,
 		submitter: cantoSessionTurnSubmitter{session: harnessSession},
 	}, nil
 }
@@ -184,6 +188,7 @@ func (b *Backend) runTurn(
 	ctx context.Context,
 	turnID uint64,
 	cancel context.CancelFunc,
+	session *cantofw.Session,
 	turn cantoTurnHandle,
 ) {
 	defer b.clearActiveTurn(turnID)
@@ -191,7 +196,13 @@ func (b *Backend) runTurn(
 
 	b.bindTurnCancel(turnID, func() {
 		cancel()
-		_ = turn.Cancel(context.Background())
+		b.wg.Go(func() {
+			if session != nil {
+				_ = session.Abort(context.Background())
+				return
+			}
+			_ = turn.Cancel(context.Background())
+		})
 	})
 
 	terminal := false
@@ -321,12 +332,8 @@ func (b *Backend) claimTerminalTurn(turnID uint64) bool {
 
 func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
-	sessionID, cantoTurnID, steering := b.activeSteeringLocked(turnID)
 	finished := b.turn.finish(turnID)
 	b.mu.Unlock()
-	if finished && steering != nil && cantoTurnID != "" {
-		steering.dropTurn(sessionID, cantoTurnID)
-	}
 	return finished
 }
 
@@ -338,12 +345,8 @@ func (b *Backend) isActiveTurn(turnID uint64) bool {
 
 func (b *Backend) clearActiveTurn(turnID uint64) {
 	b.mu.Lock()
-	sessionID, cantoTurnID, steering := b.activeSteeringLocked(turnID)
-	finished := b.turn.finish(turnID)
+	b.turn.finish(turnID)
 	b.mu.Unlock()
-	if finished && steering != nil && cantoTurnID != "" {
-		steering.dropTurn(sessionID, cantoTurnID)
-	}
 }
 
 func (b *Backend) bindTurnCancel(turnID uint64, cancel context.CancelFunc) {
@@ -359,17 +362,6 @@ func (b *Backend) acceptTurn(turnID uint64, cantoTurnID string) bool {
 	accepted := b.turn.accept(turnID, cantoTurnID)
 	b.mu.Unlock()
 	return accepted
-}
-
-func (b *Backend) activeSteeringLocked(turnID uint64) (string, string, *steeringMutator) {
-	if !b.turn.activeFor(turnID) {
-		return "", "", nil
-	}
-	sessionID := b.idLocked()
-	if sessionID == "" {
-		sessionID = "default"
-	}
-	return sessionID, b.turn.cantoIDFor(turnID), b.steering
 }
 
 func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
@@ -395,15 +387,19 @@ func (b *Backend) steerTurn(
 	ctx context.Context,
 	text string,
 ) (ionsession.SteeringResult, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ionsession.SteeringResult{}, fmt.Errorf("steering text is empty")
+	}
+
 	b.mu.Lock()
 	active := b.turn.active
-	activeTool := b.turn.hasActiveTool()
 	cantoTurnID := b.turn.cantoIDFor(b.turn.seq)
 	sessionID := b.idLocked()
-	steering := b.steering
+	harness := b.harness
 	b.mu.Unlock()
 
-	if !active || !activeTool || steering == nil || cantoTurnID == "" {
+	if !active || harness == nil || cantoTurnID == "" {
 		return ionsession.SteeringResult{
 			Outcome: ionsession.SteeringQueued,
 			Notice:  "No active provider boundary is available.",
@@ -412,7 +408,19 @@ func (b *Backend) steerTurn(
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	return steering.Submit(ctx, sessionID, cantoTurnID, text)
+	if err := harness.Session(sessionID).SteerText(ctx, text); err != nil {
+		if errors.Is(err, cantofw.ErrSessionBusy) {
+			return ionsession.SteeringResult{
+				Outcome: ionsession.SteeringQueued,
+				Notice:  "No active provider boundary is available.",
+			}, nil
+		}
+		return ionsession.SteeringResult{}, err
+	}
+	return ionsession.SteeringResult{
+		Outcome: ionsession.SteeringAccepted,
+		Notice:  "Steering will be applied at the next provider boundary.",
+	}, nil
 }
 
 func (s *Session) CancelTurn(ctx context.Context) error {

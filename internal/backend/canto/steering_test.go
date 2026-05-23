@@ -2,200 +2,18 @@ package canto
 
 import (
 	"context"
-	"errors"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
-	csession "github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func TestSteeringMutatorConsumesPendingAtProviderBoundary(t *testing.T) {
-	mutator := newSteeringMutator()
-	ctx := csession.WithTurnID(t.Context(), "turn-1")
-	result, err := mutator.Submit(ctx, "s1", "turn-1", "use the smaller test")
-	if err != nil {
-		t.Fatalf("submit steering: %v", err)
-	}
-	if result.Outcome != ionsession.SteeringAccepted {
-		t.Fatalf("steering outcome = %q, want accepted", result.Outcome)
-	}
-
-	sess := csession.New("s1")
-	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
-		t.Fatalf("mutate steering: %v", err)
-	}
-	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
-		t.Fatalf("second mutate steering: %v", err)
-	}
-
-	events, err := steeringEvents(sess.Events())
-	if err != nil {
-		t.Fatalf("decode steering events: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("steering events = %d, want pending+consumed", len(events))
-	}
-	if events[0].Status != "pending" || events[0].Input != "use the smaller test" {
-		t.Fatalf("pending event = %#v", events[0])
-	}
-	if events[1].Status != "consumed" || events[1].PendingEventID == "" {
-		t.Fatalf("consumed event = %#v", events[1])
-	}
-
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-	if len(entries) != 1 || entries[0].EventType != csession.ContextAdded {
-		t.Fatalf("entries = %#v, want one steering context", entries)
-	}
-	if !strings.Contains(entries[0].Message.Content, "use the smaller test") {
-		t.Fatalf("steering context = %q", entries[0].Message.Content)
-	}
-}
-
-func TestSteeringMutatorKeepsOtherSessionsPending(t *testing.T) {
-	mutator := newSteeringMutator()
-	ctx := csession.WithTurnID(t.Context(), "turn-1")
-	if _, err := mutator.Submit(ctx, "s1", "turn-1", "first"); err != nil {
-		t.Fatalf("submit s1: %v", err)
-	}
-	if _, err := mutator.Submit(ctx, "s2", "turn-1", "second"); err != nil {
-		t.Fatalf("submit s2: %v", err)
-	}
-
-	sess := csession.New("s1")
-	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
-		t.Fatalf("mutate s1: %v", err)
-	}
-
-	other := csession.New("s2")
-	if err := mutator.Mutate(ctx, nil, "", other); err != nil {
-		t.Fatalf("mutate s2: %v", err)
-	}
-	entries, err := other.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-	if len(entries) != 1 || !strings.Contains(entries[0].Message.Content, "second") {
-		t.Fatalf("other entries = %#v, want deferred second steering", entries)
-	}
-}
-
-func TestSteeringMutatorDropsAppliedItemsAfterLaterAppendFailure(t *testing.T) {
-	mutator := newSteeringMutator()
-	ctx := csession.WithTurnID(t.Context(), "turn-1")
-	if _, err := mutator.Submit(ctx, "s1", "turn-1", "first steering"); err != nil {
-		t.Fatalf("submit first: %v", err)
-	}
-	if _, err := mutator.Submit(ctx, "s1", "turn-1", "second steering"); err != nil {
-		t.Fatalf("submit second: %v", err)
-	}
-
-	writeErr := errors.New("persist steering")
-	writer := &failingAfterNWriter{failAt: 4, err: writeErr}
-	sess := csession.New("s1").WithWriter(writer)
-
-	if err := mutator.Mutate(ctx, nil, "", sess); !errors.Is(err, writeErr) {
-		t.Fatalf("mutate error = %v, want %v", err, writeErr)
-	}
-
-	writer.failAt = 0
-	if err := mutator.Mutate(ctx, nil, "", sess); err != nil {
-		t.Fatalf("retry mutate: %v", err)
-	}
-
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-
-	var firstCount, secondCount int
-	for _, entry := range entries {
-		if strings.Contains(entry.Message.Content, "first steering") {
-			firstCount++
-		}
-		if strings.Contains(entry.Message.Content, "second steering") {
-			secondCount++
-		}
-	}
-	if firstCount != 1 || secondCount != 1 {
-		t.Fatalf(
-			"steering context counts first=%d second=%d, want first=1 second=1; entries=%#v",
-			firstCount,
-			secondCount,
-			entries,
-		)
-	}
-}
-
-func TestSteeringMutatorDoesNotApplyStaleTurnSteering(t *testing.T) {
-	mutator := newSteeringMutator()
-	if _, err := mutator.Submit(
-		csession.WithTurnID(t.Context(), "old-turn"),
-		"s1",
-		"old-turn",
-		"stale steering",
-	); err != nil {
-		t.Fatalf("submit stale steering: %v", err)
-	}
-
-	sess := csession.New("s1")
-	if err := mutator.Mutate(
-		csession.WithTurnID(t.Context(), "next-turn"),
-		nil,
-		"",
-		sess,
-	); err != nil {
-		t.Fatalf("mutate next turn: %v", err)
-	}
-
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("entries = %#v, want stale steering dropped", entries)
-	}
-	if err := mutator.Mutate(
-		csession.WithTurnID(t.Context(), "old-turn"),
-		nil,
-		"",
-		sess,
-	); err != nil {
-		t.Fatalf("mutate old turn after stale drop: %v", err)
-	}
-	entries, err = sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries after old turn: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("entries after old turn = %#v, want stale steering gone", entries)
-	}
-}
-
 func TestBackendSteerTurnQueuesWithoutActiveTurn(t *testing.T) {
-	backend := &Backend{steering: newSteeringMutator()}
-	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "later")
-	if err != nil {
-		t.Fatalf("steer turn: %v", err)
-	}
-	if result.Outcome != ionsession.SteeringQueued {
-		t.Fatalf("outcome = %q, want queued", result.Outcome)
-	}
-}
-
-func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
-	backend := &Backend{
-		steering: newSteeringMutator(),
-		turn:     turnState{active: true},
-	}
+	backend := New()
 	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "later")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
@@ -207,87 +25,16 @@ func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
 
 func TestBackendSteerTurnQueuesBeforeCantoTurnAcceptance(t *testing.T) {
 	turn := newTurnState()
-	turnID := turn.start(func() {})
-	turn.markToolActive(turnID, "tool-call-1")
-	backend := &Backend{
-		steering: newSteeringMutator(),
-		turn:     turn,
-	}
+	turn.start(func() {})
+	backend := New()
+	backend.turn = turn
+
 	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "too early")
 	if err != nil {
 		t.Fatalf("steer turn: %v", err)
 	}
 	if result.Outcome != ionsession.SteeringQueued {
 		t.Fatalf("outcome = %q, want queued before Canto turn acceptance", result.Outcome)
-	}
-}
-
-func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
-	turn := newTurnState()
-	turnID := turn.start(func() {})
-	turn.accept(turnID, "turn-1")
-	turn.markToolActive(turnID, "tool-call-1")
-	backend := &Backend{
-		steering: newSteeringMutator(),
-		turn:     turn,
-	}
-	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "use the test output")
-	if err != nil {
-		t.Fatalf("steer turn: %v", err)
-	}
-	if result.Outcome != ionsession.SteeringAccepted {
-		t.Fatalf("outcome = %q, want accepted", result.Outcome)
-	}
-
-	sess := csession.New("default")
-	if err := backend.steering.Mutate(csession.WithTurnID(t.Context(), "turn-1"), nil, "", sess); err != nil {
-		t.Fatalf("mutate steering: %v", err)
-	}
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-	if len(entries) != 1 || !strings.Contains(entries[0].Message.Content, "use the test output") {
-		t.Fatalf("entries = %#v, want accepted steering context", entries)
-	}
-}
-
-func TestBackendSteeringClearsPendingAtTurnSettlement(t *testing.T) {
-	turn := newTurnState()
-	turnID := turn.start(func() {})
-	turn.accept(turnID, "turn-1")
-	turn.markToolActive(turnID, "tool-call-1")
-	backend := &Backend{
-		steering: newSteeringMutator(),
-		turn:     turn,
-	}
-
-	result, err := backendSteeringSession(t, backend).SteerTurn(t.Context(), "do not leak")
-	if err != nil {
-		t.Fatalf("steer turn: %v", err)
-	}
-	if result.Outcome != ionsession.SteeringAccepted {
-		t.Fatalf("outcome = %q, want accepted", result.Outcome)
-	}
-	if !backend.finishTurnIfActive(turnID) {
-		t.Fatal("finishTurnIfActive returned false")
-	}
-
-	sess := csession.New("default")
-	if err := backend.steering.Mutate(
-		csession.WithTurnID(t.Context(), "turn-2"),
-		nil,
-		"",
-		sess,
-	); err != nil {
-		t.Fatalf("mutate next turn: %v", err)
-	}
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		t.Fatalf("effective entries: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("entries = %#v, want no leaked steering", entries)
 	}
 }
 
@@ -360,7 +107,168 @@ func TestBackendSteeringAppearsInNextProviderRequestAfterTool(t *testing.T) {
 		t.Fatalf("first provider request unexpectedly contains steering: %#v", calls[0].Messages)
 	}
 	if !requestHasMessage(calls[1].Messages, llm.RoleUser, "use the smaller test") {
-		t.Fatalf("second provider request missing steering context: %#v", calls[1].Messages)
+		t.Fatalf("second provider request missing steering: %#v", calls[1].Messages)
+	}
+}
+
+func TestBackendSteeringDoesNotRequireActiveTool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &blockingFirstStreamProvider{
+		FauxProvider: llm.NewFauxProvider(
+			"local-api",
+			llm.FauxStep{Content: "first answer"},
+			llm.FauxStep{Content: "after steering"},
+		),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+	})
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "start"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for first provider request")
+	}
+
+	result, err := backendSteeringSession(t, b).SteerTurn(ctx, "steer without tool")
+	if err != nil {
+		t.Fatalf("steer turn: %v", err)
+	}
+	if result.Outcome != ionsession.SteeringAccepted {
+		t.Fatalf("steering outcome = %q, want accepted", result.Outcome)
+	}
+	close(provider.release)
+
+	waitForTurnFinished(t, b.Session().Events())
+
+	calls := provider.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(calls))
+	}
+	if requestHasMessage(calls[0].Messages, llm.RoleUser, "steer without tool") {
+		t.Fatalf("first provider request unexpectedly contains steering: %#v", calls[0].Messages)
+	}
+	if !requestHasMessage(calls[1].Messages, llm.RoleUser, "steer without tool") {
+		t.Fatalf("second provider request missing steering: %#v", calls[1].Messages)
+	}
+}
+
+func TestBackendCancelClearsQueuedSteering(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &blockingFirstStreamProvider{
+		FauxProvider: llm.NewFauxProvider(
+			"local-api",
+			llm.FauxStep{Content: "next answer"},
+			llm.FauxStep{Content: "stale steering answer"},
+		),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider: "local-api",
+		Model:    "model-a",
+		Endpoint: "http://localhost:8080/v1",
+	})
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "start"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(backendEventWaitTimeout):
+		t.Fatal("timed out waiting for first provider request")
+	}
+
+	result, err := backendSteeringSession(t, b).SteerTurn(ctx, "do not leak")
+	if err != nil {
+		t.Fatalf("steer turn: %v", err)
+	}
+	if result.Outcome != ionsession.SteeringAccepted {
+		t.Fatalf("steering outcome = %q, want accepted", result.Outcome)
+	}
+	if err := b.Session().CancelTurn(ctx); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Session().Events())
+
+	if err := b.Session().SubmitTurn(ctx, "next"); err != nil {
+		t.Fatalf("submit next turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Session().Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1 after canceled turn; calls=%#v", len(calls), calls)
+	}
+	if requestHasMessage(calls[0].Messages, llm.RoleUser, "do not leak") {
+		t.Fatalf("next turn provider request leaked canceled steering: %#v", calls[0].Messages)
 	}
 }
 
@@ -397,33 +305,28 @@ func waitForToolStarted(t *testing.T, events <-chan ionsession.Event, toolName s
 	}
 }
 
-func steeringEvents(events []csession.Event) ([]steeringEvent, error) {
-	out := make([]steeringEvent, 0)
-	for _, event := range events {
-		if event.Type != csession.ExternalInput {
-			continue
-		}
-		var data steeringEvent
-		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return nil, err
-		}
-		if data.Kind == steeringKind {
-			out = append(out, data)
-		}
-	}
-	return out, nil
+type blockingFirstStreamProvider struct {
+	*llm.FauxProvider
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
 }
 
-type failingAfterNWriter struct {
-	failAt int
-	saves  int
-	err    error
-}
-
-func (w *failingAfterNWriter) Save(_ context.Context, _ csession.Event) error {
-	w.saves++
-	if w.failAt > 0 && w.saves == w.failAt {
-		return w.err
+func (p *blockingFirstStreamProvider) Stream(
+	ctx context.Context,
+	req *llm.Request,
+) (llm.Stream, error) {
+	var wait bool
+	p.once.Do(func() {
+		close(p.entered)
+		wait = true
+	})
+	if wait {
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return nil
+	return p.FauxProvider.Stream(ctx, req)
 }

@@ -98,7 +98,6 @@ func (b *Backend) open(ctx context.Context) error {
 		registry.Register(NewSubagentTool(b, personas))
 	}
 
-	steering := newSteeringMutator()
 	compaction := compactionRuntime{
 		provider:  p,
 		model:     modelName,
@@ -107,7 +106,6 @@ func (b *Backend) open(ctx context.Context) error {
 
 	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
-		agent.WithMutators(steering),
 	}
 	runtimeOptions := []runtime.Option{
 		runtime.WithBeforeRun(compaction.compactBeforeRun),
@@ -135,7 +133,6 @@ func (b *Backend) open(ctx context.Context) error {
 	b.compactLLM = p
 	b.llm = p
 	b.tools = registry
-	b.steering = steering
 	b.harness = harness
 	b.mu.Unlock()
 

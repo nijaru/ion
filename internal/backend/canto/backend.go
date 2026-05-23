@@ -27,7 +27,6 @@ type Backend struct {
 	sess       storage.Session
 	tools      *tool.Registry
 	compactLLM llm.Provider
-	steering   *steeringMutator
 
 	mu        sync.Mutex
 	turn      turnState
