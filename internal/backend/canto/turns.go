@@ -584,27 +584,3 @@ func (b *Backend) cancelTurn(context.Context) error {
 	}
 	return nil
 }
-
-func (b *Backend) markToolActive(turnID uint64, id string) {
-	if id == "" {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.turn.markToolActive(turnID, id)
-}
-
-func (b *Backend) markToolComplete(turnID uint64, id string) (bool, bool) {
-	if id == "" {
-		return false, false
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.turn.markToolComplete(turnID, id)
-}
-
-func (b *Backend) setActiveTools(turnID uint64, tools []cantofw.RunToolLifecycle) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.turn.setActiveTools(turnID, tools)
-}

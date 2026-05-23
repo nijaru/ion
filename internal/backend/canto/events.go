@@ -64,7 +64,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		return true
 	case session.ToolStarted:
 		if data, ok, err := ev.ToolStartedData(); err == nil && ok {
-			b.markToolActive(turnID, data.ID)
 			b.events <- ionsession.ToolCallStarted{
 				Base:      base,
 				ToolUseID: data.ID,
@@ -75,7 +74,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		}
 	case session.ToolCompleted:
 		if data, ok, err := ev.ToolCompletedData(); err == nil && ok {
-			tracked, remaining := b.markToolComplete(turnID, data.ID)
 			var execErr error
 			if data.Error != "" {
 				execErr = fmt.Errorf("%s", data.Error)
@@ -86,9 +84,6 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 				ToolName:  data.Tool,
 				Result:    data.Output,
 				Error:     execErr,
-			}
-			if tracked && !remaining {
-				b.events <- ionsession.StatusChanged{Base: base, Status: "Thinking..."}
 			}
 		}
 	case session.ToolOutputDelta:
@@ -257,7 +252,6 @@ func (b *Backend) translateRunSessionEvent(
 			return false
 		}
 		tool := lifecycle.Tool
-		b.setActiveTools(turnID, lifecycle.ActiveTools)
 		switch lifecycle.Status {
 		case cantofw.RunLifecycleStarted:
 			b.events <- ionsession.ToolCallStarted{

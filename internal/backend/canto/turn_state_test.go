@@ -2,14 +2,9 @@ package canto
 
 import "testing"
 
-func TestTurnStateFinishClearsCancelAndTools(t *testing.T) {
+func TestTurnStateFinishClearsCancel(t *testing.T) {
 	state := newTurnState()
 	turnID := state.start(func() {})
-	state.markToolActive(turnID, "tool-call-1")
-
-	if !state.hasActiveTool() {
-		t.Fatal("turn state did not record active tool")
-	}
 	if !state.finish(turnID) {
 		t.Fatal("finish returned false for active turn")
 	}
@@ -19,9 +14,6 @@ func TestTurnStateFinishClearsCancelAndTools(t *testing.T) {
 	if state.cancel != nil {
 		t.Fatal("cancel remained set after finish")
 	}
-	if state.hasActiveTool() {
-		t.Fatal("active tools remained after finish")
-	}
 }
 
 func TestTurnStateFinishCantoMatchesAcceptedTurn(t *testing.T) {
@@ -30,7 +22,6 @@ func TestTurnStateFinishCantoMatchesAcceptedTurn(t *testing.T) {
 	if !state.accept(turnID, "canto-turn") {
 		t.Fatal("accept returned false for active turn")
 	}
-	state.markToolActive(turnID, "tool-call-1")
 
 	if state.finishCanto("other-turn") {
 		t.Fatal("stale Canto turn claimed settlement")
@@ -41,7 +32,7 @@ func TestTurnStateFinishCantoMatchesAcceptedTurn(t *testing.T) {
 	if !state.finishCanto("canto-turn") {
 		t.Fatal("accepted Canto turn did not claim settlement")
 	}
-	if state.active || state.cancel != nil || state.hasActiveTool() {
+	if state.active || state.cancel != nil {
 		t.Fatalf("turn state not cleared after Canto settlement: %#v", state)
 	}
 }
@@ -53,7 +44,6 @@ func TestTurnStateRequestCancelKeepsTurnActiveUntilSettlement(t *testing.T) {
 	if !state.accept(turnID, "canto-turn") {
 		t.Fatal("accept returned false for active turn")
 	}
-	state.markToolActive(turnID, "tool-call-1")
 
 	cancel, active := state.requestCancel()
 	if !active {
@@ -80,9 +70,6 @@ func TestTurnStateRequestCancelKeepsTurnActiveUntilSettlement(t *testing.T) {
 	}
 	if state.cancel != nil {
 		t.Fatal("cancel remained set after cancelActive")
-	}
-	if state.hasActiveTool() {
-		t.Fatal("active tools remained after cancelActive")
 	}
 	cancel, active = state.requestCancel()
 	if !active {
@@ -137,26 +124,5 @@ func TestTurnStateSuppressesCanceledSettlementAfterNextTurnStarts(t *testing.T) 
 	}
 	if !state.activeFor(nextTurn) {
 		t.Fatal("next turn was not kept active")
-	}
-}
-
-func TestTurnStateIgnoresStaleToolMutations(t *testing.T) {
-	state := newTurnState()
-	first := state.start(func() {})
-	second := state.start(func() {})
-
-	state.markToolActive(first, "stale-tool")
-	if state.hasActiveTool() {
-		t.Fatal("stale turn marked a tool active")
-	}
-
-	state.markToolActive(second, "active-tool")
-	if !state.hasActiveTool() {
-		t.Fatal("active turn did not mark tool active")
-	}
-
-	state.markToolComplete(first, "active-tool")
-	if !state.hasActiveTool() {
-		t.Fatal("stale turn completed current tool")
 	}
 }

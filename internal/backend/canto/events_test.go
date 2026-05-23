@@ -616,10 +616,6 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	if status.Status != "Running bash..." {
 		t.Fatalf("status = %q, want Running bash...", status.Status)
 	}
-	if !b.turn.hasActiveTool() {
-		t.Fatal("Canto active tool snapshot did not mark the Ion turn active")
-	}
-
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Payload: cantofw.RunSessionPayload{Event: csession.NewEvent(
 			"session-id",
@@ -686,9 +682,6 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	}
 	if status.Status != "Thinking..." {
 		t.Fatalf("status = %q, want Thinking...", status.Status)
-	}
-	if b.turn.hasActiveTool() {
-		t.Fatal("Canto active tool snapshot did not clear the Ion active tool")
 	}
 	assertNoBackendEvent(t, b)
 }
@@ -909,54 +902,7 @@ func TestTranslateEventsPreservesToolCompletedError(t *testing.T) {
 	}
 }
 
-func TestTranslateEventsRestoresThinkingAfterLastActiveTool(t *testing.T) {
-	b := New()
-	b.turn.seq = 7
-	b.turn.active = true
-
-	events := make(chan csession.Event, 4)
-	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
-		ID:        "tool-call-1",
-		Tool:      "bash",
-		Arguments: "echo one",
-	})
-	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
-		ID:        "tool-call-2",
-		Tool:      "read",
-		Arguments: "file.txt",
-	})
-	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
-		ID:     "tool-call-1",
-		Tool:   "bash",
-		Output: "one",
-	})
-	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
-		ID:     "tool-call-2",
-		Tool:   "read",
-		Output: "two",
-	})
-	close(events)
-
-	translateSessionEvents(t.Context(), b, events, 7)
-
-	_ = receiveEvent(t, b.Session().Events()) // first tool started
-	_ = receiveEvent(t, b.Session().Events()) // first running status
-	_ = receiveEvent(t, b.Session().Events()) // second tool started
-	_ = receiveEvent(t, b.Session().Events()) // second running status
-	_ = receiveEvent(t, b.Session().Events()) // first tool result; one tool remains active
-	_ = receiveEvent(t, b.Session().Events()) // second tool result
-
-	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
-	if !ok {
-		t.Fatal("event is not StatusChanged")
-	}
-	if status.Status != "Thinking..." {
-		t.Fatalf("status = %q, want Thinking...", status.Status)
-	}
-	assertNoBackendEvent(t, b)
-}
-
-func TestTranslateEventsDoesNotRestoreThinkingForUntrackedTool(t *testing.T) {
+func TestTranslateEventsDoesNotRestoreThinkingForRawToolCompleted(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
