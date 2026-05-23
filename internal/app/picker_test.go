@@ -240,7 +240,8 @@ func TestComposerShowsFileReferenceSuggestionsWhileTyping(t *testing.T) {
 	}
 	model := readyModel(t)
 	model.App.Workdir = workdir
-	model.setComposerDraft("read @RE")
+	cmd := model.setComposerDraft("read @RE")
+	model = applyFileReferenceCompletionResult(t, model, cmd)
 
 	view := ansi.Strip(model.View().Content)
 	if !strings.Contains(view, "@README.md") {
@@ -259,9 +260,10 @@ func TestTabCompletesFileReference(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = testModel(t, updated)
-	if cmd != nil {
-		t.Fatalf("unexpected file completion cmd %T", cmd)
+	if cmd == nil {
+		t.Fatal("expected async file completion command")
 	}
+	model = applyFileReferenceCompletionResult(t, model, cmd)
 	if got := model.Input.Composer.Value(); got != "read @README.md " {
 		t.Fatalf("composer = %q, want completed file reference", got)
 	}
@@ -276,8 +278,9 @@ func TestTabCompletesDirectoryReferenceWithoutTrailingSpace(t *testing.T) {
 	model.App.Workdir = workdir
 	model.Input.Composer.SetValue("@int")
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = testModel(t, updated)
+	model = applyFileReferenceCompletionResult(t, model, cmd)
 	if got := model.Input.Composer.Value(); got != "@internal/" {
 		t.Fatalf("composer = %q, want completed directory reference", got)
 	}
@@ -294,11 +297,50 @@ func TestTabFileReferenceKeepsCommonPrefixForAmbiguousMatches(t *testing.T) {
 	model.App.Workdir = workdir
 	model.Input.Composer.SetValue("@RE")
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = testModel(t, updated)
+	model = applyFileReferenceCompletionResult(t, model, cmd)
 	if got := model.Input.Composer.Value(); got != "@RE" {
 		t.Fatalf("composer = %q, want unchanged ambiguous reference", got)
 	}
+}
+
+func TestStaleFileReferenceCompletionIsIgnored(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	firstCmd := model.setComposerDraft("@RE")
+	secondCmd := model.setComposerDraft("/st")
+	model = applyFileReferenceCompletionResult(t, model, firstCmd)
+	if got := model.Input.Composer.Value(); got != "/st" {
+		t.Fatalf("composer changed after stale completion: %q", got)
+	}
+	if model.Input.Completion != nil {
+		for _, item := range model.Input.Completion.items {
+			if strings.HasPrefix(item.Label, "@") {
+				t.Fatalf("stale file completion leaked into slash state: %#v", model.Input.Completion)
+			}
+		}
+	}
+	for _, msg := range runCommandTree(t, secondCmd) {
+		updated, _ := model.Update(msg)
+		model = testModel(t, updated)
+	}
+}
+
+func applyFileReferenceCompletionResult(t *testing.T, model Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected file completion command")
+	}
+	for _, msg := range runCommandTree(t, cmd) {
+		updated, _ := model.Update(msg)
+		model = testModel(t, updated)
+	}
+	return model
 }
 
 func TestMatchingWorkspaceFileReferencesRejectsEscapes(t *testing.T) {

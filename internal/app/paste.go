@@ -38,8 +38,7 @@ func (m Model) handlePaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if current != "" {
 		current += " "
 	}
-	m.setComposerDraft(current + placeholder)
-	return m, nil
+	return m, m.setComposerDraft(current + placeholder)
 }
 
 func inlinePasteText(content string) string {

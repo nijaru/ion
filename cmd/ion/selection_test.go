@@ -548,7 +548,7 @@ func TestPrintStartupPlacesResumeMarkerAfterHeaderBeforeTranscript(t *testing.T)
 	var buf bytes.Buffer
 	printStartup(
 		&buf,
-		[]string{"ion v0.0.0", "13 tools registered"},
+		[]string{"ion v0.0.0", "Search tools enabled"},
 		"~/repo • main",
 		true,
 		[]string{"› hi", "", "• hello"},
@@ -576,7 +576,7 @@ func TestPrintStartupLeavesBlankRowBeforeFreshShell(t *testing.T) {
 	var buf bytes.Buffer
 	printStartup(
 		&buf,
-		[]string{"ion v0.0.0", "Tools: 9 registered"},
+		[]string{"ion v0.0.0"},
 		"~/repo • main",
 		false,
 		nil,

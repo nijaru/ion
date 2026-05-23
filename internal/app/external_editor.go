@@ -65,10 +65,10 @@ func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Mode
 			Content: "Editor failed: " + msg.err.Error(),
 		})
 	}
-	m.setComposerDraft(msg.content)
+	cmd := m.setComposerDraft(msg.content)
 	m.resetHistoryCursor()
 	m.clearPasteMarkers()
-	return m, nil
+	return m, cmd
 }
 
 func externalEditor() string {

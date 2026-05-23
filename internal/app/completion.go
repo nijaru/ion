@@ -2,27 +2,35 @@ package app
 
 import (
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 const maxComposerCompletions = 5
 
-func (m *Model) refreshComposerCompletions() {
-	items := m.composerCompletionItems()
+func (m *Model) refreshComposerCompletions() tea.Cmd {
+	items, cmd := m.composerCompletionItems()
 	m.inputReducer().setCompletionItems(items)
+	return cmd
 }
 
-func (m Model) composerCompletionItems() []completionItem {
+func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 	text := m.Input.Composer.Value()
 	if strings.TrimSpace(text) == "" {
-		return nil
+		m.inputReducer().invalidateFileCompletionRequest()
+		return nil, nil
 	}
 	if items := slashComposerCompletionItems(text); len(items) > 0 {
-		return limitCompletionItems(items)
+		m.inputReducer().invalidateFileCompletionRequest()
+		return limitCompletionItems(items), nil
 	}
-	if items := m.fileReferenceCompletionItems(text); len(items) > 0 {
-		return limitCompletionItems(items)
+	start, token, ok := fileReferenceCompletionToken(text)
+	if !ok {
+		m.inputReducer().invalidateFileCompletionRequest()
+		return nil, nil
 	}
-	return nil
+	requestID := m.inputReducer().beginFileCompletionRequest()
+	return nil, loadFileReferenceCompletion(requestID, m.App.Workdir, text, start, token, false)
 }
 
 func slashComposerCompletionItems(text string) []completionItem {
@@ -94,13 +102,19 @@ func slashArgumentCompletionItems(text string) []completionItem {
 	return items
 }
 
-func (m Model) fileReferenceCompletionItems(text string) []completionItem {
+func fileReferenceCompletionToken(text string) (int, string, bool) {
 	start := lastTokenStart(text)
 	token := text[start:]
 	if !strings.HasPrefix(token, "@") {
-		return nil
+		return 0, "", false
 	}
-	matches := matchingWorkspaceFileReferences(m.App.Workdir, strings.TrimPrefix(token, "@"))
+	return start, token, true
+}
+
+func fileReferenceCompletionItems(
+	token string,
+	matches []fileReferenceMatch,
+) []completionItem {
 	if len(matches) == 1 && strings.EqualFold(matches[0].reference, token) {
 		return nil
 	}
@@ -113,6 +127,73 @@ func (m Model) fileReferenceCompletionItems(text string) []completionItem {
 		items = append(items, completionItem{Label: match.reference, Detail: detail})
 	}
 	return items
+}
+
+func loadFileReferenceCompletion(
+	requestID uint64,
+	workdir, text string,
+	start int,
+	token string,
+	apply bool,
+) tea.Cmd {
+	return func() tea.Msg {
+		return fileReferenceCompletionMsg{
+			requestID: requestID,
+			text:      text,
+			start:     start,
+			token:     token,
+			matches: matchingWorkspaceFileReferences(
+				workdir,
+				strings.TrimPrefix(token, "@"),
+			),
+			apply: apply,
+		}
+	}
+}
+
+func (m Model) handleFileReferenceCompletion(
+	msg fileReferenceCompletionMsg,
+) (Model, tea.Cmd) {
+	if msg.requestID == 0 ||
+		msg.requestID != m.Input.FileCompletionRequest ||
+		m.Input.Composer.Value() != msg.text {
+		return m, nil
+	}
+	if msg.apply {
+		return m.applyFileReferenceCompletion(msg)
+	}
+	m.inputReducer().setCompletionItems(
+		limitCompletionItems(fileReferenceCompletionItems(msg.token, msg.matches)),
+	)
+	return m, nil
+}
+
+func (m Model) applyFileReferenceCompletion(
+	msg fileReferenceCompletionMsg,
+) (Model, tea.Cmd) {
+	switch len(msg.matches) {
+	case 0:
+		m.inputReducer().clearCompletion()
+		return m, nil
+	case 1:
+		completion := msg.matches[0].reference
+		if !msg.matches[0].isDir {
+			completion += " "
+		}
+		return m, m.setComposerDraft(msg.text[:msg.start] + completion)
+	}
+
+	values := make([]string, 0, len(msg.matches))
+	for _, match := range msg.matches {
+		values = append(values, match.reference)
+	}
+	if prefix := commonPrefix(values); prefix != "" && prefix != msg.token {
+		return m, m.setComposerDraft(msg.text[:msg.start] + prefix)
+	}
+	m.inputReducer().setCompletionItems(
+		limitCompletionItems(fileReferenceCompletionItems(msg.token, msg.matches)),
+	)
+	return m, nil
 }
 
 func completionItemsFromPicker(items []pickerItem) []completionItem {

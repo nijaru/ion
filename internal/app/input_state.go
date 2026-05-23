@@ -14,14 +14,13 @@ const maxInputHistoryEntries = 200
 func (m *Model) updateComposer(msg tea.Msg) tea.Cmd {
 	cmd := m.inputReducer().updateComposer(msg)
 	m.relayoutComposer()
-	m.refreshComposerCompletions()
-	return cmd
+	return tea.Batch(cmd, m.refreshComposerCompletions())
 }
 
-func (m *Model) insertComposerText(value string) {
+func (m *Model) insertComposerText(value string) tea.Cmd {
 	m.inputReducer().insertComposerText(value)
 	m.relayoutComposer()
-	m.refreshComposerCompletions()
+	return m.refreshComposerCompletions()
 }
 
 func (m *Model) clearPasteMarkers() {
@@ -34,13 +33,14 @@ func (m *Model) resetHistoryCursor() {
 
 func (m *Model) resetComposerDraft() {
 	m.inputReducer().resetComposerDraft()
+	m.inputReducer().invalidateFileCompletionRequest()
 	m.relayoutComposer()
 }
 
-func (m *Model) setComposerDraft(value string) {
+func (m *Model) setComposerDraft(value string) tea.Cmd {
 	m.inputReducer().setComposerDraft(value)
 	m.relayoutComposer()
-	m.refreshComposerCompletions()
+	return m.refreshComposerCompletions()
 }
 
 func (m *Model) appendInputHistory(text string) (string, bool) {

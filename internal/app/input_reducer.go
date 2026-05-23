@@ -80,6 +80,15 @@ func (r inputReducer) clearCompletion() {
 	r.input.Completion = nil
 }
 
+func (r inputReducer) beginFileCompletionRequest() uint64 {
+	r.input.FileCompletionRequest++
+	return r.input.FileCompletionRequest
+}
+
+func (r inputReducer) invalidateFileCompletionRequest() {
+	r.input.FileCompletionRequest++
+}
+
 func (r inputReducer) clearPasteMarkers() {
 	if r.pasteMarkers == nil {
 		return

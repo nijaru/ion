@@ -243,7 +243,7 @@ send_command_picker_filter_smoke() {
 
 send_deterministic_p1_tui_smoke() {
   start_smoke_ion "complete"
-  assert_contains "Tools: 7 registered"
+  assert_not_contains "Tools: 7 registered"
   send_line "run deterministic p1 matrix"
   wait_contains "[smoke] active progress" 30
   assert_visible_contains "Type a message"
@@ -277,6 +277,7 @@ start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
 assert_not_contains "Env inherit"
+assert_not_contains "Tools: 7 registered"
 assert_contains "Type a message"
 
 send_multiline_composer_smoke

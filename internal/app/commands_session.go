@@ -49,6 +49,30 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 }
 
+func loadSessionUsageCmd(generation uint64, sess storage.Session) tea.Cmd {
+	if sess == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		input, output, cost, err := sess.Usage(context.Background())
+		return sessionUsageLoadedMsg{
+			generation: generation,
+			input:      input,
+			output:     output,
+			cost:       cost,
+			err:        err,
+		}
+	}
+}
+
+func (m Model) handleSessionUsageLoaded(msg sessionUsageLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || msg.err != nil {
+		return m, nil
+	}
+	m.progressReducer().applySessionUsage(msg.input, msg.output, msg.cost)
+	return m, nil
+}
+
 func (m Model) sessionCostCmd() tea.Cmd {
 	return func() tea.Msg {
 		inputTokens := m.Progress.TokensSent

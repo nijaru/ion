@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -198,6 +199,104 @@ func TestRuntimeSwitchAcceptedSnapshotIncludesRuntimeMetadata(t *testing.T) {
 	if got := runtimeStatusSummary(model); !strings.Contains(got, "Model: gpt-4.1-mini") {
 		t.Fatalf("status = %q, want accepted runtime model", got)
 	}
+}
+
+func TestRuntimeSwitchReturnsBeforeUsageLoadCompletes(t *testing.T) {
+	storageSess := &blockingSessionInfoStorage{
+		stubStorageSession: stubStorageSession{
+			id:       "session-1",
+			model:    "openai/gpt-4.1",
+			usageIn:  1200,
+			usageOut: 300,
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+
+	type updateResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	returned := make(chan updateResult, 1)
+	go func() {
+		updated, cmd := model.Update(runtimeSwitchMsgForTest(
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			&config.Config{Provider: "openai", Model: "gpt-4.1"},
+			presetPrimary,
+			"",
+			stubBackend{
+				sess:     &stubSession{events: make(chan session.Event)},
+				provider: "openai",
+				model:    "gpt-4.1",
+			},
+			&stubSession{events: make(chan session.Event)},
+			storageSess,
+		))
+		returned <- updateResult{model: testModel(t, updated), cmd: cmd}
+	}()
+
+	var result updateResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime switch blocked on usage load")
+	}
+	if result.cmd == nil {
+		t.Fatal("expected runtime switch command")
+	}
+	select {
+	case <-storageSess.started:
+		t.Fatal("usage load ran inside Update")
+	default:
+	}
+
+	firstCmd := firstSequenceCmd(t, result.cmd)
+	loaded := make(chan tea.Msg, 1)
+	go func() {
+		loaded <- firstCmd()
+	}()
+	select {
+	case <-storageSess.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime switch command did not load usage")
+	}
+	select {
+	case msg := <-loaded:
+		t.Fatalf("usage command returned before storage completed: %T", msg)
+	default:
+	}
+
+	close(storageSess.release)
+	msg := <-loaded
+	usage, ok := msg.(sessionUsageLoadedMsg)
+	if !ok {
+		t.Fatalf("usage command result = %T, want sessionUsageLoadedMsg", msg)
+	}
+	updated, _ := result.model.Update(usage)
+	result.model = testModel(t, updated)
+	if result.model.Progress.TokensSent != 1200 || result.model.Progress.TokensReceived != 300 {
+		t.Fatalf(
+			"usage = %d/%d, want 1200/300",
+			result.model.Progress.TokensSent,
+			result.model.Progress.TokensReceived,
+		)
+	}
+}
+
+func firstSequenceCmd(t *testing.T, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+	msg := cmd()
+	value := reflect.ValueOf(msg)
+	cmdType := reflect.TypeOf(tea.Cmd(nil))
+	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType || value.Len() == 0 {
+		t.Fatalf("command message = %T, want non-empty sequence", msg)
+	}
+	first, ok := value.Index(0).Interface().(tea.Cmd)
+	if !ok {
+		t.Fatalf("sequence element = %T, want tea.Cmd", value.Index(0).Interface())
+	}
+	return first
 }
 
 func TestRuntimeSwitchSnapshotTracksLazySessionWithoutResumingIt(t *testing.T) {

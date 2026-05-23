@@ -65,12 +65,20 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleSessionCost(msg)
 		return next, cmd, true
 
+	case sessionUsageLoadedMsg:
+		next, cmd := m.handleSessionUsageLoaded(msg)
+		return next, cmd, true
+
 	case gitDiffStatsMsg:
 		next, cmd := m.handleGitDiffStats(msg)
 		return next, cmd, true
 
 	case externalEditorFinishedMsg:
 		next, cmd := m.handleExternalEditorFinished(msg)
+		return next, cmd, true
+
+	case fileReferenceCompletionMsg:
+		next, cmd := m.handleFileReferenceCompletion(msg)
 		return next, cmd, true
 
 	case localErrorMsg:

@@ -53,7 +53,7 @@ func (m Model) commandConfig() (*config.Config, error) {
 		copied := *m.Model.Config
 		return &copied, nil
 	}
-	return config.Load()
+	return &config.Config{}, nil
 }
 
 func mergeRuntimeSelection(dst, runtime *config.Config) {

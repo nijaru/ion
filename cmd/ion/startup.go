@@ -34,13 +34,16 @@ func startupToolLine(b backend.Backend) string {
 	if surface.Count == 0 {
 		return ""
 	}
-	parts := []string{fmt.Sprintf("Tools: %d registered", surface.Count)}
+	var parts []string
 	if surface.LazyEnabled {
 		parts = append(parts, "Search tools enabled")
 	}
 	sandbox := strings.TrimSpace(surface.Sandbox)
 	if sandbox != "" && sandbox != "off" {
 		parts = append(parts, "Sandbox "+sandbox)
+	}
+	if len(parts) == 0 {
+		return ""
 	}
 	return strings.Join(parts, " • ")
 }

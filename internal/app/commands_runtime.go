@@ -240,11 +240,6 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.turnReducer().resetFinishedTurnSummary()
 	m.clearPendingAction()
 	m.progressReducer().resetSessionUsage()
-	if msg.runtime.Handles.Storage != nil {
-		if input, output, cost, err := msg.runtime.Handles.Storage.Usage(context.Background()); err == nil {
-			m.progressReducer().applySessionUsage(input, output, cost)
-		}
-	}
 	m.resetHistoryCursor()
 }
 
@@ -268,6 +263,12 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 		cmds = append(
 			cmds,
 			m.printEntries(session.Entry{Role: session.System, Content: status}),
+		)
+	}
+	if msg.runtime.Handles.Storage != nil {
+		cmds = append(
+			cmds,
+			loadSessionUsageCmd(m.Model.EventGeneration, msg.runtime.Handles.Storage),
 		)
 	}
 	return append(cmds, m.awaitSessionEvent())

@@ -129,8 +129,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+enter", "alt+enter", "ctrl+j":
 		m.clearPendingAction()
-		m.insertComposerText("\n")
-		return m, nil
+		return m, m.insertComposerText("\n")
 
 	case "up", "ctrl+p":
 		m.clearPendingAction()
@@ -138,8 +137,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if draft, ok := m.inputReducer().previousHistoryDraft(
 				m.Input.Composer.Value(),
 			); ok {
-				m.setComposerDraft(draft)
-				return m, nil
+				return m, m.setComposerDraft(draft)
 			}
 		}
 		return m, m.updateComposer(msg)
@@ -149,8 +147,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 &&
 			m.inputReducer().browsingHistory() {
 			if draft, ok := m.inputReducer().nextHistoryDraft(); ok {
-				m.setComposerDraft(draft)
-				return m, nil
+				return m, m.setComposerDraft(draft)
 			}
 		}
 		return m, m.updateComposer(msg)
@@ -229,8 +226,7 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 	if current != "" {
 		queued = current + "\n" + queued
 	}
-	m.setComposerDraft(queued)
-	return m, nil
+	return m, m.setComposerDraft(queued)
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
@@ -247,14 +243,12 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 	case 0:
 		return m, nil, true
 	case 1:
-		m.setComposerDraft(matches[0] + " ")
-		return m, nil, true
+		return m, m.setComposerDraft(matches[0] + " "), true
 	}
 
 	prefix := commonPrefix(matches)
 	if prefix != "" && prefix != text {
-		m.setComposerDraft(prefix)
-		return m, nil, true
+		return m, m.setComposerDraft(prefix), true
 	}
 
 	return m.openCommandPicker(text), nil, true
@@ -317,11 +311,10 @@ func (m Model) completeLastSlashToken(text string, values []string) (Model, tea.
 	case 0:
 		return m, nil, true
 	case 1:
-		m.setComposerDraft(text[:start] + matches[0] + " ")
-		return m, nil, true
+		return m, m.setComposerDraft(text[:start] + matches[0] + " "), true
 	default:
 		if common := commonPrefix(matches); common != "" && common != prefix {
-			m.setComposerDraft(text[:start] + common)
+			return m, m.setComposerDraft(text[:start] + common), true
 		}
 		return m, nil, true
 	}
@@ -329,33 +322,20 @@ func (m Model) completeLastSlashToken(text string, values []string) (Model, tea.
 
 func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
 	text := m.Input.Composer.Value()
-	start := lastTokenStart(text)
-	token := text[start:]
-	if !strings.HasPrefix(token, "@") {
+	start, token, ok := fileReferenceCompletionToken(text)
+	if !ok {
 		return m, nil, false
 	}
-
-	matches := matchingWorkspaceFileReferences(m.App.Workdir, strings.TrimPrefix(token, "@"))
-	switch len(matches) {
-	case 0:
-		return m, nil, true
-	case 1:
-		completion := matches[0].reference
-		if !matches[0].isDir {
-			completion += " "
-		}
-		m.setComposerDraft(text[:start] + completion)
-		return m, nil, true
-	}
-
-	values := make([]string, 0, len(matches))
-	for _, match := range matches {
-		values = append(values, match.reference)
-	}
-	if prefix := commonPrefix(values); prefix != "" && prefix != token {
-		m.setComposerDraft(text[:start] + prefix)
-	}
-	return m, nil, true
+	requestID := m.inputReducer().beginFileCompletionRequest()
+	m.inputReducer().clearCompletion()
+	return m, loadFileReferenceCompletion(
+		requestID,
+		m.App.Workdir,
+		text,
+		start,
+		token,
+		true,
+	), true
 }
 
 func lastTokenStart(text string) int {
@@ -372,6 +352,9 @@ type fileReferenceMatch struct {
 }
 
 func matchingWorkspaceFileReferences(workdir, query string) []fileReferenceMatch {
+	if strings.TrimSpace(workdir) == "" {
+		return nil
+	}
 	workdir = filepath.Clean(workdir)
 	dirPart, base := filepath.Split(filepath.FromSlash(query))
 	dirPart = filepath.Clean(dirPart)

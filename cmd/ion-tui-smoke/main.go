@@ -69,7 +69,6 @@ func run(mode, storeRoot string, startupCheck bool) error {
 	smoke.SetConfig(cfg)
 
 	fmt.Println("ion v0.0.0")
-	fmt.Println("Tools: 7 registered")
 	fmt.Println(cwd + " • smoke")
 	fmt.Println()
 

@@ -101,10 +101,11 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		return m, sequenceCmds(routingCmd, historyCmd)
 	}
 	m.turnReducer().rejectSubmit()
+	var draftCmd tea.Cmd
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
-		m.setComposerDraft(msg.draft)
+		draftCmd = m.setComposerDraft(msg.draft)
 	}
-	return m, cmdError(sessionErrorDisplay(msg.err))
+	return m, tea.Batch(draftCmd, cmdError(sessionErrorDisplay(msg.err)))
 }
 
 func (m Model) handleDeferredEnter() (Model, tea.Cmd) {

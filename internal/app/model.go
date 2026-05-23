@@ -38,6 +38,15 @@ type clearPendingMsg struct {
 
 type deferredEnterMsg struct{}
 
+type fileReferenceCompletionMsg struct {
+	requestID uint64
+	text      string
+	start     int
+	token     string
+	matches   []fileReferenceMatch
+	apply     bool
+}
+
 type pendingAction int
 
 const (
@@ -139,6 +148,14 @@ type sessionCompactedMsg struct {
 
 type sessionCostMsg struct {
 	notice string
+}
+
+type sessionUsageLoadedMsg struct {
+	generation uint64
+	input      int
+	output     int
+	cost       float64
+	err        error
 }
 
 type localEntriesMsg struct {
@@ -377,17 +394,18 @@ type ProgressState struct {
 
 // InputState holds state for the composer, history, and double-tap tracking.
 type InputState struct {
-	Composer       textarea.Model
-	Completion     *completionState
-	Spinner        spinner.Model
-	History        []string
-	HistoryIdx     int
-	HistoryDraft   string
-	Pending        pendingAction
-	PrintHoldUntil time.Time
-	PrintHoldDelay time.Duration
-	DelayNextEnter bool
-	DeferredEnter  bool
+	Composer              textarea.Model
+	Completion            *completionState
+	FileCompletionRequest uint64
+	Spinner               spinner.Model
+	History               []string
+	HistoryIdx            int
+	HistoryDraft          string
+	Pending               pendingAction
+	PrintHoldUntil        time.Time
+	PrintHoldDelay        time.Duration
+	DelayNextEnter        bool
+	DeferredEnter         bool
 }
 
 // pasteMarker stores original content for a collapsed large paste.

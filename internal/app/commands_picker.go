@@ -670,9 +670,9 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			},
 		)
 	case pickerPurposeCommand:
-		m.setComposerDraft(selected.Value + " ")
+		cmd := m.setComposerDraft(selected.Value + " ")
 		m.pickerReducer().closeOverlay()
-		return m, nil
+		return m, cmd
 	default:
 		m.pickerReducer().closeOverlay()
 		return m, nil
