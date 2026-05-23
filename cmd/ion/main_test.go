@@ -87,7 +87,7 @@ func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 		},
 	}
 
-	agent, storageSession := runtimeHandlesForClose(final, startupAgent, startupStorage)
+	agent, storageSession := runtimeHandlesForClose(&final, startupAgent, startupStorage)
 	if agent != currentAgent {
 		t.Fatalf("agent = %#v, want current runtime agent", agent)
 	}

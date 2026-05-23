@@ -62,7 +62,7 @@ func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 			}
 			msg := cmd()
 			updated, printCmd := model.Update(msg)
-			model = updated.(Model)
+			model = testModel(t, updated)
 			if printCmd == nil {
 				t.Fatal("expected runtime commit to print a notice")
 			}
@@ -153,7 +153,7 @@ func TestThinkingCommandReturnsBeforeRuntimeStateWriteCompletes(t *testing.T) {
 	}
 
 	next, printCmd := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 	if printCmd == nil {
 		t.Fatal("expected thinking commit notice")
 	}
@@ -385,7 +385,7 @@ func TestStartupPickerCmdLoadsInitialModelPicker(t *testing.T) {
 		t.Fatal("startup model picker should schedule model loading")
 	}
 	updated, _ := model.Update(cmd())
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
@@ -521,7 +521,7 @@ func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
 		t.Fatalf("switch command message = %T, want runtimeSwitchErrorMsg", raw)
 	}
 	next, _ := model.Update(switchErr)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if got := model.Model.Backend.Model(); got != "gpt-4.1-old" {
 		t.Fatalf("backend model = %q, want unchanged old model", got)
@@ -646,7 +646,7 @@ func TestCompactingStatusShowsProgressLine(t *testing.T) {
 	model := readyModel(t)
 
 	updated, _ := model.Update(session.StatusChanged{Status: "Compacting context..."})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if !model.Progress.Compacting {
 		t.Fatal("expected compacting status to mark compaction in progress")
@@ -657,7 +657,7 @@ func TestCompactingStatusShowsProgressLine(t *testing.T) {
 	}
 
 	updated, _ = model.Update(session.StatusChanged{Status: "Ready"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.Progress.Compacting {
 		t.Fatal("expected ready status to clear compaction progress")
 	}
@@ -669,7 +669,7 @@ func TestComposerQueuesWhileCompacting(t *testing.T) {
 	model.Input.Composer.SetValue("follow up")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
 		t.Fatalf("queuedTurns = %v, want [follow up]", model.InFlight.QueuedTurns)
 	}
@@ -733,7 +733,7 @@ func TestCompactCompletionClearsStaleErrorState(t *testing.T) {
 	model.Progress.Compacting = true
 
 	updated, _ := model.Update(sessionCompactedMsg{notice: "Compacted current session context"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Compacting {
 		t.Fatal("expected compaction progress to clear")
@@ -878,7 +878,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 	next, _ := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 	if model.Model.Config == nil ||
 		model.Model.Config.Provider != "openrouter" ||
 		model.Model.Config.Model != "deepseek/deepseek-v4-flash" {
@@ -1211,7 +1211,7 @@ func TestRuntimeSwitchBlocksPresetHotkey(t *testing.T) {
 	model.App.ActivePreset = presetPrimary
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected runtime-switch guard error")
@@ -1230,7 +1230,7 @@ func TestRuntimeSwitchBlocksThinkingPickerHotkey(t *testing.T) {
 	model.Model.RuntimeSwitchRequest = 1
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected runtime-switch guard error")
@@ -1621,7 +1621,7 @@ func TestSettingsSummaryDoesNotOverwriteActiveTurnStatus(t *testing.T) {
 
 	msg := cmd()
 	next, printCmd := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 	if printCmd == nil {
 		t.Fatal("expected settings summary print command")
 	}

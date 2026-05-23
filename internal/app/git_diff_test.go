@@ -37,7 +37,7 @@ func TestGitDiffStatsMessageIgnoresStaleWorkspace(t *testing.T) {
 	model.App.GitDiff = "+1"
 
 	updated, _ := model.Update(gitDiffStatsMsg{workdir: "/repo/old", stats: "+2/-1"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.App.GitDiff != "+1" {
 		t.Fatalf("git diff stats = %q, want unchanged", model.App.GitDiff)

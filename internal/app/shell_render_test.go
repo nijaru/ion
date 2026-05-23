@@ -44,7 +44,7 @@ func TestLayoutClampsComposerHeight(t *testing.T) {
 func TestLayoutExpandsComposerForSoftWrappedInput(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 24, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Input.Composer.SetValue("write a sentence that wraps")
 
 	model.layout()
@@ -57,12 +57,12 @@ func TestLayoutExpandsComposerForSoftWrappedInput(t *testing.T) {
 func TestComposerKeepsSoftWrappedPrefixVisibleWhileTyping(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	input := "write a sentence that should wrap across multiple terminal rows before submit"
 	for _, r := range input {
 		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	view := ansi.Strip(model.View().Content)
@@ -77,17 +77,17 @@ func TestComposerKeepsSoftWrappedPrefixVisibleWhileTyping(t *testing.T) {
 func TestComposerSupportsHardMultilineInput(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	for _, r := range "first line" {
 		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	for _, r := range "second line" {
 		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	if got := model.Input.Composer.Value(); got != "first line\nsecond line" {
@@ -113,17 +113,17 @@ func TestComposerSupportsHardMultilineInput(t *testing.T) {
 func TestComposerSupportsCtrlJMultilineInput(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	for _, r := range "first line" {
 		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	for _, r := range "second line" {
 		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	if got := model.Input.Composer.Value(); got != "first line\nsecond line" {
@@ -144,7 +144,7 @@ func TestComposerSupportsCtrlJMultilineInput(t *testing.T) {
 func TestComposerPromptOnlyRendersOnFirstRow(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Input.Composer.SetValue(strings.Repeat("\n", 5))
 	model.layout()
 
@@ -231,7 +231,7 @@ func TestViewKeepsTerminalProgressAfterPrintedTranscript(t *testing.T) {
 func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Progress.Mode = stateReady
 
 	view := ansi.Strip(model.View().Content)
@@ -262,7 +262,7 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 func TestViewShellRowsFitVeryNarrowTerminal(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 12, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Progress.Mode = stateStreaming
 	model.Progress.Status = "Running a very long status message"
 	model.InFlight.QueuedTurns = []string{strings.Repeat("queued ", 8)}
@@ -290,7 +290,7 @@ func TestViewShellRowsFitVeryNarrowTerminal(t *testing.T) {
 func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Progress.Mode = stateReady
 
 	view := ansi.Strip(model.View().Content)
@@ -311,9 +311,9 @@ func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 func TestWidthShrinkDoesNotCommitScrollbackRows(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected clear-screen command after width shrink")
 	}
@@ -325,7 +325,7 @@ func TestWidthShrinkDoesNotCommitScrollbackRows(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("width growth returned command %T, want nil", cmd)
 	}
-	model = updated.(Model)
+	model = testModel(t, updated)
 	view := ansi.Strip(model.View().Content)
 	if strings.HasPrefix(view, "\n") {
 		t.Fatalf("view = %q, want no leading clear rows", view)
@@ -338,7 +338,7 @@ func TestWidthShrinkDoesNotCommitScrollbackRows(t *testing.T) {
 func TestPickerRowsFitShellWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a command with a long title that must not wrap",
 		query: "this is a long command picker search query that used to wrap",
@@ -537,7 +537,7 @@ func TestRunningProgressLineUsesCyanSpinner(t *testing.T) {
 func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Model.Backend = stubBackend{
 		sess:         &stubSession{events: make(chan session.Event)},
 		provider:     "subscription-provider-with-a-very-long-name",
@@ -580,7 +580,7 @@ func TestStatusLineStartsWithInsetSpace(t *testing.T) {
 func TestStatusLinePendingActionStartsWithInsetSpace(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Input.Pending = pendingActionQuitCtrlC
 
 	line := ansi.Strip(model.statusLine())
@@ -619,7 +619,7 @@ func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
@@ -789,7 +789,7 @@ func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 		nil,
 	)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	line := ansi.Strip(model.statusLine())
 	if strings.Contains(line, "sandbox") {

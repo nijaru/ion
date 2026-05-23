@@ -103,7 +103,7 @@ func p1MatrixQueuedInputVisible(t *testing.T) {
 	model.Input.Composer.SetValue("follow up after this")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("queued input should print a queued notice")
@@ -132,7 +132,7 @@ func p1MatrixCancelActiveTool(t *testing.T) {
 	)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("cancel should return a command")
@@ -164,7 +164,7 @@ func p1MatrixProviderError(t *testing.T) {
 func p1MatrixResizeWrapSafe(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model = applyP1Events(
 		t, model,
 		session.TurnStarted{},
@@ -190,7 +190,7 @@ func p1MatrixMultilineComposerAndPaste(t *testing.T) {
 
 	paste := strings.Repeat("large pasted line\n", pasteMarkerMinLines)
 	updated, _ := model.Update(tea.PasteMsg{Content: paste})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(model.PasteMarkers) != 1 {
 		t.Fatalf("paste markers = %#v, want one collapsed marker", model.PasteMarkers)
 	}
@@ -249,11 +249,7 @@ func applyP1Events(t *testing.T, model Model, events ...session.Event) Model {
 	t.Helper()
 	for _, ev := range events {
 		updated, _ := model.Update(ev)
-		next, ok := updated.(Model)
-		if !ok {
-			t.Fatalf("updated model = %T, want Model", updated)
-		}
-		model = next
+		model = testModel(t, updated)
 	}
 	return model
 }

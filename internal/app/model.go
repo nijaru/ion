@@ -331,7 +331,8 @@ type InFlightState struct {
 	PendingTools          map[string]*session.Entry    // active tool calls by backend tool ID
 	Subagents             map[string]*SubagentProgress // active child agents by ID
 	ReasonBuf             string                       // accumulates ThinkingDelta
-	StreamBuf             string                       // accumulates AgentDelta (mirrors pending.Content)
+	StreamBuf             string                       // non-empty while AgentDelta content is active
+	StreamChunks          []string                     // full AgentDelta content without per-event string copies
 	QueuedTurns           []string                     // follow-up turns queued during agent work
 	Thinking              bool
 	Canceling             bool

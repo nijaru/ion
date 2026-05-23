@@ -33,7 +33,7 @@ func (r turnReducer) startToolCall(
 	r.inFlight.PendingTools[r.progress.LastToolUseID] = entry
 	if r.inFlight.Pending == nil || r.inFlight.Pending.Role == session.Tool ||
 		(r.inFlight.Pending.Role == session.Agent &&
-			r.inFlight.Pending.Content == "" &&
+			r.agentStreamEmpty() &&
 			r.inFlight.ReasonBuf == "") {
 		r.inFlight.Pending = entry
 	}

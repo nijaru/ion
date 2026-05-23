@@ -29,6 +29,7 @@ func (r turnReducer) clearActiveState(clearQueued bool) {
 	}
 	r.inFlight.Canceling = false
 	r.inFlight.StreamBuf = ""
+	r.inFlight.StreamChunks = nil
 	r.inFlight.ReasonBuf = ""
 	r.inFlight.AgentCommitted = false
 	r.inFlight.DrainUntilTurnStarted = false
@@ -191,16 +192,22 @@ func (r turnReducer) startTurn(timestamp, startedAt time.Time) {
 	r.progress.BudgetStopReason = ""
 	r.inFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: timestamp}
 	r.inFlight.PendingTools = nil
+	r.inFlight.StreamBuf = ""
+	r.inFlight.StreamChunks = nil
 	r.inFlight.AgentCommitted = false
 }
 
 func (r turnReducer) finishPendingAssistant() (session.Entry, bool, bool) {
 	assistantCompleted := r.inFlight.AgentCommitted
+	streamContent := r.agentStreamContent()
 	if !r.inFlight.AgentCommitted &&
 		r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Agent &&
-		(strings.TrimSpace(r.inFlight.Pending.Content) != "" ||
+		(strings.TrimSpace(streamContent) != "" ||
 			strings.TrimSpace(r.inFlight.Pending.Reasoning) != "" ||
 			strings.TrimSpace(r.inFlight.ReasonBuf) != "") {
+		if streamContent != "" {
+			r.inFlight.Pending.Content = streamContent
+		}
 		if strings.TrimSpace(r.inFlight.Pending.Reasoning) == "" {
 			r.inFlight.Pending.Reasoning = r.inFlight.ReasonBuf
 		}
@@ -217,6 +224,7 @@ func (r turnReducer) finishPendingAssistant() (session.Entry, bool, bool) {
 func (r turnReducer) clearPendingAssistant() {
 	r.inFlight.Pending = nil
 	r.inFlight.StreamBuf = ""
+	r.inFlight.StreamChunks = nil
 	r.inFlight.ReasonBuf = ""
 }
 

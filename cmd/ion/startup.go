@@ -92,8 +92,8 @@ func currentBranch() string {
 }
 
 func resumeHintSessionID(model tea.Model) string {
-	appModel, ok := model.(app.Model)
-	if !ok {
+	appModel, ok := model.(*app.Model)
+	if !ok || appModel == nil {
 		return ""
 	}
 	return appModel.ResumeSessionID()

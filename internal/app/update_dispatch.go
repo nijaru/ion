@@ -7,7 +7,16 @@ import (
 	"github.com/nijaru/ion/internal/session"
 )
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m == nil {
+		return m, nil
+	}
+	next, cmd := m.update(msg)
+	*m = next
+	return m, cmd
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if next, cmd, ok := m.dispatchAppControlMessage(msg); ok {
 		return next, cmd
 	}

@@ -29,7 +29,7 @@ func applySubmitResult(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) 
 		t.Fatalf("submit command error = %v", result.err)
 	}
 	updated, nextCmd := model.Update(result)
-	return updated.(Model), nextCmd
+	return testModel(t, updated), nextCmd
 }
 
 type blockingSubmitSession struct {
@@ -175,7 +175,7 @@ func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 	returned := make(chan busyResult, 1)
 	go func() {
 		updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		returned <- busyResult{model: updated.(Model), cmd: cmd}
+		returned <- busyResult{model: testModel(t, updated), cmd: cmd}
 	}()
 
 	var result busyResult
@@ -377,7 +377,7 @@ func TestSubmitErrorRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *test
 		t.Fatal("submit result error is nil")
 	}
 	next, _ := model.Update(result)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if !storage.IsMaterialized(lazy) {
 		t.Fatal("lazy session did not materialize during submit")
@@ -405,7 +405,7 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 		t.Fatalf("submit result = %#v, want successful turnSubmitResultMsg", submitMsg)
 	}
 	updatedModel, cmd := model.Update(result)
-	model = updatedModel.(Model)
+	model = testModel(t, updatedModel)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "route this" {
 		t.Fatalf("submits = %#v, want route this", sess.submits)
@@ -556,7 +556,7 @@ func TestSlashCommandDoesNotEchoTranscriptEntry(t *testing.T) {
 	model.Input.Composer.SetValue("/provider")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("command = %T, want nil for local picker without transcript echo", cmd)
@@ -856,7 +856,7 @@ func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
 	updated, _ := model.Update(session.TurnFinished{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
@@ -872,7 +872,7 @@ func TestTurnFinishedPreservesUserCancellation(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
 	updated, _ := model.Update(session.TurnFinished{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
@@ -972,7 +972,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		Base:    session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
 		Message: "stale canceled prompt",
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.App.PrintedTranscript {
 		t.Fatal("late canceled-turn user message printed transcript output")
 	}
@@ -980,7 +980,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	updated, _ = model.Update(session.TurnStarted{
 		Base: session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.Progress.Mode != stateCancelled {
 		t.Fatalf("late turn start reopened progress mode = %v", model.Progress.Mode)
 	}
@@ -996,7 +996,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		session.StatusChanged{Status: "Ready"},
 	} {
 		updated, _ := model.Update(ev)
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	if model.Progress.Mode != stateCancelled {
@@ -1015,7 +1015,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 
 	model.Input.Composer.SetValue("after cancel")
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "after cancel" {
 		t.Fatalf("queued turns = %#v, want [after cancel]", model.InFlight.QueuedTurns)
 	}
@@ -1027,7 +1027,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(session.TurnFinished{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("cancel terminal did not clear drain fence")
 	}
@@ -1054,7 +1054,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		Base:    session.BaseAt(drainStartedAt.Add(time.Millisecond)),
 		Message: "fresh prompt",
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("fresh user message after cancel did not print")
 	}
@@ -1062,7 +1062,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	updated, _ = model.Update(session.TurnStarted{
 		Base: session.BaseAt(drainStartedAt.Add(time.Millisecond)),
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("fresh turn did not clear drain fence")
 	}
@@ -1075,7 +1075,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 
 	updated, _ = model.Update(session.AgentDelta{Delta: "fresh"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "fresh" {
 		t.Fatalf("fresh turn delta not accepted: %#v", model.InFlight.Pending)
 	}
@@ -1210,7 +1210,7 @@ func TestTurnFinishedPreservesSessionError(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
 	updated, _ := model.Update(session.TurnFinished{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateError {
 		t.Fatalf("progress mode = %v, want stateError", model.Progress.Mode)
@@ -1293,7 +1293,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
 		t.Fatalf("queuedTurns = %v, want [follow up]", model.InFlight.QueuedTurns)
 	}
@@ -1306,13 +1306,13 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 
 	model.InFlight.AgentCommitted = true
 	updated, cmd = model.Update(session.TurnFinished{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected queued turn command after finish")
 	}
 	msg := cmd()
 	next, nextCmd := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 	if nextCmd == nil {
 		t.Fatal("expected queued turn submission command")
 	}
@@ -1325,7 +1325,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 		t.Fatalf("queued submit result = %#v, want successful rearmed submit", submitResult)
 	}
 	next, nextCmd = model.Update(submitResult)
-	model = next.(Model)
+	model = testModel(t, next)
 	if nextCmd == nil {
 		t.Fatal("expected queued submit result to re-arm session event wait")
 	}
@@ -1351,7 +1351,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 		t.Fatalf("queued follow-up event = %T, want UserMessage", eventMsg.event)
 	}
 	next, nextCmd = model.Update(eventMsg)
-	model = next.(Model)
+	model = testModel(t, next)
 	if nextCmd == nil {
 		t.Fatal("expected committed user message to print and re-arm session event wait")
 	}
@@ -1371,7 +1371,7 @@ func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected steering command")
@@ -1385,7 +1385,7 @@ func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 		t.Fatalf("steering result = %#v, want accepted", result)
 	}
 	updated, cmd = model.Update(result)
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(sess.steers) != 1 || sess.steers[0] != "use the smaller test" {
 		t.Fatalf("steers = %#v, want submitted steering", sess.steers)
 	}
@@ -1415,13 +1415,13 @@ func TestBusyInputQueuesWhenSteeringDeclines(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	result, ok := cmd().(steeringResultMsg)
 	if !ok {
 		t.Fatalf("steering command returned unexpected result")
 	}
 	updated, cmd = model.Update(result)
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if len(model.InFlight.QueuedTurns) != 1 ||
 		model.InFlight.QueuedTurns[0] != "queue instead" {
@@ -1443,7 +1443,7 @@ func TestBusyInputQueuesWhenSteeringHasNoToolBoundary(t *testing.T) {
 	model.InFlight.Thinking = true
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if len(sess.steers) != 0 {
 		t.Fatalf("steers = %#v, want no steering without active tools", sess.steers)
@@ -1478,7 +1478,7 @@ func TestCtrlGRecallsQueuedTurnsIntoComposer(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatal("recall queued turns should be local")
@@ -1497,7 +1497,7 @@ func TestRetiredModeSlashCommandErrorsDuringTurn(t *testing.T) {
 	model.Input.Composer.SetValue("/mode read")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for host command", model.InFlight.QueuedTurns)
 	}
@@ -1512,7 +1512,7 @@ func TestSlashCommandOpensProviderPickerDuringTurn(t *testing.T) {
 	model.Input.Composer.SetValue("/provider")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for slash command", model.InFlight.QueuedTurns)
@@ -1533,7 +1533,7 @@ func TestUnknownSlashCommandDuringTurnStaysLocal(t *testing.T) {
 	model.Input.Composer.SetValue("/definitely-not-a-command")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for slash command", model.InFlight.QueuedTurns)
@@ -1554,7 +1554,7 @@ func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"queued"}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected cancel command")
@@ -1583,7 +1583,7 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	model.Input.Composer.SetValue("hello")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateIonizing {
 		t.Fatalf("progress mode before submit result = %v, want ionizing", model.Progress.Mode)
@@ -1600,7 +1600,7 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 		t.Fatalf("submit result error = %v, want backend unavailable", result.err)
 	}
 	updated, cmd = model.Update(result)
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.Progress.Mode != stateReady {
 		t.Fatalf("progress mode = %v, want ready after immediate rejection", model.Progress.Mode)
 	}
@@ -1657,7 +1657,7 @@ func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
 	model.Input.Composer.SetValue("try again")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model, _ = applySubmitResult(t, model, cmd)
 
 	if model.Progress.Mode != stateIonizing {

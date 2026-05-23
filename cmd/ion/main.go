@@ -261,7 +261,7 @@ func main() {
 		model.RenderEntries(startupEntries...),
 	)
 	model = model.WithPrintedTranscript(len(startupEntries) > 0)
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
 	agentToClose, sessionToClose := runtimeHandlesForClose(finalModel, b.Session(), sess)
 	closeErr := closeRuntimeHandles(agentToClose, sessionToClose, store)
@@ -296,7 +296,7 @@ func runtimeHandlesForClose(
 	fallbackAgent session.AgentSession,
 	fallbackSession storage.Session,
 ) (session.AgentSession, storage.Session) {
-	if model, ok := finalModel.(app.Model); ok {
+	if model, ok := finalModel.(*app.Model); ok && model != nil {
 		return model.Model.Session, model.Model.Storage
 	}
 	return fallbackAgent, fallbackSession

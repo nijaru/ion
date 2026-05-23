@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,15 +22,16 @@ import (
 func main() {
 	mode := flag.String("mode", "complete", "smoke script mode: complete, cancel, or error")
 	storeRoot := flag.String("store", "", "session store directory")
+	startupCheck := flag.Bool("startup-check", false, "render the ready shell once and exit")
 	flag.Parse()
 
-	if err := run(*mode, *storeRoot); err != nil {
+	if err := run(*mode, *storeRoot, *startupCheck); err != nil {
 		fmt.Fprintf(os.Stderr, "ion-tui-smoke: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, storeRoot string) error {
+func run(mode, storeRoot string, startupCheck bool) error {
 	ctx := context.Background()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -73,7 +75,21 @@ func run(mode, storeRoot string) error {
 
 	model := app.New(smoke, stored, store, cwd, "smoke", "v0.0.0", nil).
 		WithConfig(cfg)
-	_, err = tea.NewProgram(model).Run()
+	if startupCheck {
+		updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+		ready, ok := updated.(*app.Model)
+		if !ok {
+			return fmt.Errorf("startup update returned %T, want *app.Model", updated)
+		}
+		view := ready.View().Content
+		if !strings.Contains(view, "›") || !strings.Contains(view, "fake-model") {
+			return fmt.Errorf("startup view missing ready shell markers")
+		}
+		fmt.Println("startup-check: ready shell rendered")
+		smoke.Close()
+		return nil
+	}
+	_, err = tea.NewProgram(&model).Run()
 	smoke.Close()
 	return err
 }

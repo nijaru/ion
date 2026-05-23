@@ -1502,6 +1502,85 @@ func BenchmarkCantoStoreDisplayProjectionCachedEntries(b *testing.B) {
 	}
 }
 
+func BenchmarkCantoStoreDisplayProjectionColdBuild(b *testing.B) {
+	root := b.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		b.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, filepath.Join(b.TempDir(), "repo"), "model-a", "main")
+	if err != nil {
+		b.Fatalf("open session: %v", err)
+	}
+	for i := range 2_000 {
+		appendCantoMessage(b, store, ctx, sess.ID(), llm.Message{
+			Role:    llm.RoleUser,
+			Content: "message " + strconv.Itoa(i),
+		})
+	}
+	b.ReportMetric(2_000, "events/op")
+
+	b.ResetTimer()
+	for b.Loop() {
+		b.StopTimer()
+		if _, err := store.db.ExecContext(
+			ctx,
+			"DELETE FROM session_display_projection WHERE session_id = ?",
+			sess.ID(),
+		); err != nil {
+			b.Fatalf("clear projection: %v", err)
+		}
+		b.StartTimer()
+		entries, err := sess.Entries(ctx)
+		if err != nil {
+			b.Fatalf("entries: %v", err)
+		}
+		if len(entries) != 2_000 {
+			b.Fatalf("entries = %d, want 2000", len(entries))
+		}
+	}
+}
+
+func BenchmarkCantoStoreListSessionsLargeWorkspace(b *testing.B) {
+	root := b.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		b.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := filepath.Join(b.TempDir(), "repo")
+	for i := range 1_200 {
+		id := "bench-session-" + strconv.Itoa(i)
+		if _, err := store.OpenSessionWithID(ctx, id, cwd, "model-a", "main"); err != nil {
+			b.Fatalf("open session %d: %v", i, err)
+		}
+		if err := store.UpdateSession(ctx, SessionInfo{
+			ID:          id,
+			Title:       "feature investigation " + strconv.Itoa(i),
+			LastPreview: "last preview message " + strconv.Itoa(i),
+		}); err != nil {
+			b.Fatalf("update session %d: %v", i, err)
+		}
+	}
+	b.ReportMetric(1_200, "sessions/op")
+
+	b.ResetTimer()
+	for b.Loop() {
+		sessions, err := store.ListSessions(ctx, cwd)
+		if err != nil {
+			b.Fatalf("list sessions: %v", err)
+		}
+		if len(sessions) != 1_200 {
+			b.Fatalf("sessions = %d, want 1200", len(sessions))
+		}
+	}
+}
+
 func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

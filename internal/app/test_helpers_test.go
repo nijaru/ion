@@ -147,10 +147,7 @@ func settleRuntimeTransitionCmd(t *testing.T, model Model, cmd tea.Cmd) (Model, 
 	}
 	msg := cmd()
 	updated, nextCmd := model.Update(msg)
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("updated model = %T, want Model", updated)
-	}
+	next := testModel(t, updated)
 	return next, nextCmd
 }
 
@@ -205,6 +202,22 @@ func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 		messages = append(messages, runCommandTree(t, child)...)
 	}
 	return messages
+}
+
+func testModel(t testing.TB, updated any) Model {
+	t.Helper()
+	switch next := updated.(type) {
+	case Model:
+		return next
+	case *Model:
+		if next == nil {
+			t.Fatal("updated model is nil")
+		}
+		return *next
+	default:
+		t.Fatalf("updated model = %T, want Model", updated)
+		return Model{}
+	}
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
@@ -343,11 +356,7 @@ func readyModel(t *testing.T) Model {
 	b := stubBackend{sess: sess}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	ready, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after window size update")
-	}
-	return ready
+	return testModel(t, updated)
 }
 
 func withOpenRouterKey(t *testing.T) {
@@ -365,11 +374,7 @@ func resolveModelPickerLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
 	if nextCmd != nil {
 		t.Fatalf("model picker load returned unexpected command %T", nextCmd)
 	}
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after model picker load")
-	}
-	return next
+	return testModel(t, updated)
 }
 
 func resolveProviderSelection(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
@@ -379,11 +384,7 @@ func resolveProviderSelection(t *testing.T, model Model, cmd tea.Cmd) (Model, te
 	}
 	msg := cmd()
 	updated, nextCmd := model.Update(msg)
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after provider selection")
-	}
-	return next, nextCmd
+	return testModel(t, updated), nextCmd
 }
 
 func resolveProviderSelectionAndModelLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
@@ -399,11 +400,7 @@ func resolveModelPickerSetup(t *testing.T, model Model, cmd tea.Cmd) (Model, tea
 	}
 	msg := cmd()
 	updated, nextCmd := model.Update(msg)
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after model picker setup")
-	}
-	return next, nextCmd
+	return testModel(t, updated), nextCmd
 }
 
 func resolveSetupPromptSave(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
@@ -413,11 +410,7 @@ func resolveSetupPromptSave(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.
 	}
 	msg := cmd()
 	updated, nextCmd := model.Update(msg)
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after setup prompt save")
-	}
-	return next, nextCmd
+	return testModel(t, updated), nextCmd
 }
 
 func resolveSettingsCommand(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
@@ -427,11 +420,7 @@ func resolveSettingsCommand(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.
 	}
 	msg := cmd()
 	updated, nextCmd := model.Update(msg)
-	next, ok := updated.(Model)
-	if !ok {
-		t.Fatalf("expected Model after settings command")
-	}
-	return next, nextCmd
+	return testModel(t, updated), nextCmd
 }
 
 func stubModelCatalog(

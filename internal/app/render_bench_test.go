@@ -12,9 +12,68 @@ import (
 
 var (
 	benchmarkStringSink       string
+	benchmarkIntSink          int
 	benchmarkPickerItemsSink  []pickerItem
 	benchmarkSessionItemsSink []sessionPickerItem
 )
+
+func BenchmarkP1StartupReadyShell(b *testing.B) {
+	b.Setenv("HOME", b.TempDir())
+
+	backend := stubBackend{sess: &stubSession{}}
+	b.ReportAllocs()
+	for b.Loop() {
+		model := New(
+			backend,
+			nil,
+			nil,
+			"/Users/nick/github/nijaru/ion",
+			"main",
+			"bench",
+			nil,
+		)
+		model.App.Ready = true
+		model.App.Width = 120
+		model.App.Height = 32
+		model.layout()
+		benchmarkStringSink = model.View().Content
+	}
+}
+
+func BenchmarkP1EventToViewActiveTool(b *testing.B) {
+	base := benchmarkRenderModel()
+	events := benchmarkP1TurnEvents(12)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		model := base
+		model.InFlight.Subagents = make(map[string]*SubagentProgress)
+		for _, ev := range events {
+			updated, _ := model.Update(ev)
+			model = (*updated.(*Model))
+		}
+		benchmarkStringSink = model.View().Content
+	}
+}
+
+func BenchmarkP1BurstAgentDeltaReduction(b *testing.B) {
+	base := benchmarkRenderModel()
+	deltas := benchmarkAgentDeltas(128)
+	b.ReportMetric(float64(len(deltas)+1), "events/op")
+
+	b.ReportAllocs()
+	for b.Loop() {
+		model := base
+		model.InFlight.Subagents = make(map[string]*SubagentProgress)
+		updated, _ := model.Update(session.TurnStarted{})
+		model = (*updated.(*Model))
+		for _, ev := range deltas {
+			updated, _ := model.Update(ev)
+			model = (*updated.(*Model))
+		}
+		benchmarkIntSink = len(model.InFlight.StreamChunks)
+	}
+}
 
 func BenchmarkViewReadyShell(b *testing.B) {
 	model := benchmarkRenderModel()
@@ -203,4 +262,40 @@ func benchmarkReplayEntries(count int) []session.Entry {
 		)
 	}
 	return entries
+}
+
+func benchmarkP1TurnEvents(deltaCount int) []session.Event {
+	events := []session.Event{
+		session.UserMessage{Message: "inspect the workspace"},
+		session.TurnStarted{},
+		session.StatusChanged{Status: "Thinking..."},
+	}
+	for i := range deltaCount {
+		events = append(events, session.AgentDelta{
+			Delta: fmt.Sprintf("stream chunk %02d with enough text to render ", i),
+		})
+	}
+	events = append(
+		events,
+		session.ToolCallStarted{
+			ToolUseID: "tool-1",
+			ToolName:  "read",
+			Args:      `{"file_path":"ai/STATUS.md"}`,
+		},
+		session.ToolOutputDelta{
+			ToolUseID: "tool-1",
+			Delta:     strings.Repeat("status line\n", 24),
+		},
+	)
+	return events
+}
+
+func benchmarkAgentDeltas(count int) []session.Event {
+	events := make([]session.Event, 0, count)
+	for i := range count {
+		events = append(events, session.AgentDelta{
+			Delta: fmt.Sprintf("delta-%03d ", i),
+		})
+	}
+	return events
 }

@@ -11,7 +11,7 @@ func TestShiftTabDoesNothingDuringCoreStabilization(t *testing.T) {
 	model := readyModel(t)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatal("shift+tab should be disabled while modes are hidden")
 	}

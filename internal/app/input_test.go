@@ -26,7 +26,7 @@ func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	model.layout()
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("expected composer to be cleared, got %q", got)
@@ -61,7 +61,7 @@ func TestComposerAcceptsTypedText(t *testing.T) {
 		{Text: "p", Code: 'p'},
 	} {
 		updated, _ := model.Update(key)
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	if got := model.Input.Composer.Value(); got != "/help" {
@@ -98,10 +98,10 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 		nil,
 	)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second prompt" {
 		t.Fatalf("composer = %q, want latest persisted input", got)
 	}
@@ -213,7 +213,7 @@ func TestEnterSubmitsSlashCommandFromComposer(t *testing.T) {
 	model.Input.Composer.SetValue("/help")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared after submit", got)
@@ -229,7 +229,7 @@ func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
 	model.holdEnterForLargePrint(40)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if !model.Input.DeferredEnter {
 		t.Fatal("expected Enter to be deferred while large print is flushing")
@@ -250,7 +250,7 @@ func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
 	model.Input.Composer.SetValue("run this after the switch")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected runtime-switch guard error")
@@ -277,7 +277,7 @@ func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
 	model.Input.PrintHoldUntil = time.Now().Add(-time.Millisecond)
 
 	updated, cmd := model.Update(deferredEnterMsg{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Input.DeferredEnter {
 		t.Fatal("expected deferred Enter state to clear after submit")
@@ -294,7 +294,7 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	model := readyModel(t)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("first ctrl+c should arm quit timeout")
 	}
@@ -309,7 +309,7 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("second ctrl+c should quit")
 	}
@@ -323,7 +323,7 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatal("ctrl+c with text should clear, not quit")
 	}
@@ -343,7 +343,7 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"follow up"}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("ctrl+c while running should print durable cancellation")
 	}
@@ -380,7 +380,7 @@ func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
 	model.Input.Composer.SetValue("draft follow-up")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatal("ctrl+c with a draft should clear composer, not cancel")
 	}
@@ -399,7 +399,7 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	model := readyModel(t)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("first ctrl+d should arm quit timeout")
 	}
@@ -414,7 +414,7 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("second ctrl+d should quit")
 	}
@@ -427,13 +427,13 @@ func TestQuitDoubleTapRequiresSameKey(t *testing.T) {
 	model := readyModel(t)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlC {
 		t.Fatal("first ctrl+c should arm ctrl+c quit")
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("ctrl+d after ctrl+c should arm ctrl+d quit")
 	}
@@ -443,13 +443,13 @@ func TestQuitDoubleTapRequiresSameKey(t *testing.T) {
 
 	model = readyModel(t)
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlD {
 		t.Fatal("first ctrl+d should arm ctrl+d quit")
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("ctrl+c after ctrl+d should arm ctrl+c quit")
 	}
@@ -464,7 +464,7 @@ func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 	model.Input.Composer.CursorStart()
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("ctrl+d with draft returned cmd %T, want composer edit only", cmd)
 	}
@@ -483,7 +483,7 @@ func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatal("ctrl+d while running should not quit or print")
 	}
@@ -506,7 +506,7 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("esc while running should print durable cancellation")
 	}
@@ -546,13 +546,13 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 	model := readyModel(t)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected timeout cmd after first ctrl+c")
 	}
 
 	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should clear after timeout")
 	}
@@ -569,7 +569,7 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	model.Input.History = []string{"first\nsecond\nthird"}
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "first\nsecond\nthird" {
 		t.Fatalf("expected recalled history entry, got %q", got)
@@ -583,7 +583,7 @@ func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	model := readyModel(t)
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected thinking picker to open")
@@ -653,7 +653,7 @@ func TestExternalEditorReturnsBeforeBufferWriteCompletes(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("external editor should return a command")
 	}
@@ -725,7 +725,7 @@ func TestCtrlXControlTextDoesNotEnterComposerWhileBusy(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("busy editor handoff should print a notice")
@@ -740,13 +740,13 @@ func TestCtrlPRecallsHistory(t *testing.T) {
 	model.Input.History = []string{"first", "second"}
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second" {
 		t.Fatalf("composer = %q, want latest history entry", got)
 	}
 
 	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "first" {
 		t.Fatalf("composer = %q, want previous history entry", got)
 	}
@@ -757,12 +757,12 @@ func TestCtrlNTogglesForwardThroughHistory(t *testing.T) {
 	model.Input.History = []string{"first", "second"}
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second" {
 		t.Fatalf("composer = %q, want next history entry", got)
 	}
@@ -808,7 +808,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected ctrl+m to return a switch command")
 	}
@@ -818,7 +818,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 	next, _ := model.Update(switched)
-	model = next.(Model)
+	model = testModel(t, next)
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
 	}
@@ -837,7 +837,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected ctrl+m to switch back to primary")
 	}
@@ -847,7 +847,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 	next, _ = model.Update(switched)
-	model = next.(Model)
+	model = testModel(t, next)
 	if model.App.ActivePreset != presetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
@@ -887,7 +887,7 @@ func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
 	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected ctrl+m to return a busy-turn error")
 	}

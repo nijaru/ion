@@ -22,7 +22,7 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 
 	model.Input.Composer.SetValue("run smoke")
 	updated, cmd := model.Update(sendKeyMsg())
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "run smoke" {
@@ -42,7 +42,7 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	} {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
-		model = updated.(Model)
+		model = testModel(t, updated)
 		if _, ok := ev.(session.TokenUsage); ok {
 			runSequencePrefix(t, cmd, 1)
 		}
@@ -93,11 +93,11 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 	model, sess, store, stored := newCoreLoopSmokeModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	model.Input.Composer.SetValue("inspect workspace")
 	updated, cmd := model.Update(sendKeyMsg())
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model, _ = applySubmitResult(t, model, cmd)
 
 	if len(sess.submits) != 1 || sess.submits[0] != "inspect workspace" {
@@ -117,7 +117,7 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 	} {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
-		model = updated.(Model)
+		model = testModel(t, updated)
 		if _, ok := ev.(session.TokenUsage); ok {
 			runSequencePrefix(t, cmd, 1)
 		}
@@ -175,9 +175,9 @@ func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {
 	model, sess, store, stored := newCoreLoopSmokeModel(t)
 
 	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("expected cancel command")
@@ -205,9 +205,9 @@ func TestCoreLoopSmokeStreamCloseDuringTurnStopsBusyState(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 
 	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(streamClosedMsg{generation: model.Model.EventGeneration})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd == nil {
 		t.Fatal("stream close during turn should print terminal error")
@@ -252,9 +252,9 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	)
 
 	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 2)
 
 	if model.Progress.Mode != stateError {
@@ -280,12 +280,12 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 
 	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 	updated, cmd = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 3)
 
 	if model.Progress.Mode != stateError {
@@ -316,9 +316,9 @@ func TestCoreLoopSmokeBudgetCancellationPersistsForResume(t *testing.T) {
 	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
 
 	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 4)
 
 	if model.Progress.Mode != stateCancelled {
@@ -363,7 +363,7 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
 	updated, cmd := model.Update(session.StatusChanged{Status: status})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 
 	if model.Progress.Status != status {
@@ -387,7 +387,7 @@ func TestCoreLoopSmokeRetryStatusPersistsForResume(t *testing.T) {
 
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
 	updated, cmd := model.Update(session.StatusChanged{Status: status})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 
 	if model.Progress.Status != status {
@@ -429,7 +429,7 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 		ToolName:  "bash",
 		Args:      `curl -H "Authorization: Bearer abc.def-123" https://example.test`,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.InFlight.Pending == nil {
 		t.Fatal("expected pending tool preview")

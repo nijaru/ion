@@ -79,7 +79,7 @@ func TestTabCompletesSlashCommands(t *testing.T) {
 	model.Input.Composer.SetValue("/think")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("unexpected autocomplete cmd %T", cmd)
 	}
@@ -96,7 +96,7 @@ func TestComposerShowsSlashCommandSuggestionsWhileTyping(t *testing.T) {
 		{Text: "m", Code: 'm'},
 	} {
 		updated, _ := model.Update(key)
-		model = updated.(Model)
+		model = testModel(t, updated)
 	}
 
 	if model.Picker.Overlay != nil {
@@ -142,7 +142,7 @@ func TestTabCompletesKnownSlashArguments(t *testing.T) {
 			model.Input.Composer.SetValue(tc.input)
 
 			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-			model = updated.(Model)
+			model = testModel(t, updated)
 			if cmd != nil {
 				t.Fatalf("unexpected autocomplete cmd %T", cmd)
 			}
@@ -158,7 +158,7 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 	model.Input.Composer.SetValue("/t")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("unexpected ambiguous autocomplete command %T", cmd)
 	}
@@ -187,7 +187,7 @@ func TestTabIgnoresHiddenSlashCommandAliases(t *testing.T) {
 	model.Input.Composer.SetValue("/rea")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("unexpected autocomplete cmd %T", cmd)
 	}
@@ -258,7 +258,7 @@ func TestTabCompletesFileReference(t *testing.T) {
 	model.Input.Composer.SetValue("read @REA")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("unexpected file completion cmd %T", cmd)
 	}
@@ -277,7 +277,7 @@ func TestTabCompletesDirectoryReferenceWithoutTrailingSpace(t *testing.T) {
 	model.Input.Composer.SetValue("@int")
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "@internal/" {
 		t.Fatalf("composer = %q, want completed directory reference", got)
 	}
@@ -295,7 +295,7 @@ func TestTabFileReferenceKeepsCommonPrefixForAmbiguousMatches(t *testing.T) {
 	model.Input.Composer.SetValue("@RE")
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "@RE" {
 		t.Fatalf("composer = %q, want unchanged ambiguous reference", got)
 	}
@@ -447,7 +447,7 @@ func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
 		)
 	}
 	updated, cmd := result.model.Update(loadedMsg)
-	result.model = updated.(Model)
+	result.model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("loaded session picker command = %T, want nil", cmd)
 	}
@@ -473,7 +473,7 @@ func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 			Title: "stale session",
 		}},
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("stale session picker command = %T, want nil", cmd)
@@ -552,7 +552,7 @@ func TestSessionPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	model.Picker.Session.filtered = model.Picker.Session.items
 
 	updated, _ := model.Update(tea.PasteMsg{Content: "resume\n"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged draft", got)
@@ -583,7 +583,7 @@ func TestSessionPickerIgnoresControlKeyText(t *testing.T) {
 		Code: 'x',
 		Mod:  tea.ModCtrl,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("unexpected control-key command %T", cmd)
@@ -884,7 +884,7 @@ func TestPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	}
 
 	updated, _ := model.Update(tea.PasteMsg{Content: "router\n"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged draft", got)
@@ -920,7 +920,7 @@ func TestPickerIgnoresControlKeyText(t *testing.T) {
 		Code: 'x',
 		Mod:  tea.ModCtrl,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("unexpected control-key command %T", cmd)
@@ -1230,7 +1230,7 @@ func TestThinkingPickerCommitUpdatesAppConfig(t *testing.T) {
 		t.Fatal("expected thinking selection notice")
 	}
 	next, nextCmd := model.Update(cmd())
-	model = next.(Model)
+	model = testModel(t, next)
 	cmd = nextCmd
 	if cmd == nil {
 		t.Fatal("expected thinking selection print command")
@@ -1251,7 +1251,7 @@ func TestThinkingPickerCommitUpdatesAppConfig(t *testing.T) {
 func TestModelPickerMetricHeaderFitsShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
-	model = updated.(Model)
+	model = testModel(t, updated)
 	longModel := "provider/really-long-model-name-that-must-not-wrap"
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model",
@@ -1462,7 +1462,7 @@ func TestOpenModelPickerReturnsBeforeEndpointProbeCompletes(t *testing.T) {
 		t.Fatalf("model picker setup result = %#v, want ready provider", msg)
 	}
 	updated, nextCmd := result.model.Update(resolved)
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model = resolveModelPickerLoad(t, model, nextCmd)
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
@@ -1917,7 +1917,7 @@ func TestProviderPickerSelectionReturnsBeforeEndpointProbeCompletes(t *testing.T
 		t.Fatalf("provider selection result = %#v, want success", msg)
 	}
 	updated, nextCmd := result.model.Update(resolved)
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model = resolveModelPickerLoad(t, model, nextCmd)
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
@@ -2398,7 +2398,7 @@ func TestSetupPromptPasteUpdatesPromptWithoutChangingComposer(t *testing.T) {
 	}
 
 	updated, _ := model.Update(tea.PasteMsg{Content: "fedora:11434\n"})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged draft", got)
@@ -2422,7 +2422,7 @@ func TestSetupPromptIgnoresControlKeyText(t *testing.T) {
 		Code: 'x',
 		Mod:  tea.ModCtrl,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if cmd != nil {
 		t.Fatalf("unexpected control-key command %T", cmd)

@@ -44,7 +44,11 @@ func (m Model) renderPlaneB() string {
 	}
 
 	if hasPendingAgent {
-		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
+		entry := *m.InFlight.Pending
+		if content := m.agentStreamContent(); content != "" {
+			entry.Content = content
+		}
+		b.WriteString(m.renderPendingEntry(entry))
 		b.WriteString("\n")
 	}
 
@@ -82,6 +86,10 @@ func (m Model) renderPlaneB() string {
 	}
 
 	return b.String()
+}
+
+func (m Model) agentStreamContent() string {
+	return m.turnReducer().agentStreamContent()
 }
 
 // renderPendingEntry renders an in-flight entry for Plane B.

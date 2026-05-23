@@ -47,7 +47,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 	model.Input.Composer.SetValue("hi")
 	// simulate ctrl+s (m.sendKey)
 	updated, cmd := model.Update(sendKeyMsg())
-	model = updated.(Model)
+	model = testModel(t, updated)
 	model, _ = applySubmitResult(t, model, cmd)
 
 	// Wait for async backend script to finish
@@ -57,7 +57,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		select {
 		case ev := <-b.Events():
 			updated, _ = model.Update(ev)
-			model = updated.(Model)
+			model = testModel(t, updated)
 			if _, ok := ev.(session.TurnFinished); ok {
 				done = true
 			}
@@ -134,7 +134,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		select {
 		case ev := <-b.Events():
 			updated, _ := model.Update(ev)
-			model = updated.(Model)
+			model = testModel(t, updated)
 			if _, ok := ev.(session.TurnFinished); ok {
 				done = true
 			}
@@ -191,7 +191,7 @@ loop:
 		select {
 		case ev := <-b.Events():
 			updated, cmd := model.Update(ev)
-			model = updated.(Model)
+			model = testModel(t, updated)
 			switch ev.(type) {
 			case session.ChildRequested, session.ChildCompleted, session.ChildFailed:
 				runSequencePrefix(t, cmd, 2)

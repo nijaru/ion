@@ -19,7 +19,7 @@ func TestToolStreaming(t *testing.T) {
 		ToolName: "bash",
 		Args:     "ls",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if m.InFlight.Pending == nil || m.InFlight.Pending.Role != session.Tool {
 		t.Fatal("expected pending tool entry")
@@ -27,7 +27,7 @@ func TestToolStreaming(t *testing.T) {
 
 	// 2. Output delta
 	updated, _ = m.Update(session.ToolOutputDelta{Delta: "file1.txt\n"})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if m.InFlight.Pending.Content != "file1.txt\n" {
 		t.Fatalf("expected content 'file1.txt\n', got %q", m.InFlight.Pending.Content)
@@ -38,7 +38,7 @@ func TestToolStreaming(t *testing.T) {
 		ToolName: "bash",
 		Result:   "file1.txt\nfile2.txt\n",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if m.InFlight.Pending != nil {
 		t.Fatal("expected pending entry cleared after ToolResult")
@@ -92,14 +92,14 @@ func TestAsyncSubagents(t *testing.T) {
 		AgentName: "worker-1",
 		Query:     "task 1",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	// 2. Worker 2 requested
 	updated, _ = m.Update(session.ChildRequested{
 		AgentName: "worker-2",
 		Query:     "task 2",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if len(m.InFlight.Subagents) != 2 {
 		t.Fatalf("expected 2 subagents, got %d", len(m.InFlight.Subagents))
@@ -110,14 +110,14 @@ func TestAsyncSubagents(t *testing.T) {
 		AgentName: "worker-1",
 		Delta:     "working on 1...",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	// 4. Worker 2 progresses
 	updated, _ = m.Update(session.ChildDelta{
 		AgentName: "worker-2",
 		Delta:     "working on 2...",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if !strings.Contains(m.InFlight.Subagents["worker-1"].Output, "working on 1...") {
 		t.Error("worker-1 output missing progress")
@@ -131,7 +131,7 @@ func TestAsyncSubagents(t *testing.T) {
 		AgentName: "worker-1",
 		Result:    "result 1",
 	})
-	m = updated.(Model)
+	m = testModel(t, updated)
 
 	if _, ok := m.InFlight.Subagents["worker-1"]; ok {
 		t.Error("worker-1 should be removed from map after completion")
@@ -153,7 +153,7 @@ func TestSubagentCollapseRule(t *testing.T) {
 			AgentName: name,
 			Query:     "task",
 		})
-		m = updated.(Model)
+		m = testModel(t, updated)
 	}
 
 	if len(m.InFlight.Subagents) != 5 {

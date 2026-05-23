@@ -588,7 +588,7 @@ func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	got := model.InFlight.PendingTools["tool-read"].Title
 	if got != "Read(AGENTS.md)" {
@@ -607,7 +607,7 @@ func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	got := model.InFlight.PendingTools["tool-read"].Title
 	if got != "Read(internal/app/model_test.go)" {
@@ -630,7 +630,7 @@ func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	entry := model.InFlight.PendingTools["tool-read"]
 	if got := entry.Title; got != "Read(internal/app/model_test.go)" {

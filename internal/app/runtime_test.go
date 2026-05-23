@@ -117,7 +117,7 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
@@ -184,7 +184,7 @@ func TestRuntimeSwitchAcceptedSnapshotIncludesRuntimeMetadata(t *testing.T) {
 		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	snapshot := model.Model.Runtime
 	if snapshot.Provider != "openai" ||
@@ -217,7 +217,7 @@ func TestRuntimeSwitchSnapshotTracksLazySessionWithoutResumingIt(t *testing.T) {
 		&stubSession{events: make(chan session.Event)},
 		lazy,
 	))
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Model.Runtime.SessionID == "" {
 		t.Fatal("runtime snapshot session id is empty, want lazy session identity tracked")
@@ -277,7 +277,7 @@ func TestRuntimeTransitionCommittedPreservesAcceptedSessionSnapshot(t *testing.T
 		),
 		notice: session.Entry{Role: session.System, Content: "Runtime changed"},
 	})
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if got := model.Model.Runtime.MaterializedSessionID(); got != "session-1" {
 		t.Fatalf("snapshot session id = %q, want current accepted session", got)
@@ -349,7 +349,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 
 	next, _ := model.Update(switchedMsg)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if !switched {
 		t.Fatal("expected runtime switch callback to be invoked")
@@ -652,7 +652,7 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	)
 	msg.notice = "Switched model to gpt-4.1"
 	next, _ := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if len(newStorage.appends) != 0 {
 		t.Fatalf(
@@ -677,7 +677,7 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want cleared on runtime switch", model.InFlight.QueuedTurns)
@@ -709,11 +709,11 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 		newSession,
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
-	model = next.(Model)
+	model = testModel(t, next)
 
 	oldSession.events <- session.AgentDelta{Delta: "stale output"}
 	next, cmd := model.Update(waitOld())
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if cmd != nil {
 		t.Fatalf("stale session event scheduled command %T", cmd)
@@ -731,7 +731,7 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 
 	newSession.events <- session.TurnStarted{}
 	next, _ = model.Update(model.awaitSessionEvent()())
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if !model.InFlight.Thinking {
 		t.Fatal("current session event was not accepted")
@@ -796,7 +796,7 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 	)
 
 	next, cmd := model.Update(firstCmd())
-	model = next.(Model)
+	model = testModel(t, next)
 	if cmd != nil {
 		t.Fatalf("stale runtime switch returned command %T", cmd)
 	}
@@ -815,7 +815,7 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 	}
 
 	next, cmd = model.Update(secondCmd())
-	model = next.(Model)
+	model = testModel(t, next)
 	if cmd == nil {
 		t.Fatal("current runtime switch should schedule replay/await commands")
 	}
@@ -889,7 +889,7 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	}
 
 	next, _ := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if !oldSession.closed {
 		t.Fatal("old agent session was not closed")
@@ -917,7 +917,7 @@ func TestRuntimeSwitchErrorClearsSwitchingStatus(t *testing.T) {
 		switchID: 7,
 		err:      errors.New("Local API is not running"),
 	})
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if cmd == nil {
 		t.Fatal("expected local error print command")
@@ -976,7 +976,7 @@ func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	}
 
 	next, _ := model.Update(msg)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if !oldSession.closed {
 		t.Fatal("old agent session was not closed")
@@ -1039,7 +1039,7 @@ func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
 		t.Fatalf("resume command message = %T, want runtimeSwitchedMsg", msg)
 	}
 	next, _ := model.Update(switched)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if model.App.ActivePreset != presetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
@@ -1202,7 +1202,7 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 	next, _ := model.Update(switched)
-	model = next.(Model)
+	model = testModel(t, next)
 
 	if observed == nil || observed.Provider != "openrouter" ||
 		observed.Model != "anthropic/claude-sonnet-4.5" {
@@ -1240,7 +1240,7 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	msg.replayEntries = []session.Entry{{Role: session.User, Content: "hello"}}
 	msg.notice = "Resumed session session-1"
 	updated, cmd := model.Update(msg)
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if model.Progress.Status != "Connected via Canto" {
 		t.Fatalf("status = %q", model.Progress.Status)
@@ -1267,7 +1267,7 @@ func TestRuntimeSwitchMarksPrintedTranscriptForReplay(t *testing.T) {
 	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
 	msg.replayEntries = []session.Entry{{Role: session.Agent, Content: "restored answer"}}
 	updated, _ := model.Update(msg)
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if !model.App.PrintedTranscript {
 		t.Fatal("runtime replay did not mark transcript as printed")
@@ -1293,7 +1293,7 @@ func TestRuntimeSwitchMarksPrintedTranscriptForHeaderOnlyReplay(t *testing.T) {
 	)
 	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
 	updated, _ := model.Update(msg)
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if !model.App.PrintedTranscript {
 		t.Fatal("runtime replay header did not mark transcript as printed")
@@ -1319,7 +1319,7 @@ func TestRuntimeSwitchMarksPrintedTranscriptForNotice(t *testing.T) {
 	)
 	msg.notice = "Switched to fast"
 	updated, _ := model.Update(msg)
-	model = updated.(Model)
+	model = testModel(t, updated)
 
 	if !model.App.PrintedTranscript {
 		t.Fatal("runtime switch notice did not mark transcript as printed")
@@ -1342,7 +1342,7 @@ func runResumeStoredSessionCommand(t *testing.T, model Model, sessionID string) 
 		t.Fatalf("expected resumeSessionSelectedMsg, got %T", first)
 	}
 	nextModel, nextCmd := updated.Update(selected)
-	updated = nextModel.(Model)
+	updated = testModel(t, nextModel)
 	if nextCmd == nil {
 		t.Fatal("resumeSessionSelectedMsg returned nil runtime switch command")
 	}
