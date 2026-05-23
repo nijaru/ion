@@ -24,6 +24,28 @@ func TestTurnStateFinishClearsCancelAndTools(t *testing.T) {
 	}
 }
 
+func TestTurnStateFinishCantoMatchesAcceptedTurn(t *testing.T) {
+	state := newTurnState()
+	turnID := state.start(func() {})
+	if !state.accept(turnID, "canto-turn") {
+		t.Fatal("accept returned false for active turn")
+	}
+	state.markToolActive(turnID, "tool-call-1")
+
+	if state.finishCanto("other-turn") {
+		t.Fatal("stale Canto turn claimed settlement")
+	}
+	if !state.active {
+		t.Fatal("stale Canto turn cleared active turn")
+	}
+	if !state.finishCanto("canto-turn") {
+		t.Fatal("accepted Canto turn did not claim settlement")
+	}
+	if state.active || state.cancel != nil || state.hasActiveTool() {
+		t.Fatalf("turn state not cleared after Canto settlement: %#v", state)
+	}
+}
+
 func TestTurnStateRequestCancelKeepsTurnActiveUntilSettlement(t *testing.T) {
 	state := newTurnState()
 	var canceled bool

@@ -50,11 +50,27 @@ func (b *Backend) forwardRuntimeEvents(ctx context.Context, session *cantofw.Ses
 }
 
 func (b *Backend) translateHarnessEvent(event cantofw.HarnessEvent) {
+	base := ionsession.BaseNow()
 	switch payload := event.Payload.(type) {
 	case cantofw.QueueUpdatedPayload:
 		b.events <- ionsession.QueuedInputUpdated{
-			Base:     ionsession.BaseNow(),
+			Base:     base,
 			Snapshot: queuedInputSnapshotFromCanto(payload.Queue),
 		}
+	case cantofw.SavePointPayload:
+		b.events <- ionsession.TurnSavePoint{
+			Base:                base,
+			HadPendingMutations: payload.HadPendingMutations,
+		}
+	case cantofw.SettledPayload:
+		b.emitTurnSettled(event.TurnID, base)
 	}
+}
+
+func (b *Backend) emitTurnSettled(cantoTurnID string, base ionsession.Base) bool {
+	if !b.finishTurnByCantoID(cantoTurnID) {
+		return false
+	}
+	b.events <- ionsession.TurnFinished{Base: base}
+	return true
 }

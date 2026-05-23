@@ -14,6 +14,7 @@ type turnState struct {
 	cancel        context.CancelFunc
 	activeToolIDs map[string]struct{}
 	canceled      map[uint64]struct{}
+	terminalError bool
 }
 
 func newTurnState() turnState {
@@ -29,6 +30,7 @@ func (s *turnState) start(cancel context.CancelFunc) uint64 {
 	s.accepted = false
 	s.cantoTurnID = ""
 	s.cancel = cancel
+	s.terminalError = false
 	s.clearTools()
 	return s.seq
 }
@@ -48,6 +50,7 @@ func (s *turnState) finish(id uint64) bool {
 		s.accepted = false
 		s.cantoTurnID = ""
 		s.cancel = nil
+		s.terminalError = false
 		delete(s.canceled, id)
 		s.clearTools()
 		return true
@@ -57,6 +60,24 @@ func (s *turnState) finish(id uint64) bool {
 	}
 	delete(s.canceled, id)
 	return id == s.seq && !s.active
+}
+
+func (s *turnState) finishCanto(cantoTurnID string) bool {
+	if cantoTurnID == "" || !s.active || s.cantoTurnID != cantoTurnID {
+		return false
+	}
+	return s.finish(s.seq)
+}
+
+func (s *turnState) markTerminalError(id uint64) bool {
+	if id != 0 && s.seq != id {
+		return false
+	}
+	if s.terminalError {
+		return false
+	}
+	s.terminalError = true
+	return true
 }
 
 func (s *turnState) requestCancel() (context.CancelFunc, bool) {

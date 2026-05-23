@@ -154,6 +154,14 @@ type TurnFinished struct {
 
 func (e TurnFinished) isEvent() {}
 
+// TurnSavePoint fires when the backend has flushed durable writes for a turn.
+type TurnSavePoint struct {
+	Base
+	HadPendingMutations bool `json:"had_pending_mutations,omitempty"`
+}
+
+func (e TurnSavePoint) isEvent() {}
+
 // Error represents a recoverable or fatal error in the session.
 type Error struct {
 	Base

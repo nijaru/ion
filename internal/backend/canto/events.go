@@ -238,10 +238,9 @@ func (b *Backend) translateRunSessionEvent(
 			if errText == "" {
 				errText = "turn failed"
 			}
-			b.emitTurnError(turnID, base, fmt.Errorf("%s", errText))
+			b.emitTurnErrorOnce(turnID, base, fmt.Errorf("%s", errText))
 			return true
 		}
-		b.emitTurnFinished(turnID, base)
 		return true
 	case cantofw.RunLifecycleTool:
 		if lifecycle.Tool == nil {

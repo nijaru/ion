@@ -62,6 +62,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnStarted:
 		return m.handleTurnStarted(msg)
 
+	case session.TurnSavePoint:
+		return m, m.awaitSessionEvent()
+
 	case session.TurnFinished:
 		return m.handleTurnFinished()
 

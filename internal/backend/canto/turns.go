@@ -195,8 +195,10 @@ func (b *Backend) runTurn(
 	session *cantofw.Session,
 	turn cantoTurnHandle,
 ) {
-	defer b.clearActiveTurn(turnID)
 	defer cancel()
+	if session == nil {
+		defer b.clearActiveTurn(turnID)
+	}
 
 	b.bindTurnCancel(turnID, func() {
 		cancel()
@@ -215,8 +217,13 @@ func (b *Backend) runTurn(
 			terminal = true
 		}
 	}
-	if _, err := turn.Result(); err != nil && !terminal && b.acceptsTurnEvent(turnID) {
+	_, err := turn.Result()
+	if err != nil && !terminal && b.acceptsTurnEvent(turnID) {
 		b.finishTurnWithError(turnID, err)
+		return
+	}
+	if session == nil && terminal && b.acceptsTurnEvent(turnID) {
+		b.emitTurnFinished(turnID, ionsession.BaseNow())
 	}
 }
 
@@ -296,13 +303,14 @@ func (b *Backend) translateRunEvent(
 			return false
 		}
 		if b.isCancelingTurn(turnID) || isCancellationTerminal(payload.Err.Error()) {
-			return b.emitTurnFinished(turnID, ionsession.BaseNow())
+			return true
 		}
-		return b.emitTurnError(turnID, ionsession.BaseNow(), payload.Err)
+		b.emitTurnErrorOnce(turnID, ionsession.BaseNow(), payload.Err)
+		return true
 	case cantofw.RunResultPayload:
 		base := ionsession.BaseNow()
 		b.emitRunUsage(base, event.Usage)
-		return b.emitTurnFinished(turnID, base)
+		return true
 	}
 	return false
 }
@@ -314,8 +322,31 @@ func (b *Backend) emitTurnError(turnID uint64, base ionsession.Base, err error) 
 	if !b.claimTerminalTurn(turnID) {
 		return false
 	}
-	b.events <- ionsession.Error{Base: base, Err: err}
+	b.emitTurnErrorOnly(base, err)
 	b.events <- ionsession.TurnFinished{Base: base}
+	return true
+}
+
+func (b *Backend) emitTurnErrorOnly(base ionsession.Base, err error) {
+	if err == nil {
+		return
+	}
+	b.events <- ionsession.Error{Base: base, Err: err}
+}
+
+func (b *Backend) emitTurnErrorOnce(turnID uint64, base ionsession.Base, err error) bool {
+	if err == nil {
+		return false
+	}
+	if turnID != 0 {
+		b.mu.Lock()
+		emit := b.turn.markTerminalError(turnID)
+		b.mu.Unlock()
+		if !emit {
+			return false
+		}
+	}
+	b.emitTurnErrorOnly(base, err)
 	return true
 }
 
@@ -337,6 +368,13 @@ func (b *Backend) claimTerminalTurn(turnID uint64) bool {
 func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
 	finished := b.turn.finish(turnID)
+	b.mu.Unlock()
+	return finished
+}
+
+func (b *Backend) finishTurnByCantoID(cantoTurnID string) bool {
+	b.mu.Lock()
+	finished := b.turn.finishCanto(cantoTurnID)
 	b.mu.Unlock()
 	return finished
 }

@@ -192,6 +192,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.TokenUsage,
 		session.QueuedInputUpdated,
 		session.TurnStarted,
+		session.TurnSavePoint,
 		session.TurnFinished,
 		session.ThinkingDelta,
 		session.UserMessage,

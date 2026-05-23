@@ -480,8 +480,10 @@ func TestTranslateRunEventUsesCantoUsageAfterToolCompleted(t *testing.T) {
 
 func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 	b := New()
-	b.turn.seq = 7
-	b.turn.active = true
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
 
 	usage := &cantofw.RunUsage{
 		Kind: cantofw.RunUsageTurn,
@@ -499,6 +501,7 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 		},
 	}
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID: "turn-1",
 		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
 			"session-id",
 			csession.TurnCompletedData{Usage: usage.Cumulative},
@@ -510,7 +513,7 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 			Terminal: true,
 			Usage:    usage,
 		},
-	}, 7)
+	}, turnID)
 
 	msg, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
@@ -519,6 +522,11 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 	if msg.Input != 3 || msg.Output != 4 || msg.Total != 7 || msg.Cost != 0.25 {
 		t.Fatalf("terminal usage = %#v, want 3/4/7/0.25", msg)
 	}
+	assertNoBackendEvent(t, b)
+	b.translateHarnessEvent(cantofw.HarnessEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.SettledPayload{},
+	})
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("second event is not TurnFinished")
 	}
@@ -527,10 +535,13 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 
 func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 	b := New()
-	b.turn.seq = 7
-	b.turn.active = true
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  "turn-1",
 		Payload: cantofw.RunResultPayload{},
 		Usage: &cantofw.RunUsage{
 			Kind: cantofw.RunUsageTurn,
@@ -547,7 +558,7 @@ func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 				Cost:         0.33,
 			},
 		},
-	}, 7)
+	}, turnID)
 
 	msg, ok := receiveEvent(t, b.Session().Events()).(ionsession.TokenUsage)
 	if !ok {
@@ -556,6 +567,11 @@ func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 	if msg.Input != 5 || msg.Output != 6 || msg.Total != 11 || msg.Cost != 0.33 {
 		t.Fatalf("terminal usage = %#v, want 5/6/11/0.33", msg)
 	}
+	assertNoBackendEvent(t, b)
+	b.translateHarnessEvent(cantofw.HarnessEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.SettledPayload{},
+	})
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("second event is not TurnFinished")
 	}
@@ -805,10 +821,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	if errEvent.Err == nil || errEvent.Err.Error() != "provider failed" {
 		t.Fatalf("error = %v, want provider failed", errEvent.Err)
 	}
-	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
-		t.Fatal("fourth event is not TurnFinished")
-	}
 	assertNoBackendEvent(t, b)
+	if !b.isActiveTurn(7) {
+		t.Fatal("terminal Canto lifecycle finished before harness settled event")
+	}
 }
 
 func TestTranslateEventsPreservesToolUseID(t *testing.T) {
