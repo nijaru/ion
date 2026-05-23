@@ -171,8 +171,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			name:       "/settings",
 			detail:     "common settings",
 			helpLabel:  "/settings",
-			helpDetail: "show or change common settings",
-			idle:       slashCommandIdleWithArgs,
+			helpDetail: "open common settings",
 		},
 		{
 			name:       "/tools",

@@ -138,6 +138,34 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
+	t.Run("List supports sorted limited directory output", func(t *testing.T) {
+		dir := filepath.Join(tmpDir, "list")
+		if err := os.MkdirAll(filepath.Join(dir, "Beta"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"zeta.txt", "Alpha.txt"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		l := &List{FileTool: *newTestFileTool(t, tmpDir)}
+		res, err := l.Execute(context.Background(), `{"path":"list","limit":2}`)
+		if err != nil {
+			t.Fatalf("list failed: %v", err)
+		}
+		if !strings.HasPrefix(res, "Alpha.txt\nBeta/\n") {
+			t.Fatalf("list output = %q, want case-insensitive sorted entries", res)
+		}
+		if !strings.Contains(res, "2 entries limit reached") {
+			t.Fatalf("list output = %q, want limit notice", res)
+		}
+
+		if _, err := l.Execute(context.Background(), `{"path":"list/Alpha.txt"}`); err == nil {
+			t.Fatal("expected listing a file to fail")
+		}
+	})
+
 	t.Run("Read line numbering handles trailing newline and empty ranges", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		filePath := "numbered.txt"

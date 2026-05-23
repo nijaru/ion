@@ -12,25 +12,7 @@ import (
 
 func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) == 1 {
-		if m.Model.SettingsRequest != 0 {
-			return m, cmdError(m.localCommandBusyMessage("loading settings"))
-		}
-		m.Model.SettingsRequest++
-		requestID := m.Model.SettingsRequest
-		m.progressReducer().beginLocalStatus("Loading settings...")
-		return m, func() tea.Msg {
-			cfg, err := loadStableConfig()
-			if err != nil {
-				return settingsCommandMsg{
-					requestID: requestID,
-					err:       fmt.Errorf("failed to load config: %w", err),
-				}
-			}
-			return settingsCommandMsg{
-				requestID: requestID,
-				summary:   m.settingsSummary(cfg),
-			}
-		}
+		return m.openSettingsPicker()
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
@@ -42,6 +24,12 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	value := strings.ToLower(strings.TrimSpace(fields[2]))
 	if _, _, err := settingsConfigUpdate(&config.Config{}, key, value); err != nil {
 		return m, cmdError(err.Error())
+	}
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("changing settings"))
+	}
+	if m.Model.SettingsRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("changing settings"))
 	}
 	m.Model.SettingsRequest++
 	requestID := m.Model.SettingsRequest
@@ -98,9 +86,6 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	m.progressReducer().clearLocalBusyStatus()
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
-	}
-	if msg.summary != "" {
-		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.summary})
 	}
 	if !msg.hasTransition {
 		return m, nil
@@ -192,9 +177,9 @@ func settingsConfigUpdate(
 			return config.Config{}, "", fmt.Errorf("usage: /settings busy queue|steer")
 		}
 		if mode == "queue" {
-			updated.BusyInput = ""
+			updated.BusyInput = "queue"
 		} else {
-			updated.BusyInput = mode
+			updated.BusyInput = ""
 		}
 		notice = "Busy input: " + mode
 	default:
@@ -205,33 +190,157 @@ func settingsConfigUpdate(
 	return updated, notice, nil
 }
 
-func (m Model) settingsSummary(cfg *config.Config) string {
+func (m Model) openSettingsPicker() (Model, tea.Cmd) {
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("opening settings"))
+	}
+	if m.Model.SettingsRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("opening settings"))
+	}
+	cfg := &config.Config{}
+	if m.Model.Config != nil {
+		clone := *m.Model.Config
+		cfg = &clone
+	}
+	items := settingsPickerItems(cfg)
+	m.clearProgressError()
+	m.pickerReducer().openOverlay(pickerOverlayState{
+		title:    "Settings",
+		items:    items,
+		filtered: append([]pickerItem(nil), items...),
+		index:    0,
+		purpose:  pickerPurposeSettings,
+		cfg:      cfg,
+	})
+	return m, nil
+}
+
+func settingsPickerItems(cfg *config.Config) []pickerItem {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	return strings.Join([]string{
-		"settings",
-		"",
-		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
-		"  tool display: " + displayToolVerbosity(cfg.ToolVerbosity),
-		"  tool mode: " + cfg.ActiveToolMode(),
-		"  read output: " + displayReadOutput(cfg.ReadOutput),
-		"  write output: " + displayWriteOutput(cfg.WriteOutput),
-		"  bash output: " + displayBashOutput(cfg.BashOutput),
-		"  thinking output: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
-		"  busy input: " + cfg.BusyInputMode(),
-		"",
-		"commands",
-		"",
-		"  /settings retry on|off",
-		"  /settings tool auto|full|collapsed|hidden",
-		"  /settings tool_mode coding|read|all",
-		"  /settings read full|summary|hidden",
-		"  /settings write diff|summary|hidden",
-		"  /settings bash full|summary|hidden",
-		"  /settings thinking full|collapsed|hidden",
-		"  /settings busy queue|steer",
-	}, "\n")
+	retry := onOff(cfg.RetryUntilCancelledEnabled())
+	busy := cfg.BusyInputMode()
+	toolDisplay := displayToolVerbosity(cfg.ToolVerbosity)
+	toolMode := cfg.ActiveToolMode()
+	readOutput := displayReadOutput(cfg.ReadOutput)
+	writeOutput := displayWriteOutput(cfg.WriteOutput)
+	bashOutput := displayBashOutput(cfg.BashOutput)
+	thinkingOutput := displayThinkingVerbosity(cfg.ThinkingVerbosity)
+
+	return []pickerItem{
+		settingsPickerItem(
+			"Retry network errors",
+			"retry",
+			retry,
+			toggleOnOff(retry),
+			"Turn behavior",
+			"Retry transient provider/network failures",
+		),
+		settingsPickerItem(
+			"Busy input",
+			"busy",
+			busy,
+			toggleBusyInput(busy),
+			"Turn behavior",
+			"Default running-turn input behavior",
+		),
+		settingsPickerItem(
+			"Tool mode",
+			"tool_mode",
+			toolMode,
+			nextSettingValue(toolMode, []string{"coding", "read", "all"}),
+			"Tools",
+			"Active tool set for future turns",
+		),
+		settingsPickerItem(
+			"Tool display",
+			"tool",
+			toolDisplay,
+			nextSettingValue(toolDisplay, []string{"auto", "full", "collapsed", "hidden"}),
+			"Display",
+			"Tool call/result visibility",
+		),
+		settingsPickerItem(
+			"Read output",
+			"read",
+			readOutput,
+			nextSettingValue(readOutput, []string{"summary", "full", "hidden"}),
+			"Display",
+			"Read tool transcript detail",
+		),
+		settingsPickerItem(
+			"Write output",
+			"write",
+			writeOutput,
+			nextSettingValue(writeOutput, []string{"summary", "diff", "hidden"}),
+			"Display",
+			"Write/edit transcript detail",
+		),
+		settingsPickerItem(
+			"Bash output",
+			"bash",
+			bashOutput,
+			nextSettingValue(bashOutput, []string{"hidden", "summary", "full"}),
+			"Display",
+			"Bash transcript detail",
+		),
+		settingsPickerItem(
+			"Thinking output",
+			"thinking",
+			thinkingOutput,
+			nextSettingValue(thinkingOutput, []string{"hidden", "collapsed", "full"}),
+			"Display",
+			"Reasoning transcript detail",
+		),
+	}
+}
+
+func settingsPickerItem(label, key, current, next, group, detail string) pickerItem {
+	itemLabel := label + ": " + current
+	itemDetail := "Enter: " + current + " -> " + next
+	if detail != "" {
+		itemDetail += " • " + detail
+	}
+	return pickerItem{
+		Label:  itemLabel,
+		Value:  key + " " + next,
+		Detail: itemDetail,
+		Group:  group,
+		Search: pickerSearchIndex(
+			itemLabel,
+			key+" "+current+" "+next,
+			detail,
+			group,
+			nil,
+		),
+	}
+}
+
+func toggleOnOff(value string) string {
+	if value == "on" {
+		return "off"
+	}
+	return "on"
+}
+
+func toggleBusyInput(value string) string {
+	if value == "queue" {
+		return "steer"
+	}
+	return "queue"
+}
+
+func nextSettingValue(current string, values []string) string {
+	if len(values) == 0 {
+		return current
+	}
+	for i, value := range values {
+		if value == current {
+			return values[(i+1)%len(values)]
+		}
+	}
+	return values[0]
 }
 
 func parseOnOff(value string) (bool, bool) {

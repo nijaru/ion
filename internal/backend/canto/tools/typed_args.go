@@ -24,16 +24,24 @@ type editInput struct {
 }
 
 type listInput struct {
-	Path string `json:"path"`
+	Path  string `json:"path"`
+	Limit int    `json:"limit"`
 }
 
 type grepInput struct {
-	Pattern string `json:"pattern"`
-	Path    string `json:"path"`
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path"`
+	Glob       string `json:"glob"`
+	IgnoreCase bool   `json:"ignoreCase"`
+	Literal    bool   `json:"literal"`
+	Context    int    `json:"context"`
+	Limit      int    `json:"limit"`
 }
 
 type globInput struct {
 	Pattern string `json:"pattern"`
+	Path    string `json:"path"`
+	Limit   int    `json:"limit"`
 }
 
 func decodeToolArgs[A any](name, args string) (A, error) {
@@ -105,6 +113,7 @@ func editParameters() map[string]any {
 func listParameters() map[string]any {
 	schema := typedParameters[listInput](nil)
 	describeProperty(schema, "path", "Directory to list (default: current directory).")
+	describeProperty(schema, "limit", "Maximum number of entries to return (default: 500).")
 	return schema
 }
 
@@ -116,12 +125,23 @@ func grepParameters() map[string]any {
 		"path",
 		"Directory or file to search in, relative to the current directory or absolute.",
 	)
+	describeProperty(
+		schema,
+		"glob",
+		"Filter files by glob pattern (for example '*.go' or '**/*_test.go').",
+	)
+	describeProperty(schema, "ignoreCase", "Case-insensitive search (default: false).")
+	describeProperty(schema, "literal", "Treat the pattern as a literal string instead of a regex.")
+	describeProperty(schema, "context", "Number of context lines before and after each match.")
+	describeProperty(schema, "limit", "Maximum number of output lines to return (default: 100).")
 	return schema
 }
 
 func globParameters() map[string]any {
 	schema := typedParameters[globInput]([]string{"pattern"})
 	describeProperty(schema, "pattern", "The glob pattern to search for (e.g. '**/*.go').")
+	describeProperty(schema, "path", "Directory to search in (default: current directory).")
+	describeProperty(schema, "limit", "Maximum number of results to return (default: 1000).")
 	return schema
 }
 

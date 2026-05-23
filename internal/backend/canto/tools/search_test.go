@@ -21,6 +21,10 @@ func TestSearchTools(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "nomatch.log"), []byte("nothing here"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, "dash.txt"), []byte("-needle"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, ".hidden.go"), []byte("package hidden"), 0o644)
+	os.Mkdir(filepath.Join(tmpDir, "src"), 0o755)
+	os.WriteFile(filepath.Join(tmpDir, "src", "upper.go"), []byte("Needle\ncontext line"), 0o644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "another.go"), []byte("package another"), 0o644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "skip.txt"), []byte("Needle"), 0o644)
 	os.Mkdir(filepath.Join(tmpDir, "ignored"), 0o755)
 	os.WriteFile(filepath.Join(tmpDir, "ignored", "ignored.go"), []byte("package ignored"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("ignored/**\n"), 0o644)
@@ -80,6 +84,23 @@ func TestSearchTools(t *testing.T) {
 			t.Fatalf("expected dash.txt in dash-pattern results, got %q", res)
 		}
 
+		res, err = g.Execute(
+			context.Background(),
+			`{"pattern":"needle","path":"src","glob":"*.go","ignoreCase":true,"literal":true,"context":1,"limit":1}`,
+		)
+		if err != nil {
+			t.Fatalf("grep with pi-like options failed: %v", err)
+		}
+		if !strings.Contains(res, "src/upper.go") {
+			t.Fatalf("expected src/upper.go in filtered grep results, got %q", res)
+		}
+		if strings.Contains(res, "src/skip.txt") {
+			t.Fatalf("glob filter should exclude src/skip.txt, got %q", res)
+		}
+		if !strings.Contains(res, "matches limit reached") {
+			t.Fatalf("expected grep limit notice, got %q", res)
+		}
+
 		res, err = g.Execute(context.Background(), `{"pattern":"definitely-not-present"}`)
 		if err != nil {
 			t.Fatalf("grep no-match should not be a tool error: %v", err)
@@ -111,12 +132,40 @@ func TestSearchTools(t *testing.T) {
 		if strings.Contains(res, ".git/") {
 			t.Fatalf("expected .git paths to be skipped, got %q", res)
 		}
-		if strings.TrimSpace(res) != ".hidden.go\nmatch1.go" {
+		if strings.TrimSpace(res) != ".hidden.go\nmatch1.go\nsrc/another.go\nsrc/upper.go" {
 			t.Errorf("expected hidden and normal go files, got %q", res)
+		}
+
+		res, err = gl.Execute(context.Background(), `{"pattern":"*.go","path":"src","limit":1}`)
+		if err != nil {
+			t.Fatalf("glob with search path and limit failed: %v", err)
+		}
+		if !strings.Contains(res, ".go") {
+			t.Fatalf("expected path-relative glob result, got %q", res)
+		}
+		if strings.Contains(res, "src/") {
+			t.Fatalf("expected glob output relative to search path, got %q", res)
+		}
+		if !strings.Contains(res, "results limit reached") {
+			t.Fatalf("expected glob limit notice, got %q", res)
+		}
+
+		absArgs := `{"pattern":"` + filepath.ToSlash(filepath.Join(tmpDir, "match*")) + `"}`
+		res, err = gl.Execute(context.Background(), absArgs)
+		if err != nil {
+			t.Fatalf("glob with absolute workspace pattern failed: %v", err)
+		}
+		if strings.TrimSpace(res) != "match1.go\nmatch2.txt" {
+			t.Fatalf("absolute workspace glob = %q, want relative matches", res)
 		}
 
 		if _, err := gl.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {
 			t.Fatal("expected glob pattern outside workspace to fail")
+		}
+
+		outsidePattern := filepath.ToSlash(filepath.Join(t.TempDir(), "*.go"))
+		if _, err := gl.Execute(context.Background(), `{"pattern":"`+outsidePattern+`"}`); err == nil {
+			t.Fatal("expected absolute glob pattern outside workspace to fail")
 		}
 
 		if _, err := gl.Execute(context.Background(), `{"pattern":" "}`); err == nil {

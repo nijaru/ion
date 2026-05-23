@@ -22,6 +22,7 @@ func TestP1InlineScenarioMatrix(t *testing.T) {
 		{"submit stream tool and commit", p1MatrixSubmitStreamToolCommit},
 		{"active progress keeps shell frame", p1MatrixActiveProgressKeepsShellFrame},
 		{"queued input stays visible while active", p1MatrixQueuedInputVisible},
+		{"settings command stays local while active", p1MatrixSettingsCommandLocalWhileActive},
 		{"cancel during active tool settles visibly", p1MatrixCancelActiveTool},
 		{"provider error settles visibly", p1MatrixProviderError},
 		{"resize keeps rows wrap safe", p1MatrixResizeWrapSafe},
@@ -82,6 +83,7 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 		t, model,
 		session.TurnStarted{},
 		session.StatusChanged{Status: "Running tool..."},
+		session.TokenUsage{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
 		session.AgentDelta{Delta: "working"},
 		session.ToolCallStarted{
 			ToolUseID: "tool-1",
@@ -95,6 +97,8 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 	assertP1ViewContains(t, view, "Running tool")
 	assertP1ViewContains(t, view, "Bash(sleep 2; echo ion-tmux-smoke)")
 	assertP1ViewContains(t, view, "Type a message")
+	assertP1ViewContains(t, view, "stub-model")
+	assertP1ViewContains(t, view, "18k tokens")
 }
 
 func p1MatrixQueuedInputVisible(t *testing.T) {
@@ -115,6 +119,33 @@ func p1MatrixQueuedInputVisible(t *testing.T) {
 	view := assertP1ShellFrame(t, model)
 	assertP1ViewContains(t, view, "Queued (Ctrl+G edit): follow up after this")
 	assertP1ViewContains(t, view, "1 queued")
+}
+
+func p1MatrixSettingsCommandLocalWhileActive(t *testing.T) {
+	model := readyModel(t)
+	model = applyP1Events(t, model, session.TurnStarted{})
+	model.Input.Composer.SetValue("/settings")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+
+	if cmd != nil {
+		t.Fatalf("settings picker command = %T, want nil local picker", cmd)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf(
+			"queued turns = %#v, want none for local settings command",
+			model.InFlight.QueuedTurns,
+		)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("picker overlay = %#v, want settings picker", model.Picker.Overlay)
+	}
+	view := assertP1ShellFrame(t, model)
+	assertP1ViewContains(t, view, "Settings")
+	assertP1ViewContains(t, view, "Busy input")
+	assertP1ViewNotContains(t, view, "Queued follow-up")
+	assertP1ViewNotContains(t, view, "› /settings")
 }
 
 func p1MatrixCancelActiveTool(t *testing.T) {

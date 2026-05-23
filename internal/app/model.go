@@ -135,7 +135,6 @@ type setupPromptSavedMsg struct {
 
 type settingsCommandMsg struct {
 	requestID     uint64
-	summary       string
 	transition    runtimeTransition
 	hasTransition bool
 	notice        string
@@ -226,6 +225,7 @@ const (
 	pickerPurposeModel
 	pickerPurposeThinking
 	pickerPurposeCommand
+	pickerPurposeSettings
 )
 
 type setupPromptKind int

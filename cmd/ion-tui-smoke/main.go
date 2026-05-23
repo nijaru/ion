@@ -180,6 +180,13 @@ func (b *smokeBackend) CancelTurn(context.Context) error {
 	return nil
 }
 
+func (b *smokeBackend) SteerTurn(ctx context.Context, text string) (session.SteeringResult, error) {
+	if strings.TrimSpace(text) == "" {
+		return session.SteeringResult{}, fmt.Errorf("steering text is empty")
+	}
+	return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+}
+
 func (b *smokeBackend) Close() error {
 	_ = b.CancelTurn(context.Background())
 	return nil

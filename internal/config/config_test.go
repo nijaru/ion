@@ -847,11 +847,11 @@ func TestNormalizeBashOutput(t *testing.T) {
 func TestNormalizeBusyInput(t *testing.T) {
 	for input, want := range map[string]string{
 		"":          "",
-		"queue":     "",
-		"queued":    "",
-		"follow-up": "",
-		" STEER ":   "steer",
-		"steering":  "steer",
+		"queue":     "queue",
+		"queued":    "queue",
+		"follow-up": "queue",
+		" STEER ":   "",
+		"steering":  "",
 		"unknown":   "",
 	} {
 		if got := normalizeBusyInput(input); got != want {
@@ -935,11 +935,14 @@ func TestSubagentToolModeDefaultsOff(t *testing.T) {
 	}
 }
 
-func TestBusyInputModeDefaultsToQueue(t *testing.T) {
-	if got := (&Config{}).BusyInputMode(); got != "queue" {
-		t.Fatalf("busy input mode = %q, want queue", got)
+func TestBusyInputModeDefaultsToSteer(t *testing.T) {
+	if got := (&Config{}).BusyInputMode(); got != "steer" {
+		t.Fatalf("busy input mode = %q, want steer", got)
 	}
 	if got := (&Config{BusyInput: "steer"}).BusyInputMode(); got != "steer" {
 		t.Fatalf("busy input mode = %q, want steer", got)
+	}
+	if got := (&Config{BusyInput: "queue"}).BusyInputMode(); got != "queue" {
+		t.Fatalf("busy input mode = %q, want queue", got)
 	}
 }

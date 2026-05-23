@@ -247,12 +247,21 @@ send_deterministic_p1_tui_smoke() {
   send_line "run deterministic p1 matrix"
   wait_contains "[smoke] active progress" 30
   assert_visible_contains "Type a message"
+  assert_visible_contains "fake-model"
   assert_visible_separator_line_count 2
+  send_line "/settings"
+  wait_contains "Settings" 30
+  assert_visible_contains "Busy input"
+  assert_visible_not_contains "commands"
+  assert_visible_not_contains "› /settings"
+  assert_visible_separator_line_count 2
+  tmux send-keys -t "$SESSION" Escape
+  sleep 0.5
   wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
   assert_visible_separator_line_count 2
-  send_line "queued while active"
-  wait_contains "Queued follow-up" 30
-  assert_visible_contains "1 queued"
+  send_line "steer while active"
+  wait_contains "Steering current turn" 30
+  assert_visible_not_contains "1 queued"
   wait_contains "ion-tmux-smoke" 60
   wait_contains "Complete" 60
   assert_visible_separator_line_count 2
@@ -307,8 +316,10 @@ send_line "/jobs"
 assert_contains "/jobs is deferred until its roadmap phase"
 
 send_line "/settings"
-assert_contains "thinking"
-assert_contains "tool"
+assert_contains "Settings"
+assert_contains "Busy input"
+assert_contains "Tool display"
+assert_visible_not_contains "commands"
 
 tmux resize-window -t "$SESSION" -x 84 -y 28
 sleep 0.5

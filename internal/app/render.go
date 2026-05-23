@@ -310,6 +310,9 @@ func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
 		return "Type to search • ↑/↓ move • Enter: select • Tab: models • Esc: cancel"
 	}
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
+		return "Type to search • ↑/↓ move • Enter: change • Esc: close"
+	}
 	return "Type to search • ↑/↓ move • Enter: select • Esc: cancel"
 }
 

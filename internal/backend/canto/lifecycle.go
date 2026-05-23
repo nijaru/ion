@@ -108,6 +108,9 @@ func (b *Backend) open(ctx context.Context) error {
 		agent.WithRequestProcessors(dynamicReasoningEffortProcessor(b.configSnapshot)),
 	}
 	runtimeOptions := []runtime.Option{
+		// Pi-style interactive turns are bounded by user/provider cancellation,
+		// not an arbitrary whole-turn wall clock.
+		runtime.WithExecutionTimeout(0),
 		runtime.WithBeforeRun(compaction.compactBeforeRun),
 		runtime.WithOverflowRecovery(
 			p.IsContextOverflow,

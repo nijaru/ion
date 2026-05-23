@@ -539,10 +539,10 @@ func (c *Config) RetryUntilCancelledEnabled() bool {
 }
 
 func (c *Config) BusyInputMode() string {
-	if c != nil && normalizeBusyInput(c.BusyInput) == "steer" {
-		return "steer"
+	if c != nil && normalizeBusyInput(c.BusyInput) == "queue" {
+		return "queue"
 	}
-	return "queue"
+	return "steer"
 }
 
 func (c *Config) SkillToolMode() string {
@@ -695,8 +695,8 @@ func NormalizeBusyInput(value string) string {
 }
 
 func normalizeBusyInput(value string) string {
-	if NormalizeBusyInput(value) == "steer" {
-		return "steer"
+	if NormalizeBusyInput(value) == "queue" {
+		return "queue"
 	}
 	return ""
 }

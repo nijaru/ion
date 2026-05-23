@@ -669,6 +669,14 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 				Content: "Thinking set to " + thinkingDisplayName(level),
 			},
 		)
+	case pickerPurposeSettings:
+		fields := strings.Fields(selected.Value)
+		if len(fields) != 2 {
+			m.pickerReducer().closeOverlay()
+			return m, cmdError("invalid settings selection")
+		}
+		m.pickerReducer().closeOverlay()
+		return m.handleSettingsCommand([]string{"/settings", fields[0], fields[1]})
 	case pickerPurposeCommand:
 		cmd := m.setComposerDraft(selected.Value + " ")
 		m.pickerReducer().closeOverlay()

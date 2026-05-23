@@ -30,8 +30,13 @@ the latest session.
 - Canto is the framework: agent loop, ordered runtime events, durable session
   history, provider-visible context, tool lifecycle, retry/cancel settlement,
   provider transforms, compaction, and harness primitives.
-- Keep the Canto/Ion split. If Ion needs to duplicate framework-owned behavior,
-  fix or extend Canto first, import the exact revision, then simplify Ion.
+- Keep the Canto/Ion split as the target architecture, but Phase 1 is
+  Ion-first. Ion owns the Pi-level acceptance bar; Canto is an unstable
+  pre-release kernel until Ion's core loop is boring under tests and tmux.
+- If a Canto abstraction blocks Ion P1, reduce it, rewrite it, or move the
+  behavior into Ion temporarily. Re-extract to Canto only after the behavior is
+  proven by Ion's acceptance matrix. Do not preserve Canto API stability before
+  Canto release at the cost of Ion reliability.
 - When `ai/PLAN.md` selects an optimal-core redesign lane, treat scratch-design
   gaps as proactive implementation work. Do not wait for each weak ownership
   boundary to appear as a dogfood bug before replacing it.
@@ -57,6 +62,9 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
 - Use Pi as the primary internal reference for session history,
   provider-visible context, event ordering, tool lifecycle, cancel/error
   settlement, persistence/replay, and runtime state ownership.
+- Ion's executable P1 scenario matrix is the acceptance source of truth. Static
+  review, passing narrow unit tests, or green framework tests are insufficient
+  if normal first-minutes TUI use still fails.
 - Use Codex app, Codex CLI, Claude Code, Amp, Droid, OpenCode, Cursor, Zed,
   and similar tools only as references for specific tradeoffs. Do not widen the
   core surface because another agent has a feature.
@@ -72,9 +80,11 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
 - Prefer contract-first fixes over patch-first fixes in the core loop:
   1. identify the owner, Canto or Ion;
   2. add or update focused tests for the invariant;
-  3. fix Canto first for framework-owned defects;
-  4. import the exact Canto revision into Ion;
-  5. simplify the Ion adapter/reducer after the contract is fixed.
+  3. fix Canto first when the failing behavior is a reusable primitive and the
+     Canto change is the fastest reliable path;
+  4. make a clean Ion-local implementation when the Canto boundary is slowing
+     P1, then log the re-extraction target in Canto;
+  5. simplify duplicate adapters/reducers after the acceptance matrix passes.
 - Make targeted rewrites of broken modules when they remove duplicate ownership
   or hidden state. Do not do broad churn unrelated to the task.
 - Use `tk` for all multi-step work. Log concrete findings while they are fresh:

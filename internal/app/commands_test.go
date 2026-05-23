@@ -1131,7 +1131,6 @@ func TestBusyTurnBlocksRuntimeChangingCommands(t *testing.T) {
 		"/model model-b",
 		"/provider local-api",
 		"/thinking high",
-		"/settings retry on",
 		"/new",
 		"/clear",
 		"/compact",
@@ -1442,7 +1441,7 @@ func TestSplitHelpDetail(t *testing.T) {
 	}
 }
 
-func TestSettingsCommandShowsCommonSettings(t *testing.T) {
+func TestSettingsCommandOpensCommonSettingsPicker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configDir := filepath.Join(home, ".ion")
@@ -1463,29 +1462,49 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 		provider: "openrouter",
 		model:    "tencent/hy3-preview:free",
 	}
+	retryUntilCancelled := false
 	model.Model.Config = &config.Config{
-		Provider:        "openrouter",
-		Model:           "tencent/hy3-preview:free",
-		ReasoningEffort: "high",
+		Provider:            "openrouter",
+		Model:               "tencent/hy3-preview:free",
+		ReasoningEffort:     "high",
+		RetryUntilCancelled: &retryUntilCancelled,
+		ToolVerbosity:       "collapsed",
+		BusyInput:           "queue",
 	}
-	cfg, err := config.LoadStable()
-	if err != nil {
-		t.Fatalf("load stable config: %v", err)
+	model, cmd := model.handleCommand("/settings")
+	if cmd != nil {
+		t.Fatalf("/settings returned command %T, want picker-only update", cmd)
 	}
-	got := model.settingsSummary(cfg)
+	if model.Picker.Overlay == nil {
+		t.Fatal("/settings did not open picker")
+	}
+	if model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("picker purpose = %v, want settings", model.Picker.Overlay.purpose)
+	}
+	gotItems := pickerDisplayItems(model.Picker.Overlay)
+	var pickerText strings.Builder
+	for _, item := range gotItems {
+		pickerText.WriteString(item.Label)
+		pickerText.WriteByte('\n')
+		pickerText.WriteString(item.Detail)
+		pickerText.WriteByte('\n')
+		pickerText.WriteString(item.Value)
+		pickerText.WriteByte('\n')
+	}
+	got := pickerText.String()
 	for _, want := range []string{
-		"retry network errors: off",
-		"tool display: collapsed",
-		"read output: summary",
-		"write output: summary",
-		"bash output: hidden",
-		"thinking output: hidden",
-		"busy input: queue",
-		"/settings retry on|off",
-		"/settings read full|summary|hidden",
-		"/settings write diff|summary|hidden",
-		"/settings bash full|summary|hidden",
-		"/settings busy queue|steer",
+		"Retry network errors: off",
+		"Tool display: collapsed",
+		"Read output: summary",
+		"Write output: summary",
+		"Bash output: hidden",
+		"Thinking output: hidden",
+		"Busy input: queue",
+		"retry on",
+		"read full",
+		"write diff",
+		"bash summary",
+		"busy steer",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("settings missing %q: %q", want, got)
@@ -1504,20 +1523,37 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	}
 }
 
-func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
+func TestSettingsCommandPickerShowsDisplayDefaults(t *testing.T) {
 	model := readyModel(t)
-	got := model.settingsSummary(&config.Config{})
+	model.Model.Config = &config.Config{}
+	model, cmd := model.handleCommand("/settings")
+	if cmd != nil {
+		t.Fatalf("/settings returned command %T, want picker-only update", cmd)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("picker = %#v, want settings picker", model.Picker.Overlay)
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	var got strings.Builder
+	for _, item := range items {
+		got.WriteString(item.Label)
+		got.WriteByte('\n')
+		got.WriteString(item.Detail)
+		got.WriteByte('\n')
+	}
+	text := got.String()
 	for _, want := range []string{
-		"tool display: auto",
-		"read output: summary",
-		"write output: summary",
-		"bash output: hidden",
-		"thinking output: hidden",
-		"busy input: queue",
-		"/settings tool auto|full|collapsed|hidden",
+		"Tool display: auto",
+		"Read output: summary",
+		"Write output: summary",
+		"Bash output: hidden",
+		"Thinking output: hidden",
+		"Busy input: steer",
+		"Enter: steer -> queue",
+		"Enter: auto -> full",
 	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("settings missing %q: %q", want, got)
+		if !strings.Contains(text, want) {
+			t.Fatalf("settings missing %q: %q", want, text)
 		}
 	}
 }
@@ -1595,7 +1631,7 @@ func TestSettingsCommandSaveReturnsBeforeConfigWriteCompletes(t *testing.T) {
 	}
 }
 
-func TestSettingsSummaryDoesNotOverwriteActiveTurnStatus(t *testing.T) {
+func TestSettingsPickerDoesNotOverwriteActiveTurnStatus(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	model := readyModel(t)
@@ -1605,31 +1641,21 @@ func TestSettingsSummaryDoesNotOverwriteActiveTurnStatus(t *testing.T) {
 
 	updated, cmd := model.handleCommand("/settings")
 	model = updated
-	if cmd == nil {
-		t.Fatal("expected settings summary command")
+	if cmd != nil {
+		t.Fatalf("settings picker returned command %T, want local overlay only", cmd)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("picker = %#v, want settings picker", model.Picker.Overlay)
 	}
 	if model.Progress.Status != "Running bash..." {
 		t.Fatalf("turn status = %q, want preserved tool status", model.Progress.Status)
 	}
-	if model.Progress.LocalStatus != "Loading settings..." {
-		t.Fatalf("local status = %q, want Loading settings...", model.Progress.LocalStatus)
+	if model.Progress.LocalStatus != "" {
+		t.Fatalf("local status = %q, want no local status for picker", model.Progress.LocalStatus)
 	}
 	line := ansi.Strip(model.progressLine())
-	if !strings.Contains(line, "Running bash...") || strings.Contains(line, "Loading settings") {
-		t.Fatalf("progress line = %q, want active turn status over local status", line)
-	}
-
-	msg := cmd()
-	next, printCmd := model.Update(msg)
-	model = testModel(t, next)
-	if printCmd == nil {
-		t.Fatal("expected settings summary print command")
-	}
-	if model.Progress.Status != "Running bash..." {
-		t.Fatalf("turn status after settings = %q, want preserved", model.Progress.Status)
-	}
-	if model.Progress.LocalStatus != "" {
-		t.Fatalf("local status after settings = %q, want cleared", model.Progress.LocalStatus)
+	if !strings.Contains(line, "Running bash...") {
+		t.Fatalf("progress line = %q, want active turn status", line)
 	}
 }
 

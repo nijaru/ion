@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/nijaru/canto/llm"
 )
+
+const defaultListLimit = 500
 
 // List tool (formerly list_directory)
 type List struct {
@@ -36,18 +39,45 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory: %s", input.Path)
+	}
+
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return "", err
 	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return strings.Compare(strings.ToLower(a.Name()), strings.ToLower(b.Name()))
+	})
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
 
 	var res strings.Builder
-	for _, e := range entries {
+	for i, e := range entries {
+		if i >= limit {
+			break
+		}
 		suffix := ""
 		if e.IsDir() {
 			suffix = "/"
 		}
 		res.WriteString(fmt.Sprintf("%s%s\n", e.Name(), suffix))
+	}
+	if len(entries) > limit {
+		fmt.Fprintf(
+			&res,
+			"\n[%d entries limit reached. Use limit=%d for more, or narrow the path.]",
+			limit,
+			limit*2,
+		)
 	}
 	return limitToolOutput(res.String()), nil
 }

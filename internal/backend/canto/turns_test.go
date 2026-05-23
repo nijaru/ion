@@ -905,6 +905,12 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for provider stream")
 	}
+	if deadline, ok := streamCtx.Deadline(); ok {
+		t.Fatalf(
+			"provider stream context deadline = %v, want no hidden whole-turn deadline",
+			deadline,
+		)
+	}
 
 	cancel()
 	select {
