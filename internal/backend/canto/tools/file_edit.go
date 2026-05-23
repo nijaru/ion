@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/aymanbagabas/go-udiff"
+	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
 
@@ -97,11 +99,88 @@ type editReplacement struct {
 	Expected   int    `json:"expected_replacements"`
 }
 
+type editReplacementArg struct {
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	OldText    string `json:"oldText"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replace_all"`
+	Expected   int    `json:"expected_replacements"`
+}
+
+type editReplacementArgs []editReplacementArg
+
 type matchedReplacement struct {
 	editIndex int
 	start     int
 	end       int
 	newString string
+}
+
+func (i *editInput) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		FilePath string              `json:"file_path"`
+		Path     string              `json:"path"`
+		Edits    editReplacementArgs `json:"edits"`
+		OldText  string              `json:"oldText"`
+		NewText  string              `json:"newText"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	i.FilePath = raw.FilePath
+	if i.FilePath == "" {
+		i.FilePath = raw.Path
+	}
+	i.Edits = make([]editReplacement, 0, len(raw.Edits)+1)
+	for _, edit := range raw.Edits {
+		i.Edits = append(i.Edits, edit.replacement())
+	}
+	if raw.OldText != "" || raw.NewText != "" {
+		i.Edits = append(i.Edits, editReplacementArg{
+			OldText: raw.OldText,
+			NewText: raw.NewText,
+		}.replacement())
+	}
+	return nil
+}
+
+func (r *editReplacementArgs) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*r = nil
+		return nil
+	}
+	if data[0] == '"' {
+		var encoded string
+		if err := json.Unmarshal(data, &encoded); err != nil {
+			return err
+		}
+		return r.UnmarshalJSON([]byte(encoded))
+	}
+
+	var replacements []editReplacementArg
+	if err := json.Unmarshal(data, &replacements); err != nil {
+		return err
+	}
+	*r = replacements
+	return nil
+}
+
+func (a editReplacementArg) replacement() editReplacement {
+	edit := editReplacement{
+		OldString:  a.OldString,
+		NewString:  a.NewString,
+		ReplaceAll: a.ReplaceAll,
+		Expected:   a.Expected,
+	}
+	if edit.OldString == "" {
+		edit.OldString = a.OldText
+	}
+	if edit.NewString == "" {
+		edit.NewString = a.NewText
+	}
+	return edit
 }
 
 func writeEditTempFile(path string, data []byte, mode os.FileMode) (string, error) {

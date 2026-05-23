@@ -65,6 +65,9 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 					t.Fatalf("missing property %q in %#v", property, properties)
 				}
 			}
+			if len(properties) != len(tt.properties) {
+				t.Fatalf("properties = %#v, want only %#v", properties, tt.properties)
+			}
 			required := schemaStringList(t, tt.spec["required"])
 			for _, property := range tt.required {
 				if !slices.Contains(required, property) {
@@ -81,6 +84,22 @@ func TestEditToolSchemaRequiresNestedReplacementFields(t *testing.T) {
 	properties := params["properties"].(map[string]any)
 	edits := properties["edits"].(map[string]any)
 	items := edits["items"].(map[string]any)
+	itemProperties := items["properties"].(map[string]any)
+	expectedProperties := []string{
+		"old_string",
+		"new_string",
+		"replace_all",
+		"expected_replacements",
+	}
+	for _, property := range expectedProperties {
+		if _, ok := itemProperties[property]; !ok {
+			t.Fatalf("missing nested property %q in %#v", property, itemProperties)
+		}
+	}
+	if len(itemProperties) != len(expectedProperties) {
+		t.Fatalf("nested properties = %#v, want only %#v", itemProperties, expectedProperties)
+	}
+
 	required := schemaStringList(t, items["required"])
 	for _, property := range []string{"old_string", "new_string"} {
 		if !slices.Contains(required, property) {

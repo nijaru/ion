@@ -101,6 +101,24 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		assertFileContent(t, tmpDir, "multi.txt", "one\ntwo\n")
 	})
 
+	t.Run("edit accepts Pi-style compatibility arguments", func(t *testing.T) {
+		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
+		writeFile(t, tmpDir, "pi-compat.txt", "alpha\nbeta\ngamma\n")
+
+		result, err := e.Execute(
+			t.Context(),
+			`{"path":"pi-compat.txt","edits":"[{\"oldText\":\"alpha\",\"newText\":\"one\"}]","oldText":"gamma","newText":"three"}`,
+		)
+		if err != nil {
+			t.Fatalf("edit failed: %v", err)
+		}
+		if !strings.Contains(result, "Applied 2 edit(s)") {
+			t.Fatalf("edit result = %q, want two edit compatibility result", result)
+		}
+
+		assertFileContent(t, tmpDir, "pi-compat.txt", "one\nbeta\nthree\n")
+	})
+
 	t.Run("edit matches edits against original content", func(t *testing.T) {
 		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
 		writeFile(t, tmpDir, "original-match.txt", "alpha\none\n")
