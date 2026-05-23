@@ -158,4 +158,4 @@ tk done <id>
 - `ai/PLAN.md` - active work sequence and deferred work.
 - `ai/DESIGN.md` - current architecture.
 - `ai/DECISIONS.md` - durable decisions and recent decision log.
-- `/Users/nick/github/badlogic/pi-mono` - primary phase-1 internal reference.
+- `/Users/nick/github/earendil-works/pi` - primary phase-1 internal reference.
