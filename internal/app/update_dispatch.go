@@ -173,12 +173,24 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		next, cmd := m.handleSteeringResult(msg)
 		return next, cmd, true
 
+	case followUpResultMsg:
+		next, cmd := m.handleFollowUpResult(msg)
+		return next, cmd, true
+
+	case queuedInputClearResultMsg:
+		if msg.err != nil {
+			next, cmd := m.handleLocalError(msg.err)
+			return next, cmd, true
+		}
+		return m, nil, true
+
 	case turnCancelResultMsg:
 		next, cmd := m.handleTurnCancelResult(msg)
 		return next, cmd, true
 
 	case session.StatusChanged,
 		session.TokenUsage,
+		session.QueuedInputUpdated,
 		session.TurnStarted,
 		session.TurnFinished,
 		session.ThinkingDelta,

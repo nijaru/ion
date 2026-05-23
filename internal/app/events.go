@@ -183,8 +183,7 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	if m.Model.Config != nil &&
 		m.Model.Config.BusyInputMode() == "steer" &&
 		m.InFlight.Thinking &&
-		!m.Progress.Compacting &&
-		len(m.InFlight.PendingTools) > 0 {
+		!m.Progress.Compacting {
 		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
 			m.resetComposerDraft()
 			return m, steerTurnCmd(steering, text)
@@ -212,12 +211,40 @@ func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
+	if m.InFlight.Thinking && !m.Progress.Compacting {
+		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			m.resetComposerDraft()
+			return m, followUpTurnCmd(queued, text)
+		}
+	}
+	return m.queueBusyInputLocal(text)
+}
+
+func followUpTurnCmd(queued session.QueuedInputSession, text string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := queued.FollowUpTurn(context.Background(), text)
+		return followUpResultMsg{text: text, result: result, err: err}
+	}
+}
+
+func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil && msg.result.Outcome == session.QueuedInputAccepted {
+		queued := append([]string(nil), m.InFlight.QueuedTurns...)
+		queued = append(queued, msg.text)
+		m.turnReducer().setBackendQueuedTurns(queued)
+		return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+	}
+	return m.queueBusyInputLocal(msg.text)
+}
+
+func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().queueTurn(text)
 	m.resetComposerDraft()
 	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
+	backendOwned := m.InFlight.QueuedTurnsBackendOwned
 	queued := m.turnReducer().drainQueuedTurnsText()
 	if queued == "" {
 		return m, nil
@@ -226,7 +253,22 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 	if current != "" {
 		queued = current + "\n" + queued
 	}
-	return m, m.setComposerDraft(queued)
+	setDraft := m.setComposerDraft(queued)
+	if backendOwned {
+		if queuedInput, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
+		}
+	}
+	return m, setDraft
+}
+
+func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := queued.ClearQueuedInput(context.Background()); err != nil {
+			return queuedInputClearResultMsg{err: err}
+		}
+		return queuedInputClearResultMsg{}
+	}
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {

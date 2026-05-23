@@ -185,6 +185,16 @@ type steeringResultMsg struct {
 	err    error
 }
 
+type followUpResultMsg struct {
+	text   string
+	result session.QueuedInputResult
+	err    error
+}
+
+type queuedInputClearResultMsg struct {
+	err error
+}
+
 type turnCancelResultMsg struct {
 	err error
 }
@@ -344,18 +354,19 @@ type SubagentProgress struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending               *session.Entry               // streaming agent, active tool, or active subagent
-	PendingTools          map[string]*session.Entry    // active tool calls by backend tool ID
-	Subagents             map[string]*SubagentProgress // active child agents by ID
-	ReasonBuf             string                       // accumulates ThinkingDelta
-	StreamBuf             string                       // non-empty while AgentDelta content is active
-	StreamChunks          []string                     // full AgentDelta content without per-event string copies
-	QueuedTurns           []string                     // follow-up turns queued during agent work
-	Thinking              bool
-	Canceling             bool
-	AgentCommitted        bool // true once AgentMessage owns the turn transcript
-	DrainUntilTurnStarted bool
-	DrainStartedAt        time.Time
+	Pending                 *session.Entry               // streaming agent, active tool, or active subagent
+	PendingTools            map[string]*session.Entry    // active tool calls by backend tool ID
+	Subagents               map[string]*SubagentProgress // active child agents by ID
+	ReasonBuf               string                       // accumulates ThinkingDelta
+	StreamBuf               string                       // non-empty while AgentDelta content is active
+	StreamChunks            []string                     // full AgentDelta content without per-event string copies
+	QueuedTurns             []string                     // follow-up turns queued during agent work
+	QueuedTurnsBackendOwned bool
+	Thinking                bool
+	Canceling               bool
+	AgentCommitted          bool // true once AgentMessage owns the turn transcript
+	DrainUntilTurnStarted   bool
+	DrainStartedAt          time.Time
 }
 
 // PickerState holds state for the various overlay pickers.

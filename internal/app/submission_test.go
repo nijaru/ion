@@ -1357,6 +1357,88 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 }
 
+func TestBusyInputUsesBackendFollowUpQueueWhenAvailable(t *testing.T) {
+	sess := &queuedInputStubSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Input.Composer.SetValue("follow up")
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected backend follow-up command")
+	}
+	result, ok := cmd().(followUpResultMsg)
+	if !ok {
+		t.Fatalf("follow-up command returned %T, want followUpResultMsg", result)
+	}
+	if result.err != nil || result.result.Outcome != session.QueuedInputAccepted {
+		t.Fatalf("follow-up result = %#v, want accepted", result)
+	}
+	updated, cmd = model.Update(result)
+	model = testModel(t, updated)
+	if len(sess.followUps) != 1 || sess.followUps[0] != "follow up" {
+		t.Fatalf("followUps = %#v, want backend-owned follow-up", sess.followUps)
+	}
+	if len(model.InFlight.QueuedTurns) != 1 ||
+		model.InFlight.QueuedTurns[0] != "follow up" ||
+		!model.InFlight.QueuedTurnsBackendOwned {
+		t.Fatalf(
+			"queued projection = %#v owned=%v, want backend-owned follow up",
+			model.InFlight.QueuedTurns,
+			model.InFlight.QueuedTurnsBackendOwned,
+		)
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after queueing", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected queue notice cmd")
+	}
+
+	updated, cmd = model.Update(session.TurnFinished{})
+	model = testModel(t, updated)
+	if len(sess.submits) != 0 {
+		t.Fatalf("submits = %#v, want no local resubmit for backend-owned queue", sess.submits)
+	}
+	if cmd == nil {
+		t.Fatal("expected normal finish command")
+	}
+}
+
+func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{"local stale"}
+	model.InFlight.QueuedTurnsBackendOwned = true
+
+	updated, _ := model.Update(session.QueuedInputUpdated{
+		Snapshot: session.QueuedInputSnapshot{FollowUp: []string{"backend follow-up"}},
+	})
+	model = testModel(t, updated)
+	if len(model.InFlight.QueuedTurns) != 1 ||
+		model.InFlight.QueuedTurns[0] != "backend follow-up" ||
+		!model.InFlight.QueuedTurnsBackendOwned {
+		t.Fatalf(
+			"queued projection = %#v owned=%v, want backend snapshot",
+			model.InFlight.QueuedTurns,
+			model.InFlight.QueuedTurnsBackendOwned,
+		)
+	}
+
+	updated, _ = model.Update(session.QueuedInputUpdated{})
+	model = testModel(t, updated)
+	if len(model.InFlight.QueuedTurns) != 0 || model.InFlight.QueuedTurnsBackendOwned {
+		t.Fatalf(
+			"queued projection = %#v owned=%v, want cleared backend snapshot",
+			model.InFlight.QueuedTurns,
+			model.InFlight.QueuedTurnsBackendOwned,
+		)
+	}
+}
+
 func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 	sess := &steeringStubSession{
 		stubSession: stubSession{events: make(chan session.Event)},
@@ -1432,7 +1514,7 @@ func TestBusyInputQueuesWhenSteeringDeclines(t *testing.T) {
 	}
 }
 
-func TestBusyInputQueuesWhenSteeringHasNoToolBoundary(t *testing.T) {
+func TestBusyInputSteersWithoutActiveToolBoundary(t *testing.T) {
 	sess := &steeringStubSession{
 		stubSession: stubSession{events: make(chan session.Event)},
 	}
@@ -1442,14 +1524,58 @@ func TestBusyInputQueuesWhenSteeringHasNoToolBoundary(t *testing.T) {
 	model.Input.Composer.SetValue("after this")
 	model.InFlight.Thinking = true
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected steering command")
+	}
+	result, ok := cmd().(steeringResultMsg)
+	if !ok {
+		t.Fatalf("steering command returned %T, want steeringResultMsg", result)
+	}
+	updated, _ = model.Update(result)
 	model = testModel(t, updated)
 
-	if len(sess.steers) != 0 {
-		t.Fatalf("steers = %#v, want no steering without active tools", sess.steers)
+	if len(sess.steers) != 1 || sess.steers[0] != "after this" {
+		t.Fatalf("steers = %#v, want steering without active tools", sess.steers)
 	}
-	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "after this" {
-		t.Fatalf("queued turns = %#v, want fallback queue", model.InFlight.QueuedTurns)
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want none after steering", model.InFlight.QueuedTurns)
+	}
+}
+
+func TestCtrlGRecallsBackendOwnedQueuedTurns(t *testing.T) {
+	sess := &queuedInputStubSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.QueuedTurns = []string{"queued one", "queued two"}
+	model.InFlight.QueuedTurnsBackendOwned = true
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if len(model.InFlight.QueuedTurns) != 0 || model.InFlight.QueuedTurnsBackendOwned {
+		t.Fatalf(
+			"queued turns = %#v owned=%v, want cleared projection",
+			model.InFlight.QueuedTurns,
+			model.InFlight.QueuedTurnsBackendOwned,
+		)
+	}
+	if cmd == nil {
+		t.Fatal("expected clear-and-set-draft command")
+	}
+	messages := runCommandTree(t, cmd)
+	for _, msg := range messages {
+		updated, _ = model.Update(msg)
+		model = testModel(t, updated)
+	}
+	if sess.clears != 1 {
+		t.Fatalf("clear calls = %d, want 1", sess.clears)
+	}
+	if got := model.Input.Composer.Value(); got != "draft\nqueued one\nqueued two" {
+		t.Fatalf("composer = %q, want recalled queued turns", got)
 	}
 }
 

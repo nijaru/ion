@@ -236,3 +236,10 @@ type TokenUsage struct {
 }
 
 func (e TokenUsage) isEvent() {}
+
+type QueuedInputUpdated struct {
+	Base
+	Snapshot QueuedInputSnapshot `json:"snapshot"`
+}
+
+func (e QueuedInputUpdated) isEvent() {}

@@ -32,6 +32,9 @@ func (r turnReducer) clearActiveState(clearQueued bool) {
 	r.inFlight.StreamChunks = nil
 	r.inFlight.ReasonBuf = ""
 	r.inFlight.AgentCommitted = false
+	if clearQueued {
+		r.inFlight.QueuedTurnsBackendOwned = false
+	}
 	r.inFlight.DrainUntilTurnStarted = false
 	r.inFlight.DrainStartedAt = time.Time{}
 	r.progress.LastToolUseID = ""
@@ -276,6 +279,17 @@ func (r turnReducer) resetFinishedTurnSummary() {
 
 func (r turnReducer) queueTurn(text string) {
 	r.inFlight.QueuedTurns = append(r.inFlight.QueuedTurns, text)
+	r.inFlight.QueuedTurnsBackendOwned = false
+}
+
+func (r turnReducer) setBackendQueuedTurns(texts []string) {
+	r.inFlight.QueuedTurns = append([]string(nil), texts...)
+	r.inFlight.QueuedTurnsBackendOwned = len(texts) > 0
+}
+
+func (r turnReducer) clearQueuedTurns() {
+	r.inFlight.QueuedTurns = nil
+	r.inFlight.QueuedTurnsBackendOwned = false
 }
 
 func (r turnReducer) drainQueuedTurnsText() string {
@@ -283,12 +297,12 @@ func (r turnReducer) drainQueuedTurnsText() string {
 		return ""
 	}
 	queued := strings.Join(r.inFlight.QueuedTurns, "\n")
-	r.inFlight.QueuedTurns = nil
+	r.clearQueuedTurns()
 	return queued
 }
 
 func (r turnReducer) popQueuedTurn() string {
-	if len(r.inFlight.QueuedTurns) == 0 {
+	if r.inFlight.QueuedTurnsBackendOwned || len(r.inFlight.QueuedTurns) == 0 {
 		return ""
 	}
 	queued := r.inFlight.QueuedTurns[0]

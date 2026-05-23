@@ -48,3 +48,27 @@ type SteeringResult struct {
 type SteeringSession interface {
 	SteerTurn(ctx context.Context, text string) (SteeringResult, error)
 }
+
+type QueuedInputOutcome string
+
+const (
+	QueuedInputAccepted    QueuedInputOutcome = "accepted"
+	QueuedInputQueued      QueuedInputOutcome = "queued"
+	QueuedInputUnsupported QueuedInputOutcome = "unsupported"
+)
+
+type QueuedInputResult struct {
+	Outcome QueuedInputOutcome
+	Notice  string
+}
+
+type QueuedInputSnapshot struct {
+	Steering []string
+	FollowUp []string
+	NextTurn []string
+}
+
+type QueuedInputSession interface {
+	FollowUpTurn(ctx context.Context, text string) (QueuedInputResult, error)
+	ClearQueuedInput(ctx context.Context) (QueuedInputSnapshot, error)
+}

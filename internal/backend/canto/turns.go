@@ -383,6 +383,17 @@ func (s *Session) SteerTurn(
 	return s.backend.steerTurn(ctx, text)
 }
 
+func (s *Session) FollowUpTurn(
+	ctx context.Context,
+	text string,
+) (ionsession.QueuedInputResult, error) {
+	return s.backend.followUpTurn(ctx, text)
+}
+
+func (s *Session) ClearQueuedInput(ctx context.Context) (ionsession.QueuedInputSnapshot, error) {
+	return s.backend.clearQueuedInput(ctx)
+}
+
 func (b *Backend) steerTurn(
 	ctx context.Context,
 	text string,
@@ -421,6 +432,96 @@ func (b *Backend) steerTurn(
 		Outcome: ionsession.SteeringAccepted,
 		Notice:  "Steering will be applied at the next provider boundary.",
 	}, nil
+}
+
+func (b *Backend) followUpTurn(
+	ctx context.Context,
+	text string,
+) (ionsession.QueuedInputResult, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ionsession.QueuedInputResult{}, fmt.Errorf("follow-up text is empty")
+	}
+
+	b.mu.Lock()
+	active := b.turn.active
+	sessionID := b.idLocked()
+	harness := b.harness
+	b.mu.Unlock()
+
+	if !active || harness == nil {
+		return ionsession.QueuedInputResult{
+			Outcome: ionsession.QueuedInputQueued,
+			Notice:  "No active turn is available.",
+		}, nil
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	if err := harness.Session(sessionID).FollowUpText(ctx, text); err != nil {
+		if errors.Is(err, cantofw.ErrSessionBusy) {
+			return ionsession.QueuedInputResult{
+				Outcome: ionsession.QueuedInputQueued,
+				Notice:  "No active turn is available.",
+			}, nil
+		}
+		return ionsession.QueuedInputResult{}, err
+	}
+	return ionsession.QueuedInputResult{
+		Outcome: ionsession.QueuedInputAccepted,
+		Notice:  "Follow-up queued.",
+	}, nil
+}
+
+func (b *Backend) clearQueuedInput(ctx context.Context) (ionsession.QueuedInputSnapshot, error) {
+	b.mu.Lock()
+	sessionID := b.idLocked()
+	harness := b.harness
+	b.mu.Unlock()
+
+	if harness == nil {
+		return ionsession.QueuedInputSnapshot{}, nil
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	snapshot, err := harness.Session(sessionID).ClearQueuedInput(ctx)
+	if err != nil {
+		return ionsession.QueuedInputSnapshot{}, err
+	}
+	return queuedInputSnapshotFromCanto(snapshot), nil
+}
+
+func queuedInputSnapshotFromCanto(snapshot cantofw.QueueSnapshot) ionsession.QueuedInputSnapshot {
+	return ionsession.QueuedInputSnapshot{
+		Steering: promptTexts(snapshot.Steer),
+		FollowUp: promptTexts(snapshot.FollowUp),
+		NextTurn: promptTexts(snapshot.NextTurn),
+	}
+}
+
+func promptTexts(prompts []cantofw.Prompt) []string {
+	if len(prompts) == 0 {
+		return nil
+	}
+	texts := make([]string, 0, len(prompts))
+	for _, prompt := range prompts {
+		text := promptText(prompt)
+		if text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return texts
+}
+
+func promptText(prompt cantofw.Prompt) string {
+	parts := make([]string, 0, len(prompt.Messages))
+	for _, message := range prompt.Messages {
+		if text := strings.TrimSpace(message.TextContent()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (s *Session) CancelTurn(ctx context.Context) error {

@@ -56,6 +56,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TokenUsage:
 		return m.handleTokenUsage(msg)
 
+	case session.QueuedInputUpdated:
+		return m.handleQueuedInputUpdated(msg)
+
 	case session.TurnStarted:
 		return m.handleTurnStarted(msg)
 
@@ -200,6 +203,11 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 		Status: msg.Status,
 		TS:     entryUnix(msg.Timestamp),
 	}), m.awaitSessionEvent())
+}
+
+func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdated) (Model, tea.Cmd) {
+	m.turnReducer().setBackendQueuedTurns(msg.Snapshot.FollowUp)
+	return m, m.awaitSessionEvent()
 }
 
 func sessionErrorDisplay(err error) string {

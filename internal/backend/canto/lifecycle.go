@@ -134,8 +134,10 @@ func (b *Backend) open(ctx context.Context) error {
 	b.llm = p
 	b.tools = registry
 	b.harness = harness
+	sessionID := b.idLocked()
 	b.mu.Unlock()
 
+	b.startRuntimeEvents(sessionID, harness)
 	return nil
 }
 
@@ -178,11 +180,14 @@ func (b *Backend) resume(ctx context.Context, sessionID string) error {
 
 	b.mu.Lock()
 	needOpen := b.harness == nil
+	harness := b.harness
+	currentSessionID := b.idLocked()
 	b.mu.Unlock()
 	if needOpen {
 		return b.open(ctx)
 	}
 
+	b.startRuntimeEvents(currentSessionID, harness)
 	return nil
 }
 
@@ -194,9 +199,15 @@ func (b *Backend) close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
 		cancel := b.turn.cancel
+		runtimeEventsCancel := b.runtimeEventsCancel
+		b.runtimeEventsCancel = nil
+		b.runtimeEventsSessionID = ""
 		harness := b.harness
 		b.mu.Unlock()
 
+		if runtimeEventsCancel != nil {
+			runtimeEventsCancel()
+		}
 		if cancel != nil {
 			cancel()
 		}

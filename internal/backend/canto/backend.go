@@ -1,6 +1,7 @@
 package canto
 
 import (
+	"context"
 	"sync"
 
 	cantofw "github.com/nijaru/canto"
@@ -32,6 +33,9 @@ type Backend struct {
 	turn      turnState
 	closeOnce sync.Once
 	wg        sync.WaitGroup
+
+	runtimeEventsCancel    context.CancelFunc
+	runtimeEventsSessionID string
 }
 
 func New() *Backend {
@@ -48,7 +52,8 @@ type Session struct {
 }
 
 var (
-	_ backend.Backend            = (*Backend)(nil)
-	_ ionsession.AgentSession    = (*Session)(nil)
-	_ ionsession.SteeringSession = (*Session)(nil)
+	_ backend.Backend               = (*Backend)(nil)
+	_ ionsession.AgentSession       = (*Session)(nil)
+	_ ionsession.SteeringSession    = (*Session)(nil)
+	_ ionsession.QueuedInputSession = (*Session)(nil)
 )

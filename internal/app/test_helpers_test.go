@@ -117,6 +117,15 @@ type steeringStubSession struct {
 	err    error
 }
 
+type queuedInputStubSession struct {
+	stubSession
+	followUps []string
+	clears    int
+	result    session.QueuedInputResult
+	err       error
+	clearErr  error
+}
+
 func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	t.Helper()
 	switch msg := msg.(type) {
@@ -260,6 +269,30 @@ func (s *steeringStubSession) SteerTurn(
 		return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
 	}
 	return s.result, nil
+}
+
+func (s *queuedInputStubSession) FollowUpTurn(
+	ctx context.Context,
+	text string,
+) (session.QueuedInputResult, error) {
+	s.followUps = append(s.followUps, text)
+	if s.err != nil {
+		return session.QueuedInputResult{}, s.err
+	}
+	if s.result.Outcome == "" {
+		return session.QueuedInputResult{Outcome: session.QueuedInputAccepted}, nil
+	}
+	return s.result, nil
+}
+
+func (s *queuedInputStubSession) ClearQueuedInput(
+	ctx context.Context,
+) (session.QueuedInputSnapshot, error) {
+	s.clears++
+	if s.clearErr != nil {
+		return session.QueuedInputSnapshot{}, s.clearErr
+	}
+	return session.QueuedInputSnapshot{}, nil
 }
 
 type stubStorageSession struct {
