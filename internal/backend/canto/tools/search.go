@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
 
@@ -76,29 +75,13 @@ func (g *Grep) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "grep",
 		Description: "Search file contents with ripgrep. Respects ignore files, includes hidden files, and excludes .git internals.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pattern": map[string]any{
-					"type":        "string",
-					"description": "The regex pattern to search for.",
-				},
-				"path": map[string]any{
-					"type":        "string",
-					"description": "Directory or file to search in, relative to the current directory or absolute.",
-				},
-			},
-			"required": []string{"pattern"},
-		},
+		Parameters:  grepParameters(),
 	}
 }
 
 func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		Pattern string `json:"pattern"`
-		Path    string `json:"path"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := decodeToolArgs[grepInput]("grep", args)
+	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(input.Pattern) == "" {
@@ -145,24 +128,13 @@ func (g *Glob) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "glob",
 		Description: "Find files matching a glob pattern using ripgrep's ignored-file list. Respects ignore files, includes hidden files, excludes .git internals, and supports ** for recursive search.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pattern": map[string]any{
-					"type":        "string",
-					"description": "The glob pattern to search for (e.g. '**/*.go').",
-				},
-			},
-			"required": []string{"pattern"},
-		},
+		Parameters:  globParameters(),
 	}
 }
 
 func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		Pattern string `json:"pattern"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := decodeToolArgs[globInput]("glob", args)
+	if err != nil {
 		return "", err
 	}
 	if err := validateGlobPattern(input.Pattern); err != nil {

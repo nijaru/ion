@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
 
@@ -19,23 +18,13 @@ func (l *List) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "list",
 		Description: "List contents of a specific directory.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"path": map[string]any{
-					"type":        "string",
-					"description": "Directory to list (default: current directory).",
-				},
-			},
-		},
+		Parameters:  listParameters(),
 	}
 }
 
 func (l *List) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := decodeToolArgs[listInput]("list", args)
+	if err != nil {
 		return "", err
 	}
 	if input.Path == "" {

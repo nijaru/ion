@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
 
@@ -19,34 +18,13 @@ func (r *Read) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "read",
 		Description: "Read file contents with line numbers. Returns the full file or a specific line range (use offset/limit for large files).",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"file_path": map[string]any{
-					"type":        "string",
-					"description": "File to read, relative to the current directory or absolute.",
-				},
-				"offset": map[string]any{
-					"type":        "integer",
-					"description": "Line number to start reading from (1-indexed).",
-				},
-				"limit": map[string]any{
-					"type":        "integer",
-					"description": "Maximum number of lines to read.",
-				},
-			},
-			"required": []string{"file_path"},
-		},
+		Parameters:  readParameters(),
 	}
 }
 
 func (r *Read) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		FilePath string `json:"file_path"`
-		Offset   int    `json:"offset"`
-		Limit    int    `json:"limit"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := decodeToolArgs[readInput]("read", args)
+	if err != nil {
 		return "", err
 	}
 	if input.Offset < 0 {

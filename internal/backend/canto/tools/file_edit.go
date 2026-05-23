@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/aymanbagabas/go-udiff"
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
 
@@ -26,51 +25,13 @@ func (e *Edit) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "edit",
 		Description: "Apply one or more targeted exact text replacements to one file after validating every operation against the original content.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"file_path": map[string]any{
-					"type":        "string",
-					"description": "File to modify, relative to the current directory or absolute.",
-				},
-				"edits": map[string]any{
-					"type":        "array",
-					"description": "One or more targeted replacements. Each edit is matched against the original file, not another edit's output.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"old_string": map[string]any{
-								"type":        "string",
-								"description": "The exact text to replace. Must match the original file, not another edit's output.",
-							},
-							"new_string": map[string]any{
-								"type":        "string",
-								"description": "The replacement text.",
-							},
-							"replace_all": map[string]any{
-								"type":        "boolean",
-								"description": "Replace all occurrences (default: false, requires unique match).",
-							},
-							"expected_replacements": map[string]any{
-								"type":        "integer",
-								"description": "Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
-							},
-						},
-						"required": []string{"old_string", "new_string"},
-					},
-				},
-			},
-			"required": []string{"file_path", "edits"},
-		},
+		Parameters:  editParameters(),
 	}
 }
 
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		FilePath string            `json:"file_path"`
-		Edits    []editReplacement `json:"edits"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := decodeToolArgs[editInput]("edit", args)
+	if err != nil {
 		return "", err
 	}
 	if len(input.Edits) == 0 {
