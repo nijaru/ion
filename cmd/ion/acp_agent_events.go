@@ -197,7 +197,7 @@ func acpToolKind(name string) acp.ToolKind {
 		return acp.ToolKindRead
 	case "write", "edit":
 		return acp.ToolKindEdit
-	case "list", "grep", "glob":
+	case "list", "ls", "grep", "glob", "find":
 		return acp.ToolKindSearch
 	case "bash":
 		return acp.ToolKindExecute

@@ -356,7 +356,7 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider calls = %d, want 1", len(calls))
 	}
-	if got := strings.Join(specNames(calls[0].Tools), ","); got != "glob,grep,list,read" {
+	if got := strings.Join(specNames(calls[0].Tools), ","); got != "find,grep,ls,read" {
 		t.Fatalf("provider tools = %q, want read-only tools", got)
 	}
 
@@ -372,7 +372,7 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("effective settings: %v", err)
 	}
-	if !settings.HasTools || strings.Join(settings.ActiveTools, ",") != "glob,grep,list,read" {
+	if !settings.HasTools || strings.Join(settings.ActiveTools, ",") != "find,grep,ls,read" {
 		t.Fatalf("settings = %#v, want read-only active tools", settings)
 	}
 
@@ -384,7 +384,7 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode tool selection: %v", err)
 			}
-			if ok && strings.Join(selection.Names, ",") == "glob,grep,list,read" {
+			if ok && strings.Join(selection.Names, ",") == "find,grep,ls,read" {
 				toolsIdx = i
 			}
 		case csession.MessageAdded:

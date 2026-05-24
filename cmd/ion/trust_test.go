@@ -40,7 +40,7 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 func TestStartupToolLineOmitsDefaultToolCount(t *testing.T) {
 	line := startupToolLine(toolSummaryBackend{surface: backend.ToolSurface{
 		Count: 7,
-		Names: []string{"bash", "read", "write", "edit", "list", "grep", "glob"},
+		Names: []string{"bash", "read", "write", "edit", "ls", "grep", "find"},
 	}})
 	if line != "" {
 		t.Fatalf("line = %q, want no default tool count", line)

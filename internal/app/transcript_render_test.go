@@ -195,16 +195,16 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 			name: "list entries",
 			entry: session.Entry{
 				Role:    session.Tool,
-				Title:   "list internal/app",
+				Title:   "ls internal/app",
 				Content: "model.go\nviewport.go\n",
 			},
 			want: "• List(internal/app) · 2 entries",
 		},
 		{
-			name: "glob entries",
+			name: "find entries",
 			entry: session.Entry{
 				Role:    session.Tool,
-				Title:   "glob **/*.go",
+				Title:   "find **/*.go",
 				Content: "main.go\ninternal/app/model.go\n",
 			},
 			want: "• Find(**/*.go) · 2 entries",

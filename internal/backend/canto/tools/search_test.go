@@ -114,16 +114,16 @@ func TestSearchTools(t *testing.T) {
 		}
 	})
 
-	t.Run("Glob", func(t *testing.T) {
-		gl := &Glob{SearchTool: *NewSearchTool(tmpDir)}
+	t.Run("Find", func(t *testing.T) {
+		find := &Find{SearchTool: *NewSearchTool(tmpDir)}
 		if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(tmpDir, "broken-link")); err != nil {
 			t.Logf("symlink unavailable: %v", err)
 		}
 
 		args := `{"pattern": "**/*.go"}`
-		res, err := gl.Execute(context.Background(), args)
+		res, err := find.Execute(context.Background(), args)
 		if err != nil {
-			t.Fatalf("glob failed: %v", err)
+			t.Fatalf("find failed: %v", err)
 		}
 
 		if strings.Contains(res, "ignored/") {
@@ -136,40 +136,40 @@ func TestSearchTools(t *testing.T) {
 			t.Errorf("expected hidden and normal go files, got %q", res)
 		}
 
-		res, err = gl.Execute(context.Background(), `{"pattern":"*.go","path":"src","limit":1}`)
+		res, err = find.Execute(context.Background(), `{"pattern":"*.go","path":"src","limit":1}`)
 		if err != nil {
-			t.Fatalf("glob with search path and limit failed: %v", err)
+			t.Fatalf("find with search path and limit failed: %v", err)
 		}
 		if !strings.Contains(res, ".go") {
-			t.Fatalf("expected path-relative glob result, got %q", res)
+			t.Fatalf("expected path-relative find result, got %q", res)
 		}
 		if strings.Contains(res, "src/") {
-			t.Fatalf("expected glob output relative to search path, got %q", res)
+			t.Fatalf("expected find output relative to search path, got %q", res)
 		}
 		if !strings.Contains(res, "results limit reached") {
-			t.Fatalf("expected glob limit notice, got %q", res)
+			t.Fatalf("expected find limit notice, got %q", res)
 		}
 
 		absArgs := `{"pattern":"` + filepath.ToSlash(filepath.Join(tmpDir, "match*")) + `"}`
-		res, err = gl.Execute(context.Background(), absArgs)
+		res, err = find.Execute(context.Background(), absArgs)
 		if err != nil {
-			t.Fatalf("glob with absolute workspace pattern failed: %v", err)
+			t.Fatalf("find with absolute workspace pattern failed: %v", err)
 		}
 		if strings.TrimSpace(res) != "match1.go\nmatch2.txt" {
-			t.Fatalf("absolute workspace glob = %q, want relative matches", res)
+			t.Fatalf("absolute workspace find = %q, want relative matches", res)
 		}
 
-		if _, err := gl.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {
-			t.Fatal("expected glob pattern outside workspace to fail")
+		if _, err := find.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {
+			t.Fatal("expected find pattern outside workspace to fail")
 		}
 
 		outsidePattern := filepath.ToSlash(filepath.Join(t.TempDir(), "*.go"))
-		if _, err := gl.Execute(context.Background(), `{"pattern":"`+outsidePattern+`"}`); err == nil {
-			t.Fatal("expected absolute glob pattern outside workspace to fail")
+		if _, err := find.Execute(context.Background(), `{"pattern":"`+outsidePattern+`"}`); err == nil {
+			t.Fatal("expected absolute find pattern outside workspace to fail")
 		}
 
-		if _, err := gl.Execute(context.Background(), `{"pattern":" "}`); err == nil {
-			t.Fatal("expected empty glob pattern to fail")
+		if _, err := find.Execute(context.Background(), `{"pattern":" "}`); err == nil {
+			t.Fatal("expected empty find pattern to fail")
 		}
 	})
 }

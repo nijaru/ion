@@ -83,7 +83,7 @@ func p1ToolSpecs(cwd string) []llm.Spec {
 		&tools.Edit{FileTool: *fileTool},
 		&tools.List{FileTool: *fileTool},
 		&tools.Grep{SearchTool: *searchTool},
-		&tools.Glob{SearchTool: *searchTool},
+		&tools.Find{SearchTool: *searchTool},
 	}
 	specs := make([]llm.Spec, 0, len(registered))
 	for _, t := range registered {

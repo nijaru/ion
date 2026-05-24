@@ -19,9 +19,9 @@ func TestToolMetadataMarksReadOnlyToolsParallelAndMutatorsSerialized(t *testing.
 		{name: "read", metadata: (&Read{}).Metadata(), readOnly: true, mode: tool.Parallel},
 		{name: "write", metadata: (&Write{}).Metadata(), mode: tool.Serialized},
 		{name: "edit", metadata: (&Edit{}).Metadata(), mode: tool.Serialized},
-		{name: "list", metadata: (&List{}).Metadata(), readOnly: true, mode: tool.Parallel},
+		{name: "ls", metadata: (&List{}).Metadata(), readOnly: true, mode: tool.Parallel},
 		{name: "grep", metadata: (&Grep{}).Metadata(), readOnly: true, mode: tool.Parallel},
-		{name: "glob", metadata: (&Glob{}).Metadata(), readOnly: true, mode: tool.Parallel},
+		{name: "find", metadata: (&Find{}).Metadata(), readOnly: true, mode: tool.Parallel},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.metadata.Category != "workspace" {

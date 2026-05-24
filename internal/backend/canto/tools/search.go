@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultGrepLimit = 100
-	defaultGlobLimit = 1000
+	defaultFindLimit = 1000
 )
 
 type SearchTool struct {
@@ -168,33 +168,33 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	return "", fmt.Errorf("rg search failed: %w", err)
 }
 
-// Glob tool
-type Glob struct {
+// Find tool
+type Find struct {
 	SearchTool
 }
 
-func (g *Glob) Spec() llm.Spec {
+func (f *Find) Spec() llm.Spec {
 	return llm.Spec{
-		Name:        "glob",
+		Name:        "find",
 		Description: "Find files matching a glob pattern using ripgrep's ignored-file list. Respects ignore files, includes hidden files, excludes .git internals, and supports ** for recursive search.",
-		Parameters:  globParameters(),
+		Parameters:  findParameters(),
 	}
 }
 
-func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
-	input, err := decodeToolArgs[globInput]("glob", args)
+func (f *Find) Execute(ctx context.Context, args string) (string, error) {
+	input, err := decodeToolArgs[findInput]("find", args)
 	if err != nil {
 		return "", err
 	}
-	pattern, err := g.globPatternArg(input.Pattern)
+	pattern, err := f.globPatternArg(input.Pattern)
 	if err != nil {
 		return "", err
 	}
 	limit := input.Limit
 	if limit <= 0 {
-		limit = defaultGlobLimit
+		limit = defaultFindLimit
 	}
-	searchArg, err := g.searchArg(input.Path)
+	searchArg, err := f.searchArg(input.Path)
 	if err != nil {
 		return "", err
 	}
@@ -209,7 +209,7 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 		cmdArgs = append(cmdArgs, searchArg)
 	}
 	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
-	cmd.Dir = g.cwd
+	cmd.Dir = f.cwd
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -222,7 +222,7 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 
 	matches, err := globMatches(pattern, string(output), searchArg)
 	if err != nil {
-		return "", fmt.Errorf("glob failed: %w", err)
+		return "", fmt.Errorf("find failed: %w", err)
 	}
 
 	if len(matches) == 0 {

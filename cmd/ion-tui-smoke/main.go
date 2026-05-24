@@ -208,7 +208,7 @@ func (b *smokeBackend) SetConfig(cfg *config.Config) {
 func (b *smokeBackend) ToolSurface() backend.ToolSurface {
 	return backend.ToolSurface{
 		Count:       7,
-		Names:       []string{"bash", "edit", "glob", "grep", "list", "read", "write"},
+		Names:       []string{"bash", "edit", "find", "grep", "ls", "read", "write"},
 		Environment: "inherit_without_provider_keys",
 	}
 }

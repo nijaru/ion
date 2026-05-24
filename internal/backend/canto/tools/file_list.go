@@ -10,23 +10,23 @@ import (
 	"github.com/nijaru/canto/llm"
 )
 
-const defaultListLimit = 500
+const defaultLSLimit = 500
 
-// List tool (formerly list_directory)
+// List tool (Pi-style ls; formerly list_directory).
 type List struct {
 	FileTool
 }
 
 func (l *List) Spec() llm.Spec {
 	return llm.Spec{
-		Name:        "list",
+		Name:        "ls",
 		Description: "List contents of a specific directory.",
-		Parameters:  listParameters(),
+		Parameters:  lsParameters(),
 	}
 }
 
 func (l *List) Execute(ctx context.Context, args string) (string, error) {
-	input, err := decodeToolArgs[listInput]("list", args)
+	input, err := decodeToolArgs[lsInput]("ls", args)
 	if err != nil {
 		return "", err
 	}
@@ -57,7 +57,7 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = defaultListLimit
+		limit = defaultLSLimit
 	}
 
 	var res strings.Builder

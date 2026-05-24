@@ -104,7 +104,7 @@ func toolBashOutput(cfg *config.Config) string {
 
 func isReadLikeTool(title string) bool {
 	switch toolTitleVerb(title) {
-	case "list", "read", "find", "glob", "search", "grep":
+	case "list", "ls", "read", "find", "glob", "search", "grep":
 		return true
 	default:
 		return false
@@ -128,7 +128,7 @@ func toolOutputSummary(e session.Entry) string {
 	lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
 	n := len(lines)
 	switch toolTitleVerb(e.Title) {
-	case "list", "find", "glob":
+	case "list", "ls", "find", "glob":
 		if n == 1 {
 			return "1 entry"
 		}

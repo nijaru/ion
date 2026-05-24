@@ -48,7 +48,7 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	defer func() { _ = b.Session().Close() }()
 
 	surface := b.ToolSurface()
-	want := []string{"bash", "edit", "glob", "grep", "list", "read", "write"}
+	want := []string{"bash", "edit", "find", "grep", "ls", "read", "write"}
 	if surface.Count != len(want) {
 		t.Fatalf("tool count = %d, want %d", surface.Count, len(want))
 	}
@@ -92,7 +92,7 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	if surface.Mode != "read" {
 		t.Fatalf("tool mode = %q, want read", surface.Mode)
 	}
-	if got := strings.Join(surface.ActiveNames, ","); got != "glob,grep,list,read" {
+	if got := strings.Join(surface.ActiveNames, ","); got != "find,grep,ls,read" {
 		t.Fatalf("active tools = %q, want read-only tools", got)
 	}
 }

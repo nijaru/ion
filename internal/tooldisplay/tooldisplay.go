@@ -77,11 +77,11 @@ func knownName(name string) (string, bool) {
 		return "Write", true
 	case "edit":
 		return "Edit", true
-	case "list":
+	case "list", "ls":
 		return "List", true
 	case "grep":
 		return "Search", true
-	case "glob":
+	case "glob", "find":
 		return "Find", true
 	case "bash":
 		return "Bash", true
@@ -103,14 +103,14 @@ func primaryArg(name, args string) (string, argKind, bool) {
 			return value, kind, true
 		}
 		return jsonStringArg(args, "file_path", kindPath)
-	case "list":
+	case "list", "ls":
 		return jsonStringArg(args, "path", kindPath)
 	case "grep":
 		if value, kind, ok := jsonStringArg(args, "pattern", kindText); ok {
 			return value, kind, true
 		}
 		return jsonStringArg(args, "path", kindPath)
-	case "glob":
+	case "glob", "find":
 		return jsonStringArg(args, "pattern", kindText)
 	default:
 		for _, candidate := range []struct {
@@ -156,7 +156,7 @@ const (
 
 func titleArgKind(verb string) argKind {
 	switch strings.ToLower(strings.TrimSpace(verb)) {
-	case "read", "write", "edit", "list":
+	case "read", "write", "edit", "list", "ls":
 		return kindPath
 	default:
 		return kindText

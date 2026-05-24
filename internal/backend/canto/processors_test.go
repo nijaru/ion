@@ -158,9 +158,9 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 	wantTools := []string{
 		"bash",
 		"edit",
-		"glob",
+		"find",
 		"grep",
-		"list",
+		"ls",
 		"read",
 		"write",
 	}

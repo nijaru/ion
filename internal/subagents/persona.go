@@ -38,14 +38,14 @@ func Builtins() []Persona {
 			Name:        "explorer",
 			Description: "Read-only codebase exploration and focused context gathering.",
 			ModelSlot:   ModelSlotFast,
-			Tools:       []string{"read", "grep", "glob", "list"},
+			Tools:       []string{"read", "grep", "find", "ls"},
 			Prompt:      "Explore the codebase for the requested question. Return a concise summary with file paths and concrete findings. Do not make changes.",
 		},
 		{
 			Name:        "reviewer",
 			Description: "Focused correctness, regression, and risk review.",
 			ModelSlot:   ModelSlotPrimary,
-			Tools:       []string{"read", "grep", "glob", "list", "bash"},
+			Tools:       []string{"read", "grep", "find", "ls", "bash"},
 			Prompt:      "Review the requested area for correctness risks, missing tests, and behavior regressions. Return findings first, with file paths and evidence.",
 		},
 		{
@@ -55,8 +55,8 @@ func Builtins() []Persona {
 			Tools: []string{
 				"read",
 				"grep",
-				"glob",
-				"list",
+				"find",
+				"ls",
 				"write",
 				"edit",
 				"bash",

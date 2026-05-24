@@ -490,7 +490,7 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 	}
 }
 
-func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
+func TestSubmitTurnExecutesReadFindAndGrepFirstMinutesFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -521,10 +521,10 @@ func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
 		"read",
 		map[string]any{"path": "ai/STATUS.md", "limit": 2},
 	)
-	globCall := toolCall(
+	findCall := toolCall(
 		t,
-		"glob-call-1",
-		"glob",
+		"find-call-1",
+		"find",
 		map[string]any{"pattern": filepath.Join(cwd, "ai", "*.md")},
 	)
 	grepCall := toolCall(
@@ -541,7 +541,7 @@ func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
 	)
 	provider := ctesting.NewFauxProvider(
 		"local-api",
-		ctesting.Step{Calls: []llm.Call{readCall, globCall, grepCall}},
+		ctesting.Step{Calls: []llm.Call{readCall, findCall, grepCall}},
 		ctesting.Step{Content: "done"},
 	)
 
@@ -590,8 +590,8 @@ func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
 				if !strings.Contains(results["read"], "phase: p1") {
 					t.Fatalf("read result = %q, want status contents", results["read"])
 				}
-				if !strings.Contains(results["glob"], "ai/STATUS.md") {
-					t.Fatalf("glob result = %q, want ai/STATUS.md", results["glob"])
+				if !strings.Contains(results["find"], "ai/STATUS.md") {
+					t.Fatalf("find result = %q, want ai/STATUS.md", results["find"])
 				}
 				if !strings.Contains(results["grep"], "STATUS.md") ||
 					!strings.Contains(results["grep"], "needle path") {

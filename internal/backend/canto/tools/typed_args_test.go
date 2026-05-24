@@ -33,7 +33,7 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 			required:   []string{"path", "edits"},
 		},
 		{
-			name:       "list",
+			name:       "ls",
 			spec:       (&List{FileTool: *fileTool}).Spec().Parameters.(map[string]any),
 			properties: []string{"path", "limit"},
 		},
@@ -52,8 +52,8 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 			required: []string{"pattern"},
 		},
 		{
-			name:       "glob",
-			spec:       (&Glob{SearchTool: *searchTool}).Spec().Parameters.(map[string]any),
+			name:       "find",
+			spec:       (&Find{SearchTool: *searchTool}).Spec().Parameters.(map[string]any),
 			properties: []string{"pattern", "path", "limit"},
 			required:   []string{"pattern"},
 		},

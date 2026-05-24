@@ -44,6 +44,24 @@ func TestTitleAcceptsPiPathAlias(t *testing.T) {
 	}
 }
 
+func TestTitleUsesPiReadOnlyToolNames(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "find", args: `{"pattern":"**/*.go"}`, want: "Find(**/*.go)"},
+		{name: "ls", args: `{"path":"./internal/../hello"}`, want: "List(hello)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Title(tt.name, tt.args, Options{}); got != tt.want {
+				t.Fatalf("title = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTitleShortensHomePathOutsideWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

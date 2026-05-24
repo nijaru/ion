@@ -23,7 +23,7 @@ type editInput struct {
 	Edits []editReplacement `json:"edits"`
 }
 
-type listInput struct {
+type lsInput struct {
 	Path  string `json:"path"`
 	Limit int    `json:"limit"`
 }
@@ -38,7 +38,7 @@ type grepInput struct {
 	Limit      int    `json:"limit"`
 }
 
-type globInput struct {
+type findInput struct {
 	Pattern string `json:"pattern"`
 	Path    string `json:"path"`
 	Limit   int    `json:"limit"`
@@ -146,8 +146,8 @@ func editParameters() map[string]any {
 	return schema
 }
 
-func listParameters() map[string]any {
-	schema := typedParameters[listInput](nil)
+func lsParameters() map[string]any {
+	schema := typedParameters[lsInput](nil)
 	describeProperty(schema, "path", "Directory to list (default: current directory).")
 	describeProperty(schema, "limit", "Maximum number of entries to return (default: 500).")
 	return schema
@@ -173,8 +173,8 @@ func grepParameters() map[string]any {
 	return schema
 }
 
-func globParameters() map[string]any {
-	schema := typedParameters[globInput]([]string{"pattern"})
+func findParameters() map[string]any {
+	schema := typedParameters[findInput]([]string{"pattern"})
 	describeProperty(schema, "pattern", "The glob pattern to search for (e.g. '**/*.go').")
 	describeProperty(schema, "path", "Directory to search in (default: current directory).")
 	describeProperty(schema, "limit", "Maximum number of results to return (default: 1000).")

@@ -79,7 +79,7 @@ func (b *Backend) open(ctx context.Context) error {
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
-	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
+	registry.Register(&tools.Find{SearchTool: *tools.NewSearchTool(cwd)})
 	if cfg.SkillToolMode() != "off" {
 		skillsDir, err := ionconfig.DefaultSkillsDir()
 		if err != nil {

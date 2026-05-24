@@ -145,9 +145,9 @@ func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
 	names := []string{
 		"bash",
 		"edit",
-		"glob",
+		"find",
 		"grep",
-		"list",
+		"ls",
 		"read",
 		"read_skill",
 		"unknown",
@@ -156,7 +156,7 @@ func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
 
 	pe.SetMode(ModeRead)
 	got := pe.VisibleToolNames(names)
-	want := []string{"glob", "grep", "list", "read", "read_skill"}
+	want := []string{"find", "grep", "ls", "read", "read_skill"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("READ visible tools = %#v, want %#v", got, want)
 	}

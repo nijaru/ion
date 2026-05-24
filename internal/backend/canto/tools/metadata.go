@@ -29,7 +29,7 @@ func (g *Grep) Metadata() tool.Metadata {
 	return readOnlyWorkspaceMetadata()
 }
 
-func (g *Glob) Metadata() tool.Metadata {
+func (f *Find) Metadata() tool.Metadata {
 	return readOnlyWorkspaceMetadata()
 }
 

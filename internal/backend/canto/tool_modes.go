@@ -10,9 +10,9 @@ import (
 )
 
 var readToolNames = map[string]struct{}{
-	"glob":       {},
+	"find":       {},
 	"grep":       {},
-	"list":       {},
+	"ls":         {},
 	"read":       {},
 	"read_skill": {},
 }
@@ -20,9 +20,9 @@ var readToolNames = map[string]struct{}{
 var codingToolNames = map[string]struct{}{
 	"bash":       {},
 	"edit":       {},
-	"glob":       {},
+	"find":       {},
 	"grep":       {},
-	"list":       {},
+	"ls":         {},
 	"read":       {},
 	"read_skill": {},
 	"subagent":   {},
