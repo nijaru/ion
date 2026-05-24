@@ -624,6 +624,149 @@ func TestSubmitTurnExecutesReadFindAndGrepFirstMinutesFlow(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnExecutesLsWriteAndEditFirstMinutesFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cwd, "src", "main.go"),
+		[]byte("package main\n\nfunc message() string { return \"old\" }\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	lsCall := toolCall(t, "ls-call-1", "ls", map[string]any{"path": ".", "limit": 10})
+	writeCall := toolCall(
+		t,
+		"write-call-1",
+		"write",
+		map[string]any{"path": "notes/todo.md", "content": "todo ok\n"},
+	)
+	editCall := toolCall(
+		t,
+		"edit-call-1",
+		"edit",
+		map[string]any{
+			"path": "src/main.go",
+			"edits": []map[string]any{{
+				"oldText": `return "old"`,
+				"newText": `return "new"`,
+			}},
+		},
+	)
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{lsCall, writeCall, editCall}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+			ToolMode: "all",
+		},
+	)
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "list source, write notes, and edit main"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	results := map[string]string{}
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-b.Session().Events():
+			if !ok {
+				t.Fatal("event stream closed before mutation-tool turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolResult:
+				results[msg.ToolName] = msg.Result
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				if !strings.Contains(results["ls"], "src/") {
+					t.Fatalf("ls result = %q, want src/", results["ls"])
+				}
+				if !strings.Contains(results["write"], "Wrote notes/todo.md.") {
+					t.Fatalf("write result = %q, want write success", results["write"])
+				}
+				if !strings.Contains(results["edit"], "Applied 1 edit(s)") ||
+					!strings.Contains(results["edit"], `return "new"`) {
+					t.Fatalf("edit result = %q, want edit diff", results["edit"])
+				}
+				note, err := os.ReadFile(filepath.Join(cwd, "notes", "todo.md"))
+				if err != nil {
+					t.Fatalf("read note: %v", err)
+				}
+				if string(note) != "todo ok\n" {
+					t.Fatalf("note content = %q, want todo ok", note)
+				}
+				source, err := os.ReadFile(filepath.Join(cwd, "src", "main.go"))
+				if err != nil {
+					t.Fatalf("read source: %v", err)
+				}
+				if !strings.Contains(string(source), `return "new"`) {
+					t.Fatalf("edited source = %q, want new return", source)
+				}
+				calls := provider.Calls()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and post-tool requests", len(calls))
+				}
+				for _, want := range []string{"src/", "Wrote notes/todo.md.", `return "new"`} {
+					if !requestHasMessage(calls[1].Messages, llm.RoleTool, want) {
+						t.Fatalf("post-tool request missing %q in tool messages", want)
+					}
+				}
+				entries, err := storageSession.Entries(ctx)
+				if err != nil {
+					t.Fatalf("entries: %v", err)
+				}
+				for _, want := range []string{"src/", "Wrote notes/todo.md.", `return "new"`} {
+					if !entryExists(entries, ionsession.Tool, want) {
+						t.Fatalf("persisted entries missing tool result containing %q", want)
+					}
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for mutation-tool turn")
+		}
+	}
+}
+
 func toolCall(t *testing.T, id, name string, args map[string]any) llm.Call {
 	t.Helper()
 	encoded, err := json.Marshal(args)
