@@ -562,6 +562,7 @@ func TestSubmitTurnExecutesReadFindAndGrepFirstMinutesFlow(t *testing.T) {
 			Provider: "local-api",
 			Model:    "model-a",
 			Endpoint: "http://localhost:8080/v1",
+			ToolMode: "all",
 		},
 	)
 	if err := b.Session().Open(ctx); err != nil {

@@ -316,7 +316,36 @@ func TestSubmitTurnRecordsProviderChangeWhenModelMatches(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnSyncsDefaultCodingToolsBeforeUserMessage(t *testing.T) {
+	assertSubmitTurnSyncsToolsBeforeUserMessage(
+		t,
+		&config.Config{
+			Provider: "openai",
+			Model:    "model-a",
+		},
+		"bash,edit,read,write",
+	)
+}
+
 func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
+	assertSubmitTurnSyncsToolsBeforeUserMessage(
+		t,
+		&config.Config{
+			Provider: "openai",
+			Model:    "model-a",
+			ToolMode: "read",
+		},
+		"find,grep,ls,read",
+	)
+}
+
+func assertSubmitTurnSyncsToolsBeforeUserMessage(
+	t *testing.T,
+	cfg *config.Config,
+	wantTools string,
+) {
+	t.Helper()
+
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())
 	if err != nil {
@@ -337,11 +366,7 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{
-		Provider: "openai",
-		Model:    "model-a",
-		ToolMode: "read",
-	})
+	b.SetConfig(cfg)
 	if err := b.Session().Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -356,8 +381,8 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider calls = %d, want 1", len(calls))
 	}
-	if got := strings.Join(specNames(calls[0].Tools), ","); got != "find,grep,ls,read" {
-		t.Fatalf("provider tools = %q, want read-only tools", got)
+	if got := strings.Join(specNames(calls[0].Tools), ","); got != wantTools {
+		t.Fatalf("provider tools = %q, want %q", got, wantTools)
 	}
 
 	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
@@ -372,8 +397,8 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("effective settings: %v", err)
 	}
-	if !settings.HasTools || strings.Join(settings.ActiveTools, ",") != "find,grep,ls,read" {
-		t.Fatalf("settings = %#v, want read-only active tools", settings)
+	if !settings.HasTools || strings.Join(settings.ActiveTools, ",") != wantTools {
+		t.Fatalf("settings = %#v, want active tools %q", settings, wantTools)
 	}
 
 	toolsIdx, userIdx := -1, -1
@@ -384,7 +409,7 @@ func TestSubmitTurnSyncsActiveToolModeBeforeUserMessage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode tool selection: %v", err)
 			}
-			if ok && strings.Join(selection.Names, ",") == "find,grep,ls,read" {
+			if ok && strings.Join(selection.Names, ",") == wantTools {
 				toolsIdx = i
 			}
 		case csession.MessageAdded:

@@ -13,9 +13,9 @@ The target default personas are:
 
 | Name | Model slot | Tools | Use |
 |---|---|---|---|
-| `explorer` | `fast` | read/search/list | Codebase scouting and context gathering |
-| `reviewer` | `primary` | read/search/shell | Correctness and regression review |
-| `worker` | `primary` | edit/shell plus read/search | Scoped implementation work |
+| `explorer` | `fast` | read/find/grep/ls | Codebase scouting and context gathering |
+| `reviewer` | `primary` | read/find/grep/bash | Correctness and regression review |
+| `worker` | `primary` | edit/bash plus read/find/grep | Scoped implementation work |
 
 The `fast` slot resolves from `fast_model` / `fast_reasoning_effort` in
 `~/.ion/config.toml`. If `fast_model` is unset, fast-slot personas fall back to
@@ -38,7 +38,7 @@ Each persona is Markdown with YAML frontmatter:
 name: scout
 description: Quick read-only repo scouting.
 model: fast
-tools: [read, grep, glob, list]
+tools: [read, grep, find, ls]
 ---
 Find the files relevant to the task and return concise findings with paths.
 ```

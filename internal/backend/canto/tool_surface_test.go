@@ -58,8 +58,9 @@ func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	if surface.Mode != "coding" {
 		t.Fatalf("tool mode = %q, want coding", surface.Mode)
 	}
-	if strings.Join(surface.ActiveNames, ",") != strings.Join(want, ",") {
-		t.Fatalf("active tools = %#v, want %#v", surface.ActiveNames, want)
+	wantActive := []string{"bash", "edit", "read", "write"}
+	if strings.Join(surface.ActiveNames, ",") != strings.Join(wantActive, ",") {
+		t.Fatalf("active tools = %#v, want %#v", surface.ActiveNames, wantActive)
 	}
 	if surface.Environment != "inherit" {
 		t.Fatalf("tool environment = %q, want inherit", surface.Environment)

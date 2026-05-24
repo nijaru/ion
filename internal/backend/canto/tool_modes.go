@@ -20,9 +20,6 @@ var readToolNames = map[string]struct{}{
 var codingToolNames = map[string]struct{}{
 	"bash":       {},
 	"edit":       {},
-	"find":       {},
-	"grep":       {},
-	"ls":         {},
 	"read":       {},
 	"read_skill": {},
 	"subagent":   {},
@@ -67,9 +64,6 @@ func syncCantoActiveTools(
 	settings, err := session.EffectiveSettings(ctx)
 	if err != nil {
 		return err
-	}
-	if !settings.HasTools && mode == "coding" {
-		return nil
 	}
 	if settings.HasTools && slices.Equal(settings.ActiveTools, names) {
 		return nil

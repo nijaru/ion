@@ -328,6 +328,7 @@ send_line "/tools"
 assert_contains "Tools: 7"
 assert_contains "bash env inherited"
 assert_contains "bash, edit, find, grep, ls, read, write"
+assert_contains "Active (coding): bash, edit, read, write"
 assert_not_contains "eager"
 assert_not_contains "verify"
 
