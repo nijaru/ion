@@ -25,7 +25,7 @@ func main() {
 	mode := flag.String(
 		"mode",
 		"complete",
-		"smoke script mode: complete, files, session-picker, cancel, or error",
+		"smoke script mode: complete, controls, files, session-picker, cancel, or error",
 	)
 	storeRoot := flag.String("store", "", "session store directory")
 	sessionID := flag.String("session-id", "", "session id to open or resume")
@@ -84,6 +84,9 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	cfg := &config.Config{
 		Provider: "fake",
 		Model:    "fake-model",
+	}
+	if mode == "controls" {
+		cfg = &config.Config{}
 	}
 	smoke.SetConfig(cfg)
 
@@ -335,6 +338,8 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 			return
 		}
 		b.emit(ctx, session.Error{Err: fmt.Errorf("smoke provider failure")})
+	case "controls":
+		b.runActiveControlsScript(ctx, input)
 	case "files":
 		b.runFileToolScript(ctx, input)
 	default:
@@ -374,6 +379,17 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		b.emit(ctx, session.AgentMessage{Message: "done"})
 		b.emit(ctx, session.TurnFinished{})
 	}
+}
+
+func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStarted{})
+	b.emit(ctx, session.StatusChanged{Status: "[smoke] active controls"})
+	if !b.sleep(ctx, 9*time.Second) {
+		return
+	}
+	b.emit(ctx, session.AgentMessage{Message: "controls done"})
+	b.emit(ctx, session.TurnFinished{})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {

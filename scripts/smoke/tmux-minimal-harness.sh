@@ -163,6 +163,26 @@ wait_contains() {
   done
 }
 
+wait_visible_contains() {
+  local needle="$1"
+  local timeout="${2:-20}"
+  local start
+  start="$(date +%s)"
+  while true; do
+    capture_visible
+    if grep -Fq -- "$needle" "$CAPTURE"; then
+      return 0
+    fi
+    if (($(date +%s) - start >= timeout)); then
+      echo "timed out waiting for visible text: $needle" >&2
+      echo "--- capture ---" >&2
+      cat "$CAPTURE" >&2
+      exit 1
+    fi
+    sleep 0.5
+  done
+}
+
 start_ion() {
   local args="${1:-}"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -270,6 +290,34 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_not_contains "1 queued"
   wait_contains "ion-tmux-smoke" 60
   wait_contains "Complete" 60
+  assert_visible_separator_line_count 2
+
+  start_smoke_ion "controls"
+  send_line "exercise active local controls"
+  wait_contains "[smoke] active controls" 30
+  send_line "/provider"
+  wait_visible_contains "Pick a provider" 30
+  assert_visible_not_contains "Queued follow-up"
+  assert_visible_not_contains "› /provider"
+  assert_visible_separator_line_count 2
+  tmux send-keys -t "$SESSION" Escape
+  sleep 0.3
+  assert_visible_not_contains "Pick a provider"
+  send_line "/model"
+  wait_visible_contains "Pick a provider" 30
+  assert_visible_not_contains "Queued follow-up"
+  assert_visible_not_contains "› /model"
+  assert_visible_separator_line_count 2
+  tmux send-keys -t "$SESSION" Escape
+  sleep 0.3
+  assert_visible_not_contains "Pick a provider"
+  send_line "/thinking"
+  wait_visible_contains "thinking level" 30
+  assert_visible_not_contains "Queued follow-up"
+  assert_visible_not_contains "› /thinking"
+  assert_visible_separator_line_count 2
+  tmux send-keys -t "$SESSION" Escape
+  wait_contains "controls done" 30
   assert_visible_separator_line_count 2
 
   start_smoke_ion "files"
