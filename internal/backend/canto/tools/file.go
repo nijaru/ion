@@ -6,9 +6,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
+	"golang.org/x/text/unicode/norm"
 )
 
 type FileTool struct {
@@ -133,6 +135,22 @@ func (t *FileTool) resolvePath(target string) (string, error) {
 	return t.absolutePath(target)
 }
 
+func (t *FileTool) readPath(target string) (string, error) {
+	absPath, err := t.absolutePath(target)
+	if err != nil {
+		return "", err
+	}
+	if fileExists(absPath) {
+		return absPath, nil
+	}
+	for _, candidate := range readPathVariants(absPath) {
+		if candidate != absPath && fileExists(candidate) {
+			return candidate, nil
+		}
+	}
+	return absPath, nil
+}
+
 func (t *FileTool) mutationPath(target string) (string, error) {
 	absPath, err := t.absolutePath(target)
 	if err != nil {
@@ -203,6 +221,29 @@ func (t *FileTool) realPathInsideWorkspace(target string) (bool, error) {
 		return false, nil
 	}
 	return rel == "." || filepath.IsLocal(rel), nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+var macOSScreenshotAMPM = regexp.MustCompile(` (?i:am|pm)\.`)
+
+func readPathVariants(path string) []string {
+	nfd := norm.NFD.String(path)
+	return []string{
+		tryMacOSScreenshotPath(path),
+		nfd,
+		strings.ReplaceAll(path, "'", "\u2019"),
+		strings.ReplaceAll(nfd, "'", "\u2019"),
+	}
+}
+
+func tryMacOSScreenshotPath(path string) string {
+	return macOSScreenshotAMPM.ReplaceAllStringFunc(path, func(match string) string {
+		return "\u202f" + match[1:]
+	})
 }
 
 func realPathForPossiblyMissingPath(path string) (string, error) {

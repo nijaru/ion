@@ -51,7 +51,7 @@ func (r *Read) ExecuteContent(ctx context.Context, args string) ([]llm.ContentPa
 		return nil, fmt.Errorf("limit must be non-negative")
 	}
 
-	absPath, err := r.absolutePath(input.Path)
+	absPath, err := r.readPath(input.Path)
 	if err != nil {
 		return nil, err
 	}

@@ -64,7 +64,9 @@ stable line references for follow-up edits.
 File and search tool path inputs follow Pi-style normalization for common
 model output: leading `@` is stripped, Unicode space variants are normalized to
 ASCII spaces, and local `file://` URLs are accepted. Non-local `file://host/...`
-URLs are rejected.
+URLs are rejected. For `read`, Ion also retries common macOS filename variants
+when the normalized path is missing: screenshot AM/PM narrow spaces, NFD
+Unicode filenames, and straight apostrophes typed for curly apostrophes.
 
 Native `grep` and `find` remain dedicated read-only tools instead of being
 collapsed into `bash`. They use ripgrep (`rg`) semantics for ignore handling:

@@ -101,6 +101,45 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("normalized path read = %q, want space ok", res)
 		}
 
+		screenshotPath := "Screenshot 1\u202fPM.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, screenshotPath), []byte("screenshot ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		screenshotArgs, _ := json.Marshal(map[string]any{"path": "Screenshot 1 PM.txt"})
+		res, err = r.Execute(context.Background(), string(screenshotArgs))
+		if err != nil {
+			t.Fatalf("read with macOS screenshot AM/PM path failed: %v", err)
+		}
+		if !strings.Contains(res, "screenshot ok") {
+			t.Fatalf("screenshot path read = %q, want screenshot ok", res)
+		}
+
+		nfdPath := "Cafe\u0301.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, nfdPath), []byte("nfd ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		nfdArgs, _ := json.Marshal(map[string]any{"path": "Caf\u00e9.txt"})
+		res, err = r.Execute(context.Background(), string(nfdArgs))
+		if err != nil {
+			t.Fatalf("read with NFD path variant failed: %v", err)
+		}
+		if !strings.Contains(res, "nfd ok") {
+			t.Fatalf("NFD path read = %q, want nfd ok", res)
+		}
+
+		curlyPath := "Guide\u2019s.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, curlyPath), []byte("curly ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		curlyArgs, _ := json.Marshal(map[string]any{"path": "Guide's.txt"})
+		res, err = r.Execute(context.Background(), string(curlyArgs))
+		if err != nil {
+			t.Fatalf("read with curly quote path variant failed: %v", err)
+		}
+		if !strings.Contains(res, "curly ok") {
+			t.Fatalf("curly path read = %q, want curly ok", res)
+		}
+
 		fileURLReadArgs, _ := json.Marshal(map[string]any{
 			"path": "file://" + filepath.ToSlash(filepath.Join(tmpDir, filePath)),
 		})
