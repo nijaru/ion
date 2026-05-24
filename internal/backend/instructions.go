@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,15 @@ import (
 type InstructionLayer struct {
 	Path    string
 	Content string
+}
+
+var instructionFileNames = []string{
+	"AGENTS.md",
+	"AGENTS.MD",
+	"CLAUDE.md",
+	"CLAUDE.MD",
+	"GEMINI.md",
+	"GEMINI.MD",
 }
 
 func BuildInstructions(base, cwd string) (string, error) {
@@ -47,38 +55,19 @@ func LoadInstructionLayers(cwd string) ([]InstructionLayer, error) {
 		return nil, err
 	}
 
-	root, ok := findRepoRoot(abs)
-	if !ok {
-		return instructionLayerForDir(abs)
+	dirs := dirsFromRoot(filepath.VolumeName(abs)+string(filepath.Separator), abs)
+	layers := make([]InstructionLayer, 0, len(dirs)+1)
+	seen := make(map[string]struct{}, len(dirs)+1)
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		globalDir := filepath.Join(home, ".ion")
+		appendInstructionLayers(&layers, seen, instructionLayerForDir(globalDir))
 	}
 
-	dirs := dirsFromRoot(root, abs)
-	layers := make([]InstructionLayer, 0, len(dirs))
 	for _, dir := range dirs {
-		layer, err := instructionLayerForDir(dir)
-		if err != nil {
-			return nil, err
-		}
-		if len(layer) != 0 {
-			layers = append(layers, layer...)
-		}
+		appendInstructionLayers(&layers, seen, instructionLayerForDir(dir))
 	}
 	return layers, nil
-}
-
-func findRepoRoot(cwd string) (string, bool) {
-	dir := cwd
-	for {
-		gitPath := filepath.Join(dir, ".git")
-		if _, err := os.Stat(gitPath); err == nil {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
 }
 
 func dirsFromRoot(root, cwd string) []string {
@@ -100,24 +89,40 @@ func dirsFromRoot(root, cwd string) []string {
 	return dirs
 }
 
-func instructionLayerForDir(dir string) ([]InstructionLayer, error) {
-	for _, name := range []string{"AGENTS.md", "GEMINI.md", "CLAUDE.md"} {
+func instructionLayerForDir(dir string) []InstructionLayer {
+	for _, name := range instructionFileNames {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read instruction file %s: %w", path, err)
+			continue
 		}
 		content := strings.TrimSpace(string(data))
 		if content == "" {
-			return nil, nil
+			continue
 		}
 		return []InstructionLayer{{
 			Path:    path,
 			Content: content,
-		}}, nil
+		}}
 	}
-	return nil, nil
+	return nil
+}
+
+func appendInstructionLayers(
+	layers *[]InstructionLayer,
+	seen map[string]struct{},
+	additional []InstructionLayer,
+) {
+	for _, layer := range additional {
+		path := filepath.Clean(layer.Path)
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		layer.Path = path
+		*layers = append(*layers, layer)
+	}
 }
