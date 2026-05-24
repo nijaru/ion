@@ -66,6 +66,16 @@ func TestFileTools(t *testing.T) {
 			t.Errorf("expected %q, got %q", wantRead, res)
 		}
 
+		// Pi-style path argument.
+		piReadArgs, _ := json.Marshal(map[string]any{"path": filePath, "offset": 2, "limit": 1})
+		res, err = r.Execute(context.Background(), string(piReadArgs))
+		if err != nil {
+			t.Fatalf("read with Pi-style path failed: %v", err)
+		}
+		if res != "     2\tline 2\n\n[1 more line(s) in file. Use offset=3 to continue.]" {
+			t.Errorf("Pi-style read path expected numbered line 2, got %q", res)
+		}
+
 		// Read with limit/offset
 		limitArgs, _ := json.Marshal(map[string]any{
 			"file_path": filePath,
@@ -214,6 +224,21 @@ func TestFileTools(t *testing.T) {
 		}
 		if string(data) != "absolute" {
 			t.Fatalf("absolute file = %q, want absolute", data)
+		}
+
+		aliasArgs, _ := json.Marshal(map[string]any{
+			"path":    "pi-write.txt",
+			"content": "pi path",
+		})
+		if _, err := w.Execute(context.Background(), string(aliasArgs)); err != nil {
+			t.Fatalf("write with Pi-style path failed: %v", err)
+		}
+		data, err = os.ReadFile(filepath.Join(tmpDir, "pi-write.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "pi path" {
+			t.Fatalf("Pi-style write path file = %q, want pi path", data)
 		}
 
 		if err := os.Symlink(outsideFile, filepath.Join(tmpDir, "outside-write-link.txt")); err != nil {

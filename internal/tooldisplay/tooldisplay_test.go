@@ -25,6 +25,25 @@ func TestTitleCleansRelativePath(t *testing.T) {
 	}
 }
 
+func TestTitleAcceptsPiPathAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "read", args: `{"path":"./internal/../hello.md"}`, want: "Read(hello.md)"},
+		{name: "write", args: `{"path":"./internal/../hello.md"}`, want: "Write(hello.md)"},
+		{name: "edit", args: `{"path":"./internal/../hello.md"}`, want: "Edit(hello.md)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Title(tt.name, tt.args, Options{}); got != tt.want {
+				t.Fatalf("title = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTitleShortensHomePathOutsideWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

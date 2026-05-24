@@ -40,7 +40,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("edits must contain at least one operation")
 	}
 
-	absPath, err := e.mutationPath(input.FilePath)
+	absPath, err := e.mutationPath(input.Path)
 	if err != nil {
 		return "", err
 	}
@@ -50,19 +50,19 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read %s: %w", input.FilePath, err)
+		return "", fmt.Errorf("failed to read %s: %w", input.Path, err)
 	}
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to stat %s: %w", input.FilePath, err)
+		return "", fmt.Errorf("failed to stat %s: %w", input.Path, err)
 	}
 	original := string(content)
-	newContent, replacements, err := applyEditReplacements(input.FilePath, original, input.Edits)
+	newContent, replacements, err := applyEditReplacements(input.Path, original, input.Edits)
 	if err != nil {
 		return "", err
 	}
 
-	if _, err := e.checkpointPaths(ctx, input.FilePath); err != nil {
+	if _, err := e.checkpointPaths(ctx, input.Path); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -82,12 +82,12 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, original, newContent)
+	diff := udiff.Unified("a/"+input.Path, "b/"+input.Path, original, newContent)
 	return limitToolOutput(fmt.Sprintf(
 		"Applied %d edit(s) with %d replacement(s) in %s.\n\n%s",
 		len(input.Edits),
 		replacements,
-		input.FilePath,
+		input.Path,
 		diff,
 	)), nil
 }
@@ -119,8 +119,8 @@ type matchedReplacement struct {
 
 func (i *editInput) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		FilePath string              `json:"file_path"`
 		Path     string              `json:"path"`
+		FilePath string              `json:"file_path"`
 		Edits    editReplacementArgs `json:"edits"`
 		OldText  string              `json:"oldText"`
 		NewText  string              `json:"newText"`
@@ -128,9 +128,9 @@ func (i *editInput) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	i.FilePath = raw.FilePath
-	if i.FilePath == "" {
-		i.FilePath = raw.Path
+	i.Path = raw.Path
+	if i.Path == "" {
+		i.Path = raw.FilePath
 	}
 	i.Edits = make([]editReplacement, 0, len(raw.Edits)+1)
 	for _, edit := range raw.Edits {

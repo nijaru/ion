@@ -29,7 +29,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath, err := w.mutationPath(input.FilePath)
+	absPath, err := w.mutationPath(input.Path)
 	if err != nil {
 		return "", err
 	}
@@ -37,7 +37,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if _, err := w.checkpointPaths(ctx, input.FilePath); err != nil {
+	if _, err := w.checkpointPaths(ctx, input.Path); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -70,5 +70,5 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	return limitToolOutput(fmt.Sprintf("Wrote %s.", input.FilePath)), nil
+	return limitToolOutput(fmt.Sprintf("Wrote %s.", input.Path)), nil
 }

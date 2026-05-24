@@ -34,7 +34,7 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("limit must be non-negative")
 	}
 
-	absPath, err := r.absolutePath(input.FilePath)
+	absPath, err := r.absolutePath(input.Path)
 	if err != nil {
 		return "", err
 	}

@@ -17,20 +17,20 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 		{
 			name:       "read",
 			spec:       (&Read{FileTool: *fileTool}).Spec().Parameters.(map[string]any),
-			properties: []string{"file_path", "offset", "limit"},
-			required:   []string{"file_path"},
+			properties: []string{"path", "offset", "limit"},
+			required:   []string{"path"},
 		},
 		{
 			name:       "write",
 			spec:       (&Write{FileTool: *fileTool}).Spec().Parameters.(map[string]any),
-			properties: []string{"file_path", "content"},
-			required:   []string{"file_path", "content"},
+			properties: []string{"path", "content"},
+			required:   []string{"path", "content"},
 		},
 		{
 			name:       "edit",
 			spec:       (&Edit{FileTool: *fileTool}).Spec().Parameters.(map[string]any),
-			properties: []string{"file_path", "edits"},
-			required:   []string{"file_path", "edits"},
+			properties: []string{"path", "edits"},
+			required:   []string{"path", "edits"},
 		},
 		{
 			name:       "list",

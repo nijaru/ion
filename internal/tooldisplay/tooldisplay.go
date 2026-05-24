@@ -99,6 +99,9 @@ func primaryArg(name, args string) (string, argKind, bool) {
 		}
 		return "", kindText, false
 	case "read", "write", "edit":
+		if value, kind, ok := jsonStringArg(args, "path", kindPath); ok {
+			return value, kind, true
+		}
 		return jsonStringArg(args, "file_path", kindPath)
 	case "list":
 		return jsonStringArg(args, "path", kindPath)
@@ -115,8 +118,8 @@ func primaryArg(name, args string) (string, argKind, bool) {
 			kind argKind
 		}{
 			{key: "command", kind: kindText},
-			{key: "file_path", kind: kindPath},
 			{key: "path", kind: kindPath},
+			{key: "file_path", kind: kindPath},
 			{key: "pattern", kind: kindText},
 			{key: "query", kind: kindText},
 		} {

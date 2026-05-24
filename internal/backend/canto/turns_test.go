@@ -390,7 +390,7 @@ func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 
 	call := llm.Call{ID: "write-call-1", Type: "function"}
 	call.Function.Name = "write"
-	call.Function.Arguments = `{"file_path":"handoff.md","content":"ion smoke ok\n"}`
+	call.Function.Arguments = `{"path":"handoff.md","content":"ion smoke ok\n"}`
 	provider := ctesting.NewFauxProvider(
 		"local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
@@ -519,7 +519,7 @@ func TestSubmitTurnExecutesReadGlobAndGrepFirstMinutesFlow(t *testing.T) {
 		t,
 		"read-call-1",
 		"read",
-		map[string]any{"file_path": "ai/STATUS.md", "limit": 2},
+		map[string]any{"path": "ai/STATUS.md", "limit": 2},
 	)
 	globCall := toolCall(
 		t,

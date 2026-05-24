@@ -8,19 +8,19 @@ import (
 )
 
 type readInput struct {
-	FilePath string `json:"file_path"`
-	Offset   int    `json:"offset"`
-	Limit    int    `json:"limit"`
+	Path   string `json:"path"`
+	Offset int    `json:"offset"`
+	Limit  int    `json:"limit"`
 }
 
 type writeInput struct {
-	FilePath string `json:"file_path"`
-	Content  string `json:"content"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 type editInput struct {
-	FilePath string            `json:"file_path"`
-	Edits    []editReplacement `json:"edits"`
+	Path  string            `json:"path"`
+	Edits []editReplacement `json:"edits"`
 }
 
 type listInput struct {
@@ -52,11 +52,47 @@ func decodeToolArgs[A any](name, args string) (A, error) {
 	return input, nil
 }
 
+func (i *readInput) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Path     string `json:"path"`
+		FilePath string `json:"file_path"`
+		Offset   int    `json:"offset"`
+		Limit    int    `json:"limit"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	i.Path = raw.Path
+	if i.Path == "" {
+		i.Path = raw.FilePath
+	}
+	i.Offset = raw.Offset
+	i.Limit = raw.Limit
+	return nil
+}
+
+func (i *writeInput) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Path     string `json:"path"`
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	i.Path = raw.Path
+	if i.Path == "" {
+		i.Path = raw.FilePath
+	}
+	i.Content = raw.Content
+	return nil
+}
+
 func readParameters() map[string]any {
-	schema := typedParameters[readInput]([]string{"file_path"})
+	schema := typedParameters[readInput]([]string{"path"})
 	describeProperty(
 		schema,
-		"file_path",
+		"path",
 		"File to read, relative to the current directory or absolute.",
 	)
 	describeProperty(schema, "offset", "Line number to start reading from (1-indexed).")
@@ -65,10 +101,10 @@ func readParameters() map[string]any {
 }
 
 func writeParameters() map[string]any {
-	schema := typedParameters[writeInput]([]string{"file_path", "content"})
+	schema := typedParameters[writeInput]([]string{"path", "content"})
 	describeProperty(
 		schema,
-		"file_path",
+		"path",
 		"File to write, relative to the current directory or absolute.",
 	)
 	describeProperty(schema, "content", "The full content to write to the file.")
@@ -76,10 +112,10 @@ func writeParameters() map[string]any {
 }
 
 func editParameters() map[string]any {
-	schema := typedParameters[editInput]([]string{"file_path", "edits"})
+	schema := typedParameters[editInput]([]string{"path", "edits"})
 	describeProperty(
 		schema,
-		"file_path",
+		"path",
 		"File to modify, relative to the current directory or absolute.",
 	)
 	describeProperty(
