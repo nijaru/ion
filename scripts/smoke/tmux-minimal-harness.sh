@@ -321,6 +321,18 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_separator_line_count 2
 
   start_smoke_ion "controls"
+  send_line "exercise active read-only commands"
+  wait_contains "[smoke] active controls" 30
+  send_line "/status"
+  wait_contains "Permissions: trusted by default" 30
+  assert_contains "Tools: 7"
+  assert_visible_not_contains "Queued follow-up"
+  assert_visible_not_contains "› /status"
+  assert_visible_separator_line_count 2
+  wait_contains "controls done" 30
+  assert_visible_separator_line_count 2
+
+  start_smoke_ion "controls"
   send_line "/settings busy queue"
   wait_contains "Busy input: queue" 30
   send_line "exercise explicit queue mode"

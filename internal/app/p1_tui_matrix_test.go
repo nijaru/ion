@@ -30,6 +30,10 @@ func TestP1InlineScenarioMatrix(t *testing.T) {
 			"runtime picker commands stay local while active",
 			p1MatrixRuntimePickerCommandsLocalWhileActive,
 		},
+		{
+			"read only slash commands stay local while active",
+			p1MatrixReadOnlySlashCommandsLocalWhileActive,
+		},
 		{"cancel during active tool settles visibly", p1MatrixCancelActiveTool},
 		{"provider error settles visibly", p1MatrixProviderError},
 		{"resize keeps rows wrap safe", p1MatrixResizeWrapSafe},
@@ -312,6 +316,67 @@ func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
 			assertP1ViewContains(t, view, tt.label)
 			assertP1ViewNotContains(t, view, "Queued follow-up")
 			assertP1ViewNotContains(t, view, "› "+tt.command)
+		})
+	}
+}
+
+func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	tests := []string{"/help", "/session", "/cost", "/tools", "/status", "/skills"}
+	for _, command := range tests {
+		t.Run(command, func(t *testing.T) {
+			sess := &stubSession{events: make(chan session.Event)}
+			model := readyModel(t)
+			model.Model.Session = sess
+			model = applyP1Events(
+				t,
+				model,
+				session.TurnStarted{},
+				session.AgentDelta{Delta: "still running"},
+			)
+			model.Input.Composer.SetValue(command)
+
+			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = testModel(t, updated)
+
+			if cmd == nil {
+				t.Fatalf("%s command returned nil, want local command output", command)
+			}
+			if len(model.InFlight.QueuedSteering) != 0 || len(model.InFlight.QueuedTurns) != 0 {
+				t.Fatalf(
+					"queued input = steering %#v follow-up %#v, want none for local %s command",
+					model.InFlight.QueuedSteering,
+					model.InFlight.QueuedTurns,
+					command,
+				)
+			}
+			if len(sess.submits) != 0 {
+				t.Fatalf("submits = %#v, want no provider-visible submit for %s", sess.submits, command)
+			}
+			if !model.InFlight.Thinking {
+				t.Fatalf("%s cleared active turn state", command)
+			}
+			for _, msg := range runCommandTree(t, cmd) {
+				if msg == nil {
+					continue
+				}
+				if errMsg, ok := msg.(localErrorMsg); ok {
+					t.Fatalf("%s returned local error: %v", command, errMsg.err)
+				}
+				updated, nextCmd := model.Update(msg)
+				model = testModel(t, updated)
+				for _, nextMsg := range runCommandTree(t, nextCmd) {
+					if errMsg, ok := nextMsg.(localErrorMsg); ok {
+						t.Fatalf("%s returned follow-up local error: %v", command, errMsg.err)
+					}
+				}
+			}
+
+			view := assertP1ShellFrame(t, model)
+			assertP1ViewContains(t, view, "still running")
+			assertP1ViewNotContains(t, view, "Queued follow-up")
+			assertP1ViewNotContains(t, view, "› "+command)
 		})
 	}
 }
