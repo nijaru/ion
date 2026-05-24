@@ -8,6 +8,7 @@ HEIGHT="${ION_TMUX_HEIGHT:-30}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ion-tmux-smoke.XXXXXX")"
 CAPTURE="${ION_TMUX_CAPTURE:-$(mktemp "${TMPDIR:-/tmp}/ion-tmux-capture.XXXXXX")}"
 ION_HOME="${ION_TMUX_HOME:-$HOME}"
+SMOKE_HOME="${ION_TMUX_SMOKE_HOME:-$TMP_DIR/home}"
 ION_PROVIDER_SMOKE="${ION_TMUX_PROVIDER:-ollama}"
 ION_MODEL_SMOKE="${ION_TMUX_MODEL:-ion-tmux-smoke}"
 LIVE="${ION_TMUX_LIVE:-0}"
@@ -184,7 +185,7 @@ start_smoke_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$ION_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$store\" $args"
+    "cd \"$ROOT\" && HOME=\"$SMOKE_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$store\" $args"
   wait_contains "Type a message" 60
 }
 
@@ -257,8 +258,11 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_not_contains "commands"
   assert_visible_not_contains "› /settings"
   assert_visible_separator_line_count 2
-  tmux send-keys -t "$SESSION" Escape
+  tmux send-keys -t "$SESSION" Enter
   sleep 0.5
+  wait_contains "Retry network errors: off" 30
+  assert_visible_not_contains "1 queued"
+  assert_visible_separator_line_count 2
   wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
   assert_visible_separator_line_count 2
   send_line "steer while active"
