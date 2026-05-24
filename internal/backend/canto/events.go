@@ -58,6 +58,7 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 			return true
 		}
 		if turnID != 0 {
+			b.emitTurnTerminal(turnID, base)
 			return true
 		}
 		b.emitTurnFinished(turnID, base)
@@ -245,6 +246,7 @@ func (b *Backend) translateRunSessionEvent(
 			b.emitTurnErrorOnce(turnID, base, fmt.Errorf("%s", errText))
 			return true
 		}
+		b.emitTurnTerminal(turnID, base)
 		return true
 	case cantofw.RunLifecycleTool:
 		if lifecycle.Tool == nil {

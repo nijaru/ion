@@ -29,11 +29,54 @@ func TestTurnStateFinishCantoMatchesAcceptedTurn(t *testing.T) {
 	if !state.active {
 		t.Fatal("stale Canto turn cleared active turn")
 	}
-	if !state.finishCanto("canto-turn") {
-		t.Fatal("accepted Canto turn did not claim settlement")
+	if state.finishCanto("canto-turn") {
+		t.Fatal("Canto settlement claimed finish before terminal run state")
+	}
+	if !state.active {
+		t.Fatal("Canto settlement cleared active turn before terminal run state")
+	}
+	if !state.markTerminal(turnID) {
+		t.Fatal("terminal run state after settlement did not claim finish")
 	}
 	if state.active || state.cancel != nil {
-		t.Fatalf("turn state not cleared after Canto settlement: %#v", state)
+		t.Fatalf("turn state not cleared after terminal settlement: %#v", state)
+	}
+}
+
+func TestTurnStateTerminalWaitsForCantoSettlement(t *testing.T) {
+	state := newTurnState()
+	turnID := state.start(func() {})
+	if !state.accept(turnID, "canto-turn") {
+		t.Fatal("accept returned false for active turn")
+	}
+
+	if state.markTerminal(turnID) {
+		t.Fatal("terminal run state claimed finish before Canto settlement")
+	}
+	if !state.active {
+		t.Fatal("terminal run state cleared active turn before settlement")
+	}
+	if !state.finishCanto("canto-turn") {
+		t.Fatal("Canto settlement after terminal run state did not claim finish")
+	}
+}
+
+func TestTurnStateTerminalErrorWaitsForCantoSettlement(t *testing.T) {
+	state := newTurnState()
+	turnID := state.start(func() {})
+	if !state.accept(turnID, "canto-turn") {
+		t.Fatal("accept returned false for active turn")
+	}
+
+	emit, finish := state.markTerminalError(turnID)
+	if !emit {
+		t.Fatal("terminal error did not request error emission")
+	}
+	if finish {
+		t.Fatal("terminal error claimed finish before Canto settlement")
+	}
+	if !state.finishCanto("canto-turn") {
+		t.Fatal("Canto settlement after terminal error did not claim finish")
 	}
 }
 

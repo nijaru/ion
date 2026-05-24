@@ -226,6 +226,10 @@ func (b *Backend) runTurn(
 		b.finishTurnWithError(turnID, err)
 		return
 	}
+	if err == nil && !terminal && b.acceptsTurnEvent(turnID) {
+		b.emitTurnTerminal(turnID, ionsession.BaseNow())
+		return
+	}
 	if session == nil && terminal && b.acceptsTurnEvent(turnID) {
 		b.emitTurnFinished(turnID, ionsession.BaseNow())
 	}
@@ -307,6 +311,7 @@ func (b *Backend) translateRunEvent(
 			return false
 		}
 		if b.isCancelingTurn(turnID) || isCancellationTerminal(payload.Err.Error()) {
+			b.emitTurnTerminal(turnID, ionsession.BaseNow())
 			return true
 		}
 		b.emitTurnErrorOnce(turnID, ionsession.BaseNow(), payload.Err)
@@ -314,6 +319,7 @@ func (b *Backend) translateRunEvent(
 	case cantofw.RunResultPayload:
 		base := ionsession.BaseNow()
 		b.emitRunUsage(base, event.Usage)
+		b.emitTurnTerminal(turnID, base)
 		return true
 	}
 	return false
@@ -342,15 +348,34 @@ func (b *Backend) emitTurnErrorOnce(turnID uint64, base ionsession.Base, err err
 	if err == nil {
 		return false
 	}
+	finish := false
 	if turnID != 0 {
 		b.mu.Lock()
-		emit := b.turn.markTerminalError(turnID)
+		emit, settled := b.turn.markTerminalError(turnID)
 		b.mu.Unlock()
 		if !emit {
 			return false
 		}
+		finish = settled
 	}
 	b.emitTurnErrorOnly(base, err)
+	if finish {
+		b.events <- ionsession.TurnFinished{Base: base}
+	}
+	return true
+}
+
+func (b *Backend) emitTurnTerminal(turnID uint64, base ionsession.Base) bool {
+	if turnID == 0 {
+		return b.emitTurnFinished(turnID, base)
+	}
+	b.mu.Lock()
+	finish := b.turn.markTerminal(turnID)
+	b.mu.Unlock()
+	if !finish {
+		return false
+	}
+	b.events <- ionsession.TurnFinished{Base: base}
 	return true
 }
 
