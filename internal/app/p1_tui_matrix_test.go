@@ -24,6 +24,7 @@ func TestP1InlineScenarioMatrix(t *testing.T) {
 		{"active progress keeps shell frame", p1MatrixActiveProgressKeepsShellFrame},
 		{"queued input stays visible while active", p1MatrixQueuedInputVisible},
 		{"settings command stays local while active", p1MatrixSettingsCommandLocalWhileActive},
+		{"settings selection stays local while active", p1MatrixSettingsSelectionLocalWhileActive},
 		{
 			"runtime picker commands stay local while active",
 			p1MatrixRuntimePickerCommandsLocalWhileActive,
@@ -151,6 +152,73 @@ func p1MatrixSettingsCommandLocalWhileActive(t *testing.T) {
 	assertP1ViewContains(t, view, "Busy input")
 	assertP1ViewNotContains(t, view, "Queued follow-up")
 	assertP1ViewNotContains(t, view, "› /settings")
+}
+
+func p1MatrixSettingsSelectionLocalWhileActive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	model := readyModel(t)
+	model.Model.Config = &config.Config{Provider: "openai", Model: "model-a"}
+	model = applyP1Events(
+		t,
+		model,
+		session.TurnStarted{},
+		session.StatusChanged{Status: "Running bash..."},
+	)
+
+	updated, cmd := model.handleCommand("/settings")
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatalf("settings picker command = %T, want nil local picker", cmd)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("picker overlay = %#v, want settings picker", model.Picker.Overlay)
+	}
+
+	items := pickerDisplayItems(model.Picker.Overlay)
+	model.Picker.Overlay.index = pickerIndex(items, "busy queue")
+	updated, cmd = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("settings selection did not return save command")
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatalf("settings picker overlay = %#v, want closed after selection", model.Picker.Overlay)
+	}
+	if len(model.InFlight.QueuedSteering) != 0 || len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf(
+			"queued input = steering %#v follow-up %#v, want none for local settings selection",
+			model.InFlight.QueuedSteering,
+			model.InFlight.QueuedTurns,
+		)
+	}
+	if model.Progress.Status != "Running bash..." {
+		t.Fatalf("active status = %q, want preserved tool status", model.Progress.Status)
+	}
+	if line := ansi.Strip(model.progressLine()); !strings.Contains(line, "Running bash") {
+		t.Fatalf("progress line = %q, want active turn status", line)
+	}
+
+	model, printCmd := resolveSettingsCommand(t, model, cmd)
+	if printCmd == nil {
+		t.Fatal("settings save should return local notice print command")
+	}
+	if model.Model.SettingsRequest != 0 {
+		t.Fatalf("settings request = %d, want settled", model.Model.SettingsRequest)
+	}
+	if model.Progress.LocalStatus != "" {
+		t.Fatalf("local status = %q, want cleared after settings save", model.Progress.LocalStatus)
+	}
+	if model.Progress.Status != "Running bash..." {
+		t.Fatalf("active status after save = %q, want preserved tool status", model.Progress.Status)
+	}
+	if model.Model.Config == nil || model.Model.Config.BusyInputMode() != "queue" {
+		t.Fatalf("busy input = %#v, want queue", model.Model.Config)
+	}
+
+	view := assertP1ShellFrame(t, model)
+	assertP1ViewContains(t, view, "Running bash")
+	assertP1ViewNotContains(t, view, "Queued follow-up")
 }
 
 func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
