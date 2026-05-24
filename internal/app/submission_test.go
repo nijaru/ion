@@ -1409,6 +1409,38 @@ func TestBusyInputUsesBackendFollowUpQueueWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestFollowUpResultPreservesBackendSteeringProjection(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.InFlight.QueuedSteering = []string{"steer already queued"}
+	model.InFlight.QueuedTurns = []string{"follow up"}
+	model.InFlight.QueuedTurnsBackendOwned = true
+
+	updated, cmd := model.Update(followUpResultMsg{
+		text:               "follow up",
+		priorFollowUpCount: 0,
+		result:             session.QueuedInputResult{Outcome: session.QueuedInputAccepted},
+	})
+	model = testModel(t, updated)
+
+	if len(model.InFlight.QueuedSteering) != 1 ||
+		model.InFlight.QueuedSteering[0] != "steer already queued" {
+		t.Fatalf(
+			"queued steering = %#v, want preserved backend steering",
+			model.InFlight.QueuedSteering,
+		)
+	}
+	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
+		t.Fatalf("queued follow-ups = %#v, want no duplicate", model.InFlight.QueuedTurns)
+	}
+	if !model.InFlight.QueuedTurnsBackendOwned {
+		t.Fatal("queued projection should remain backend-owned")
+	}
+	if cmd == nil {
+		t.Fatal("expected queued follow-up notice")
+	}
+}
+
 func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.QueuedSteering = []string{"local stale steer"}

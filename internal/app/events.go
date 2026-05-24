@@ -213,25 +213,37 @@ func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	if m.InFlight.Thinking && !m.Progress.Compacting {
 		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			priorFollowUpCount := len(m.InFlight.QueuedTurns)
 			m.resetComposerDraft()
-			return m, followUpTurnCmd(queued, text)
+			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
 		}
 	}
 	return m.queueBusyInputLocal(text)
 }
 
-func followUpTurnCmd(queued session.QueuedInputSession, text string) tea.Cmd {
+func followUpTurnCmd(
+	queued session.QueuedInputSession,
+	text string,
+	priorFollowUpCount int,
+) tea.Cmd {
 	return func() tea.Msg {
 		result, err := queued.FollowUpTurn(context.Background(), text)
-		return followUpResultMsg{text: text, result: result, err: err}
+		return followUpResultMsg{
+			text:               text,
+			priorFollowUpCount: priorFollowUpCount,
+			result:             result,
+			err:                err,
+		}
 	}
 }
 
 func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 	if msg.err == nil && msg.result.Outcome == session.QueuedInputAccepted {
 		queued := append([]string(nil), m.InFlight.QueuedTurns...)
-		queued = append(queued, msg.text)
-		m.turnReducer().setBackendQueuedTurns(queued)
+		if len(queued) <= msg.priorFollowUpCount {
+			queued = append(queued, msg.text)
+		}
+		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
 		return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 	}
 	return m.queueBusyInputLocal(msg.text)

@@ -185,9 +185,10 @@ type steeringResultMsg struct {
 }
 
 type followUpResultMsg struct {
-	text   string
-	result session.QueuedInputResult
-	err    error
+	text               string
+	priorFollowUpCount int
+	result             session.QueuedInputResult
+	err                error
 }
 
 type queuedInputClearResultMsg struct {
