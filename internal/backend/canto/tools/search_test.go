@@ -101,6 +101,17 @@ func TestSearchTools(t *testing.T) {
 			t.Fatalf("expected grep limit notice, got %q", res)
 		}
 
+		res, err = g.Execute(
+			context.Background(),
+			`{"pattern":"Needle","path":"@src","ignoreCase":true,"limit":1}`,
+		)
+		if err != nil {
+			t.Fatalf("grep with @ path failed: %v", err)
+		}
+		if !strings.Contains(res, "src/upper.go") {
+			t.Fatalf("grep with @ path = %q, want src/upper.go", res)
+		}
+
 		res, err = g.Execute(context.Background(), `{"pattern":"definitely-not-present"}`)
 		if err != nil {
 			t.Fatalf("grep no-match should not be a tool error: %v", err)
@@ -148,6 +159,14 @@ func TestSearchTools(t *testing.T) {
 		}
 		if !strings.Contains(res, "results limit reached") {
 			t.Fatalf("expected find limit notice, got %q", res)
+		}
+
+		res, err = find.Execute(context.Background(), `{"pattern":"@src/*.go","limit":1}`)
+		if err != nil {
+			t.Fatalf("find with @ pattern failed: %v", err)
+		}
+		if !strings.Contains(res, "src/") {
+			t.Fatalf("expected workspace-relative @ pattern output, got %q", res)
 		}
 
 		absArgs := `{"pattern":"` + filepath.ToSlash(filepath.Join(tmpDir, "match*")) + `"}`

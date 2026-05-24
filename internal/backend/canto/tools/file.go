@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,11 +25,14 @@ func NewFileTool(cwd string) *FileTool {
 }
 
 func (t *FileTool) absolutePath(target string) (string, error) {
-	target = strings.TrimSpace(target)
+	target, err := normalizeToolPathInput(target)
+	if err != nil {
+		return "", err
+	}
 	if target == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	target, err := expandHomePath(target)
+	target, err = expandHomePath(target)
 	if err != nil {
 		return "", err
 	}
@@ -41,6 +45,42 @@ func (t *FileTool) absolutePath(target string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(filepath.Join(absCwd, target)), nil
+}
+
+func normalizeToolPathInput(target string) (string, error) {
+	target = normalizeUnicodeSpaces(strings.TrimSpace(target))
+	if strings.HasPrefix(target, "@") {
+		target = strings.TrimPrefix(target, "@")
+	}
+	if !strings.HasPrefix(target, "file://") {
+		return target, nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse file URL: %w", err)
+	}
+	if u.Scheme != "file" {
+		return target, nil
+	}
+	if u.Host != "" && u.Host != "localhost" {
+		return "", fmt.Errorf("unsupported file URL host: %s", u.Host)
+	}
+	return u.Path, nil
+}
+
+func normalizeUnicodeSpaces(target string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\u00a0' ||
+			r == '\u202f' ||
+			r == '\u205f' ||
+			r == '\u3000' ||
+			(r >= '\u2000' && r <= '\u200a'):
+			return ' '
+		default:
+			return r
+		}
+	}, target)
 }
 
 func expandHomePath(target string) (string, error) {

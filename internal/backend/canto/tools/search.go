@@ -27,7 +27,10 @@ func NewSearchTool(cwd string) *SearchTool {
 }
 
 func (t *SearchTool) searchArg(target string) (string, error) {
-	target = strings.TrimSpace(target)
+	target, err := normalizeToolPathInput(target)
+	if err != nil {
+		return "", err
+	}
 	if target == "" || target == "." {
 		target = "."
 	}
@@ -55,11 +58,14 @@ func (t *SearchTool) searchArg(target string) (string, error) {
 }
 
 func (t *SearchTool) globPatternArg(pattern string) (string, error) {
-	pattern = strings.TrimSpace(pattern)
+	pattern, err := normalizeToolPathInput(pattern)
+	if err != nil {
+		return "", err
+	}
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
-	pattern, err := expandHomePath(pattern)
+	pattern, err = expandHomePath(pattern)
 	if err != nil {
 		return "", err
 	}

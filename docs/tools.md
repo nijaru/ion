@@ -54,6 +54,11 @@ Native `read` returns model-visible file contents with line numbers. The TUI
 still compacts read rows by default, but the model receives stable line
 references for follow-up edits.
 
+File and search tool path inputs follow Pi-style normalization for common
+model output: leading `@` is stripped, Unicode space variants are normalized to
+ASCII spaces, and local `file://` URLs are accepted. Non-local `file://host/...`
+URLs are rejected.
+
 Native `grep` and `find` remain dedicated read-only tools instead of being
 collapsed into `bash`. They use ripgrep (`rg`) semantics for ignore handling:
 ignore files are respected, hidden files are included when useful for coding

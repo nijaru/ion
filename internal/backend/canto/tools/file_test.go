@@ -77,6 +77,36 @@ func TestFileTools(t *testing.T) {
 			t.Errorf("Pi-style read path expected numbered line 2, got %q", res)
 		}
 
+		spacePath := "space name.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, spacePath), []byte("space ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		normalizedReadArgs, _ := json.Marshal(map[string]any{"path": "@space\u202fname.txt"})
+		res, err = r.Execute(context.Background(), string(normalizedReadArgs))
+		if err != nil {
+			t.Fatalf("read with @/unicode-space path failed: %v", err)
+		}
+		if strings.TrimSpace(res) != "1\tspace ok" {
+			t.Fatalf("normalized path read = %q, want space ok", res)
+		}
+
+		fileURLReadArgs, _ := json.Marshal(map[string]any{
+			"path": "file://" + filepath.ToSlash(filepath.Join(tmpDir, filePath)),
+		})
+		res, err = r.Execute(context.Background(), string(fileURLReadArgs))
+		if err != nil {
+			t.Fatalf("read with file URL path failed: %v", err)
+		}
+		if !strings.Contains(res, "line 1") {
+			t.Fatalf("file URL read = %q, want file contents", res)
+		}
+		remoteFileURLReadArgs, _ := json.Marshal(map[string]any{
+			"path": "file://example.com/" + filepath.ToSlash(filepath.Join(tmpDir, filePath)),
+		})
+		if _, err := r.Execute(context.Background(), string(remoteFileURLReadArgs)); err == nil {
+			t.Fatal("expected remote file URL host to fail")
+		}
+
 		// Read with limit/offset
 		limitArgs, _ := json.Marshal(map[string]any{
 			"file_path": filePath,
