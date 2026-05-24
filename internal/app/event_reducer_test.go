@@ -502,6 +502,30 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	}
 }
 
+func TestToolOutputSnapshotReplacesPendingContent(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-a",
+		ToolName:  "bash",
+		Args:      "first",
+	})
+	model = testModel(t, updated)
+
+	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "head"})
+	model = testModel(t, updated)
+	updated, _ = model.Update(session.ToolOutputDelta{
+		ToolUseID: "tool-a",
+		Delta:     "tail snapshot",
+		Snapshot:  true,
+	})
+	model = testModel(t, updated)
+
+	if got := model.InFlight.PendingTools["tool-a"].Content; got != "tail snapshot" {
+		t.Fatalf("pending content = %q, want tail snapshot", got)
+	}
+}
+
 func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)

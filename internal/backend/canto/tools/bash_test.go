@@ -195,33 +195,9 @@ func TestBashExecuteStreamingStopsCommandWhenConsumerStops(t *testing.T) {
 	}
 }
 
-func TestBashExecuteStreamingEmitsTruncationMarker(t *testing.T) {
+func TestBashExecuteStreamingEmitsTruncatedSnapshot(t *testing.T) {
 	b := NewBash(t.TempDir())
-	assertStreamingTruncationMarker(t, b)
-}
-
-func TestBashExecuteStreamingThroughTracingEmitsTruncationMarker(t *testing.T) {
-	b := NewBash(t.TempDir())
-	wrapped, ok := tracing.WrapTool(b).(tool.StreamingTool)
-	if !ok {
-		t.Fatal("wrapped bash does not implement StreamingTool")
-	}
-	assertStreamingTruncationMarker(t, wrapped)
-}
-
-func TestBashExecuteEmitsTruncationMarker(t *testing.T) {
-	b := NewBash(t.TempDir())
-	args := largeOutputCommandArgs(maxOutputSize + 64)
-	got, err := b.Execute(t.Context(), args)
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
-	}
-	assertTruncationMarker(t, got)
-}
-
-func assertStreamingTruncationMarker(t *testing.T, b tool.StreamingTool) {
-	t.Helper()
-	args := largeOutputCommandArgs(maxOutputSize + 64)
+	args := largeLineOutputCommandArgs(2105)
 
 	var chunks []string
 	for chunk, err := range b.ExecuteStreaming(t.Context(), args) {
@@ -231,24 +207,106 @@ func assertStreamingTruncationMarker(t *testing.T, b tool.StreamingTool) {
 		chunks = append(chunks, chunk)
 	}
 	got := strings.Join(chunks, "")
-	assertTruncationMarker(t, got)
+	if !strings.Contains(got, "line-2105") ||
+		!strings.Contains(got, "Full output:") {
+		t.Fatalf("streaming output missing final snapshot: %q", tailForTest(got, 300))
+	}
 }
 
-func largeOutputCommandArgs(size int) string {
-	return fmt.Sprintf(`{"command":"awk 'BEGIN { for (i = 0; i < %d; i++) printf \"a\" }'"}`, size)
+func TestBashExecuteStreamingUpdatesEmitTailSnapshotWhenTruncated(t *testing.T) {
+	b := NewBash(t.TempDir())
+	assertStreamingUpdateTailSnapshot(t, b)
 }
 
-func assertTruncationMarker(t *testing.T, got string) {
+func TestBashExecuteStreamingUpdatesThroughTracingEmitTailSnapshotWhenTruncated(t *testing.T) {
+	b := NewBash(t.TempDir())
+	wrapped, ok := tracing.WrapTool(b).(tool.StreamingUpdateTool)
+	if !ok {
+		t.Fatal("wrapped bash does not implement StreamingUpdateTool")
+	}
+	assertStreamingUpdateTailSnapshot(t, wrapped)
+}
+
+func TestBashExecuteReturnsTailAndFullOutputPathWhenTruncated(t *testing.T) {
+	b := NewBash(t.TempDir())
+	args := largeLineOutputCommandArgs(2105)
+	got, err := b.Execute(t.Context(), args)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	assertBashTailTruncation(t, got)
+}
+
+func assertStreamingUpdateTailSnapshot(t *testing.T, b tool.StreamingUpdateTool) {
 	t.Helper()
-	if !strings.Contains(got, "[tool output truncated after") {
-		t.Fatalf("output missing truncation marker")
+	args := largeLineOutputCommandArgs(2105)
+
+	var finalSnapshot string
+	sawSnapshot := false
+	for update, err := range b.ExecuteStreamingUpdates(t.Context(), args) {
+		if err != nil {
+			t.Fatalf("execute streaming updates failed: %v", err)
+		}
+		if update.Snapshot {
+			sawSnapshot = true
+			finalSnapshot = update.Text
+		}
 	}
-	if !strings.Contains(got, "64 bytes omitted") {
-		t.Fatalf("output = %q, want omitted byte count", tailForTest(got, 200))
+	if !sawSnapshot {
+		t.Fatal("streaming updates did not emit a snapshot after truncation")
 	}
-	if len(got) > maxOutputSize+512 {
+	assertBashTailTruncation(t, finalSnapshot)
+}
+
+func largeLineOutputCommandArgs(lines int) string {
+	return fmt.Sprintf(
+		`{"command":"awk 'BEGIN { for (i = 1; i <= %d; i++) print \"line-\" i }'"}`,
+		lines,
+	)
+}
+
+func assertBashTailTruncation(t *testing.T, got string) {
+	t.Helper()
+	if strings.Contains(got, "line-1\n") || strings.Contains(got, "line-105\n") {
+		t.Fatalf("output kept head instead of tail: %q", tailForTest(got, 300))
+	}
+	if !strings.Contains(got, "line-106\n") || !strings.Contains(got, "line-2105") {
+		t.Fatalf("output missing expected tail lines: %q", tailForTest(got, 300))
+	}
+	if !strings.Contains(got, "[Showing lines 106-2105 of 2105. Full output: ") {
+		t.Fatalf("output missing Pi-style tail notice: %q", tailForTest(got, 300))
+	}
+	fullOutputPath := fullOutputPathFromNotice(t, got)
+	defer func() { _ = os.Remove(fullOutputPath) }()
+	fullOutput, err := os.ReadFile(fullOutputPath)
+	if err != nil {
+		t.Fatalf("read full output file %q: %v", fullOutputPath, err)
+	}
+	if !strings.Contains(string(fullOutput), "line-1\n") ||
+		!strings.Contains(string(fullOutput), "line-2105\n") {
+		t.Fatalf(
+			"full output file missing original content: %q",
+			tailForTest(string(fullOutput), 300),
+		)
+	}
+	if len(got) > maxToolOutputSize+512 {
 		t.Fatalf("output length = %d, want bounded output", len(got))
 	}
+}
+
+func fullOutputPathFromNotice(t *testing.T, output string) string {
+	t.Helper()
+	const marker = "Full output: "
+	start := strings.LastIndex(output, marker)
+	if start == -1 {
+		t.Fatalf("output missing full output marker: %q", tailForTest(output, 300))
+	}
+	pathStart := start + len(marker)
+	pathEnd := strings.IndexByte(output[pathStart:], ']')
+	if pathEnd == -1 {
+		t.Fatalf("output missing full output closing bracket: %q", tailForTest(output, 300))
+	}
+	return output[pathStart : pathStart+pathEnd]
 }
 
 func tailForTest(s string, max int) string {

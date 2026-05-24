@@ -88,14 +88,16 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		}
 	case session.ToolOutputDelta:
 		var data struct {
-			ID    string `json:"id"`
-			Delta string `json:"delta"`
+			ID       string `json:"id"`
+			Delta    string `json:"delta"`
+			Snapshot bool   `json:"snapshot"`
 		}
 		if err := ev.UnmarshalData(&data); err == nil {
 			b.events <- ionsession.ToolOutputDelta{
 				Base:      base,
 				ToolUseID: data.ID,
 				Delta:     data.Delta,
+				Snapshot:  data.Snapshot,
 			}
 		}
 	case session.ChildRequested:
@@ -270,6 +272,7 @@ func (b *Backend) translateRunSessionEvent(
 					Base:      base,
 					ToolUseID: tool.ID,
 					Delta:     tool.Delta,
+					Snapshot:  tool.Snapshot,
 				}
 			}
 		case cantofw.RunLifecycleCompleted,

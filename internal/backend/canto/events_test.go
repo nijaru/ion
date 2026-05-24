@@ -629,9 +629,10 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 			Type:   cantofw.RunLifecycleTool,
 			Status: cantofw.RunLifecycleUpdated,
 			Tool: &cantofw.RunToolLifecycle{
-				ID:    "tool-call-1",
-				Name:  "bash",
-				Delta: "partial output",
+				ID:       "tool-call-1",
+				Name:     "bash",
+				Delta:    "partial output",
+				Snapshot: true,
 			},
 			ActiveTools: []cantofw.RunToolLifecycle{{
 				ID:   "tool-call-1",
@@ -644,7 +645,9 @@ func TestTranslateRunEventProjectsCantoToolLifecycle(t *testing.T) {
 	if !ok {
 		t.Fatalf("third event = %T, want ToolOutputDelta", delta)
 	}
-	if delta.ToolUseID != "tool-call-1" || delta.Delta != "partial output" {
+	if delta.ToolUseID != "tool-call-1" ||
+		delta.Delta != "partial output" ||
+		!delta.Snapshot {
 		t.Fatalf("tool delta = %#v", delta)
 	}
 
@@ -854,10 +857,11 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 1)
-	events <- csession.NewEvent("session-id", csession.ToolOutputDelta, map[string]string{
-		"id":    "tool-call-1",
-		"tool":  "bash",
-		"delta": "partial output",
+	events <- csession.NewEvent("session-id", csession.ToolOutputDelta, map[string]any{
+		"id":       "tool-call-1",
+		"tool":     "bash",
+		"delta":    "partial output",
+		"snapshot": true,
 	})
 	close(events)
 
@@ -873,6 +877,9 @@ func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
 	}
 	if delta.Delta != "partial output" {
 		t.Fatalf("delta = %q, want partial output", delta.Delta)
+	}
+	if !delta.Snapshot {
+		t.Fatalf("delta snapshot = false, want true")
 	}
 }
 

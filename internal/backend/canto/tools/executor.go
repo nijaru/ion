@@ -15,11 +15,15 @@ import (
 type localCommand struct {
 	CWD     string
 	Command string
-	Emit    func(string) error
+	Emit    func(localOutputUpdate) error
+}
+
+type localOutputUpdate struct {
+	Text     string
+	Snapshot bool
 }
 
 const (
-	maxOutputSize     = maxToolOutputSize
 	exitStdioGrace    = 100 * time.Millisecond
 	exitStdioMaxDrain = 2 * time.Second
 )
@@ -144,7 +148,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	})
 	defer stopKill()
 
-	var output strings.Builder
+	output := newBashOutputAccumulator()
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	readProgress := make(chan struct{}, 1)
@@ -155,8 +159,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		}
 	}
 
-	limitExceeded := false
-	omittedBytes := 0
+	truncatedSnapshotEmitted := false
 	var emitErr error
 	hasEmitErr := func() bool {
 		mu.Lock()
@@ -172,30 +175,25 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 				if hasEmitErr() {
 					return
 				}
-				chunk := string(buf[:n])
+				data := bytesClone(buf[:n])
 				mu.Lock()
-				if limitExceeded {
-					omittedBytes += len(chunk)
-					mu.Unlock()
-					continue
-				}
-
-				emitChunk := chunk
-				if remaining := maxOutputSize - output.Len(); len(chunk) > remaining {
-					limitExceeded = true
-					emitLen := toolOutputSafeAppendLen(output.String(), chunk, maxOutputSize)
-					if emitLen <= 0 {
-						omittedBytes += len(chunk)
-						mu.Unlock()
-						continue
+				if err := output.append(data); err != nil {
+					if emitErr == nil {
+						emitErr = err
+						if cmd.Process != nil {
+							_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+						}
 					}
-					emitChunk = chunk[:emitLen]
-					omittedBytes += len(chunk) - emitLen
+					mu.Unlock()
+					return
 				}
-
-				output.WriteString(emitChunk)
 				if request.Emit != nil {
-					if err := request.Emit(emitChunk); err != nil {
+					update, ok, err := bashOutputUpdateForChunk(
+						output,
+						data,
+						&truncatedSnapshotEmitted,
+					)
+					if err != nil {
 						if emitErr == nil {
 							emitErr = err
 							if cmd.Process != nil {
@@ -204,6 +202,18 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 						}
 						mu.Unlock()
 						return
+					}
+					if ok {
+						if err := request.Emit(update); err != nil {
+							if emitErr == nil {
+								emitErr = err
+								if cmd.Process != nil {
+									_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+								}
+							}
+							mu.Unlock()
+							return
+						}
 					}
 				}
 				mu.Unlock()
@@ -219,19 +229,16 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 
 	err = cmd.Wait()
 	waitForReadersOrClosePipes(&wg, cmd.Process.Pid, readProgress, stdout, stderr)
+
+	mu.Lock()
+	result, resultErr := finalizeBashOutput(output, request.Emit)
+	if emitErr == nil && resultErr != nil {
+		emitErr = resultErr
+	}
+	mu.Unlock()
 	if emitErr != nil {
-		return output.String(), emitErr
+		return result, emitErr
 	}
-	if omittedBytes > 0 {
-		marker := toolOutputTruncationMarker(output.Len(), omittedBytes)
-		output.WriteString(marker)
-		if request.Emit != nil {
-			if err := request.Emit(marker); err != nil {
-				return output.String(), err
-			}
-		}
-	}
-	result := output.String()
 	if err != nil {
 		if result == "" {
 			return "", err
@@ -240,6 +247,57 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	}
 
 	return result, nil
+}
+
+func bashOutputUpdateForChunk(
+	output *bashOutputAccumulator,
+	data []byte,
+	truncatedSnapshotEmitted *bool,
+) (localOutputUpdate, bool, error) {
+	if !output.truncated() {
+		return localOutputUpdate{Text: string(data)}, true, nil
+	}
+	if *truncatedSnapshotEmitted {
+		return localOutputUpdate{}, false, nil
+	}
+	snapshot, err := output.snapshot(true)
+	if err != nil {
+		return localOutputUpdate{}, false, err
+	}
+	*truncatedSnapshotEmitted = true
+	return localOutputUpdate{
+		Text:     formatBashSnapshot(snapshot, output, ""),
+		Snapshot: true,
+	}, true, nil
+}
+
+func finalizeBashOutput(
+	output *bashOutputAccumulator,
+	emit func(localOutputUpdate) error,
+) (string, error) {
+	snapshot, err := output.snapshot(true)
+	if err != nil {
+		return "", err
+	}
+	result := formatBashSnapshot(snapshot, output, "")
+	if err := output.closeTempFile(); err != nil {
+		return result, err
+	}
+	if emit != nil && snapshot.Truncation.Truncated {
+		if err := emit(localOutputUpdate{
+			Text:     result,
+			Snapshot: true,
+		}); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func bytesClone(data []byte) []byte {
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out
 }
 
 func pipeForCommand() (*os.File, *os.File, error) {

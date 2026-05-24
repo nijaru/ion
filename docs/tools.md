@@ -46,6 +46,11 @@ seconds. There is no default timeout; normal turns are bounded by user/provider
 cancellation and explicit tool/provider timeouts rather than a hidden whole-turn
 deadline.
 
+Long native `bash` output follows Pi-style tail semantics: Ion keeps the last
+2000 lines or 50KB for provider-visible context and writes the full truncated
+output to a temp file referenced in the tool result. This preserves final test
+summaries and compiler errors instead of returning only the command's head.
+
 Native Pi-parity execution is trusted by default. Approval tiers, persistent
 policy files, and sandbox permission UX are deferred until the core loop and
 TUI are stable.

@@ -18,7 +18,10 @@ type Bash struct {
 	executor *localExecutor
 }
 
-var _ tool.StreamingTool = (*Bash)(nil)
+var (
+	_ tool.StreamingTool       = (*Bash)(nil)
+	_ tool.StreamingUpdateTool = (*Bash)(nil)
+)
 
 func NewBash(cwd string) *Bash {
 	return NewBashWithEnvironment(
@@ -66,19 +69,41 @@ func (b *Bash) Execute(ctx context.Context, args string) (string, error) {
 
 func (b *Bash) ExecuteStreaming(ctx context.Context, args string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
+		for update, err := range b.ExecuteStreamingUpdates(ctx, args) {
+			if err != nil {
+				if !yield("", err) {
+					return
+				}
+				return
+			}
+			if !yield(update.Text, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (b *Bash) ExecuteStreamingUpdates(
+	ctx context.Context,
+	args string,
+) iter.Seq2[tool.StreamUpdate, error] {
+	return func(yield func(tool.StreamUpdate, error) bool) {
 		streamCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		type streamItem struct {
-			text string
-			err  error
+			update tool.StreamUpdate
+			err    error
 		}
 		ch := make(chan streamItem, 16)
 
 		go func() {
-			_, err := b.execute(streamCtx, args, func(chunk string) error {
+			_, err := b.execute(streamCtx, args, func(update localOutputUpdate) error {
 				select {
-				case ch <- streamItem{text: chunk}:
+				case ch <- streamItem{update: tool.StreamUpdate{
+					Text:     update.Text,
+					Snapshot: update.Snapshot,
+				}}:
 					return nil
 				case <-streamCtx.Done():
 					return streamCtx.Err()
@@ -94,7 +119,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string) iter.Seq2[stri
 		}()
 
 		for item := range ch {
-			if !yield(item.text, item.err) {
+			if !yield(item.update, item.err) {
 				cancel()
 				return
 			}
@@ -105,7 +130,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string) iter.Seq2[stri
 func (b *Bash) execute(
 	ctx context.Context,
 	args string,
-	emit func(string) error,
+	emit func(localOutputUpdate) error,
 ) (string, error) {
 	input, err := parseBashInput(args)
 	if err != nil {

@@ -1168,8 +1168,8 @@ func TestSubmitTurnBashTruncatesStreamedToolResult(t *testing.T) {
 	call := llm.Call{ID: "bash-call-large", Type: "function"}
 	call.Function.Name = "bash"
 	call.Function.Arguments = fmt.Sprintf(
-		`{"command":"awk 'BEGIN { for (i = 0; i < %d; i++) printf \"a\" }'"}`,
-		1024*1024+64,
+		`{"command":"awk 'BEGIN { for (i = 1; i <= %d; i++) print \"line-\" i }'"}`,
+		2105,
 	)
 	provider := ctesting.NewFauxProvider(
 		"local-api",
@@ -1231,21 +1231,18 @@ func TestSubmitTurnBashTruncatesStreamedToolResult(t *testing.T) {
 			case ionsession.Error:
 				t.Fatalf("unexpected session error: %v", msg.Err)
 			case ionsession.TurnFinished:
-				if !strings.Contains(result, "[tool output truncated after") {
-					rawLen, rawHasMarker := rawToolCompletedOutputInfo(t, b, "bash-call-large")
+				if strings.Contains(result, "line-1\n") || strings.Contains(result, "line-105\n") ||
+					!strings.Contains(result, "line-106\n") ||
+					!strings.Contains(result, "line-2105") ||
+					!strings.Contains(result, "[Showing lines 106-2105 of 2105. Full output: ") {
+					rawLen, rawHasFullOutput := rawToolCompletedOutputInfo(t, b, "bash-call-large")
 					t.Fatalf(
-						"tool result missing truncation marker; result len=%d delta bytes=%d err=%v raw len=%d raw marker=%v suffix=%q",
+						"tool result is not Pi-style bash tail; result len=%d delta bytes=%d err=%v raw len=%d raw full-output=%v suffix=%q",
 						len(result),
 						deltaBytes,
 						resultErr,
 						rawLen,
-						rawHasMarker,
-						tailString(result, 200),
-					)
-				}
-				if !strings.Contains(result, "bytes omitted") {
-					t.Fatalf(
-						"tool result = %q, want omitted byte count",
+						rawHasFullOutput,
 						tailString(result, 200),
 					)
 				}
@@ -2249,7 +2246,7 @@ func rawToolCompletedOutputInfo(t *testing.T, b *Backend, toolUseID string) (int
 			t.Fatalf("decode raw tool completed: %v", err)
 		}
 		if ok && data.ID == toolUseID {
-			return len(data.Output), strings.Contains(data.Output, "[tool output truncated after")
+			return len(data.Output), strings.Contains(data.Output, "Full output:")
 		}
 	}
 	return 0, false

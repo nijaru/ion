@@ -6,8 +6,12 @@ import (
 	"github.com/nijaru/ion/internal/session"
 )
 
-func (r turnReducer) appendToolOutput(toolUseID, delta string) {
+func (r turnReducer) appendToolOutput(toolUseID, delta string, snapshot bool) {
 	if entry := r.pendingToolEntry(toolUseID); entry != nil {
+		if snapshot {
+			entry.Content = delta
+			return
+		}
 		entry.Content += delta
 	}
 }

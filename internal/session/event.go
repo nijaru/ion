@@ -111,6 +111,7 @@ type ToolOutputDelta struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Delta     string `json:"delta"`
+	Snapshot  bool   `json:"snapshot,omitempty"`
 }
 
 func (e ToolOutputDelta) isEvent() {}

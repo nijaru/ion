@@ -325,7 +325,7 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cm
 }
 
 func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
-	m.turnReducer().appendToolOutput(msg.ToolUseID, msg.Delta)
+	m.turnReducer().appendToolOutput(msg.ToolUseID, msg.Delta, msg.Snapshot)
 	return m, m.awaitSessionEvent()
 }
 
