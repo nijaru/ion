@@ -445,14 +445,16 @@ if [[ "$LIVE" == "1" ]]; then
   send_line 'Use the bash tool exactly once to run `sleep 3; echo ion-tmux-smoke`, then reply with the single word done.'
   wait_contains "Bash(sleep 3; echo ion-tmux-smoke)" 90
   send_line "what happened?"
-  wait_contains "Queued follow-up" 30
-  wait_contains "› what happened?" 90
+  wait_contains "Steering current turn" 30
+  wait_contains "Steering (Ctrl+G edit): what happened?" 30
+  assert_visible_contains "1 queued"
+  assert_visible_not_contains "Queued follow-up"
   wait_contains "Complete" 90
 
   start_ion "--continue"
   assert_contains "--- resumed ---"
   assert_contains "ion-tmux-smoke"
-  send_line "Reply with exactly ok-continued if this resumed session contains ion-tmux-smoke, otherwise reply exactly ok-fresh."
+  send_line "Reply with exactly ok-continued."
   wait_contains "• ok-continued" 90
   wait_contains "Complete" 90
 fi
