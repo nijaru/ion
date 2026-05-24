@@ -320,6 +320,21 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "controls done" 30
   assert_visible_separator_line_count 2
 
+  start_smoke_ion "controls"
+  send_line "/settings busy queue"
+  wait_contains "Busy input: queue" 30
+  send_line "exercise explicit queue mode"
+  wait_contains "[smoke] active controls" 30
+  send_line "queued follow-up from queue mode"
+  wait_contains "Queued follow-up" 30
+  assert_visible_contains "1 queued"
+  assert_visible_contains "Queued (Ctrl+G edit): queued follow-up from queue mode"
+  tmux send-keys -t "$SESSION" C-g
+  sleep 0.5
+  assert_visible_contains "› queued follow-up from queue mode"
+  assert_visible_not_contains "1 queued"
+  assert_visible_separator_line_count 2
+
   start_smoke_ion "files"
   send_line "exercise first-minutes file tools"
   wait_contains "Read(ai/STATUS.md)" 30
