@@ -987,13 +987,13 @@ func TestSubmitTurnBashTruncatesStreamedToolResult(t *testing.T) {
 						tailString(result, 200),
 					)
 				}
-				if !strings.Contains(result, "64 bytes omitted") {
+				if !strings.Contains(result, "bytes omitted") {
 					t.Fatalf(
 						"tool result = %q, want omitted byte count",
 						tailString(result, 200),
 					)
 				}
-				if len(result) > 1024*1024+512 {
+				if len(result) > 50*1024+512 {
 					t.Fatalf("tool result length = %d, want bounded output", len(result))
 				}
 				return

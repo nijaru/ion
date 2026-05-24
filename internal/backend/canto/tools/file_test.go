@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -201,6 +202,79 @@ func TestFileTools(t *testing.T) {
 		_, err = r.Execute(context.Background(), string(emptyRangeArgs))
 		if err == nil || !strings.Contains(err.Error(), "beyond end of file") {
 			t.Fatalf("empty range read error = %v, want beyond end of file", err)
+		}
+	})
+
+	t.Run("Read applies Pi-style default continuation limits", func(t *testing.T) {
+		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
+		filePath := "long-read.txt"
+		lines := make([]string, 2002)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("line %d", i+1)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, filePath), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		res, err := r.Execute(context.Background(), `{"path":"long-read.txt"}`)
+		if err != nil {
+			t.Fatalf("long read failed: %v", err)
+		}
+		if !strings.Contains(res, "  2000\tline 2000") {
+			t.Fatalf("long read missing line 2000: %q", res)
+		}
+		if strings.Contains(res, "line 2001") {
+			t.Fatalf("long read included line beyond default limit: %q", res)
+		}
+		if !strings.Contains(
+			res,
+			"[Showing lines 1-2000 of 2002 (2000 line limit). Use offset=2001 to continue.]",
+		) {
+			t.Fatalf("long read missing line-limit continuation notice: %q", res)
+		}
+	})
+
+	t.Run("Read applies Pi-style byte continuation limits", func(t *testing.T) {
+		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
+		filePath := "wide-read.txt"
+		content := strings.Repeat("a", maxToolOutputSize/2) + "\n" +
+			strings.Repeat("b", maxToolOutputSize/2)
+		if err := os.WriteFile(filepath.Join(tmpDir, filePath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		res, err := r.Execute(context.Background(), `{"path":"wide-read.txt"}`)
+		if err != nil {
+			t.Fatalf("wide read failed: %v", err)
+		}
+		if strings.Contains(res, "\tb") {
+			t.Fatalf("wide read included line beyond byte limit: %q", res)
+		}
+		if !strings.Contains(res, fmt.Sprintf("(%d byte limit)", maxToolOutputSize)) {
+			t.Fatalf("wide read missing byte-limit continuation notice: %q", res)
+		}
+		if !strings.Contains(res, "Use offset=2 to continue.") {
+			t.Fatalf("wide read missing byte-limit offset: %q", res)
+		}
+	})
+
+	t.Run("Read reports oversized first line", func(t *testing.T) {
+		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
+		filePath := "huge-line.txt"
+		if err := os.WriteFile(
+			filepath.Join(tmpDir, filePath),
+			[]byte(strings.Repeat("x", maxToolOutputSize)),
+			0o644,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		res, err := r.Execute(context.Background(), `{"path":"huge-line.txt"}`)
+		if err != nil {
+			t.Fatalf("huge line read failed: %v", err)
+		}
+		if !strings.Contains(res, fmt.Sprintf("Line 1 exceeds %d bytes", maxToolOutputSize)) {
+			t.Fatalf("huge line read missing oversized-line notice: %q", res)
 		}
 	})
 

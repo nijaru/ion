@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxToolOutputSize = 1024 * 1024 // 1MB
+const maxToolOutputSize = 50 * 1024
 
 func limitToolOutput(output string) string {
 	return limitToolOutputBytes(output, maxToolOutputSize)
