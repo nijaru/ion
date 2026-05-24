@@ -75,6 +75,13 @@ work, and `.git` internals are excluded. Ion does not auto-download `rg`; a
 future in-process engine such as ripgo should be evaluated with benchmarks
 before replacing the battle-tested ripgrep baseline.
 
+`grep` follows Pi-style result shaping: `limit` counts matches, not rendered
+context lines; `context` is formatted by Ion as compact before/after blocks;
+long match and context lines are truncated to 500 characters with an explicit
+notice; and directory/file results are displayed relative to the searched root.
+`find` supports Pi-style slash patterns even when `path` already narrows the
+search root, while keeping output relative to that root.
+
 Large model-visible tool results are truncated with explicit continuation or
 omission markers. If the model needs the omitted content, it should rerun the
 tool with a narrower command, path, or line range.

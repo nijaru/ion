@@ -3,12 +3,17 @@ package tools
 import (
 	"bufio"
 	"context"
+	stdjson "encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/nijaru/canto/llm"
@@ -17,6 +22,7 @@ import (
 const (
 	defaultGrepLimit = 100
 	defaultFindLimit = 1000
+	grepMaxLineChars = 500
 )
 
 type SearchTool struct {
@@ -125,6 +131,25 @@ type Grep struct {
 	SearchTool
 }
 
+type rgJSONEvent struct {
+	Type string `json:"type"`
+	Data struct {
+		Path *struct {
+			Text string `json:"text"`
+		} `json:"path"`
+		LineNumber int `json:"line_number"`
+		Lines      *struct {
+			Text string `json:"text"`
+		} `json:"lines"`
+	} `json:"data"`
+}
+
+type grepMatch struct {
+	filePath   string
+	lineNumber int
+	lineText   string
+}
+
 func (g *Grep) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "grep",
@@ -157,16 +182,19 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(searchPath); err != nil {
+	info, err := os.Stat(searchPath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("path not found: %s", searchPath)
 		}
 		return "", err
 	}
+	isDirectory := info.IsDir()
 
 	cmdArgs := []string{
+		"--json",
 		"--line-number",
-		"--color", "never",
+		"--color=never",
 		"--hidden",
 		"--no-require-git",
 		"--glob", "!.git/**",
@@ -177,9 +205,6 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if input.Literal {
 		cmdArgs = append(cmdArgs, "--fixed-strings")
 	}
-	if input.Context > 0 {
-		cmdArgs = append(cmdArgs, "--context", fmt.Sprint(input.Context))
-	}
 	if strings.TrimSpace(input.Glob) != "" {
 		cmdArgs = append(cmdArgs, "--glob", input.Glob)
 	}
@@ -189,14 +214,197 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
 	cmd.Dir = g.cwd
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return limitToolOutput(limitSearchLines(string(output), limit, "matches")), nil
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("rg stdout: %w", err)
 	}
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("rg stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("rg search failed: %w", err)
+	}
+
+	var stderr strings.Builder
+	var stderrWG sync.WaitGroup
+	stderrWG.Add(1)
+	go func() {
+		defer stderrWG.Done()
+		_, _ = io.Copy(&stderr, stderrPipe)
+	}()
+
+	reader := bufio.NewReader(stdout)
+	matches := make([]grepMatch, 0, min(limit, defaultGrepLimit))
+	matchLimitReached := false
+	killedDueToLimit := false
+	for {
+		line, readErr := reader.ReadString('\n')
+		if strings.TrimSpace(line) != "" && len(matches) < limit {
+			var event rgJSONEvent
+			if err := stdjson.Unmarshal([]byte(line), &event); err == nil && event.Type == "match" &&
+				event.Data.Path != nil &&
+				event.Data.LineNumber > 0 {
+				match := grepMatch{
+					filePath:   event.Data.Path.Text,
+					lineNumber: event.Data.LineNumber,
+				}
+				if event.Data.Lines != nil {
+					match.lineText = event.Data.Lines.Text
+				}
+				matches = append(matches, match)
+				if len(matches) >= limit {
+					matchLimitReached = true
+					killedDueToLimit = true
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				_ = cmd.Wait()
+				stderrWG.Wait()
+				return "", fmt.Errorf("read rg output: %w", readErr)
+			}
+			break
+		}
+	}
+	waitErr := cmd.Wait()
+	stderrWG.Wait()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if waitErr != nil && !killedDueToLimit {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "No matches found", nil
+		}
+		errorMsg := strings.TrimSpace(stderr.String())
+		if errorMsg == "" {
+			errorMsg = waitErr.Error()
+		}
+		return "", fmt.Errorf("rg search failed: %s", errorMsg)
+	}
+	if len(matches) == 0 {
 		return "No matches found", nil
 	}
-	return "", fmt.Errorf("rg search failed: %w", err)
+
+	output, linesTruncated := g.formatGrepMatches(matches, searchPath, isDirectory, input.Context)
+	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	var notices []string
+	if matchLimitReached {
+		notices = append(
+			notices,
+			fmt.Sprintf(
+				"%d matches limit reached. Use limit=%d for more, or refine pattern",
+				limit,
+				limit*2,
+			),
+		)
+	}
+	if byteTruncated {
+		notices = append(
+			notices,
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+		)
+	}
+	if linesTruncated {
+		notices = append(
+			notices,
+			fmt.Sprintf(
+				"Some lines truncated to %d chars. Use read tool to see full lines",
+				grepMaxLineChars,
+			),
+		)
+	}
+	if len(notices) > 0 {
+		output += "\n\n[" + strings.Join(notices, ". ") + "]"
+	}
+	return output, nil
+}
+
+func (g *Grep) formatGrepMatches(
+	matches []grepMatch,
+	searchPath string,
+	isDirectory bool,
+	contextLines int,
+) (string, bool) {
+	fileCache := map[string][]string{}
+	var output []string
+	linesTruncated := false
+	for _, match := range matches {
+		path := g.grepDisplayPath(match.filePath, searchPath, isDirectory)
+		if contextLines <= 0 && match.lineText != "" {
+			lineText := strings.TrimSuffix(strings.ReplaceAll(match.lineText, "\r", ""), "\n")
+			truncated, ok := truncateGrepLine(lineText)
+			linesTruncated = linesTruncated || ok
+			output = append(output, fmt.Sprintf("%s:%d: %s", path, match.lineNumber, truncated))
+			continue
+		}
+		filePath := g.grepAbsolutePath(match.filePath)
+		lines, ok := fileCache[filePath]
+		if !ok {
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				output = append(
+					output,
+					fmt.Sprintf("%s:%d: (unable to read file)", path, match.lineNumber),
+				)
+				continue
+			}
+			lines = strings.Split(
+				strings.ReplaceAll(strings.ReplaceAll(string(content), "\r\n", "\n"), "\r", "\n"),
+				"\n",
+			)
+			fileCache[filePath] = lines
+		}
+		start := match.lineNumber
+		end := match.lineNumber
+		if contextLines > 0 {
+			start = max(1, match.lineNumber-contextLines)
+			end = min(len(lines), match.lineNumber+contextLines)
+		}
+		for lineNumber := start; lineNumber <= end; lineNumber++ {
+			lineText := ""
+			if lineNumber-1 >= 0 && lineNumber-1 < len(lines) {
+				lineText = lines[lineNumber-1]
+			}
+			truncated, ok := truncateGrepLine(lineText)
+			linesTruncated = linesTruncated || ok
+			if lineNumber == match.lineNumber {
+				output = append(output, fmt.Sprintf("%s:%d: %s", path, lineNumber, truncated))
+			} else {
+				output = append(output, fmt.Sprintf("%s-%d- %s", path, lineNumber, truncated))
+			}
+		}
+	}
+	return strings.Join(output, "\n"), linesTruncated
+}
+
+func (g *Grep) grepDisplayPath(filePath, searchPath string, isDirectory bool) string {
+	absPath := g.grepAbsolutePath(filePath)
+	if isDirectory {
+		if rel, err := filepath.Rel(searchPath, absPath); err == nil && filepath.IsLocal(rel) {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.Base(absPath)
+}
+
+func (g *Grep) grepAbsolutePath(filePath string) string {
+	if filepath.IsAbs(filePath) {
+		return filepath.Clean(filePath)
+	}
+	return filepath.Clean(filepath.Join(g.cwd, filepath.FromSlash(filePath)))
+}
+
+func truncateGrepLine(line string) (string, bool) {
+	if utf8.RuneCountInString(line) <= grepMaxLineChars {
+		return line, false
+	}
+	runes := []rune(line)
+	return string(runes[:grepMaxLineChars]) + "... [truncated]", true
 }
 
 // Find tool
@@ -275,7 +483,7 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	slices.Sort(matches)
-	return limitToolOutput(joinLimitedMatches(matches, limit)), nil
+	return formatLimitedFindMatches(matches, limit), nil
 }
 
 func globMatches(pattern, output, searchArg string) ([]string, error) {
@@ -288,13 +496,19 @@ func globMatches(pattern, output, searchArg string) ([]string, error) {
 			continue
 		}
 		path = strings.TrimPrefix(path, "./")
-		path = searchRelativePath(path, searchArg)
-		matched, err := doublestar.Match(matchPattern, path)
+		displayPath := searchRelativePath(path, searchArg)
+		matched, err := doublestar.Match(matchPattern, displayPath)
 		if err != nil {
 			return nil, err
 		}
+		if !matched && strings.Contains(pattern, "/") {
+			matched, err = doublestar.Match(matchPattern, path)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if matched {
-			matches = append(matches, path)
+			matches = append(matches, displayPath)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -331,36 +545,34 @@ func searchRelativePath(path, searchArg string) string {
 	return strings.TrimPrefix(path, prefix)
 }
 
-func joinLimitedMatches(matches []string, limit int) string {
-	if limit <= 0 || len(matches) <= limit {
-		return strings.Join(matches, "\n")
+func formatLimitedFindMatches(matches []string, limit int) string {
+	limited := matches
+	resultLimitReached := false
+	if limit > 0 && len(matches) > limit {
+		limited = matches[:limit]
+		resultLimitReached = true
 	}
-	output := strings.Join(matches[:limit], "\n")
-	return fmt.Sprintf(
-		"%s\n\n[%d results limit reached. Use limit=%d for more, or refine pattern.]",
-		output,
-		limit,
-		limit*2,
-	)
-}
-
-func limitSearchLines(output string, limit int, label string) string {
-	if limit <= 0 {
-		return output
+	output := strings.Join(limited, "\n")
+	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	var notices []string
+	if resultLimitReached {
+		notices = append(
+			notices,
+			fmt.Sprintf(
+				"%d results limit reached. Use limit=%d for more, or refine pattern",
+				limit,
+				limit*2,
+			),
+		)
 	}
-	output = strings.TrimRight(output, "\n")
-	if output == "" {
-		return output
+	if byteTruncated {
+		notices = append(
+			notices,
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+		)
 	}
-	lines := strings.Split(output, "\n")
-	if len(lines) <= limit {
-		return output
+	if len(notices) > 0 {
+		output += "\n\n[" + strings.Join(notices, ". ") + "]"
 	}
-	return fmt.Sprintf(
-		"%s\n\n[%d %s limit reached. Use limit=%d for more, or refine pattern.]",
-		strings.Join(lines[:limit], "\n"),
-		limit,
-		label,
-		limit*2,
-	)
+	return output
 }

@@ -61,8 +61,10 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	var res strings.Builder
+	limitReached := false
 	for i, e := range entries {
 		if i >= limit {
+			limitReached = true
 			break
 		}
 		suffix := ""
@@ -74,13 +76,23 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 	if res.Len() == 0 {
 		return "(empty directory)", nil
 	}
-	if len(entries) > limit {
-		fmt.Fprintf(
-			&res,
-			"\n[%d entries limit reached. Use limit=%d for more, or narrow the path.]",
-			limit,
-			limit*2,
+	output := strings.TrimRight(res.String(), "\n")
+	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	var notices []string
+	if limitReached {
+		notices = append(
+			notices,
+			fmt.Sprintf("%d entries limit reached. Use limit=%d for more", limit, limit*2),
 		)
 	}
-	return limitToolOutput(res.String()), nil
+	if byteTruncated {
+		notices = append(
+			notices,
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+		)
+	}
+	if len(notices) > 0 {
+		output += "\n\n[" + strings.Join(notices, ". ") + "]"
+	}
+	return output, nil
 }

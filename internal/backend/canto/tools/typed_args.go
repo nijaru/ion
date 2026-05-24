@@ -167,7 +167,7 @@ func grepParameters() map[string]any {
 	describeProperty(schema, "ignoreCase", "Case-insensitive search (default: false).")
 	describeProperty(schema, "literal", "Treat the pattern as a literal string instead of a regex.")
 	describeProperty(schema, "context", "Number of context lines before and after each match.")
-	describeProperty(schema, "limit", "Maximum number of output lines to return (default: 100).")
+	describeProperty(schema, "limit", "Maximum number of matches to return (default: 100).")
 	return schema
 }
 

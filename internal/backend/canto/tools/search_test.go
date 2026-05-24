@@ -25,6 +25,16 @@ func TestSearchTools(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "src", "upper.go"), []byte("Needle\ncontext line"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, "src", "another.go"), []byte("package another"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, "src", "skip.txt"), []byte("Needle"), 0o644)
+	os.WriteFile(
+		filepath.Join(tmpDir, "src", "long.go"),
+		[]byte(strings.Repeat("x", 520)+" needle-tail\n"),
+		0o644,
+	)
+	os.WriteFile(
+		filepath.Join(tmpDir, "src", "context.go"),
+		[]byte("before\nNeedle one\nafter\nNeedle two\n"),
+		0o644,
+	)
 	os.Mkdir(filepath.Join(tmpDir, "ignored"), 0o755)
 	os.WriteFile(filepath.Join(tmpDir, "ignored", "ignored.go"), []byte("package ignored"), 0o644)
 	os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("ignored/**\n"), 0o644)
@@ -86,16 +96,16 @@ func TestSearchTools(t *testing.T) {
 
 		res, err = g.Execute(
 			context.Background(),
-			`{"pattern":"needle","path":"src","glob":"*.go","ignoreCase":true,"literal":true,"context":1,"limit":1}`,
+			`{"pattern":"context line","path":"src","glob":"*.go","ignoreCase":true,"literal":true,"context":1,"limit":1}`,
 		)
 		if err != nil {
 			t.Fatalf("grep with pi-like options failed: %v", err)
 		}
-		if !strings.Contains(res, "src/upper.go") {
-			t.Fatalf("expected src/upper.go in filtered grep results, got %q", res)
+		if !strings.Contains(res, "upper.go") {
+			t.Fatalf("expected upper.go in filtered grep results, got %q", res)
 		}
-		if strings.Contains(res, "src/skip.txt") {
-			t.Fatalf("glob filter should exclude src/skip.txt, got %q", res)
+		if strings.Contains(res, "skip.txt") {
+			t.Fatalf("glob filter should exclude skip.txt, got %q", res)
 		}
 		if !strings.Contains(res, "matches limit reached") {
 			t.Fatalf("expected grep limit notice, got %q", res)
@@ -103,13 +113,41 @@ func TestSearchTools(t *testing.T) {
 
 		res, err = g.Execute(
 			context.Background(),
-			`{"pattern":"Needle","path":"@src","ignoreCase":true,"limit":1}`,
+			`{"pattern":"context line","path":"@src","ignoreCase":true,"limit":1}`,
 		)
 		if err != nil {
 			t.Fatalf("grep with @ path failed: %v", err)
 		}
-		if !strings.Contains(res, "src/upper.go") {
-			t.Fatalf("grep with @ path = %q, want src/upper.go", res)
+		if !strings.Contains(res, "upper.go") {
+			t.Fatalf("grep with @ path = %q, want upper.go", res)
+		}
+
+		res, err = g.Execute(
+			context.Background(),
+			`{"pattern":"Needle","path":"src/context.go","context":1,"limit":1}`,
+		)
+		if err != nil {
+			t.Fatalf("grep context with file path failed: %v", err)
+		}
+		if !strings.Contains(res, "context.go-1- before") ||
+			!strings.Contains(res, "context.go:2: Needle one") ||
+			!strings.Contains(res, "context.go-3- after") {
+			t.Fatalf("expected Pi-style context block, got %q", res)
+		}
+		if !strings.Contains(res, "1 matches limit reached") {
+			t.Fatalf("expected match-limit notice to count matches, got %q", res)
+		}
+		if strings.Contains(res, "Needle two") {
+			t.Fatalf("limit should stop after one match, got %q", res)
+		}
+
+		res, err = g.Execute(context.Background(), `{"pattern":"needle-tail","path":"src/long.go"}`)
+		if err != nil {
+			t.Fatalf("grep long line failed: %v", err)
+		}
+		if !strings.Contains(res, "... [truncated]") ||
+			!strings.Contains(res, "Some lines truncated to 500 chars") {
+			t.Fatalf("expected long-line truncation notice, got %q", res)
 		}
 
 		res, err = g.Execute(context.Background(), `{"pattern":"definitely-not-present"}`)
@@ -148,7 +186,9 @@ func TestSearchTools(t *testing.T) {
 		if strings.Contains(res, ".git/") {
 			t.Fatalf("expected .git paths to be skipped, got %q", res)
 		}
-		if strings.TrimSpace(res) != ".hidden.go\nmatch1.go\nsrc/another.go\nsrc/upper.go" {
+		if strings.TrimSpace(
+			res,
+		) != ".hidden.go\nmatch1.go\nsrc/another.go\nsrc/context.go\nsrc/long.go\nsrc/upper.go" {
 			t.Errorf("expected hidden and normal go files, got %q", res)
 		}
 
@@ -164,6 +204,17 @@ func TestSearchTools(t *testing.T) {
 		}
 		if !strings.Contains(res, "results limit reached") {
 			t.Fatalf("expected find limit notice, got %q", res)
+		}
+
+		res, err = find.Execute(context.Background(), `{"pattern":"src/*.go","path":"src"}`)
+		if err != nil {
+			t.Fatalf("find with path-containing pattern under search root failed: %v", err)
+		}
+		if !strings.Contains(res, "upper.go") {
+			t.Fatalf("expected slash pattern to match under narrowed path, got %q", res)
+		}
+		if strings.Contains(res, "src/upper.go") {
+			t.Fatalf("expected find output relative to narrowed search path, got %q", res)
 		}
 
 		res, err = find.Execute(context.Background(), `{"pattern":"@src/*.go","limit":1}`)
