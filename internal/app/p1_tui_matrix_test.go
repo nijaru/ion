@@ -21,6 +21,7 @@ func TestP1InlineScenarioMatrix(t *testing.T) {
 	}{
 		{"idle launch shell frame", p1MatrixIdleLaunchShellFrame},
 		{"submit stream tool and commit", p1MatrixSubmitStreamToolCommit},
+		{"file tool rows keep shell frame", p1MatrixFileToolRowsKeepShellFrame},
 		{"active progress keeps shell frame", p1MatrixActiveProgressKeepsShellFrame},
 		{"queued input stays visible while active", p1MatrixQueuedInputVisible},
 		{"settings command stays local while active", p1MatrixSettingsCommandLocalWhileActive},
@@ -81,6 +82,59 @@ func p1MatrixSubmitStreamToolCommit(t *testing.T) {
 	}
 	view := assertP1ShellFrame(t, model)
 	assertP1ViewContains(t, view, "Complete")
+}
+
+func p1MatrixFileToolRowsKeepShellFrame(t *testing.T) {
+	model := readyModel(t)
+	model = applyP1Events(
+		t,
+		model,
+		session.TurnStarted{},
+		session.ToolCallStarted{
+			ToolUseID: "read-1",
+			ToolName:  "read",
+			Args:      `{"path":"ai/STATUS.md"}`,
+		},
+		session.ToolCallStarted{
+			ToolUseID: "find-1",
+			ToolName:  "find",
+			Args:      `{"pattern":"ai/*.md"}`,
+		},
+		session.ToolCallStarted{
+			ToolUseID: "grep-1",
+			ToolName:  "grep",
+			Args:      `{"pattern":"needle","path":"ai"}`,
+		},
+		session.ToolCallStarted{
+			ToolUseID: "ls-1",
+			ToolName:  "ls",
+			Args:      `{"path":"ai"}`,
+		},
+		session.ToolCallStarted{
+			ToolUseID: "write-1",
+			ToolName:  "write",
+			Args:      `{"path":"notes/todo.md"}`,
+		},
+		session.ToolCallStarted{
+			ToolUseID: "edit-1",
+			ToolName:  "edit",
+			Args:      `{"path":"src/main.go"}`,
+		},
+	)
+
+	view := assertP1ShellFrame(t, model)
+	for _, want := range []string{
+		"Read(ai/STATUS.md)",
+		"Find(ai/*.md)",
+		"Search(needle)",
+		"List(ai)",
+		"Write(notes/todo.md)",
+		"Edit(src/main.go)",
+		"Type a message",
+		"stub-model",
+	} {
+		assertP1ViewContains(t, view, want)
+	}
 }
 
 func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
