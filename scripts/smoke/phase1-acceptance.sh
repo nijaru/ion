@@ -17,6 +17,7 @@ cd "$ROOT"
 phase_note "deterministic core gates"
 run go test ./... -count=1 -timeout 300s
 run go vet ./...
+run git diff --check
 
 phase_note "TUI tmux gate"
 run env \
