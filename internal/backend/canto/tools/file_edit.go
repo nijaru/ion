@@ -311,10 +311,10 @@ func randomHexSuffix() (string, error) {
 
 func validateEditStrings(oldString, newString string) error {
 	if oldString == "" {
-		return fmt.Errorf("old_string must not be empty")
+		return fmt.Errorf("oldText must not be empty")
 	}
 	if oldString == newString {
-		return fmt.Errorf("new_string must differ from old_string")
+		return fmt.Errorf("newText must differ from oldText")
 	}
 	return nil
 }
@@ -342,11 +342,11 @@ func replacementCount(
 	count := strings.Count(content, oldString)
 	lines := occurrenceLineSummary(content, oldString)
 	if count == 0 {
-		return 0, fmt.Errorf("old_string not found in %s", filePath)
+		return 0, fmt.Errorf("oldText not found in %s", filePath)
 	}
 	if expected > 0 && count != expected {
 		return 0, fmt.Errorf(
-			"old_string expected %d replacement(s) in %s, found %d%s",
+			"oldText expected %d replacement(s) in %s, found %d%s",
 			expected,
 			filePath,
 			count,
@@ -355,7 +355,7 @@ func replacementCount(
 	}
 	if !replaceAll && count > 1 {
 		return 0, fmt.Errorf(
-			"old_string is not unique in %s, found %d occurrences%s. Provide more context or set replace_all with expected_replacements.",
+			"oldText is not unique in %s, found %d occurrences%s. Provide more context or use a legacy replace_all call with expected_replacements.",
 			filePath,
 			count,
 			lines,

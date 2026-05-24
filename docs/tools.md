@@ -88,8 +88,7 @@ files. Checkpoints are kept as recovery metadata, but `/rewind` polish is
 deferred and should not be treated as part of the default model-visible tool
 surface.
 
-Structured edits require exact `old_string` matches inside `edits[]`. Use
-`expected_replacements` with broad replacements so Ion can fail before writing
-when the file contains a different number of matches. Ambiguous edit failures
-include line numbers. LF snippets copied from `read` can still match CRLF/BOM
-files without changing the file's line-ending style.
+Structured edits require exact `oldText` matches inside `edits[]`, paired with
+the replacement `newText`. Ambiguous edit failures include line numbers. LF
+snippets copied from `read` can still match CRLF/BOM files without changing the
+file's line-ending style.

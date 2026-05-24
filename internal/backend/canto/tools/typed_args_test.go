@@ -94,10 +94,8 @@ func TestEditToolSchemaRequiresNestedReplacementFields(t *testing.T) {
 	items := edits["items"].(map[string]any)
 	itemProperties := items["properties"].(map[string]any)
 	expectedProperties := []string{
-		"old_string",
-		"new_string",
-		"replace_all",
-		"expected_replacements",
+		"oldText",
+		"newText",
 	}
 	for _, property := range expectedProperties {
 		if _, ok := itemProperties[property]; !ok {
@@ -109,7 +107,7 @@ func TestEditToolSchemaRequiresNestedReplacementFields(t *testing.T) {
 	}
 
 	required := schemaStringList(t, items["required"])
-	for _, property := range []string{"old_string", "new_string"} {
+	for _, property := range []string{"oldText", "newText"} {
 		if !slices.Contains(required, property) {
 			t.Fatalf("nested required = %#v, want %q", required, property)
 		}

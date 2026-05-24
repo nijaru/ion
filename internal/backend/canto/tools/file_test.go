@@ -422,8 +422,8 @@ func TestFileTools(t *testing.T) {
 
 		// Replace unique
 		editArgs := marshalEditArgs(t, filePath, map[string]any{
-			"old_string": "bar",
-			"new_string": "qux",
+			"oldText": "bar",
+			"newText": "qux",
 		})
 		_, err := e.Execute(context.Background(), editArgs)
 		if err != nil {
@@ -508,7 +508,7 @@ func TestFileTools(t *testing.T) {
 			"new_string": "x",
 		})
 		if _, err := e.Execute(context.Background(), emptyOldArgs); err == nil {
-			t.Fatal("expected empty old_string to fail")
+			t.Fatal("expected empty oldText to fail")
 		}
 
 		noopArgs := marshalEditArgs(t, filePath, map[string]any{

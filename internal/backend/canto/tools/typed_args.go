@@ -23,6 +23,16 @@ type editInput struct {
 	Edits []editReplacement `json:"edits"`
 }
 
+type editParametersInput struct {
+	Path  string                      `json:"path"`
+	Edits []editParametersReplacement `json:"edits"`
+}
+
+type editParametersReplacement struct {
+	OldText string `json:"oldText"`
+	NewText string `json:"newText"`
+}
+
 type lsInput struct {
 	Path  string `json:"path"`
 	Limit int    `json:"limit"`
@@ -112,7 +122,7 @@ func writeParameters() map[string]any {
 }
 
 func editParameters() map[string]any {
-	schema := typedParameters[editInput]([]string{"path", "edits"})
+	schema := typedParameters[editParametersInput]([]string{"path", "edits"})
 	describeProperty(
 		schema,
 		"path",
@@ -126,23 +136,11 @@ func editParameters() map[string]any {
 	describeArrayItemProperty(
 		schema,
 		"edits",
-		"old_string",
+		"oldText",
 		"The exact text to replace. Must match the original file, not another edit's output.",
 	)
-	describeArrayItemProperty(schema, "edits", "new_string", "The replacement text.")
-	describeArrayItemProperty(
-		schema,
-		"edits",
-		"replace_all",
-		"Replace all occurrences (default: false, requires unique match).",
-	)
-	describeArrayItemProperty(
-		schema,
-		"edits",
-		"expected_replacements",
-		"Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
-	)
-	requireArrayItemProperties(schema, "edits", []string{"old_string", "new_string"})
+	describeArrayItemProperty(schema, "edits", "newText", "The replacement text.")
+	requireArrayItemProperties(schema, "edits", []string{"oldText", "newText"})
 	return schema
 }
 
