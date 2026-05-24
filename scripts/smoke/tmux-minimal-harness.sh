@@ -176,13 +176,15 @@ start_ion() {
 
 start_smoke_ion() {
   local mode="$1"
+  local store="${2:-$TMP_DIR/store-$mode}"
+  local args="${3:-}"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session \
     -d \
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$ION_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$TMP_DIR/store-$mode\""
+    "cd \"$ROOT\" && HOME=\"$ION_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$store\" $args"
   wait_contains "Type a message" 60
 }
 
@@ -280,6 +282,23 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "Error: smoke provider failure" 30
   assert_contains "× Error"
   assert_visible_separator_line_count 2
+
+  local resume_store="$TMP_DIR/store-resume"
+  local resume_session="ion-tmux-resume-session"
+  start_smoke_ion "complete" "$resume_store" "--session-id \"$resume_session\""
+  send_line "build deterministic resume transcript"
+  wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
+  wait_contains "Complete" 60
+  send_line "/quit"
+  sleep 1
+
+  start_smoke_ion "complete" "$resume_store" "--resume --session-id \"$resume_session\""
+  assert_contains "--- resumed ---"
+  assert_contains "build deterministic resume transcript"
+  assert_contains "Bash(sleep 2; echo ion-tmux-smoke)"
+  assert_contains "ion-tmux-smoke"
+  assert_contains "done"
+  assert_visible_separator_line_count_at_most 2
 }
 
 start_ion
