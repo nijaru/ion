@@ -50,9 +50,11 @@ Native Pi-parity execution is trusted by default. Approval tiers, persistent
 policy files, and sandbox permission UX are deferred until the core loop and
 TUI are stable.
 
-Native `read` returns model-visible file contents with line numbers. The TUI
-still compacts read rows by default, but the model receives stable line
-references for follow-up edits.
+Native `read` returns model-visible text file contents with line numbers. For
+supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an
+image content part through Canto so vision-capable providers can inspect the
+image. The TUI still compacts read rows by default, but the model receives
+stable line references for follow-up edits.
 
 File and search tool path inputs follow Pi-style normalization for common
 model output: leading `@` is stripped, Unicode space variants are normalized to

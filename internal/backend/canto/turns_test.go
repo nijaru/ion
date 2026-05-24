@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -624,6 +625,101 @@ func TestSubmitTurnExecutesReadFindAndGrepFirstMinutesFlow(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnExecutesImageReadWithContentParts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	const encodedPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+	imageData, err := base64.StdEncoding.DecodeString(encodedPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "pixel.png"), imageData, 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	readCall := toolCall(t, "read-image-call-1", "read", map[string]any{"path": "pixel.png"})
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{readCall}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "read the image"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	var readResult string
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-b.Session().Events():
+			if !ok {
+				t.Fatal("event stream closed before image-read turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolResult:
+				if msg.ToolName == "read" {
+					readResult = msg.Result
+				}
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				if readResult != "Read image file [image/png]" {
+					t.Fatalf("read result = %q, want image note", readResult)
+				}
+				calls := provider.Calls()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and post-tool requests", len(calls))
+				}
+				if !requestHasMessage(calls[1].Messages, llm.RoleTool, "Read image file [image/png]") {
+					t.Fatal("post-tool request missing image read note")
+				}
+				if !requestHasImagePart(calls[1].Messages, "read", "image/png", encodedPNG) {
+					t.Fatal("post-tool request missing image content part")
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for image-read turn")
+		}
+	}
+}
+
 func TestSubmitTurnExecutesLsWriteAndEditFirstMinutesFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -777,6 +873,22 @@ func toolCall(t *testing.T, id, name string, args map[string]any) llm.Call {
 	call.Function.Name = name
 	call.Function.Arguments = string(encoded)
 	return call
+}
+
+func requestHasImagePart(messages []llm.Message, toolName, mimeType, data string) bool {
+	for _, msg := range messages {
+		if msg.Role != llm.RoleTool || msg.Name != toolName {
+			continue
+		}
+		for _, part := range msg.Parts {
+			if part.Type == llm.ContentPartImage &&
+				part.MIMEType == mimeType &&
+				part.Data == data {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestSubmitTurnEmptyAssistantResponseEmitsSessionError(t *testing.T) {

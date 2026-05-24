@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nijaru/canto/llm"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
@@ -31,6 +33,15 @@ func marshalEditArgs(t *testing.T, filePath string, edits ...map[string]any) str
 		t.Fatal(err)
 	}
 	return string(args)
+}
+
+func mustDecodeBase64(t *testing.T, encoded string) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestFileTools(t *testing.T) {
@@ -176,6 +187,38 @@ func TestFileTools(t *testing.T) {
 		}
 		if res != "     1\toutside" {
 			t.Fatalf("symlink read = %q, want numbered outside content", res)
+		}
+	})
+
+	t.Run("Read image returns content parts", func(t *testing.T) {
+		const encodedPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+		imagePath := "pixel.png"
+		if err := os.WriteFile(filepath.Join(tmpDir, imagePath), mustDecodeBase64(t, encodedPNG), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
+		parts, err := r.ExecuteContent(context.Background(), `{"path":"pixel.png"}`)
+		if err != nil {
+			t.Fatalf("read image content failed: %v", err)
+		}
+		if len(parts) != 2 {
+			t.Fatalf("parts = %+v, want text and image", parts)
+		}
+		if parts[0].Text != "Read image file [image/png]" {
+			t.Fatalf("text part = %q", parts[0].Text)
+		}
+		if parts[1].Type != llm.ContentPartImage ||
+			parts[1].MIMEType != "image/png" ||
+			parts[1].Data != encodedPNG {
+			t.Fatalf("image part = %+v", parts[1])
+		}
+		text, err := r.Execute(context.Background(), `{"path":"pixel.png"}`)
+		if err != nil {
+			t.Fatalf("read image text failed: %v", err)
+		}
+		if text != "Read image file [image/png]" {
+			t.Fatalf("text fallback = %q", text)
 		}
 	})
 
