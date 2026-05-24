@@ -500,6 +500,48 @@ func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
 	}
 }
 
+func TestStartupPickerCmdLoadsInitialSessionPicker(t *testing.T) {
+	store := &blockingSessionListStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		sessions: []storage.SessionInfo{{
+			ID:          "sess-startup",
+			Title:       "Resume startup picker",
+			LastPreview: "continue after launch",
+			Model:       "openai/model-a",
+		}},
+	}
+	model := readyModel(t)
+	model.Model.Store = store
+	model = model.WithSessionPicker()
+
+	if model.Picker.Session == nil || !model.Picker.Session.loading {
+		t.Fatalf("session picker state = %#v, want startup loading state", model.Picker.Session)
+	}
+	cmd := model.startupPickerCmd()
+	if cmd == nil {
+		t.Fatal("startup session picker should schedule session loading")
+	}
+
+	close(store.release)
+	updated, nextCmd := model.Update(cmd())
+	model = testModel(t, updated)
+	if nextCmd != nil {
+		t.Fatalf("loaded session picker command = %T, want nil", nextCmd)
+	}
+	if model.Picker.Session == nil ||
+		model.Picker.Session.loading ||
+		len(model.Picker.Session.items) != 1 ||
+		model.Picker.Session.items[0].info.ID != "sess-startup" {
+		t.Fatalf("session picker items = %#v, want loaded startup session", model.Picker.Session)
+	}
+	select {
+	case <-store.started:
+	default:
+		t.Fatal("startup session picker command did not call ListSessions")
+	}
+}
+
 func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.SessionLoadRequest = 2

@@ -283,6 +283,17 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "file tools done" 30
   assert_visible_separator_line_count_at_most 2
 
+  start_smoke_ion "session-picker"
+  wait_contains "Resume a session" 30
+  wait_contains "Resume deterministic picker" 30
+  assert_visible_not_contains "Loading sessions..."
+  tmux send-keys -t "$SESSION" "alternate"
+  sleep "${ION_TMUX_STEP_DELAY:-1}"
+  assert_visible_contains "Search: alternate"
+  assert_visible_contains "Alternate deterministic branch"
+  assert_visible_not_contains "Resume deterministic picker"
+  assert_visible_separator_line_count_at_most 2
+
   start_smoke_ion "cancel"
   send_line "run cancel matrix"
   wait_contains "[smoke] waiting for cancel" 30

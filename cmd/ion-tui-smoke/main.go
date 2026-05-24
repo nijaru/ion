@@ -25,7 +25,7 @@ func main() {
 	mode := flag.String(
 		"mode",
 		"complete",
-		"smoke script mode: complete, files, cancel, or error",
+		"smoke script mode: complete, files, session-picker, cancel, or error",
 	)
 	storeRoot := flag.String("store", "", "session store directory")
 	sessionID := flag.String("session-id", "", "session id to open or resume")
@@ -71,6 +71,11 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	if err != nil {
 		return err
 	}
+	if mode == "session-picker" {
+		if err := seedSmokeSessionPicker(ctx, store, cwd); err != nil {
+			return err
+		}
+	}
 
 	smoke := newSmokeBackend(mode)
 	smoke.SetCantoEventStore(eventStore)
@@ -88,6 +93,9 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 
 	model := app.New(smoke, stored, store, cwd, "smoke", "v0.0.0", nil).
 		WithConfig(cfg)
+	if mode == "session-picker" {
+		model = model.WithSessionPicker()
+	}
 	if resume {
 		startupEntries, err := stored.Entries(ctx)
 		if err != nil {
@@ -140,6 +148,48 @@ func openSmokeSession(
 		return nil, fmt.Errorf("store does not support deterministic session ids")
 	}
 	return opener.OpenSessionWithID(ctx, sessionID, cwd, "fake/fake-model", "smoke")
+}
+
+func seedSmokeSessionPicker(ctx context.Context, store storage.Store, cwd string) error {
+	opener, ok := store.(storeWithSessionID)
+	if !ok {
+		return fmt.Errorf("store does not support deterministic session ids")
+	}
+	fixtures := []struct {
+		id      string
+		title   string
+		preview string
+	}{
+		{
+			id:      "ion-tmux-session-picker-primary",
+			title:   "Resume deterministic picker",
+			preview: "read ai/status.md",
+		},
+		{
+			id:      "ion-tmux-session-picker-alternate",
+			title:   "Alternate deterministic branch",
+			preview: "fix tui frame",
+		},
+	}
+	for _, fixture := range fixtures {
+		sess, err := opener.OpenSessionWithID(ctx, fixture.id, cwd, "fake/fake-model", "smoke")
+		if err != nil {
+			return fmt.Errorf("seed session %s: %w", fixture.id, err)
+		}
+		if err := sess.Close(); err != nil {
+			return fmt.Errorf("close seed session %s: %w", fixture.id, err)
+		}
+		if err := store.UpdateSession(ctx, storage.SessionInfo{
+			ID:          fixture.id,
+			Title:       fixture.title,
+			LastPreview: fixture.preview,
+			Model:       "fake/fake-model",
+			Branch:      "smoke",
+		}); err != nil {
+			return fmt.Errorf("update seed session %s: %w", fixture.id, err)
+		}
+	}
+	return nil
 }
 
 func printSmokeStartup(renderedEntries []string) {

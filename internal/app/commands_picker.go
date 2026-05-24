@@ -435,17 +435,25 @@ func loadModelPickerItems(requestID uint64, cfg *config.Config, preset modelPres
 
 func (m Model) startupPickerCmd() tea.Cmd {
 	overlay := m.Picker.Overlay
-	if overlay == nil ||
-		overlay.purpose != pickerPurposeModel ||
-		!overlay.loading ||
-		overlay.request == 0 ||
-		overlay.cfg == nil {
-		return nil
+	if overlay != nil &&
+		overlay.purpose == pickerPurposeModel &&
+		overlay.loading &&
+		overlay.request != 0 &&
+		overlay.cfg != nil {
+		if overlay.setup {
+			return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.modelPreset())
+		}
+		return loadModelPickerItems(overlay.request, overlay.cfg, overlay.modelPreset())
 	}
-	if overlay.setup {
-		return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.modelPreset())
+
+	if sessionPicker := m.Picker.Session; sessionPicker != nil &&
+		sessionPicker.loading &&
+		sessionPicker.request != 0 &&
+		m.Model.Store != nil {
+		return loadSessionPickerItems(sessionPicker.request, m.Model.Store, m.App.Workdir)
 	}
-	return loadModelPickerItems(overlay.request, overlay.cfg, overlay.modelPreset())
+
+	return nil
 }
 
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
