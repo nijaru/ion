@@ -1411,13 +1411,21 @@ func TestBusyInputUsesBackendFollowUpQueueWhenAvailable(t *testing.T) {
 
 func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 	model := readyModel(t)
+	model.InFlight.QueuedSteering = []string{"local stale steer"}
 	model.InFlight.QueuedTurns = []string{"local stale"}
 	model.InFlight.QueuedTurnsBackendOwned = true
 
 	updated, _ := model.Update(session.QueuedInputUpdated{
-		Snapshot: session.QueuedInputSnapshot{FollowUp: []string{"backend follow-up"}},
+		Snapshot: session.QueuedInputSnapshot{
+			Steering: []string{"backend steering"},
+			FollowUp: []string{"backend follow-up"},
+		},
 	})
 	model = testModel(t, updated)
+	if len(model.InFlight.QueuedSteering) != 1 ||
+		model.InFlight.QueuedSteering[0] != "backend steering" {
+		t.Fatalf("steering projection = %#v, want backend snapshot", model.InFlight.QueuedSteering)
+	}
 	if len(model.InFlight.QueuedTurns) != 1 ||
 		model.InFlight.QueuedTurns[0] != "backend follow-up" ||
 		!model.InFlight.QueuedTurnsBackendOwned {
@@ -1430,9 +1438,12 @@ func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 
 	updated, _ = model.Update(session.QueuedInputUpdated{})
 	model = testModel(t, updated)
-	if len(model.InFlight.QueuedTurns) != 0 || model.InFlight.QueuedTurnsBackendOwned {
+	if len(model.InFlight.QueuedSteering) != 0 ||
+		len(model.InFlight.QueuedTurns) != 0 ||
+		model.InFlight.QueuedTurnsBackendOwned {
 		t.Fatalf(
-			"queued projection = %#v owned=%v, want cleared backend snapshot",
+			"queued projection = steer %#v follow %#v owned=%v, want cleared backend snapshot",
+			model.InFlight.QueuedSteering,
 			model.InFlight.QueuedTurns,
 			model.InFlight.QueuedTurnsBackendOwned,
 		)
@@ -1550,15 +1561,19 @@ func TestCtrlGRecallsBackendOwnedQueuedTurns(t *testing.T) {
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
+	model.InFlight.QueuedSteering = []string{"steer one"}
 	model.InFlight.QueuedTurns = []string{"queued one", "queued two"}
 	model.InFlight.QueuedTurnsBackendOwned = true
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
-	if len(model.InFlight.QueuedTurns) != 0 || model.InFlight.QueuedTurnsBackendOwned {
+	if len(model.InFlight.QueuedSteering) != 0 ||
+		len(model.InFlight.QueuedTurns) != 0 ||
+		model.InFlight.QueuedTurnsBackendOwned {
 		t.Fatalf(
-			"queued turns = %#v owned=%v, want cleared projection",
+			"queued turns = steer %#v follow %#v owned=%v, want cleared projection",
+			model.InFlight.QueuedSteering,
 			model.InFlight.QueuedTurns,
 			model.InFlight.QueuedTurnsBackendOwned,
 		)
@@ -1574,8 +1589,26 @@ func TestCtrlGRecallsBackendOwnedQueuedTurns(t *testing.T) {
 	if sess.clears != 1 {
 		t.Fatalf("clear calls = %d, want 1", sess.clears)
 	}
-	if got := model.Input.Composer.Value(); got != "draft\nqueued one\nqueued two" {
+	if got := model.Input.Composer.Value(); got != "draft\nsteer one\nqueued one\nqueued two" {
 		t.Fatalf("composer = %q, want recalled queued turns", got)
+	}
+}
+
+func TestQueuedSteeringRendersAboveComposer(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedSteering = []string{"use the smaller test"}
+	model.InFlight.QueuedTurns = []string{"follow up after this"}
+	model.InFlight.QueuedTurnsBackendOwned = true
+
+	view := ansi.Strip(model.View().Content)
+	for _, want := range []string{
+		"Steering (Ctrl+G edit): use the smaller test",
+		"+1 more",
+		"2 queued",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
 	}
 }
 

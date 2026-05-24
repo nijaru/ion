@@ -25,6 +25,7 @@ func (r turnReducer) clearActiveState(clearQueued bool) {
 	r.inFlight.PendingTools = nil
 	r.inFlight.Subagents = make(map[string]*SubagentProgress)
 	if clearQueued {
+		r.inFlight.QueuedSteering = nil
 		r.inFlight.QueuedTurns = nil
 	}
 	r.inFlight.Canceling = false
@@ -283,20 +284,29 @@ func (r turnReducer) queueTurn(text string) {
 }
 
 func (r turnReducer) setBackendQueuedTurns(texts []string) {
-	r.inFlight.QueuedTurns = append([]string(nil), texts...)
-	r.inFlight.QueuedTurnsBackendOwned = len(texts) > 0
+	r.setBackendQueuedInput(nil, texts)
+}
+
+func (r turnReducer) setBackendQueuedInput(steering, followUp []string) {
+	r.inFlight.QueuedSteering = append([]string(nil), steering...)
+	r.inFlight.QueuedTurns = append([]string(nil), followUp...)
+	r.inFlight.QueuedTurnsBackendOwned = len(steering) > 0 || len(followUp) > 0
 }
 
 func (r turnReducer) clearQueuedTurns() {
+	r.inFlight.QueuedSteering = nil
 	r.inFlight.QueuedTurns = nil
 	r.inFlight.QueuedTurnsBackendOwned = false
 }
 
 func (r turnReducer) drainQueuedTurnsText() string {
-	if len(r.inFlight.QueuedTurns) == 0 {
+	if len(r.inFlight.QueuedSteering) == 0 && len(r.inFlight.QueuedTurns) == 0 {
 		return ""
 	}
-	queued := strings.Join(r.inFlight.QueuedTurns, "\n")
+	all := make([]string, 0, len(r.inFlight.QueuedSteering)+len(r.inFlight.QueuedTurns))
+	all = append(all, r.inFlight.QueuedSteering...)
+	all = append(all, r.inFlight.QueuedTurns...)
+	queued := strings.Join(all, "\n")
 	r.clearQueuedTurns()
 	return queued
 }

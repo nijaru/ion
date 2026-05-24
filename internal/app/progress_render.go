@@ -7,15 +7,31 @@ import (
 )
 
 func (m Model) renderQueuedTurns() string {
-	if len(m.InFlight.QueuedTurns) == 0 {
+	count := m.queuedInputCount()
+	if count == 0 {
 		return ""
 	}
-	preview := compactQueuedText(m.InFlight.QueuedTurns[0])
-	label := fmt.Sprintf("• Queued (Ctrl+G edit): %s", preview)
-	if extra := len(m.InFlight.QueuedTurns) - 1; extra > 0 {
+	kind, text := m.firstQueuedInput()
+	preview := compactQueuedText(text)
+	label := fmt.Sprintf("• %s (Ctrl+G edit): %s", kind, preview)
+	if extra := count - 1; extra > 0 {
 		label += fmt.Sprintf(" • +%d more", extra)
 	}
 	return m.st.dim.Render(fitLine(label, m.shellWidth()))
+}
+
+func (m Model) queuedInputCount() int {
+	return len(m.InFlight.QueuedSteering) + len(m.InFlight.QueuedTurns)
+}
+
+func (m Model) firstQueuedInput() (string, string) {
+	if len(m.InFlight.QueuedSteering) > 0 {
+		return "Steering", m.InFlight.QueuedSteering[0]
+	}
+	if len(m.InFlight.QueuedTurns) > 0 {
+		return "Queued", m.InFlight.QueuedTurns[0]
+	}
+	return "Queued", ""
 }
 
 func compactQueuedText(text string) string {
@@ -28,7 +44,7 @@ func (m Model) progressLine() string {
 	idleReady := false
 	if m.Progress.Compacting {
 		line = m.Input.Spinner.View() + " Compacting context..."
-		if n := len(m.InFlight.QueuedTurns); n > 0 {
+		if n := m.queuedInputCount(); n > 0 {
 			line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 		}
 		return fitLine(strings.TrimRight(line, " "), m.shellWidth())
@@ -90,7 +106,7 @@ func (m Model) progressLine() string {
 			line = m.st.dim.Render("• Ready")
 		}
 	}
-	if n := len(m.InFlight.QueuedTurns); n > 0 {
+	if n := m.queuedInputCount(); n > 0 {
 		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 	}
 	if idleReady && m.suppressIdleReadyProgress() {
@@ -100,11 +116,11 @@ func (m Model) progressLine() string {
 }
 
 func (m Model) suppressIdleReadyProgress() bool {
-	return m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0
+	return m.App.PrintedTranscript && m.queuedInputCount() == 0
 }
 
 func (m Model) suppressTerminalErrorProgress() bool {
-	return m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0
+	return m.App.PrintedTranscript && m.queuedInputCount() == 0
 }
 
 func (m Model) renderProgressStats(parts []string) string {

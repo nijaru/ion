@@ -360,6 +360,7 @@ type InFlightState struct {
 	ReasonBuf               string                       // accumulates ThinkingDelta
 	StreamBuf               string                       // non-empty while AgentDelta content is active
 	StreamChunks            []string                     // full AgentDelta content without per-event string copies
+	QueuedSteering          []string                     // steering messages queued during agent work
 	QueuedTurns             []string                     // follow-up turns queued during agent work
 	QueuedTurnsBackendOwned bool
 	Thinking                bool

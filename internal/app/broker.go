@@ -209,7 +209,7 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 }
 
 func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdated) (Model, tea.Cmd) {
-	m.turnReducer().setBackendQueuedTurns(msg.Snapshot.FollowUp)
+	m.turnReducer().setBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
 }
 
