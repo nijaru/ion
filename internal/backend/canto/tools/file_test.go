@@ -202,6 +202,18 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("list output = %q, want limit notice", res)
 		}
 
+		emptyDir := filepath.Join(tmpDir, "empty")
+		if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		res, err = l.Execute(context.Background(), `{"path":"empty"}`)
+		if err != nil {
+			t.Fatalf("empty list failed: %v", err)
+		}
+		if strings.TrimSpace(res) != "(empty directory)" {
+			t.Fatalf("empty list = %q, want empty directory notice", res)
+		}
+
 		if _, err := l.Execute(context.Background(), `{"path":"list/Alpha.txt"}`); err == nil {
 			t.Fatal("expected listing a file to fail")
 		}

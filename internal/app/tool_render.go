@@ -134,7 +134,7 @@ func toolOutputSummary(e session.Entry) string {
 		}
 		return fmt.Sprintf("%d entries", n)
 	case "grep", "search":
-		if strings.TrimSpace(e.Content) == "No matches found." {
+		if strings.TrimSuffix(strings.TrimSpace(e.Content), ".") == "No matches found" {
 			return "0 matches"
 		}
 		if n == 1 {

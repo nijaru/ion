@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -55,6 +56,20 @@ func (t *SearchTool) searchArg(target string) (string, error) {
 		return relPath, nil
 	}
 	return absPath, nil
+}
+
+func (t *SearchTool) commandSearchPath(searchArg string) (string, error) {
+	absCwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(searchArg) == "" {
+		return absCwd, nil
+	}
+	if filepath.IsAbs(searchArg) {
+		return filepath.Clean(searchArg), nil
+	}
+	return filepath.Clean(filepath.Join(absCwd, filepath.FromSlash(searchArg))), nil
 }
 
 func (t *SearchTool) globPatternArg(pattern string) (string, error) {
@@ -138,6 +153,16 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	searchPath, err := g.commandSearchPath(searchArg)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(searchPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("path not found: %s", searchPath)
+		}
+		return "", err
+	}
 
 	cmdArgs := []string{
 		"--line-number",
@@ -169,7 +194,7 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 		return limitToolOutput(limitSearchLines(string(output), limit, "matches")), nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		return "No matches found.", nil
+		return "No matches found", nil
 	}
 	return "", fmt.Errorf("rg search failed: %w", err)
 }
@@ -204,6 +229,20 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	searchPath, err := f.commandSearchPath(searchArg)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(searchPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("path not found: %s", searchPath)
+		}
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory: %s", searchPath)
+	}
 
 	cmdArgs := []string{
 		"--files",
@@ -219,7 +258,7 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "No matches found.", nil
+			return "No files found matching pattern", nil
 		}
 		if strings.TrimSpace(string(output)) == "" {
 			return "", fmt.Errorf("rg file listing failed: %w", err)
@@ -232,7 +271,7 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	if len(matches) == 0 {
-		return "No matches found.", nil
+		return "No files found matching pattern", nil
 	}
 
 	slices.Sort(matches)

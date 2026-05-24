@@ -116,8 +116,13 @@ func TestSearchTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("grep no-match should not be a tool error: %v", err)
 		}
-		if strings.TrimSpace(res) != "No matches found." {
+		if strings.TrimSpace(res) != "No matches found" {
 			t.Fatalf("grep no-match = %q", res)
+		}
+
+		if _, err := g.Execute(context.Background(), `{"pattern":"Needle","path":"missing"}`); err == nil ||
+			!strings.Contains(strings.ToLower(err.Error()), "path not found") {
+			t.Fatalf("grep missing path error = %v, want path not found", err)
 		}
 
 		if _, err := g.Execute(context.Background(), `{"pattern":" "}`); err == nil {
@@ -176,6 +181,23 @@ func TestSearchTools(t *testing.T) {
 		}
 		if strings.TrimSpace(res) != "match1.go\nmatch2.txt" {
 			t.Fatalf("absolute workspace find = %q, want relative matches", res)
+		}
+
+		res, err = find.Execute(context.Background(), `{"pattern":"*.rs"}`)
+		if err != nil {
+			t.Fatalf("find no-match should not be a tool error: %v", err)
+		}
+		if strings.TrimSpace(res) != "No files found matching pattern" {
+			t.Fatalf("find no-match = %q", res)
+		}
+
+		if _, err := find.Execute(context.Background(), `{"pattern":"*.go","path":"missing"}`); err == nil ||
+			!strings.Contains(strings.ToLower(err.Error()), "path not found") {
+			t.Fatalf("find missing path error = %v, want path not found", err)
+		}
+		if _, err := find.Execute(context.Background(), `{"pattern":"*.go","path":"match1.go"}`); err == nil ||
+			!strings.Contains(strings.ToLower(err.Error()), "not a directory") {
+			t.Fatalf("find file path error = %v, want not a directory", err)
 		}
 
 		if _, err := find.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {

@@ -71,6 +71,9 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		}
 		res.WriteString(fmt.Sprintf("%s%s\n", e.Name(), suffix))
 	}
+	if res.Len() == 0 {
+		return "(empty directory)", nil
+	}
 	if len(entries) > limit {
 		fmt.Fprintf(
 			&res,

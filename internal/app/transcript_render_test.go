@@ -223,7 +223,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 			entry: session.Entry{
 				Role:    session.Tool,
 				Title:   "grep missing",
-				Content: "No matches found.",
+				Content: "No matches found",
 			},
 			want: "• Search(missing) · 0 matches",
 		},
