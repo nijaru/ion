@@ -41,6 +41,11 @@ Background jobs are deferred. The native Pi-parity tool path only runs
 foreground commands; `/jobs` and `/stop` stay hidden until async process UX is
 designed as a coherent later feature.
 
+Native `bash` accepts `command` plus an optional per-command `timeout` in
+seconds. There is no default timeout; normal turns are bounded by user/provider
+cancellation and explicit tool/provider timeouts rather than a hidden whole-turn
+deadline.
+
 Native Pi-parity execution is trusted by default. Approval tiers, persistent
 policy files, and sandbox permission UX are deferred until the core loop and
 TUI are stable.

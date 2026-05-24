@@ -36,6 +36,9 @@ func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
 	if _, ok := properties["command"]; !ok {
 		t.Fatalf("default bash spec missing command: %#v", properties)
 	}
+	if _, ok := properties["timeout"]; !ok {
+		t.Fatalf("default bash spec missing timeout: %#v", properties)
+	}
 	required, ok := params["required"].([]string)
 	if !ok {
 		t.Fatalf("bash spec required = %T, want []string", params["required"])
@@ -94,6 +97,20 @@ func TestBashExecuteDoesNotWaitForDetachedChildHoldingStdout(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(tmpDir, "survived")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("detached child marker stat err = %v, want not exist", err)
+	}
+}
+
+func TestBashTimeoutKillsProcessGroup(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := NewBash(tmpDir)
+
+	start := time.Now()
+	_, err := b.Execute(t.Context(), `{"command":"sleep 10 & wait","timeout":0.1}`)
+	if err == nil || !strings.Contains(err.Error(), "timeout after") {
+		t.Fatalf("timeout error = %v, want timeout after", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("timed-out command took %s, want prompt process-group cleanup", elapsed)
 	}
 }
 

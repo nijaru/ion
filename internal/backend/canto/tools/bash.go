@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"time"
 
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
@@ -41,6 +42,10 @@ func (b *Bash) Spec() llm.Spec {
 		"command": map[string]any{
 			"type":        "string",
 			"description": "The command to execute (e.g. 'ls -la', 'go test ./...', 'git status')",
+		},
+		"timeout": map[string]any{
+			"type":        "number",
+			"description": "Timeout in seconds (optional, no default timeout).",
 		},
 	}
 
@@ -106,19 +111,36 @@ func (b *Bash) execute(
 	if err != nil {
 		return "", err
 	}
-	return b.executor.Run(ctx, localCommand{
+
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if input.Timeout > 0 {
+		timeout := time.Duration(input.Timeout * float64(time.Second))
+		if timeout <= 0 {
+			return "", fmt.Errorf("timeout is too large")
+		}
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	result, err := b.executor.Run(runCtx, localCommand{
 		CWD:     b.cwd,
 		Command: input.Command,
 		Emit:    emit,
 	})
+	if input.Timeout > 0 && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return result, fmt.Errorf("timeout after %.3g seconds", input.Timeout)
+	}
+	return result, err
 }
 
 type bashInput struct {
-	Command    string `json:"command"`
-	Action     string `json:"action"`
-	Background bool   `json:"background"`
-	JobID      string `json:"job_id"`
-	TailLines  int    `json:"tail_lines"`
+	Command    string  `json:"command"`
+	Timeout    float64 `json:"timeout"`
+	Action     string  `json:"action"`
+	Background bool    `json:"background"`
+	JobID      string  `json:"job_id"`
+	TailLines  int     `json:"tail_lines"`
 }
 
 func parseBashInput(args string) (bashInput, error) {
