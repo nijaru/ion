@@ -272,6 +272,17 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "Complete" 60
   assert_visible_separator_line_count 2
 
+  start_smoke_ion "files"
+  send_line "exercise first-minutes file tools"
+  wait_contains "Read(ai/STATUS.md)" 30
+  wait_contains "Find(ai/*.md)" 30
+  wait_contains "Search(needle)" 30
+  wait_contains "List(ai)" 30
+  wait_contains "Write(notes/todo.md)" 30
+  wait_contains "Edit(src/main.go)" 30
+  wait_contains "file tools done" 30
+  assert_visible_separator_line_count_at_most 2
+
   start_smoke_ion "cancel"
   send_line "run cancel matrix"
   wait_contains "[smoke] waiting for cancel" 30

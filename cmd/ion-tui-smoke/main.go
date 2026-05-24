@@ -22,7 +22,11 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "complete", "smoke script mode: complete, cancel, or error")
+	mode := flag.String(
+		"mode",
+		"complete",
+		"smoke script mode: complete, files, cancel, or error",
+	)
 	storeRoot := flag.String("store", "", "session store directory")
 	sessionID := flag.String("session-id", "", "session id to open or resume")
 	resume := flag.Bool("resume", false, "resume an existing smoke session")
@@ -281,6 +285,8 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 			return
 		}
 		b.emit(ctx, session.Error{Err: fmt.Errorf("smoke provider failure")})
+	case "files":
+		b.runFileToolScript(ctx, input)
 	default:
 		b.emit(ctx, session.UserMessage{Message: input})
 		b.emit(ctx, session.TurnStarted{})
@@ -318,6 +324,78 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		b.emit(ctx, session.AgentMessage{Message: "done"})
 		b.emit(ctx, session.TurnFinished{})
 	}
+}
+
+func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStarted{})
+	b.emit(ctx, session.StatusChanged{Status: "[smoke] file tool rows"})
+	if !b.sleep(ctx, 200*time.Millisecond) {
+		return
+	}
+	tools := []struct {
+		id     string
+		name   string
+		args   string
+		result string
+	}{
+		{
+			id:     "read-1",
+			name:   "read",
+			args:   `{"path":"ai/STATUS.md"}`,
+			result: "phase: p1\nfocus: smoke\n",
+		},
+		{
+			id:     "find-1",
+			name:   "find",
+			args:   `{"pattern":"ai/*.md"}`,
+			result: "ai/STATUS.md\nai/PLAN.md\n",
+		},
+		{
+			id:     "grep-1",
+			name:   "grep",
+			args:   `{"pattern":"needle","path":"ai"}`,
+			result: "ai/STATUS.md:2:needle path\n",
+		},
+		{
+			id:     "ls-1",
+			name:   "ls",
+			args:   `{"path":"ai"}`,
+			result: "STATUS.md\nPLAN.md\n",
+		},
+		{
+			id:     "write-1",
+			name:   "write",
+			args:   `{"path":"notes/todo.md"}`,
+			result: "Wrote notes/todo.md.\n",
+		},
+		{
+			id:     "edit-1",
+			name:   "edit",
+			args:   `{"path":"src/main.go"}`,
+			result: "Applied 1 edit(s).\n- old\n+ new\n",
+		},
+	}
+	for _, tool := range tools {
+		b.emit(ctx, session.ToolCallStarted{
+			ToolUseID: tool.id,
+			ToolName:  tool.name,
+			Args:      tool.args,
+		})
+		if !b.sleep(ctx, 150*time.Millisecond) {
+			return
+		}
+		b.emit(ctx, session.ToolResult{
+			ToolUseID: tool.id,
+			ToolName:  tool.name,
+			Result:    tool.result,
+		})
+		if !b.sleep(ctx, 100*time.Millisecond) {
+			return
+		}
+	}
+	b.emit(ctx, session.AgentMessage{Message: "file tools done"})
+	b.emit(ctx, session.TurnFinished{})
 }
 
 func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
