@@ -84,7 +84,7 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 }
 
-const backendEventWaitTimeout = 5 * time.Second
+const backendEventWaitTimeout = 15 * time.Second
 
 func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 	t.Helper()

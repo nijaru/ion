@@ -32,14 +32,7 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
-		llm.Message{Role: llm.RoleUser, Content: "recent question"},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	oldFactory := providerFactory
 	provider := &compactProvider{id: "openai"}
@@ -134,13 +127,7 @@ func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("alpha old context ", 40)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta old answer ", 40)},
-		llm.Message{Role: llm.RoleUser, Content: "recent question"},
-		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	compactProvider := &compactProvider{id: "openai"}
 	followUpProvider := ctesting.NewFauxProvider(
@@ -359,14 +346,7 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
-		llm.Message{Role: llm.RoleUser, Content: "recent question"},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	provider := &overflowRecoveryProvider{
 		FauxProvider: ctesting.NewFauxProvider(
@@ -477,6 +457,27 @@ func requestContains(req *llm.Request, needle string) bool {
 	return false
 }
 
+func appendCompactionReadyHistory(
+	t *testing.T,
+	ctx context.Context,
+	store storage.Store,
+	sessionID string,
+) {
+	t.Helper()
+
+	appendCantoHistory(
+		t, ctx, store, sessionID,
+		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("alpha old context ", 40)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha old answer ", 40)},
+		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("beta middle context ", 30)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta middle answer ", 30)},
+		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("gamma middle context ", 30)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma middle answer ", 30)},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+	)
+}
+
 func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -494,14 +495,7 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
-		llm.Message{Role: llm.RoleUser, Content: "recent question"},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	provider := &fixedCountProvider{
 		FauxProvider: ctesting.NewFauxProvider(
@@ -599,14 +593,7 @@ func TestSubmitTurnProactiveCompactionUsesTurnRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
-		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
-		llm.Message{Role: llm.RoleUser, Content: "recent question"},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	provider := &blockingFirstCountProvider{
 		FauxProvider: ctesting.NewFauxProvider(
@@ -679,10 +666,7 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(
-		t, ctx, store, storageSession.ID(),
-		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
-	)
+	appendCompactionReadyHistory(t, ctx, store, storageSession.ID())
 
 	provider := &fixedCountProvider{
 		FauxProvider: ctesting.NewFauxProvider(
