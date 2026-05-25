@@ -36,7 +36,7 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 
 func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) {
 	m.progressReducer().completeCompaction()
-	cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
+	cmds := []tea.Cmd{m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice})}
 	if queued := m.turnReducer().popQueuedTurn(); queued != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{text: queued, rearmSessionEvents: false}
@@ -46,7 +46,7 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 }
 
 func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
-	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+	return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice})
 }
 
 func loadSessionUsageCmd(generation uint64, sess storage.Session) tea.Cmd {

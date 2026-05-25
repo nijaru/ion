@@ -9,26 +9,26 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func TestTranscriptReducerMarksPrintedTranscript(t *testing.T) {
+func TestTerminalCommitMarksPrintedTranscript(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
 
-	model.transcriptReducer().markPrinted()
+	model.terminalCommit().MarkPrinted()
 
 	if !model.App.PrintedTranscript {
 		t.Fatal("printed transcript was not marked")
 	}
 }
 
-func TestPrintEntriesAndRuntimeReplayUseTranscriptReducer(t *testing.T) {
+func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
 
-	if cmd := model.printEntries(session.Entry{Role: session.System, Content: "notice"}); cmd == nil {
-		t.Fatal("printEntries returned nil command")
+	if cmd := model.terminalCommit().Entries(session.Entry{Role: session.System, Content: "notice"}); cmd == nil {
+		t.Fatal("terminal entries commit returned nil command")
 	}
 	if !model.App.PrintedTranscript {
-		t.Fatal("printEntries did not mark transcript printed")
+		t.Fatal("terminal entries commit did not mark transcript printed")
 	}
 
 	model.App.PrintedTranscript = false

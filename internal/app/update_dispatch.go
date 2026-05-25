@@ -89,8 +89,8 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleLocalEntries(msg)
 		return next, cmd, true
 
-	case deferredPrintLinesMsg:
-		return m, printLinesCmd(msg.lines...), true
+	case terminalCommitLinesMsg:
+		return m, terminalCommitFlushCmd(msg.lines...), true
 	}
 
 	return m, nil, false

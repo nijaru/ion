@@ -246,23 +246,22 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 5)
 	if len(msg.printLines) > 0 {
-		m.transcriptReducer().markPrinted()
-		cmds = append(cmds, printLinesCmd(msg.printLines...))
+		cmds = append(cmds, m.terminalCommit().Lines(msg.printLines...))
 	}
 	if len(msg.replayEntries) > 0 {
-		cmds = append(cmds, m.printEntries(msg.replayEntries...))
+		cmds = append(cmds, m.terminalCommit().Entries(msg.replayEntries...))
 	}
 	if strings.TrimSpace(msg.notice) != "" {
 		cmds = append(
 			cmds,
-			m.printEntries(session.Entry{Role: session.System, Content: msg.notice}),
+			m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice}),
 		)
 	}
 	status := msg.runtime.Transition.Snapshot.Status
 	if msg.showStatus && strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		cmds = append(
 			cmds,
-			m.printEntries(session.Entry{Role: session.System, Content: status}),
+			m.terminalCommit().Entries(session.Entry{Role: session.System, Content: status}),
 		)
 	}
 	if msg.runtime.Handles.Storage != nil {

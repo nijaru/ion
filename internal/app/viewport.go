@@ -280,7 +280,7 @@ func (m Model) verbosity(kind string) string {
 	return "full"
 }
 
-// renderEntry formats a completed entry for tea.Printf scrollback commit.
+// renderEntry formats a completed entry for the terminal commit boundary.
 func (m Model) renderEntry(e session.Entry) string {
 	thinkingVerbosity := m.verbosity("thinking")
 	toolVerbosity := m.verbosity("tool")

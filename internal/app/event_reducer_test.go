@@ -190,7 +190,7 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 		t.Fatalf("expected pending entry to be cleared")
 	}
 	if cmd == nil {
-		t.Fatalf("expected tea.Println command for tool result")
+		t.Fatalf("expected terminal commit command for tool result")
 	}
 	if model.Progress.Mode != stateIonizing {
 		t.Fatalf("progress mode = %v, want ionizing after tool completion", model.Progress.Mode)

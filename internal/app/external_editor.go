@@ -23,7 +23,7 @@ var (
 
 func (m Model) openExternalEditor() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
-		return m, m.printEntries(session.Entry{
+		return m, m.terminalCommit().Entries(session.Entry{
 			Role:    session.System,
 			Content: m.localCommandBusyMessage("opening the external editor"),
 		})
@@ -60,7 +60,7 @@ func openExternalEditorCmd(content string) tea.Cmd {
 
 func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
-		return m, m.printEntries(session.Entry{
+		return m, m.terminalCommit().Entries(session.Entry{
 			Role:    session.System,
 			Content: "Editor failed: " + msg.err.Error(),
 		})

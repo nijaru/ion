@@ -95,7 +95,7 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	if err != nil {
 		return m, runtimeTransitionErrorCmd(err)
 	}
-	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+	return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice})
 }
 
 func settingsConfigUpdate(

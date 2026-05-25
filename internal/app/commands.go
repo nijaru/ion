@@ -35,7 +35,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	switch command {
 	case "/help":
-		return m, m.printHelp(helpText())
+		return m, m.terminalCommit().Help(helpText())
 
 	case "/primary":
 		if len(fields) != 1 {
@@ -162,7 +162,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError("tool summary unavailable for this backend")
 		}
 		surface := summarizer.ToolSurface()
-		return m, m.printEntries(
+		return m, m.terminalCommit().Entries(
 			session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)},
 		)
 
@@ -170,7 +170,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if len(fields) != 1 {
 			return m, cmdError("usage: /status")
 		}
-		return m, m.printEntries(
+		return m, m.terminalCommit().Entries(
 			session.Entry{Role: session.System, Content: runtimeStatusSummary(m)},
 		)
 
@@ -184,7 +184,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
 		}
-		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
+		return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: out})
 
 	case "/new", "/clear":
 		cfg, err := m.commandConfig()
@@ -236,7 +236,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	case "/compact":
 		if m.Model.Storage != nil && !storage.IsMaterialized(m.Model.Storage) {
-			return m, m.printEntries(session.Entry{
+			return m, m.terminalCommit().Entries(session.Entry{
 				Role:    session.System,
 				Content: "No active session to compact yet",
 			})

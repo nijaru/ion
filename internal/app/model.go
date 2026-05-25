@@ -161,7 +161,7 @@ type localEntriesMsg struct {
 	entries []session.Entry
 }
 
-type deferredPrintLinesMsg struct {
+type terminalCommitLinesMsg struct {
 	lines []string
 }
 

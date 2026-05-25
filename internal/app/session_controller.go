@@ -158,7 +158,7 @@ func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 
 func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
-		return m, m.printEntries(session.Entry{
+		return m, m.terminalCommit().Entries(session.Entry{
 			Role:    session.System,
 			Content: "Steering current turn",
 		})
@@ -200,7 +200,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 			queued = append(queued, msg.text)
 		}
 		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+		return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 	}
 	return m.queueBusyInputLocal(msg.text)
 }
@@ -208,7 +208,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().queueTurn(text)
 	m.resetComposerDraft()
-	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+	return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
@@ -243,7 +243,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	m.turnReducer().cancelActiveTurn()
 	entry := session.Entry{Role: session.System, Content: reason}
 	return m, sequenceCmds(
-		m.printEntries(entry),
+		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist cancellation", storage.System{
 			Type:    "system",
 			Content: entry.Content,
@@ -421,7 +421,7 @@ func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
 		Timestamp: msg.Timestamp,
 		Content:   msg.Message,
 	}
-	return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
@@ -430,7 +430,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.printEntries(entry))
+	cmds = append(cmds, m.terminalCommit().Entries(entry))
 	cmds = append(cmds, m.persistEntryCmd("persist stream close error", storage.System{
 		Type:    "system",
 		Content: entry.Content,
@@ -454,7 +454,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.turnReducer().failTurn(displayErr, time.Now())
 	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
-	printErr := m.printEntries(entry)
+	printErr := m.terminalCommit().Entries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
 	if awaitTerminal {
 		cmds = append(cmds, m.persistEntryCmd("persist session error", storage.System{
@@ -476,7 +476,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 		m.progressReducer().clearLocalBusyStatus()
 	}
 	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
-	return m, m.printEntries(entry)
+	return m, m.terminalCommit().Entries(entry)
 }
 
 func isLocalBusyStatus(status string) bool {
@@ -546,7 +546,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 			}))
 			cmds = append([]tea.Cmd{
 				tea.Batch(
-					m.printEntries(entry),
+					m.terminalCommit().Entries(entry),
 					cancelTurnCmd(m.Model.Session),
 				),
 			}, cmds...)
@@ -569,10 +569,10 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 
 	assistant, assistantCompleted, printAssistant := m.turnReducer().finishPendingAssistant()
 	if printAssistant {
-		cmds = append(cmds, m.printEntries(assistant))
+		cmds = append(cmds, m.terminalCommit().Entries(assistant))
 	}
 	if entry, ok := m.turnReducer().finishTurnMode(assistantCompleted); ok {
-		cmds = append(cmds, m.printEntries(entry))
+		cmds = append(cmds, m.terminalCommit().Entries(entry))
 	}
 	m.turnReducer().recordFinishedTurnSummary(time.Now())
 
@@ -602,7 +602,7 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 		return m.handleSubagentMessage(msg)
 	}
 	if entry, ok := m.turnReducer().commitAgentMessage(msg); ok {
-		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 	}
 	return m, m.awaitSessionEvent()
 }
@@ -627,7 +627,7 @@ func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
 		toolUseID = m.Progress.LastToolUseID
 	}
 	if entry, ok := m.turnReducer().completeToolResult(toolUseID, msg); ok {
-		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 	}
 	return m, m.awaitSessionEvent()
 }

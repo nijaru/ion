@@ -59,7 +59,7 @@ func (m Model) beginRuntimeTransitionCommit(
 		if err != nil {
 			return m, runtimeTransitionErrorCmd(err)
 		}
-		return m, m.printEntries(notice)
+		return m, m.terminalCommit().Entries(notice)
 	}
 	m.Model.RuntimeSwitchRequest++
 	switchID := m.Model.RuntimeSwitchRequest
@@ -90,7 +90,7 @@ func (m Model) handleRuntimeTransitionCommitted(
 	transition := msg.transition.WithHandles(m.runtimeHandles())
 	m.applyRuntimeSnapshot(transition.Snapshot)
 	m.clearProgressError()
-	return m, m.printEntries(msg.notice)
+	return m, m.terminalCommit().Entries(msg.notice)
 }
 
 func (m Model) providerSelection(

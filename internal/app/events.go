@@ -88,7 +88,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "?":
 		if strings.TrimSpace(m.Input.Composer.Value()) == "" {
 			m.clearPendingAction()
-			return m, m.printHelp(helpText())
+			return m, m.terminalCommit().Help(helpText())
 		}
 
 	case "esc":

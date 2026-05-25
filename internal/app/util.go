@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/session"
 )
 
 func ifthen[T any](cond bool, a, b T) T {
@@ -22,48 +21,6 @@ func ifthen[T any](cond bool, a, b T) T {
 
 func now() int64 { return time.Now().Unix() }
 
-const (
-	printSubmitHoldThreshold = 12
-	printSubmitHoldBase      = 150 * time.Millisecond
-	printSubmitHoldPerLine   = 15 * time.Millisecond
-	printSubmitHoldMax       = 1 * time.Second
-	printFrameSettleDelay    = 16 * time.Millisecond
-)
-
-func printLinesCmd(lines ...string) tea.Cmd {
-	body := formatPrintLines(lines...)
-	if body == "" {
-		return nil
-	}
-	return tea.Printf("%s", body)
-}
-
-func formatPrintLines(lines ...string) string {
-	filtered := make([]string, 0, physicalLineCount(lines))
-	for _, line := range lines {
-		filtered = append(filtered, strings.Split(line, "\n")...)
-	}
-	for len(filtered) > 0 && filtered[len(filtered)-1] == "" {
-		filtered = filtered[:len(filtered)-1]
-	}
-	if len(filtered) == 0 {
-		return ""
-	}
-	for i, line := range filtered {
-		if line == "" {
-			filtered[i] = "\x1b[0m"
-		}
-	}
-	return strings.Join(filtered, "\n")
-}
-
-func deferredPrintLinesCmd(lines ...string) tea.Cmd {
-	copied := append([]string(nil), lines...)
-	return tea.Tick(printFrameSettleDelay, func(time.Time) tea.Msg {
-		return deferredPrintLinesMsg{lines: copied}
-	})
-}
-
 // clearVisibleScreenCmd clears the visible inline frame after terminal width
 // shrink, then asks Bubble Tea's renderer to discard its old frame. The raw
 // clear handles rows already reflowed by the terminal; ClearScreen keeps the
@@ -73,81 +30,6 @@ func clearVisibleScreenCmd() tea.Cmd {
 		tea.Raw(ansi.CursorHomePosition+ansi.EraseEntireScreen),
 		tea.ClearScreen,
 	)
-}
-
-func (m Model) RenderEntries(entries ...session.Entry) []string {
-	lines := make([]string, 0, len(entries)*2)
-	for _, entry := range entries {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, m.renderEntry(entry))
-	}
-	return lines
-}
-
-func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
-	if len(entries) == 0 {
-		return nil
-	}
-	lines := make([]string, 0, len(entries))
-	m.transcriptReducer().markPrinted()
-	lines = append(lines, m.RenderEntries(entries...)...)
-	physicalLines := physicalLineCount(lines)
-	m.holdEnterForLargePrint(physicalLines)
-	return deferredPrintLinesCmd(lines...)
-}
-
-func (m *Model) printHelp(content string) tea.Cmd {
-	content = strings.TrimRight(content, "\n")
-	if content == "" {
-		return nil
-	}
-	lines := make([]string, 0, strings.Count(content, "\n")+1)
-	m.transcriptReducer().markPrinted()
-	for i, line := range strings.Split(content, "\n") {
-		lines = append(lines, m.renderHelpLine(i, line))
-	}
-	physicalLines := physicalLineCount(lines)
-	m.holdEnterForLargePrint(physicalLines)
-	return printLinesCmd(lines...)
-}
-
-func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
-	return m, m.printEntries(msg.entries...)
-}
-
-func physicalLineCount(lines []string) int {
-	count := 0
-	for _, line := range lines {
-		count += strings.Count(line, "\n") + 1
-	}
-	return count
-}
-
-func (m *Model) holdEnterForLargePrint(lines int) {
-	if lines < printSubmitHoldThreshold {
-		return
-	}
-	delay := printSubmitHoldBase + time.Duration(lines)*printSubmitHoldPerLine
-	if delay > printSubmitHoldMax {
-		delay = printSubmitHoldMax
-	}
-	m.inputReducer().holdEnter(delay)
-}
-
-func (m Model) printHoldActive() bool {
-	return time.Now().Before(m.Input.PrintHoldUntil)
-}
-
-func (m Model) scheduleDeferredEnter() tea.Cmd {
-	delay := time.Until(m.Input.PrintHoldUntil)
-	if delay < 10*time.Millisecond {
-		delay = 10 * time.Millisecond
-	}
-	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return deferredEnterMsg{}
-	})
 }
 
 func (m Model) renderHelpLine(index int, line string) string {
