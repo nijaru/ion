@@ -1836,7 +1836,7 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	}
 }
 
-func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T) {
+func TestRunTurnReportsMissingTerminalRunEvent(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	if !b.acceptTurn(turnID, "fake-canto-turn") {
@@ -1853,9 +1853,15 @@ func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T)
 		&fakeCantoTurn{events: events},
 	)
 
+	errEvent := waitForSessionError(t, b.Session().Events())
+	if errEvent.Err == nil ||
+		!strings.Contains(errEvent.Err.Error(), "closed without terminal run event") {
+		t.Fatalf("error = %v, want missing terminal run event", errEvent.Err)
+	}
+	waitForTurnFinished(t, b.Session().Events())
 	assertNoBackendEvent(t, b)
 	if b.turn.active {
-		t.Fatal("turn remained active after Canto settlement")
+		t.Fatal("turn remained active after missing terminal event")
 	}
 }
 

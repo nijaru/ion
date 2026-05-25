@@ -222,12 +222,11 @@ func (b *Backend) runTurn(
 		}
 	}
 	_, err := turn.Result()
-	if err != nil && !terminal && b.acceptsTurnEvent(turnID) {
+	if !terminal && b.acceptsTurnEvent(turnID) {
+		if err == nil {
+			err = fmt.Errorf("canto turn %s closed without terminal run event", turn.ID())
+		}
 		b.finishTurnWithError(turnID, err)
-		return
-	}
-	if err == nil && !terminal && b.acceptsTurnEvent(turnID) {
-		b.emitTurnTerminal(turnID, ionsession.BaseNow())
 		return
 	}
 	if session == nil && terminal && b.acceptsTurnEvent(turnID) {
