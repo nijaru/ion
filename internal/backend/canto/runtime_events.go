@@ -76,15 +76,7 @@ func (b *Backend) translateHarnessEventPayload(
 			HadPendingMutations: payload.HadPendingMutations,
 		}
 	case cantofw.SettledPayload:
-		return b.emitTurnSettled(event.TurnID, base)
-	}
-	return false
-}
-
-func (b *Backend) emitTurnSettled(cantoTurnID string, base ionsession.Base) bool {
-	if !b.finishTurnByCantoID(cantoTurnID) {
 		return false
 	}
-	b.events <- ionsession.TurnFinished{Base: base}
-	return true
+	return false
 }

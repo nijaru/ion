@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	cantofw "github.com/nijaru/canto"
@@ -35,7 +36,7 @@ func TestTranslateHarnessEventEmitsSavePoint(t *testing.T) {
 	}
 }
 
-func TestTranslateHarnessEventSettledWaitsForTerminalRunState(t *testing.T) {
+func TestTranslateHarnessEventSettledDoesNotFinishActiveTurn(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	if !b.acceptTurn(turnID, "turn-1") {
@@ -49,33 +50,25 @@ func TestTranslateHarnessEventSettledWaitsForTerminalRunState(t *testing.T) {
 
 	assertNoBackendEvent(t, b)
 	if !b.isActiveTurn(turnID) {
-		t.Fatal("settled event finished turn before terminal run state")
+		t.Fatal("settled event finished turn before final run payload")
 	}
 
 	terminal := b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		TurnID: "turn-1",
-		Payload: cantofw.RunSessionPayload{Event: csession.NewTurnCompletedEvent(
-			"session-id",
-			csession.TurnCompletedData{},
-		)},
-		Lifecycle: &cantofw.RunLifecycle{
-			Type:     cantofw.RunLifecycleTurn,
-			Status:   cantofw.RunLifecycleCompleted,
-			Terminal: true,
-		},
+		TurnID:  "turn-1",
+		Payload: cantofw.RunResultPayload{},
 	}, turnID)
 	if !terminal {
-		t.Fatal("terminal lifecycle was not recognized")
+		t.Fatal("final run payload was not recognized")
 	}
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
-		t.Fatal("terminal run state after settlement did not emit TurnFinished")
+		t.Fatal("final run payload after settlement did not emit TurnFinished")
 	}
 	if b.isActiveTurn(turnID) {
-		t.Fatal("turn remained active after terminal settlement")
+		t.Fatal("turn remained active after final run payload")
 	}
 }
 
-func TestRunTerminalWaitsForHarnessSettled(t *testing.T) {
+func TestRunLifecycleTurnDoesNotFinishBeforeFinalResult(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	if !b.acceptTurn(turnID, "turn-1") {
@@ -94,24 +87,36 @@ func TestRunTerminalWaitsForHarnessSettled(t *testing.T) {
 			Terminal: true,
 		},
 	}, turnID)
-	if !terminal {
-		t.Fatal("terminal lifecycle was not recognized")
+	if terminal {
+		t.Fatal("durable turn lifecycle claimed final run")
 	}
 	assertNoBackendEvent(t, b)
 	if !b.isActiveTurn(turnID) {
-		t.Fatal("turn finished before harness settled event")
+		t.Fatal("turn finished before final run payload")
 	}
 
 	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
+	assertNoBackendEvent(t, b)
+	if !b.isActiveTurn(turnID) {
+		t.Fatal("settled event finished turn before final run payload")
+	}
+
+	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.RunResultPayload{},
+	}, turnID)
+	if !terminal {
+		t.Fatal("final run result was not recognized")
+	}
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
-		t.Fatal("settled event did not emit TurnFinished")
+		t.Fatal("final run result did not emit TurnFinished")
 	}
 }
 
-func TestRunTerminalErrorWaitsForHarnessSettled(t *testing.T) {
+func TestRunLifecycleTurnErrorWaitsForFinalRunError(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	if !b.acceptTurn(turnID, "turn-1") {
@@ -131,32 +136,37 @@ func TestRunTerminalErrorWaitsForHarnessSettled(t *testing.T) {
 			Terminal: true,
 		},
 	}, turnID)
-	if !terminal {
-		t.Fatal("terminal lifecycle was not recognized")
-	}
-	errEvent, ok := receiveEvent(t, b.Session().Events()).(ionsession.Error)
-	if !ok {
-		t.Fatalf("event = %T, want Error", errEvent)
+	if terminal {
+		t.Fatal("durable turn error lifecycle claimed final run")
 	}
 	assertNoBackendEvent(t, b)
 	if !b.isActiveTurn(turnID) {
-		t.Fatal("turn finished before harness settled event")
+		t.Fatal("turn finished before final run error")
 	}
-	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
-		TurnID:  "turn-1",
-		Payload: cantofw.RunErrorPayload{Err: errEvent.Err},
-	}, turnID)
-	if !terminal {
-		t.Fatal("terminal run error was not recognized")
-	}
-	assertNoBackendEvent(t, b)
 
 	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
+	assertNoBackendEvent(t, b)
+
+	err := errors.New("provider failed")
+	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.RunErrorPayload{Err: err},
+	}, turnID)
+	if !terminal {
+		t.Fatal("terminal run error was not recognized")
+	}
+	errEvent, ok := receiveEvent(t, b.Session().Events()).(ionsession.Error)
+	if !ok {
+		t.Fatalf("event = %T, want Error", errEvent)
+	}
+	if !errors.Is(errEvent.Err, err) {
+		t.Fatalf("error = %v, want %v", errEvent.Err, err)
+	}
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
-		t.Fatal("settled event did not emit TurnFinished")
+		t.Fatal("terminal run error did not emit TurnFinished")
 	}
 }
 

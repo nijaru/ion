@@ -136,7 +136,7 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	assertNoBackendEvent(t, b)
 }
 
-func TestTranslateEventsActiveTurnWaitsForSettledEvent(t *testing.T) {
+func TestTranslateEventsActiveTurnCompletedDoesNotClaimFinalPayload(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
 	if !b.acceptTurn(turnID, "turn-1") {
@@ -150,7 +150,7 @@ func TestTranslateEventsActiveTurnWaitsForSettledEvent(t *testing.T) {
 	translateSessionEvents(t.Context(), b, events, turnID)
 
 	if !b.turn.active {
-		t.Fatal("turn finished before settled event")
+		t.Fatal("turn finished before final run payload")
 	}
 	assertNoBackendEvent(t, b)
 }
@@ -522,6 +522,11 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
+	assertNoBackendEvent(t, b)
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.RunResultPayload{},
+	}, turnID)
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("second event is not TurnFinished")
 	}
@@ -562,11 +567,6 @@ func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 	if msg.Input != 5 || msg.Output != 6 || msg.Total != 11 || msg.Cost != 0.33 {
 		t.Fatalf("terminal usage = %#v, want 5/6/11/0.33", msg)
 	}
-	assertNoBackendEvent(t, b)
-	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
-		TurnID:  "turn-1",
-		Payload: cantofw.SettledPayload{},
-	})
 	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
 		t.Fatal("second event is not TurnFinished")
 	}
@@ -804,8 +804,20 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 			Error:    "provider failed",
 		},
 	}, turnID)
+	if terminal {
+		t.Fatal("failed Canto turn lifecycle claimed the Ion turn before final payload")
+	}
+	assertNoBackendEvent(t, b)
+	if !b.isActiveTurn(turnID) {
+		t.Fatal("turn lifecycle finished before final run error")
+	}
+
+	terminal = b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.RunErrorPayload{Err: errors.New("provider failed")},
+	}, turnID)
 	if !terminal {
-		t.Fatal("failed Canto turn lifecycle did not claim the Ion turn")
+		t.Fatal("final run error did not claim the Ion turn")
 	}
 	errEvent, ok := receiveEvent(t, b.Session().Events()).(ionsession.Error)
 	if !ok {
@@ -814,10 +826,10 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	if errEvent.Err == nil || errEvent.Err.Error() != "provider failed" {
 		t.Fatalf("error = %v, want provider failed", errEvent.Err)
 	}
-	assertNoBackendEvent(t, b)
-	if !b.isActiveTurn(turnID) {
-		t.Fatal("terminal Canto lifecycle finished before harness settled event")
+	if _, ok := receiveEvent(t, b.Session().Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("final run error did not finish the Ion turn")
 	}
+	assertNoBackendEvent(t, b)
 }
 
 func TestTranslateEventsPreservesToolUseID(t *testing.T) {

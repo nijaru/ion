@@ -353,35 +353,11 @@ func (b *Backend) emitTurnErrorOnce(turnID uint64, base ionsession.Base, err err
 	if err == nil {
 		return false
 	}
-	finish := false
-	if turnID != 0 {
-		b.mu.Lock()
-		emit, settled := b.turn.markTerminalError(turnID)
-		b.mu.Unlock()
-		if !emit {
-			return false
-		}
-		finish = settled
-	}
-	b.emitTurnErrorOnly(base, err)
-	if finish {
-		b.events <- ionsession.TurnFinished{Base: base}
-	}
-	return true
+	return b.emitTurnError(turnID, base, err)
 }
 
 func (b *Backend) emitTurnTerminal(turnID uint64, base ionsession.Base) bool {
-	if turnID == 0 {
-		return b.emitTurnFinished(turnID, base)
-	}
-	b.mu.Lock()
-	finish := b.turn.markTerminal(turnID)
-	b.mu.Unlock()
-	if !finish {
-		return false
-	}
-	b.events <- ionsession.TurnFinished{Base: base}
-	return true
+	return b.emitTurnFinished(turnID, base)
 }
 
 func (b *Backend) emitTurnFinished(turnID uint64, base ionsession.Base) bool {
@@ -402,13 +378,6 @@ func (b *Backend) claimTerminalTurn(turnID uint64) bool {
 func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
 	finished := b.turn.finish(turnID)
-	b.mu.Unlock()
-	return finished
-}
-
-func (b *Backend) finishTurnByCantoID(cantoTurnID string) bool {
-	b.mu.Lock()
-	finished := b.turn.finishCanto(cantoTurnID)
 	b.mu.Unlock()
 	return finished
 }

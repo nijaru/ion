@@ -45,6 +45,9 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 		b.events <- ionsession.TurnStarted{Base: base}
 		b.events <- ionsession.StatusChanged{Base: base, Status: "Thinking..."}
 	case session.TurnCompleted:
+		if turnID != 0 {
+			return false
+		}
 		if data, ok, err := ev.TurnCompletedData(); err == nil && ok &&
 			data.Error != "" && !isCancellationTerminal(data.Error) {
 			if isContextOverflowTerminal(data.Error) {
@@ -233,6 +236,9 @@ func (b *Backend) translateRunSessionEvent(
 			break
 		}
 		b.emitRunUsage(base, lifecycle.Usage)
+		if turnID != 0 {
+			return false
+		}
 		if lifecycle.Status == cantofw.RunLifecycleFailed &&
 			!lifecycle.Canceled &&
 			!isCancellationTerminal(lifecycle.Error) {
