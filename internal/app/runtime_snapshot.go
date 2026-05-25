@@ -61,9 +61,7 @@ func (m Model) beginRuntimeTransitionCommit(
 		}
 		return m, m.terminalCommit().Entries(notice)
 	}
-	m.Model.RuntimeSwitchRequest++
-	switchID := m.Model.RuntimeSwitchRequest
-	m.progressReducer().beginLocalStatus("Saving runtime settings...")
+	switchID := m.runtimeRequest().begin("Saving runtime settings...")
 	return m, func() tea.Msg {
 		if err := t.Persist(saveRuntimeState); err != nil {
 			return runtimeTransitionCommittedMsg{switchID: switchID, err: err}
@@ -79,11 +77,9 @@ func (m Model) beginRuntimeTransitionCommit(
 func (m Model) handleRuntimeTransitionCommitted(
 	msg runtimeTransitionCommittedMsg,
 ) (Model, tea.Cmd) {
-	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+	if !m.runtimeRequest().finish(msg.switchID) {
 		return m, nil
 	}
-	m.Model.RuntimeSwitchRequest = 0
-	m.progressReducer().clearLocalBusyStatus()
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}

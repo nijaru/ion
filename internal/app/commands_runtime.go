@@ -18,9 +18,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 		return m, cmdError("session store not available")
 	}
 
-	m.Model.RuntimeSwitchRequest++
-	switchID := m.Model.RuntimeSwitchRequest
-	m.progressReducer().beginLocalStatus("Loading session...")
+	switchID := m.runtimeRequest().begin("Loading session...")
 	store := m.Model.Store
 	return m, func() tea.Msg {
 		cfg, err := m.storedSessionConfig(context.Background(), store, sessionID)
@@ -64,7 +62,7 @@ func (m Model) storedSessionConfig(
 }
 
 func (m Model) handleResumeSessionSelected(msg resumeSessionSelectedMsg) (Model, tea.Cmd) {
-	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+	if !m.runtimeRequest().matches(msg.switchID) {
 		return m, nil
 	}
 	notice := systemEntry("Resumed session " + msg.sessionID)
@@ -139,9 +137,7 @@ func (m Model) switchRuntimeCommand(
 
 	switcher := m.Model.Switcher
 	current := m.runtimeHandles()
-	m.Model.RuntimeSwitchRequest++
-	requestID := m.Model.RuntimeSwitchRequest
-	m.progressReducer().beginLocalStatus("Switching runtime...")
+	requestID := m.runtimeRequest().begin("Switching runtime...")
 
 	return m, func() tea.Msg {
 		result, err := runtimecontroller.Switch(context.Background(), runtimecontroller.SwitchInput{
@@ -177,9 +173,7 @@ func (m Model) resumeRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	current := m.runtimeHandles()
-	m.Model.RuntimeSwitchRequest++
-	switchID := m.Model.RuntimeSwitchRequest
-	m.progressReducer().beginLocalStatus("Switching runtime...")
+	switchID := m.runtimeRequest().begin("Switching runtime...")
 	return m, func() tea.Msg {
 		result, err := runtimecontroller.Resume(context.Background(), runtimecontroller.ResumeInput{
 			Switcher:   switcher,
@@ -210,7 +204,7 @@ func (m Model) resumeRuntimeCommand(
 }
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
-	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+	if !m.runtimeRequest().matches(msg.switchID) {
 		closeRuntimeHandles(msg.runtime.Handles)
 		return m, nil
 	}
@@ -221,7 +215,7 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
-	m.Model.RuntimeSwitchRequest = 0
+	m.runtimeRequest().clear()
 	m.Model.Backend = msg.runtime.Handles.Backend
 	m.Model.Session = msg.runtime.Handles.Session
 	m.Model.Storage = msg.runtime.Handles.Storage
@@ -274,10 +268,10 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 }
 
 func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.Cmd) {
-	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+	if !m.runtimeRequest().matches(msg.switchID) {
 		return m, nil
 	}
-	m.Model.RuntimeSwitchRequest = 0
+	m.runtimeRequest().clear()
 	return m.handleLocalError(msg.err)
 }
 
