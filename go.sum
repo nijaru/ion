@@ -81,8 +81,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d h1:zf4g9wK8q+c8wRLj5fvbIVSHw45t9A30LAdrv5tOvFk=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d/go.mod h1:+a9vDBa2salNkUtRNdC9qKMjlDuX6JZABlfsk0f9TvE=
-github.com/nijaru/canto v0.0.0-20260525075553-f6588a69a354 h1:zGHOOUbbb24CugOx0uo33lCuXhsY4frYIxvEvOiQJEg=
-github.com/nijaru/canto v0.0.0-20260525075553-f6588a69a354/go.mod h1:c1dnBgRNgyzKaiyCHuhP/Bogry+IxVcYLgpqCf8VvfI=
+github.com/nijaru/canto v0.0.0-20260525080312-2de902a8a6db h1:Ku6R9QZtx++BRJ7v9S8Ww4p05o9PaRRNa+UP7rowX2g=
+github.com/nijaru/canto v0.0.0-20260525080312-2de902a8a6db/go.mod h1:c1dnBgRNgyzKaiyCHuhP/Bogry+IxVcYLgpqCf8VvfI=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=
 github.com/oklog/ulid/v2 v2.1.1/go.mod h1:rcEKHmBBKfef9DhnvX7y1HZBYxjXb0cP5ExxNsTT1QQ=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
