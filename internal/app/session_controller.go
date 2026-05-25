@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -15,9 +17,299 @@ type localErrorMsg struct {
 	err error
 }
 
+// Product session control owns the Ion side of the active-turn lifecycle.
+// Key handlers and renderers should delegate here instead of making their own
+// submit, cancel, queue, or settlement decisions.
+func (m Model) submitComposer() (Model, tea.Cmd) {
+	m.clearPendingAction()
+	text := strings.TrimSpace(m.Input.Composer.Value())
+	if text == "" {
+		return m, nil
+	}
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError("Wait for the runtime switch to finish before sending input.")
+	}
+	if strings.HasPrefix(text, "/") {
+		return m.submitText(text)
+	}
+	if m.localCommandBusy() {
+		return m.submitBusyInput(text)
+	}
+
+	return m.submitText(text)
+}
+
+func (m Model) submitText(text string) (Model, tea.Cmd) {
+	// Expand any paste marker placeholders to their original content.
+	draft := text
+	text = m.expandMarkers(text)
+
+	if !strings.HasPrefix(text, "/") {
+		if status := m.configurationStatus(); status != "" {
+			return m, cmdError(status)
+		}
+		if reason := m.configuredSessionBudgetStopReason(); reason != "" {
+			return m, cmdError(reason)
+		}
+	}
+
+	if strings.HasPrefix(text, "/") {
+		historyText, historyChanged := m.appendInputHistory(text)
+		var historyCmd tea.Cmd
+		if historyChanged {
+			historyCmd = m.persistInputHistory(context.Background(), historyText)
+		}
+		m.resetComposerDraft()
+		m, cmd := m.handleCommand(text)
+		return m, sequenceCmds(cmd, historyCmd)
+	}
+
+	m.turnReducer().startSubmit()
+	m.resetComposerDraft()
+	return m, submitTurnCmd(m.Model.Session, text, draft)
+}
+
+func submitTurnCmd(sess session.AgentSession, text, draft string) tea.Cmd {
+	return func() tea.Msg {
+		if sess == nil {
+			return turnSubmitResultMsg{
+				text:  text,
+				draft: draft,
+				err:   errors.New("session unavailable"),
+			}
+		}
+		if err := sess.SubmitTurn(context.Background(), text); err != nil {
+			return turnSubmitResultMsg{text: text, draft: draft, err: err}
+		}
+		return turnSubmitResultMsg{text: text, draft: draft}
+	}
+}
+
+func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
+	m.refreshRuntimeSessionSnapshot()
+	if msg.err == nil {
+		historyText, historyChanged := m.appendInputHistory(msg.text)
+		var historyCmd tea.Cmd
+		if historyChanged {
+			historyCmd = m.persistInputHistory(context.Background(), historyText)
+		}
+		routingCmd := m.persistEntryCmd(
+			"persist routing decision",
+			m.routingDecision("use_model", "active_preset", ""),
+		)
+		if msg.rearm {
+			return m, sequenceCmds(routingCmd, historyCmd, m.awaitSessionEvent())
+		}
+		return m, sequenceCmds(routingCmd, historyCmd)
+	}
+	m.turnReducer().rejectSubmit()
+	var draftCmd tea.Cmd
+	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
+		draftCmd = m.setComposerDraft(msg.draft)
+	}
+	return m, tea.Batch(draftCmd, cmdError(sessionErrorDisplay(msg.err)))
+}
+
+func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
+	next, cmd := m.submitText(msg.text)
+	if !msg.rearmSessionEvents {
+		return next, cmd
+	}
+	if next.InFlight.Thinking {
+		if cmd == nil {
+			return next, next.awaitSessionEvent()
+		}
+		return next, rearmSubmitResultCmd(cmd)
+	}
+	return next, sequenceCmds(cmd, next.awaitSessionEvent())
+}
+
+func rearmSubmitResultCmd(submitCmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		msg := submitCmd()
+		if result, ok := msg.(turnSubmitResultMsg); ok {
+			result.rearm = true
+			return result
+		}
+		return msg
+	}
+}
+
+func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
+	if m.Model.Config != nil &&
+		m.Model.Config.BusyInputMode() == "steer" &&
+		m.InFlight.Thinking &&
+		!m.Progress.Compacting {
+		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
+			m.resetComposerDraft()
+			return m, steerTurnCmd(steering, text)
+		}
+	}
+
+	return m.queueBusyInput(text)
+}
+
+func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := steering.SteerTurn(context.Background(), text)
+		return steeringResultMsg{text: text, result: result, err: err}
+	}
+}
+
+func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: "Steering current turn",
+		})
+	}
+	return m.queueBusyInput(msg.text)
+}
+
+func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
+	if m.InFlight.Thinking && !m.Progress.Compacting {
+		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			priorFollowUpCount := len(m.InFlight.QueuedTurns)
+			m.resetComposerDraft()
+			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
+		}
+	}
+	return m.queueBusyInputLocal(text)
+}
+
+func followUpTurnCmd(
+	queued session.QueuedInputSession,
+	text string,
+	priorFollowUpCount int,
+) tea.Cmd {
+	return func() tea.Msg {
+		result, err := queued.FollowUpTurn(context.Background(), text)
+		return followUpResultMsg{
+			text:               text,
+			priorFollowUpCount: priorFollowUpCount,
+			result:             result,
+			err:                err,
+		}
+	}
+}
+
+func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil && msg.result.Outcome == session.QueuedInputAccepted {
+		queued := append([]string(nil), m.InFlight.QueuedTurns...)
+		if len(queued) <= msg.priorFollowUpCount {
+			queued = append(queued, msg.text)
+		}
+		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
+		return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+	}
+	return m.queueBusyInputLocal(msg.text)
+}
+
+func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
+	m.turnReducer().queueTurn(text)
+	m.resetComposerDraft()
+	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+}
+
+func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
+	backendOwned := m.InFlight.QueuedTurnsBackendOwned
+	queued := m.turnReducer().drainQueuedTurnsText()
+	if queued == "" {
+		return m, nil
+	}
+	current := strings.TrimSpace(m.Input.Composer.Value())
+	if current != "" {
+		queued = current + "\n" + queued
+	}
+	setDraft := m.setComposerDraft(queued)
+	if backendOwned {
+		if queuedInput, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
+		}
+	}
+	return m, setDraft
+}
+
+func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := queued.ClearQueuedInput(context.Background()); err != nil {
+			return queuedInputClearResultMsg{err: err}
+		}
+		return queuedInputClearResultMsg{}
+	}
+}
+
+func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
+	m.turnReducer().cancelActiveTurn()
+	entry := session.Entry{Role: session.System, Content: reason}
+	return m, sequenceCmds(
+		m.printEntries(entry),
+		m.persistEntryCmd("persist cancellation", storage.System{
+			Type:    "system",
+			Content: entry.Content,
+			TS:      now(),
+		}),
+		cancelTurnCmd(m.Model.Session),
+	)
+}
+
+func cancelTurnCmd(sess session.AgentSession) tea.Cmd {
+	return func() tea.Msg {
+		if sess == nil {
+			return turnCancelResultMsg{err: errors.New("session unavailable")}
+		}
+		if err := sess.CancelTurn(context.Background()); err != nil {
+			return turnCancelResultMsg{err: err}
+		}
+		return turnCancelResultMsg{}
+	}
+}
+
+func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, persistErrorCmd("cancel turn", msg.err)
+	}
+	return m, nil
+}
+
+func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
+	if !m.Input.DeferredEnter {
+		return m, nil
+	}
+	if m.printHoldActive() {
+		return m, m.scheduleDeferredEnter()
+	}
+	m.inputReducer().finishDeferredEnter()
+	return m.submitComposer()
+}
+
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
+	if m.Model.Session == nil {
+		return func() tea.Msg {
+			return sessionEventMsg{
+				generation: generation,
+				event: session.Error{
+					Base:  session.BaseNow(),
+					Err:   errors.New("session unavailable"),
+					Fatal: true,
+				},
+			}
+		}
+	}
 	events := m.Model.Session.Events()
+	if events == nil {
+		return func() tea.Msg {
+			return sessionEventMsg{
+				generation: generation,
+				event: session.Error{
+					Base:  session.BaseNow(),
+					Err:   errors.New("session event stream unavailable"),
+					Fatal: true,
+				},
+			}
+		}
+	}
 	return func() tea.Msg {
 		ev, ok := <-events
 		if !ok {

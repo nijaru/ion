@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,8 +9,6 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/nijaru/ion/internal/session"
 )
 
 func keyTextInput(msg tea.KeyPressMsg) (string, bool) {
@@ -158,129 +155,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
 	return m, m.updateComposer(msg)
-}
-
-func (m Model) submitComposer() (Model, tea.Cmd) {
-	m.clearPendingAction()
-	text := strings.TrimSpace(m.Input.Composer.Value())
-	if text == "" {
-		return m, nil
-	}
-	if m.Model.RuntimeSwitchRequest != 0 {
-		return m, cmdError("Wait for the runtime switch to finish before sending input.")
-	}
-	if strings.HasPrefix(text, "/") {
-		return m.submitText(text)
-	}
-	if m.localCommandBusy() {
-		return m.submitBusyInput(text)
-	}
-
-	return m.submitText(text)
-}
-
-func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
-	if m.Model.Config != nil &&
-		m.Model.Config.BusyInputMode() == "steer" &&
-		m.InFlight.Thinking &&
-		!m.Progress.Compacting {
-		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
-			m.resetComposerDraft()
-			return m, steerTurnCmd(steering, text)
-		}
-	}
-
-	return m.queueBusyInput(text)
-}
-
-func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
-	return func() tea.Msg {
-		result, err := steering.SteerTurn(context.Background(), text)
-		return steeringResultMsg{text: text, result: result, err: err}
-	}
-}
-
-func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
-	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
-		return m, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: "Steering current turn",
-		})
-	}
-	return m.queueBusyInput(msg.text)
-}
-
-func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
-	if m.InFlight.Thinking && !m.Progress.Compacting {
-		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
-			priorFollowUpCount := len(m.InFlight.QueuedTurns)
-			m.resetComposerDraft()
-			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
-		}
-	}
-	return m.queueBusyInputLocal(text)
-}
-
-func followUpTurnCmd(
-	queued session.QueuedInputSession,
-	text string,
-	priorFollowUpCount int,
-) tea.Cmd {
-	return func() tea.Msg {
-		result, err := queued.FollowUpTurn(context.Background(), text)
-		return followUpResultMsg{
-			text:               text,
-			priorFollowUpCount: priorFollowUpCount,
-			result:             result,
-			err:                err,
-		}
-	}
-}
-
-func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
-	if msg.err == nil && msg.result.Outcome == session.QueuedInputAccepted {
-		queued := append([]string(nil), m.InFlight.QueuedTurns...)
-		if len(queued) <= msg.priorFollowUpCount {
-			queued = append(queued, msg.text)
-		}
-		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
-	}
-	return m.queueBusyInputLocal(msg.text)
-}
-
-func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
-	m.turnReducer().queueTurn(text)
-	m.resetComposerDraft()
-	return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
-}
-
-func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	backendOwned := m.InFlight.QueuedTurnsBackendOwned
-	queued := m.turnReducer().drainQueuedTurnsText()
-	if queued == "" {
-		return m, nil
-	}
-	current := strings.TrimSpace(m.Input.Composer.Value())
-	if current != "" {
-		queued = current + "\n" + queued
-	}
-	setDraft := m.setComposerDraft(queued)
-	if backendOwned {
-		if queuedInput, ok := m.Model.Session.(session.QueuedInputSession); ok {
-			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
-		}
-	}
-	return m, setDraft
-}
-
-func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
-	return func() tea.Msg {
-		if _, err := queued.ClearQueuedInput(context.Background()); err != nil {
-			return queuedInputClearResultMsg{err: err}
-		}
-		return queuedInputClearResultMsg{}
-	}
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {

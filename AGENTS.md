@@ -40,6 +40,10 @@ the latest session.
 - When `ai/PLAN.md` selects an optimal-core redesign lane, treat scratch-design
   gaps as proactive implementation work. Do not wait for each weak ownership
   boundary to appear as a dogfood bug before replacing it.
+- During reopened P1, do not optimize for the smallest patch when a larger
+  design issue is visible. If the current shape differs materially from the
+  clean-sheet Pi-like target, rewrite or reorganize the relevant modules now
+  and make the task/tests prove the new ownership boundary.
 - P1 remains Pi-level: use Pi as the primary core control; use Codex app/CLI
   and Claude Code for P1 performance and UX lessons; keep AX, DSPy, GEPA,
   Slate, Droid, and richer multi-agent/workflow systems in Phase 2/Pi+ unless
@@ -85,8 +89,10 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
   4. make a clean Ion-local implementation when the Canto boundary is slowing
      P1, then log the re-extraction target in Canto;
   5. simplify duplicate adapters/reducers after the acceptance matrix passes.
-- Make targeted rewrites of broken modules when they remove duplicate ownership
-  or hidden state. Do not do broad churn unrelated to the task.
+- Make aggressive targeted rewrites of broken modules when they remove
+  duplicate ownership, hidden state, or architecture that has repeatedly let
+  first-minutes bugs through. The boundary is relevance to P1 correctness, not
+  line-count minimization.
 - Use `tk` for all multi-step work. Log concrete findings while they are fresh:
   files reviewed, root cause, fix, commands run, residual risk.
 - Short prompts like `proceed`, `what's next`, or `hows it look` mean: verify

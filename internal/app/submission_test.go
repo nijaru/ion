@@ -151,6 +151,62 @@ func TestSubmitTextReturnsBeforeBackendSubmitCompletes(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnCmdReportsMissingSession(t *testing.T) {
+	msg := submitTurnCmd(nil, "hello", "hello draft")()
+	result, ok := msg.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T, want turnSubmitResultMsg", msg)
+	}
+	if result.err == nil || !strings.Contains(result.err.Error(), "session unavailable") {
+		t.Fatalf("submit command error = %v, want missing-session error", result.err)
+	}
+	if result.text != "hello" || result.draft != "hello draft" {
+		t.Fatalf("submit result = %#v, want original text and draft", result)
+	}
+}
+
+func TestAwaitSessionEventReportsMissingSession(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Session = nil
+
+	msg := model.awaitSessionEvent()()
+	eventMsg, ok := msg.(sessionEventMsg)
+	if !ok {
+		t.Fatalf("await message = %T, want sessionEventMsg", msg)
+	}
+	errEvent, ok := eventMsg.event.(session.Error)
+	if !ok {
+		t.Fatalf("session event = %T, want session.Error", eventMsg.event)
+	}
+	if errEvent.Err == nil || !strings.Contains(errEvent.Err.Error(), "session unavailable") {
+		t.Fatalf("session error = %v, want missing-session error", errEvent.Err)
+	}
+	if !errEvent.Fatal {
+		t.Fatal("missing session error should be fatal")
+	}
+}
+
+func TestAwaitSessionEventReportsMissingEventStream(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Session = &stubSession{}
+
+	msg := model.awaitSessionEvent()()
+	eventMsg, ok := msg.(sessionEventMsg)
+	if !ok {
+		t.Fatalf("await message = %T, want sessionEventMsg", msg)
+	}
+	errEvent, ok := eventMsg.event.(session.Error)
+	if !ok {
+		t.Fatalf("session event = %T, want session.Error", eventMsg.event)
+	}
+	if errEvent.Err == nil || !strings.Contains(errEvent.Err.Error(), "session event stream unavailable") {
+		t.Fatalf("session error = %v, want missing-stream error", errEvent.Err)
+	}
+	if !errEvent.Fatal {
+		t.Fatal("missing event stream error should be fatal")
+	}
+}
+
 func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 	sess := &blockingSteeringSession{
 		steeringStubSession: steeringStubSession{
