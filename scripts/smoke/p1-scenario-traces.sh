@@ -48,7 +48,7 @@ run_layer cancel_and_recovery event \
 
 run_layer resume_provider_history provider \
   go test ./internal/backend/canto \
-    -run '^(TestResumedToolSessionSendsValidFollowUpHistory|TestRetryRecoveryWaitsThroughToolLoop)$' \
+    -run '^(TestResumedToolSessionSendsValidFollowUpHistory|TestProviderHistory(ExcludesIonDisplayOnlyEvents|RecoversToolContentPartsFromLifecycle)|TestRetryRecoveryWaitsThroughToolLoop)$' \
     -count=1 -timeout 180s
 
 run_layer display_model display \
@@ -62,8 +62,8 @@ run_layer timeout_surfacing timeout \
     -count=1 -timeout 180s
 
 run_layer smoke_resume_persistence persistence \
-  go test ./cmd/ion-tui-smoke \
-    -run '^TestSmokeBackendPersistsNativeTranscriptForResume$' \
+  go test ./cmd/ion-tui-smoke ./internal/storage \
+    -run '^(TestSmokeBackendPersistsNativeTranscriptForResume|TestCantoStoreDisplayReplaySharesProviderHistorySource)$' \
     -count=1 -timeout 180s
 
 run_layer real_terminal_pty pty scripts/smoke/tmux-minimal-harness.sh
