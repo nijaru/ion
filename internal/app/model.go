@@ -161,6 +161,10 @@ type localEntriesMsg struct {
 	entries []session.Entry
 }
 
+type deferredPrintLinesMsg struct {
+	lines []string
+}
+
 type gitDiffStatsMsg struct {
 	workdir string
 	stats   string

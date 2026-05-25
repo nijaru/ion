@@ -25,7 +25,7 @@ func main() {
 	mode := flag.String(
 		"mode",
 		"complete",
-		"smoke script mode: complete, controls, files, session-picker, cancel, or error",
+		"smoke script mode: complete, controls, files, markdown, session-picker, cancel, or error",
 	)
 	storeRoot := flag.String("store", "", "session store directory")
 	sessionID := flag.String("session-id", "", "session id to open or resume")
@@ -342,6 +342,8 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		b.runActiveControlsScript(ctx, input)
 	case "files":
 		b.runFileToolScript(ctx, input)
+	case "markdown":
+		b.runMarkdownScript(ctx, input)
 	default:
 		b.emit(ctx, session.UserMessage{Message: input})
 		b.emit(ctx, session.TurnStarted{})
@@ -379,6 +381,38 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		b.emit(ctx, session.AgentMessage{Message: "done"})
 		b.emit(ctx, session.TurnFinished{})
 	}
+}
+
+func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStarted{})
+	b.emit(ctx, session.StatusChanged{Status: "[smoke] markdown stream"})
+	if !b.sleep(ctx, 200*time.Millisecond) {
+		return
+	}
+	b.emit(ctx, session.AgentDelta{Delta: strings.Join([]string{
+		"Here's the summary of both status files:",
+		"",
+		"## Canto (`../canto/ai/STATUS.md`)",
+		"",
+		"**Key facts:**",
+	}, "\n")})
+	if !b.sleep(ctx, 500*time.Millisecond) {
+		return
+	}
+	b.emit(ctx, session.AgentMessage{Message: strings.Join([]string{
+		"Here's the summary of both status files:",
+		"",
+		"## Canto (`../canto/ai/STATUS.md`)",
+		"",
+		"**Key facts:**",
+		"",
+		"- The markdown stream should not be committed raw.",
+		"- A long line with a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes must still fit the shell width.",
+		"",
+		"Bottom line: formatted final output should be the only committed assistant entry.",
+	}, "\n")})
+	b.emit(ctx, session.TurnFinished{})
 }
 
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {

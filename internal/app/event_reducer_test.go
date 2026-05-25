@@ -35,9 +35,8 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 		t.Fatalf("expected pending entry to be cleared after flush")
 	}
 
-	// Verify that a Println command was returned
 	if cmd == nil {
-		t.Fatalf("expected tea.Println command after finalizing message")
+		t.Fatalf("expected deferred print command after finalizing message")
 	}
 	for _, event := range storageSess.appends {
 		if _, ok := event.(storage.Agent); ok {

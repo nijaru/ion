@@ -358,6 +358,13 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "file tools done" 30
   assert_visible_separator_line_count_at_most 2
 
+  start_smoke_ion "markdown"
+  send_line "exercise final markdown commit"
+  wait_contains "Complete" 30
+  assert_not_contains "## Canto"
+  assert_line_count_at_most "• Here's the summary of both status files:" 1
+  assert_visible_separator_line_count_at_most 2
+
   start_smoke_ion "session-picker"
   wait_contains "Resume a session" 30
   wait_contains "Resume deterministic picker" 30

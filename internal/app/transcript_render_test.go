@@ -424,7 +424,7 @@ func TestRenderPlaneBThinkingHidesReasoningByDefault(t *testing.T) {
 	}
 }
 
-func TestRenderAgentMarkdownDoesNotIndentContinuationLines(t *testing.T) {
+func TestRenderAgentMarkdownIndentsContinuationLines(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
 		Role:    session.Agent,
@@ -432,11 +432,37 @@ func TestRenderAgentMarkdownDoesNotIndentContinuationLines(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if strings.Contains(got, "\n  - first") || strings.Contains(got, "\n  - second") {
-		t.Fatalf("agent render = %q, want markdown continuation lines unindented", got)
+	if !strings.Contains(got, "\n  - first") || !strings.Contains(got, "\n  - second") {
+		t.Fatalf("agent render = %q, want markdown continuation lines aligned under agent bullet", got)
 	}
-	if !strings.Contains(got, "\n- first") || !strings.Contains(got, "\n- second") {
-		t.Fatalf("agent render = %q, want bullet lines preserved", got)
+	if strings.Contains(got, "\n- first") || strings.Contains(got, "\n- second") {
+		t.Fatalf("agent render = %q, want no unindented markdown continuation lines", got)
+	}
+}
+
+func TestRenderAgentMarkdownWrapsCompletedLinesBeforeTerminalWrap(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 40
+	entry := session.Entry{
+		Role: session.Agent,
+		Content: "This paragraph contains a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes " +
+			"and then more words.",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	for _, line := range strings.Split(got, "\n") {
+		if width := ansi.StringWidth(line); width > model.shellWidth() {
+			t.Fatalf(
+				"line width = %d, want <= %d for line %q in render:\n%s",
+				width,
+				model.shellWidth(),
+				line,
+				got,
+			)
+		}
+	}
+	if !strings.Contains(got, "\n  ") {
+		t.Fatalf("agent render = %q, want wrapped continuation row", got)
 	}
 }
 

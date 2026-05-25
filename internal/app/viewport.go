@@ -211,6 +211,54 @@ func (m Model) renderLiveAgentContent(content string) string {
 	return b.String()
 }
 
+func (m Model) renderCompletedAgentContent(rendered string) string {
+	lines := m.wrapCompletedAgentLines(rendered)
+	if len(lines) == 0 {
+		return m.st.agent.Render("• ")
+	}
+
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		prefix := "  "
+		if i == 0 {
+			prefix = "• "
+		}
+		if line == "" {
+			b.WriteString("")
+			continue
+		}
+		b.WriteString(m.st.agent.Render(prefix))
+		b.WriteString(line)
+	}
+	return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+}
+
+func (m Model) wrapCompletedAgentLines(rendered string) []string {
+	width := m.shellWidth()
+	bodyWidth := width - ansi.StringWidth("  ")
+	if width <= 0 || bodyWidth <= 0 {
+		return strings.Split(rendered, "\n")
+	}
+
+	lines := make([]string, 0, strings.Count(rendered, "\n")+1)
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.TrimSpace(ansi.Strip(line)) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		wrapped := ansi.Wrap(line, bodyWidth, " \t")
+		if wrapped == "" {
+			lines = append(lines, line)
+			continue
+		}
+		lines = append(lines, strings.Split(wrapped, "\n")...)
+	}
+	return lines
+}
+
 func (m Model) verbosity(kind string) string {
 	if m.Model.Config == nil {
 		if kind == "thinking" {
@@ -266,8 +314,10 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
 		}
-		b.WriteString(m.st.agent.Render("• "))
-		b.WriteString(rendered)
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.renderCompletedAgentContent(rendered))
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Tool:

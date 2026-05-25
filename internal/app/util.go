@@ -27,25 +27,41 @@ const (
 	printSubmitHoldBase      = 150 * time.Millisecond
 	printSubmitHoldPerLine   = 15 * time.Millisecond
 	printSubmitHoldMax       = 1 * time.Second
+	printFrameSettleDelay    = 16 * time.Millisecond
 )
 
 func printLinesCmd(lines ...string) tea.Cmd {
+	body := formatPrintLines(lines...)
+	if body == "" {
+		return nil
+	}
+	return tea.Printf("%s", body)
+}
+
+func formatPrintLines(lines ...string) string {
 	filtered := make([]string, 0, physicalLineCount(lines))
 	for _, line := range lines {
 		filtered = append(filtered, strings.Split(line, "\n")...)
 	}
-	if len(filtered) == 0 {
-		return nil
+	for len(filtered) > 0 && filtered[len(filtered)-1] == "" {
+		filtered = filtered[:len(filtered)-1]
 	}
-	if filtered[len(filtered)-1] != "" {
-		filtered = append(filtered, "")
+	if len(filtered) == 0 {
+		return ""
 	}
 	for i, line := range filtered {
 		if line == "" {
 			filtered[i] = "\x1b[0m"
 		}
 	}
-	return tea.Printf("%s", strings.Join(filtered, "\n"))
+	return strings.Join(filtered, "\n")
+}
+
+func deferredPrintLinesCmd(lines ...string) tea.Cmd {
+	copied := append([]string(nil), lines...)
+	return tea.Tick(printFrameSettleDelay, func(time.Time) tea.Msg {
+		return deferredPrintLinesMsg{lines: copied}
+	})
 }
 
 // clearVisibleScreenCmd clears the visible inline frame after terminal width
@@ -79,7 +95,7 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 	lines = append(lines, m.RenderEntries(entries...)...)
 	physicalLines := physicalLineCount(lines)
 	m.holdEnterForLargePrint(physicalLines)
-	return printLinesCmd(lines...)
+	return deferredPrintLinesCmd(lines...)
 }
 
 func (m *Model) printHelp(content string) tea.Cmd {
