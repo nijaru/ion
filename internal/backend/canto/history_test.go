@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nijaru/canto/llm"
+	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -345,6 +346,93 @@ func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 	}
 	if !requestHasMessage(req.Messages, llm.RoleAssistant, "prior assistant") {
 		t.Fatalf("provider request missing prior assistant: %#v", req.Messages)
+	}
+	if !requestHasMessage(req.Messages, llm.RoleUser, "new user") {
+		t.Fatalf("provider request missing new user: %#v", req.Messages)
+	}
+}
+
+func TestProviderHistoryRecoversToolContentPartsFromLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "read-image-call", Type: "function"}
+	call.Function.Name = "read"
+	call.Function.Arguments = `{"path":"pixel.png"}`
+	cantoStore := store.(interface{ Canto() *csession.SQLiteStore })
+	for _, ev := range []csession.Event{
+		csession.NewEvent(storageSession.ID(), csession.MessageAdded, llm.Message{
+			Role:  llm.RoleAssistant,
+			Calls: []llm.Call{call},
+		}),
+		csession.NewToolStartedEvent(storageSession.ID(), csession.ToolStartedData{
+			Tool:      "read",
+			ID:        "read-image-call",
+			Arguments: `{"path":"pixel.png"}`,
+		}),
+		csession.NewToolCompletedEvent(storageSession.ID(), csession.ToolCompletedData{
+			Tool:   "read",
+			ID:     "read-image-call",
+			Output: "Read image file [image/png]",
+			Parts: []llm.ContentPart{
+				llm.TextPart("Read image file [image/png]"),
+				llm.ImagePart("image/png", "aW1hZ2U="),
+			},
+		}),
+	} {
+		if err := cantoStore.Canto().Save(ctx, ev); err != nil {
+			t.Fatalf("append lifecycle event %s: %v", ev.Type, err)
+		}
+	}
+
+	provider := ctesting.NewFauxProvider("local-api", ctesting.Step{Content: "next"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Session().Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Session().Close() }()
+
+	if err := b.Session().SubmitTurn(ctx, "new user"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Session().Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
+	}
+	req := calls[0]
+	if !requestHasImagePart(req.Messages, "read", "image/png", "aW1hZ2U=") {
+		t.Fatalf("provider request missing recovered image part: %#v", req.Messages)
 	}
 	if !requestHasMessage(req.Messages, llm.RoleUser, "new user") {
 		t.Fatalf("provider request missing new user: %#v", req.Messages)

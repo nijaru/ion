@@ -10,8 +10,11 @@ import (
 )
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
-	projection, err := s.displayProjection(ctx)
-	return append([]ionsession.Entry(nil), projection.entries...), err
+	sess, err := s.store.canto.Load(ctx, s.id)
+	if err != nil {
+		return nil, err
+	}
+	return displayEntriesFromSession(s.meta.CWD, sess)
 }
 
 func displayEntriesFromSession(

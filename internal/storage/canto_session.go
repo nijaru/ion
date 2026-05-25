@@ -118,7 +118,7 @@ func modelVisibleAppendError(event any) error {
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
-	projection, err := s.displayProjection(ctx)
+	projection, err := s.progressProjection(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -153,7 +153,7 @@ func clearsDurableResumeStatus(eventType session.EventType) bool {
 }
 
 func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {
-	projection, err := s.displayProjection(ctx)
+	projection, err := s.progressProjection(ctx)
 	if err != nil {
 		return 0, 0, 0, err
 	}
