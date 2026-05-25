@@ -19,10 +19,10 @@ run go test ./... -count=1 -timeout 300s
 run go vet ./...
 run git diff --check
 
-phase_note "TUI tmux gate"
+phase_note "P1 layered scenario trace gate"
 run env \
   "ION_TMUX_HOME=${ION_TMUX_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/ion-phase1-home.XXXXXX")}" \
-  scripts/smoke/tmux-minimal-harness.sh
+  scripts/smoke/p1-scenario-traces.sh
 
 if [[ "${ION_PHASE1_RACE:-0}" == "1" ]]; then
   phase_note "race subset"
@@ -54,7 +54,6 @@ cat <<'EOF'
 
 Phase 1 acceptance wrapper finished.
 
-This is not a completion claim unless race and live gates were included and the
-active P1 matrix in ai/review/p1-tui-inline-scenario-matrix-2026-05-23.md is
-logged as covered.
+This is not a completion claim unless the layered scenario trace, race gate,
+and live gates were included and the active P1 matrix is logged as covered.
 EOF

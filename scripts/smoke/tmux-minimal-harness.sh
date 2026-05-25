@@ -12,6 +12,7 @@ SMOKE_HOME="${ION_TMUX_SMOKE_HOME:-$TMP_DIR/home}"
 ION_PROVIDER_SMOKE="${ION_TMUX_PROVIDER:-ollama}"
 ION_MODEL_SMOKE="${ION_TMUX_MODEL:-ion-tmux-smoke}"
 LIVE="${ION_TMUX_LIVE:-0}"
+TRACE="${ION_TMUX_TRACE:-}"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is required" >&2
@@ -143,6 +144,14 @@ assert_visible_separator_line_count() {
   fi
 }
 
+trace_pass() {
+  local scenario="$1"
+  if [[ -z "$TRACE" ]]; then
+    return
+  fi
+  printf '{"scenario":"%s","layer":"pty","status":"pass"}\n' "$scenario" >>"$TRACE"
+}
+
 wait_contains() {
   local needle="$1"
   local timeout="${2:-20}"
@@ -227,6 +236,7 @@ send_multiline_composer_smoke() {
   assert_not_contains "first linesecond line"
   tmux send-keys -t "$SESSION" C-c
   sleep 0.5
+  trace_pass "multiline_composer"
 }
 
 send_softwrap_composer_smoke() {
@@ -240,6 +250,7 @@ send_softwrap_composer_smoke() {
   sleep 0.5
   tmux resize-window -t "$SESSION" -x "$WIDTH" -y "$HEIGHT"
   sleep 0.5
+  trace_pass "resize_wrap"
 }
 
 send_visible_completion_smoke() {
@@ -249,6 +260,7 @@ send_visible_completion_smoke() {
   assert_visible_contains "choose model"
   tmux send-keys -t "$SESSION" C-c
   sleep 0.5
+  trace_pass "command_completion"
 }
 
 send_command_picker_filter_smoke() {
@@ -262,6 +274,7 @@ send_command_picker_filter_smoke() {
   sleep 0.2
   tmux send-keys -t "$SESSION" C-c
   sleep 0.5
+  trace_pass "command_picker"
 }
 
 send_deterministic_p1_tui_smoke() {
@@ -291,6 +304,8 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "ion-tmux-smoke" 60
   wait_contains "Complete" 60
   assert_visible_separator_line_count 2
+  trace_pass "submit_stream_tool"
+  trace_pass "steering"
 
   start_smoke_ion "controls"
   send_line "exercise active local controls"
@@ -319,6 +334,7 @@ send_deterministic_p1_tui_smoke() {
   tmux send-keys -t "$SESSION" Escape
   wait_contains "controls done" 30
   assert_visible_separator_line_count 2
+  trace_pass "active_runtime_controls"
 
   start_smoke_ion "controls"
   send_line "exercise active read-only commands"
@@ -331,6 +347,7 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_separator_line_count 2
   wait_contains "controls done" 30
   assert_visible_separator_line_count 2
+  trace_pass "active_read_only_commands"
 
   start_smoke_ion "controls"
   send_line "/settings busy queue"
@@ -346,6 +363,7 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_contains "› queued follow-up from queue mode"
   assert_visible_not_contains "1 queued"
   assert_visible_separator_line_count 2
+  trace_pass "queue_mode"
 
   start_smoke_ion "files"
   send_line "exercise first-minutes file tools"
@@ -357,6 +375,7 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "Edit(src/main.go)" 30
   wait_contains "file tools done" 30
   assert_visible_separator_line_count_at_most 2
+  trace_pass "file_tools"
 
   start_smoke_ion "markdown"
   send_line "exercise final markdown commit"
@@ -364,6 +383,7 @@ send_deterministic_p1_tui_smoke() {
   assert_not_contains "## Canto"
   assert_line_count_at_most "• Here's the summary of both status files:" 1
   assert_visible_separator_line_count_at_most 2
+  trace_pass "markdown_stream_commit"
 
   start_smoke_ion "session-picker"
   wait_contains "Resume a session" 30
@@ -375,6 +395,7 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_contains "Alternate deterministic branch"
   assert_visible_not_contains "Resume deterministic picker"
   assert_visible_separator_line_count_at_most 2
+  trace_pass "session_picker"
 
   start_smoke_ion "cancel"
   send_line "run cancel matrix"
@@ -384,12 +405,14 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "Canceled by user" 30
   assert_visible_contains "Canceled"
   assert_visible_separator_line_count 2
+  trace_pass "cancel"
 
   start_smoke_ion "error"
   send_line "run error matrix"
   wait_contains "Error: smoke provider failure" 30
   assert_contains "× Error"
   assert_visible_separator_line_count 2
+  trace_pass "provider_error"
 
   local resume_store="$TMP_DIR/store-resume"
   local resume_session="ion-tmux-resume-session"
@@ -407,6 +430,7 @@ send_deterministic_p1_tui_smoke() {
   assert_contains "ion-tmux-smoke"
   assert_contains "done"
   assert_visible_separator_line_count_at_most 2
+  trace_pass "resume_replay"
 }
 
 start_ion
@@ -415,6 +439,7 @@ assert_not_contains "Bash env inherited"
 assert_not_contains "Env inherit"
 assert_not_contains "Tools: 7 registered"
 assert_contains "Type a message"
+trace_pass "launch_shell"
 
 send_multiline_composer_smoke
 send_softwrap_composer_smoke
@@ -456,6 +481,7 @@ sleep 0.5
 assert_contains "Type a message"
 assert_visible_line_count_at_most "• Ready" 1
 assert_visible_separator_line_count_at_most 2
+trace_pass "idle_resize"
 
 send_deterministic_p1_tui_smoke
 
@@ -476,6 +502,7 @@ if [[ "$LIVE" == "1" ]]; then
   send_line "Reply with exactly ok-continued."
   wait_contains "• ok-continued" 90
   wait_contains "Complete" 90
+  trace_pass "live_continue"
 fi
 
 capture
