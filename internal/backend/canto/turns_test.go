@@ -1839,6 +1839,9 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 func TestRunTurnDoesNotSynthesizeTerminalEventAfterCantoSettlement(t *testing.T) {
 	b := New()
 	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "fake-canto-turn") {
+		t.Fatal("accept turn failed")
+	}
 	events := make(chan cantofw.RunEvent)
 	close(events)
 

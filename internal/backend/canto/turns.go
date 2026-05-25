@@ -304,6 +304,12 @@ func (b *Backend) translateRunEvent(
 		b.emitRunUsage(base, event.Usage)
 	case cantofw.RunSessionPayload:
 		return b.translateRunSessionEvent(ctx, event, turnID)
+	case cantofw.RunHarnessPayload:
+		if b.isCancelingTurn(turnID) && payload.Event.Kind() != cantofw.HarnessEventSettled {
+			return false
+		}
+		b.translateTurnHarnessEvent(payload.Event, runEventBase(event))
+		return false
 	case cantofw.RunRetryPayload:
 		return b.translateRunSessionEvent(ctx, event, turnID)
 	case cantofw.RunErrorPayload:

@@ -138,15 +138,16 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 
 func TestTranslateEventsActiveTurnWaitsForSettledEvent(t *testing.T) {
 	b := New()
-	b.turn.seq = 7
-	b.turn.active = true
-	b.turn.cancel = func() {}
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
 
 	events := make(chan csession.Event, 1)
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
 	close(events)
 
-	translateSessionEvents(t.Context(), b, events, 7)
+	translateSessionEvents(t.Context(), b, events, turnID)
 
 	if !b.turn.active {
 		t.Fatal("turn finished before settled event")
@@ -517,7 +518,7 @@ func TestTranslateRunSessionEventEmitsTerminalUsageDeltaBeforeFinish(t *testing.
 		t.Fatalf("terminal usage = %#v, want 3/4/7/0.25", msg)
 	}
 	assertNoBackendEvent(t, b)
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -562,7 +563,7 @@ func TestTranslateRunResultEmitsTerminalUsageDeltaBeforeFinish(t *testing.T) {
 		t.Fatalf("terminal usage = %#v, want 5/6/11/0.33", msg)
 	}
 	assertNoBackendEvent(t, b)
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -733,8 +734,10 @@ func TestTranslateRunEventProjectsRemainingActiveToolStatus(t *testing.T) {
 
 func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 	b := New()
-	b.turn.seq = 7
-	b.turn.active = true
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Payload: cantofw.RunSessionPayload{Event: csession.NewCompactionStartedEvent(
@@ -745,7 +748,7 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 			Type:   cantofw.RunLifecycleCompaction,
 			Status: cantofw.RunLifecycleStarted,
 		},
-	}, 7)
+	}, turnID)
 	status, ok := receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
 	if !ok {
 		t.Fatalf("first event = %T, want StatusChanged", status)
@@ -764,7 +767,7 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 			Status: cantofw.RunLifecycleRetrying,
 			Retry:  &cantofw.RunRetryLifecycle{Scope: "overflow_recovery"},
 		},
-	}, 7)
+	}, turnID)
 	status, ok = receiveEvent(t, b.Session().Events()).(ionsession.StatusChanged)
 	if !ok {
 		t.Fatalf("second event = %T, want StatusChanged", status)
@@ -784,7 +787,7 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 			Terminal: true,
 			Error:    "context_length_exceeded",
 		},
-	}, 7)
+	}, turnID)
 	if terminal {
 		t.Fatal("context-overflow terminal event claimed the Ion turn")
 	}
@@ -800,7 +803,7 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 			Terminal: true,
 			Error:    "provider failed",
 		},
-	}, 7)
+	}, turnID)
 	if !terminal {
 		t.Fatal("failed Canto turn lifecycle did not claim the Ion turn")
 	}
@@ -812,7 +815,7 @@ func TestTranslateRunEventProjectsCantoLifecycleStatus(t *testing.T) {
 		t.Fatalf("error = %v, want provider failed", errEvent.Err)
 	}
 	assertNoBackendEvent(t, b)
-	if !b.isActiveTurn(7) {
+	if !b.isActiveTurn(turnID) {
 		t.Fatal("terminal Canto lifecycle finished before harness settled event")
 	}
 }

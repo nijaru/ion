@@ -78,7 +78,7 @@ func (s *turnState) markTerminal(id uint64) bool {
 		return false
 	}
 	s.terminal = true
-	if !s.settled {
+	if s.accepted && !s.settled {
 		return false
 	}
 	return s.finish(s.seq)
@@ -93,7 +93,7 @@ func (s *turnState) markTerminalError(id uint64) (emitError bool, finish bool) {
 	}
 	s.terminal = true
 	s.terminalError = true
-	if s.settled {
+	if !s.accepted || s.settled {
 		return true, s.finish(s.seq)
 	}
 	return true, false

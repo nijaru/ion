@@ -14,8 +14,12 @@ import (
 
 func TestTranslateHarnessEventEmitsSavePoint(t *testing.T) {
 	b := New()
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID: "turn-1",
 		Payload: cantofw.SavePointPayload{
 			HadPendingMutations: true,
@@ -38,7 +42,7 @@ func TestTranslateHarnessEventSettledWaitsForTerminalRunState(t *testing.T) {
 		t.Fatal("accept turn failed")
 	}
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -98,7 +102,7 @@ func TestRunTerminalWaitsForHarnessSettled(t *testing.T) {
 		t.Fatal("turn finished before harness settled event")
 	}
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -147,7 +151,7 @@ func TestRunTerminalErrorWaitsForHarnessSettled(t *testing.T) {
 	}
 	assertNoBackendEvent(t, b)
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -163,7 +167,7 @@ func TestSettledBeforeTerminalErrorStillEmitsErrorThenFinished(t *testing.T) {
 		t.Fatal("accept turn failed")
 	}
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -199,7 +203,7 @@ func TestSettledBeforeCanceledRunErrorStillFinishesQuietly(t *testing.T) {
 		t.Fatal("cancel request reported inactive turn")
 	}
 
-	b.translateHarnessEvent(cantofw.HarnessEvent{
+	translateRunHarnessEventForTest(t, b, turnID, cantofw.HarnessEvent{
 		TurnID:  "turn-1",
 		Payload: cantofw.SettledPayload{},
 	})
@@ -216,6 +220,37 @@ func TestSettledBeforeCanceledRunErrorStillFinishesQuietly(t *testing.T) {
 		t.Fatal("canceled run error after settlement did not emit TurnFinished")
 	}
 	assertNoBackendEvent(t, b)
+}
+
+func TestTranslateHarnessEventIgnoresActiveTurnRuntimeEvents(t *testing.T) {
+	b := New()
+	turnID := b.turn.start(func() {})
+	if !b.acceptTurn(turnID, "turn-1") {
+		t.Fatal("accept turn failed")
+	}
+
+	b.translateHarnessEvent(cantofw.HarnessEvent{
+		TurnID:  "turn-1",
+		Payload: cantofw.SettledPayload{},
+	})
+
+	assertNoBackendEvent(t, b)
+	if !b.isActiveTurn(turnID) {
+		t.Fatal("active turn runtime event finished the turn")
+	}
+}
+
+func translateRunHarnessEventForTest(
+	t *testing.T,
+	b *Backend,
+	turnID uint64,
+	event cantofw.HarnessEvent,
+) bool {
+	t.Helper()
+	return b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		TurnID:  event.TurnID,
+		Payload: cantofw.RunHarnessPayload{Event: event},
+	}, turnID)
 }
 
 func TestSubmitTurnEmitsSavePointBeforeTurnFinished(t *testing.T) {
