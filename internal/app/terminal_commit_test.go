@@ -6,6 +6,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/nijaru/ion/internal/session"
 )
 
 func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
@@ -39,5 +43,35 @@ func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
 			strings.Contains(source, "tea.Println") {
 			t.Fatalf("%s bypasses terminal_commit.go print boundary", name)
 		}
+	}
+}
+
+func TestTerminalCommitDefersEveryScrollbackCommit(t *testing.T) {
+	model := readyModel(t)
+	commits := []struct {
+		name string
+		cmd  tea.Cmd
+	}{
+		{
+			name: "entries",
+			cmd: model.terminalCommit().Entries(
+				session.Entry{Role: session.System, Content: "notice"},
+			),
+		},
+		{name: "help", cmd: model.terminalCommit().Help("help text")},
+		{name: "lines", cmd: model.terminalCommit().Lines("line text")},
+		{name: "deferred lines", cmd: model.terminalCommit().DeferredLines("line text")},
+	}
+
+	for _, commit := range commits {
+		t.Run(commit.name, func(t *testing.T) {
+			if commit.cmd == nil {
+				t.Fatal("commit command is nil")
+			}
+			msg := commit.cmd()
+			if _, ok := msg.(terminalCommitLinesMsg); !ok {
+				t.Fatalf("commit command returned %T, want terminalCommitLinesMsg", msg)
+			}
+		})
 	}
 }

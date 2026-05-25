@@ -51,7 +51,7 @@ func (c terminalCommitController) Help(content string) tea.Cmd {
 		lines = append(lines, c.model.renderHelpLine(i, line))
 	}
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return terminalCommitFlushCmd(lines...)
+	return deferredTerminalCommitCmd(lines...)
 }
 
 func (c terminalCommitController) Lines(lines ...string) tea.Cmd {
@@ -60,16 +60,11 @@ func (c terminalCommitController) Lines(lines ...string) tea.Cmd {
 	}
 	c.MarkPrinted()
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return terminalCommitFlushCmd(lines...)
+	return deferredTerminalCommitCmd(lines...)
 }
 
 func (c terminalCommitController) DeferredLines(lines ...string) tea.Cmd {
-	if len(lines) == 0 {
-		return nil
-	}
-	c.MarkPrinted()
-	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return deferredTerminalCommitCmd(lines...)
+	return c.Lines(lines...)
 }
 
 func (m Model) RenderEntries(entries ...session.Entry) []string {
