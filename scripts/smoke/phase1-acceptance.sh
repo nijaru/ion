@@ -30,10 +30,10 @@ if [[ "${ION_PHASE1_RACE:-0}" == "1" ]]; then
     ./cmd/ion \
     ./internal/app \
     ./internal/backend/canto \
-    ./internal/backend/canto/tools \
     ./internal/config \
     ./internal/providers \
     ./internal/storage \
+    ./internal/tools \
     -count=1 -timeout 300s
 else
   phase_note "race subset skipped; set ION_PHASE1_RACE=1 for the Phase 1 exit gate"

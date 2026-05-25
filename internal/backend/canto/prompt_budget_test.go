@@ -10,7 +10,7 @@ import (
 
 	"github.com/nijaru/canto/llm"
 	ionbackend "github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/canto/tools"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 const (

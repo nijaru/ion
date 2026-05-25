@@ -13,8 +13,8 @@ import (
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionconfig "github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 func (s *Session) Open(ctx context.Context) error {
@@ -72,20 +72,19 @@ func (b *Backend) open(ctx context.Context) error {
 	}
 
 	registry := tool.NewRegistry()
-
-	registry.Register(tools.NewBashWithEnvironment(cwd, b.executorEnvironmentPolicy()))
-	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
-	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
-	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
-	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
-	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
-	registry.Register(&tools.Find{SearchTool: *tools.NewSearchTool(cwd)})
+	toolConfig := tools.CodingToolsConfig{
+		Workdir:     cwd,
+		Environment: b.executorEnvironmentPolicy(),
+	}
 	if cfg.SkillToolMode() != "off" {
 		skillsDir, err := ionconfig.DefaultSkillsDir()
 		if err != nil {
 			return fmt.Errorf("resolve skills dir: %w", err)
 		}
-		registry.Register(tools.NewReadSkill([]string{skillsDir}))
+		toolConfig.SkillDirs = []string{skillsDir}
+	}
+	if err := tools.RegisterCodingTools(registry, toolConfig); err != nil {
+		return err
 	}
 	if cfg.SubagentToolMode() == "on" {
 		personas, err := loadSubagentPersonas(cfg)

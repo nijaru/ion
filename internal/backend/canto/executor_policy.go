@@ -1,8 +1,8 @@
 package canto
 
 import (
-	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 func (b *Backend) executorEnvironmentPolicy() tools.EnvironmentPolicy {
