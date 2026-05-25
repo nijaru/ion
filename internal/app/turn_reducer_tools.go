@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 func (r turnReducer) appendToolOutput(toolUseID, delta string, snapshot bool) {
@@ -26,11 +27,8 @@ func (r turnReducer) startToolCall(
 	if r.progress.LastToolUseID == "" {
 		r.progress.LastToolUseID = session.ShortID()
 	}
-	entry := &session.Entry{
-		Role:      session.Tool,
-		Timestamp: timestamp,
-		Title:     title,
-	}
+	projected, _ := transcript.Tool(title, "", false, timestamp)
+	entry := &projected
 	if r.inFlight.PendingTools == nil {
 		r.inFlight.PendingTools = make(map[string]*session.Entry)
 	}
@@ -55,7 +53,7 @@ func (r turnReducer) completeToolResult(
 	pending.Content = msg.Result
 	pending.IsError = msg.Error != nil
 	setEntryTimestamp(pending, msg.Timestamp)
-	entry := *pending
+	entry, _ := transcript.Tool(pending.Title, pending.Content, pending.IsError, pending.Timestamp)
 	r.clearPendingTool(toolUseID, pending)
 	if len(r.inFlight.PendingTools) == 0 {
 		r.progress.Mode = stateIonizing

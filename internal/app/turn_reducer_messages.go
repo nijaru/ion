@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 func (r turnReducer) appendThinkingDelta(agentID, delta string) {
@@ -63,25 +64,22 @@ func (r turnReducer) commitAgentMessage(msg session.AgentMessage) (session.Entry
 		setEntryTimestamp(r.inFlight.Pending, msg.Timestamp)
 		entry := *r.inFlight.Pending
 		r.clearPendingAssistant()
-		if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+		entry, ok := transcript.Agent(entry.Content, entry.Reasoning, entry.Timestamp)
+		if !ok {
 			return session.Entry{}, false
 		}
 		r.inFlight.AgentCommitted = true
 		return entry, true
 	}
-	entry := session.Entry{
-		Role:      session.Agent,
-		Timestamp: msg.Timestamp,
-		Content:   msg.Message,
-		Reasoning: r.inFlight.ReasonBuf,
-	}
+	reasoning := r.inFlight.ReasonBuf
 	if msg.Reasoning != "" {
-		entry.Reasoning = msg.Reasoning
+		reasoning = msg.Reasoning
 	}
 	r.inFlight.StreamBuf = ""
 	r.inFlight.StreamChunks = nil
 	r.inFlight.ReasonBuf = ""
-	if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+	entry, ok := transcript.Agent(msg.Message, reasoning, msg.Timestamp)
+	if !ok {
 		return session.Entry{}, false
 	}
 	r.inFlight.AgentCommitted = true

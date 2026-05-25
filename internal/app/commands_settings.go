@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
 )
 
 func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
@@ -95,7 +94,7 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	if err != nil {
 		return m, runtimeTransitionErrorCmd(err)
 	}
-	return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice})
+	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
 func settingsConfigUpdate(

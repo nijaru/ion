@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 type turnReducer struct {
@@ -100,10 +101,8 @@ func (r turnReducer) streamClosed(now time.Time) (session.Entry, bool) {
 	r.progress.Status = ""
 	r.progress.LastError = "session event stream closed"
 	r.recordFinishedTurnSummary(now)
-	return session.Entry{
-		Role:    session.System,
-		Content: "Error: " + r.progress.LastError,
-	}, true
+	entry, _ := transcript.System("Error: "+r.progress.LastError, time.Time{})
+	return entry, true
 }
 
 func (r turnReducer) failTurn(displayErr string, now time.Time) {
@@ -159,11 +158,8 @@ func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (sessio
 	r.inFlight.Thinking = true
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
-	return session.Entry{
-		Role:      session.System,
-		Timestamp: timestamp,
-		Content:   "Canceled: " + reason,
-	}, true
+	entry, _ := transcript.System("Canceled: "+reason, timestamp)
+	return entry, true
 }
 
 func (r turnReducer) cancelActiveTurn() {
@@ -215,9 +211,13 @@ func (r turnReducer) finishPendingAssistant() (session.Entry, bool, bool) {
 		if strings.TrimSpace(r.inFlight.Pending.Reasoning) == "" {
 			r.inFlight.Pending.Reasoning = r.inFlight.ReasonBuf
 		}
-		entry := *r.inFlight.Pending
+		entry, ok := transcript.Agent(
+			r.inFlight.Pending.Content,
+			r.inFlight.Pending.Reasoning,
+			r.inFlight.Pending.Timestamp,
+		)
 		r.clearPendingAssistant()
-		return entry, true, true
+		return entry, ok, ok
 	}
 	if r.inFlight.AgentCommitted {
 		r.clearPendingAssistant()
@@ -251,10 +251,11 @@ func (r turnReducer) finishTurnMode(assistantCompleted bool) (session.Entry, boo
 		r.progress.Mode = stateError
 		r.progress.LastError = "turn finished without assistant response"
 		r.progress.Status = ""
-		return session.Entry{
-			Role:    session.System,
-			Content: "Error: turn finished without assistant response",
-		}, true
+		entry, _ := transcript.System(
+			"Error: turn finished without assistant response",
+			time.Time{},
+		)
+		return entry, true
 	default:
 		r.progress.Mode = stateComplete
 	}

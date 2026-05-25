@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/nijaru/ion/internal/session"
 )
 
 type externalEditorFinishedMsg struct {
@@ -23,10 +21,9 @@ var (
 
 func (m Model) openExternalEditor() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
-		return m, m.terminalCommit().Entries(session.Entry{
-			Role:    session.System,
-			Content: m.localCommandBusyMessage("opening the external editor"),
-		})
+		return m, m.terminalCommit().Entries(
+			systemEntry(m.localCommandBusyMessage("opening the external editor")),
+		)
 	}
 	return m, openExternalEditorCmd(m.expandMarkers(m.Input.Composer.Value()))
 }
@@ -60,10 +57,7 @@ func openExternalEditorCmd(content string) tea.Cmd {
 
 func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
-		return m, m.terminalCommit().Entries(session.Entry{
-			Role:    session.System,
-			Content: "Editor failed: " + msg.err.Error(),
-		})
+		return m, m.terminalCommit().Entries(systemEntry("Editor failed: " + msg.err.Error()))
 	}
 	cmd := m.setComposerDraft(msg.content)
 	m.resetHistoryCursor()

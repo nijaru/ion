@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 func (r turnReducer) requestChild(name, intent string) *SubagentProgress {
@@ -50,13 +51,8 @@ func (r turnReducer) commitSubagentMessage(
 	if message != "" {
 		content = message
 	}
-	entry := session.Entry{
-		Role:      session.Subagent,
-		Timestamp: timestamp,
-		Title:     p.Name,
-		Content:   "Completed: " + content,
-		Reasoning: p.Reasoning,
-	}
+	entry, _ := transcript.Subagent(p.Name, "Completed: "+content, false, timestamp)
+	entry.Reasoning = p.Reasoning
 	delete(r.inFlight.Subagents, id)
 	r.settleChildProgress()
 	return entry, true
@@ -72,12 +68,7 @@ func (r turnReducer) completeChild(
 	}
 	p.Status = "Completed"
 	p.Output = result
-	entry := session.Entry{
-		Role:      session.Subagent,
-		Timestamp: timestamp,
-		Title:     p.Name,
-		Content:   "Completed: " + p.Output,
-	}
+	entry, _ := transcript.Subagent(p.Name, "Completed: "+p.Output, false, timestamp)
 	delete(r.inFlight.Subagents, name)
 	r.settleChildProgress()
 	return entry, true
@@ -105,13 +96,7 @@ func (r turnReducer) failChild(
 	}
 	p.Status = "Failed"
 	p.Output = "ERROR: " + err
-	entry := session.Entry{
-		Role:      session.Subagent,
-		Timestamp: timestamp,
-		Title:     p.Name,
-		Content:   "Failed: " + err,
-		IsError:   true,
-	}
+	entry, _ := transcript.Subagent(p.Name, "Failed: "+err, true, timestamp)
 	delete(r.inFlight.Subagents, name)
 	r.progress.Mode = stateError
 	r.progress.LastError = "Subagent failed: " + err
@@ -128,12 +113,7 @@ func (r turnReducer) cancelChild(
 	}
 	p.Status = "Canceled"
 	p.Output = childCanceledContent(reason)
-	entry := session.Entry{
-		Role:      session.Subagent,
-		Timestamp: timestamp,
-		Title:     p.Name,
-		Content:   p.Output,
-	}
+	entry, _ := transcript.Subagent(p.Name, p.Output, false, timestamp)
 	delete(r.inFlight.Subagents, name)
 	r.settleChildProgress()
 	return entry, true

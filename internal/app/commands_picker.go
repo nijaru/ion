@@ -10,7 +10,6 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
-	"github.com/nijaru/ion/internal/session"
 )
 
 func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
@@ -236,10 +235,10 @@ func (m Model) applyProviderSelection(
 
 	m.pickerReducer().closeOverlay()
 	if !selection.supportsModelListing {
-		return m.beginRuntimeTransitionCommit(selection.transition, session.Entry{
-			Role:    session.System,
-			Content: providerModelEntryNotice(selection.cfg.Provider),
-		})
+		return m.beginRuntimeTransitionCommit(
+			selection.transition,
+			systemEntry(providerModelEntryNotice(selection.cfg.Provider)),
+		)
 	}
 	return m.openReadyModelPickerForPreset(selection.cfg, preset)
 }
@@ -647,7 +646,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
 		m.pickerReducer().closeOverlay()
-		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
+		notice := systemEntry("Model set to " + selected.Value)
 		return m.switchRuntimeCommand(
 			transition,
 			notice,
@@ -672,10 +671,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.pickerReducer().closeOverlay()
 		return m.beginRuntimeTransitionCommit(
 			transition,
-			session.Entry{
-				Role:    session.System,
-				Content: "Thinking set to " + thinkingDisplayName(level),
-			},
+			systemEntry("Thinking set to "+thinkingDisplayName(level)),
 		)
 	case pickerPurposeSettings:
 		fields := strings.Fields(selected.Value)

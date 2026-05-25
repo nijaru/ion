@@ -10,7 +10,6 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
-	"github.com/nijaru/ion/internal/session"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -85,7 +84,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m.switchRuntimeCommand(
 			transition,
-			session.Entry{Role: session.System, Content: "Model set to " + name},
+			systemEntry("Model set to "+name),
 			m.currentMaterializedSessionID(),
 			false,
 		)
@@ -117,10 +116,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m.beginRuntimeTransitionCommit(
 			transition,
-			session.Entry{
-				Role:    session.System,
-				Content: "Thinking set to " + thinkingDisplayName(level),
-			},
+			systemEntry("Thinking set to "+thinkingDisplayName(level)),
 		)
 
 	case "/provider":
@@ -163,7 +159,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		surface := summarizer.ToolSurface()
 		return m, m.terminalCommit().Entries(
-			session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)},
+			systemEntry(toolSurfaceSummary(surface)),
 		)
 
 	case "/status":
@@ -171,7 +167,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError("usage: /status")
 		}
 		return m, m.terminalCommit().Entries(
-			session.Entry{Role: session.System, Content: runtimeStatusSummary(m)},
+			systemEntry(runtimeStatusSummary(m)),
 		)
 
 	case "/skills":
@@ -184,7 +180,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
 		}
-		return m, m.terminalCommit().Entries(session.Entry{Role: session.System, Content: out})
+		return m, m.terminalCommit().Entries(systemEntry(out))
 
 	case "/new", "/clear":
 		cfg, err := m.commandConfig()
@@ -223,7 +219,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		transition := newRuntimeTransition(appCfg, runtimeCfg, m.activePreset(), "")
 		return m.switchRuntimeCommand(
 			transition,
-			session.Entry{Role: session.System, Content: notice},
+			systemEntry(notice),
 			"",
 			false,
 		)
@@ -236,10 +232,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	case "/compact":
 		if m.Model.Storage != nil && !storage.IsMaterialized(m.Model.Storage) {
-			return m, m.terminalCommit().Entries(session.Entry{
-				Role:    session.System,
-				Content: "No active session to compact yet",
-			})
+			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
 		}
 		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {

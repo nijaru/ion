@@ -67,7 +67,7 @@ func (m Model) handleResumeSessionSelected(msg resumeSessionSelectedMsg) (Model,
 	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
 		return m, nil
 	}
-	notice := session.Entry{Role: session.System, Content: "Resumed session " + msg.sessionID}
+	notice := systemEntry("Resumed session " + msg.sessionID)
 	return m.resumeRuntimeCommand(msg.cfg, notice, msg.sessionID)
 }
 
@@ -95,7 +95,7 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
+	notice := systemEntry("Switched to " + preset.String())
 	transition := newRuntimeTransition(cfg, runtimeCfg, preset, "")
 	return m.switchRuntimeCommand(
 		transition,
@@ -254,14 +254,14 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 	if strings.TrimSpace(msg.notice) != "" {
 		cmds = append(
 			cmds,
-			m.terminalCommit().Entries(session.Entry{Role: session.System, Content: msg.notice}),
+			m.terminalCommit().Entries(systemEntry(msg.notice)),
 		)
 	}
 	status := msg.runtime.Transition.Snapshot.Status
 	if msg.showStatus && strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		cmds = append(
 			cmds,
-			m.terminalCommit().Entries(session.Entry{Role: session.System, Content: status}),
+			m.terminalCommit().Entries(systemEntry(status)),
 		)
 	}
 	if msg.runtime.Handles.Storage != nil {

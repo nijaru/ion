@@ -5,6 +5,7 @@ import (
 
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
@@ -22,12 +23,7 @@ func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) 
 func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd) {
 	p := m.turnReducer().requestChild(msg.AgentName, msg.Query)
 
-	entry := session.Entry{
-		Role:      session.Subagent,
-		Timestamp: msg.Timestamp,
-		Title:     p.Name,
-		Content:   "Started: " + p.Intent,
-	}
+	entry, _ := transcript.Subagent(p.Name, "Started: "+p.Intent, false, msg.Timestamp)
 	return m, sequenceCmds(
 		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist subagent start", storage.Subagent{

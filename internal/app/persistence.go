@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 func persistErrorCmd(action string, err error) tea.Cmd {
@@ -51,7 +52,5 @@ func entryUnix(timestamp time.Time) int64 {
 }
 
 func setEntryTimestamp(entry *session.Entry, timestamp time.Time) {
-	if entry != nil && !timestamp.IsZero() {
-		entry.Timestamp = timestamp.UTC()
-	}
+	transcript.SetTimestamp(entry, timestamp)
 }

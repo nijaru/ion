@@ -12,6 +12,7 @@ import (
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/transcript"
 )
 
 type displayProjection struct {
@@ -127,7 +128,7 @@ func (p *displayProjection) applyEvents(workdir string, events []csession.Event)
 		p.applyStatusEvent(ev)
 		p.applyUsageEvent(ev)
 	}
-	p.entries = normalizeDisplayEntries(p.entries)
+	p.entries = transcript.Normalize(p.entries)
 }
 
 func (p *displayProjection) applyEntryEvent(workdir string, ev csession.Event) {
@@ -144,7 +145,7 @@ func (p *displayProjection) applyEntryEvent(workdir string, ev csession.Event) {
 		return
 	}
 	if display, ok := displayEventEntry(ev); ok {
-		p.entries = append(p.entries, withEntryTimestamp(display, ev.Timestamp))
+		p.entries = append(p.entries, transcript.WithTimestamp(display, ev.Timestamp))
 		return
 	}
 	switch ev.Type {
@@ -181,7 +182,7 @@ func (p *displayProjection) applyMessageEntry(workdir string, ev csession.Event)
 		p.flushCompletedTools(workdir)
 		p.clearToolState()
 	}
-	entry, ok := displayHistoryEntry(workdir, csession.HistoryEntry{
+	entry, ok := transcript.New(workdir).HistoryEntry(csession.HistoryEntry{
 		EventID:   ev.ID.String(),
 		EventType: ev.Type,
 		Message:   msg,
@@ -189,7 +190,7 @@ func (p *displayProjection) applyMessageEntry(workdir string, ev csession.Event)
 	if !ok {
 		return
 	}
-	p.entries = append(p.entries, withEntryTimestamp(entry, ev.Timestamp))
+	p.entries = append(p.entries, transcript.WithTimestamp(entry, ev.Timestamp))
 }
 
 func (p *displayProjection) applyContextEntry(workdir string, ev csession.Event) {
@@ -200,7 +201,7 @@ func (p *displayProjection) applyContextEntry(workdir string, ev csession.Event)
 	if contextEntry.Kind == "" {
 		contextEntry.Kind = csession.ContextKindGeneric
 	}
-	entry, ok := displayHistoryEntry(workdir, csession.HistoryEntry{
+	entry, ok := transcript.New(workdir).HistoryEntry(csession.HistoryEntry{
 		EventID:     ev.ID.String(),
 		EventType:   ev.Type,
 		ContextKind: contextEntry.Kind,
@@ -209,7 +210,7 @@ func (p *displayProjection) applyContextEntry(workdir string, ev csession.Event)
 	if !ok {
 		return
 	}
-	p.entries = append(p.entries, withEntryTimestamp(entry, ev.Timestamp))
+	p.entries = append(p.entries, transcript.WithTimestamp(entry, ev.Timestamp))
 }
 
 func (p *displayProjection) applyToolMessage(
@@ -222,7 +223,7 @@ func (p *displayProjection) applyToolMessage(
 		return
 	}
 	tool := p.toolHistoryForMessage(msg)
-	entry, ok := displayHistoryEntry(workdir, csession.HistoryEntry{
+	entry, ok := transcript.New(workdir).HistoryEntry(csession.HistoryEntry{
 		EventID:   ev.ID.String(),
 		EventType: ev.Type,
 		Message:   msg,
@@ -231,7 +232,7 @@ func (p *displayProjection) applyToolMessage(
 	if !ok {
 		return
 	}
-	p.entries = append(p.entries, withEntryTimestamp(entry, ev.Timestamp))
+	p.entries = append(p.entries, transcript.WithTimestamp(entry, ev.Timestamp))
 	p.removeTool(msg.ToolID)
 }
 
@@ -315,7 +316,7 @@ func (p *displayProjection) completedToolEntry(
 		Content: content,
 	}
 	tool := p.toolHistoryForMessage(msg)
-	entry, ok := displayHistoryEntry(workdir, csession.HistoryEntry{
+	entry, ok := transcript.New(workdir).HistoryEntry(csession.HistoryEntry{
 		EventID:   completion.EventID,
 		EventType: csession.ToolCompleted,
 		Message:   msg,
@@ -324,7 +325,7 @@ func (p *displayProjection) completedToolEntry(
 	if !ok {
 		return ionsession.Entry{}, false
 	}
-	return withEntryTimestamp(entry, completion.Timestamp), true
+	return transcript.WithTimestamp(entry, completion.Timestamp), true
 }
 
 func (p *displayProjection) toolHistoryForMessage(msg llm.Message) csession.ToolHistory {
@@ -480,21 +481,7 @@ func displaySnapshotEntries(
 	workdir string,
 	snapshot csession.CompactionSnapshot,
 ) []ionsession.Entry {
-	entries := make([]ionsession.Entry, 0, max(len(snapshot.Entries), len(snapshot.Messages)))
-	if len(snapshot.Entries) > 0 {
-		for _, entry := range snapshot.Entries {
-			if display, ok := displayHistoryEntry(workdir, entry); ok {
-				entries = append(entries, display)
-			}
-		}
-		return normalizeDisplayEntries(entries)
-	}
-	for _, msg := range snapshot.Messages {
-		if display, ok := displayHistoryEntry(workdir, csession.HistoryEntry{Message: msg}); ok {
-			entries = append(entries, display)
-		}
-	}
-	return normalizeDisplayEntries(entries)
+	return transcript.New(workdir).SnapshotEntries(snapshot)
 }
 
 func (s *cantoStore) loadDisplayProjection(
