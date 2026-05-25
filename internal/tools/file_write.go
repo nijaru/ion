@@ -34,14 +34,14 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", toolContextErr("write", err)
 	}
 
 	if _, err := w.checkpointPaths(ctx, input.Path); err != nil {
-		return "", err
+		return "", toolContextErr("write", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", toolContextErr("write", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
@@ -55,7 +55,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", toolContextErr("write", err)
 	}
 	tmpPath, err := writeEditTempFile(absPath, []byte(input.Content), mode)
 	if err != nil {
@@ -63,7 +63,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", toolContextErr("write", err)
 	}
 	if err := os.Rename(tmpPath, absPath); err != nil {
 		_ = os.Remove(tmpPath)

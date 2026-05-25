@@ -2,11 +2,13 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,6 +73,32 @@ func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
 	_, err := ListModelsForConfig(t.Context(), nil)
 	if err == nil || err.Error() != "model provider config is required" {
 		t.Fatalf("ListModelsForConfig(nil) error = %v", err)
+	}
+}
+
+func TestListModelsForConfigWrapsDeadlineWithoutRawContextText(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldFetcher := providerCatalogFetcher
+	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	_, err := ListModelsForConfig(t.Context(), &config.Config{Provider: "openrouter"})
+	if err == nil {
+		t.Fatal("ListModelsForConfig returned nil error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline cause", err)
+	}
+	if got := err.Error(); got != "list models for openrouter timed out after 10s" {
+		t.Fatalf("model timeout error = %q", got)
+	}
+	if strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("model timeout leaked raw context text: %q", err.Error())
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/session"
 )
@@ -402,6 +403,34 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	_, err := runPromptTurn(ctx, sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("runPromptTurn error = %v, want context canceled", err)
+	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
+func TestPrintModeTimeoutIsActionable(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event)}
+
+	err := runPrintModeWithTimeout(
+		context.Background(),
+		&bytes.Buffer{},
+		sess,
+		"hello",
+		time.Millisecond,
+		"text",
+	)
+	if err == nil {
+		t.Fatal("runPrintModeWithTimeout returned nil error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline cause", err)
+	}
+	if got := err.Error(); got != "print mode timed out after 1ms" {
+		t.Fatalf("timeout error = %q, want actionable print timeout", got)
+	}
+	if strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("timeout error leaked raw context text: %q", err.Error())
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)

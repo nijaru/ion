@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
@@ -330,5 +331,29 @@ func assertCanceled(t *testing.T, err error) {
 	t.Helper()
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestFileToolsWrapDeadlineWithActionableOperation(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	w := &Write{FileTool: FileTool{cwd: tmpDir}}
+	_, err := executeToolJSON(t, w, ctx, map[string]any{
+		"file_path": "deadline.txt",
+		"content":   "after\n",
+	})
+	if err == nil {
+		t.Fatal("expected deadline context to fail")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline cause", err)
+	}
+	if got := err.Error(); got != "write tool timed out" {
+		t.Fatalf("deadline error = %q", got)
+	}
+	if strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("deadline error leaked raw context text: %q", err.Error())
 	}
 }

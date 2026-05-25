@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
+	"github.com/nijaru/ion/internal/apperrors"
 	ionacp "github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -123,7 +124,7 @@ func runACPAgent(
 	case <-conn.Done():
 		return agent.Close()
 	case <-ctx.Done():
-		return errors.Join(agent.Close(), ctx.Err())
+		return errors.Join(agent.Close(), apperrors.WrapContext("run ACP agent", ctx.Err()))
 	}
 }
 

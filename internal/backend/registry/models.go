@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
@@ -76,7 +78,7 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 	if cfg == nil {
 		return nil, fmt.Errorf("model provider config is required")
 	}
-	ctx, cancel := withModelListTimeout(ctx)
+	ctx, cancel, timeout := withModelListTimeout(ctx)
 	defer cancel()
 
 	providerModelsOnce.Do(initProviderModelsCache)
@@ -106,14 +108,26 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 		return append([]ModelMetadata(nil), cached.Models...), nil
 	}
 
-	return nil, err
+	return nil, wrapModelListError(cfg, timeout, err)
 }
 
-func withModelListTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+func withModelListTimeout(ctx context.Context) (context.Context, context.CancelFunc, time.Duration) {
 	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
+		return ctx, func() {}, 0
 	}
-	return context.WithTimeout(ctx, modelListRequestTimeout)
+	next, cancel := context.WithTimeout(ctx, modelListRequestTimeout)
+	return next, cancel, modelListRequestTimeout
+}
+
+func wrapModelListError(cfg *config.Config, timeout time.Duration, err error) error {
+	operation := "list models"
+	if cfg != nil && strings.TrimSpace(cfg.Provider) != "" {
+		operation = fmt.Sprintf("list models for %s", providers.ResolveID(cfg.Provider))
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apperrors.Timeout(operation, timeout, err)
+	}
+	return apperrors.WrapContext(operation, err)
 }
 
 func initProviderModelsCache() {

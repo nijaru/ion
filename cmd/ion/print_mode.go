@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -134,7 +136,7 @@ func runPromptTurn(
 			}
 		case <-ctx.Done():
 			cancelPrintTurn(agent)
-			return printResult{}, ctx.Err()
+			return printResult{}, apperrors.WrapContext("print turn", ctx.Err())
 		}
 	}
 }
@@ -188,7 +190,11 @@ func runPrintModeWithTimeout(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return runPrintModeWithWriter(ctx, w, agent, prompt, output)
+	err := runPrintModeWithWriter(ctx, w, agent, prompt, output)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return apperrors.Timeout("print mode", timeout, err)
+	}
+	return err
 }
 
 // isStdinPipe returns true if stdin is a pipe (not a terminal).

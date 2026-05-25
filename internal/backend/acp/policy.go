@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nijaru/ion/internal/apperrors"
 )
 
 // Policy defines how a tool call should be handled.
@@ -260,6 +262,7 @@ func (pe *PolicyEngine) classifyOrAsk(
 		Category: category,
 	})
 	if err != nil {
+		err = apperrors.WrapContext("classify ACP policy", err)
 		reason := defaultReason + " Classifier unavailable: " + err.Error()
 		auditPolicyDecision(
 			auditSink,

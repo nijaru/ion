@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
+	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
@@ -588,7 +589,7 @@ func (s *Session) RequestPermission(
 		return denyResponse(p), nil
 	case <-ctx.Done():
 		s.removePendingApproval(requestID, ch)
-		return acp.RequestPermissionResponse{}, ctx.Err()
+		return acp.RequestPermissionResponse{}, apperrors.WrapContext("wait for ACP permission response", ctx.Err())
 	}
 }
 
@@ -771,7 +772,7 @@ func (s *Session) WaitForTerminalExit(
 		t.mu.Unlock()
 		return acp.WaitForTerminalExitResponse{ExitCode: code}, nil
 	case <-ctx.Done():
-		return acp.WaitForTerminalExitResponse{}, ctx.Err()
+		return acp.WaitForTerminalExitResponse{}, apperrors.WrapContext("wait for ACP terminal exit", ctx.Err())
 	}
 }
 

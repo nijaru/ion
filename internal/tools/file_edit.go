@@ -45,7 +45,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", toolContextErr("edit", err)
 	}
 
 	content, err := os.ReadFile(absPath)
@@ -63,10 +63,10 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	if _, err := e.checkpointPaths(ctx, input.Path); err != nil {
-		return "", err
+		return "", toolContextErr("edit", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", toolContextErr("edit", err)
 	}
 
 	tmpPath, err := writeEditTempFile(absPath, []byte(newContent), info.Mode().Perm())
@@ -75,7 +75,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", toolContextErr("edit", err)
 	}
 	if err := os.Rename(tmpPath, absPath); err != nil {
 		_ = os.Remove(tmpPath)

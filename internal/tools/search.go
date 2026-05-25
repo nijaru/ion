@@ -273,8 +273,8 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	}
 	waitErr := cmd.Wait()
 	stderrWG.Wait()
-	if ctx.Err() != nil {
-		return "", ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return "", toolContextErr("search", err)
 	}
 	if waitErr != nil && !killedDueToLimit {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {

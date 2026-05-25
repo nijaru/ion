@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nijaru/ion/internal/apperrors"
 )
 
 const checkpointManifestName = "manifest.json"
@@ -93,7 +95,7 @@ func (s *CheckpointStore) Create(
 	paths []string,
 ) (Checkpoint, error) {
 	if err := ctx.Err(); err != nil {
-		return Checkpoint{}, err
+		return Checkpoint{}, apperrors.WrapContext("create checkpoint", err)
 	}
 	if strings.TrimSpace(s.path) == "" {
 		return Checkpoint{}, fmt.Errorf("checkpoint store path is required")
@@ -164,7 +166,7 @@ func (s *CheckpointStore) Load(id string) (Checkpoint, error) {
 
 func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (RestorePlan, error) {
 	if err := ctx.Err(); err != nil {
-		return RestorePlan{}, err
+		return RestorePlan{}, apperrors.WrapContext("analyze checkpoint restore", err)
 	}
 	if strings.TrimSpace(cp.ID) == "" {
 		return RestorePlan{}, fmt.Errorf("checkpoint id is required")
@@ -182,7 +184,7 @@ func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (Re
 	plan := RestorePlan{CheckpointID: cp.ID}
 	for _, entry := range cp.Entries {
 		if err := ctx.Err(); err != nil {
-			return plan, err
+			return plan, apperrors.WrapContext("analyze checkpoint restore", err)
 		}
 		path, err := normalizeCheckpointPath(entry.Path)
 		if err != nil {
@@ -245,7 +247,7 @@ func (s *CheckpointStore) Restore(
 	report := RestoreReport{}
 	for _, entry := range cp.Entries {
 		if err := ctx.Err(); err != nil {
-			return report, err
+			return report, apperrors.WrapContext("restore checkpoint", err)
 		}
 		path, err := normalizeCheckpointPath(entry.Path)
 		if err != nil {
@@ -326,7 +328,7 @@ func snapshotPath(
 	path, blobPath string,
 ) (CheckpointEntry, error) {
 	if err := ctx.Err(); err != nil {
-		return CheckpointEntry{}, err
+		return CheckpointEntry{}, apperrors.WrapContext("snapshot checkpoint path", err)
 	}
 	info, err := root.Stat(path)
 	if err != nil {

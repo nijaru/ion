@@ -55,6 +55,9 @@ func (r *Read) ExecuteContent(ctx context.Context, args string) ([]llm.ContentPa
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, toolContextErr("read", err)
+	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {

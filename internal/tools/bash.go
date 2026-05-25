@@ -156,6 +156,9 @@ func (b *Bash) execute(
 	if input.Timeout > 0 && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return result, fmt.Errorf("timeout after %.3g seconds", input.Timeout)
 	}
+	if ctxErr := runCtx.Err(); ctxErr != nil {
+		return result, toolContextErr("bash", ctxErr)
+	}
 	return result, err
 }
 
