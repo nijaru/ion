@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -385,6 +387,12 @@ func (s *resumeOnlyStore) Close() error { return nil }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
+	// Isolate from user's global config in ~/.ion/config.toml
+	if home, err := os.UserHomeDir(); err == nil {
+		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") && !strings.Contains(home, "folders") && !strings.Contains(home, "/var/") {
+			t.Setenv("HOME", t.TempDir())
+		}
+	}
 	sess := &stubSession{events: make(chan session.Event)}
 	b := stubBackend{sess: sess}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
