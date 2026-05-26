@@ -113,6 +113,7 @@ func formatPrintLines(lines ...string) string {
 			filtered[i] = "\x1b[0m"
 		}
 	}
+	filtered = append(filtered, "")
 	return strings.Join(filtered, "\n")
 }
 
