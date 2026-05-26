@@ -3,7 +3,6 @@ package canto
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -85,6 +84,94 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 	if cfg == nil {
 		return nil, fmt.Errorf("provider config not set")
 	}
+
+	// Synchronize Framework Capabilities Registry with Ion overrides at startup
+	llm.ClearRegistry()
+	for _, mDef := range cfg.Models {
+		preset := llm.ModelPreset(mDef.Preset)
+		var customCaps *llm.Capabilities
+		if mDef.Temperature != nil || mDef.SystemRole != "" {
+			var caps llm.Capabilities
+			if preset == llm.PresetReasoning {
+				caps = llm.Capabilities{
+					Streaming:   true,
+					Tools:       true,
+					Temperature: false,
+					SystemRole:  llm.RoleSystem,
+					Reasoning: llm.ReasoningCapabilities{
+						Kind:       llm.ReasoningKindEffort,
+						Efforts:    []string{"minimal", "low", "medium", "high"},
+						CanDisable: true,
+					},
+				}
+			} else if preset == llm.PresetOpenAIReasoning {
+				caps = llm.Capabilities{
+					Streaming:   true,
+					Tools:       true,
+					Temperature: false,
+					SystemRole:  llm.RoleDeveloper,
+					Reasoning: llm.ReasoningCapabilities{
+						Kind:       llm.ReasoningKindEffort,
+						Efforts:    []string{"minimal", "low", "medium", "high"},
+						CanDisable: true,
+					},
+				}
+			} else {
+				caps = llm.DefaultCapabilities()
+			}
+
+			if mDef.Temperature != nil {
+				caps.Temperature = *mDef.Temperature
+			}
+			if mDef.SystemRole != "" {
+				switch strings.ToLower(strings.TrimSpace(mDef.SystemRole)) {
+				case "system":
+					caps.SystemRole = llm.RoleSystem
+				case "user":
+					caps.SystemRole = llm.RoleUser
+				case "developer":
+					caps.SystemRole = llm.RoleDeveloper
+				}
+			}
+			customCaps = &caps
+		}
+		llm.RegisterModel(llm.ModelDef{
+			Pattern:      mDef.Pattern,
+			Preset:       preset,
+			Capabilities: customCaps,
+		})
+	}
+
+	// Register global preset overrides for Qwen models
+	llm.RegisterModel(llm.ModelDef{
+		Pattern: "*qwen*",
+		Preset:  llm.PresetChat,
+		Capabilities: &llm.Capabilities{
+			Streaming:   true,
+			Tools:       true,
+			Temperature: true,
+			SystemRole:  llm.RoleSystem,
+			Reasoning: llm.ReasoningCapabilities{
+				Kind:       llm.ReasoningKindBoolean,
+				CanDisable: true,
+			},
+		},
+	})
+	llm.RegisterModel(llm.ModelDef{
+		Pattern: "*qwq*",
+		Preset:  llm.PresetChat,
+		Capabilities: &llm.Capabilities{
+			Streaming:   true,
+			Tools:       true,
+			Temperature: true,
+			SystemRole:  llm.RoleSystem,
+			Reasoning: llm.ReasoningCapabilities{
+				Kind:       llm.ReasoningKindBoolean,
+				CanDisable: true,
+			},
+		},
+	})
+
 	def, ok := providers.Lookup(cfg.Provider)
 	if !ok {
 		return nil, fmt.Errorf("unsupported canto provider %q", cfg.Provider)
@@ -121,7 +208,7 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 			Endpoint:  endpoint,
 			Headers:   providers.ResolvedHeaders(cfg),
 			Models:    models,
-			ModelCaps: openAICompatibleModelCaps(cfg),
+			ModelCaps: nil, // falls back cleanly to Canto registry
 		})
 	case providers.FamilyOpenRouter:
 		if apiKey == "" {
@@ -169,75 +256,6 @@ func providerModels(cfg *config.Config) []llm.Model {
 		model.ContextWindow = cfg.ContextLimit
 	}
 	return []llm.Model{model}
-}
-
-func openAICompatibleModelCaps(cfg *config.Config) map[string]llm.Capabilities {
-	if cfg == nil || strings.TrimSpace(cfg.Model) == "" {
-		return nil
-	}
-	modelID := strings.TrimSpace(cfg.Model)
-
-	// 1. Check user-defined overrides in config
-	for _, override := range cfg.ModelCapabilities {
-		pattern := strings.TrimSpace(override.Pattern)
-		if pattern == "" {
-			continue
-		}
-		// Match pattern against modelID
-		matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(modelID))
-		if err == nil && matched {
-			caps := llm.DefaultCapabilities()
-
-			// Override Temperature
-			if override.Temperature != nil {
-				caps.Temperature = *override.Temperature
-			}
-
-			// Override ReasoningKind
-			switch strings.ToLower(override.ReasoningKind) {
-			case "none":
-				caps.Reasoning.Kind = llm.ReasoningKindNone
-			case "effort":
-				caps.Reasoning.Kind = llm.ReasoningKindEffort
-				caps.Reasoning.Efforts = []string{"minimal", "low", "medium", "high"}
-				caps.Reasoning.CanDisable = true
-			case "budget":
-				caps.Reasoning.Kind = llm.ReasoningKindBudget
-			case "boolean":
-				caps.Reasoning.Kind = llm.ReasoningKindBoolean
-				caps.Reasoning.CanDisable = true
-			}
-
-			// Override SystemRole
-			switch strings.ToLower(override.SystemRole) {
-			case "system":
-				caps.SystemRole = llm.RoleSystem
-			case "user":
-				caps.SystemRole = llm.RoleUser
-			case "developer":
-				caps.SystemRole = llm.RoleDeveloper
-			}
-
-			return map[string]llm.Capabilities{modelID: caps}
-		}
-	}
-
-	// 2. Default fallback for Qwen
-	if isQwenThinkingModel(modelID) {
-		caps := llm.DefaultCapabilities()
-		caps.Reasoning = llm.ReasoningCapabilities{
-			Kind:       llm.ReasoningKindBoolean,
-			CanDisable: true,
-		}
-		return map[string]llm.Capabilities{modelID: caps}
-	}
-
-	return nil
-}
-
-func isQwenThinkingModel(model string) bool {
-	name := strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(name, "qwen") || strings.Contains(name, "qwq")
 }
 
 func missingAuthDetail(cfg *config.Config, def providers.Definition) string {

@@ -947,7 +947,7 @@ func TestBusyInputModeDefaultsToSteer(t *testing.T) {
 	}
 }
 
-func TestLoadParsesModelCapabilities(t *testing.T) {
+func TestLoadParsesModels(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -958,16 +958,16 @@ func TestLoadParsesModelCapabilities(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(`
-[[model_capabilities]]
+[[models]]
 pattern = "*mimo*"
+preset = "reasoning"
 temperature = false
-reasoning_kind = "effort"
 system_role = "developer"
 
-[[model_capabilities]]
+[[models]]
 pattern = "custom-thinking"
+preset = "chat"
 temperature = true
-reasoning_kind = "budget"
 system_role = "system"
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -978,35 +978,35 @@ system_role = "system"
 		t.Fatalf("load config: %v", err)
 	}
 
-	if len(cfg.ModelCapabilities) != 2 {
-		t.Fatalf("len(ModelCapabilities) = %d, want 2", len(cfg.ModelCapabilities))
+	if len(cfg.Models) != 2 {
+		t.Fatalf("len(Models) = %d, want 2", len(cfg.Models))
 	}
 
-	cap0 := cfg.ModelCapabilities[0]
-	if cap0.Pattern != "*mimo*" {
-		t.Fatalf("cap0 pattern = %q, want *mimo*", cap0.Pattern)
+	m0 := cfg.Models[0]
+	if m0.Pattern != "*mimo*" {
+		t.Fatalf("m0 pattern = %q, want *mimo*", m0.Pattern)
 	}
-	if cap0.Temperature == nil || *cap0.Temperature {
-		t.Fatal("cap0 temperature should be false")
+	if m0.Preset != "reasoning" {
+		t.Fatalf("m0 preset = %q, want reasoning", m0.Preset)
 	}
-	if cap0.ReasoningKind != "effort" {
-		t.Fatalf("cap0 reasoning_kind = %q, want effort", cap0.ReasoningKind)
+	if m0.Temperature == nil || *m0.Temperature {
+		t.Fatal("m0 temperature should be false")
 	}
-	if cap0.SystemRole != "developer" {
-		t.Fatalf("cap0 system_role = %q, want developer", cap0.SystemRole)
+	if m0.SystemRole != "developer" {
+		t.Fatalf("m0 system_role = %q, want developer", m0.SystemRole)
 	}
 
-	cap1 := cfg.ModelCapabilities[1]
-	if cap1.Pattern != "custom-thinking" {
-		t.Fatalf("cap1 pattern = %q, want custom-thinking", cap1.Pattern)
+	m1 := cfg.Models[1]
+	if m1.Pattern != "custom-thinking" {
+		t.Fatalf("m1 pattern = %q, want custom-thinking", m1.Pattern)
 	}
-	if cap1.Temperature == nil || !*cap1.Temperature {
-		t.Fatal("cap1 temperature should be true")
+	if m1.Preset != "chat" {
+		t.Fatalf("m1 preset = %q, want chat", m1.Preset)
 	}
-	if cap1.ReasoningKind != "budget" {
-		t.Fatalf("cap1 reasoning_kind = %q, want budget", cap1.ReasoningKind)
+	if m1.Temperature == nil || !*m1.Temperature {
+		t.Fatal("m1 temperature should be true")
 	}
-	if cap1.SystemRole != "system" {
-		t.Fatalf("cap1 system_role = %q, want system", cap1.SystemRole)
+	if m1.SystemRole != "system" {
+		t.Fatalf("m1 system_role = %q, want system", m1.SystemRole)
 	}
 }

@@ -45,14 +45,14 @@ type Config struct {
 	SubagentTools          string                    `toml:"subagent_tools,omitempty"`
 	ToolMode               string                    `toml:"tool_mode,omitempty"`
 	ToolEnv                string                    `toml:"tool_env,omitempty"`
-	ModelCapabilities      []ModelCapabilityOverride `toml:"model_capabilities,omitempty"`
+	Models                 []ModelDef                `toml:"models,omitempty" json:"models,omitempty"`
 }
 
-type ModelCapabilityOverride struct {
-	Pattern       string `toml:"pattern"`
-	Temperature   *bool  `toml:"temperature,omitempty"`
-	ReasoningKind string `toml:"reasoning_kind,omitempty"` // "none", "effort", "budget", "boolean"
-	SystemRole    string `toml:"system_role,omitempty"`    // "system", "user", "developer"
+type ModelDef struct {
+	Pattern     string `toml:"pattern" json:"pattern"`
+	Preset      string `toml:"preset,omitempty" json:"preset,omitempty"`
+	Temperature *bool  `toml:"temperature,omitempty" json:"temperature,omitempty"`
+	SystemRole  string `toml:"system_role,omitempty" json:"system_role,omitempty"`
 }
 
 type State struct {

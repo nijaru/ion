@@ -1,6 +1,7 @@
 package canto
 
 import (
+	"context"
 	"testing"
 
 	"github.com/nijaru/canto/llm"
@@ -68,14 +69,11 @@ func TestProviderModelsUsesConfiguredContextLimitWithoutDiscovery(t *testing.T) 
 }
 
 func TestOpenAICompatibleQwenModelGetsBooleanReasoningCaps(t *testing.T) {
-	capsByModel := openAICompatibleModelCaps(&config.Config{
+	_, _ = newProvider(context.Background(), &config.Config{
 		Provider: "openai-compatible",
 		Model:    "qwen3.6:27b-uncensored",
 	})
-	caps, ok := capsByModel["qwen3.6:27b-uncensored"]
-	if !ok {
-		t.Fatalf("model caps = %#v, want qwen model entry", capsByModel)
-	}
+	caps := llm.ResolveCapabilities("qwen3.6:27b-uncensored")
 	if caps.Reasoning.Kind != llm.ReasoningKindBoolean ||
 		!caps.SupportsReasoningToggle("high") ||
 		!caps.SupportsReasoningToggle("none") {
@@ -83,47 +81,25 @@ func TestOpenAICompatibleQwenModelGetsBooleanReasoningCaps(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleNonQwenModelGetsNoInferredReasoningCaps(t *testing.T) {
-	if caps := openAICompatibleModelCaps(&config.Config{
-		Provider: "openai-compatible",
-		Model:    "custom-model",
-	}); caps != nil {
-		t.Fatalf("model caps = %#v, want nil for non-qwen custom model", caps)
-	}
-}
-
 func TestOpenAICompatibleModelCapsRespectsConfigOverrides(t *testing.T) {
 	tempFalse := false
-	tempTrue := true
 
 	cfg := &config.Config{
 		Provider: "openai-compatible",
 		Model:    "my-special-mimo-v3-model",
-		ModelCapabilities: []config.ModelCapabilityOverride{
+		Models: []config.ModelDef{
 			{
-				Pattern:       "*mimo*",
-				Temperature:   &tempFalse,
-				ReasoningKind: "effort",
-				SystemRole:    "developer",
-			},
-			{
-				Pattern:       "other-model",
-				Temperature:   &tempTrue,
-				ReasoningKind: "budget",
-				SystemRole:    "user",
+				Pattern:     "*mimo*",
+				Preset:      "reasoning",
+				Temperature: &tempFalse,
+				SystemRole:  "developer",
 			},
 		},
 	}
 
-	capsMap := openAICompatibleModelCaps(cfg)
-	if capsMap == nil {
-		t.Fatal("expected model caps, got nil")
-	}
+	_, _ = newProvider(context.Background(), cfg)
 
-	caps, ok := capsMap["my-special-mimo-v3-model"]
-	if !ok {
-		t.Fatal("missing capabilities entry for model")
-	}
+	caps := llm.ResolveCapabilities("my-special-mimo-v3-model")
 
 	if caps.Temperature {
 		t.Fatal("expected temperature to be overridden to false")
