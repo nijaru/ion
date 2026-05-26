@@ -177,6 +177,13 @@ func settingsConfigUpdate(
 		}
 		updated.ThinkingVerbosity = verbosity
 		notice = "Thinking display: " + verbosity
+	case "reasoning", "reasoning_effort", "thinking_level":
+		level := config.NormalizeReasoningEffort(value)
+		if level == "" {
+			return config.Config{}, "", fmt.Errorf("usage: /settings thinking_level auto|off|minimal|low|medium|high|xhigh|max")
+		}
+		updated.ReasoningEffort = level
+		notice = "Thinking level: " + level
 	case "busy", "busy_input":
 		mode := config.NormalizeBusyInput(value)
 		if mode == "" {
@@ -190,7 +197,7 @@ func settingsConfigUpdate(
 		notice = "Busy input: " + mode
 	default:
 		return config.Config{}, "", fmt.Errorf(
-			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy] ...",
+			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy|reasoning] ...",
 		)
 	}
 	return updated, notice, nil
@@ -229,6 +236,8 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 	busy := cfg.BusyInputMode()
 	toolDisplay := displayToolVerbosity(cfg.ToolVerbosity)
 	thinkingOutput := displayThinkingVerbosity(cfg.ThinkingVerbosity)
+	reasoning := displayReasoningEffort(cfg.ReasoningEffort)
+	toolMode := displayToolMode(cfg.ToolMode)
 
 	return []pickerItem{
 		settingsPickerItem(
@@ -246,6 +255,22 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			toggleBusyInput(busy),
 			"Turn behavior",
 			"Default running-turn input behavior",
+		),
+		settingsPickerItem(
+			"Thinking level",
+			"reasoning",
+			reasoning,
+			nextSettingValue(reasoning, []string{"auto", "off", "low", "medium", "high"}),
+			"Turn behavior",
+			"Reasoning depth for thinking models",
+		),
+		settingsPickerItem(
+			"Tool permission",
+			"tool_mode",
+			toolMode,
+			nextSettingValue(toolMode, []string{"coding", "read", "all"}),
+			"Turn behavior",
+			"Execution rights for agent tools",
 		),
 		settingsPickerItem(
 			"Tool display",
@@ -375,4 +400,18 @@ func displayThinkingVerbosity(value string) string {
 		return normalized
 	}
 	return "hidden"
+}
+
+func displayReasoningEffort(value string) string {
+	if normalized := config.NormalizeReasoningEffort(value); normalized != "" {
+		return normalized
+	}
+	return "auto"
+}
+
+func displayToolMode(value string) string {
+	if normalized := config.NormalizeToolMode(value); normalized != "" {
+		return normalized
+	}
+	return "coding"
 }
