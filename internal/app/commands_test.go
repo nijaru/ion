@@ -1537,11 +1537,11 @@ func TestSettingsCommandPickerShowsDisplayDefaults(t *testing.T) {
 	}
 	text := got.String()
 	for _, want := range []string{
-		"Tool display: auto",
+		"Tool display: collapsed",
 		"Thinking output: hidden",
 		"Active turn input: steer",
 		"Enter: steer -> queue",
-		"Enter: auto -> full",
+		"Enter: collapsed -> full",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("settings missing %q: %q", want, text)

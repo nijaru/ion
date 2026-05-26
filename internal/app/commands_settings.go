@@ -251,7 +251,7 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			"Tool display",
 			"tool",
 			toolDisplay,
-			nextSettingValue(toolDisplay, []string{"auto", "full", "collapsed", "hidden"}),
+			nextSettingValue(toolDisplay, []string{"collapsed", "full", "hidden"}),
 			"Display",
 			"Tool call/result visibility",
 		),
@@ -346,7 +346,7 @@ func displayToolVerbosity(value string) string {
 	if normalized := config.NormalizeVerbosity(value); normalized != "" {
 		return normalized
 	}
-	return "auto"
+	return "collapsed"
 }
 
 func displayReadOutput(value string) string {
