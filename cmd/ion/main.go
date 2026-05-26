@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
@@ -244,8 +245,15 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
+	width, height, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || width <= 0 {
+		width = 80
+		height = 24
+	}
+
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
-		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset)
+		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
+		WithSize(width, height)
 	if openResumePicker {
 		model = model.WithSessionPicker()
 	} else if startupProviderMissing(b) {

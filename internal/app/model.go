@@ -539,6 +539,13 @@ func (m Model) WithPrintedTranscript(v bool) Model {
 	return m
 }
 
+func (m Model) WithSize(width, height int) Model {
+	m.App.Width = width
+	m.App.Height = height
+	m.layout()
+	return m
+}
+
 func (m Model) WithConfig(cfg *config.Config) Model {
 	return m.WithConfigForRuntime(cfg, cfg)
 }
