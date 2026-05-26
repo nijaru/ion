@@ -240,7 +240,7 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			"Retry transient provider/network failures",
 		),
 		settingsPickerItem(
-			"Busy input",
+			"Active turn input",
 			"busy",
 			busy,
 			toggleBusyInput(busy),

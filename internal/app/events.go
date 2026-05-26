@@ -93,6 +93,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "esc":
 		if m.InFlight.Thinking {
+			if !m.Picker.OverlayClosedAt.IsZero() && time.Since(m.Picker.OverlayClosedAt) < 250*time.Millisecond {
+				m.clearPendingAction()
+				return m, nil
+			}
 			m.clearPendingAction()
 			return m.cancelRunningTurn("Canceled by user")
 		}

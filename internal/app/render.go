@@ -445,7 +445,7 @@ func (m Model) renderStructuredPickerLine(prefix string, item pickerItem, isSele
 		} else if item.CurrentVal == "off" {
 			styleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 		} else {
-			styleVal = m.st.dim
+			styleVal = lipgloss.NewStyle()
 		}
 	}
 

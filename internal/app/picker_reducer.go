@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nijaru/ion/internal/storage"
@@ -102,12 +103,14 @@ func (r pickerReducer) completeModelLoad(
 
 func (r pickerReducer) closeOverlay() {
 	r.picker.Overlay = nil
+	r.picker.OverlayClosedAt = time.Now()
 }
 
 func (r pickerReducer) closeAll() {
 	r.picker.Overlay = nil
 	r.picker.Session = nil
 	r.picker.Setup = nil
+	r.picker.OverlayClosedAt = time.Now()
 }
 
 func (r pickerReducer) openSetup(state setupPromptState) {

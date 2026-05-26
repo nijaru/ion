@@ -207,7 +207,7 @@ func p1MatrixSettingsCommandLocalWhileActive(t *testing.T) {
 	}
 	view := assertP1ShellFrame(t, model)
 	assertP1ViewContains(t, view, "Settings")
-	assertP1ViewContains(t, view, "Busy input")
+	assertP1ViewContains(t, view, "Active turn input")
 	assertP1ViewNotContains(t, view, "Queued follow-up")
 	assertP1ViewNotContains(t, view, "› /settings")
 }

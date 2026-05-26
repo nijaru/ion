@@ -1496,7 +1496,7 @@ func TestSettingsCommandOpensCommonSettingsPicker(t *testing.T) {
 		"Retry network errors: off",
 		"Tool display: collapsed",
 		"Thinking output: hidden",
-		"Busy input: queue",
+		"Active turn input: queue",
 		"retry on",
 		"busy steer",
 	} {
@@ -1539,7 +1539,7 @@ func TestSettingsCommandPickerShowsDisplayDefaults(t *testing.T) {
 	for _, want := range []string{
 		"Tool display: auto",
 		"Thinking output: hidden",
-		"Busy input: steer",
+		"Active turn input: steer",
 		"Enter: steer -> queue",
 		"Enter: auto -> full",
 	} {

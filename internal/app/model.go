@@ -387,6 +387,7 @@ type PickerState struct {
 	SessionLoadRequest       uint64
 	ProviderSelectionRequest uint64
 	SetupSaveRequest         uint64
+	OverlayClosedAt          time.Time
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
