@@ -293,7 +293,9 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_separator_line_count 2
   tmux send-keys -t "$SESSION" Enter
   sleep 0.5
-  wait_contains "Retry network errors: off" 30
+  wait_contains "Retry network errors      [ off        ]" 30
+  tmux send-keys -t "$SESSION" Escape
+  sleep 0.5
   assert_visible_not_contains "1 queued"
   assert_visible_separator_line_count 2
   wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30

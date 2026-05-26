@@ -241,13 +241,16 @@ const (
 )
 
 type pickerItem struct {
-	Label   string
-	Value   string
-	Detail  string
-	Group   string
-	Tone    pickerTone
-	Metrics *pickerMetrics
-	Search  []pickerSearchField
+	Label       string
+	Value       string
+	Detail      string
+	Group       string
+	Tone        pickerTone
+	Metrics     *pickerMetrics
+	Search      []pickerSearchField
+	SettingName string
+	CurrentVal  string
+	Desc        string
 }
 
 type pickerMetrics struct {

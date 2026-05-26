@@ -95,36 +95,42 @@ func (m Model) renderSessionPicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.shellPaddedLine(m.st.cyan, "Resume a session"))
+	b.WriteString(m.cardTopBorder("Resume a session"))
 	b.WriteString("\n")
+
 	if m.App.Workdir != "" {
 		workspace := "Workspace: " + filepath.Base(m.App.Workdir)
 		if total := len(m.Picker.Session.items); total > 0 {
 			workspace += fmt.Sprintf(" • %d sessions", total)
 		}
-		b.WriteString(m.shellPaddedLine(m.st.dim, workspace))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  "+workspace))
 		b.WriteString("\n")
 	}
 	search := m.Picker.Session.query
 	if search == "" {
 		search = "(type to filter)"
 	}
-	b.WriteString(m.shellPaddedLine(m.st.dim, "Search: "+search))
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  Search: "+search))
 	b.WriteString("\n")
 	if m.Picker.Session.err != "" {
-		b.WriteString(m.shellPaddedLine(m.st.warn, m.Picker.Session.err))
+		b.WriteString(m.cardPaddedLine(m.st.warn, "  Error: "+m.Picker.Session.err))
 		b.WriteString("\n")
 	}
 	if m.Picker.Session.loading {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "Loading sessions..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Loading sessions..."))
 		b.WriteString("\n")
+		b.WriteString(m.cardBottomBorder())
 		return b.String()
 	}
 	if len(m.Picker.Session.filtered) == 0 {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "No matching sessions"))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  No matching sessions"))
 		b.WriteString("\n")
+		b.WriteString(m.cardBottomBorder())
 		return b.String()
 	}
+
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
 
 	const maxVisible = pickerPageSize
 	start := 0
@@ -143,7 +149,7 @@ func (m Model) renderSessionPicker() string {
 	}
 
 	if start > 0 {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  ..."))
 		b.WriteString("\n")
 	}
 	for i := start; i < end; i++ {
@@ -155,19 +161,22 @@ func (m Model) renderSessionPicker() string {
 			prefix = "› "
 			style = m.st.cyan
 		}
-		contentWidth := max(0, m.shellWidth()-ansi.StringWidth(prefix)-2)
+		contentWidth := max(0, m.shellWidth()-ansi.StringWidth(prefix)-6)
 		content := prefix + sessionPickerRenderedLine(m.App.Workdir, item.info, contentWidth)
-		b.WriteString(m.shellPaddedLine(style, content))
+		b.WriteString(m.cardPaddedLine(style, "  "+content))
 		b.WriteString("\n")
 	}
 	if end < len(m.Picker.Session.filtered) {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  ..."))
 		b.WriteString("\n")
 	}
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
 	b.WriteString(
-		m.shellPaddedLine(m.st.dim, "Type to search • PgUp/PgDn page • Enter select • Esc cancel"),
+		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Esc cancel"),
 	)
 	b.WriteString("\n")
+	b.WriteString(m.cardBottomBorder())
 	return b.String()
 }
 

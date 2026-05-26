@@ -2426,6 +2426,9 @@ func TestSetupPromptSaveReturnsBeforeCredentialWriteCompletes(t *testing.T) {
 func TestAPIKeySetupDoesNotExposeSecretInTUIOrSessionStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	stubModelCatalog(t, func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+	})
 
 	const secret = "sk-or-secret-test"
 	storageSess := &stubStorageSession{}

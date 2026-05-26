@@ -244,6 +244,28 @@ func slashCommandDefinition(name string) (slashCommandInfo, bool) {
 	return slashCommandInfo{}, false
 }
 
+func resolveSlashCommand(name string) (slashCommandInfo, bool) {
+	switch name {
+	case "/mode", "/read", "/edit", "/auto", "/yolo", "/trust":
+		return slashCommandInfo{}, false
+	}
+
+	if info, ok := slashCommandDefinition(name); ok {
+		return info, true
+	}
+
+	var matches []slashCommandInfo
+	for _, command := range slashCommandCatalog() {
+		if strings.HasPrefix(command.name, name) {
+			matches = append(matches, command)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	return slashCommandInfo{}, false
+}
+
 func slashCommandCatalog() []slashCommandInfo {
 	definitions := slashCommandDefinitions()
 	commands := make([]slashCommandInfo, 0, len(definitions))

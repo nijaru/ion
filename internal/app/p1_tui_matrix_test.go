@@ -240,8 +240,15 @@ func p1MatrixSettingsSelectionLocalWhileActive(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("settings selection did not return save command")
 	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeSettings {
+		t.Fatalf("settings picker overlay should remain open after selection")
+	}
+
+	// Press Esc to close the overlay manually
+	escMsgUpdated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = testModel(t, escMsgUpdated)
 	if model.Picker.Overlay != nil {
-		t.Fatalf("settings picker overlay = %#v, want closed after selection", model.Picker.Overlay)
+		t.Fatalf("settings picker overlay = %#v, want closed after Esc", model.Picker.Overlay)
 	}
 	if len(model.InFlight.QueuedSteering) != 0 || len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf(

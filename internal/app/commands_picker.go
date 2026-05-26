@@ -293,7 +293,16 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 		{Label: "High", Value: "high"},
 		{Label: "XHigh", Value: "xhigh"},
 	}
+	currentIndex := pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort))
 	for i := range items {
+		isActive := i == currentIndex
+		currentVal := ""
+		if isActive {
+			currentVal = "active"
+		}
+		items[i].SettingName = items[i].Label
+		items[i].CurrentVal = currentVal
+		items[i].Desc = items[i].Detail
 		items[i].Search = pickerSearchIndex(
 			items[i].Label,
 			items[i].Value,
@@ -306,7 +315,7 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 		title:    "Pick a " + m.activePresetTitle() + " thinking level",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
-		index:    pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort)),
+		index:    currentIndex,
 		purpose:  pickerPurposeThinking,
 		cfg:      cfg,
 	})
@@ -679,7 +688,6 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.pickerReducer().closeOverlay()
 			return m, cmdError("invalid settings selection")
 		}
-		m.pickerReducer().closeOverlay()
 		return m.handleSettingsCommand([]string{"/settings", fields[0], fields[1]})
 	case pickerPurposeCommand:
 		cmd := m.setComposerDraft(selected.Value + " ")

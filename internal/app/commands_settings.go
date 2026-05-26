@@ -94,6 +94,13 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	if err != nil {
 		return m, runtimeTransitionErrorCmd(err)
 	}
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
+		items := settingsPickerItems(m.Model.Config)
+		m.Picker.Overlay.items = items
+		m.Picker.Overlay.cfg = m.Model.Config
+		m.pickerReducer().refreshOverlayFilter()
+		return m, nil
+	}
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
@@ -221,10 +228,6 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 	retry := onOff(cfg.RetryUntilCancelledEnabled())
 	busy := cfg.BusyInputMode()
 	toolDisplay := displayToolVerbosity(cfg.ToolVerbosity)
-	toolMode := cfg.ActiveToolMode()
-	readOutput := displayReadOutput(cfg.ReadOutput)
-	writeOutput := displayWriteOutput(cfg.WriteOutput)
-	bashOutput := displayBashOutput(cfg.BashOutput)
 	thinkingOutput := displayThinkingVerbosity(cfg.ThinkingVerbosity)
 
 	return []pickerItem{
@@ -245,44 +248,12 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			"Default running-turn input behavior",
 		),
 		settingsPickerItem(
-			"Tool mode",
-			"tool_mode",
-			toolMode,
-			nextSettingValue(toolMode, []string{"coding", "read", "all"}),
-			"Tools",
-			"Active tool set for future turns",
-		),
-		settingsPickerItem(
 			"Tool display",
 			"tool",
 			toolDisplay,
 			nextSettingValue(toolDisplay, []string{"auto", "full", "collapsed", "hidden"}),
 			"Display",
 			"Tool call/result visibility",
-		),
-		settingsPickerItem(
-			"Read output",
-			"read",
-			readOutput,
-			nextSettingValue(readOutput, []string{"summary", "full", "hidden"}),
-			"Display",
-			"Read tool transcript detail",
-		),
-		settingsPickerItem(
-			"Write output",
-			"write",
-			writeOutput,
-			nextSettingValue(writeOutput, []string{"summary", "diff", "hidden"}),
-			"Display",
-			"Write/edit transcript detail",
-		),
-		settingsPickerItem(
-			"Bash output",
-			"bash",
-			bashOutput,
-			nextSettingValue(bashOutput, []string{"hidden", "summary", "full"}),
-			"Display",
-			"Bash transcript detail",
 		),
 		settingsPickerItem(
 			"Thinking output",
@@ -302,10 +273,13 @@ func settingsPickerItem(label, key, current, next, group, detail string) pickerI
 		itemDetail += " • " + detail
 	}
 	return pickerItem{
-		Label:  itemLabel,
-		Value:  key + " " + next,
-		Detail: itemDetail,
-		Group:  group,
+		Label:       itemLabel,
+		Value:       key + " " + next,
+		Detail:      itemDetail,
+		Group:       group,
+		SettingName: label,
+		CurrentVal:  current,
+		Desc:        detail,
 		Search: pickerSearchIndex(
 			itemLabel,
 			key+" "+current+" "+next,

@@ -1495,15 +1495,9 @@ func TestSettingsCommandOpensCommonSettingsPicker(t *testing.T) {
 	for _, want := range []string{
 		"Retry network errors: off",
 		"Tool display: collapsed",
-		"Read output: summary",
-		"Write output: summary",
-		"Bash output: hidden",
 		"Thinking output: hidden",
 		"Busy input: queue",
 		"retry on",
-		"read full",
-		"write diff",
-		"bash summary",
 		"busy steer",
 	} {
 		if !strings.Contains(got, want) {
@@ -1544,9 +1538,6 @@ func TestSettingsCommandPickerShowsDisplayDefaults(t *testing.T) {
 	text := got.String()
 	for _, want := range []string{
 		"Tool display: auto",
-		"Read output: summary",
-		"Write output: summary",
-		"Bash output: hidden",
 		"Thinking output: hidden",
 		"Busy input: steer",
 		"Enter: steer -> queue",

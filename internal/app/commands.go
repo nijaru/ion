@@ -21,18 +21,18 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	command := fields[0]
-	commandInfo, ok := slashCommandDefinition(command)
+	commandInfo, ok := resolveSlashCommand(command)
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unknown command: %s", command))
 	}
 	if !commandInfo.available() {
-		return m, cmdError(deferredFeatureMessage(command))
+		return m, cmdError(deferredFeatureMessage(commandInfo.name))
 	}
 	if m.commandRequiresIdle(commandInfo, fields) && m.localCommandBusy() {
-		return m, cmdError(m.localCommandBusyMessage(command))
+		return m, cmdError(m.localCommandBusyMessage(commandInfo.name))
 	}
 
-	switch command {
+	switch commandInfo.name {
 	case "/help":
 		return m, m.terminalCommit().Help(helpText())
 

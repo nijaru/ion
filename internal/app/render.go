@@ -181,80 +181,122 @@ func (m Model) renderPicker() string {
 		end = len(items)
 	}
 
-	metricWidths := pickerMetricWidths{}
-	for _, item := range items[start:end] {
-		if item.Metrics == nil {
-			continue
-		}
-		metricWidths.Context = max(metricWidths.Context, lipgloss.Width(item.Metrics.Context))
-		metricWidths.Input = max(metricWidths.Input, lipgloss.Width(item.Metrics.Input))
-		metricWidths.Output = max(metricWidths.Output, lipgloss.Width(item.Metrics.Output))
-	}
-	if pickerHasMetrics(items) {
-		metricWidths.Context = max(metricWidths.Context, lipgloss.Width("Context"))
-		metricWidths.Input = max(metricWidths.Input, lipgloss.Width("Input"))
-		metricWidths.Output = max(metricWidths.Output, lipgloss.Width("Output"))
-	}
-
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.shellPaddedLine(m.st.cyan, m.Picker.Overlay.title))
+	b.WriteString(m.cardTopBorder(m.Picker.Overlay.title))
 	b.WriteString("\n")
+
 	if m.Picker.Overlay.query != "" {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "Search: "+m.Picker.Overlay.query))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Search: "+m.Picker.Overlay.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.shellPaddedLine(m.st.dim, m.renderPickerHelpText()))
+
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  "+m.renderPickerHelpText()))
 	b.WriteString("\n")
+
 	if m.Picker.Overlay.loading {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "Loading models..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Loading models..."))
 		b.WriteString("\n")
 	}
 	if m.Picker.Overlay.err != "" {
-		b.WriteString(m.shellPaddedLine(m.st.warn, m.Picker.Overlay.err))
+		b.WriteString(m.cardPaddedLine(m.st.warn, "  Error: "+m.Picker.Overlay.err))
 		b.WriteString("\n")
 	}
+
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
+
 	if len(items) == 0 {
 		if !m.Picker.Overlay.loading && m.Picker.Overlay.err == "" {
-			b.WriteString(m.shellPaddedLine(m.st.dim, "No matching items"))
+			b.WriteString(m.cardPaddedLine(m.st.dim, "  No matching items"))
 			b.WriteString("\n")
 		}
+		b.WriteString(m.cardBottomBorder())
 		return b.String()
 	}
+
 	if start > 0 {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  ..."))
 		b.WriteString("\n")
 	}
+
 	labelWidth := 0
 	for _, item := range items {
 		labelWidth = max(labelWidth, lipgloss.Width(item.Label))
 	}
+
 	if pickerHasMetrics(items) {
-		b.WriteString(m.renderPickerHeader(labelWidth, metricWidths))
+		metricWidths := pickerMetricWidths{}
+		for _, it := range items[start:end] {
+			if it.Metrics == nil {
+				continue
+			}
+			metricWidths.Context = max(metricWidths.Context, lipgloss.Width(it.Metrics.Context))
+			metricWidths.Input = max(metricWidths.Input, lipgloss.Width(it.Metrics.Input))
+			metricWidths.Output = max(metricWidths.Output, lipgloss.Width(it.Metrics.Output))
+		}
+		metricWidths.Context = max(metricWidths.Context, lipgloss.Width("Context"))
+		metricWidths.Input = max(metricWidths.Input, lipgloss.Width("Input"))
+		metricWidths.Output = max(metricWidths.Output, lipgloss.Width("Output"))
+
+		b.WriteString(m.cardPaddedLine(lipgloss.NewStyle(), m.renderPickerHeader(labelWidth, metricWidths)))
 		b.WriteString("\n")
 	}
+
+	hasStructuredCols := false
+	for _, item := range items[start:end] {
+		if item.SettingName != "" {
+			hasStructuredCols = true
+			break
+		}
+	}
+
 	lastGroup := ""
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.Group != "" && item.Group != lastGroup {
-			b.WriteString("\n")
-			b.WriteString(m.shellPaddedLine(m.st.dim, item.Group))
+			b.WriteString(m.cardPaddedLine(m.st.dim.Bold(true), "  "+item.Group))
 			b.WriteString("\n")
 			lastGroup = item.Group
 		}
-		if i == m.Picker.Overlay.index {
-			b.WriteString(
-				m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, m.st.cyan),
-			)
-		} else {
-			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle(), m.st.dim))
+
+		isSelected := i == m.Picker.Overlay.index
+		prefix := "  "
+		if isSelected {
+			prefix = "› "
 		}
+
+		var line string
+		if hasStructuredCols {
+			line = m.renderStructuredPickerLine(prefix, item, isSelected)
+		} else {
+			metricWidths := pickerMetricWidths{}
+			for _, it := range items[start:end] {
+				if it.Metrics == nil {
+					continue
+				}
+				metricWidths.Context = max(metricWidths.Context, lipgloss.Width(it.Metrics.Context))
+				metricWidths.Input = max(metricWidths.Input, lipgloss.Width(it.Metrics.Input))
+				metricWidths.Output = max(metricWidths.Output, lipgloss.Width(it.Metrics.Output))
+			}
+			if pickerHasMetrics(items) {
+				metricWidths.Context = max(metricWidths.Context, lipgloss.Width("Context"))
+				metricWidths.Input = max(metricWidths.Input, lipgloss.Width("Input"))
+				metricWidths.Output = max(metricWidths.Output, lipgloss.Width("Output"))
+			}
+			line = m.renderDefaultPickerLine(prefix, item, labelWidth, metricWidths, isSelected)
+		}
+
+		b.WriteString(m.cardPaddedLine(lipgloss.NewStyle(), line))
 		b.WriteString("\n")
 	}
+
 	if end < len(items) {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  ..."))
 		b.WriteString("\n")
 	}
+
+	b.WriteString(m.cardBottomBorder())
 	return b.String()
 }
 
@@ -279,24 +321,182 @@ func (m Model) renderSetupPrompt() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.shellPaddedLine(m.st.cyan, title))
+	b.WriteString(m.cardTopBorder(title))
 	b.WriteString("\n")
 	if prompt.kind == setupPromptEndpoint {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "Example: http://127.0.0.1:11434/v1"))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Example: http://127.0.0.1:11434/v1"))
 		b.WriteString("\n")
 	}
 	if prompt.err != "" {
-		b.WriteString(m.shellPaddedLine(m.st.warn, prompt.err))
+		b.WriteString(m.cardPaddedLine(m.st.warn, "  Error: "+prompt.err))
 		b.WriteString("\n")
 	}
 	if prompt.saving {
-		b.WriteString(m.shellPaddedLine(m.st.dim, "Saving..."))
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Saving..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.shellPaddedLine(lipgloss.NewStyle(), "> "+value))
+	b.WriteString(m.cardPaddedLine(lipgloss.NewStyle(), "  > "+value))
 	b.WriteString("\n")
-	b.WriteString(m.shellPaddedLine(m.st.dim, help))
+	b.WriteString(m.cardDivider())
 	b.WriteString("\n")
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  "+help))
+	b.WriteString("\n")
+	b.WriteString(m.cardBottomBorder())
+	return b.String()
+}
+
+func (m Model) cardTopBorder(title string) string {
+	width := m.shellWidth()
+	if width <= 6 {
+		return m.st.dim.Render("┌" + strings.Repeat("─", max(0, width-2)) + "┐")
+	}
+	titleLen := lipgloss.Width(title)
+	prefix := "┌─ "
+	suffix := " ─"
+	totalFixed := lipgloss.Width(prefix) + lipgloss.Width(suffix) + 2
+	if titleLen+totalFixed >= width {
+		return m.st.dim.Render("┌" + strings.Repeat("─", width-2) + "┐")
+	}
+	remaining := width - totalFixed - titleLen
+	border := prefix + title + suffix + strings.Repeat("─", remaining) + "┐"
+	return m.st.dim.Render(border)
+}
+
+func (m Model) cardBottomBorder() string {
+	width := m.shellWidth()
+	if width <= 2 {
+		return m.st.dim.Render("└" + strings.Repeat("─", max(0, width-2)) + "┘")
+	}
+	return m.st.dim.Render("└" + strings.Repeat("─", width-2) + "┘")
+}
+
+func (m Model) cardDivider() string {
+	width := m.shellWidth()
+	if width <= 2 {
+		return m.st.dim.Render("├" + strings.Repeat("─", max(0, width-2)) + "┤")
+	}
+	return m.st.dim.Render("├" + strings.Repeat("─", width-2) + "┤")
+}
+
+func (m Model) cardPaddedLine(style lipgloss.Style, text string) string {
+	width := m.shellWidth()
+	if width <= 4 {
+		return m.st.dim.Render("│ ") + m.st.dim.Render(" │")
+	}
+	innerWidth := width - 4
+	fitted := fitLine(text, innerWidth)
+	plainText := ansi.Strip(fitted)
+	textWidth := ansi.StringWidth(plainText)
+	var pad string
+	if textWidth < innerWidth {
+		pad = strings.Repeat(" ", innerWidth-textWidth)
+	}
+	return m.st.dim.Render("│ ") + style.Render(fitted) + pad + m.st.dim.Render(" │")
+}
+
+func (m Model) renderStructuredPickerLine(prefix string, item pickerItem, isSelected bool) string {
+	nameWidth := 24
+	valWidth := 14
+
+	name := item.SettingName
+	if len(name) > nameWidth {
+		name = name[:nameWidth-3] + "..."
+	} else {
+		name = name + strings.Repeat(" ", nameWidth-len(name))
+	}
+
+	var valStr string
+	if item.CurrentVal != "" {
+		valStr = "[ " + item.CurrentVal + " ]"
+	} else {
+		valStr = "[   ]"
+	}
+
+	if len(valStr) > valWidth {
+		valStr = valStr[:valWidth]
+	} else {
+		innerLen := valWidth - 4
+		valInner := item.CurrentVal
+		if len(valInner) > innerLen {
+			valInner = valInner[:innerLen]
+		}
+		padRight := innerLen - len(valInner)
+		valStr = "[ " + valInner + strings.Repeat(" ", padRight) + " ]"
+	}
+
+	stylePrefix := m.st.dim
+	styleName := lipgloss.NewStyle()
+	styleVal := m.st.cyan
+	styleDesc := m.st.dim
+
+	if isSelected {
+		stylePrefix = m.st.cyan
+		styleName = m.st.cyan.Bold(true)
+		if item.CurrentVal == "on" || item.CurrentVal == "active" {
+			styleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
+		} else if item.CurrentVal == "off" {
+			styleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+		} else {
+			styleVal = m.st.cyan.Bold(true)
+		}
+	} else {
+		if item.CurrentVal == "on" || item.CurrentVal == "active" {
+			styleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+		} else if item.CurrentVal == "off" {
+			styleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+		} else {
+			styleVal = m.st.dim
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("  ")
+	b.WriteString(stylePrefix.Render(prefix))
+	b.WriteString(styleName.Render(name))
+	b.WriteString("  ")
+	b.WriteString(styleVal.Render(valStr))
+	if item.Desc != "" {
+		b.WriteString("  ")
+		b.WriteString(styleDesc.Render(item.Desc))
+	}
+	return b.String()
+}
+
+func (m Model) renderDefaultPickerLine(
+	prefix string,
+	item pickerItem,
+	labelWidth int,
+	metricWidths pickerMetricWidths,
+	isSelected bool,
+) string {
+	var b strings.Builder
+	b.WriteString("  ")
+
+	stylePrefix := m.st.dim
+	styleLabel := lipgloss.NewStyle()
+
+	if isSelected {
+		stylePrefix = m.st.cyan
+		styleLabel = m.st.cyan.Bold(true)
+	}
+
+	b.WriteString(stylePrefix.Render(prefix))
+	label := item.Label + strings.Repeat(
+		" ",
+		max(0, labelWidth-lipgloss.Width(item.Label)),
+	)
+	b.WriteString(styleLabel.Render(label))
+
+	if item.Metrics != nil {
+		detail := m.renderPickerMetrics(*item.Metrics, metricWidths, m.st.dim)
+		if detail != "" {
+			b.WriteString("    ")
+			b.WriteString(styleLabel.Render(detail))
+		}
+	} else if item.Detail != "" {
+		b.WriteString("    ")
+		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
+	}
 	return b.String()
 }
 
