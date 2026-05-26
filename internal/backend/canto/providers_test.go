@@ -91,3 +91,47 @@ func TestOpenAICompatibleNonQwenModelGetsNoInferredReasoningCaps(t *testing.T) {
 		t.Fatalf("model caps = %#v, want nil for non-qwen custom model", caps)
 	}
 }
+
+func TestOpenAICompatibleModelCapsRespectsConfigOverrides(t *testing.T) {
+	tempFalse := false
+	tempTrue := true
+
+	cfg := &config.Config{
+		Provider: "openai-compatible",
+		Model:    "my-special-mimo-v3-model",
+		ModelCapabilities: []config.ModelCapabilityOverride{
+			{
+				Pattern:       "*mimo*",
+				Temperature:   &tempFalse,
+				ReasoningKind: "effort",
+				SystemRole:    "developer",
+			},
+			{
+				Pattern:       "other-model",
+				Temperature:   &tempTrue,
+				ReasoningKind: "budget",
+				SystemRole:    "user",
+			},
+		},
+	}
+
+	capsMap := openAICompatibleModelCaps(cfg)
+	if capsMap == nil {
+		t.Fatal("expected model caps, got nil")
+	}
+
+	caps, ok := capsMap["my-special-mimo-v3-model"]
+	if !ok {
+		t.Fatal("missing capabilities entry for model")
+	}
+
+	if caps.Temperature {
+		t.Fatal("expected temperature to be overridden to false")
+	}
+	if caps.Reasoning.Kind != llm.ReasoningKindEffort {
+		t.Fatalf("reasoning kind = %q, want effort", caps.Reasoning.Kind)
+	}
+	if caps.SystemRole != llm.RoleDeveloper {
+		t.Fatalf("system role = %q, want developer", caps.SystemRole)
+	}
+}

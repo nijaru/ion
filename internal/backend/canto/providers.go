@@ -3,6 +3,7 @@ package canto
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -171,15 +172,67 @@ func providerModels(cfg *config.Config) []llm.Model {
 }
 
 func openAICompatibleModelCaps(cfg *config.Config) map[string]llm.Capabilities {
-	if cfg == nil || strings.TrimSpace(cfg.Model) == "" || !isQwenThinkingModel(cfg.Model) {
+	if cfg == nil || strings.TrimSpace(cfg.Model) == "" {
 		return nil
 	}
-	caps := llm.DefaultCapabilities()
-	caps.Reasoning = llm.ReasoningCapabilities{
-		Kind:       llm.ReasoningKindBoolean,
-		CanDisable: true,
+	modelID := strings.TrimSpace(cfg.Model)
+
+	// 1. Check user-defined overrides in config
+	for _, override := range cfg.ModelCapabilities {
+		pattern := strings.TrimSpace(override.Pattern)
+		if pattern == "" {
+			continue
+		}
+		// Match pattern against modelID
+		matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(modelID))
+		if err == nil && matched {
+			caps := llm.DefaultCapabilities()
+
+			// Override Temperature
+			if override.Temperature != nil {
+				caps.Temperature = *override.Temperature
+			}
+
+			// Override ReasoningKind
+			switch strings.ToLower(override.ReasoningKind) {
+			case "none":
+				caps.Reasoning.Kind = llm.ReasoningKindNone
+			case "effort":
+				caps.Reasoning.Kind = llm.ReasoningKindEffort
+				caps.Reasoning.Efforts = []string{"minimal", "low", "medium", "high"}
+				caps.Reasoning.CanDisable = true
+			case "budget":
+				caps.Reasoning.Kind = llm.ReasoningKindBudget
+			case "boolean":
+				caps.Reasoning.Kind = llm.ReasoningKindBoolean
+				caps.Reasoning.CanDisable = true
+			}
+
+			// Override SystemRole
+			switch strings.ToLower(override.SystemRole) {
+			case "system":
+				caps.SystemRole = llm.RoleSystem
+			case "user":
+				caps.SystemRole = llm.RoleUser
+			case "developer":
+				caps.SystemRole = llm.RoleDeveloper
+			}
+
+			return map[string]llm.Capabilities{modelID: caps}
+		}
 	}
-	return map[string]llm.Capabilities{cfg.Model: caps}
+
+	// 2. Default fallback for Qwen
+	if isQwenThinkingModel(modelID) {
+		caps := llm.DefaultCapabilities()
+		caps.Reasoning = llm.ReasoningCapabilities{
+			Kind:       llm.ReasoningKindBoolean,
+			CanDisable: true,
+		}
+		return map[string]llm.Capabilities{modelID: caps}
+	}
+
+	return nil
 }
 
 func isQwenThinkingModel(model string) bool {

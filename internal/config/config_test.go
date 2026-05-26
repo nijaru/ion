@@ -946,3 +946,67 @@ func TestBusyInputModeDefaultsToSteer(t *testing.T) {
 		t.Fatalf("busy input mode = %q, want queue", got)
 	}
 }
+
+func TestLoadParsesModelCapabilities(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	path := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[model_capabilities]]
+pattern = "*mimo*"
+temperature = false
+reasoning_kind = "effort"
+system_role = "developer"
+
+[[model_capabilities]]
+pattern = "custom-thinking"
+temperature = true
+reasoning_kind = "budget"
+system_role = "system"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.ModelCapabilities) != 2 {
+		t.Fatalf("len(ModelCapabilities) = %d, want 2", len(cfg.ModelCapabilities))
+	}
+
+	cap0 := cfg.ModelCapabilities[0]
+	if cap0.Pattern != "*mimo*" {
+		t.Fatalf("cap0 pattern = %q, want *mimo*", cap0.Pattern)
+	}
+	if cap0.Temperature == nil || *cap0.Temperature {
+		t.Fatal("cap0 temperature should be false")
+	}
+	if cap0.ReasoningKind != "effort" {
+		t.Fatalf("cap0 reasoning_kind = %q, want effort", cap0.ReasoningKind)
+	}
+	if cap0.SystemRole != "developer" {
+		t.Fatalf("cap0 system_role = %q, want developer", cap0.SystemRole)
+	}
+
+	cap1 := cfg.ModelCapabilities[1]
+	if cap1.Pattern != "custom-thinking" {
+		t.Fatalf("cap1 pattern = %q, want custom-thinking", cap1.Pattern)
+	}
+	if cap1.Temperature == nil || !*cap1.Temperature {
+		t.Fatal("cap1 temperature should be true")
+	}
+	if cap1.ReasoningKind != "budget" {
+		t.Fatalf("cap1 reasoning_kind = %q, want budget", cap1.ReasoningKind)
+	}
+	if cap1.SystemRole != "system" {
+		t.Fatalf("cap1 system_role = %q, want system", cap1.SystemRole)
+	}
+}
