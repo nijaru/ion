@@ -73,7 +73,7 @@ assert_separator_line_count_at_most() {
   local max="$1"
   local count
   capture
-  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  count="$(grep -c '^─' "$CAPTURE" || true)"
   if ((count > max)); then
     echo "too many separator-only lines: got $count, want <= $max" >&2
     echo "--- capture ---" >&2
@@ -122,7 +122,7 @@ assert_visible_separator_line_count_at_most() {
   local max="$1"
   local count
   capture_visible
-  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  count="$(grep -c '^─' "$CAPTURE" || true)"
   if ((count > max)); then
     echo "too many visible separator-only lines: got $count, want <= $max" >&2
     echo "--- capture ---" >&2
@@ -135,7 +135,7 @@ assert_visible_separator_line_count() {
   local want="$1"
   local count
   capture_visible
-  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  count="$(grep -c '^─' "$CAPTURE" || true)"
   if ((count != want)); then
     echo "visible separator-only lines: got $count, want $want" >&2
     echo "--- capture ---" >&2
@@ -287,7 +287,7 @@ send_deterministic_p1_tui_smoke() {
   assert_visible_separator_line_count 2
   send_line "/settings"
   wait_contains "Settings" 30
-  assert_visible_contains "Busy input"
+  assert_visible_contains "Active turn input"
   assert_visible_not_contains "commands"
   assert_visible_not_contains "› /settings"
   assert_visible_separator_line_count 2
@@ -472,7 +472,7 @@ assert_contains "/jobs is deferred until its roadmap phase"
 
 send_line "/settings"
 assert_contains "Settings"
-assert_contains "Busy input"
+assert_contains "Active turn input"
 assert_contains "Tool display"
 assert_visible_not_contains "commands"
 
