@@ -340,14 +340,57 @@ func pathInsideWorkspace(workdir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func matchingSlashCommands(prefix string) []string {
-	var matches []string
-	for _, command := range slashCommands() {
-		if strings.HasPrefix(command, prefix) {
-			matches = append(matches, command)
-		}
+func matchingSlashCommands(query string) []string {
+	query = strings.TrimPrefix(strings.TrimSpace(query), "/")
+	if query == "" {
+		return slashCommands()
 	}
-	return matches
+
+	search := preparePickerSearchQuery(query)
+	var ranked []rankedPickerItem
+	for i, item := range slashCommandItems() {
+		fields := []pickerSearchField{
+			{value: normalizeSearchQuery(item.Label), weight: 0},
+			{value: normalizeSearchQuery(strings.TrimPrefix(item.Value, "/")), weight: 5},
+		}
+		score, ok := pickerSearchScorePrepared(search, fields)
+		if !ok {
+			continue
+		}
+		ranked = append(ranked, rankedPickerItem{
+			item:     item,
+			score:    score,
+			index:    i,
+			labelKey: strings.ToLower(item.Label),
+			valueKey: strings.ToLower(item.Value),
+		})
+	}
+
+	slices.SortFunc(ranked, func(a, b rankedPickerItem) int {
+		if a.score != b.score {
+			return a.score - b.score
+		}
+		if cmp := strings.Compare(a.labelKey, b.labelKey); cmp != 0 {
+			return cmp
+		}
+		if cmp := strings.Compare(a.valueKey, b.valueKey); cmp != 0 {
+			return cmp
+		}
+		return a.index - b.index
+	})
+
+	if len(ranked) > 0 {
+		best := ranked[0].score
+		var filtered []string
+		for _, r := range ranked {
+			if r.score <= best+50 {
+				filtered = append(filtered, r.item.Value)
+			}
+		}
+		return filtered
+	}
+
+	return nil
 }
 
 func matchingValues(prefix string, values []string) []string {
