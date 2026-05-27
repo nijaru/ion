@@ -49,10 +49,11 @@ type Config struct {
 }
 
 type ModelDef struct {
-	Pattern     string `toml:"pattern" json:"pattern"`
-	Preset      string `toml:"preset,omitempty" json:"preset,omitempty"`
-	Temperature *bool  `toml:"temperature,omitempty" json:"temperature,omitempty"`
-	SystemRole  string `toml:"system_role,omitempty" json:"system_role,omitempty"`
+	Pattern       string `toml:"pattern" json:"pattern"`
+	Preset        string `toml:"preset,omitempty" json:"preset,omitempty"`
+	Temperature   *bool  `toml:"temperature,omitempty" json:"temperature,omitempty"`
+	SystemRole    string `toml:"system_role,omitempty" json:"system_role,omitempty"`
+	ReasoningKind string `toml:"reasoning_kind,omitempty" json:"reasoning_kind,omitempty"`
 }
 
 type State struct {
@@ -539,6 +540,23 @@ func DefaultSkillsDir() (string, error) {
 func defaultConfig() *Config {
 	return &Config{
 		SessionRetentionDays: DefaultSessionRetentionDays,
+		Models: []ModelDef{
+			// o1 family: reasoning preset, user system role
+			{Pattern: "o1", Preset: "openai-reasoning", SystemRole: "user"},
+			{Pattern: "o1-*", Preset: "openai-reasoning", SystemRole: "user"},
+			// o3 / o4 families: reasoning preset, developer system role
+			{Pattern: "o3-*", Preset: "openai-reasoning", SystemRole: "developer"},
+			{Pattern: "o4-*", Preset: "openai-reasoning", SystemRole: "developer"},
+			// Claude 3.7+ sonnet / opus family: thinking preset
+			{Pattern: "*claude-3-7-sonnet*", Preset: "reasoning", ReasoningKind: "budget"},
+			{Pattern: "*claude-opus-4*", Preset: "reasoning", ReasoningKind: "budget"},
+			{Pattern: "*claude-sonnet-4*", Preset: "reasoning", ReasoningKind: "budget"},
+			// DeepSeek R1: reasoning preset
+			{Pattern: "*deepseek-r1*", Preset: "reasoning", ReasoningKind: "effort"},
+			// Qwen / Qwq: reasoning toggle preset (boolean)
+			{Pattern: "*qwen*", Preset: "chat", ReasoningKind: "boolean"},
+			{Pattern: "*qwq*", Preset: "chat", ReasoningKind: "boolean"},
+		},
 	}
 }
 

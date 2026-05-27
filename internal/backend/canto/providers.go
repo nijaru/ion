@@ -90,7 +90,7 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 	for _, mDef := range cfg.Models {
 		preset := llm.ModelPreset(mDef.Preset)
 		var customCaps *llm.Capabilities
-		if mDef.Temperature != nil || mDef.SystemRole != "" {
+		if mDef.Temperature != nil || mDef.SystemRole != "" || mDef.ReasoningKind != "" {
 			var caps llm.Capabilities
 			if preset == llm.PresetReasoning {
 				caps = llm.Capabilities{
@@ -133,6 +133,22 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 					caps.SystemRole = llm.RoleDeveloper
 				}
 			}
+			if mDef.ReasoningKind != "" {
+				switch strings.ToLower(strings.TrimSpace(mDef.ReasoningKind)) {
+				case "effort":
+					caps.Reasoning.Kind = llm.ReasoningKindEffort
+					caps.Reasoning.Efforts = []string{"minimal", "low", "medium", "high"}
+					caps.Reasoning.CanDisable = true
+				case "budget":
+					caps.Reasoning.Kind = llm.ReasoningKindBudget
+					caps.Reasoning.BudgetMinTokens = 1024
+				case "boolean":
+					caps.Reasoning.Kind = llm.ReasoningKindBoolean
+					caps.Reasoning.CanDisable = true
+				case "none":
+					caps.Reasoning.Kind = llm.ReasoningKindNone
+				}
+			}
 			customCaps = &caps
 		}
 		llm.RegisterModel(llm.ModelDef{
@@ -141,36 +157,6 @@ func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) 
 			Capabilities: customCaps,
 		})
 	}
-
-	// Register global preset overrides for Qwen models
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*qwen*",
-		Preset:  llm.PresetChat,
-		Capabilities: &llm.Capabilities{
-			Streaming:   true,
-			Tools:       true,
-			Temperature: true,
-			SystemRole:  llm.RoleSystem,
-			Reasoning: llm.ReasoningCapabilities{
-				Kind:       llm.ReasoningKindBoolean,
-				CanDisable: true,
-			},
-		},
-	})
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*qwq*",
-		Preset:  llm.PresetChat,
-		Capabilities: &llm.Capabilities{
-			Streaming:   true,
-			Tools:       true,
-			Temperature: true,
-			SystemRole:  llm.RoleSystem,
-			Reasoning: llm.ReasoningCapabilities{
-				Kind:       llm.ReasoningKindBoolean,
-				CanDisable: true,
-			},
-		},
-	})
 
 	def, ok := providers.Lookup(cfg.Provider)
 	if !ok {
@@ -247,13 +233,29 @@ func providerModels(cfg *config.Config) []llm.Model {
 		return nil
 	}
 	model := llm.Model{ID: cfg.Model}
+	var isReasoning bool
 	if meta, ok := registry.GetCachedMetadata(cfg.Provider, cfg.Model); ok {
 		model.ContextWindow = meta.ContextLimit
 		model.CostPer1MIn = meta.InputPrice
 		model.CostPer1MOut = meta.OutputPrice
+		isReasoning = meta.Reasoning
 	}
 	if cfg.ContextLimit > 0 {
 		model.ContextWindow = cfg.ContextLimit
+	}
+	if isReasoning {
+		caps := llm.Capabilities{
+			Streaming:   true,
+			Tools:       true,
+			Temperature: false,
+			SystemRole:  llm.RoleSystem,
+			Reasoning: llm.ReasoningCapabilities{
+				Kind:       llm.ReasoningKindEffort,
+				Efforts:    []string{"minimal", "low", "medium", "high"},
+				CanDisable: true,
+			},
+		}
+		model.Capabilities = &caps
 	}
 	return []llm.Model{model}
 }

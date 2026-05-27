@@ -219,11 +219,12 @@ type anthropicModel struct {
 }
 
 type openRouterModel struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	ContextLength int64              `json:"context_length"`
-	Pricing       openRouterPricing  `json:"pricing"`
-	TopProvider   openRouterProvider `json:"top_provider"`
+	ID                  string             `json:"id"`
+	Name                string             `json:"name"`
+	ContextLength       int64              `json:"context_length"`
+	Pricing             openRouterPricing  `json:"pricing"`
+	TopProvider         openRouterProvider `json:"top_provider"`
+	SupportedParameters []string           `json:"supported_parameters"`
 }
 
 type openRouterPricing struct {
@@ -329,6 +330,13 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 		}
 		inputPrice, inputKnown := parseMillionCost(model.Pricing.Prompt)
 		outputPrice, outputKnown := parseMillionCost(model.Pricing.Completion)
+		isReasoning := false
+		for _, param := range model.SupportedParameters {
+			if strings.ToLower(param) == "reasoning" {
+				isReasoning = true
+				break
+			}
+		}
 		models = append(models, ModelMetadata{
 			ID:               model.ID,
 			Provider:         "openrouter",
@@ -338,6 +346,7 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 			InputPriceKnown:  inputKnown,
 			OutputPriceKnown: outputKnown,
 			UpdatedAt:        time.Now().Unix(),
+			Reasoning:        isReasoning,
 		})
 	}
 

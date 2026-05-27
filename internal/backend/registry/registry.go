@@ -24,6 +24,7 @@ type ModelMetadata struct {
 	OutputPriceKnown bool    `json:"output_price_known"`
 	Created          int64   `json:"created"`
 	UpdatedAt        int64   `json:"updated_at"`
+	Reasoning        bool    `json:"reasoning"`
 }
 
 var (
