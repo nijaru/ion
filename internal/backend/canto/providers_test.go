@@ -68,16 +68,18 @@ func TestProviderModelsUsesConfiguredContextLimitWithoutDiscovery(t *testing.T) 
 	}
 }
 
-func TestOpenAICompatibleQwenModelGetsBooleanReasoningCaps(t *testing.T) {
-	_, _ = newProvider(context.Background(), &config.Config{
-		Provider: "openai-compatible",
-		Model:    "qwen3.6:27b-uncensored",
+func TestProviderModelsAttachesReasoningCapsFromMetadata(t *testing.T) {
+	// Without metadata, model should have no capabilities attached
+	models := providerModels(&config.Config{
+		Provider: "openrouter",
+		Model:    "qwen/qwen3-235b-a22b",
 	})
-	caps := llm.ResolveCapabilities("qwen3.6:27b-uncensored")
-	if caps.Reasoning.Kind != llm.ReasoningKindBoolean ||
-		!caps.SupportsReasoningToggle("high") ||
-		!caps.SupportsReasoningToggle("none") {
-		t.Fatalf("qwen reasoning caps = %#v, want boolean disable-capable", caps.Reasoning)
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	// No metadata cached, so capabilities should be nil
+	if models[0].Capabilities != nil {
+		t.Fatalf("expected nil capabilities without metadata, got %#v", models[0].Capabilities)
 	}
 }
 

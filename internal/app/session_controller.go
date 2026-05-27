@@ -510,8 +510,18 @@ func sessionErrorDisplay(err error) string {
 	if raw == "" {
 		return "session error"
 	}
-	if strings.Contains(strings.ToLower(raw), "assistant response has no content") {
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "assistant response has no content") {
 		return "Provider returned an empty response. Try again or switch models."
+	}
+	if strings.Contains(lower, "status code: 422") || strings.Contains(lower, "unprocessable entity") {
+		return "Model rejected the request (422). This often happens with reasoning models that don't accept temperature. Try /model to switch models."
+	}
+	if strings.Contains(lower, "message has invalid role") {
+		return "Session history contains an invalid message role. Try starting a new session with /session."
+	}
+	if strings.Contains(lower, "too many empty") || strings.Contains(lower, "empty messages") {
+		return "Provider sent too many empty responses. Try again or switch models with /model."
 	}
 	return privacy.Redact(raw)
 }

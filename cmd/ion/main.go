@@ -261,14 +261,18 @@ func main() {
 	} else if startupModelMissing(b) {
 		model = model.WithModelPicker()
 	}
-	printStartup(
-		os.Stdout,
-		startupLines,
-		workspaceHeader(cwd, branch),
-		sessionID != "",
-		model.RenderEntries(startupEntries...),
-	)
-	model = model.WithPrintedTranscript(len(startupEntries) > 0)
+	// Skip startup banner when opening the resume picker — the resume flow
+	// will print its own header after the user selects a session.
+	if !openResumePicker {
+		printStartup(
+			os.Stdout,
+			startupLines,
+			workspaceHeader(cwd, branch),
+			sessionID != "",
+			model.RenderEntries(startupEntries...),
+		)
+		model = model.WithPrintedTranscript(len(startupEntries) > 0)
+	}
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
 	agentToClose, sessionToClose := runtimeHandlesForClose(finalModel, b.Session(), sess)
