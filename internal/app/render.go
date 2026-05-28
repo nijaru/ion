@@ -11,19 +11,19 @@ import (
 const composerPrompt = "› "
 
 func (m Model) View() tea.View {
-	if !m.App.Ready {
-		return tea.NewView("loading...")
-	}
-
 	if m.Picker.PreStartupMode {
 		var v tea.View
-		if m.Picker.Session != nil {
-			v = tea.NewView(m.renderSessionPicker())
-		} else {
+		if !m.App.Ready || m.Picker.Session == nil {
 			v = tea.NewView("loading...")
+		} else {
+			v = tea.NewView(m.renderSessionPicker())
 		}
 		v.AltScreen = true
 		return v
+	}
+
+	if !m.App.Ready {
+		return tea.NewView("loading...")
 	}
 
 	var b strings.Builder
