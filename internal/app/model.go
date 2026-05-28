@@ -386,6 +386,8 @@ type PickerState struct {
 	ProviderSelectionRequest uint64
 	SetupSaveRequest         uint64
 	OverlayClosedAt          time.Time
+	PreStartupMode           bool
+	SelectedSessionID        string
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -546,4 +548,8 @@ func (m Model) Init() tea.Cmd {
 		loadGitDiffStats(m.App.Workdir),
 		m.startupPickerCmd(),
 	)
+}
+
+func (m Model) SelectedSessionID() string {
+	return m.Picker.SelectedSessionID
 }

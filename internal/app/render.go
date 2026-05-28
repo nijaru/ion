@@ -15,6 +15,17 @@ func (m Model) View() tea.View {
 		return tea.NewView("loading...")
 	}
 
+	if m.Picker.PreStartupMode {
+		var v tea.View
+		if m.Picker.Session != nil {
+			v = tea.NewView(m.renderSessionPicker())
+		} else {
+			v = tea.NewView("loading...")
+		}
+		v.AltScreen = true
+		return v
+	}
+
 	var b strings.Builder
 
 	// Plane B — ephemeral in-flight content

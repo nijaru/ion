@@ -121,18 +121,52 @@ func main() {
 		return
 	}
 
-	sessionID, err := startupSessionID(
-		ctx,
-		store,
-		cwd,
-		cli.sessionID(),
-		cli.resumeID(),
-		cli.resumeShortID(),
-		cli.continueRequested(),
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
+	var sessionID string
+	if openResumePicker {
+		width, height, err := term.GetSize(os.Stdout.Fd())
+		if err != nil || width <= 0 {
+			width = 80
+			height = 24
+		}
+		pickerModel := app.New(nil, nil, store, cwd, branch, version, nil).
+			WithConfig(cfg).
+			WithSize(width, height).
+			WithSessionPreStartupMode()
+
+		p := tea.NewProgram(&pickerModel)
+		finalPickerModel, pickerErr := p.Run()
+		if pickerErr != nil {
+			fmt.Fprintf(os.Stderr, "session picker error: %v\n", pickerErr)
+			os.Exit(1)
+		}
+
+		appPickerModel, ok := finalPickerModel.(*app.Model)
+		if !ok || appPickerModel == nil {
+			os.Exit(0)
+		}
+
+		selectedSessionID := appPickerModel.SelectedSessionID()
+		if selectedSessionID == "" {
+			os.Exit(0)
+		}
+
+		sessionID = selectedSessionID
+		openResumePicker = false
+	} else {
+		var err error
+		sessionID, err = startupSessionID(
+			ctx,
+			store,
+			cwd,
+			cli.sessionID(),
+			cli.resumeID(),
+			cli.resumeShortID(),
+			cli.continueRequested(),
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
 	}
 	if cli.exportSessionPath() != "" {
 		if sessionID == "" {

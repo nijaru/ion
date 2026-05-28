@@ -45,6 +45,9 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
 		m.pickerReducer().closeSession()
+		if m.Picker.PreStartupMode {
+			return m, tea.Quit
+		}
 		return m, nil
 	case "backspace":
 		m.pickerReducer().backspaceSessionQuery(m.App.Workdir)
@@ -67,6 +70,10 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.pickerReducer().closeSession()
+		if m.Picker.PreStartupMode {
+			m.Picker.SelectedSessionID = selected.ID
+			return m, tea.Quit
+		}
 		return m.resumeStoredSessionByID(selected.ID)
 	default:
 		if text, ok := keyTextInput(msg); ok {

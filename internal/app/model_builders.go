@@ -52,6 +52,13 @@ func (m Model) WithSessionPicker() Model {
 	return m
 }
 
+func (m Model) WithSessionPreStartupMode() Model {
+	m.Picker.PreStartupMode = true
+	m, _ = m.openSessionPicker()
+	return m
+}
+
+
 func (m Model) WithProviderPicker() Model {
 	m, _ = m.openProviderPicker()
 	return m
