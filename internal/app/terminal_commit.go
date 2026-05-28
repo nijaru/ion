@@ -67,6 +67,43 @@ func (c terminalCommitController) DeferredLines(lines ...string) tea.Cmd {
 	return c.Lines(lines...)
 }
 
+func (c terminalCommitController) SwitchReplay(
+	printLines []string,
+	entries []session.Entry,
+	notice string,
+	status string,
+) tea.Cmd {
+	c.MarkPrinted()
+	var lines []string
+	if len(printLines) > 0 {
+		lines = append(lines, printLines...)
+	}
+	if len(entries) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, c.model.RenderEntries(entries...)...)
+	}
+	if strings.TrimSpace(notice) != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, c.model.renderEntry(systemEntry(notice)))
+	}
+	if strings.TrimSpace(status) != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, c.model.renderEntry(systemEntry(status)))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	c.model.holdEnterForLargePrint(physicalLineCount(lines))
+	return deferredTerminalCommitCmd(lines...)
+}
+
+
 func (m Model) RenderEntries(entries ...session.Entry) []string {
 	lines := make([]string, 0, len(entries)*2)
 	for _, entry := range entries {
