@@ -481,7 +481,12 @@ func New(
 	spt.Spinner = spinner.MiniDot
 	spt.Style = st.cyan
 
-	boot := b.Bootstrap()
+	var boot backend.Bootstrap
+	var sess session.AgentSession
+	if b != nil {
+		boot = b.Bootstrap()
+		sess = b.Session()
+	}
 	var checkpoints *ionworkspace.CheckpointStore
 	if checkpointPath, err := ionworkspace.DefaultCheckpointPath(); err == nil {
 		checkpoints = ionworkspace.NewCheckpointStore(checkpointPath)
@@ -496,7 +501,7 @@ func New(
 		},
 		Model: ModelState{
 			Backend:     b,
-			Session:     b.Session(),
+			Session:     sess,
 			Storage:     s,
 			Store:       store,
 			Switcher:    switcher,

@@ -2693,3 +2693,28 @@ func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testin
 		t.Fatalf("setup prompt value = %q, want configured endpoint", model.Picker.Setup.value)
 	}
 }
+
+func TestNewModelAllowsNilBackendForPreStartupPicker(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	model := New(nil, nil, store, "/tmp/test", "main", "dev", nil).
+		WithSessionPreStartupMode()
+
+	if !model.Picker.PreStartupMode {
+		t.Fatal("expected PreStartupMode to be true")
+	}
+	if model.Model.Backend != nil {
+		t.Fatal("expected Model.Backend to be nil")
+	}
+
+	// Verify that View() renders without panicking and uses AltScreen = true
+	model.App.Ready = true
+	view := model.View()
+	if !view.AltScreen {
+		t.Fatal("expected AltScreen to be true in PreStartupMode")
+	}
+}
