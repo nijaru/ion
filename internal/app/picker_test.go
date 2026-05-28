@@ -19,6 +19,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/credentials"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -2716,5 +2717,33 @@ func TestNewModelAllowsNilBackendForPreStartupPicker(t *testing.T) {
 	view := model.View()
 	if !view.AltScreen {
 		t.Fatal("expected AltScreen to be true in PreStartupMode")
+	}
+}
+
+func TestInitWithoutSessionDoesNotAwaitSessionEvent(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Model with nil session (PreStartupMode session picker)
+	modelNilSess := New(nil, nil, store, "/tmp/test", "main", "dev", nil).
+		WithSessionPreStartupMode()
+
+	cmd := modelNilSess.Init()
+	if cmd == nil {
+		t.Fatal("expected Init to return non-nil batch command")
+	}
+
+	// Model with active session
+	activeSession := &stubSession{events: make(chan session.Event)}
+	activeStorageSession := &stubStorageSession{}
+	activeBackend := stubBackend{sess: activeSession}
+	modelWithSess := New(activeBackend, activeStorageSession, store, "/tmp/test", "main", "dev", nil)
+
+	cmdWithSess := modelWithSess.Init()
+	if cmdWithSess == nil {
+		t.Fatal("expected Init to return non-nil batch command when session is present")
 	}
 }

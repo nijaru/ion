@@ -546,13 +546,16 @@ func New(
 
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textarea.Blink,
 		m.Input.Spinner.Tick,
-		m.awaitSessionEvent(),
 		loadGitDiffStats(m.App.Workdir),
 		m.startupPickerCmd(),
-	)
+	}
+	if m.Model.Session != nil {
+		cmds = append(cmds, m.awaitSessionEvent())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) SelectedSessionID() string {
