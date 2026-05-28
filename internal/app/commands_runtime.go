@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/runtimecontroller"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -81,7 +80,7 @@ func (m Model) configForStoredSession(provider, model string) (*config.Config, e
 	return updateModelForPreset(cfg, model, presetPrimary), nil
 }
 
-func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
+func (m Model) switchPresetCommand(preset Preset) (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, cmdError(m.localCommandBusyMessage("changing presets"))
 	}
@@ -124,7 +123,7 @@ func (m Model) ResumeSessionID() string {
 }
 
 func (m Model) switchRuntimeCommand(
-	transition runtimeTransition,
+	transition Transition,
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
@@ -136,11 +135,11 @@ func (m Model) switchRuntimeCommand(
 	}
 
 	switcher := m.Model.Switcher
-	current := m.runtimeHandles()
+	current := m.Handles()
 	requestID := m.runtimeRequest().begin("Switching runtime...")
 
 	return m, func() tea.Msg {
-		result, err := runtimecontroller.Switch(context.Background(), runtimecontroller.SwitchInput{
+		result, err := Switch(context.Background(), SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
 			Current:         current,
@@ -172,10 +171,10 @@ func (m Model) resumeRuntimeCommand(
 		return m.beginRuntimeTransitionCommit(transition, notice)
 	}
 	switcher := m.Model.Switcher
-	current := m.runtimeHandles()
+	current := m.Handles()
 	switchID := m.runtimeRequest().begin("Switching runtime...")
 	return m, func() tea.Msg {
-		result, err := runtimecontroller.Resume(context.Background(), runtimecontroller.ResumeInput{
+		result, err := Resume(context.Background(), ResumeInput{
 			Switcher:   switcher,
 			Transition: transition,
 			Current:    current,
@@ -267,8 +266,8 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 	return m.handleLocalError(msg.err)
 }
 
-func closeRuntimeHandles(handles runtimeHandles) {
-	runtimecontroller.CloseHandles(handles)
+func closeRuntimeHandles(handles Handles) {
+	CloseHandles(handles)
 }
 
 func currentBranchName(defaultBranch string, sess storage.Session) string {

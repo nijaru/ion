@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/credentials"
 )
 
 type (
@@ -221,7 +220,7 @@ func ResolvedAuthToken(cfg *config.Config, def Definition) string {
 			return value
 		}
 	}
-	if key, ok := credentials.LookupAPIKey(def.ID); ok {
+	if key, ok := config.LookupAPIKey(def.ID); ok {
 		return key
 	}
 	return ""

@@ -4,10 +4,10 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/transcript"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 func systemEntry(content string) session.Entry {
-	entry, _ := transcript.System(content, time.Time{})
+	entry, _ := storage.EntrySystem(content, time.Time{})
 	return entry
 }

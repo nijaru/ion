@@ -92,7 +92,7 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	var err error
 	m, err = m.commitRuntimeTransition(msg.transition)
 	if err != nil {
-		return m, runtimeTransitionErrorCmd(err)
+		return m, TransitionErrorCmd(err)
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
 		items := settingsPickerItems(m.Model.Config)

@@ -17,7 +17,6 @@ import (
 
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/credentials"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -1216,7 +1215,7 @@ func TestModelPickerCtrlMChangesEditTargetWithoutChangingActiveRuntime(t *testin
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("backend model = %q, want unchanged primary model", got)
 	}
-	if model.Picker.Overlay == nil || model.Picker.Overlay.modelPreset() != presetFast {
+	if model.Picker.Overlay == nil || model.Picker.Overlay.Preset() != presetFast {
 		t.Fatalf("picker preset = %#v, want fast edit target", model.Picker.Overlay)
 	}
 	if !strings.Contains(model.Picker.Overlay.title, "Pick fast model") {
@@ -2038,8 +2037,8 @@ func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
 		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
 	}
-	if model.Picker.Overlay.modelPreset() != presetFast {
-		t.Fatalf("provider picker preset = %q, want fast", model.Picker.Overlay.modelPreset())
+	if model.Picker.Overlay.Preset() != presetFast {
+		t.Fatalf("provider picker preset = %q, want fast", model.Picker.Overlay.Preset())
 	}
 
 	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -2047,8 +2046,8 @@ func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
 	}
-	if model.Picker.Overlay.modelPreset() != presetFast {
-		t.Fatalf("model picker preset = %q, want fast", model.Picker.Overlay.modelPreset())
+	if model.Picker.Overlay.Preset() != presetFast {
+		t.Fatalf("model picker preset = %q, want fast", model.Picker.Overlay.Preset())
 	}
 	if !strings.Contains(model.Picker.Overlay.title, "Pick fast model") {
 		t.Fatalf("picker title = %q, want fast target", model.Picker.Overlay.title)
@@ -2336,7 +2335,7 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	if model.Picker.Setup != nil {
 		t.Fatal("setup prompt should close after saving key")
 	}
-	if got, ok := credentials.LookupAPIKey("anthropic"); !ok || got != "sk-ant-test" {
+	if got, ok := config.LookupAPIKey("anthropic"); !ok || got != "sk-ant-test" {
 		t.Fatalf("saved credential = (%q, %v), want sk-ant-test true", got, ok)
 	}
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
@@ -2463,7 +2462,7 @@ func TestAPIKeySetupDoesNotExposeSecretInTUIOrSessionStorage(t *testing.T) {
 	if model.Picker.Setup != nil {
 		t.Fatal("setup prompt should close after saving key")
 	}
-	if got, ok := credentials.LookupAPIKey("openrouter"); !ok || got != secret {
+	if got, ok := config.LookupAPIKey("openrouter"); !ok || got != secret {
 		t.Fatalf("saved credential = (%q, %v), want secret true", got, ok)
 	}
 	if model.App.PrintedTranscript {
@@ -2655,7 +2654,7 @@ func TestSetupPromptCommitDuringRuntimeSwitchKeepsPromptAndSkipsCredentialWrite(
 	if !strings.Contains(model.Picker.Setup.err, "runtime switch") {
 		t.Fatalf("prompt error = %q, want runtime-switch guard", model.Picker.Setup.err)
 	}
-	if got, ok := credentials.LookupAPIKey("anthropic"); ok || got != "" {
+	if got, ok := config.LookupAPIKey("anthropic"); ok || got != "" {
 		t.Fatalf("credential = (%q, %v), want no write while runtime switch is active", got, ok)
 	}
 	if model.Picker.Overlay != nil {

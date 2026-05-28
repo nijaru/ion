@@ -6,7 +6,6 @@ import (
 
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/transcript"
 )
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
@@ -26,7 +25,7 @@ func displayEntriesFromSession(
 		return nil, err
 	}
 
-	projector := transcript.New(workdir)
+	projector := New(workdir)
 	entries := make([]ionsession.Entry, 0, len(history))
 	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
@@ -47,13 +46,13 @@ func displayEntriesFromSession(
 		eventID := ev.ID.String()
 		if entry, ok := effectiveByEventID[eventID]; ok {
 			if display, ok := projector.HistoryEntry(entry); ok {
-				display = transcript.WithTimestamp(display, ev.Timestamp)
+				display = WithTimestamp(display, ev.Timestamp)
 				entries = append(entries, display)
 			}
 			seenEffective[entry.EventID] = true
 		} else if afterCutoff {
 			if display, ok := displayEventEntry(ev); ok {
-				display = transcript.WithTimestamp(display, ev.Timestamp)
+				display = WithTimestamp(display, ev.Timestamp)
 				entries = append(entries, display)
 			}
 		}
@@ -69,7 +68,7 @@ func displayEntriesFromSession(
 			entries = append(entries, display)
 		}
 	}
-	return transcript.Normalize(entries), nil
+	return Normalize(entries), nil
 }
 
 func latestDisplayCutoff(events []session.Event) (string, bool) {
@@ -100,13 +99,13 @@ func displayEventEntry(ev session.Event) (ionsession.Entry, bool) {
 		if err := ev.UnmarshalData(&data); err != nil {
 			return ionsession.Entry{}, false
 		}
-		return transcript.System(data.Content, time.Time{})
+		return EntrySystem(data.Content, time.Time{})
 	case ionSubagentEvent:
 		var data Subagent
 		if err := ev.UnmarshalData(&data); err != nil {
 			return ionsession.Entry{}, false
 		}
-		return transcript.Subagent(data.Name, data.Content, data.IsError, time.Time{})
+		return EntrySubagent(data.Name, data.Content, data.IsError, time.Time{})
 	default:
 		return ionsession.Entry{}, false
 	}

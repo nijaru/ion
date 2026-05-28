@@ -1,4 +1,4 @@
-package transcript
+package storage
 
 import (
 	"testing"
@@ -13,7 +13,7 @@ func TestLiveAndHistoryProjectionShareEntryShape(t *testing.T) {
 	timestamp := time.Date(2026, 5, 25, 12, 0, 0, 0, time.FixedZone("test", -7*60*60))
 	projector := New("/workspace")
 
-	userLive, ok := User("hello", timestamp)
+	userLive, ok := EntryUser("hello", timestamp)
 	if !ok {
 		t.Fatal("live user projection rejected non-empty content")
 	}
@@ -26,7 +26,7 @@ func TestLiveAndHistoryProjectionShareEntryShape(t *testing.T) {
 	userHistory = WithTimestamp(userHistory, timestamp)
 	assertEntry(t, userLive, userHistory)
 
-	agentLive, ok := Agent("answer", "reason", timestamp)
+	agentLive, ok := EntryAgent("answer", "reason", timestamp)
 	if !ok {
 		t.Fatal("live agent projection rejected non-empty content")
 	}
@@ -63,7 +63,7 @@ func TestLiveAndHistoryProjectionShareEntryShape(t *testing.T) {
 }
 
 func TestProjectionDropsEmptyAssistantEntries(t *testing.T) {
-	if entry, ok := Agent("  ", "\n", time.Time{}); ok {
+	if entry, ok := EntryAgent("  ", "\n", time.Time{}); ok {
 		t.Fatalf("empty live assistant projected as %#v", entry)
 	}
 	if entry, ok := New("").HistoryEntry(csession.HistoryEntry{

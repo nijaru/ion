@@ -1,4 +1,4 @@
-package tooldisplay
+package tools
 
 import (
 	"path/filepath"

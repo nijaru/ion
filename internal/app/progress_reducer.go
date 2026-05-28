@@ -46,7 +46,7 @@ func (r progressReducer) setReasoningEffort(value string) {
 	r.progress.ReasoningEffort = value
 }
 
-func (r progressReducer) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
+func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
 	r.setReasoningEffort(snapshot.Reasoning)
 	if snapshot.Status != "" {
 		r.setStatus(snapshot.Status)

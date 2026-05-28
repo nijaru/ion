@@ -6,7 +6,7 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/tooldisplay"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 func (m Model) renderToolLabel(label string, isError bool) string {
@@ -205,25 +205,25 @@ func toolTitleVerb(title string) string {
 }
 
 func (m Model) normalizeToolTitle(title string) string {
-	return tooldisplay.NormalizeTitle(title, m.toolTitleOptions())
+	return tools.NormalizeTitle(title, m.toolTitleOptions())
 }
 
 // FormatToolTitle attempts to extract the most important argument from a tool call's
 // raw JSON string to create a more readable title.
 func FormatToolTitle(name, args string) string {
-	return tooldisplay.Title(name, args, tooldisplay.Options{})
+	return tools.Title(name, args, tools.Options{})
 }
 
 func (m Model) formatToolTitle(name, args string) string {
-	return tooldisplay.Title(name, args, tooldisplay.Options{Workdir: m.App.Workdir})
+	return tools.Title(name, args, tools.Options{Workdir: m.App.Workdir})
 }
 
-func (m Model) toolTitleOptions() tooldisplay.Options {
+func (m Model) toolTitleOptions() tools.Options {
 	width := 0
 	if m.shellWidth() > 0 {
 		width = max(0, m.shellWidth()-2)
 	}
-	return tooldisplay.Options{
+	return tools.Options{
 		Workdir: m.App.Workdir,
 		Width:   width,
 	}

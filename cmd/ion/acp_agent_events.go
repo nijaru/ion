@@ -9,7 +9,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/privacy"
 	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/tooldisplay"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 type acpApprovalSession interface {
@@ -86,7 +86,7 @@ func (a *ionACPAgent) requestPermission(
 	if a.conn == nil {
 		return approvalSession.Approve(ctx, req.RequestID, false)
 	}
-	title := privacy.Redact(tooldisplay.Title(req.ToolName, req.Args, tooldisplay.Options{
+	title := privacy.Redact(tools.Title(req.ToolName, req.Args, tools.Options{
 		Workdir: sess.cwd,
 		Width:   100,
 	}))
@@ -145,7 +145,7 @@ func acpPromptText(blocks []acp.ContentBlock) (string, error) {
 }
 
 func acpToolCallStart(workdir string, e ionsession.ToolCallStarted) acp.SessionUpdate {
-	title := privacy.Redact(tooldisplay.Title(e.ToolName, e.Args, tooldisplay.Options{
+	title := privacy.Redact(tools.Title(e.ToolName, e.Args, tools.Options{
 		Workdir: workdir,
 		Width:   100,
 	}))

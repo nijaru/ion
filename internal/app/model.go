@@ -10,7 +10,6 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/runtimecontroller"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
@@ -55,36 +54,30 @@ const (
 
 const pendingActionTimeout = 1500 * time.Millisecond
 
-type modelPreset = runtimecontroller.Preset
 
 const (
-	presetPrimary = runtimecontroller.PresetPrimary
-	presetFast    = runtimecontroller.PresetFast
+	presetPrimary = PresetPrimary
+	presetFast    = PresetFast
 )
 
-type runtimeSwitcher = runtimecontroller.Switcher
 
-type runtimeHandles = runtimecontroller.Handles
 
-type runtimeSnapshot = runtimecontroller.Snapshot
 
-type runtimeTransition = runtimecontroller.Transition
 
-type acceptedRuntime = runtimecontroller.Accepted
 
 type runtimeSwitchedMsg struct {
 	switchID      uint64
-	runtime       acceptedRuntime
-	previous      runtimeHandles
+	runtime       Accepted
+	previous      Handles
 	printLines    []string
 	replayEntries []session.Entry
 	notice        string
 	showStatus    bool
 }
 
-type runtimeTransitionCommittedMsg struct {
+type TransitionCommittedMsg struct {
 	switchID   uint64
-	transition runtimeTransition
+	transition Transition
 	notice     session.Entry
 	err        error
 }
@@ -103,7 +96,7 @@ type resumeSessionSelectedMsg struct {
 type providerSelectionResolvedMsg struct {
 	requestID uint64
 	provider  string
-	preset    modelPreset
+	preset    Preset
 	selection providerSelection
 	err       error
 }
@@ -111,7 +104,7 @@ type providerSelectionResolvedMsg struct {
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    modelPreset
+	preset    Preset
 	items     []pickerItem
 	err       error
 }
@@ -119,7 +112,7 @@ type modelPickerLoadedMsg struct {
 type modelPickerSetupResolvedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    modelPreset
+	preset    Preset
 	setup     setupPromptKind
 	err       error
 }
@@ -127,13 +120,13 @@ type modelPickerSetupResolvedMsg struct {
 type setupPromptSavedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    modelPreset
+	preset    Preset
 	err       error
 }
 
 type settingsCommandMsg struct {
 	requestID     uint64
-	transition    runtimeTransition
+	transition    Transition
 	hasTransition bool
 	notice        string
 	err           error
@@ -271,7 +264,7 @@ type pickerOverlayState struct {
 	index    int
 	query    string
 	purpose  pickerPurpose
-	preset   modelPreset
+	preset   Preset
 	cfg      *config.Config
 	loading  bool
 	err      string
@@ -293,7 +286,7 @@ type setupPromptState struct {
 	provider     string
 	providerName string
 	value        string
-	preset       modelPreset
+	preset       Preset
 	cfg          config.Config
 	err          string
 	saving       bool
@@ -329,7 +322,7 @@ type AppState struct {
 	Branch            string
 	GitDiff           string
 	Version           string
-	ActivePreset      modelPreset
+	ActivePreset      Preset
 	PrintedTranscript bool
 }
 
@@ -339,9 +332,9 @@ type ModelState struct {
 	Session              session.AgentSession
 	Storage              storage.Session
 	Store                storage.Store
-	Switcher             runtimeSwitcher
+	Switcher             Switcher
 	Config               *config.Config
-	Runtime              runtimeSnapshot
+	Runtime              Snapshot
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
@@ -458,7 +451,7 @@ func New(
 	s storage.Session,
 	store storage.Store,
 	workdir, branch, version string,
-	switcher runtimeSwitcher,
+	switcher Switcher,
 ) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
@@ -523,7 +516,7 @@ func New(
 	}
 
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
-		m.App.ActivePreset = modelPresetFromString(*state.ActivePreset)
+		m.App.ActivePreset = PresetFromString(*state.ActivePreset)
 	}
 
 	if cfg, err := config.Load(); err == nil {

@@ -35,15 +35,15 @@ func (m Model) WithConfigForRuntimePreset(
 	snapshot := newRuntimeSnapshot(
 		cfg,
 		runtimeCfg,
-		modelPresetFromString(preset),
+		PresetFromString(preset),
 		"",
-	).WithHandles(m.runtimeHandles())
+	).WithHandles(m.Handles())
 	m.applyRuntimeSnapshot(snapshot)
 	return m
 }
 
 func (m Model) WithActivePreset(value string) Model {
-	m.App.ActivePreset = modelPresetFromString(value)
+	m.App.ActivePreset = PresetFromString(value)
 	return m
 }
 

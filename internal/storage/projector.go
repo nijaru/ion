@@ -1,4 +1,4 @@
-package transcript
+package storage
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/tooldisplay"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 type Projector struct {
@@ -42,7 +42,7 @@ func Normalize(entries []ionsession.Entry) []ionsession.Entry {
 	return normalized
 }
 
-func User(content string, timestamp time.Time) (ionsession.Entry, bool) {
+func EntryUser(content string, timestamp time.Time) (ionsession.Entry, bool) {
 	if strings.TrimSpace(content) == "" {
 		return ionsession.Entry{}, false
 	}
@@ -52,7 +52,7 @@ func User(content string, timestamp time.Time) (ionsession.Entry, bool) {
 	}, timestamp), true
 }
 
-func Agent(content, reasoning string, timestamp time.Time) (ionsession.Entry, bool) {
+func EntryAgent(content, reasoning string, timestamp time.Time) (ionsession.Entry, bool) {
 	entry := WithTimestamp(ionsession.Entry{
 		Role:      ionsession.Agent,
 		Content:   content,
@@ -64,7 +64,7 @@ func Agent(content, reasoning string, timestamp time.Time) (ionsession.Entry, bo
 	return entry, true
 }
 
-func System(content string, timestamp time.Time) (ionsession.Entry, bool) {
+func EntrySystem(content string, timestamp time.Time) (ionsession.Entry, bool) {
 	return WithTimestamp(ionsession.Entry{
 		Role:    ionsession.System,
 		Content: content,
@@ -83,7 +83,7 @@ func Tool(title, content string, isError bool, timestamp time.Time) (ionsession.
 	}, timestamp), true
 }
 
-func Subagent(title, content string, isError bool, timestamp time.Time) (ionsession.Entry, bool) {
+func EntrySubagent(title, content string, isError bool, timestamp time.Time) (ionsession.Entry, bool) {
 	return WithTimestamp(ionsession.Entry{
 		Role:    ionsession.Subagent,
 		Title:   title,
@@ -99,9 +99,9 @@ func (p Projector) HistoryEntry(entry csession.HistoryEntry) (ionsession.Entry, 
 	msg := entry.Message
 	switch msg.Role {
 	case llm.RoleUser:
-		return User(msg.Content, time.Time{})
+		return EntryUser(msg.Content, time.Time{})
 	case llm.RoleAssistant:
-		return Agent(msg.Content, msg.Reasoning, time.Time{})
+		return EntryAgent(msg.Content, msg.Reasoning, time.Time{})
 	case llm.RoleTool:
 		name := msg.Name
 		args := ""
@@ -113,10 +113,10 @@ func (p Projector) HistoryEntry(entry csession.HistoryEntry) (ionsession.Entry, 
 			args = entry.Tool.Arguments
 			isError = entry.Tool.IsError || strings.TrimSpace(entry.Tool.Error) != ""
 		}
-		title := tooldisplay.Title(name, args, tooldisplay.Options{Workdir: p.workdir})
+		title := tools.Title(name, args, tools.Options{Workdir: p.workdir})
 		return Tool(title, msg.Content, isError, time.Time{})
 	case llm.RoleSystem, llm.RoleDeveloper:
-		return System(msg.Content, time.Time{})
+		return EntrySystem(msg.Content, time.Time{})
 	default:
 		return ionsession.Entry{}, false
 	}
@@ -128,7 +128,7 @@ func (p Projector) ContextEntry(entry csession.HistoryEntry) (ionsession.Entry, 
 	}
 	switch entry.ContextKind {
 	case csession.ContextKindSummary, csession.ContextKindWorkingSet, csession.ContextKindBootstrap:
-		return System(entry.Message.Content, time.Time{})
+		return EntrySystem(entry.Message.Content, time.Time{})
 	default:
 		return ionsession.Entry{}, false
 	}

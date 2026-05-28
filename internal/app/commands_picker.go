@@ -48,7 +48,7 @@ func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd)
 
 func (m Model) openProviderPickerForPreset(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
@@ -84,7 +84,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 
 func (m Model) openModelPickerForPreset(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
@@ -116,7 +116,7 @@ func (m Model) openModelPickerForPreset(
 
 func (m Model) beginModelPickerSetupCheck(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -139,7 +139,7 @@ func (m Model) beginModelPickerSetupCheck(
 	return m, checkModelPickerSetup(requestID, cfg, preset)
 }
 
-func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset modelPreset) tea.Cmd {
+func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -180,7 +180,7 @@ func (m Model) handleModelPickerSetupResolved(
 func (m Model) beginProviderSelection(
 	cfg *config.Config,
 	provider string,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	updated, err := updateProviderSelection(cfg, provider)
 	if err != nil {
@@ -221,7 +221,7 @@ func (m Model) handleProviderSelectionResolved(
 func (m Model) applyProviderSelection(
 	selection providerSelection,
 	provider string,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	m.clearProgressError()
 	if selection.setup != 0 {
@@ -245,7 +245,7 @@ func (m Model) applyProviderSelection(
 
 func (m Model) openReadyModelPickerForPreset(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	cached, fresh, ok := cachedModelItemsForProvider(cfg)
 	items := m.modelPickerItemsForCatalog(cfg, cached)
@@ -424,7 +424,7 @@ func modelPickerProviderTitle(provider string) string {
 	return provider
 }
 
-func loadModelPickerItems(requestID uint64, cfg *config.Config, preset modelPreset) tea.Cmd {
+func loadModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -449,9 +449,9 @@ func (m Model) startupPickerCmd() tea.Cmd {
 		overlay.request != 0 &&
 		overlay.cfg != nil {
 		if overlay.setup {
-			return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.modelPreset())
+			return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.Preset())
 		}
-		return loadModelPickerItems(overlay.request, overlay.cfg, overlay.modelPreset())
+		return loadModelPickerItems(overlay.request, overlay.cfg, overlay.Preset())
 	}
 
 	if sessionPicker := m.Picker.Session; sessionPicker != nil &&
@@ -493,7 +493,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 	return m, nil
 }
 
-func togglePreset(p modelPreset) modelPreset {
+func togglePreset(p Preset) Preset {
 	if p == presetFast {
 		return presetPrimary
 	}
@@ -557,7 +557,7 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if m.Picker.Overlay.cfg != nil && m.Picker.Overlay.cfg.Provider != "" {
 				return m.openModelPickerForPreset(
 					m.Picker.Overlay.cfg,
-					m.Picker.Overlay.modelPreset(),
+					m.Picker.Overlay.Preset(),
 				)
 			}
 			return m, nil
@@ -565,13 +565,13 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
 			return m.openProviderPickerForPreset(
 				m.Picker.Overlay.cfg,
-				m.Picker.Overlay.modelPreset(),
+				m.Picker.Overlay.Preset(),
 			)
 		}
 		return m, nil
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			preset := togglePreset(m.Picker.Overlay.modelPreset())
+			preset := togglePreset(m.Picker.Overlay.Preset())
 			return m.openModelPickerForPreset(m.Picker.Overlay.cfg, preset)
 		}
 		return m, nil
@@ -632,11 +632,11 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
-		preset := m.Picker.Overlay.modelPreset()
+		preset := m.Picker.Overlay.Preset()
 		return m.beginProviderSelection(&cfg, selected.Value, preset)
 
 	case pickerPurposeModel:
-		preset := m.Picker.Overlay.modelPreset()
+		preset := m.Picker.Overlay.Preset()
 		currentCfg, err := m.runtimeConfigForPreset(&cfg, preset)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
@@ -699,7 +699,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 }
 
-func (p *pickerOverlayState) modelPreset() modelPreset {
+func (p *pickerOverlayState) Preset() Preset {
 	if p == nil {
 		return presetPrimary
 	}

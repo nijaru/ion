@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/credentials"
 	"github.com/nijaru/ion/internal/providers"
 )
 
@@ -16,13 +15,13 @@ var (
 	loadStableConfig = config.LoadStable
 	loadConfigFile   = config.Load
 	saveConfigFile   = config.Save
-	saveProviderKey  = credentials.SaveAPIKey
+	saveProviderKey  = config.SaveAPIKey
 )
 
 func (m Model) openAPIKeyPrompt(
 	cfg *config.Config,
 	provider string,
-	preset modelPreset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	def, ok := providers.Lookup(provider)
 	if !ok {
@@ -55,7 +54,7 @@ func providerSupportsAPIKeyPrompt(def providers.Definition) bool {
 	}
 }
 
-func (m Model) openEndpointPrompt(cfg *config.Config, preset modelPreset) (Model, tea.Cmd) {
+func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}

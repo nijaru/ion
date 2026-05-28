@@ -33,9 +33,9 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 
 	model.App.PrintedTranscript = false
 	msg := runtimeSwitchedMsg{
-		runtime: acceptedRuntime{
-			Transition: runtimeTransition{
-				Snapshot: runtimeSnapshot{},
+		runtime: Accepted{
+			Transition: Transition{
+				Snapshot: Snapshot{},
 			},
 		},
 		printLines: []string{"ion v0.0.0", "--- resumed ---"},

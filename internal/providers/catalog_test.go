@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/credentials"
 )
 
 func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
@@ -271,7 +270,7 @@ func TestCredentialStateUsesStoredProviderCredential(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("OPENAI_API_KEY", "")
-	if err := credentials.SaveAPIKey("openai", "stored-key"); err != nil {
+	if err := config.SaveAPIKey("openai", "stored-key"); err != nil {
 		t.Fatalf("save credential: %v", err)
 	}
 

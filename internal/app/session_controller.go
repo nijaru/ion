@@ -11,7 +11,6 @@ import (
 	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/internal/transcript"
 )
 
 type localErrorMsg struct {
@@ -159,7 +158,7 @@ func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 
 func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
-		entry, _ := transcript.System("Steering current turn", time.Time{})
+		entry, _ := storage.EntrySystem("Steering current turn", time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInput(msg.text)
@@ -199,7 +198,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 			queued = append(queued, msg.text)
 		}
 		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
-		entry, _ := transcript.System("Queued follow-up", time.Time{})
+		entry, _ := storage.EntrySystem("Queued follow-up", time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInputLocal(msg.text)
@@ -208,7 +207,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().queueTurn(text)
 	m.resetComposerDraft()
-	entry, _ := transcript.System("Queued follow-up", time.Time{})
+	entry, _ := storage.EntrySystem("Queued follow-up", time.Time{})
 	return m, m.terminalCommit().Entries(entry)
 }
 
@@ -242,7 +241,7 @@ func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	m.turnReducer().cancelActiveTurn()
-	entry, _ := transcript.System(reason, time.Time{})
+	entry, _ := storage.EntrySystem(reason, time.Time{})
 	return m, sequenceCmds(
 		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist cancellation", storage.System{
@@ -414,7 +413,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 }
 
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, ok := transcript.User(msg.Message, msg.Timestamp)
+	entry, ok := storage.EntryUser(msg.Message, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}
@@ -450,7 +449,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		)
 	}
 	m.turnReducer().failTurn(displayErr, time.Now())
-	entry, _ := transcript.System("Error: "+displayErr, time.Time{})
+	entry, _ := storage.EntrySystem("Error: "+displayErr, time.Time{})
 	printErr := m.terminalCommit().Entries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
 	if awaitTerminal {
@@ -472,7 +471,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	if !m.InFlight.Thinking {
 		m.progressReducer().clearLocalBusyStatus()
 	}
-	entry, _ := transcript.System("Error: "+err.Error(), time.Time{})
+	entry, _ := storage.EntrySystem("Error: "+err.Error(), time.Time{})
 	return m, m.terminalCommit().Entries(entry)
 }
 

@@ -1,4 +1,4 @@
-package credentials
+package config
 
 import (
 	"fmt"
@@ -9,15 +9,15 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-type Provider struct {
+type CredentialProvider struct {
 	APIKey string `toml:"api_key,omitempty"`
 }
 
-type File struct {
-	Providers map[string]Provider `toml:"providers,omitempty"`
+type CredentialsFile struct {
+	Providers map[string]CredentialProvider `toml:"providers,omitempty"`
 }
 
-func DefaultPath() (string, error) {
+func CredentialPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -26,11 +26,11 @@ func DefaultPath() (string, error) {
 }
 
 func LookupAPIKey(provider string) (string, bool) {
-	file, err := Load()
+	file, err := LoadCredentials()
 	if err != nil {
 		return "", false
 	}
-	credential, ok := file.Providers[normalizeProvider(provider)]
+	credential, ok := file.Providers[normalizeCredentialProvider(provider)]
 	if !ok {
 		return "", false
 	}
@@ -39,7 +39,7 @@ func LookupAPIKey(provider string) (string, bool) {
 }
 
 func SaveAPIKey(provider, key string) error {
-	provider = normalizeProvider(provider)
+	provider = normalizeCredentialProvider(provider)
 	key = strings.TrimSpace(key)
 	if provider == "" {
 		return fmt.Errorf("provider is required")
@@ -48,23 +48,23 @@ func SaveAPIKey(provider, key string) error {
 		return fmt.Errorf("API key cannot be empty")
 	}
 
-	file, err := Load()
+	file, err := LoadCredentials()
 	if err != nil {
 		return err
 	}
 	if file.Providers == nil {
-		file.Providers = map[string]Provider{}
+		file.Providers = map[string]CredentialProvider{}
 	}
-	file.Providers[provider] = Provider{APIKey: key}
-	return Save(file)
+	file.Providers[provider] = CredentialProvider{APIKey: key}
+	return SaveCredentials(file)
 }
 
-func Load() (*File, error) {
-	path, err := DefaultPath()
+func LoadCredentials() (*CredentialsFile, error) {
+	path, err := CredentialPath()
 	if err != nil {
 		return nil, err
 	}
-	file := &File{Providers: map[string]Provider{}}
+	file := &CredentialsFile{Providers: map[string]CredentialProvider{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -76,19 +76,19 @@ func Load() (*File, error) {
 		return nil, fmt.Errorf("failed to parse credentials: %w", err)
 	}
 	if file.Providers == nil {
-		file.Providers = map[string]Provider{}
+		file.Providers = map[string]CredentialProvider{}
 	}
 	return file, nil
 }
 
-func Save(file *File) error {
+func SaveCredentials(file *CredentialsFile) error {
 	if file == nil {
-		file = &File{}
+		file = &CredentialsFile{}
 	}
 	if file.Providers == nil {
-		file.Providers = map[string]Provider{}
+		file.Providers = map[string]CredentialProvider{}
 	}
-	path, err := DefaultPath()
+	path, err := CredentialPath()
 	if err != nil {
 		return err
 	}
@@ -99,10 +99,10 @@ func Save(file *File) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o600)
+	return writeCredentialFileAtomic(path, data, 0o600)
 }
 
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+func writeCredentialFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -127,7 +127,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-func normalizeProvider(provider string) string {
+func normalizeCredentialProvider(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "local-api", "custom-api":
 		return "openai-compatible"

@@ -181,18 +181,9 @@ func classifyProviderLimitError(err error) (providerLimitError, bool) {
 			}, true
 		}
 	}
-	for _, marker := range []string{
-		"status code: 422",
-		"unprocessable entity",
-	} {
-		if strings.Contains(lower, marker) {
-			return providerLimitError{
-				reason: "model_rejected",
-				label:  "Model rejected request (422)",
-				raw:    raw,
-			}, true
-		}
-	}
+	// 422 errors are handled by sessionErrorDisplay with a more helpful message
+	// that suggests actionable steps (e.g., try /model to switch models).
+	// Do not classify them here to avoid overriding that message with raw error text.
 	return providerLimitError{}, false
 }
 

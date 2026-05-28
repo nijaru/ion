@@ -141,7 +141,7 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 func runtimeSwitchMsgForTest(
 	appCfg *config.Config,
 	runtimeCfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 	status string,
 	backend backend.Backend,
 	sess session.AgentSession,
@@ -150,7 +150,7 @@ func runtimeSwitchMsgForTest(
 	return runtimeSwitchedMsg{
 		runtime: newAcceptedRuntime(
 			newRuntimeTransition(appCfg, runtimeCfg, preset, status),
-			runtimeHandles{
+			Handles{
 				Backend: backend,
 				Session: sess,
 				Storage: storageSess,
@@ -366,7 +366,7 @@ func TestRuntimeTransitionCommittedPreservesAcceptedSessionSnapshot(t *testing.T
 	}
 	model.Progress.Status = "Saving runtime settings..."
 
-	updated, _ := model.Update(runtimeTransitionCommittedMsg{
+	updated, _ := model.Update(TransitionCommittedMsg{
 		switchID: 12,
 		transition: newRuntimeTransition(
 			&config.Config{Provider: "openai", Model: "gpt-4.1", ReasoningEffort: "high"},

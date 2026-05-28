@@ -8,10 +8,9 @@ import (
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
-	"github.com/nijaru/ion/internal/runtimecontroller"
 )
 
-func (m Model) activePreset() modelPreset {
+func (m Model) activePreset() Preset {
 	switch m.App.ActivePreset {
 	case presetFast:
 		return presetFast
@@ -24,7 +23,7 @@ func (m Model) activePresetTitle() string {
 	return presetTitle(m.activePreset())
 }
 
-func presetTitle(preset modelPreset) string {
+func presetTitle(preset Preset) string {
 	switch preset {
 	case presetFast:
 		return "fast"
@@ -33,13 +32,9 @@ func presetTitle(preset modelPreset) string {
 	}
 }
 
-func modelPresetFromString(value string) modelPreset {
-	return runtimecontroller.PresetFromString(value)
-}
-
 func (m Model) runtimeConfigForPreset(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (*config.Config, error) {
 	return registry.ResolveRuntimeConfig(context.Background(), cfg, registry.Preset(preset))
 }
@@ -116,7 +111,7 @@ func (m Model) updateModelForActivePreset(cfg *config.Config, model string) *con
 func updateModelForPreset(
 	cfg *config.Config,
 	model string,
-	preset modelPreset,
+	preset Preset,
 ) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -139,7 +134,7 @@ func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) 
 func updateThinkingForPreset(
 	cfg *config.Config,
 	effort string,
-	preset modelPreset,
+	preset Preset,
 ) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -159,7 +154,7 @@ func (m Model) configuredModelForActivePreset(cfg *config.Config) string {
 	return configuredModelForPreset(cfg, m.activePreset())
 }
 
-func configuredModelForPreset(cfg *config.Config, preset modelPreset) string {
+func configuredModelForPreset(cfg *config.Config, preset Preset) string {
 	if cfg == nil {
 		return ""
 	}

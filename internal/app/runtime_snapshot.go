@@ -9,14 +9,13 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
-	"github.com/nijaru/ion/internal/runtimecontroller"
 	"github.com/nijaru/ion/internal/session"
 )
 
 type providerSelection struct {
 	cfg                  *config.Config
 	supportsModelListing bool
-	transition           runtimeTransition
+	transition           Transition
 	setup                setupPromptKind
 }
 
@@ -25,48 +24,48 @@ var saveRuntimeState = config.SaveRuntimeState
 func newRuntimeSnapshot(
 	appCfg *config.Config,
 	backendCfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 	status string,
-) runtimeSnapshot {
-	return runtimecontroller.NewSnapshot(appCfg, backendCfg, preset, status)
+) Snapshot {
+	return NewSnapshot(appCfg, backendCfg, preset, status)
 }
 
 func newRuntimeTransition(
 	appCfg *config.Config,
 	backendCfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 	status string,
-) runtimeTransition {
-	return runtimecontroller.NewTransition(appCfg, backendCfg, preset, status)
+) Transition {
+	return NewTransition(appCfg, backendCfg, preset, status)
 }
 
-func (m Model) commitRuntimeTransition(t runtimeTransition) (Model, error) {
+func (m Model) commitRuntimeTransition(t Transition) (Model, error) {
 	if t.NeedsPersistence() {
 		return m, fmt.Errorf("runtime transition requires asynchronous persistence")
 	}
-	t = t.WithHandles(m.runtimeHandles())
+	t = t.WithHandles(m.Handles())
 	m.applyRuntimeSnapshot(t.Snapshot)
 	return m, nil
 }
 
 func (m Model) beginRuntimeTransitionCommit(
-	t runtimeTransition,
+	t Transition,
 	notice session.Entry,
 ) (Model, tea.Cmd) {
 	if !t.NeedsPersistence() {
 		var err error
 		m, err = m.commitRuntimeTransition(t)
 		if err != nil {
-			return m, runtimeTransitionErrorCmd(err)
+			return m, TransitionErrorCmd(err)
 		}
 		return m, m.terminalCommit().Entries(notice)
 	}
 	switchID := m.runtimeRequest().begin("Saving runtime settings...")
 	return m, func() tea.Msg {
 		if err := t.Persist(saveRuntimeState); err != nil {
-			return runtimeTransitionCommittedMsg{switchID: switchID, err: err}
+			return TransitionCommittedMsg{switchID: switchID, err: err}
 		}
-		return runtimeTransitionCommittedMsg{
+		return TransitionCommittedMsg{
 			switchID:   switchID,
 			transition: t,
 			notice:     notice,
@@ -75,7 +74,7 @@ func (m Model) beginRuntimeTransitionCommit(
 }
 
 func (m Model) handleRuntimeTransitionCommitted(
-	msg runtimeTransitionCommittedMsg,
+	msg TransitionCommittedMsg,
 ) (Model, tea.Cmd) {
 	if !m.runtimeRequest().finish(msg.switchID) {
 		return m, nil
@@ -83,7 +82,7 @@ func (m Model) handleRuntimeTransitionCommitted(
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	transition := msg.transition.WithHandles(m.runtimeHandles())
+	transition := msg.transition.WithHandles(m.Handles())
 	m.applyRuntimeSnapshot(transition.Snapshot)
 	m.clearProgressError()
 	return m, m.terminalCommit().Entries(msg.notice)
@@ -93,7 +92,7 @@ func (m Model) providerSelection(
 	ctx context.Context,
 	cfg *config.Config,
 	provider string,
-	preset modelPreset,
+	preset Preset,
 ) (providerSelection, error) {
 	updated, err := updateProviderSelection(cfg, provider)
 	if err != nil {
@@ -105,7 +104,7 @@ func (m Model) providerSelection(
 func providerSelectionForConfig(
 	ctx context.Context,
 	updated *config.Config,
-	preset modelPreset,
+	preset Preset,
 ) (providerSelection, error) {
 	setup, err := providerSetupPrompt(ctx, updated)
 	if err != nil {
@@ -159,13 +158,13 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (setupPromptKi
 
 func (m Model) modelSelectionTransition(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 	model string,
-) (runtimeTransition, *config.Config, error) {
+) (Transition, *config.Config, error) {
 	updated := updateModelForPreset(cfg, model, preset)
 	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
 	if err != nil {
-		return runtimeTransition{}, nil, err
+		return Transition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithStatePersistence()
@@ -174,20 +173,20 @@ func (m Model) modelSelectionTransition(
 
 func (m Model) thinkingSelectionTransition(
 	cfg *config.Config,
-	preset modelPreset,
+	preset Preset,
 	level string,
-) (runtimeTransition, *config.Config, error) {
+) (Transition, *config.Config, error) {
 	updated := updateThinkingForPreset(cfg, level, preset)
 	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
 	if err != nil {
-		return runtimeTransition{}, nil, err
+		return Transition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithReasoningPersistence(preset, level)
 	return transition, runtimeCfg, nil
 }
 
-func resumeSelectionTransition(cfg *config.Config) runtimeTransition {
+func resumeSelectionTransition(cfg *config.Config) Transition {
 	return newRuntimeTransition(
 		cfg,
 		cfg,
@@ -196,7 +195,7 @@ func resumeSelectionTransition(cfg *config.Config) runtimeTransition {
 	).WithActivePresetPersistence()
 }
 
-func runtimeTransitionErrorCmd(err error) tea.Cmd {
+func TransitionErrorCmd(err error) tea.Cmd {
 	if err == nil {
 		return nil
 	}
@@ -205,7 +204,7 @@ func runtimeTransitionErrorCmd(err error) tea.Cmd {
 	}
 }
 
-func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
+func (m *Model) applyRuntimeSnapshot(snapshot Snapshot) {
 	appCfg := snapshot.AppConfig
 	backendCfg := snapshot.BackendConfig
 
@@ -219,20 +218,20 @@ func (m *Model) applyRuntimeSnapshot(snapshot runtimeSnapshot) {
 }
 
 func (m *Model) refreshRuntimeSessionSnapshot() {
-	sessionID, materialized := runtimecontroller.SessionState(m.runtimeHandles())
+	sessionID, materialized := SessionState(m.Handles())
 	m.Model.Runtime.SessionID = sessionID
 	m.Model.Runtime.Materialized = materialized
 }
 
 func newAcceptedRuntime(
-	transition runtimeTransition,
-	handles runtimeHandles,
-) acceptedRuntime {
-	return runtimecontroller.NewAccepted(transition, handles)
+	transition Transition,
+	handles Handles,
+) Accepted {
+	return NewAccepted(transition, handles)
 }
 
-func (m Model) runtimeHandles() runtimeHandles {
-	return runtimeHandles{
+func (m Model) Handles() Handles {
+	return Handles{
 		Backend: m.Model.Backend,
 		Session: m.Model.Session,
 		Storage: m.Model.Storage,
