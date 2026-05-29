@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 // Agent is the core agent loop primitive. It manages the lifecycle of an

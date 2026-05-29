@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/nijaru/ion/internal/storage/session"
+	"github.com/nijaru/ion/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 

@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"github.com/nijaru/ion/internal/tool"
+	"github.com/nijaru/ion/tool"
 )
 
 func TestToolMetadataMarksReadOnlyToolsParallelAndMutatorsSerialized(t *testing.T) {

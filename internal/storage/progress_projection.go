@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	csession "github.com/nijaru/ion/internal/storage/session"
+	csession "github.com/nijaru/ion/session"
 )
 
 type progressProjection struct {

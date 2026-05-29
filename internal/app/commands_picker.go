@@ -9,7 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/providers"
 )
 
 func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {

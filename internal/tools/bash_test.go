@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/tool"
-	"github.com/nijaru/ion/internal/tracing"
+	"github.com/nijaru/ion/tool"
+	"github.com/nijaru/ion/tracing"
 )
 
 func TestBash_Spec(t *testing.T) {

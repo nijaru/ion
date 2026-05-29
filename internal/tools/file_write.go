@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 // Write tool (formerly write_file)

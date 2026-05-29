@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nijaru/ion/internal/llm"
-	"github.com/nijaru/ion/internal/tool"
+	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/tool"
 )
 
 // Read tool (formerly read_file)

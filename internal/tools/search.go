@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 const (

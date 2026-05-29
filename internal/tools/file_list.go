@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 const defaultLSLimit = 500

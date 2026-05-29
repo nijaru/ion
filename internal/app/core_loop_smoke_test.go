@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nijaru/ion/internal/llm"
-	csession "github.com/nijaru/ion/internal/storage/session"
+	"github.com/nijaru/ion/llm"
+	csession "github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"

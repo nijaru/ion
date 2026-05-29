@@ -15,7 +15,7 @@ import (
 
 	"github.com/aymanbagabas/go-udiff"
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 // Edit tool

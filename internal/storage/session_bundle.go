@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	csession "github.com/nijaru/ion/internal/storage/session"
+	csession "github.com/nijaru/ion/session"
 )
 
 const sessionBundleVersion = 1

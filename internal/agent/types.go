@@ -6,7 +6,7 @@ package agent
 import (
 	"context"
 
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 )
 
 // StreamFn is the function signature for streaming LLM completions.

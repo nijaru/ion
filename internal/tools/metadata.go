@@ -1,6 +1,6 @@
 package tools
 
-import "github.com/nijaru/ion/internal/tool"
+import "github.com/nijaru/ion/tool"
 
 func (b *Bash) Metadata() tool.Metadata {
 	return tool.Metadata{

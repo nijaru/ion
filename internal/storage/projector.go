@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/llm"
-	csession "github.com/nijaru/ion/internal/storage/session"
+	"github.com/nijaru/ion/llm"
+	csession "github.com/nijaru/ion/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/tools"
 )

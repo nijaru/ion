@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	csession "github.com/nijaru/ion/internal/storage/session"
+	csession "github.com/nijaru/ion/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )

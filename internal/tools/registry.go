@@ -3,7 +3,7 @@ package tools
 import (
 	"fmt"
 
-	"github.com/nijaru/ion/internal/tool"
+	"github.com/nijaru/ion/tool"
 )
 
 type CodingToolsConfig struct {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/llm"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
