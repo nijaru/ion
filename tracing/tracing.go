@@ -1,12 +1,12 @@
-// Package tracing provides OpenTelemetry instrumentation for canto agents.
+// Package tracing provides OpenTelemetry instrumentation for ion agents.
 //
 // Span hierarchy per session/turn:
 //
-//	canto.session
-//	└── canto.turn
-//	    ├── canto.context   (context pipeline build)
+//	ion.session
+//	└── ion.turn
+//	    ├── ion.context   (context pipeline build)
 //	    ├── gen_ai.chat     (provider.Generate)
-//	    └── canto.tool.{name}  (tool executions, one per call)
+//	    └── ion.tool.{name}  (tool executions, one per call)
 //
 // Typical usage:
 //
@@ -25,9 +25,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const tracerName = "github.com/nijaru/canto"
+const tracerName = "github.com/nijaru/ion"
 
-// Tracer returns the canto tracer.
+// Tracer returns the ion tracer.
 func Tracer() trace.Tracer {
 	return otel.Tracer(tracerName)
 }
