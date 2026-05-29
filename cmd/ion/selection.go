@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
@@ -175,7 +175,7 @@ func backendForProvider(provider string) (backend.Backend, error) {
 		)
 	}
 	if def.Runtime == providers.RuntimeNative {
-		return canto.New(), nil
+		return agent.NewBackend(), nil
 	}
 
 	return nil, fmt.Errorf("unsupported provider %q", provider)

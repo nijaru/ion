@@ -69,11 +69,11 @@ func TestBackendForProvider(t *testing.T) {
 		want     string
 		wantErr  string
 	}{
-		{name: "canto openrouter", provider: "openrouter", want: "canto"},
-		{name: "canto anthropic", provider: "anthropic", want: "canto"},
-		{name: "canto together", provider: "together", want: "canto"},
-		{name: "canto custom openai", provider: "openai-compatible", want: "canto"},
-		{name: "canto local api", provider: "local-api", want: "canto"},
+		{name: "canto openrouter", provider: "openrouter", want: "agent"},
+		{name: "canto anthropic", provider: "anthropic", want: "agent"},
+		{name: "canto together", provider: "together", want: "agent"},
+		{name: "canto custom openai", provider: "openai-compatible", want: "agent"},
+		{name: "canto local api", provider: "local-api", want: "agent"},
 		{name: "acp claude", provider: "claude-pro", wantErr: "ACP providers are deferred"},
 		{name: "acp gemini", provider: "gemini-advanced", wantErr: "ACP providers are deferred"},
 		{name: "acp github", provider: "gh-copilot", wantErr: "ACP providers are deferred"},
@@ -826,8 +826,8 @@ func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
 	defer closeRuntimeHandles(b.Session(), sess, nil)
-	if b.Name() != "canto" {
-		t.Fatalf("backend name = %q, want canto", b.Name())
+	if b.Name() != "agent" {
+		t.Fatalf("backend name = %q, want agent", b.Name())
 	}
 	if sess == nil {
 		t.Fatal("storage session = nil, want lazy session")
