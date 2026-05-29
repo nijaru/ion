@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/canto/llm"
-	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/internal/tool"
 )
 
 type Bash struct {

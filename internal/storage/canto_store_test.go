@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/canto/llm"
-	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/llm"
+	csession "github.com/nijaru/ion/internal/storage/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 

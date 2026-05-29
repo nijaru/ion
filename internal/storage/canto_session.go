@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/canto/llm"
-	"github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/llm"
+	"github.com/nijaru/ion/internal/storage/session"
 )
 
 type cantoSession struct {

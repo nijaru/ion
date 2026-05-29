@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/ion/internal/tool"
 )
 
 func TestRegisterCodingToolsOwnsDefaultSurface(t *testing.T) {

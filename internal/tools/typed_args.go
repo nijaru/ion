@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/go-json-experiment/json"
-	cantotool "github.com/nijaru/canto/tool"
+	cantotool "github.com/nijaru/ion/internal/tool"
 )
 
 type readInput struct {

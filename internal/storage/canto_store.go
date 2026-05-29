@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/storage/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	_ "modernc.org/sqlite"
 )

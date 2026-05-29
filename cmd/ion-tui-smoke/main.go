@@ -12,8 +12,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/canto/llm"
-	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/llm"
+	csession "github.com/nijaru/ion/internal/storage/session"
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"

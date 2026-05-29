@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-const meterName = "github.com/nijaru/canto/llm"
+const meterName = "github.com/nijaru/ion/internal/llm"
 
 var (
 	usageMetricsOnce sync.Once

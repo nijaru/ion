@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/ion/internal/tool"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
