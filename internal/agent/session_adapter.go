@@ -125,12 +125,21 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("session is closed")
 	}
+	sess := s.sess
 	s.mu.Unlock()
 
 	// Create user message
 	userMsg := AgentMessage{
 		Role:    "user",
 		Content: input,
+	}
+
+	// Persist user input to session storage
+	if sess != nil {
+		_ = sess.Append(ctx, session.UserMessage{
+			Base:    session.BaseNow(),
+			Message: input,
+		})
 	}
 
 	// Run the agent loop in a goroutine
@@ -145,25 +154,37 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			return
 		}
 
-		// Emit events for new messages
+		// Emit events for new messages and persist to storage
 		for _, msg := range newMessages {
 			switch msg.Role {
 			case "user":
-				s.events <- session.UserMessage{
+				evt := session.UserMessage{
 					Base:    session.BaseNow(),
 					Message: msg.Content,
 				}
+				s.events <- evt
+				if sess != nil {
+					_ = sess.Append(ctx, evt)
+				}
 			case "assistant":
-				s.events <- session.AgentMessage{
+				evt := session.AgentMessage{
 					Base:      session.BaseNow(),
 					Message:   msg.Content,
 					Reasoning: msg.Reasoning,
 				}
+				s.events <- evt
+				if sess != nil {
+					_ = sess.Append(ctx, evt)
+				}
 			case "tool":
-				s.events <- session.ToolResult{
+				evt := session.ToolResult{
 					Base:      session.BaseNow(),
 					ToolUseID: msg.ToolID,
 					Result:    msg.Content,
+				}
+				s.events <- evt
+				if sess != nil {
+					_ = sess.Append(ctx, evt)
 				}
 			}
 		}
