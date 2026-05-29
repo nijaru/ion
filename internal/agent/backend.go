@@ -15,11 +15,16 @@ import (
 
 // Backend implements backend.Backend using the agent loop.
 type Backend struct {
-	cfg     *config.Config
-	store   storage.Store
-	sess    storage.Session
+	cfg      *config.Config
+	store    storage.Store
+	 sess    storage.Session
 	provider llm.Provider
-	session *SessionAdapter
+	session  *SessionAdapter
+
+	// toolExecutor is the tool execution function. Set via SetToolExecutor.
+	toolExecutor ToolExecutor
+	// tools are the available tool definitions. Set via SetTools.
+	tools []AgentTool
 }
 
 var _ backend.Backend = (*Backend)(nil)
@@ -27,6 +32,20 @@ var _ backend.Backend = (*Backend)(nil)
 // NewBackend creates a new agent backend.
 func NewBackend() *Backend {
 	return &Backend{}
+}
+
+// SetToolExecutor sets the tool executor for the backend.
+func (b *Backend) SetToolExecutor(exec ToolExecutor) {
+	b.toolExecutor = exec
+	// Reset session to pick up new executor
+	b.session = nil
+}
+
+// SetTools sets the available tool definitions for the backend.
+func (b *Backend) SetTools(tools []AgentTool) {
+	b.tools = tools
+	// Reset session to pick up new tools
+	b.session = nil
 }
 
 // Name returns the backend name.
@@ -139,9 +158,11 @@ func (b *Backend) createSession() *SessionAdapter {
 
 	// Create session adapter
 	sessionCfg := &SessionAdapterConfig{
-		ID:    b.sessionID(),
-		Model: model,
-		StreamFn: streamFn,
+		ID:           b.sessionID(),
+		Model:        model,
+		StreamFn:     streamFn,
+		ToolExecutor: b.toolExecutor,
+		Tools:        b.tools,
 	}
 
 	adapter := NewSessionAdapter(sessionCfg)

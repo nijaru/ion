@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/internal/agenttools"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/tools"
 )
 
 func closeRuntimeHandles(
@@ -118,6 +122,17 @@ func openRuntime(
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
+
+	// Wire up coding tools for agent backends
+	if ab, ok := b.(*agent.Backend); ok {
+		registry := tool.NewRegistry()
+		if regErr := tools.RegisterCodingTools(registry, tools.CodingToolsConfig{
+			Workdir: cwd,
+		}); regErr == nil {
+			ab.SetToolExecutor(agenttools.ExecutorFromRegistry(registry))
+			ab.SetTools(agenttools.ToolsFromRegistry(registry))
+		}
+	}
 
 	if sessionID != "" {
 		sess, err := store.ResumeSession(ctx, sessionID)

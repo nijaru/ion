@@ -43,6 +43,8 @@ type SessionAdapterConfig struct {
 	Temperature float64
 	// StreamFn is the function to stream LLM responses.
 	StreamFn StreamFn
+	// ToolExecutor executes tool calls.
+	ToolExecutor ToolExecutor
 }
 
 // NewSessionAdapter creates a new session adapter.
@@ -57,6 +59,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		MaxTokens:     config.MaxTokens,
 		Temperature:   config.Temperature,
 		StreamFn:      config.StreamFn,
+		ToolExecutor:  config.ToolExecutor,
 	}
 
 	agent := New(agentConfig)
