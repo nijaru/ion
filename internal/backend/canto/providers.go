@@ -8,7 +8,7 @@ import (
 
 	"github.com/nijaru/canto/llm"
 	cproviders "github.com/nijaru/canto/llm/providers"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/providers"
@@ -234,7 +234,7 @@ func providerModels(cfg *config.Config) []llm.Model {
 	}
 	model := llm.Model{ID: cfg.Model}
 	var isReasoning bool
-	if meta, ok := registry.GetCachedMetadata(cfg.Provider, cfg.Model); ok {
+	if meta, ok := models.GetCachedMetadata(cfg.Provider, cfg.Model); ok {
 		model.ContextWindow = meta.ContextLimit
 		model.CostPer1MIn = meta.InputPrice
 		model.CostPer1MOut = meta.OutputPrice

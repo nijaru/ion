@@ -8,7 +8,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/storage"
@@ -107,7 +107,7 @@ func startupRuntimeConfig(
 		preset = "primary"
 	}
 
-	resolved, err := registry.ResolveRuntimeConfig(ctx, cfg, registry.Preset(preset))
+	resolved, err := models.ResolveRuntimeConfig(ctx, cfg, models.Preset(preset))
 	if err == nil {
 		return resolved, preset, nil
 	}
@@ -115,7 +115,7 @@ func startupRuntimeConfig(
 		return nil, preset, err
 	}
 
-	resolved, err = registry.ResolveRuntimeConfig(ctx, cfg, registry.PresetPrimary)
+	resolved, err = models.ResolveRuntimeConfig(ctx, cfg, models.PresetPrimary)
 	if err != nil {
 		return nil, "primary", err
 	}

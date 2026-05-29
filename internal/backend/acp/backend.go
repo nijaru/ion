@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -53,7 +53,7 @@ func (b *Backend) ContextLimit() int {
 	}
 	provider := b.Provider()
 	model := b.Model()
-	if meta, ok := registry.GetMetadata(context.Background(), provider, model); ok {
+	if meta, ok := models.GetMetadata(context.Background(), provider, model); ok {
 		return meta.ContextLimit
 	}
 	return 0

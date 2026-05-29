@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -466,13 +466,13 @@ func resolveSettingsCommand(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.
 
 func stubModelCatalog(
 	t *testing.T,
-	fn func(context.Context, *config.Config) ([]registry.ModelMetadata, error),
+	fn func(context.Context, *config.Config) ([]models.ModelMetadata, error),
 ) {
 	t.Helper()
 	oldListModelsForConfig := listModelsForConfig
 	oldCachedModelsForConfig := cachedModelsForConfig
 	listModelsForConfig = fn
-	cachedModelsForConfig = func(*config.Config) ([]registry.ModelMetadata, bool, bool) {
+	cachedModelsForConfig = func(*config.Config) ([]models.ModelMetadata, bool, bool) {
 		return nil, false, false
 	}
 	t.Cleanup(func() {

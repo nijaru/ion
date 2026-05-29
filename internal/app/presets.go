@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
@@ -36,7 +36,7 @@ func (m Model) runtimeConfigForPreset(
 	cfg *config.Config,
 	preset Preset,
 ) (*config.Config, error) {
-	return registry.ResolveRuntimeConfig(context.Background(), cfg, registry.Preset(preset))
+	return models.ResolveRuntimeConfig(context.Background(), cfg, models.Preset(preset))
 }
 
 func (m Model) runtimeConfigForActivePreset(cfg *config.Config) (*config.Config, error) {

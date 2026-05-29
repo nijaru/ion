@@ -8,7 +8,7 @@ import (
 
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -75,12 +75,12 @@ func contextLimitFromConfig(cfg *config.Config) int {
 	if cfg != nil && cfg.ContextLimit > 0 {
 		return cfg.ContextLimit
 	}
-	if limit, ok := registry.CachedContextLimitForConfig(cfg); ok {
+	if limit, ok := models.CachedContextLimitForConfig(cfg); ok {
 		return limit
 	}
 	provider := providerFromConfig(cfg)
 	model := modelFromConfig(cfg)
-	if limit, ok := registry.CachedContextLimit(provider, model); ok {
+	if limit, ok := models.CachedContextLimit(provider, model); ok {
 		return limit
 	}
 	return 0

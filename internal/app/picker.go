@@ -8,15 +8,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
 
 var (
-	listModels            = registry.ListModels
-	listModelsForConfig   = registry.ListModelsForConfig
-	cachedModelsForConfig = registry.CachedModelsForConfig
+	listModels            = models.ListModels
+	listModelsForConfig   = models.ListModelsForConfig
+	cachedModelsForConfig = models.CachedModelsForConfig
 )
 
 const pickerPageSize = 8
@@ -79,9 +79,9 @@ func cachedModelItemsForProvider(cfg *config.Config) ([]pickerItem, bool, bool) 
 	return modelItemsFromMetadata(models), fresh, true
 }
 
-func modelItemsFromMetadata(models []registry.ModelMetadata) []pickerItem {
-	models = append([]registry.ModelMetadata(nil), models...)
-	slices.SortFunc(models, func(a, b registry.ModelMetadata) int {
+func modelItemsFromMetadata(metas []models.ModelMetadata) []pickerItem {
+	metas = append([]models.ModelMetadata(nil), metas...)
+	slices.SortFunc(metas, func(a, b models.ModelMetadata) int {
 		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
 			return strings.Compare(orgA, orgB)
 		}
@@ -95,7 +95,7 @@ func modelItemsFromMetadata(models []registry.ModelMetadata) []pickerItem {
 	})
 
 	var items []pickerItem
-	for _, model := range models {
+	for _, model := range metas {
 		metrics := modelMetrics(model)
 		search := pickerSearchIndex(model.ID, model.ID, "", "", metrics)
 		if model.InputPriceKnown && model.OutputPriceKnown && model.InputPrice == 0 &&
@@ -267,7 +267,7 @@ func providerCredentialSet(provider string) bool {
 	return ready
 }
 
-func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
+func modelMetrics(meta models.ModelMetadata) *pickerMetrics {
 	metrics := &pickerMetrics{}
 	if meta.ContextLimit > 0 {
 		if meta.ContextLimit >= 1000 {

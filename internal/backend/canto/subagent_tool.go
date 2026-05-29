@@ -12,7 +12,7 @@ import (
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
 	csession "github.com/nijaru/canto/session"
-	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/subagents"
 )
 
@@ -226,11 +226,11 @@ func (b *Backend) newChildAgent(
 	if tools == nil || harness == nil || harness.Agent == nil || provider == nil {
 		return nil, fmt.Errorf("subagent runtime is not initialized")
 	}
-	preset := registry.PresetPrimary
+	preset := models.PresetPrimary
 	if persona.ModelSlot == subagents.ModelSlotFast && strings.TrimSpace(cfg.FastModel) != "" {
-		preset = registry.PresetFast
+		preset = models.PresetFast
 	}
-	runtimeCfg, err := registry.ResolveRuntimeConfig(ctx, cfg, preset)
+	runtimeCfg, err := models.ResolveRuntimeConfig(ctx, cfg, preset)
 	if err != nil {
 		return nil, err
 	}
