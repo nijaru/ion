@@ -13,6 +13,9 @@ import (
 // It must not throw errors; failures are encoded in the returned stream.
 type StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 
+// ToolExecutor executes a tool call and returns the result.
+type ToolExecutor func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error)
+
 // ToolExecutionMode controls how tool calls from a single assistant message are executed.
 type ToolExecutionMode string
 
@@ -246,6 +249,8 @@ type AgentLoopConfig struct {
 	MaxTokens int `json:"max_tokens"`
 	// Temperature is the sampling temperature.
 	Temperature float64 `json:"temperature"`
+	// ToolExecutor executes tool calls.
+	ToolExecutor ToolExecutor `json:"-"`
 
 	// Hooks (optional)
 

@@ -350,12 +350,32 @@ func (a *Agent) executeToolCalls(ctx context.Context, assistantMsg AgentMessage,
 			}
 		}
 
-		// TODO: Actually execute the tool
-		// For now, return a placeholder result
-		toolResult := AgentMessage{
-			Role:    "tool",
-			Content: fmt.Sprintf("Tool %s executed (placeholder)", toolCall.Name),
-			ToolID:  toolCall.ID,
+		// Execute the tool
+		var toolResult AgentMessage
+		if config.ToolExecutor != nil {
+			result, err := config.ToolExecutor(ctx, toolCall)
+			if err != nil {
+				toolResult = AgentMessage{
+					Role:    "tool",
+					Content: fmt.Sprintf("Tool execution error: %v", err),
+					ToolID:  toolCall.ID,
+					IsError: true,
+				}
+			} else {
+				toolResult = AgentMessage{
+					Role:    "tool",
+					Content: result.Content[0].Text,
+					ToolID:  toolCall.ID,
+					IsError: result.IsError,
+				}
+			}
+		} else {
+			// No tool executor configured, return placeholder
+			toolResult = AgentMessage{
+				Role:    "tool",
+				Content: fmt.Sprintf("Tool %s executed (no executor configured)", toolCall.Name),
+				ToolID:  toolCall.ID,
+			}
 		}
 
 		// Call afterToolCall hook
