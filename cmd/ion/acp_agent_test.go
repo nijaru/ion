@@ -12,7 +12,7 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
-	ionacp "github.com/nijaru/ion/internal/backend/acp"
+	ionacp "github.com/nijaru/ion/internal/acp"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 

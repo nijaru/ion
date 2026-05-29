@@ -1,7 +1,7 @@
 package main
 
 import (
-	ionacp "github.com/nijaru/ion/internal/backend/acp"
+	ionacp "github.com/nijaru/ion/internal/acp"
 	"github.com/nijaru/ion/internal/session"
 )
 
