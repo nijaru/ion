@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 
+	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -251,6 +252,8 @@ type AgentLoopConfig struct {
 	Temperature float64 `json:"temperature"`
 	// ToolExecutor executes tool calls.
 	ToolExecutor ToolExecutor `json:"-"`
+	// OnEvent is called when a session event is emitted.
+	OnEvent func(event session.Event) `json:"-"`
 
 	// Hooks (optional)
 

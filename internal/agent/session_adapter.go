@@ -18,11 +18,15 @@ type SessionAdapter struct {
 	sess   storage.Session
 	config *SessionAdapterConfig
 
-	mu        sync.Mutex
-	id        string
-	events    chan session.Event
-	closed    bool
-	closeOnce sync.Once
+	mu            sync.Mutex
+	id            string
+	events        chan session.Event
+	closed        bool
+	closeOnce     sync.Once
+	steeringQueue []string
+	followUpQueue []string
+	turnCtx       context.Context
+	cancel        context.CancelFunc
 }
 
 // SessionAdapterConfig holds configuration for the session adapter.
@@ -53,6 +57,12 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		config.ID = "default"
 	}
 
+	s := &SessionAdapter{
+		config: config,
+		id:     config.ID,
+		events: make(chan session.Event, 100),
+	}
+
 	agentConfig := AgentLoopConfig{
 		Model:         config.Model,
 		ThinkingLevel: config.ThinkingLevel,
@@ -60,6 +70,52 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		Temperature:   config.Temperature,
 		StreamFn:      config.StreamFn,
 		ToolExecutor:  config.ToolExecutor,
+		OnEvent: func(ev session.Event) {
+			s.mu.Lock()
+			closed := s.closed
+			sess := s.sess
+			s.mu.Unlock()
+			if closed {
+				return
+			}
+			s.events <- ev
+
+			// Persist durable events to storage in real-time
+			if sess != nil {
+				switch e := ev.(type) {
+				case session.AgentMessage, session.ToolResult:
+					_ = sess.Append(context.Background(), e)
+				}
+			}
+		},
+		GetSteeringMessages: func() []AgentMessage {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if len(s.steeringQueue) == 0 {
+				return nil
+			}
+			msgs := make([]AgentMessage, len(s.steeringQueue))
+			for i, txt := range s.steeringQueue {
+				msgs[i] = AgentMessage{Role: "user", Content: txt}
+			}
+			s.steeringQueue = nil
+			s.emitQueueUpdatedLocked()
+			return msgs
+		},
+		GetFollowUpMessages: func() []AgentMessage {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if len(s.followUpQueue) == 0 {
+				return nil
+			}
+			msgs := make([]AgentMessage, len(s.followUpQueue))
+			for i, txt := range s.followUpQueue {
+				msgs[i] = AgentMessage{Role: "user", Content: txt}
+			}
+			s.followUpQueue = nil
+			s.emitQueueUpdatedLocked()
+			return msgs
+		},
 	}
 
 	agent := New(agentConfig)
@@ -70,11 +126,18 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		agent.SetTools(config.Tools)
 	}
 
-	return &SessionAdapter{
-		agent:  agent,
-		config: config,
-		id:     config.ID,
-		events: make(chan session.Event, 100),
+	s.agent = agent
+	return s
+}
+
+func (s *SessionAdapter) emitQueueUpdatedLocked() {
+	snapshot := session.QueuedInputSnapshot{
+		Steering: append([]string(nil), s.steeringQueue...),
+		FollowUp: append([]string(nil), s.followUpQueue...),
+	}
+	s.events <- session.QueuedInputUpdated{
+		Base:     session.BaseNow(),
+		Snapshot: snapshot,
 	}
 }
 
@@ -125,6 +188,13 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("session is closed")
 	}
+	// Cancel any active running context first
+	if s.cancel != nil {
+		s.cancel()
+	}
+	turnCtx, cancel := context.WithCancel(ctx)
+	s.turnCtx = turnCtx
+	s.cancel = cancel
 	sess := s.sess
 	s.mu.Unlock()
 
@@ -142,56 +212,33 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		})
 	}
 
+	// Emit UserMessage immediately so TUI projects it
+	s.events <- session.UserMessage{
+		Base:    session.BaseNow(),
+		Message: input,
+	}
+
 	// Run the agent loop in a goroutine
 	go func() {
-		newMessages, err := s.agent.Run(ctx, []AgentMessage{userMsg})
+		defer func() {
+			s.mu.Lock()
+			s.cancel = nil
+			s.turnCtx = nil
+			s.mu.Unlock()
+		}()
+		_, err := s.agent.Run(turnCtx, []AgentMessage{userMsg})
 		if err != nil {
-			s.events <- session.Error{
-				Base: session.BaseNow(),
-				Err:  err,
-				Fatal: true,
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if !closed {
+				s.events <- session.Error{
+					Base:  session.BaseNow(),
+					Err:   err,
+					Fatal: true,
+				}
 			}
 			return
-		}
-
-		// Emit events for new messages and persist to storage
-		for _, msg := range newMessages {
-			switch msg.Role {
-			case "user":
-				evt := session.UserMessage{
-					Base:    session.BaseNow(),
-					Message: msg.Content,
-				}
-				s.events <- evt
-				if sess != nil {
-					_ = sess.Append(ctx, evt)
-				}
-			case "assistant":
-				evt := session.AgentMessage{
-					Base:      session.BaseNow(),
-					Message:   msg.Content,
-					Reasoning: msg.Reasoning,
-				}
-				s.events <- evt
-				if sess != nil {
-					_ = sess.Append(ctx, evt)
-				}
-			case "tool":
-				evt := session.ToolResult{
-					Base:      session.BaseNow(),
-					ToolUseID: msg.ToolID,
-					Result:    msg.Content,
-				}
-				s.events <- evt
-				if sess != nil {
-					_ = sess.Append(ctx, evt)
-				}
-			}
-		}
-
-		// Emit turn complete event
-		s.events <- session.TurnFinished{
-			Base: session.BaseNow(),
 		}
 	}()
 
@@ -200,7 +247,16 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 
 // CancelTurn interrupts an in-flight turn if the backend supports it.
 func (s *SessionAdapter) CancelTurn(ctx context.Context) error {
-	// TODO: Implement cancellation
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("session is closed")
+	}
+
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return nil
 }
 
@@ -209,6 +265,9 @@ func (s *SessionAdapter) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.mu.Unlock()
 		close(s.events)
 	})
@@ -245,12 +304,13 @@ func (s *SessionAdapter) SteerTurn(ctx context.Context, text string) (session.St
 		s.mu.Unlock()
 		return session.SteeringResult{}, fmt.Errorf("session is closed")
 	}
+	s.steeringQueue = append(s.steeringQueue, text)
+	s.emitQueueUpdatedLocked()
 	s.mu.Unlock()
 
-	// TODO: Implement steering
 	return session.SteeringResult{
-		Outcome: session.SteeringQueued,
-		Notice:  "Steering input queued",
+		Outcome: session.SteeringAccepted,
+		Notice:  "Steering input accepted",
 	}, nil
 }
 
@@ -261,26 +321,35 @@ func (s *SessionAdapter) FollowUpTurn(ctx context.Context, text string) (session
 		s.mu.Unlock()
 		return session.QueuedInputResult{}, fmt.Errorf("session is closed")
 	}
+	s.followUpQueue = append(s.followUpQueue, text)
+	s.emitQueueUpdatedLocked()
 	s.mu.Unlock()
 
-	// TODO: Implement follow-up
 	return session.QueuedInputResult{
-		Outcome: session.QueuedInputQueued,
-		Notice:  "Follow-up input queued",
+		Outcome: session.QueuedInputAccepted,
+		Notice:  "Follow-up input accepted",
 	}, nil
 }
 
 // ClearQueuedInput clears queued input and returns the snapshot.
 func (s *SessionAdapter) ClearQueuedInput(ctx context.Context) (session.QueuedInputSnapshot, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.closed {
-		s.mu.Unlock()
 		return session.QueuedInputSnapshot{}, fmt.Errorf("session is closed")
 	}
-	s.mu.Unlock()
 
-	// TODO: Implement clear queued input
-	return session.QueuedInputSnapshot{}, nil
+	snapshot := session.QueuedInputSnapshot{
+		Steering: append([]string(nil), s.steeringQueue...),
+		FollowUp: append([]string(nil), s.followUpQueue...),
+	}
+
+	s.steeringQueue = nil
+	s.followUpQueue = nil
+	s.emitQueueUpdatedLocked()
+
+	return snapshot, nil
 }
 
 // SetStore sets the storage store.

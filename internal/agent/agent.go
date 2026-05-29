@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
+	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -25,6 +27,15 @@ func New(config AgentLoopConfig) *Agent {
 			ThinkingLevel: config.ThinkingLevel,
 			Tools:         []AgentTool{},
 		},
+	}
+}
+
+func (a *Agent) emit(ev session.Event) {
+	a.mu.RLock()
+	onEvent := a.config.OnEvent
+	a.mu.RUnlock()
+	if onEvent != nil {
+		onEvent(ev)
 	}
 }
 
@@ -157,8 +168,9 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			}
 
 			if !firstTurn {
-				// Emit turn_start event (TODO: implement event emission)
+				a.emit(session.TurnStarted{Base: session.BaseNow()})
 			} else {
+				a.emit(session.TurnStarted{Base: session.BaseNow()})
 				firstTurn = false
 			}
 
@@ -181,6 +193,13 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			a.state.Messages = append(a.state.Messages, message)
 			a.mu.Unlock()
 			*newMessages = append(*newMessages, message)
+
+			// Emit complete assistant message event
+			a.emit(session.AgentMessage{
+				Base:      session.BaseNow(),
+				Message:   message.Content,
+				Reasoning: message.Reasoning,
+			})
 
 			// Check for error/abort
 			if message.IsError {
@@ -215,6 +234,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 					NewMessages: *newMessages,
 				}
 				if a.config.ShouldStopAfterTurn(ctx) {
+					a.emit(session.TurnFinished{Base: session.BaseNow()})
 					return nil
 				}
 			}
@@ -231,6 +251,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 		}
 
 		// No more messages, exit
+		a.emit(session.TurnFinished{Base: session.BaseNow()})
 		return nil
 	}
 }
@@ -285,9 +306,26 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, erro
 
 		if chunk.Content != "" {
 			content += chunk.Content
+			a.emit(session.AgentDelta{
+				Base:  session.BaseNow(),
+				Delta: chunk.Content,
+			})
 		}
 		if chunk.Reasoning != "" {
 			reasoning += chunk.Reasoning
+			a.emit(session.ThinkingDelta{
+				Base:  session.BaseNow(),
+				Delta: chunk.Reasoning,
+			})
+		}
+		if chunk.Usage != nil {
+			a.emit(session.TokenUsage{
+				Base:   session.BaseNow(),
+				Input:  chunk.Usage.InputTokens,
+				Output: chunk.Usage.OutputTokens,
+				Total:  chunk.Usage.TotalTokens,
+				Cost:   chunk.Usage.Cost,
+			})
 		}
 		if len(chunk.Calls) > 0 {
 			for _, call := range chunk.Calls {
@@ -352,6 +390,13 @@ func (a *Agent) executeToolCalls(ctx context.Context, assistantMsg AgentMessage,
 
 		// Execute the tool
 		var toolResult AgentMessage
+		a.emit(session.ToolCallStarted{
+			Base:      session.BaseNow(),
+			ToolUseID: toolCall.ID,
+			ToolName:  toolCall.Name,
+			Args:      serializeArguments(toolCall.Arguments),
+		})
+
 		if config.ToolExecutor != nil {
 			result, err := config.ToolExecutor(ctx, toolCall)
 			if err != nil {
@@ -377,6 +422,13 @@ func (a *Agent) executeToolCalls(ctx context.Context, assistantMsg AgentMessage,
 				ToolID:  toolCall.ID,
 			}
 		}
+
+		a.emit(session.ToolResult{
+			Base:      session.BaseNow(),
+			ToolUseID: toolCall.ID,
+			ToolName:  toolCall.Name,
+			Result:    toolResult.Content,
+		})
 
 		// Call afterToolCall hook
 		if config.AfterToolCall != nil {
@@ -474,17 +526,26 @@ func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 
 // parseArguments parses a JSON string into a map.
 func parseArguments(args string) map[string]any {
-	// TODO: Implement proper JSON parsing
-	return map[string]any{"raw": args}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return map[string]any{"raw": args}
+	}
+	return m
 }
 
 // serializeArguments serializes a map into a JSON string.
 func serializeArguments(args map[string]any) string {
-	// TODO: Implement proper JSON serialization
+	if args == nil {
+		return "{}"
+	}
 	if raw, ok := args["raw"]; ok {
 		if s, ok := raw.(string); ok {
 			return s
 		}
 	}
-	return "{}"
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
