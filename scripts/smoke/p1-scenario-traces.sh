@@ -32,23 +32,23 @@ run_layer() {
 }
 
 run_layer tool_provider_history provider \
-  go test ./internal/backend/canto \
-    -run '^(TestSubmitTurnExecutes(ReadFindAndGrep|LsWriteAndEdit)FirstMinutesFlow|TestSubmitTurnToolFailurePersistsForFollowUp|TestRetryRecoveryWaitsThroughToolLoop)$' \
+  go test ./internal/agent \
+    -run '^(TestAgentEventsAndLoop|TestSessionAdapterQueuesAndCancel)$' \
     -count=1 -timeout 180s
 
 run_layer event_order_and_settlement event \
-  go test ./internal/backend/canto \
-    -run '^(TestSubmitTurnEmitsSavePointBeforeTurnFinished|TestTranslateRunEventProjectsCantoToolLifecycle|TestTranslateRunEventUsesCantoUsageAfterToolCompleted|TestTranslateEventsPreservesToolCompletedError)$' \
+  go test ./internal/app \
+    -run '^(TestQueuedInputUpdateOwnsBackendQueueProjection|TestQueuedSteeringRendersAboveComposer|TestQueuedFollowUpRendersAboveComposer)$' \
     -count=1 -timeout 180s
 
 run_layer cancel_and_recovery event \
-  go test ./internal/backend/canto \
-    -run '^(TestSubmitTurnCancelDuringToolSuppressesLateToolEvents|TestSubmitTurnProviderErrorLeavesBackendReusable|TestBackendCancelClearsQueuedSteering)$' \
+  go test ./internal/app \
+    -run '^(TestCancelledTurnDrainsLateEventsUntilNextTurnStarts|TestCancelTurnCmdCallsBackend)$' \
     -count=1 -timeout 180s
 
 run_layer resume_provider_history provider \
-  go test ./internal/backend/canto \
-    -run '^(TestResumedToolSessionSendsValidFollowUpHistory|TestProviderHistory(ExcludesIonDisplayOnlyEvents|RecoversToolContentPartsFromLifecycle)|TestRetryRecoveryWaitsThroughToolLoop)$' \
+  go test ./internal/storage \
+    -run '^(TestCantoStoreEntriesRecoverToolResultFromLifecycle|TestCantoStoreEntriesPreserveCantoToolCompletedErrors)$' \
     -count=1 -timeout 180s
 
 run_layer display_model display \
@@ -57,8 +57,8 @@ run_layer display_model display \
     -count=1 -timeout 180s
 
 run_layer timeout_surfacing timeout \
-  go test ./cmd/ion ./internal/backend/canto ./internal/tools \
-    -run '^(TestPrintModeCancelsTurnOnTimeout|TestSubmitTurnUsesCallerContext|TestBashTimeoutKillsProcessGroup)$' \
+  go test ./cmd/ion ./internal/tools \
+    -run '^(TestPrintModeCancelsTurnOnTimeout|TestBashTimeoutKillsProcessGroup)$' \
     -count=1 -timeout 180s
 
 run_layer smoke_resume_persistence persistence \

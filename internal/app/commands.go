@@ -21,6 +21,22 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	command := fields[0]
+	if strings.HasPrefix(command, "//") {
+		name := strings.TrimPrefix(command, "//")
+		if name == "" {
+			return m, cmdError("usage: //skill_name")
+		}
+		dir, err := config.DefaultSkillsDir()
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
+		}
+		detail, err := ionskills.Read([]string{dir}, name)
+		if err != nil {
+			return m, cmdError(err.Error())
+		}
+		return m, m.terminalCommit().Help(ionskills.FormatDetail(detail))
+	}
+
 	commandInfo, ok := resolveSlashCommand(command)
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unknown command: %s", command))

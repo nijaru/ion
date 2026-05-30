@@ -28,6 +28,7 @@ type Backend struct {
 }
 
 var _ backend.Backend = (*Backend)(nil)
+var _ backend.ToolSummarizer = (*Backend)(nil)
 
 // NewBackend creates a new agent backend.
 func NewBackend() *Backend {
@@ -181,4 +182,40 @@ func (b *Backend) createSession() *SessionAdapter {
 // sessionID returns the session ID from config or default.
 func (b *Backend) sessionID() string {
 	return "default"
+}
+
+func (b *Backend) ToolSurface() backend.ToolSurface {
+	var names []string
+	for _, t := range b.tools {
+		names = append(names, t.Name)
+	}
+
+	activeMode := "coding"
+	if b.cfg != nil {
+		activeMode = b.cfg.ActiveToolMode()
+	}
+
+	var activeNames []string
+	for _, t := range b.tools {
+		if activeMode == "coding" {
+			switch t.Name {
+			case "find", "grep", "ls":
+				continue
+			}
+		}
+		activeNames = append(activeNames, t.Name)
+	}
+
+	envMode := "inherit"
+	if b.cfg != nil {
+		envMode = b.cfg.ToolEnvMode()
+	}
+
+	return backend.ToolSurface{
+		Count:       len(b.tools),
+		Names:       names,
+		ActiveNames: activeNames,
+		Mode:        activeMode,
+		Environment: envMode,
+	}
 }

@@ -1973,3 +1973,45 @@ func TestToolSurfaceSummaryReportsActiveMode(t *testing.T) {
 		t.Fatalf("summary = %q, want registered tools", got)
 	}
 }
+
+func TestCustomCommandSkillExecution(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Write a mock skill
+	skillsDir := filepath.Join(home, ".ion", "skills")
+	skillPath := filepath.Join(skillsDir, "review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	content := `---
+name: review
+description: Review code.
+allowed-tools: [read]
+---
+Instructions for review.
+`
+	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	model := New(stubBackend{}, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	// Test successful skill resolution
+	model, cmd := model.handleCommand("//review")
+	if cmd == nil {
+		t.Fatal("expected command from skill invocation")
+	}
+
+	// Test invalid skill name usage
+	_, cmdErr := model.handleCommand("//")
+	if cmdErr == nil {
+		t.Fatal("expected error command for empty skill name")
+	}
+
+	// Test non-existent skill
+	_, missingErr := model.handleCommand("//nonexistent")
+	if missingErr == nil {
+		t.Fatal("expected error command for non-existent skill")
+	}
+}

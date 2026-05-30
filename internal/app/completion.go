@@ -4,6 +4,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/nijaru/ion/internal/config"
+	ionskills "github.com/nijaru/ion/internal/skills"
 )
 
 const maxComposerCompletions = 5
@@ -20,6 +23,11 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 		m.inputReducer().invalidateFileCompletionRequest()
 		return nil, nil
 	}
+	if strings.HasPrefix(text, "//") {
+		m.inputReducer().invalidateFileCompletionRequest()
+		items := m.customComposerCompletionItems(text)
+		return limitCompletionItems(items), nil
+	}
 	if items := slashComposerCompletionItems(text); len(items) > 0 {
 		m.inputReducer().invalidateFileCompletionRequest()
 		return limitCompletionItems(items), nil
@@ -34,7 +42,7 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 }
 
 func slashComposerCompletionItems(text string) []completionItem {
-	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, "\r\n") {
+	if !strings.HasPrefix(text, "/") || strings.HasPrefix(text, "//") || strings.ContainsAny(text, "\r\n") {
 		return nil
 	}
 	if strings.ContainsAny(text, " \t") {
@@ -209,4 +217,48 @@ func limitCompletionItems(items []completionItem) []completionItem {
 		return items
 	}
 	return items[:maxComposerCompletions]
+}
+
+func (m Model) customComposerCompletionItems(text string) []completionItem {
+	if !strings.HasPrefix(text, "//") || strings.ContainsAny(text, "\r\n") {
+		return nil
+	}
+	if strings.ContainsAny(text, " \t") {
+		return nil
+	}
+
+	dir, err := config.DefaultSkillsDir()
+	if err != nil {
+		return nil
+	}
+
+	skillSummaries, err := ionskills.List(dir)
+	if err != nil {
+		return nil
+	}
+
+	var pickerItems []pickerItem
+	for _, skill := range skillSummaries {
+		search := pickerSearchIndex(
+			"//" + skill.Name,
+			skill.Name,
+			skill.Description,
+			"Skills",
+			nil,
+		)
+		pickerItems = append(pickerItems, pickerItem{
+			Label:  "//" + skill.Name,
+			Value:  "//" + skill.Name,
+			Detail: skill.Description,
+			Group:  "Skills",
+			Search: search,
+		})
+	}
+
+	query := strings.TrimPrefix(strings.TrimSpace(text), "//")
+	items := rankedPickerItems(pickerItems, query)
+	if len(items) == 1 && strings.EqualFold(items[0].Value, strings.TrimSpace(text)) {
+		return nil
+	}
+	return completionItemsFromPicker(items)
 }
