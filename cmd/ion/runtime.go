@@ -126,6 +126,7 @@ func openRuntime(
 
 	// Wire up coding tools for agent backends
 	if ab, ok := b.(*agent.Backend); ok {
+		ab.Workdir = cwd
 		registry := tool.NewRegistry()
 		if regErr := tools.RegisterCodingTools(registry, tools.CodingToolsConfig{
 			Workdir: cwd,

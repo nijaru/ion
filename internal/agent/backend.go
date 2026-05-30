@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
 
 	"github.com/nijaru/ion/internal/backend"
@@ -17,9 +18,12 @@ import (
 type Backend struct {
 	cfg      *config.Config
 	store    storage.Store
-	 sess    storage.Session
+	sess     storage.Session
 	provider llm.Provider
 	session  *SessionAdapter
+
+	// Workdir is the current workspace directory.
+	Workdir string
 
 	// toolExecutor is the tool execution function. Set via SetToolExecutor.
 	toolExecutor ToolExecutor
@@ -157,6 +161,20 @@ func (b *Backend) createSession() *SessionAdapter {
 		return provider.Stream(ctx, req)
 	}
 
+	// Load workspace instruction layers if Workdir is set
+	systemPrompt := ""
+	workdir := b.Workdir
+	if workdir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			workdir = wd
+		}
+	}
+	if workdir != "" {
+		if insts, err := backend.BuildInstructions("", workdir); err == nil {
+			systemPrompt = insts
+		}
+	}
+
 	// Create session adapter
 	sessionCfg := &SessionAdapterConfig{
 		ID:           b.sessionID(),
@@ -164,6 +182,7 @@ func (b *Backend) createSession() *SessionAdapter {
 		StreamFn:     streamFn,
 		ToolExecutor: b.toolExecutor,
 		Tools:        b.tools,
+		SystemPrompt: systemPrompt,
 	}
 
 	adapter := NewSessionAdapter(sessionCfg)

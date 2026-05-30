@@ -240,3 +240,59 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 	}
 }
 
+func TestAgentSystemPromptPropagation(t *testing.T) {
+	var observedReq *llm.Request
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		observedReq = req
+		return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
+	}
+
+	modelCaps := &llm.Capabilities{
+		SystemRole: "developer",
+	}
+
+	cfg := AgentLoopConfig{
+		Model: llm.Model{
+			ID:           "test-reasoning-model",
+			Capabilities: modelCaps,
+		},
+		StreamFn: streamFn,
+	}
+
+	agent := New(cfg)
+	agent.SetSystemPrompt("durable instruction set")
+
+	userMsg := AgentMessage{
+		Role:    "user",
+		Content: "hello",
+	}
+
+	_, err := agent.Run(context.Background(), []AgentMessage{userMsg})
+	if err != nil {
+		t.Fatalf("agent run: %v", err)
+	}
+
+	if observedReq == nil {
+		t.Fatal("expected LLM stream function to be invoked")
+	}
+
+	if len(observedReq.Messages) != 2 {
+		t.Fatalf("expected 2 messages sent to LLM, got %d", len(observedReq.Messages))
+	}
+
+	sysMsg := observedReq.Messages[0]
+	if sysMsg.Role != "developer" {
+		t.Errorf("expected system message role to be 'developer', got %q", sysMsg.Role)
+	}
+	if sysMsg.Content != "durable instruction set" {
+		t.Errorf("expected system message content to be 'durable instruction set', got %q", sysMsg.Content)
+	}
+
+	userMsgOut := observedReq.Messages[1]
+	if userMsgOut.Role != "user" {
+		t.Errorf("expected second message role to be 'user', got %q", userMsgOut.Role)
+	}
+	if userMsgOut.Content != "hello" {
+		t.Errorf("expected second message content to be 'hello', got %q", userMsgOut.Content)
+	}
+}

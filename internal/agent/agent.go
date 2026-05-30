@@ -492,7 +492,37 @@ func (a *Agent) buildContext() AgentContext {
 
 // defaultConvertToLlm converts AgentMessages to LLM Messages using default logic.
 func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
-	result := make([]llm.Message, 0, len(messages))
+	a.mu.RLock()
+	systemPrompt := a.state.SystemPrompt
+	var caps *llm.Capabilities
+	if a.config.Model.Capabilities != nil {
+		caps = a.config.Model.Capabilities
+	}
+	a.mu.RUnlock()
+
+	result := make([]llm.Message, 0, len(messages)+1)
+
+	// Prepend system prompt if set and not already present at the head of messages.
+	if systemPrompt != "" {
+		hasSystem := false
+		if len(messages) > 0 {
+			firstRole := messages[0].Role
+			if firstRole == "system" || firstRole == "developer" {
+				hasSystem = true
+			}
+		}
+		if !hasSystem {
+			role := llm.RoleSystem
+			if caps != nil && caps.SystemRole != "" {
+				role = llm.Role(caps.SystemRole)
+			}
+			result = append(result, llm.Message{
+				Role:    role,
+				Content: systemPrompt,
+			})
+		}
+	}
+
 	for _, msg := range messages {
 		llmMsg := llm.Message{
 			Role:    llm.Role(msg.Role),
@@ -523,6 +553,7 @@ func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 	}
 	return result
 }
+
 
 // parseArguments parses a JSON string into a map.
 func parseArguments(args string) map[string]any {
