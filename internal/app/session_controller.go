@@ -510,7 +510,7 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp
 	}
-	return m, sequenceCmds(m.persistEntryCmd("persist status", storage.Status{
+	return m, batchCmds(m.persistEntryCmd("persist status", storage.Status{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(persistTimestamp),
@@ -554,11 +554,11 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				),
 			}, cmds...)
 			cmds = append(cmds, m.awaitSessionEvent())
-			return m, sequenceCmds(cmds...)
+			return m, batchCmds(cmds...)
 		}
 	}
 	cmds = append(cmds, m.awaitSessionEvent())
-	return m, sequenceCmds(cmds...)
+	return m, batchCmds(cmds...)
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {

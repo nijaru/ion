@@ -1190,7 +1190,7 @@ func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	if model.Progress.Status != "Thinking..." {
 		t.Fatalf("status = %q, want Thinking...", model.Progress.Status)
 	}
-	requireSequenceCmd(t, cmd)
+	requireBatchCmd(t, cmd)
 	msgs := runSequencePrefix(t, cmd, 1)
 	if len(msgs) != 1 {
 		t.Fatalf("persistence messages = %d, want 1", len(msgs))
@@ -1221,6 +1221,8 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	model := readyModel(t)
+	sess := &stubSession{events: make(chan session.Event, 1)}
+	model.Model.Session = sess
 	model.Model.Storage = storageSess
 
 	next, cmd := model.Update(session.StatusChanged{Status: "Thinking..."})
@@ -1238,10 +1240,13 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 		t.Fatalf("appends during Update = %#v, want none", storageSess.appends)
 	}
 
-	done := make(chan []tea.Msg, 1)
-	go func() {
-		done <- runSequencePrefix(t, cmd, 1)
-	}()
+	children := commandChildren(t, cmd())
+	done := make(chan []tea.Msg, len(children))
+	for _, child := range children {
+		go func() {
+			done <- runCommandTree(t, child)
+		}()
+	}
 	select {
 	case event := <-storageSess.entered:
 		if status, ok := event.(storage.Status); !ok || status.Status != "Thinking..." {
@@ -1250,11 +1255,31 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("status persistence command did not start append")
 	}
+	sess.events <- session.TurnStarted{}
+	completed := 0
+	var sawEvent bool
+	for !sawEvent {
+		select {
+		case messages := <-done:
+			completed++
+			for _, msg := range messages {
+				if _, ok := msg.(sessionEventMsg); ok {
+					sawEvent = true
+					break
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("status event reader waited for persistence to complete")
+		}
+	}
 	close(storageSess.release)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("status persistence command did not finish")
+	for completed < len(children) {
+		select {
+		case <-done:
+			completed++
+		case <-time.After(time.Second):
+			t.Fatal("status command batch did not finish")
+		}
 	}
 	if len(storageSess.appends) != 1 {
 		t.Fatalf("appends after command = %#v, want one status append", storageSess.appends)

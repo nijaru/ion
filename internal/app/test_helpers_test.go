@@ -152,6 +152,16 @@ func requireSequenceCmd(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
+func requireBatchCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
+		t.Fatalf("command = %s, want tea.BatchMsg", got)
+	}
+}
+
 func settleRuntimeTransitionCmd(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
 	t.Helper()
 	if cmd == nil {
