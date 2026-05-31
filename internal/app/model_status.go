@@ -11,16 +11,33 @@ import (
 )
 
 func (m Model) configurationStatus() string {
-	if m.Model.Backend == nil {
+	decision := m.submitPreflightWithoutBudget()
+	if decision.Allowed {
 		return ""
 	}
-	if m.runtimeProvider() == "" {
-		return noProviderConfiguredStatus()
+	return decision.Reason
+}
+
+func (m Model) submitPreflightWithoutBudget() session.SubmitPreflightDecision {
+	return session.DecideSubmitPreflight(session.SubmitPreflightInput{
+		RuntimeRequired: m.Model.Backend != nil,
+		Provider:        m.runtimeProvider(),
+		Model:           m.runtimeModel(),
+	})
+}
+
+func (m Model) submitPreflight() session.SubmitPreflightDecision {
+	var maxSessionCost float64
+	if m.Model.Config != nil {
+		maxSessionCost = m.Model.Config.MaxSessionCost
 	}
-	if m.runtimeModel() == "" {
-		return noModelConfiguredStatus()
-	}
-	return ""
+	return session.DecideSubmitPreflight(session.SubmitPreflightInput{
+		RuntimeRequired: m.Model.Backend != nil,
+		Provider:        m.runtimeProvider(),
+		Model:           m.runtimeModel(),
+		TotalCost:       m.Progress.TotalCost,
+		MaxSessionCost:  maxSessionCost,
+	})
 }
 
 func (m Model) runningProgressParts() []string {
@@ -83,16 +100,6 @@ func (m Model) configuredBudgetStopReason() string {
 		TotalCost:       m.Progress.TotalCost,
 		MaxTurnCost:     m.Model.Config.MaxTurnCost,
 		MaxSessionCost:  m.Model.Config.MaxSessionCost,
-	})
-}
-
-func (m Model) configuredSessionBudgetStopReason() string {
-	if m.Model.Config == nil {
-		return ""
-	}
-	return session.BudgetStopReason(session.BudgetStopInput{
-		TotalCost:      m.Progress.TotalCost,
-		MaxSessionCost: m.Model.Config.MaxSessionCost,
 	})
 }
 

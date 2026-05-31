@@ -45,11 +45,8 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	text = m.expandMarkers(text)
 
 	if !strings.HasPrefix(text, "/") {
-		if status := m.configurationStatus(); status != "" {
-			return m, cmdError(status)
-		}
-		if reason := m.configuredSessionBudgetStopReason(); reason != "" {
-			return m, cmdError(reason)
+		if decision := m.submitPreflight(); !decision.Allowed {
+			return m, cmdError(decision.Reason)
 		}
 	}
 

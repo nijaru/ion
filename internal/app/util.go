@@ -123,11 +123,11 @@ func isConfigurationStatus(status string) bool {
 }
 
 func noProviderConfiguredStatus() string {
-	return "No provider configured. Use /provider. Set ION_PROVIDER for scripts."
+	return session.NoProviderConfiguredStatus()
 }
 
 func noModelConfiguredStatus() string {
-	return "No model configured. Use /model. Set ION_MODEL for scripts."
+	return session.NoModelConfiguredStatus()
 }
 
 func toolSurfaceSummary(surface backend.ToolSurface) string {
