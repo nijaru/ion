@@ -10,11 +10,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nijaru/ion/llm"
-	csession "github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
+	csession "github.com/nijaru/ion/session"
 )
 
 func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
@@ -440,10 +440,8 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	if !strings.Contains(model.InFlight.Pending.Title, "[redacted-secret]") {
 		t.Fatalf("tool preview missing redaction marker: %q", model.InFlight.Pending.Title)
 	}
-	for _, appended := range stored.appends {
-		if _, ok := appended.(storage.ToolUse); ok {
-			t.Fatalf("tool start should not be app-persisted: %#v", stored.appends)
-		}
+	if len(stored.messages) != 0 {
+		t.Fatalf("tool start should not be app-persisted: %#v", stored.messages)
 	}
 }
 

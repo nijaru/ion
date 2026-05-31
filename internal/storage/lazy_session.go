@@ -80,9 +80,6 @@ func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
 }
 
 func (s *LazySession) Append(ctx context.Context, event any) error {
-	if isNoopAppendEvent(event) {
-		return nil
-	}
 	s.mu.Lock()
 	created := s.created
 	s.mu.Unlock()
@@ -93,6 +90,9 @@ func (s *LazySession) Append(ctx context.Context, event any) error {
 }
 
 func (s *LazySession) AppendModelMessage(ctx context.Context, message llm.Message) error {
+	if isEmptyModelMessage(message) {
+		return nil
+	}
 	created, err := s.Ensure(ctx)
 	if err != nil {
 		return err

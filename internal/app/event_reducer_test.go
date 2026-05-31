@@ -38,10 +38,8 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected deferred print command after finalizing message")
 	}
-	for _, event := range storageSess.appends {
-		if _, ok := event.(storage.Agent); ok {
-			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("agent message should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 
@@ -198,10 +196,8 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	if model.Progress.Status != "" {
 		t.Fatalf("status = %q, want cleared after tool completion", model.Progress.Status)
 	}
-	for _, event := range storageSess.appends {
-		if _, ok := event.(storage.ToolResult); ok {
-			t.Fatalf("tool result should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("tool result should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 
@@ -392,10 +388,8 @@ func TestAgentMessagePrintsWithoutPendingStream(t *testing.T) {
 	if !model.App.PrintedTranscript {
 		t.Fatal("committed assistant message did not mark transcript printed")
 	}
-	for _, event := range storageSess.appends {
-		if _, ok := event.(storage.Agent); ok {
-			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("agent message should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 
@@ -432,10 +426,8 @@ func TestAgentMessageAfterToolResultPrintsFinalAnswer(t *testing.T) {
 	if model.InFlight.Pending != nil {
 		t.Fatalf("pending entry = %#v, want none", model.InFlight.Pending)
 	}
-	for _, event := range storageSess.appends {
-		if _, ok := event.(storage.Agent); ok {
-			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("agent message should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 
@@ -494,10 +486,8 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	if len(model.InFlight.PendingTools) != 0 {
 		t.Fatalf("pending tools = %#v, want none", model.InFlight.PendingTools)
 	}
-	for _, event := range storageSess.appends {
-		if _, ok := event.(storage.ToolResult); ok {
-			t.Fatalf("tool results should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("tool results should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 
@@ -547,10 +537,8 @@ func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
 	if _, ok := model.InFlight.PendingTools["tool-a"]; !ok {
 		t.Fatal("known pending tool was cleared by unknown tool result")
 	}
-	for _, event := range storageSess.appends {
-		if result, ok := event.(storage.ToolResult); ok && result.ToolUseID == "missing-tool" {
-			t.Fatal("unknown tool result was persisted")
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("unknown tool result was persisted: %#v", storageSess.messages)
 	}
 }
 

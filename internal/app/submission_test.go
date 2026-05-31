@@ -199,7 +199,8 @@ func TestAwaitSessionEventReportsMissingEventStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("session event = %T, want session.Error", eventMsg.event)
 	}
-	if errEvent.Err == nil || !strings.Contains(errEvent.Err.Error(), "session event stream unavailable") {
+	if errEvent.Err == nil ||
+		!strings.Contains(errEvent.Err.Error(), "session event stream unavailable") {
 		t.Fatalf("session error = %v, want missing-stream error", errEvent.Err)
 	}
 	if !errEvent.Fatal {
@@ -778,11 +779,8 @@ func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 	if len(sess.submits) != 1 || sess.submits[0] != "hello" {
 		t.Fatalf("submitted turns = %#v, want hello", sess.submits)
 	}
-	for _, event := range storageSess.appends {
-		switch event.(type) {
-		case storage.User, storage.Agent, storage.ToolUse, storage.ToolResult:
-			t.Fatalf("model-visible event should not be app-persisted: %#v", storageSess.appends)
-		}
+	if len(storageSess.messages) != 0 {
+		t.Fatalf("model-visible messages should not be app-persisted: %#v", storageSess.messages)
 	}
 }
 

@@ -33,22 +33,10 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	var preview string
 	var err error
 	switch e := event.(type) {
-	case User:
-		return modelVisibleAppendError(event)
-	case Agent:
-		content, reasoning := agentMessagePayload(e)
-		if !hasAgentMessagePayload(content, reasoning) {
-			return nil
-		}
-		return modelVisibleAppendError(event)
 	case Subagent:
 		preview = sessionSummary(e.Content)
 		ev := newStoredEvent(s.id, ionSubagentEvent, e, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case ToolUse:
-		return modelVisibleAppendError(event)
-	case ToolResult:
-		return modelVisibleAppendError(event)
 	case Status:
 		if !isDurableResumeStatus(e.Status) {
 			return nil
@@ -84,7 +72,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	default:
-		return nil
+		return fmt.Errorf("canto storage cannot append unsupported %T events", event)
 	}
 
 	if err != nil {
@@ -130,13 +118,6 @@ func newStoredEvent(
 		ev.Timestamp = time.Unix(unixTS, 0).UTC()
 	}
 	return ev
-}
-
-func modelVisibleAppendError(event any) error {
-	return fmt.Errorf(
-		"canto storage cannot append model-visible %T events; use the Canto runner",
-		event,
-	)
 }
 
 func isEmptyModelMessage(message llm.Message) bool {

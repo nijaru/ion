@@ -164,12 +164,6 @@ type (
 		CreatedAt int64  `json:"created_at"`
 	}
 
-	User struct {
-		Type    string `json:"type"` // "user"
-		Content string `json:"content"`
-		TS      int64  `json:"ts"`
-	}
-
 	Status struct {
 		Type   string `json:"type"` // "status"
 		Status string `json:"status"`
@@ -180,28 +174,6 @@ type (
 		Type    string `json:"type"` // "system"
 		Content string `json:"content"`
 		TS      int64  `json:"ts"`
-	}
-
-	Agent struct {
-		Type    string  `json:"type"` // "agent"
-		Content []Block `json:"content"`
-		TS      int64   `json:"ts"`
-	}
-
-	ToolUse struct {
-		Type  string `json:"type"` // "tool_use"
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Input any    `json:"input"`
-		TS    int64  `json:"ts"`
-	}
-
-	ToolResult struct {
-		Type      string `json:"type"` // "tool_result"
-		ToolUseID string `json:"tool_use_id"`
-		Content   string `json:"content"`
-		IsError   bool   `json:"is_error"`
-		TS        int64  `json:"ts"`
 	}
 
 	TokenUsage struct {
@@ -235,40 +207,7 @@ type (
 		IsError bool   `json:"is_error"`
 		TS      int64  `json:"ts"`
 	}
-
-	Block struct {
-		Type     string  `json:"type"` // "text" or "thinking"
-		Text     *string `json:"text,omitempty"`
-		Thinking *string `json:"thinking,omitempty"`
-	}
 )
-
-func agentMessagePayload(e Agent) (string, string) {
-	var content strings.Builder
-	var reasoning strings.Builder
-	for _, b := range e.Content {
-		if b.Type == "text" && b.Text != nil {
-			content.WriteString(*b.Text)
-		}
-		if b.Type == "thinking" && b.Thinking != nil {
-			reasoning.WriteString(*b.Thinking)
-		}
-	}
-	return content.String(), reasoning.String()
-}
-
-func hasAgentMessagePayload(content, reasoning string) bool {
-	return strings.TrimSpace(content) != "" || strings.TrimSpace(reasoning) != ""
-}
-
-func isNoopAppendEvent(event any) bool {
-	e, ok := event.(Agent)
-	if !ok {
-		return false
-	}
-	content, reasoning := agentMessagePayload(e)
-	return !hasAgentMessagePayload(content, reasoning)
-}
 
 func sessionTitle(text string) string {
 	return compactSessionText(text, 72)

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 	csession "github.com/nijaru/ion/session"
-	ionsession "github.com/nijaru/ion/internal/session"
 )
 
 func appendCantoMessage(
@@ -952,7 +952,7 @@ func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	}
 }
 
-func TestLazySessionSkipsEmptyAgentAppend(t *testing.T) {
+func TestLazySessionSkipsEmptyModelMessageAppend(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewCantoStore(root)
 	if err != nil {
@@ -962,12 +962,10 @@ func TestLazySessionSkipsEmptyAgentAppend(t *testing.T) {
 	ctx := context.Background()
 	cwd := "/tmp/ion-storage-test"
 	lazy := NewLazySession(store, cwd, "model-a", "main")
-	if err := lazy.Append(ctx, Agent{
-		Type:    "agent",
-		Content: []Block{},
-		TS:      time.Now().Unix(),
+	if err := lazy.AppendModelMessage(ctx, llm.Message{
+		Role: llm.RoleAssistant,
 	}); err != nil {
-		t.Fatalf("append empty agent: %v", err)
+		t.Fatalf("append empty model message: %v", err)
 	}
 
 	if IsMaterialized(lazy) {
@@ -1182,7 +1180,9 @@ func TestCantoStoreDisplayReplaySharesProviderHistorySource(t *testing.T) {
 
 	_, err = sess.Entries(ctx)
 	if err == nil {
-		t.Fatal("incremental entries succeeded from stale projection cache after provider history corruption")
+		t.Fatal(
+			"incremental entries succeeded from stale projection cache after provider history corruption",
+		)
 	}
 	if !strings.Contains(err.Error(), "effective history") {
 		t.Fatalf("incremental entries error = %v, want effective history decode error", err)
@@ -1695,7 +1695,7 @@ func TestCantoStoreEntriesDropDanglingToolCall(t *testing.T) {
 	}
 }
 
-func TestCantoStoreAppendSkipsEmptyAgentMessages(t *testing.T) {
+func TestCantoStoreAppendSkipsEmptyModelMessages(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
 	if err != nil {
@@ -1709,12 +1709,10 @@ func TestCantoStoreAppendSkipsEmptyAgentMessages(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := sess.Append(ctx, Agent{
-		Type:    "agent",
-		Content: []Block{},
-		TS:      time.Now().Unix(),
+	if err := sess.AppendModelMessage(ctx, llm.Message{
+		Role: llm.RoleAssistant,
 	}); err != nil {
-		t.Fatalf("append empty agent: %v", err)
+		t.Fatalf("append empty model message: %v", err)
 	}
 
 	cantoSess, err := store.canto.Load(ctx, sess.ID())
@@ -1893,7 +1891,7 @@ func TestCantoStoreEntriesInterleaveSystemMessagesWithHistory(t *testing.T) {
 	}
 }
 
-func TestCantoStoreRejectsModelVisibleAppends(t *testing.T) {
+func TestCantoStoreRejectsUnsupportedAppends(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
 	if err != nil {
@@ -1906,20 +1904,19 @@ func TestCantoStoreRejectsModelVisibleAppends(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	content := "agent"
 	cases := []any{
-		User{Type: "user", Content: "user"},
-		Agent{Type: "agent", Content: []Block{{Type: "text", Text: &content}}},
-		ToolUse{Type: "tool_use", ID: "tool-123", Name: "bash"},
-		ToolResult{Type: "tool_result", ToolUseID: "tool-123", Content: "ok"},
+		struct{ Type string }{Type: "user"},
+		struct{ Type string }{Type: "agent"},
+		struct{ Type string }{Type: "tool_use"},
+		struct{ Type string }{Type: "tool_result"},
 	}
 	for _, event := range cases {
 		err := sess.Append(ctx, event)
 		if err == nil {
-			t.Fatalf("append %T returned nil, want model-visible error", event)
+			t.Fatalf("append %T returned nil, want unsupported-event error", event)
 		}
-		if !strings.Contains(err.Error(), "cannot append model-visible") {
-			t.Fatalf("append %T error = %q, want model-visible error", event, err)
+		if !strings.Contains(err.Error(), "cannot append unsupported") {
+			t.Fatalf("append %T error = %q, want unsupported-event error", event, err)
 		}
 	}
 }
