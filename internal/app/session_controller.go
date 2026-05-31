@@ -94,8 +94,8 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 			"persist routing decision",
 			m.routingDecision("use_model", "active_preset", ""),
 		)
-		if msg.rearm {
-			return m, sequenceCmds(routingCmd, historyCmd, m.awaitSessionEvent())
+		if msg.rearm || m.InFlight.Thinking {
+			return m, batchCmds(routingCmd, historyCmd, m.awaitSessionEvent())
 		}
 		return m, sequenceCmds(routingCmd, historyCmd)
 	}

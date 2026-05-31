@@ -216,6 +216,19 @@ func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 	return messages
 }
 
+func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
+	for _, msg := range messages {
+		eventMsg, ok := msg.(sessionEventMsg)
+		if !ok {
+			continue
+		}
+		if _, ok := eventMsg.event.(T); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func testModel(t testing.TB, updated any) Model {
 	t.Helper()
 	switch next := updated.(type) {

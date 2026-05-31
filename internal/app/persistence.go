@@ -44,6 +44,23 @@ func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	}
 }
 
+func batchCmds(cmds ...tea.Cmd) tea.Cmd {
+	filtered := cmds[:0]
+	for _, cmd := range cmds {
+		if cmd != nil {
+			filtered = append(filtered, cmd)
+		}
+	}
+	switch len(filtered) {
+	case 0:
+		return nil
+	case 1:
+		return filtered[0]
+	default:
+		return tea.Batch(filtered...)
+	}
+}
+
 func entryUnix(timestamp time.Time) int64 {
 	if timestamp.IsZero() {
 		return now()

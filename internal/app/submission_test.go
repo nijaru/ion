@@ -278,7 +278,8 @@ func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 }
 
 func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
+	sess.events <- session.UserMessage{Message: "route this"}
 	storageSess := &stubStorageSession{}
 	model := New(
 		stubBackend{
@@ -310,7 +311,10 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	if len(storageSess.appends) != 0 {
 		t.Fatalf("appends before command execution = %#v, want none", storageSess.appends)
 	}
-	runCommandTree(t, cmd)
+	messages := runCommandTree(t, cmd)
+	if !containsSessionEvent[session.UserMessage](messages) {
+		t.Fatalf("messages = %#v, want submitted user session event", messages)
+	}
 	var decision storage.RoutingDecision
 	for _, event := range storageSess.appends {
 		if e, ok := event.(storage.RoutingDecision); ok {
@@ -444,6 +448,40 @@ func TestSubmitErrorRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *test
 	}
 }
 
+func TestSubmitResultArmsEventReader(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event, 1)}
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storageSess
+
+	updated, submitCmd := model.submitText("hello")
+	model = updated
+	if !model.InFlight.Thinking {
+		t.Fatal("submit should mark turn in flight before command execution")
+	}
+
+	submitMsg := submitCmd()
+	result, ok := submitMsg.(turnSubmitResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("submit result = %#v, want success", submitMsg)
+	}
+	sess.events <- session.UserMessage{Message: "hello"}
+
+	updatedModel, cmd := model.Update(result)
+	model = testModel(t, updatedModel)
+	messages := runCommandTree(t, cmd)
+	if !containsSessionEvent[session.UserMessage](messages) {
+		t.Fatalf("messages = %#v, want initial submit to arm session event reader", messages)
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "hello" {
+		t.Fatalf("submits = %#v, want hello", sess.submits)
+	}
+	if len(storageSess.appends) == 0 {
+		t.Fatal("expected routing decision persistence command to run")
+	}
+}
+
 func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &blockingAppendStorage{
@@ -493,6 +531,7 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 		t.Fatal("routing persistence command did not start append")
 	}
 	close(storageSess.release)
+	sess.events <- session.UserMessage{Message: "route this"}
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -504,7 +543,8 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 }
 
 func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
+	sess.events <- session.UserMessage{Message: "keep going"}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
 	model.Model.Session = sess
