@@ -14,6 +14,7 @@ import (
 type mockStream struct {
 	chunks []*llm.Chunk
 	idx    int
+	err    error
 }
 
 func (s *mockStream) Next() (*llm.Chunk, bool) {
@@ -25,7 +26,7 @@ func (s *mockStream) Next() (*llm.Chunk, bool) {
 	return chunk, true
 }
 
-func (s *mockStream) Err() error   { return nil }
+func (s *mockStream) Err() error   { return s.err }
 func (s *mockStream) Close() error { return nil }
 
 func TestAgentEventsAndLoop(t *testing.T) {
@@ -286,7 +287,10 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 		t.Errorf("expected system message role to be 'developer', got %q", sysMsg.Role)
 	}
 	if sysMsg.Content != "durable instruction set" {
-		t.Errorf("expected system message content to be 'durable instruction set', got %q", sysMsg.Content)
+		t.Errorf(
+			"expected system message content to be 'durable instruction set', got %q",
+			sysMsg.Content,
+		)
 	}
 
 	userMsgOut := observedReq.Messages[1]
@@ -404,6 +408,53 @@ func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 	}
 	if !strings.Contains(toolMsg.Content, "Image: image/png") {
 		t.Fatalf("tool content = %q, want image notice", toolMsg.Content)
+	}
+}
+
+func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
+	var events []session.Event
+	var committed []llm.Message
+	streamErr := errors.New("provider stream failed")
+	agent := New(AgentLoopConfig{
+		Model: llm.Model{ID: "model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{
+				chunks: []*llm.Chunk{{Content: "partial response"}},
+				err:    streamErr,
+			}, nil
+		},
+		OnEvent: func(ev session.Event) {
+			events = append(events, ev)
+		},
+		OnModelMessage: func(ctx context.Context, message llm.Message) error {
+			committed = append(committed, message)
+			return nil
+		},
+	})
+
+	messages, err := agent.Run(context.Background(), []AgentMessage{{
+		Role:    "user",
+		Content: "hello",
+	}})
+	if err == nil {
+		t.Fatal("run succeeded after stream error")
+	}
+	if !strings.Contains(err.Error(), streamErr.Error()) {
+		t.Fatalf("run error = %v, want stream error", err)
+	}
+	if len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("new messages = %#v, want only user prompt", messages)
+	}
+	if len(committed) != 1 || committed[0].Role != llm.RoleUser {
+		t.Fatalf("committed messages = %#v, want only user prompt", committed)
+	}
+	for _, ev := range events {
+		if _, ok := ev.(session.AgentMessage); ok {
+			t.Fatalf("unexpected assistant message event after stream error: %#v", ev)
+		}
+		if _, ok := ev.(session.TurnFinished); ok {
+			t.Fatalf("unexpected turn-finished event after stream error: %#v", ev)
+		}
 	}
 }
 

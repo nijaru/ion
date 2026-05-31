@@ -386,12 +386,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 	}
 
 	if err := stream.Err(); err != nil {
-		message := AgentMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("Stream error: %v", err),
-			IsError: true,
-		}
-		return message, agentMessageToLLM(message), nil
+		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
 	}
 
 	message := AgentMessage{
@@ -565,7 +560,9 @@ func (a *Agent) prepareAndExecuteTool(
 		}
 	}
 	if config.ToolExecutor == nil {
-		return errorToolResult(fmt.Sprintf("Tool %s executed without a configured executor", toolCall.Name)), true
+		return errorToolResult(
+			fmt.Sprintf("Tool %s executed without a configured executor", toolCall.Name),
+		), true
 	}
 	result, err := config.ToolExecutor(ctx, toolCall)
 	if err != nil {
