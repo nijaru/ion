@@ -92,16 +92,19 @@ func (r turnReducer) applyTokenUsage(msg session.TokenUsage) {
 }
 
 func (r turnReducer) streamClosed(now time.Time) (session.Entry, bool) {
-	if !r.inFlight.Thinking {
+	decision := session.DecideStreamClosure(session.StreamClosureInput{
+		Thinking: r.inFlight.Thinking,
+	})
+	if !decision.Terminal {
 		return session.Entry{}, false
 	}
 	r.clearActiveState(true)
 	r.progress.Compacting = false
 	r.progress.Mode = stateError
 	r.progress.Status = ""
-	r.progress.LastError = "session event stream closed"
+	r.progress.LastError = decision.DisplayError
 	r.recordFinishedTurnSummary(now)
-	entry, _ := storage.EntrySystem("Error: "+r.progress.LastError, time.Time{})
+	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
 	return entry, true
 }
 

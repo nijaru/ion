@@ -450,30 +450,36 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	displayErr := session.DisplayError(err)
+	decision := session.DecideErrorSettlement(session.ErrorSettlementInput{
+		Err:           err,
+		AwaitTerminal: awaitTerminal,
+	})
 	var cmds []tea.Cmd
-	if limit, ok := session.ClassifyProviderLimitError(err); ok {
-		displayErr = limit.Display()
+	if decision.RoutingStop != nil {
 		cmds = append(
 			cmds,
 			m.persistEntryCmd(
 				"persist routing stop",
-				m.routingDecision("stop", limit.Reason, limit.Raw),
+				m.routingDecision(
+					"stop",
+					decision.RoutingStop.Reason,
+					decision.RoutingStop.StopReason,
+				),
 			),
 		)
 	}
-	m.turnReducer().failTurn(displayErr, time.Now())
-	entry, _ := storage.EntrySystem("Error: "+displayErr, time.Time{})
+	m.turnReducer().failTurn(decision.DisplayError, time.Now())
+	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
 	printErr := m.terminalCommit().Entries(entry)
 	cmds = append([]tea.Cmd{printErr}, cmds...)
-	if awaitTerminal {
+	if decision.PersistSystem {
 		cmds = append(cmds, m.persistEntryCmd("persist session error", storage.System{
 			Type:    "system",
 			Content: entry.Content,
 			TS:      now(),
 		}))
 	}
-	if !awaitTerminal {
+	if !decision.AwaitNext {
 		return m, sequenceCmds(cmds...)
 	}
 	cmds = append(cmds, m.awaitSessionEvent())

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -77,28 +78,22 @@ func (m Model) configuredBudgetStopReason() string {
 	if m.Model.Config == nil {
 		return ""
 	}
-	if m.Model.Config.MaxTurnCost > 0 && m.Progress.CurrentTurnCost >= m.Model.Config.MaxTurnCost {
-		return fmt.Sprintf(
-			"turn cost limit reached ($%.6f / $%.6f)",
-			m.Progress.CurrentTurnCost,
-			m.Model.Config.MaxTurnCost,
-		)
-	}
-	return m.configuredSessionBudgetStopReason()
+	return session.BudgetStopReason(session.BudgetStopInput{
+		CurrentTurnCost: m.Progress.CurrentTurnCost,
+		TotalCost:       m.Progress.TotalCost,
+		MaxTurnCost:     m.Model.Config.MaxTurnCost,
+		MaxSessionCost:  m.Model.Config.MaxSessionCost,
+	})
 }
 
 func (m Model) configuredSessionBudgetStopReason() string {
 	if m.Model.Config == nil {
 		return ""
 	}
-	if m.Model.Config.MaxSessionCost > 0 && m.Progress.TotalCost >= m.Model.Config.MaxSessionCost {
-		return fmt.Sprintf(
-			"session cost limit reached ($%.6f / $%.6f)",
-			m.Progress.TotalCost,
-			m.Model.Config.MaxSessionCost,
-		)
-	}
-	return ""
+	return session.BudgetStopReason(session.BudgetStopInput{
+		TotalCost:      m.Progress.TotalCost,
+		MaxSessionCost: m.Model.Config.MaxSessionCost,
+	})
 }
 
 func (m Model) routingDecision(decision, reason, stopReason string) storage.RoutingDecision {
