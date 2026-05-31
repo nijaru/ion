@@ -244,6 +244,49 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 	}
 }
 
+func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
+	streamEntered := make(chan struct{})
+	adapter := NewSessionAdapter(&SessionAdapterConfig{
+		ID:    "test-session",
+		Model: llm.Model{ID: "test-model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			close(streamEntered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+
+	if err := adapter.Open(context.Background()); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := adapter.SubmitTurn(context.Background(), "long run"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	select {
+	case <-streamEntered:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not start")
+	}
+	if err := adapter.CancelTurn(context.Background()); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	var sawFinished bool
+	for !sawFinished {
+		select {
+		case ev := <-adapter.Events():
+			switch ev.(type) {
+			case session.Error:
+				t.Fatalf("cancel emitted session error: %#v", ev)
+			case session.TurnFinished:
+				sawFinished = true
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for cancel terminal event")
+		}
+	}
+}
+
 func TestAgentSystemPromptPropagation(t *testing.T) {
 	var observedReq *llm.Request
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {

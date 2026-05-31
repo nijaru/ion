@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -219,6 +220,10 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			closed := s.closed
 			s.mu.Unlock()
 			if !closed {
+				if errors.Is(err, context.Canceled) {
+					s.events <- session.TurnFinished{Base: session.BaseNow()}
+					return
+				}
 				s.events <- session.Error{
 					Base:  session.BaseNow(),
 					Err:   err,
@@ -310,7 +315,10 @@ func (s *SessionAdapter) Meta() map[string]string {
 }
 
 // SteerTurn sends steering input during an active turn.
-func (s *SessionAdapter) SteerTurn(ctx context.Context, text string) (session.SteeringResult, error) {
+func (s *SessionAdapter) SteerTurn(
+	ctx context.Context,
+	text string,
+) (session.SteeringResult, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -327,7 +335,10 @@ func (s *SessionAdapter) SteerTurn(ctx context.Context, text string) (session.St
 }
 
 // FollowUpTurn sends follow-up input after the agent would stop.
-func (s *SessionAdapter) FollowUpTurn(ctx context.Context, text string) (session.QueuedInputResult, error) {
+func (s *SessionAdapter) FollowUpTurn(
+	ctx context.Context,
+	text string,
+) (session.QueuedInputResult, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -344,7 +355,9 @@ func (s *SessionAdapter) FollowUpTurn(ctx context.Context, text string) (session
 }
 
 // ClearQueuedInput clears queued input and returns the snapshot.
-func (s *SessionAdapter) ClearQueuedInput(ctx context.Context) (session.QueuedInputSnapshot, error) {
+func (s *SessionAdapter) ClearQueuedInput(
+	ctx context.Context,
+) (session.QueuedInputSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
