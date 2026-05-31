@@ -433,7 +433,9 @@ func (a *Agent) executeToolCallsSequential(
 			return toolMessages(finalized)
 		}
 
-		result := a.executeOneToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+		a.emitToolCallStarted(toolCall)
+		result := a.finalizeToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+		a.emitToolResult(result)
 		finalized = append(finalized, result)
 	}
 
@@ -453,15 +455,19 @@ func (a *Agent) executeToolCallsParallel(
 		if ctx.Err() != nil {
 			return nil, nil, false, ctx.Err()
 		}
+		a.emitToolCallStarted(toolCall)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			finalized[i] = a.executeOneToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+			finalized[i] = a.finalizeToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
 		}()
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
 		return nil, nil, false, err
+	}
+	for _, result := range finalized {
+		a.emitToolResult(result)
 	}
 	return toolMessages(finalized)
 }
@@ -475,21 +481,32 @@ type finalizedToolCall struct {
 	terminate bool
 }
 
-func (a *Agent) executeOneToolCall(
+func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
+	a.emit(session.ToolCallStarted{
+		Base:      session.BaseNow(),
+		ToolUseID: toolCall.ID,
+		ToolName:  toolCall.Name,
+		Args:      serializeArguments(toolCall.Arguments),
+	})
+}
+
+func (a *Agent) emitToolResult(result finalizedToolCall) {
+	a.emit(session.ToolResult{
+		Base:      session.BaseNow(),
+		ToolUseID: result.toolCall.ID,
+		ToolName:  result.toolCall.Name,
+		Result:    result.message.Content,
+		Error:     toolEventError(result.message),
+	})
+}
+
+func (a *Agent) finalizeToolCall(
 	ctx context.Context,
 	assistantMsg AgentMessage,
 	assistantLLM llm.Message,
 	toolCall AgentToolCall,
 	config AgentLoopConfig,
 ) finalizedToolCall {
-	argsJSON := serializeArguments(toolCall.Arguments)
-	a.emit(session.ToolCallStarted{
-		Base:      session.BaseNow(),
-		ToolUseID: toolCall.ID,
-		ToolName:  toolCall.Name,
-		Args:      argsJSON,
-	})
-
 	result, isError := a.prepareAndExecuteTool(ctx, assistantMsg, assistantLLM, toolCall, config)
 	if config.AfterToolCall != nil {
 		after := config.AfterToolCall(AfterToolCallContext{
@@ -517,13 +534,6 @@ func (a *Agent) executeOneToolCall(
 
 	message := toolResultMessage(toolCall, result)
 	llmMessage := agentMessageToLLM(message)
-	a.emit(session.ToolResult{
-		Base:      session.BaseNow(),
-		ToolUseID: toolCall.ID,
-		ToolName:  toolCall.Name,
-		Result:    message.Content,
-		Error:     toolEventError(message),
-	})
 	return finalizedToolCall{
 		toolCall:  toolCall,
 		result:    result,

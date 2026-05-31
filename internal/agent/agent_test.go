@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -408,6 +410,85 @@ func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 	}
 	if !strings.Contains(toolMsg.Content, "Image: image/png") {
 		t.Fatalf("tool content = %q, want image notice", toolMsg.Content)
+	}
+}
+
+func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
+	releaseFirst := make(chan struct{})
+	secondRan := make(chan struct{})
+	errc := make(chan error, 1)
+	var (
+		mu        sync.Mutex
+		lifecycle []string
+	)
+	agent := New(AgentLoopConfig{
+		Model:             llm.Model{ID: "model"},
+		ToolExecutionMode: ToolExecutionParallel,
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{
+					testCall("call-1", "first", `{}`),
+					testCall("call-2", "second", `{}`),
+				},
+			}}}, nil
+		},
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			switch toolCall.Name {
+			case "first":
+				<-releaseFirst
+				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("first done")}}, nil
+			case "second":
+				close(secondRan)
+				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("second done")}}, nil
+			default:
+				return AgentToolResult{}, errors.New("unexpected tool")
+			}
+		},
+		OnEvent: func(ev session.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch msg := ev.(type) {
+			case session.ToolCallStarted:
+				lifecycle = append(lifecycle, "start:"+msg.ToolName)
+			case session.ToolResult:
+				lifecycle = append(lifecycle, "result:"+msg.ToolName)
+			}
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(ctx.ToolResults) == 2
+		},
+	})
+	agent.SetTools([]AgentTool{
+		{Name: "first", Parallel: true},
+		{Name: "second", Parallel: true},
+	})
+
+	go func() {
+		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+		errc <- err
+	}()
+
+	select {
+	case <-secondRan:
+	case <-time.After(time.Second):
+		t.Fatal("second parallel tool did not run while first was blocked")
+	}
+	close(releaseFirst)
+
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent run did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"start:first", "start:second", "result:first", "result:second"}
+	if strings.Join(lifecycle, ",") != strings.Join(want, ",") {
+		t.Fatalf("lifecycle = %v, want %v", lifecycle, want)
 	}
 }
 
