@@ -9,6 +9,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
 )
 
 func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
@@ -274,6 +275,10 @@ func (s *fakeStorage) Meta() storage.Metadata {
 }
 
 func (s *fakeStorage) Append(context.Context, any) error { return nil }
+
+func (s *fakeStorage) AppendModelMessage(context.Context, llm.Message) error { return nil }
+
+func (s *fakeStorage) ModelMessages(context.Context) ([]llm.Message, error) { return nil, nil }
 
 func (s *fakeStorage) Entries(context.Context) ([]session.Entry, error) {
 	if s.entriesErr != nil {

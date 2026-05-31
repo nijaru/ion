@@ -10,6 +10,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
 )
 
 type closeStorageSession struct {
@@ -24,6 +25,14 @@ func (s *closeStorageSession) Meta() storage.Metadata {
 }
 
 func (s *closeStorageSession) Append(ctx context.Context, event any) error { return nil }
+
+func (s *closeStorageSession) AppendModelMessage(ctx context.Context, msg llm.Message) error {
+	return nil
+}
+
+func (s *closeStorageSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
+	return nil, nil
+}
 
 func (s *closeStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/llm"
 )
 
 // Store defines the interface for session and input history persistence.
@@ -97,8 +98,14 @@ type Session interface {
 	// Meta returns the session's initial metadata.
 	Meta() Metadata
 
-	// Append appends a new event to the session storage.
+	// Append appends an Ion-owned display/progress event to the session storage.
 	Append(ctx context.Context, event any) error
+
+	// AppendModelMessage appends a provider-visible message to durable history.
+	AppendModelMessage(ctx context.Context, message llm.Message) error
+
+	// ModelMessages returns the effective provider-visible message history.
+	ModelMessages(ctx context.Context) ([]llm.Message, error)
 
 	// Entries returns all entries stored in the session so far.
 	Entries(ctx context.Context) ([]session.Entry, error)

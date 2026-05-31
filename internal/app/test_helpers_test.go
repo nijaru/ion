@@ -11,10 +11,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
 )
 
 type stubBackend struct {
@@ -303,6 +304,7 @@ type stubStorageSession struct {
 	branch     string
 	closed     bool
 	appends    []any
+	messages   []llm.Message
 	appendErr  error
 	usageIn    int
 	usageOut   int
@@ -324,6 +326,18 @@ func (s *stubStorageSession) Meta() storage.Metadata {
 func (s *stubStorageSession) Append(ctx context.Context, event any) error {
 	s.appends = append(s.appends, event)
 	return s.appendErr
+}
+
+func (s *stubStorageSession) AppendModelMessage(
+	ctx context.Context,
+	message llm.Message,
+) error {
+	s.messages = append(s.messages, message)
+	return s.appendErr
+}
+
+func (s *stubStorageSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
+	return append([]llm.Message(nil), s.messages...), nil
 }
 
 func (s *stubStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {

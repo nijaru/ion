@@ -51,11 +51,6 @@ type SessionAdapterConfig struct {
 	ToolExecutor ToolExecutor
 }
 
-type modelHistorySession interface {
-	AppendModelMessage(context.Context, llm.Message) error
-	ModelMessages(context.Context) ([]llm.Message, error)
-}
-
 // NewSessionAdapter creates a new session adapter.
 func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 	if config.ID == "" {
@@ -244,22 +239,14 @@ func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Mes
 	if sess == nil {
 		return nil
 	}
-	writer, ok := sess.(modelHistorySession)
-	if !ok {
-		return nil
-	}
-	return writer.AppendModelMessage(ctx, message)
+	return sess.AppendModelMessage(ctx, message)
 }
 
 func (s *SessionAdapter) loadModelHistoryLocked(ctx context.Context) ([]AgentMessage, error) {
 	if s.sess == nil {
 		return nil, nil
 	}
-	history, ok := s.sess.(modelHistorySession)
-	if !ok {
-		return nil, nil
-	}
-	messages, err := history.ModelMessages(ctx)
+	messages, err := s.sess.ModelMessages(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load model history: %w", err)
 	}
