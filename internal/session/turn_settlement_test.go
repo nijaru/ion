@@ -41,3 +41,52 @@ func TestDecideTurnSettlement(t *testing.T) {
 		})
 	}
 }
+
+func TestDecideTurnFinishedDispatch(t *testing.T) {
+	tests := []struct {
+		name  string
+		input TurnFinishedDispatchInput
+		want  TurnFinishedDispatchDecision
+	}{
+		{
+			name:  "awaits and refreshes git stats with no queued local turns",
+			input: TurnFinishedDispatchInput{},
+			want: TurnFinishedDispatchDecision{
+				Action:        TurnFinishedDispatchAwait,
+				ReloadGitDiff: true,
+				AwaitNext:     true,
+			},
+		},
+		{
+			name: "awaits backend-owned queue",
+			input: TurnFinishedDispatchInput{
+				BackendOwnedQueued: true,
+				LocalQueuedTurns:   []string{"backend follow-up"},
+			},
+			want: TurnFinishedDispatchDecision{
+				Action:        TurnFinishedDispatchAwait,
+				ReloadGitDiff: true,
+				AwaitNext:     true,
+			},
+		},
+		{
+			name: "submits local follow-up and rearms session events",
+			input: TurnFinishedDispatchInput{
+				LocalQueuedTurns: []string{"first", "second"},
+			},
+			want: TurnFinishedDispatchDecision{
+				Action:             TurnFinishedDispatchSubmitLocal,
+				Text:               "first",
+				RearmSessionEvents: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DecideTurnFinishedDispatch(tt.input); got != tt.want {
+				t.Fatalf("DecideTurnFinishedDispatch() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}

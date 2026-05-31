@@ -335,3 +335,14 @@ func (r turnReducer) popQueuedTurn() string {
 	r.inFlight.QueuedTurns = r.inFlight.QueuedTurns[1:]
 	return decision.Text
 }
+
+func (r turnReducer) finishTurnDispatch() session.TurnFinishedDispatchDecision {
+	decision := session.DecideTurnFinishedDispatch(session.TurnFinishedDispatchInput{
+		BackendOwnedQueued: r.inFlight.QueuedTurnsBackendOwned,
+		LocalQueuedTurns:   r.inFlight.QueuedTurns,
+	})
+	if decision.Action == session.TurnFinishedDispatchSubmitLocal {
+		r.inFlight.QueuedTurns = r.inFlight.QueuedTurns[1:]
+	}
+	return decision
+}

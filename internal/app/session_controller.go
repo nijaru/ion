@@ -582,14 +582,22 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	}
 	m.turnReducer().recordFinishedTurnSummary(time.Now())
 
-	if queued := m.turnReducer().popQueuedTurn(); queued != "" {
+	dispatch := m.turnReducer().finishTurnDispatch()
+	if dispatch.Action == session.TurnFinishedDispatchSubmitLocal {
 		cmds = append(cmds, func() tea.Msg {
-			return queuedTurnMsg{text: queued, rearmSessionEvents: true}
+			return queuedTurnMsg{
+				text:               dispatch.Text,
+				rearmSessionEvents: dispatch.RearmSessionEvents,
+			}
 		})
 		return m, tea.Sequence(cmds...)
 	}
-	cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
-	cmds = append(cmds, m.awaitSessionEvent())
+	if dispatch.ReloadGitDiff {
+		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
+	}
+	if dispatch.AwaitNext {
+		cmds = append(cmds, m.awaitSessionEvent())
+	}
 	return m, tea.Sequence(cmds...)
 }
 
