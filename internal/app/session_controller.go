@@ -136,17 +136,42 @@ func rearmSubmitResultCmd(submitCmd tea.Cmd) tea.Cmd {
 }
 
 func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
-	if m.Model.Config != nil &&
-		m.Model.Config.BusyInputMode() == "steer" &&
-		m.InFlight.Thinking &&
-		!m.Progress.Compacting {
-		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
+	mode := ""
+	if m.Model.Config != nil {
+		mode = m.Model.Config.BusyInputMode()
+	}
+	steering, supportsSteering := m.Model.Session.(session.SteeringSession)
+	queued, supportsFollowUp := m.Model.Session.(session.QueuedInputSession)
+
+	switch session.RouteBusyInput(session.BusyInputRouting{
+		Mode:             mode,
+		Thinking:         m.InFlight.Thinking,
+		Compacting:       m.Progress.Compacting,
+		SupportsSteering: supportsSteering,
+		SupportsFollowUp: supportsFollowUp,
+	}) {
+	case session.BusyInputRouteSteer:
+		m.resetComposerDraft()
+		return m, steerTurnCmd(steering, text)
+	case session.BusyInputRouteFollowUp:
+		priorFollowUpCount := len(m.InFlight.QueuedTurns)
+		m.resetComposerDraft()
+		return m, followUpTurnCmd(queued, text, priorFollowUpCount)
+	default:
+		return m.queueBusyInputLocal(text)
+	}
+}
+
+func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
+	if m.InFlight.Thinking && !m.Progress.Compacting {
+		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
+			priorFollowUpCount := len(m.InFlight.QueuedTurns)
 			m.resetComposerDraft()
-			return m, steerTurnCmd(steering, text)
+			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
 		}
 	}
 
-	return m.queueBusyInput(text)
+	return m.queueBusyInputLocal(text)
 }
 
 func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
@@ -162,17 +187,6 @@ func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInput(msg.text)
-}
-
-func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
-	if m.InFlight.Thinking && !m.Progress.Compacting {
-		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
-			priorFollowUpCount := len(m.InFlight.QueuedTurns)
-			m.resetComposerDraft()
-			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
-		}
-	}
-	return m.queueBusyInputLocal(text)
 }
 
 func followUpTurnCmd(
