@@ -200,12 +200,6 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		Content: input,
 	}
 
-	// Emit UserMessage immediately so TUI projects it
-	s.events <- session.UserMessage{
-		Base:    session.BaseNow(),
-		Message: input,
-	}
-
 	// Run the agent loop in a goroutine
 	go func() {
 		defer func() {

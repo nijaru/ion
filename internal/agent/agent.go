@@ -113,6 +113,7 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	a.state.Messages = append(a.state.Messages, prompts...)
 	a.mu.Unlock()
 	for _, prompt := range prompts {
+		a.emitInputMessage(prompt)
 		if err := a.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
 			return nil, err
 		}

@@ -110,10 +110,14 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	}
 
 	// Verify event sequence
-	var gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnFinished bool
+	var gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnFinished bool
 
 	for _, ev := range events {
-		switch ev.(type) {
+		switch msg := ev.(type) {
+		case session.UserMessage:
+			if msg.Message == "run test" {
+				gotUserMessage = true
+			}
 		case session.TurnStarted:
 			gotTurnStarted = true
 		case session.ThinkingDelta:
@@ -131,6 +135,9 @@ func TestAgentEventsAndLoop(t *testing.T) {
 		}
 	}
 
+	if !gotUserMessage {
+		t.Error("missing UserMessage event")
+	}
 	if !gotTurnStarted {
 		t.Error("missing TurnStarted event")
 	}
@@ -151,6 +158,33 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	}
 	if !gotTurnFinished {
 		t.Error("missing TurnFinished event")
+	}
+}
+
+func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
+	var events []session.Event
+	agent := New(AgentLoopConfig{
+		Model: llm.Model{ID: "test-model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
+		},
+		OnEvent: func(ev session.Event) {
+			events = append(events, ev)
+		},
+	})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{
+		Role:    "user",
+		Content: "project me",
+	}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("missing events")
+	}
+	msg, ok := events[0].(session.UserMessage)
+	if !ok || msg.Message != "project me" {
+		t.Fatalf("first event = %#v, want prompt UserMessage", events[0])
 	}
 }
 
