@@ -313,10 +313,13 @@ func (r turnReducer) drainQueuedTurnsText() string {
 }
 
 func (r turnReducer) popQueuedTurn() string {
-	if r.inFlight.QueuedTurnsBackendOwned || len(r.inFlight.QueuedTurns) == 0 {
+	decision := session.DecideTurnSettlement(session.TurnSettlementInput{
+		BackendOwnedQueued: r.inFlight.QueuedTurnsBackendOwned,
+		LocalQueuedTurns:   r.inFlight.QueuedTurns,
+	})
+	if decision.Action != session.TurnSettlementSubmitLocal {
 		return ""
 	}
-	queued := r.inFlight.QueuedTurns[0]
 	r.inFlight.QueuedTurns = r.inFlight.QueuedTurns[1:]
-	return queued
+	return decision.Text
 }
