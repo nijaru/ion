@@ -254,8 +254,8 @@ func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
 }
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
-	m.turnReducer().cancelActiveTurn()
-	entry, _ := storage.EntrySystem(reason, time.Time{})
+	decision := m.turnReducer().cancelActiveTurn(reason, time.Now())
+	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
 	return m, sequenceCmds(
 		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist cancellation", storage.System{

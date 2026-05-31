@@ -174,15 +174,23 @@ func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (sessio
 	return entry, true
 }
 
-func (r turnReducer) cancelActiveTurn() {
-	r.clearActiveState(true)
-	r.inFlight.Thinking = true
-	r.inFlight.Canceling = true
-	r.beginDrain(time.Now())
+func (r turnReducer) cancelActiveTurn(
+	reason string,
+	now time.Time,
+) session.CancelStartDecision {
+	decision := session.DecideCancelStart(session.CancelStartInput{
+		Reason: reason,
+		Now:    now,
+	})
+	r.clearActiveState(decision.ClearQueued)
+	r.inFlight.Thinking = decision.Thinking
+	r.inFlight.Canceling = decision.Canceling
+	r.beginDrain(decision.DrainStartedAt)
 	r.progress.Compacting = false
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
 	r.progress.StatusUpdatedAt = time.Time{}
+	return decision
 }
 
 func (r turnReducer) stopThinking() {
@@ -254,8 +262,10 @@ func (r turnReducer) finishTurnMode(assistantCompleted bool) (session.Entry, boo
 		r.progress.Mode = stateCancelled
 		r.progress.Status = ""
 	case r.progress.Mode == stateCancelled:
-		preserveQueued := r.inFlight.Canceling
-		r.clearActiveState(!preserveQueued)
+		decision := session.DecideCancelFinish(session.CancelFinishInput{
+			Canceling: r.inFlight.Canceling,
+		})
+		r.clearActiveState(!decision.PreserveQueued)
 		r.progress.Mode = stateCancelled
 		r.progress.Status = ""
 	case !assistantCompleted:
