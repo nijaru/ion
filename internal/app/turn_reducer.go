@@ -150,18 +150,23 @@ func (r turnReducer) applyStatusChanged(msg session.StatusChanged) {
 }
 
 func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (session.Entry, bool) {
-	if reason == "" || reason == r.progress.BudgetStopReason {
+	decision := session.DecideBudgetStopSettlement(session.BudgetStopSettlementInput{
+		Reason:         reason,
+		ExistingReason: r.progress.BudgetStopReason,
+		Thinking:       r.inFlight.Thinking,
+	})
+	if decision.Action == session.BudgetStopIgnore {
 		return session.Entry{}, false
 	}
-	r.progress.BudgetStopReason = reason
-	if !r.inFlight.Thinking {
+	r.progress.BudgetStopReason = decision.Reason
+	if decision.Action == session.BudgetStopRecord {
 		return session.Entry{}, true
 	}
 	r.clearActiveState(true)
 	r.inFlight.Thinking = true
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
-	entry, _ := storage.EntrySystem("Canceled: "+reason, timestamp)
+	entry, _ := storage.EntrySystem(decision.EntryContent, timestamp)
 	return entry, true
 }
 

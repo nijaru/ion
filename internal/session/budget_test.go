@@ -50,3 +50,55 @@ func TestBudgetStopReason(t *testing.T) {
 		})
 	}
 }
+
+func TestDecideBudgetStopSettlement(t *testing.T) {
+	tests := []struct {
+		name  string
+		input BudgetStopSettlementInput
+		want  BudgetStopSettlementDecision
+	}{
+		{
+			name: "ignores blank reason",
+			want: BudgetStopSettlementDecision{Action: BudgetStopIgnore},
+		},
+		{
+			name: "ignores repeated reason",
+			input: BudgetStopSettlementInput{
+				Reason:         "session cost limit reached",
+				ExistingReason: "session cost limit reached",
+				Thinking:       true,
+			},
+			want: BudgetStopSettlementDecision{Action: BudgetStopIgnore},
+		},
+		{
+			name: "records stop after turn already settled",
+			input: BudgetStopSettlementInput{
+				Reason: "session cost limit reached",
+			},
+			want: BudgetStopSettlementDecision{
+				Action: BudgetStopRecord,
+				Reason: "session cost limit reached",
+			},
+		},
+		{
+			name: "cancels active turn",
+			input: BudgetStopSettlementInput{
+				Reason:   "turn cost limit reached",
+				Thinking: true,
+			},
+			want: BudgetStopSettlementDecision{
+				Action:       BudgetStopCancel,
+				Reason:       "turn cost limit reached",
+				EntryContent: "Canceled: turn cost limit reached",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DecideBudgetStopSettlement(tt.input); got != tt.want {
+				t.Fatalf("DecideBudgetStopSettlement() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}

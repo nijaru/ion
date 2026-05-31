@@ -26,3 +26,40 @@ func BudgetStopReason(input BudgetStopInput) string {
 	}
 	return ""
 }
+
+type BudgetStopSettlementAction string
+
+const (
+	BudgetStopIgnore BudgetStopSettlementAction = "ignore"
+	BudgetStopRecord BudgetStopSettlementAction = "record"
+	BudgetStopCancel BudgetStopSettlementAction = "cancel"
+)
+
+type BudgetStopSettlementInput struct {
+	Reason         string
+	ExistingReason string
+	Thinking       bool
+}
+
+type BudgetStopSettlementDecision struct {
+	Action       BudgetStopSettlementAction
+	Reason       string
+	EntryContent string
+}
+
+func DecideBudgetStopSettlement(input BudgetStopSettlementInput) BudgetStopSettlementDecision {
+	if input.Reason == "" || input.Reason == input.ExistingReason {
+		return BudgetStopSettlementDecision{Action: BudgetStopIgnore}
+	}
+	if !input.Thinking {
+		return BudgetStopSettlementDecision{
+			Action: BudgetStopRecord,
+			Reason: input.Reason,
+		}
+	}
+	return BudgetStopSettlementDecision{
+		Action:       BudgetStopCancel,
+		Reason:       input.Reason,
+		EntryContent: "Canceled: " + input.Reason,
+	}
+}
