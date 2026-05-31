@@ -179,8 +179,9 @@ func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 }
 
 func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
-	if msg.err == nil && msg.result.Outcome == session.SteeringAccepted {
-		entry, _ := storage.EntrySystem("Steering current turn", time.Time{})
+	decision := session.DecideSteeringResult(msg.result, msg.err)
+	if decision.Action == session.BusyInputResultAccepted {
+		entry, _ := storage.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInput(msg.text)
@@ -203,13 +204,16 @@ func followUpTurnCmd(
 }
 
 func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
-	if msg.err == nil && msg.result.Outcome == session.QueuedInputAccepted {
-		queued := append([]string(nil), m.InFlight.QueuedTurns...)
-		if len(queued) <= msg.priorFollowUpCount {
-			queued = append(queued, msg.text)
-		}
-		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, queued)
-		entry, _ := storage.EntrySystem("Queued follow-up", time.Time{})
+	decision := session.DecideFollowUpResult(session.FollowUpResultInput{
+		Text:               msg.text,
+		PriorFollowUpCount: msg.priorFollowUpCount,
+		CurrentFollowUp:    m.InFlight.QueuedTurns,
+		Result:             msg.result,
+		Err:                msg.err,
+	})
+	if decision.Action == session.BusyInputResultAccepted {
+		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, decision.FollowUp)
+		entry, _ := storage.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInputLocal(msg.text)

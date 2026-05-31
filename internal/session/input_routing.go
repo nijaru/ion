@@ -28,3 +28,54 @@ func RouteBusyInput(input BusyInputRouting) BusyInputRoute {
 	}
 	return BusyInputRouteLocalQueue
 }
+
+type BusyInputResultAction string
+
+const (
+	BusyInputResultAccepted BusyInputResultAction = "accepted"
+	BusyInputResultFallback BusyInputResultAction = "fallback"
+)
+
+type SteeringResultDecision struct {
+	Action        BusyInputResultAction
+	NoticeContent string
+}
+
+func DecideSteeringResult(result SteeringResult, err error) SteeringResultDecision {
+	if err == nil && result.Outcome == SteeringAccepted {
+		return SteeringResultDecision{
+			Action:        BusyInputResultAccepted,
+			NoticeContent: "Steering current turn",
+		}
+	}
+	return SteeringResultDecision{Action: BusyInputResultFallback}
+}
+
+type FollowUpResultInput struct {
+	Text               string
+	PriorFollowUpCount int
+	CurrentFollowUp    []string
+	Result             QueuedInputResult
+	Err                error
+}
+
+type FollowUpResultDecision struct {
+	Action        BusyInputResultAction
+	FollowUp      []string
+	NoticeContent string
+}
+
+func DecideFollowUpResult(input FollowUpResultInput) FollowUpResultDecision {
+	if input.Err != nil || input.Result.Outcome != QueuedInputAccepted {
+		return FollowUpResultDecision{Action: BusyInputResultFallback}
+	}
+	followUp := append([]string(nil), input.CurrentFollowUp...)
+	if len(followUp) <= input.PriorFollowUpCount {
+		followUp = append(followUp, input.Text)
+	}
+	return FollowUpResultDecision{
+		Action:        BusyInputResultAccepted,
+		FollowUp:      followUp,
+		NoticeContent: "Queued follow-up",
+	}
+}
