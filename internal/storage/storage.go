@@ -131,17 +131,19 @@ type Metadata struct {
 
 // SessionInfo provides summary information about a session for lists and pickers.
 type SessionInfo struct {
-	ID                string    `json:"id"`
-	CWD               string    `json:"cwd"`
-	Model             string    `json:"model"`
-	Branch            string    `json:"branch"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	MessageCount      int       `json:"message_count"`
-	Title             string    `json:"title"`
-	Summary           string    `json:"summary"`
-	LastPreview       string    `json:"last_preview"`
-	PreserveUpdatedAt bool      `json:"-"`
+	ID           string    `json:"id"`
+	CWD          string    `json:"cwd"`
+	Model        string    `json:"model"`
+	Branch       string    `json:"branch"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	MessageCount int       `json:"message_count"`
+	Title        string    `json:"title"`
+	// Summary is a read-side alias for LastPreview. Persistent metadata stores
+	// one preview string so session lists, bundles, and pickers cannot diverge.
+	Summary           string `json:"summary"`
+	LastPreview       string `json:"last_preview"`
+	PreserveUpdatedAt bool   `json:"-"`
 }
 
 func IsConversationSessionInfo(info SessionInfo) bool {
@@ -227,6 +229,13 @@ func sessionTitle(text string) string {
 
 func sessionSummary(text string) string {
 	return compactSessionText(text, 120)
+}
+
+func sessionInfoPreview(info SessionInfo) string {
+	if preview := strings.TrimSpace(info.LastPreview); preview != "" {
+		return preview
+	}
+	return strings.TrimSpace(info.Summary)
 }
 
 func compactSessionText(text string, max int) string {

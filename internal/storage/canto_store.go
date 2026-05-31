@@ -450,6 +450,7 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 	if si.PreserveUpdatedAt {
 		preserveUpdatedAt = 1
 	}
+	preview := sessionInfoPreview(si)
 	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE session_meta
@@ -467,8 +468,8 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		si.Branch,
 		si.Title,
 		si.Title,
-		si.LastPreview,
-		si.LastPreview,
+		preview,
+		preview,
 		si.ID,
 	)
 	if err != nil {

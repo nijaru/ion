@@ -375,6 +375,96 @@ func TestCantoStoreUpdateSessionFailsWhenMetadataMissing(t *testing.T) {
 	}
 }
 
+func TestCantoSessionAppendModelMessageOwnsTitleAndPreviewMetadata(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	sess, err := store.OpenSession(ctx, cwd, "openrouter/test-model", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	first := strings.Repeat("plan architecture slice ", 6)
+	if err := sess.AppendModelMessage(ctx, llm.Message{
+		Role:    llm.RoleUser,
+		Content: first,
+	}); err != nil {
+		t.Fatalf("append first user message: %v", err)
+	}
+
+	info, err := store.sessionInfo(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("session info after first message: %v", err)
+	}
+	wantTitle := sessionTitle(first)
+	wantPreview := sessionSummary(first)
+	if info.Title != wantTitle {
+		t.Fatalf("title = %q, want %q", info.Title, wantTitle)
+	}
+	if info.LastPreview != wantPreview || info.Summary != wantPreview {
+		t.Fatalf("preview = (%q, %q), want %q", info.LastPreview, info.Summary, wantPreview)
+	}
+
+	second := "short follow-up"
+	if err := sess.AppendModelMessage(ctx, llm.Message{
+		Role:    llm.RoleUser,
+		Content: second,
+	}); err != nil {
+		t.Fatalf("append second user message: %v", err)
+	}
+
+	info, err = store.sessionInfo(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("session info after second message: %v", err)
+	}
+	if info.Title != wantTitle {
+		t.Fatalf("title after second message = %q, want first title %q", info.Title, wantTitle)
+	}
+	if info.LastPreview != second || info.Summary != second {
+		t.Fatalf(
+			"preview after second message = (%q, %q), want %q",
+			info.LastPreview,
+			info.Summary,
+			second,
+		)
+	}
+}
+
+func TestCantoStoreUpdateSessionUsesSummaryAsPreviewAlias(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := store.UpdateSession(ctx, SessionInfo{
+		ID:      sess.ID(),
+		Summary: "summary-only preview",
+	}); err != nil {
+		t.Fatalf("update session: %v", err)
+	}
+	info, err := store.sessionInfo(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("session info: %v", err)
+	}
+	if info.LastPreview != "summary-only preview" || info.Summary != "summary-only preview" {
+		t.Fatalf("preview = (%q, %q), want summary-only preview", info.LastPreview, info.Summary)
+	}
+}
+
 func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

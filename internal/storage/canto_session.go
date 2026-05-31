@@ -92,10 +92,15 @@ func (s *cantoSession) AppendModelMessage(ctx context.Context, message llm.Messa
 	if err := s.store.canto.Save(ctx, session.NewMessage(s.id, message)); err != nil {
 		return err
 	}
-	preview := sessionSummary(message.TextContent())
+	text := message.TextContent()
+	title := ""
+	if message.Role == llm.RoleUser {
+		title = sessionTitle(text)
+	}
+	preview := sessionSummary(text)
 	return s.store.UpdateSession(
 		ctx,
-		SessionInfo{ID: s.id, Summary: preview, LastPreview: preview},
+		SessionInfo{ID: s.id, Title: title, LastPreview: preview},
 	)
 }
 
