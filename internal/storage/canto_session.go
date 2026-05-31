@@ -28,7 +28,7 @@ func (s *cantoSession) Meta() Metadata {
 	}
 }
 
-func (s *cantoSession) Append(ctx context.Context, event any) error {
+func (s *cantoSession) Append(ctx context.Context, event Event) error {
 	var title string
 	var preview string
 	var err error

@@ -1209,7 +1209,7 @@ type blockingAppendStorage struct {
 	release chan struct{}
 }
 
-func (s *blockingAppendStorage) Append(ctx context.Context, event any) error {
+func (s *blockingAppendStorage) Append(ctx context.Context, event storage.Event) error {
 	s.entered <- event
 	<-s.release
 	return s.stubStorageSession.Append(ctx, event)

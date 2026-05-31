@@ -17,7 +17,7 @@ func (m Model) persistenceController() persistenceController {
 	return persistenceController{storage: m.Model.Storage}
 }
 
-func (c persistenceController) appendEntry(action string, entry any) tea.Cmd {
+func (c persistenceController) appendEntry(action string, entry storage.Event) tea.Cmd {
 	if c.storage == nil {
 		return nil
 	}

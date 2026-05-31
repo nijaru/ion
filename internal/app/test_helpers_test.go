@@ -323,7 +323,7 @@ func (s *stubStorageSession) Meta() storage.Metadata {
 	}
 }
 
-func (s *stubStorageSession) Append(ctx context.Context, event any) error {
+func (s *stubStorageSession) Append(ctx context.Context, event storage.Event) error {
 	s.appends = append(s.appends, event)
 	return s.appendErr
 }
@@ -403,7 +403,9 @@ func readyModel(t *testing.T) Model {
 	t.Helper()
 	// Isolate from user's global config in ~/.ion/config.toml
 	if home, err := os.UserHomeDir(); err == nil {
-		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") && !strings.Contains(home, "folders") && !strings.Contains(home, "/var/") {
+		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") &&
+			!strings.Contains(home, "folders") &&
+			!strings.Contains(home, "/var/") {
 			t.Setenv("HOME", t.TempDir())
 		}
 	}

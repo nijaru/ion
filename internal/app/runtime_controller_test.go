@@ -274,7 +274,7 @@ func (s *fakeStorage) Meta() storage.Metadata {
 	return storage.Metadata{ID: s.id, Branch: s.branch}
 }
 
-func (s *fakeStorage) Append(context.Context, any) error { return nil }
+func (s *fakeStorage) Append(context.Context, storage.Event) error { return nil }
 
 func (s *fakeStorage) AppendModelMessage(context.Context, llm.Message) error { return nil }
 

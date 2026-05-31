@@ -99,7 +99,7 @@ type Session interface {
 	Meta() Metadata
 
 	// Append appends an Ion-owned display/progress event to the session storage.
-	Append(ctx context.Context, event any) error
+	Append(ctx context.Context, event Event) error
 
 	// AppendModelMessage appends a provider-visible message to durable history.
 	AppendModelMessage(ctx context.Context, message llm.Message) error
@@ -151,6 +151,12 @@ func IsConversationSessionInfo(info SessionInfo) bool {
 	}
 	preview := strings.TrimSpace(info.LastPreview)
 	return preview != "" && !strings.HasPrefix(preview, "/")
+}
+
+// Event is a sealed storage event. Provider-visible messages use
+// AppendModelMessage instead of this display/progress append path.
+type Event interface {
+	isStorageEvent()
 }
 
 // Event projection types persisted into Canto for Ion-owned display/session state.
@@ -208,6 +214,12 @@ type (
 		TS      int64  `json:"ts"`
 	}
 )
+
+func (Status) isStorageEvent()          {}
+func (System) isStorageEvent()          {}
+func (TokenUsage) isStorageEvent()      {}
+func (RoutingDecision) isStorageEvent() {}
+func (Subagent) isStorageEvent()        {}
 
 func sessionTitle(text string) string {
 	return compactSessionText(text, 72)

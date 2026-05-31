@@ -1969,22 +1969,20 @@ func TestCantoStoreRejectsUnsupportedAppends(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	cases := []any{
-		struct{ Type string }{Type: "user"},
-		struct{ Type string }{Type: "agent"},
-		struct{ Type string }{Type: "tool_use"},
-		struct{ Type string }{Type: "tool_result"},
+	err = sess.Append(ctx, unhandledStorageEvent{Type: "future_event"})
+	if err == nil {
+		t.Fatal("append unhandled storage event returned nil, want unsupported-event error")
 	}
-	for _, event := range cases {
-		err := sess.Append(ctx, event)
-		if err == nil {
-			t.Fatalf("append %T returned nil, want unsupported-event error", event)
-		}
-		if !strings.Contains(err.Error(), "cannot append unsupported") {
-			t.Fatalf("append %T error = %q, want unsupported-event error", event, err)
-		}
+	if !strings.Contains(err.Error(), "cannot append unsupported") {
+		t.Fatalf("append unhandled storage event error = %q, want unsupported-event error", err)
 	}
 }
+
+type unhandledStorageEvent struct {
+	Type string
+}
+
+func (unhandledStorageEvent) isStorageEvent() {}
 
 func TestCantoStoreEntriesPreserveFullAgentContent(t *testing.T) {
 	root := t.TempDir()

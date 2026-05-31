@@ -24,7 +24,7 @@ func (s *closeStorageSession) Meta() storage.Metadata {
 	return storage.Metadata{ID: s.id, CreatedAt: time.Now()}
 }
 
-func (s *closeStorageSession) Append(ctx context.Context, event any) error { return nil }
+func (s *closeStorageSession) Append(ctx context.Context, event storage.Event) error { return nil }
 
 func (s *closeStorageSession) AppendModelMessage(ctx context.Context, msg llm.Message) error {
 	return nil

@@ -79,7 +79,7 @@ func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
 	return created, nil
 }
 
-func (s *LazySession) Append(ctx context.Context, event any) error {
+func (s *LazySession) Append(ctx context.Context, event Event) error {
 	s.mu.Lock()
 	created := s.created
 	s.mu.Unlock()

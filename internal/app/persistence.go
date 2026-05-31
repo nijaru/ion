@@ -23,7 +23,7 @@ func (m Model) persistErrorAndAwait(action string, err error) tea.Cmd {
 	return sequenceCmds(persistErrorCmd(action, err), m.awaitSessionEvent())
 }
 
-func (m Model) persistEntryCmd(action string, entry any) tea.Cmd {
+func (m Model) persistEntryCmd(action string, entry storage.Event) tea.Cmd {
 	return m.persistenceController().appendEntry(action, entry)
 }
 
