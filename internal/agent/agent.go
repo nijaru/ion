@@ -40,6 +40,16 @@ func (a *Agent) emit(ev session.Event) {
 	}
 }
 
+func (a *Agent) emitInputMessage(message AgentMessage) {
+	if message.Role != "user" {
+		return
+	}
+	a.emit(session.UserMessage{
+		Base:    session.BaseNow(),
+		Message: message.Content,
+	})
+}
+
 // State returns a copy of the current agent state.
 func (a *Agent) State() AgentState {
 	a.mu.RLock()
@@ -166,13 +176,16 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 // runLoop is the main agent loop logic.
 func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error {
 	firstTurn := true
+	var pendingMessages []AgentMessage
 
 	// Outer loop: continues when queued follow-up messages arrive
 	for {
 		hasMoreToolCalls := true
 
 		// Check for steering messages at start
-		pendingMessages := a.getSteeringMessages()
+		if len(pendingMessages) == 0 {
+			pendingMessages = a.getSteeringMessages()
+		}
 
 		// Inner loop: process tool calls and steering messages
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
@@ -195,6 +208,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				a.mu.Unlock()
 				*newMessages = append(*newMessages, pendingMessages...)
 				for _, message := range pendingMessages {
+					a.emitInputMessage(message)
 					if err := a.writeModelMessage(ctx, agentMessageToLLM(message)); err != nil {
 						return err
 					}

@@ -535,6 +535,62 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 	}
 }
 
+func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
+	var events []session.Event
+	var committed []llm.Message
+	requests := 0
+	followUpSent := false
+	agent := New(AgentLoopConfig{
+		Model: llm.Model{ID: "model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			requests++
+			return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
+		},
+		GetFollowUpMessages: func() []AgentMessage {
+			if followUpSent {
+				return nil
+			}
+			followUpSent = true
+			return []AgentMessage{{Role: "user", Content: "queued follow-up"}}
+		},
+		OnEvent: func(ev session.Event) {
+			events = append(events, ev)
+		},
+		OnModelMessage: func(ctx context.Context, message llm.Message) error {
+			committed = append(committed, message)
+			return nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return requests >= 2
+		},
+	})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "initial"}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var sawFollowUpEvent bool
+	for _, ev := range events {
+		msg, ok := ev.(session.UserMessage)
+		if ok && msg.Message == "queued follow-up" {
+			sawFollowUpEvent = true
+			break
+		}
+	}
+	if !sawFollowUpEvent {
+		t.Fatalf("events = %#v, want queued follow-up user event", events)
+	}
+	var sawFollowUpCommit bool
+	for _, message := range committed {
+		if message.Role == llm.RoleUser && message.Content == "queued follow-up" {
+			sawFollowUpCommit = true
+			break
+		}
+	}
+	if !sawFollowUpCommit {
+		t.Fatalf("committed = %#v, want queued follow-up model message", committed)
+	}
+}
+
 func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 	var events []session.Event
 	var committed []llm.Message
