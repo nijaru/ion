@@ -50,6 +50,8 @@ type SessionAdapterConfig struct {
 	StreamFn StreamFn
 	// ToolExecutor executes tool calls.
 	ToolExecutor ToolExecutor
+	// QueueMode controls how many queued inputs are consumed at a loop boundary.
+	QueueMode QueueMode
 }
 
 // NewSessionAdapter creates a new session adapter.
@@ -64,9 +66,15 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		events: make(chan session.Event, 100),
 	}
 
+	queueMode := config.QueueMode
+	if queueMode == "" {
+		queueMode = QueueModeOneAtATime
+	}
+
 	agentConfig := AgentLoopConfig{
 		Model:         config.Model,
 		ThinkingLevel: config.ThinkingLevel,
+		QueueMode:     queueMode,
 		MaxTokens:     config.MaxTokens,
 		Temperature:   config.Temperature,
 		StreamFn:      config.StreamFn,
@@ -87,11 +95,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 			if len(s.steeringQueue) == 0 {
 				return nil
 			}
-			msgs := make([]AgentMessage, len(s.steeringQueue))
-			for i, txt := range s.steeringQueue {
-				msgs[i] = AgentMessage{Role: "user", Content: txt}
-			}
-			s.steeringQueue = nil
+			msgs := drainQueuedMessagesLocked(&s.steeringQueue, queueMode)
 			s.emitQueueUpdatedLocked()
 			return msgs
 		},
@@ -101,11 +105,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 			if len(s.followUpQueue) == 0 {
 				return nil
 			}
-			msgs := make([]AgentMessage, len(s.followUpQueue))
-			for i, txt := range s.followUpQueue {
-				msgs[i] = AgentMessage{Role: "user", Content: txt}
-			}
-			s.followUpQueue = nil
+			msgs := drainQueuedMessagesLocked(&s.followUpQueue, queueMode)
 			s.emitQueueUpdatedLocked()
 			return msgs
 		},
@@ -121,6 +121,22 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 
 	s.agent = agent
 	return s
+}
+
+func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
+	if len(*queue) == 0 {
+		return nil
+	}
+	count := 1
+	if mode == QueueModeAll {
+		count = len(*queue)
+	}
+	msgs := make([]AgentMessage, count)
+	for i, text := range (*queue)[:count] {
+		msgs[i] = AgentMessage{Role: "user", Content: text}
+	}
+	*queue = (*queue)[count:]
+	return msgs
 }
 
 func (s *SessionAdapter) emitQueueUpdatedLocked() {

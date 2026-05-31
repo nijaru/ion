@@ -365,6 +365,62 @@ func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
 	}
 }
 
+func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
+	firstStreamEntered := make(chan struct{})
+	releaseFirstStream := make(chan struct{})
+	var closeFirstOnce sync.Once
+	adapter := NewSessionAdapter(&SessionAdapterConfig{
+		ID:    "test-session",
+		Model: llm.Model{ID: "model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			if len(req.Messages) == 1 {
+				closeFirstOnce.Do(func() { close(firstStreamEntered) })
+				select {
+				case <-releaseFirstStream:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
+		},
+	})
+
+	if err := adapter.SubmitTurn(context.Background(), "initial"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	select {
+	case <-firstStreamEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first stream did not start")
+	}
+	if _, err := adapter.FollowUpTurn(context.Background(), "follow one"); err != nil {
+		t.Fatalf("first follow-up: %v", err)
+	}
+	if _, err := adapter.FollowUpTurn(context.Background(), "follow two"); err != nil {
+		t.Fatalf("second follow-up: %v", err)
+	}
+	close(releaseFirstStream)
+
+	var users []string
+	for {
+		select {
+		case ev := <-adapter.Events():
+			switch msg := ev.(type) {
+			case session.UserMessage:
+				users = append(users, msg.Message)
+			case session.TurnFinished:
+				want := []string{"initial", "follow one", "follow two"}
+				if strings.Join(users, ",") != strings.Join(want, ",") {
+					t.Fatalf("user events = %v, want %v", users, want)
+				}
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for terminal event; users = %v", users)
+		}
+	}
+}
+
 func TestAgentSystemPromptPropagation(t *testing.T) {
 	var observedReq *llm.Request
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
