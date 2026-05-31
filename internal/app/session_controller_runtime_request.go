@@ -1,5 +1,7 @@
 package app
 
+import "github.com/nijaru/ion/internal/session"
+
 type runtimeRequestController struct {
 	model *Model
 }
@@ -9,26 +11,37 @@ func (m *Model) runtimeRequest() runtimeRequestController {
 }
 
 func (c runtimeRequestController) begin(status string) uint64 {
-	c.model.Model.RuntimeSwitchRequest++
-	requestID := c.model.Model.RuntimeSwitchRequest
-	c.model.progressReducer().beginLocalStatus(status)
-	return requestID
+	decision := session.BeginRuntimeRequest(session.RuntimeRequestBeginInput{
+		Current: c.model.Model.RuntimeSwitchRequest,
+		Status:  status,
+	})
+	c.model.Model.RuntimeSwitchRequest = decision.RequestID
+	if decision.SetLocalStatus {
+		c.model.progressReducer().beginLocalStatus(decision.Status)
+	}
+	return decision.RequestID
 }
 
 func (c runtimeRequestController) matches(requestID uint64) bool {
-	return requestID == 0 || requestID == c.model.Model.RuntimeSwitchRequest
+	return session.RuntimeRequestMatches(c.model.Model.RuntimeSwitchRequest, requestID)
 }
 
 func (c runtimeRequestController) finish(requestID uint64) bool {
-	if !c.matches(requestID) {
+	decision := session.FinishRuntimeRequest(c.model.Model.RuntimeSwitchRequest, requestID)
+	if !decision.Matched {
 		return false
 	}
-	c.model.Model.RuntimeSwitchRequest = 0
-	c.model.progressReducer().clearLocalBusyStatus()
+	c.model.Model.RuntimeSwitchRequest = decision.Active
+	if decision.ClearLocalStatus {
+		c.model.progressReducer().clearLocalBusyStatus()
+	}
 	return true
 }
 
 func (c runtimeRequestController) clear() {
-	c.model.Model.RuntimeSwitchRequest = 0
-	c.model.progressReducer().clearLocalBusyStatus()
+	decision := session.ClearRuntimeRequest()
+	c.model.Model.RuntimeSwitchRequest = decision.Active
+	if decision.ClearLocalStatus {
+		c.model.progressReducer().clearLocalBusyStatus()
+	}
 }
