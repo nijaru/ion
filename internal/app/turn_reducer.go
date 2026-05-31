@@ -52,13 +52,6 @@ func (r turnReducer) drainingUntilTurnStarted() bool {
 	return r.inFlight.DrainUntilTurnStarted
 }
 
-func (r turnReducer) shouldDrainLateEvent(timestamp time.Time) bool {
-	if r.inFlight.DrainStartedAt.IsZero() || timestamp.IsZero() {
-		return false
-	}
-	return !timestamp.After(r.inFlight.DrainStartedAt)
-}
-
 func (r turnReducer) finishDrain() {
 	r.inFlight.DrainUntilTurnStarted = false
 	r.inFlight.DrainStartedAt = time.Time{}

@@ -337,21 +337,16 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	turn := m.turnReducer()
 	if turn.drainingUntilTurnStarted() {
-		switch msg := ev.(type) {
-		case session.UserMessage:
-			if turn.shouldDrainLateEvent(msg.Timestamp) {
-				return m, m.awaitSessionEvent()
-			}
-			turn.finishDrain()
-		case session.TurnStarted:
-			if turn.shouldDrainLateEvent(msg.Timestamp) {
-				return m, m.awaitSessionEvent()
-			}
-			turn.finishDrain()
-		case session.TurnFinished:
-			turn.finishDrain()
-		default:
+		decision := session.DecideEventDrain(session.EventDrainInput{
+			Active:         m.InFlight.DrainUntilTurnStarted,
+			DrainStartedAt: m.InFlight.DrainStartedAt,
+			Event:          ev,
+		})
+		if decision.Action == session.EventDrainAwait {
 			return m, m.awaitSessionEvent()
+		}
+		if decision.FinishDrain {
+			turn.finishDrain()
 		}
 	}
 
