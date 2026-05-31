@@ -191,6 +191,24 @@ func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	return messages
 }
 
+func commandChildren(t *testing.T, msg tea.Msg) []tea.Cmd {
+	t.Helper()
+	value := reflect.ValueOf(msg)
+	cmdType := reflect.TypeOf(tea.Cmd(nil))
+	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType {
+		t.Fatalf("message = %T, want command batch/sequence", msg)
+	}
+	children := make([]tea.Cmd, 0, value.Len())
+	for i := range value.Len() {
+		child, ok := value.Index(i).Interface().(tea.Cmd)
+		if !ok {
+			t.Fatalf("command element %d = %T, want tea.Cmd", i, value.Index(i).Interface())
+		}
+		children = append(children, child)
+	}
+	return children
+}
+
 func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 	t.Helper()
 	if cmd == nil || limit <= 0 {

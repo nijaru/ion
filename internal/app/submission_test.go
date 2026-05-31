@@ -1175,7 +1175,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 }
 
-func TestCancelRunningTurnPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
+func TestCancelRunningTurnDoesNotWaitForStorageAppend(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &blockingAppendStorage{
 		entered: make(chan any, 1),
@@ -1204,10 +1204,13 @@ func TestCancelRunningTurnPersistenceReturnsBeforeStorageAppendCompletes(t *test
 		t.Fatalf("cancels before command execution = %d, want 0", sess.cancels)
 	}
 
-	done := make(chan []tea.Msg, 1)
-	go func() {
-		done <- runSequencePrefix(t, cmd, 3)
-	}()
+	children := commandChildren(t, cmd())
+	done := make(chan []tea.Msg, len(children))
+	for _, child := range children {
+		go func() {
+			done <- runCommandTree(t, child)
+		}()
+	}
 	select {
 	case event := <-storageSess.entered:
 		system, ok := event.(storage.System)
@@ -1220,17 +1223,33 @@ func TestCancelRunningTurnPersistenceReturnsBeforeStorageAppendCompletes(t *test
 	case <-time.After(time.Second):
 		t.Fatal("cancellation persistence command did not start append")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel ran before persistence completed: %d", sess.cancels)
-	}
-	close(storageSess.release)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("cancellation command sequence did not finish")
+	var sawCancel bool
+	completed := 0
+	for !sawCancel {
+		select {
+		case messages := <-done:
+			completed++
+			for _, msg := range messages {
+				if _, ok := msg.(turnCancelResultMsg); ok {
+					sawCancel = true
+					break
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("cancel command waited for persistence to complete")
+		}
 	}
 	if sess.cancels != 1 {
-		t.Fatalf("cancels after command execution = %d, want 1", sess.cancels)
+		t.Fatalf("cancels before persistence release = %d, want 1", sess.cancels)
+	}
+	close(storageSess.release)
+	for completed < len(children) {
+		select {
+		case <-done:
+			completed++
+		case <-time.After(time.Second):
+			t.Fatal("cancellation command batch did not finish")
+		}
 	}
 	if len(storageSess.appends) != 1 {
 		t.Fatalf(
