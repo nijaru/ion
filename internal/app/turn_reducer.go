@@ -134,19 +134,23 @@ func (r turnReducer) clearLocalErrorIfIdle() {
 	r.progress.LastError = ""
 }
 
-func (r turnReducer) applyStatusChanged(msg session.StatusChanged) {
-	if msg.AgentID == "" {
-		r.progress.Status = msg.Status
-		r.progress.StatusUpdatedAt = msg.Timestamp
-		if r.progress.StatusUpdatedAt.IsZero() {
-			r.progress.StatusUpdatedAt = time.Now()
-		}
-		r.progress.Compacting = isCompactingStatus(msg.Status)
-		return
+func (r turnReducer) applyStatusChanged(msg session.StatusChanged) session.StatusChangeDecision {
+	decision := session.DecideStatusChange(session.StatusChangeInput{
+		AgentID:   msg.AgentID,
+		Status:    msg.Status,
+		Timestamp: msg.Timestamp,
+		Now:       time.Now(),
+	})
+	if decision.Root {
+		r.progress.Status = decision.Status
+		r.progress.StatusUpdatedAt = decision.StatusUpdatedAt
+		r.progress.Compacting = decision.Compacting
+		return decision
 	}
 	if p, ok := r.inFlight.Subagents[msg.AgentID]; ok {
 		p.Status = msg.Status
 	}
+	return decision
 }
 
 func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (session.Entry, bool) {

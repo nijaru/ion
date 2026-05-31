@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/session"
 )
 
 func ifthen[T any](cond bool, a, b T) T {
@@ -209,7 +210,7 @@ func isIdleStatus(status string) bool {
 }
 
 func isCompactingStatus(status string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(status)), "compacting")
+	return session.IsCompactingStatus(status)
 }
 
 func fitLine(line string, width int) string {

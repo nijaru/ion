@@ -508,11 +508,15 @@ func isLocalBusyStatus(status string) bool {
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
-	m.turnReducer().applyStatusChanged(msg)
+	decision := m.turnReducer().applyStatusChanged(msg)
+	persistTimestamp := msg.Timestamp
+	if decision.Root {
+		persistTimestamp = decision.PersistTimestamp
+	}
 	return m, sequenceCmds(m.persistEntryCmd("persist status", storage.Status{
 		Type:   "status",
 		Status: msg.Status,
-		TS:     entryUnix(msg.Timestamp),
+		TS:     entryUnix(persistTimestamp),
 	}), m.awaitSessionEvent())
 }
 
