@@ -246,32 +246,33 @@ func (r turnReducer) clearPendingAssistant() {
 }
 
 func (r turnReducer) finishTurnMode(assistantCompleted bool) (session.Entry, bool) {
-	switch {
-	case r.progress.Mode == stateError:
-		r.clearActiveState(true)
+	decision := session.DecideTurnFinishMode(session.TurnFinishModeInput{
+		HadError:           r.progress.Mode == stateError,
+		BudgetStopReason:   r.progress.BudgetStopReason,
+		Canceled:           r.progress.Mode == stateCancelled,
+		Canceling:          r.inFlight.Canceling,
+		AssistantCompleted: assistantCompleted,
+	})
+	switch decision.Action {
+	case session.TurnFinishPreserveError:
+		r.clearActiveState(decision.ClearQueued)
 		r.progress.Status = ""
-	case r.progress.BudgetStopReason != "":
-		r.clearActiveState(true)
+	case session.TurnFinishBudgetCancel:
+		r.clearActiveState(decision.ClearQueued)
 		r.progress.Mode = stateCancelled
 		r.progress.Status = ""
-	case r.progress.Mode == stateCancelled:
-		decision := session.DecideCancelFinish(session.CancelFinishInput{
-			Canceling: r.inFlight.Canceling,
-		})
-		r.clearActiveState(!decision.PreserveQueued)
+	case session.TurnFinishUserCancel:
+		r.clearActiveState(decision.ClearQueued)
 		r.progress.Mode = stateCancelled
 		r.progress.Status = ""
-	case !assistantCompleted:
-		r.clearActiveState(true)
+	case session.TurnFinishMissingAgent:
+		r.clearActiveState(decision.ClearQueued)
 		r.progress.Mode = stateError
-		r.progress.LastError = "turn finished without assistant response"
+		r.progress.LastError = decision.DisplayError
 		r.progress.Status = ""
-		entry, _ := storage.EntrySystem(
-			"Error: turn finished without assistant response",
-			time.Time{},
-		)
+		entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
 		return entry, true
-	default:
+	case session.TurnFinishComplete:
 		r.progress.Mode = stateComplete
 	}
 	return session.Entry{}, false
