@@ -160,3 +160,59 @@ func TestDecideFollowUpResult(t *testing.T) {
 		})
 	}
 }
+
+func TestDecideQueuedInputRecall(t *testing.T) {
+	tests := []struct {
+		name  string
+		input QueuedInputRecallInput
+		want  QueuedInputRecallDecision
+	}{
+		{
+			name:  "empty queue",
+			input: QueuedInputRecallInput{CurrentDraft: "draft"},
+			want:  QueuedInputRecallDecision{},
+		},
+		{
+			name: "local follow up",
+			input: QueuedInputRecallInput{
+				CurrentDraft: "draft",
+				FollowUp:     []string{"queued one", "queued two"},
+			},
+			want: QueuedInputRecallDecision{
+				Recall:       true,
+				ComposerText: "draft\nqueued one\nqueued two",
+			},
+		},
+		{
+			name: "backend steering and follow up",
+			input: QueuedInputRecallInput{
+				CurrentDraft: " draft ",
+				Steering:     []string{"steer one"},
+				FollowUp:     []string{"queued one"},
+				BackendOwned: true,
+			},
+			want: QueuedInputRecallDecision{
+				Recall:       true,
+				ComposerText: "draft\nsteer one\nqueued one",
+				ClearBackend: true,
+			},
+		},
+		{
+			name: "queued text without draft",
+			input: QueuedInputRecallInput{
+				Steering: []string{"steer one"},
+			},
+			want: QueuedInputRecallDecision{
+				Recall:       true,
+				ComposerText: "steer one",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DecideQueuedInputRecall(tt.input); got != tt.want {
+				t.Fatalf("DecideQueuedInputRecall() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}

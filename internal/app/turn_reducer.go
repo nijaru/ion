@@ -315,18 +315,6 @@ func (r turnReducer) clearQueuedTurns() {
 	r.inFlight.QueuedTurnsBackendOwned = false
 }
 
-func (r turnReducer) drainQueuedTurnsText() string {
-	if len(r.inFlight.QueuedSteering) == 0 && len(r.inFlight.QueuedTurns) == 0 {
-		return ""
-	}
-	all := make([]string, 0, len(r.inFlight.QueuedSteering)+len(r.inFlight.QueuedTurns))
-	all = append(all, r.inFlight.QueuedSteering...)
-	all = append(all, r.inFlight.QueuedTurns...)
-	queued := strings.Join(all, "\n")
-	r.clearQueuedTurns()
-	return queued
-}
-
 func (r turnReducer) popQueuedTurn() string {
 	decision := session.DecideTurnSettlement(session.TurnSettlementInput{
 		BackendOwnedQueued: r.inFlight.QueuedTurnsBackendOwned,

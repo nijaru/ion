@@ -227,17 +227,18 @@ func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	backendOwned := m.InFlight.QueuedTurnsBackendOwned
-	queued := m.turnReducer().drainQueuedTurnsText()
-	if queued == "" {
+	decision := session.DecideQueuedInputRecall(session.QueuedInputRecallInput{
+		CurrentDraft: m.Input.Composer.Value(),
+		Steering:     m.InFlight.QueuedSteering,
+		FollowUp:     m.InFlight.QueuedTurns,
+		BackendOwned: m.InFlight.QueuedTurnsBackendOwned,
+	})
+	if !decision.Recall {
 		return m, nil
 	}
-	current := strings.TrimSpace(m.Input.Composer.Value())
-	if current != "" {
-		queued = current + "\n" + queued
-	}
-	setDraft := m.setComposerDraft(queued)
-	if backendOwned {
+	m.turnReducer().clearQueuedTurns()
+	setDraft := m.setComposerDraft(decision.ComposerText)
+	if decision.ClearBackend {
 		if queuedInput, ok := m.Model.Session.(session.QueuedInputSession); ok {
 			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
 		}

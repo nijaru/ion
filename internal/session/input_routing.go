@@ -1,5 +1,7 @@
 package session
 
+import "strings"
+
 type BusyInputRoute string
 
 const (
@@ -77,5 +79,35 @@ func DecideFollowUpResult(input FollowUpResultInput) FollowUpResultDecision {
 		Action:        BusyInputResultAccepted,
 		FollowUp:      followUp,
 		NoticeContent: "Queued follow-up",
+	}
+}
+
+type QueuedInputRecallInput struct {
+	CurrentDraft string
+	Steering     []string
+	FollowUp     []string
+	BackendOwned bool
+}
+
+type QueuedInputRecallDecision struct {
+	Recall       bool
+	ComposerText string
+	ClearBackend bool
+}
+
+func DecideQueuedInputRecall(input QueuedInputRecallInput) QueuedInputRecallDecision {
+	if len(input.Steering) == 0 && len(input.FollowUp) == 0 {
+		return QueuedInputRecallDecision{}
+	}
+	all := make([]string, 0, len(input.Steering)+len(input.FollowUp)+1)
+	if draft := strings.TrimSpace(input.CurrentDraft); draft != "" {
+		all = append(all, draft)
+	}
+	all = append(all, input.Steering...)
+	all = append(all, input.FollowUp...)
+	return QueuedInputRecallDecision{
+		Recall:       true,
+		ComposerText: strings.Join(all, "\n"),
+		ClearBackend: input.BackendOwned,
 	}
 }
