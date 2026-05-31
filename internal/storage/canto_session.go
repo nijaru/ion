@@ -97,6 +97,28 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	)
 }
 
+func (s *cantoSession) AppendModelMessage(ctx context.Context, message llm.Message) error {
+	if isEmptyModelMessage(message) {
+		return nil
+	}
+	if err := s.store.canto.Save(ctx, session.NewMessage(s.id, message)); err != nil {
+		return err
+	}
+	preview := sessionSummary(message.TextContent())
+	return s.store.UpdateSession(
+		ctx,
+		SessionInfo{ID: s.id, Summary: preview, LastPreview: preview},
+	)
+}
+
+func (s *cantoSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
+	sess, err := s.store.canto.Load(ctx, s.id)
+	if err != nil {
+		return nil, err
+	}
+	return sess.EffectiveMessages()
+}
+
 func newStoredEvent(
 	sessionID string,
 	eventType session.EventType,
@@ -115,6 +137,14 @@ func modelVisibleAppendError(event any) error {
 		"canto storage cannot append model-visible %T events; use the Canto runner",
 		event,
 	)
+}
+
+func isEmptyModelMessage(message llm.Message) bool {
+	return strings.TrimSpace(message.TextContent()) == "" &&
+		strings.TrimSpace(message.Reasoning) == "" &&
+		len(message.ThinkingBlocks) == 0 &&
+		len(message.Calls) == 0 &&
+		len(message.Parts) == 0
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
 )
 
 // SessionAdapter wraps an Agent to implement session.AgentSession,
@@ -51,6 +51,11 @@ type SessionAdapterConfig struct {
 	ToolExecutor ToolExecutor
 }
 
+type modelHistorySession interface {
+	AppendModelMessage(context.Context, llm.Message) error
+	ModelMessages(context.Context) ([]llm.Message, error)
+}
+
 // NewSessionAdapter creates a new session adapter.
 func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 	if config.ID == "" {
@@ -73,21 +78,13 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		OnEvent: func(ev session.Event) {
 			s.mu.Lock()
 			closed := s.closed
-			sess := s.sess
 			s.mu.Unlock()
 			if closed {
 				return
 			}
 			s.events <- ev
-
-			// Persist durable events to storage in real-time
-			if sess != nil {
-				switch e := ev.(type) {
-				case session.AgentMessage, session.ToolResult:
-					_ = sess.Append(context.Background(), e)
-				}
-			}
 		},
+		OnModelMessage: s.appendModelMessage,
 		GetSteeringMessages: func() []AgentMessage {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -170,7 +167,11 @@ func (s *SessionAdapter) Resume(ctx context.Context, sessionID string) error {
 
 	s.id = sessionID
 
-	// TODO: Load session state from store
+	if history, err := s.loadModelHistoryLocked(ctx); err != nil {
+		return err
+	} else if history != nil {
+		s.agent.SetMessages(history)
+	}
 
 	// Emit metadata loaded event
 	s.events <- session.MetadataLoaded{
@@ -195,21 +196,12 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 	turnCtx, cancel := context.WithCancel(ctx)
 	s.turnCtx = turnCtx
 	s.cancel = cancel
-	sess := s.sess
 	s.mu.Unlock()
 
 	// Create user message
 	userMsg := AgentMessage{
 		Role:    "user",
 		Content: input,
-	}
-
-	// Persist user input to session storage
-	if sess != nil {
-		_ = sess.Append(ctx, session.UserMessage{
-			Base:    session.BaseNow(),
-			Message: input,
-		})
 	}
 
 	// Emit UserMessage immediately so TUI projects it
@@ -243,6 +235,39 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 	}()
 
 	return nil
+}
+
+func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Message) error {
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	if sess == nil {
+		return nil
+	}
+	writer, ok := sess.(modelHistorySession)
+	if !ok {
+		return nil
+	}
+	return writer.AppendModelMessage(ctx, message)
+}
+
+func (s *SessionAdapter) loadModelHistoryLocked(ctx context.Context) ([]AgentMessage, error) {
+	if s.sess == nil {
+		return nil, nil
+	}
+	history, ok := s.sess.(modelHistorySession)
+	if !ok {
+		return nil, nil
+	}
+	messages, err := history.ModelMessages(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load model history: %w", err)
+	}
+	result := make([]AgentMessage, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, agentMessageFromLLM(message))
+	}
+	return result, nil
 }
 
 // CancelTurn interrupts an in-flight turn if the backend supports it.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -295,4 +296,163 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 	if userMsgOut.Content != "hello" {
 		t.Errorf("expected second message content to be 'hello', got %q", userMsgOut.Content)
 	}
+}
+
+func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
+	var requests []string
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		requests = append(requests, req.Model)
+		if len(requests) == 1 {
+			return &mockStream{chunks: []*llm.Chunk{{
+				Content: "need tool",
+				Calls:   []llm.Call{testCall("call-1", "read", `{"path":"README.md"}`)},
+			}}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+	}
+
+	var before BeforeToolCallContext
+	var after AfterToolCallContext
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "first"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("contents")}}, nil
+		},
+		BeforeToolCall: func(ctx BeforeToolCallContext) BeforeToolCallResult {
+			before = ctx
+			return BeforeToolCallResult{}
+		},
+		AfterToolCall: func(ctx AfterToolCallContext) AfterToolCallResult {
+			after = ctx
+			return AfterToolCallResult{}
+		},
+		PrepareNextTurn: func(ctx PrepareNextTurnContext) *AgentLoopTurnUpdate {
+			if len(ctx.ToolResults) == 0 {
+				return nil
+			}
+			next := llm.Model{ID: "second"}
+			return &AgentLoopTurnUpdate{Model: &next}
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(requests) >= 2
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, want := strings.Join(requests, ","), "first,second"; got != want {
+		t.Fatalf("request models = %s, want %s", got, want)
+	}
+	if before.AssistantMessage.Content != "need tool" {
+		t.Fatalf("before assistant = %#v", before.AssistantMessage)
+	}
+	if before.Args == nil || before.ToolCall.Arguments["path"] != "README.md" {
+		t.Fatalf("before args = %#v", before)
+	}
+	if after.Result.Content[0].Text != "contents" || after.Args == nil {
+		t.Fatalf("after context = %#v", after)
+	}
+}
+
+func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
+	var committed []llm.Message
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		if len(committed) < 3 {
+			return &mockStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{testCall("call-1", "read", `{}`)},
+			}}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+	}
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			return AgentToolResult{Content: []llm.ContentPart{
+				llm.TextPart("image result\n"),
+				llm.ImagePart("image/png", "abc123"),
+			}}, nil
+		},
+		OnModelMessage: func(ctx context.Context, message llm.Message) error {
+			committed = append(committed, message)
+			return nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(committed) >= 4
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read image"}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var toolMsg *llm.Message
+	for i := range committed {
+		if committed[i].Role == llm.RoleTool {
+			toolMsg = &committed[i]
+			break
+		}
+	}
+	if toolMsg == nil {
+		t.Fatal("missing committed tool message")
+	}
+	if len(toolMsg.Parts) != 2 || toolMsg.Parts[1].Type != llm.ContentPartImage {
+		t.Fatalf("tool parts = %#v", toolMsg.Parts)
+	}
+	if !strings.Contains(toolMsg.Content, "Image: image/png") {
+		t.Fatalf("tool content = %q, want image notice", toolMsg.Content)
+	}
+}
+
+func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
+	store, err := storage.NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer store.Close()
+
+	sess, err := store.OpenSession(context.Background(), "/tmp/ion", "model", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	writer := sess.(interface {
+		AppendModelMessage(context.Context, llm.Message) error
+	})
+	if err := writer.AppendModelMessage(context.Background(), llm.TextMessage(llm.RoleUser, "prior")); err != nil {
+		t.Fatalf("append user: %v", err)
+	}
+	if err := writer.AppendModelMessage(context.Background(), llm.TextMessage(llm.RoleAssistant, "answer")); err != nil {
+		t.Fatalf("append assistant: %v", err)
+	}
+
+	adapter := NewSessionAdapter(&SessionAdapterConfig{
+		ID:    "placeholder",
+		Model: llm.Model{ID: "model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "next"}}}, nil
+		},
+	})
+	adapter.SetSession(sess)
+	if err := adapter.Resume(context.Background(), sess.ID()); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	messages := adapter.agent.State().Messages
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].Content != "prior" || messages[1].Content != "answer" {
+		t.Fatalf("hydrated messages = %#v", messages)
+	}
+}
+
+func testCall(id, name, args string) llm.Call {
+	var call llm.Call
+	call.ID = id
+	call.Type = "function"
+	call.Function.Name = name
+	call.Function.Arguments = args
+	return call
 }

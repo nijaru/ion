@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nijaru/ion/internal/session"
@@ -76,6 +77,13 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	a.config.ThinkingLevel = level
 }
 
+// SetMessages replaces the provider-visible conversation history.
+func (a *Agent) SetMessages(messages []AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Messages = cloneAgentMessages(messages)
+}
+
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the loop.
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
@@ -94,6 +102,11 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	a.mu.Lock()
 	a.state.Messages = append(a.state.Messages, prompts...)
 	a.mu.Unlock()
+	for _, prompt := range prompts {
+		if err := a.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
+			return nil, err
+		}
+	}
 
 	newMessages := make([]AgentMessage, len(prompts))
 	copy(newMessages, prompts)
@@ -152,10 +165,11 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 
 // runLoop is the main agent loop logic.
 func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error {
+	firstTurn := true
+
 	// Outer loop: continues when queued follow-up messages arrive
 	for {
 		hasMoreToolCalls := true
-		firstTurn := true
 
 		// Check for steering messages at start
 		pendingMessages := a.getSteeringMessages()
@@ -180,11 +194,16 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				a.state.Messages = append(a.state.Messages, pendingMessages...)
 				a.mu.Unlock()
 				*newMessages = append(*newMessages, pendingMessages...)
+				for _, message := range pendingMessages {
+					if err := a.writeModelMessage(ctx, agentMessageToLLM(message)); err != nil {
+						return err
+					}
+				}
 				pendingMessages = nil
 			}
 
 			// Stream assistant response
-			message, err := a.streamAssistantResponse(ctx)
+			message, llmMessage, err := a.streamAssistantResponse(ctx)
 			if err != nil {
 				return fmt.Errorf("stream assistant response: %w", err)
 			}
@@ -200,18 +219,30 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				Message:   message.Content,
 				Reasoning: message.Reasoning,
 			})
+			if err := a.writeModelMessage(ctx, llmMessage); err != nil {
+				return err
+			}
 
 			// Check for error/abort
 			if message.IsError {
-				return fmt.Errorf("assistant response error: %s", message.Content)
+				a.emit(session.TurnFinished{Base: session.BaseNow()})
+				return nil
 			}
 
 			// Check for tool calls
 			toolCalls := message.Calls
 			hasMoreToolCalls = false
+			var toolResults []AgentMessage
+			var llmToolResults []llm.Message
 
 			if len(toolCalls) > 0 {
-				toolResults, terminate, err := a.executeToolCalls(ctx, message, toolCalls)
+				var terminate bool
+				toolResults, llmToolResults, terminate, err = a.executeToolCalls(
+					ctx,
+					message,
+					llmMessage,
+					toolCalls,
+				)
 				if err != nil {
 					return fmt.Errorf("execute tool calls: %w", err)
 				}
@@ -223,17 +254,27 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				a.state.Messages = append(a.state.Messages, toolResults...)
 				a.mu.Unlock()
 				*newMessages = append(*newMessages, toolResults...)
+				for _, result := range llmToolResults {
+					if err := a.writeModelMessage(ctx, result); err != nil {
+						return err
+					}
+				}
+			}
+
+			turnContext := ShouldStopAfterTurnContext{
+				Message:     llmMessage,
+				ToolResults: agentMessagesToLLM(toolResults),
+				Context:     a.buildContext(),
+				NewMessages: cloneAgentMessages(*newMessages),
+			}
+			if a.config.PrepareNextTurn != nil {
+				a.applyTurnUpdate(a.config.PrepareNextTurn(turnContext))
+				turnContext.Context = a.buildContext()
 			}
 
 			// Check if we should stop after this turn
 			if a.config.ShouldStopAfterTurn != nil {
-				ctx := ShouldStopAfterTurnContext{
-					Message:     llm.Message{},
-					ToolResults: []llm.Message{},
-					Context:     a.buildContext(),
-					NewMessages: *newMessages,
-				}
-				if a.config.ShouldStopAfterTurn(ctx) {
+				if a.config.ShouldStopAfterTurn(turnContext) {
 					a.emit(session.TurnFinished{Base: session.BaseNow()})
 					return nil
 				}
@@ -257,7 +298,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 }
 
 // streamAssistantResponse streams a response from the LLM.
-func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, error) {
+func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
 	a.mu.RLock()
 	config := a.config
 	state := a.state
@@ -279,24 +320,26 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, erro
 
 	// Build LLM request
 	req := &llm.Request{
-		Model:          config.Model.ID,
-		Messages:       llmMessages,
-		MaxTokens:      config.MaxTokens,
-		Temperature:    config.Temperature,
+		Model:           config.Model.ID,
+		Messages:        llmMessages,
+		MaxTokens:       config.MaxTokens,
+		Temperature:     config.Temperature,
 		ReasoningEffort: string(config.ThinkingLevel),
 	}
 
 	// Stream the response
 	stream, err := config.StreamFn(ctx, req)
 	if err != nil {
-		return AgentMessage{}, fmt.Errorf("stream: %w", err)
+		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
 	}
 	defer stream.Close()
 
 	// Collect the response
 	var content string
 	var reasoning string
+	var thinkingBlocks []llm.ThinkingBlock
 	var calls []AgentToolCall
+	var llmCalls []llm.Call
 
 	for {
 		chunk, ok := stream.Next()
@@ -318,6 +361,9 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, erro
 				Delta: chunk.Reasoning,
 			})
 		}
+		if len(chunk.ThinkingBlocks) > 0 {
+			thinkingBlocks = append(thinkingBlocks, chunk.ThinkingBlocks...)
+		}
 		if chunk.Usage != nil {
 			a.emit(session.TokenUsage{
 				Base:   session.BaseNow(),
@@ -329,9 +375,10 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, erro
 		}
 		if len(chunk.Calls) > 0 {
 			for _, call := range chunk.Calls {
-				calls = append(calls, AgentToolCall{
-					ID:       call.ID,
-					Name:     call.Function.Name,
+				llmCalls = upsertLLMCall(llmCalls, call)
+				calls = upsertAgentToolCall(calls, AgentToolCall{
+					ID:        call.ID,
+					Name:      call.Function.Name,
 					Arguments: parseArguments(call.Function.Arguments),
 				})
 			}
@@ -339,117 +386,195 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, erro
 	}
 
 	if err := stream.Err(); err != nil {
-		return AgentMessage{
+		message := AgentMessage{
 			Role:    "assistant",
 			Content: fmt.Sprintf("Stream error: %v", err),
 			IsError: true,
-		}, nil
+		}
+		return message, agentMessageToLLM(message), nil
 	}
 
-	return AgentMessage{
+	message := AgentMessage{
 		Role:      "assistant",
 		Content:   content,
 		Reasoning: reasoning,
 		Calls:     calls,
-	}, nil
+	}
+	llmMessage := agentMessageToLLM(message)
+	llmMessage.ThinkingBlocks = thinkingBlocks
+	llmMessage.Calls = llmCalls
+	return message, llmMessage, nil
 }
 
 // executeToolCalls executes tool calls from an assistant message.
-func (a *Agent) executeToolCalls(ctx context.Context, assistantMsg AgentMessage, toolCalls []AgentToolCall) ([]AgentMessage, bool, error) {
+func (a *Agent) executeToolCalls(
+	ctx context.Context,
+	assistantMsg AgentMessage,
+	assistantLLM llm.Message,
+	toolCalls []AgentToolCall,
+) ([]AgentMessage, []llm.Message, bool, error) {
 	a.mu.RLock()
 	config := a.config
 	a.mu.RUnlock()
 
-	var results []AgentMessage
-	terminate := false
+	if a.shouldExecuteSequentially(config, toolCalls) {
+		return a.executeToolCallsSequential(ctx, assistantMsg, assistantLLM, toolCalls, config)
+	}
+	return a.executeToolCallsParallel(ctx, assistantMsg, assistantLLM, toolCalls, config)
+}
+
+func (a *Agent) executeToolCallsSequential(
+	ctx context.Context,
+	assistantMsg AgentMessage,
+	assistantLLM llm.Message,
+	toolCalls []AgentToolCall,
+	config AgentLoopConfig,
+) ([]AgentMessage, []llm.Message, bool, error) {
+	finalized := make([]finalizedToolCall, 0, len(toolCalls))
 
 	for _, toolCall := range toolCalls {
 		// Check for context cancellation
 		if ctx.Err() != nil {
-			return results, terminate, ctx.Err()
+			return toolMessages(finalized)
 		}
 
-		// Call beforeToolCall hook
-		if config.BeforeToolCall != nil {
-			hookCtx := BeforeToolCallContext{
-				AssistantMessage: llm.Message{},
-				ToolCall:        toolCall,
-				Context:         a.buildContext(),
-			}
-			result := config.BeforeToolCall(hookCtx)
-			if result.Block {
-				results = append(results, AgentMessage{
-					Role:    "tool",
-					Content: result.Reason,
-					ToolID:  toolCall.ID,
-					IsError: true,
-				})
-				continue
-			}
-		}
-
-		// Execute the tool
-		var toolResult AgentMessage
-		a.emit(session.ToolCallStarted{
-			Base:      session.BaseNow(),
-			ToolUseID: toolCall.ID,
-			ToolName:  toolCall.Name,
-			Args:      serializeArguments(toolCall.Arguments),
-		})
-
-		if config.ToolExecutor != nil {
-			result, err := config.ToolExecutor(ctx, toolCall)
-			if err != nil {
-				toolResult = AgentMessage{
-					Role:    "tool",
-					Content: fmt.Sprintf("Tool execution error: %v", err),
-					ToolID:  toolCall.ID,
-					IsError: true,
-				}
-			} else {
-				toolResult = AgentMessage{
-					Role:    "tool",
-					Content: result.Content[0].Text,
-					ToolID:  toolCall.ID,
-					IsError: result.IsError,
-				}
-			}
-		} else {
-			// No tool executor configured, return placeholder
-			toolResult = AgentMessage{
-				Role:    "tool",
-				Content: fmt.Sprintf("Tool %s executed (no executor configured)", toolCall.Name),
-				ToolID:  toolCall.ID,
-			}
-		}
-
-		a.emit(session.ToolResult{
-			Base:      session.BaseNow(),
-			ToolUseID: toolCall.ID,
-			ToolName:  toolCall.Name,
-			Result:    toolResult.Content,
-		})
-
-		// Call afterToolCall hook
-		if config.AfterToolCall != nil {
-			hookCtx := AfterToolCallContext{
-				AssistantMessage: llm.Message{},
-				ToolCall:        toolCall,
-				Result: AgentToolResult{
-					Content: []llm.ContentPart{{Type: llm.ContentPartText, Text: toolResult.Content}},
-				},
-				Context: a.buildContext(),
-			}
-			result := config.AfterToolCall(hookCtx)
-			if result.Terminate != nil && *result.Terminate {
-				terminate = true
-			}
-		}
-
-		results = append(results, toolResult)
+		result := a.executeOneToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+		finalized = append(finalized, result)
 	}
 
-	return results, terminate, nil
+	return toolMessages(finalized)
+}
+
+func (a *Agent) executeToolCallsParallel(
+	ctx context.Context,
+	assistantMsg AgentMessage,
+	assistantLLM llm.Message,
+	toolCalls []AgentToolCall,
+	config AgentLoopConfig,
+) ([]AgentMessage, []llm.Message, bool, error) {
+	finalized := make([]finalizedToolCall, len(toolCalls))
+	var wg sync.WaitGroup
+	for i, toolCall := range toolCalls {
+		if ctx.Err() != nil {
+			return nil, nil, false, ctx.Err()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			finalized[i] = a.executeOneToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	return toolMessages(finalized)
+}
+
+type finalizedToolCall struct {
+	toolCall  AgentToolCall
+	result    AgentToolResult
+	message   AgentMessage
+	llm       llm.Message
+	isError   bool
+	terminate bool
+}
+
+func (a *Agent) executeOneToolCall(
+	ctx context.Context,
+	assistantMsg AgentMessage,
+	assistantLLM llm.Message,
+	toolCall AgentToolCall,
+	config AgentLoopConfig,
+) finalizedToolCall {
+	argsJSON := serializeArguments(toolCall.Arguments)
+	a.emit(session.ToolCallStarted{
+		Base:      session.BaseNow(),
+		ToolUseID: toolCall.ID,
+		ToolName:  toolCall.Name,
+		Args:      argsJSON,
+	})
+
+	result, isError := a.prepareAndExecuteTool(ctx, assistantMsg, assistantLLM, toolCall, config)
+	if config.AfterToolCall != nil {
+		after := config.AfterToolCall(AfterToolCallContext{
+			AssistantMessage: assistantLLM,
+			ToolCall:         toolCall,
+			Args:             toolCall.Arguments,
+			Result:           result,
+			IsError:          isError,
+			Context:          a.buildContext(),
+		})
+		if after.Content != nil {
+			result.Content = after.Content
+		}
+		if after.Details != nil {
+			result.Details = after.Details
+		}
+		if after.IsError != nil {
+			result.IsError = *after.IsError
+			isError = *after.IsError
+		}
+		if after.Terminate != nil {
+			result.Terminate = *after.Terminate
+		}
+	}
+
+	message := toolResultMessage(toolCall, result)
+	llmMessage := agentMessageToLLM(message)
+	a.emit(session.ToolResult{
+		Base:      session.BaseNow(),
+		ToolUseID: toolCall.ID,
+		ToolName:  toolCall.Name,
+		Result:    message.Content,
+		Error:     toolEventError(message),
+	})
+	return finalizedToolCall{
+		toolCall:  toolCall,
+		result:    result,
+		message:   message,
+		llm:       llmMessage,
+		isError:   isError,
+		terminate: result.Terminate,
+	}
+}
+
+func (a *Agent) prepareAndExecuteTool(
+	ctx context.Context,
+	assistantMsg AgentMessage,
+	assistantLLM llm.Message,
+	toolCall AgentToolCall,
+	config AgentLoopConfig,
+) (AgentToolResult, bool) {
+	if _, ok := a.findTool(toolCall.Name); !ok {
+		return errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name)), true
+	}
+	if config.BeforeToolCall != nil {
+		before := config.BeforeToolCall(BeforeToolCallContext{
+			AssistantMessage: assistantLLM,
+			ToolCall:         toolCall,
+			Args:             toolCall.Arguments,
+			Context:          a.buildContext(),
+		})
+		if before.Block {
+			reason := before.Reason
+			if strings.TrimSpace(reason) == "" {
+				reason = "Tool execution was blocked"
+			}
+			return errorToolResult(reason), true
+		}
+	}
+	if config.ToolExecutor == nil {
+		return errorToolResult(fmt.Sprintf("Tool %s executed without a configured executor", toolCall.Name)), true
+	}
+	result, err := config.ToolExecutor(ctx, toolCall)
+	if err != nil {
+		return errorToolResult(fmt.Sprintf("Tool execution error: %v", err)), true
+	}
+	if len(result.Content) == 0 {
+		result.Content = []llm.ContentPart{llm.TextPart("")}
+	}
+	return result, result.IsError
 }
 
 // getSteeringMessages returns steering messages from the config hook.
@@ -482,12 +607,53 @@ func (a *Agent) buildContext() AgentContext {
 	defer a.mu.RUnlock()
 
 	return AgentContext{
-		Messages:     a.state.Messages,
-		SystemPrompt: a.state.SystemPrompt,
-		Tools:        a.state.Tools,
-		Model:        a.state.Model,
+		Messages:      a.state.Messages,
+		SystemPrompt:  a.state.SystemPrompt,
+		Tools:         a.state.Tools,
+		Model:         a.state.Model,
 		ThinkingLevel: a.state.ThinkingLevel,
 	}
+}
+
+func (a *Agent) applyTurnUpdate(update *AgentLoopTurnUpdate) {
+	if update == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if update.Context != nil {
+		a.state.Messages = cloneAgentMessages(update.Context.Messages)
+		a.state.SystemPrompt = update.Context.SystemPrompt
+		a.state.Tools = append([]AgentTool(nil), update.Context.Tools...)
+		a.state.Model = update.Context.Model
+		a.state.ThinkingLevel = update.Context.ThinkingLevel
+		a.config.Model = update.Context.Model
+		a.config.ThinkingLevel = update.Context.ThinkingLevel
+	}
+	if update.Model != nil {
+		a.state.Model = *update.Model
+		a.config.Model = *update.Model
+	}
+	if update.ThinkingLevel != nil {
+		a.state.ThinkingLevel = *update.ThinkingLevel
+		a.config.ThinkingLevel = *update.ThinkingLevel
+	}
+}
+
+func (a *Agent) writeModelMessage(ctx context.Context, message llm.Message) error {
+	a.mu.RLock()
+	write := a.config.OnModelMessage
+	a.mu.RUnlock()
+	if write == nil {
+		return nil
+	}
+	if isEmptyModelMessage(message) {
+		return nil
+	}
+	if err := write(ctx, message); err != nil {
+		return fmt.Errorf("persist model message: %w", err)
+	}
+	return nil
 }
 
 // defaultConvertToLlm converts AgentMessages to LLM Messages using default logic.
@@ -554,6 +720,225 @@ func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 	return result
 }
 
+func (a *Agent) shouldExecuteSequentially(config AgentLoopConfig, calls []AgentToolCall) bool {
+	if config.ToolExecutionMode == ToolExecutionSequential {
+		return true
+	}
+	if config.ToolExecutionMode == ToolExecutionParallel {
+		return !a.allToolsParallel(calls)
+	}
+	return !a.allToolsParallel(calls)
+}
+
+func (a *Agent) allToolsParallel(calls []AgentToolCall) bool {
+	for _, call := range calls {
+		tool, ok := a.findTool(call.Name)
+		if !ok || !tool.Parallel {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Agent) findTool(name string) (AgentTool, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, tool := range a.state.Tools {
+		if tool.Name == name {
+			return tool, true
+		}
+	}
+	return AgentTool{}, false
+}
+
+func toolMessages(finalized []finalizedToolCall) ([]AgentMessage, []llm.Message, bool, error) {
+	messages := make([]AgentMessage, 0, len(finalized))
+	llmMessages := make([]llm.Message, 0, len(finalized))
+	terminate := len(finalized) > 0
+	for _, result := range finalized {
+		messages = append(messages, result.message)
+		llmMessages = append(llmMessages, result.llm)
+		terminate = terminate && result.terminate
+	}
+	return messages, llmMessages, terminate, nil
+}
+
+func toolResultMessage(call AgentToolCall, result AgentToolResult) AgentMessage {
+	parts := normalizeContentParts(result.Content)
+	text := contentPartsText(parts)
+	return AgentMessage{
+		Role:    "tool",
+		Content: text,
+		Parts:   parts,
+		ToolID:  call.ID,
+		Name:    call.Name,
+		IsError: result.IsError,
+	}
+}
+
+func errorToolResult(message string) AgentToolResult {
+	return AgentToolResult{
+		Content: []llm.ContentPart{llm.TextPart(message)},
+		IsError: true,
+	}
+}
+
+func toolEventError(message AgentMessage) error {
+	if !message.IsError {
+		return nil
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		return fmt.Errorf("tool execution failed")
+	}
+	return fmt.Errorf("%s", message.Content)
+}
+
+func agentMessagesToLLM(messages []AgentMessage) []llm.Message {
+	result := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, agentMessageToLLM(message))
+	}
+	return result
+}
+
+func agentMessageToLLM(message AgentMessage) llm.Message {
+	role := llm.Role(message.Role)
+	if role == "toolResult" {
+		role = llm.RoleTool
+	}
+	llmMessage := llm.Message{
+		Role:      role,
+		Content:   message.Content,
+		Parts:     normalizeContentParts(message.Parts),
+		Reasoning: message.Reasoning,
+		Name:      message.Name,
+		ToolID:    message.ToolID,
+	}
+	if len(message.Calls) > 0 {
+		llmMessage.Calls = make([]llm.Call, len(message.Calls))
+		for i, call := range message.Calls {
+			llmMessage.Calls[i] = agentToolCallToLLM(call)
+		}
+	}
+	return llmMessage
+}
+
+func agentToolCallToLLM(call AgentToolCall) llm.Call {
+	var llmCall llm.Call
+	llmCall.ID = call.ID
+	llmCall.Type = "function"
+	llmCall.Function.Name = call.Name
+	llmCall.Function.Arguments = serializeArguments(call.Arguments)
+	return llmCall
+}
+
+func agentMessageFromLLM(message llm.Message) AgentMessage {
+	role := string(message.Role)
+	if message.Role == llm.RoleTool {
+		role = "tool"
+	}
+	result := AgentMessage{
+		Role:      role,
+		Content:   message.TextContent(),
+		Parts:     normalizeContentParts(message.Parts),
+		Reasoning: message.Reasoning,
+		Name:      message.Name,
+		ToolID:    message.ToolID,
+	}
+	if len(message.Calls) > 0 {
+		result.Calls = make([]AgentToolCall, len(message.Calls))
+		for i, call := range message.Calls {
+			result.Calls[i] = AgentToolCall{
+				ID:        call.ID,
+				Name:      call.Function.Name,
+				Arguments: parseArguments(call.Function.Arguments),
+			}
+		}
+	}
+	return result
+}
+
+func normalizeContentParts(parts []llm.ContentPart) []llm.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	result := make([]llm.ContentPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Type == "" {
+			part.Type = llm.ContentPartText
+		}
+		result = append(result, part)
+	}
+	return result
+}
+
+func contentPartsText(parts []llm.ContentPart) string {
+	var sb strings.Builder
+	for _, part := range parts {
+		switch part.Type {
+		case "", llm.ContentPartText:
+			sb.WriteString(part.Text)
+		case llm.ContentPartImage:
+			if sb.Len() > 0 {
+				sb.WriteByte('\n')
+			}
+			if part.MIMEType != "" {
+				sb.WriteString("Image: ")
+				sb.WriteString(part.MIMEType)
+			} else {
+				sb.WriteString("Image")
+			}
+		}
+	}
+	return sb.String()
+}
+
+func isEmptyModelMessage(message llm.Message) bool {
+	return strings.TrimSpace(message.TextContent()) == "" &&
+		strings.TrimSpace(message.Reasoning) == "" &&
+		len(message.ThinkingBlocks) == 0 &&
+		len(message.Calls) == 0 &&
+		len(message.Parts) == 0
+}
+
+func cloneAgentMessages(messages []AgentMessage) []AgentMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	result := make([]AgentMessage, len(messages))
+	copy(result, messages)
+	for i := range result {
+		result[i].Parts = append([]llm.ContentPart(nil), result[i].Parts...)
+		result[i].Calls = append([]AgentToolCall(nil), result[i].Calls...)
+	}
+	return result
+}
+
+func upsertLLMCall(calls []llm.Call, call llm.Call) []llm.Call {
+	if call.ID == "" {
+		return calls
+	}
+	for i := range calls {
+		if calls[i].ID == call.ID {
+			calls[i] = call
+			return calls
+		}
+	}
+	return append(calls, call)
+}
+
+func upsertAgentToolCall(calls []AgentToolCall, call AgentToolCall) []AgentToolCall {
+	if call.ID == "" {
+		return calls
+	}
+	for i := range calls {
+		if calls[i].ID == call.ID {
+			calls[i] = call
+			return calls
+		}
+	}
+	return append(calls, call)
+}
 
 // parseArguments parses a JSON string into a map.
 func parseArguments(args string) map[string]any {

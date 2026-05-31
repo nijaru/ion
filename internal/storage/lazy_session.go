@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ionsession "github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/llm"
 )
 
 type materializedSession interface {
@@ -89,6 +90,36 @@ func (s *LazySession) Append(ctx context.Context, event any) error {
 		return nil
 	}
 	return created.Append(ctx, event)
+}
+
+func (s *LazySession) AppendModelMessage(ctx context.Context, message llm.Message) error {
+	created, err := s.Ensure(ctx)
+	if err != nil {
+		return err
+	}
+	writer, ok := created.(interface {
+		AppendModelMessage(context.Context, llm.Message) error
+	})
+	if !ok {
+		return nil
+	}
+	return writer.AppendModelMessage(ctx, message)
+}
+
+func (s *LazySession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
+	s.mu.Lock()
+	created := s.created
+	s.mu.Unlock()
+	if created == nil {
+		return nil, nil
+	}
+	reader, ok := created.(interface {
+		ModelMessages(context.Context) ([]llm.Message, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.ModelMessages(ctx)
 }
 
 func (s *LazySession) Entries(ctx context.Context) ([]ionsession.Entry, error) {

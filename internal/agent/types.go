@@ -17,6 +17,9 @@ type StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 // ToolExecutor executes a tool call and returns the result.
 type ToolExecutor func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error)
 
+// ModelMessageWriter persists one provider-visible message.
+type ModelMessageWriter func(ctx context.Context, message llm.Message) error
+
 // ToolExecutionMode controls how tool calls from a single assistant message are executed.
 type ToolExecutionMode string
 
@@ -39,8 +42,8 @@ const (
 
 // AgentToolCall represents a single tool call from an assistant message.
 type AgentToolCall struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }
 
@@ -117,12 +120,12 @@ type PrepareNextTurnContext = ShouldStopAfterTurnContext
 type ThinkingLevel string
 
 const (
-	ThinkingLevelOff      ThinkingLevel = "off"
-	ThinkingLevelMinimal  ThinkingLevel = "minimal"
-	ThinkingLevelLow      ThinkingLevel = "low"
-	ThinkingLevelMedium   ThinkingLevel = "medium"
-	ThinkingLevelHigh     ThinkingLevel = "high"
-	ThinkingLevelXHigh    ThinkingLevel = "xhigh"
+	ThinkingLevelOff     ThinkingLevel = "off"
+	ThinkingLevelMinimal ThinkingLevel = "minimal"
+	ThinkingLevelLow     ThinkingLevel = "low"
+	ThinkingLevelMedium  ThinkingLevel = "medium"
+	ThinkingLevelHigh    ThinkingLevel = "high"
+	ThinkingLevelXHigh   ThinkingLevel = "xhigh"
 )
 
 // AgentMessage is a message in the agent's conversation.
@@ -254,6 +257,8 @@ type AgentLoopConfig struct {
 	ToolExecutor ToolExecutor `json:"-"`
 	// OnEvent is called when a session event is emitted.
 	OnEvent func(event session.Event) `json:"-"`
+	// OnModelMessage is called when a provider-visible message is committed.
+	OnModelMessage ModelMessageWriter `json:"-"`
 
 	// Hooks (optional)
 
