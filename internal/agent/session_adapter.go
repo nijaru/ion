@@ -199,6 +199,14 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		Role:    "user",
 		Content: input,
 	}
+	if _, err := s.agent.acceptPrompts(turnCtx, []AgentMessage{userMsg}); err != nil {
+		s.mu.Lock()
+		s.cancel = nil
+		s.turnCtx = nil
+		s.mu.Unlock()
+		cancel()
+		return err
+	}
 
 	// Run the agent loop in a goroutine
 	go func() {
@@ -208,7 +216,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			s.turnCtx = nil
 			s.mu.Unlock()
 		}()
-		_, err := s.agent.Run(turnCtx, []AgentMessage{userMsg})
+		_, err := s.agent.Continue(turnCtx)
 		if err != nil {
 			s.mu.Lock()
 			closed := s.closed

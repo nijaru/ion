@@ -321,6 +321,50 @@ func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 	}
 }
 
+func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
+	store, err := storage.NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer store.Close()
+
+	lazy := storage.NewLazySession(store, "/tmp/ion", "model", "main")
+	streamEntered := make(chan struct{})
+	adapter := NewSessionAdapter(&SessionAdapterConfig{
+		ID:    lazy.ID(),
+		Model: llm.Model{ID: "model"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			close(streamEntered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	adapter.SetSession(lazy)
+
+	if err := adapter.SubmitTurn(context.Background(), "commit first"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if !storage.IsMaterialized(lazy) {
+		t.Fatal("lazy session was not materialized before SubmitTurn returned")
+	}
+	messages, err := lazy.ModelMessages(context.Background())
+	if err != nil {
+		t.Fatalf("model messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != llm.RoleUser ||
+		messages[0].Content != "commit first" {
+		t.Fatalf("messages = %#v, want committed user prompt", messages)
+	}
+	select {
+	case <-streamEntered:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not start after submit returned")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
 func TestAgentSystemPromptPropagation(t *testing.T) {
 	var observedReq *llm.Request
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {

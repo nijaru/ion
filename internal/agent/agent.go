@@ -108,7 +108,30 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		a.mu.Unlock()
 	}()
 
-	// Add prompts to context
+	newMessages, err := a.acceptPrompts(ctx, prompts)
+	if err != nil {
+		a.mu.Lock()
+		a.state.ErrorMessage = err.Error()
+		a.mu.Unlock()
+		return newMessages, err
+	}
+
+	// Run the main loop
+	err = a.runLoop(ctx, &newMessages)
+	if err != nil {
+		a.mu.Lock()
+		a.state.ErrorMessage = err.Error()
+		a.mu.Unlock()
+		return newMessages, err
+	}
+
+	return newMessages, nil
+}
+
+func (a *Agent) acceptPrompts(
+	ctx context.Context,
+	prompts []AgentMessage,
+) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.Messages = append(a.state.Messages, prompts...)
 	a.mu.Unlock()
@@ -118,19 +141,8 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 			return nil, err
 		}
 	}
-
 	newMessages := make([]AgentMessage, len(prompts))
 	copy(newMessages, prompts)
-
-	// Run the main loop
-	err := a.runLoop(ctx, &newMessages)
-	if err != nil {
-		a.mu.Lock()
-		a.state.ErrorMessage = err.Error()
-		a.mu.Unlock()
-		return newMessages, err
-	}
-
 	return newMessages, nil
 }
 
