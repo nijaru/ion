@@ -242,6 +242,71 @@ func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testi
 	}
 }
 
+func TestCantoStoreProgressProjectionSchemaExcludesDisplayCache(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+	store := storeAny.(*cantoStore)
+
+	rows, err := store.db.Query("SELECT name FROM pragma_table_info('session_progress_projection')")
+	if err != nil {
+		t.Fatalf("read progress projection schema: %v", err)
+	}
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan progress projection column: %v", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read progress projection columns: %v", err)
+	}
+
+	for _, name := range []string{
+		"session_id",
+		"cutoff_seq",
+		"cutoff_event_id",
+		"last_status",
+		"usage_input",
+		"usage_output",
+		"usage_cost",
+		"pending_input",
+		"pending_output",
+		"pending_cost",
+		"updated_at",
+	} {
+		if !columns[name] {
+			t.Fatalf("session_progress_projection missing column %q", name)
+		}
+	}
+	for _, name := range []string{
+		"entries_json",
+		"tool_calls_json",
+		"tool_starts_json",
+		"tool_completions_json",
+	} {
+		if columns[name] {
+			t.Fatalf("session_progress_projection retained display cache column %q", name)
+		}
+	}
+
+	var oldTableCount int
+	if err := store.db.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_display_projection'",
+	).Scan(&oldTableCount); err != nil {
+		t.Fatalf("check old display projection table: %v", err)
+	}
+	if oldTableCount != 0 {
+		t.Fatal("legacy session_display_projection table should not be created")
+	}
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

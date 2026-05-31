@@ -126,26 +126,20 @@ func (s *cantoStore) loadProgressProjection(
 	sessionID string,
 ) (progressProjection, bool, error) {
 	var (
-		projection         progressProjection
-		rawEntries         []byte
-		rawToolCalls       []byte
-		rawToolStarts      []byte
-		rawToolCompletions []byte
-		lastStatus         sql.NullString
-		cutoffID           sql.NullString
+		projection progressProjection
+		lastStatus sql.NullString
+		cutoffID   sql.NullString
 	)
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT cutoff_seq, cutoff_event_id, entries_json, last_status,
+		`SELECT cutoff_seq, cutoff_event_id, last_status,
 		        usage_input, usage_output, usage_cost,
-		        pending_input, pending_output, pending_cost,
-		        tool_calls_json, tool_starts_json, tool_completions_json
-		   FROM session_display_projection WHERE session_id = ?`,
+		        pending_input, pending_output, pending_cost
+		   FROM session_progress_projection WHERE session_id = ?`,
 		sessionID,
 	).Scan(
 		&projection.cutoffSeq,
 		&cutoffID,
-		&rawEntries,
 		&lastStatus,
 		&projection.usage.input,
 		&projection.usage.output,
@@ -153,9 +147,6 @@ func (s *cantoStore) loadProgressProjection(
 		&projection.pendingUsage.input,
 		&projection.pendingUsage.output,
 		&projection.pendingUsage.cost,
-		&rawToolCalls,
-		&rawToolStarts,
-		&rawToolCompletions,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return progressProjection{}, false, nil
@@ -175,32 +166,26 @@ func (s *cantoStore) saveProgressProjection(
 ) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO session_display_projection (
-			session_id, cutoff_seq, cutoff_event_id, entries_json, last_status,
+		`INSERT INTO session_progress_projection (
+			session_id, cutoff_seq, cutoff_event_id, last_status,
 			usage_input, usage_output, usage_cost,
-			pending_input, pending_output, pending_cost,
-			tool_calls_json, tool_starts_json, tool_completions_json, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET
-			cutoff_seq = excluded.cutoff_seq,
-			cutoff_event_id = excluded.cutoff_event_id,
-			entries_json = excluded.entries_json,
-			last_status = excluded.last_status,
-			usage_input = excluded.usage_input,
-			usage_output = excluded.usage_output,
-			usage_cost = excluded.usage_cost,
-			pending_input = excluded.pending_input,
-			pending_output = excluded.pending_output,
-			pending_cost = excluded.pending_cost,
-			tool_calls_json = excluded.tool_calls_json,
-			tool_starts_json = excluded.tool_starts_json,
-			tool_completions_json = excluded.tool_completions_json,
-			updated_at = excluded.updated_at
-		WHERE excluded.cutoff_seq >= session_display_projection.cutoff_seq`,
+			pending_input, pending_output, pending_cost, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(session_id) DO UPDATE SET
+				cutoff_seq = excluded.cutoff_seq,
+				cutoff_event_id = excluded.cutoff_event_id,
+				last_status = excluded.last_status,
+				usage_input = excluded.usage_input,
+				usage_output = excluded.usage_output,
+				usage_cost = excluded.usage_cost,
+				pending_input = excluded.pending_input,
+				pending_output = excluded.pending_output,
+				pending_cost = excluded.pending_cost,
+				updated_at = excluded.updated_at
+			WHERE excluded.cutoff_seq >= session_progress_projection.cutoff_seq`,
 		projection.sessionID,
 		projection.cutoffSeq,
 		projection.cutoffEvent,
-		[]byte("[]"),
 		projection.lastStatus,
 		projection.usage.input,
 		projection.usage.output,
@@ -208,9 +193,6 @@ func (s *cantoStore) saveProgressProjection(
 		projection.pendingUsage.input,
 		projection.pendingUsage.output,
 		projection.pendingUsage.cost,
-		[]byte("{}"),
-		[]byte("{}"),
-		[]byte("[]"),
 		metadataTimestamp(time.Now()),
 	)
 	return err
