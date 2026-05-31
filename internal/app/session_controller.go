@@ -107,7 +107,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
 		draftCmd = m.setComposerDraft(msg.draft)
 	}
-	return m, tea.Batch(draftCmd, cmdError(sessionErrorDisplay(msg.err)))
+	return m, tea.Batch(draftCmd, cmdError(session.DisplayError(msg.err)))
 }
 
 func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
@@ -450,15 +450,15 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	displayErr := sessionErrorDisplay(err)
+	displayErr := session.DisplayError(err)
 	var cmds []tea.Cmd
-	if limit, ok := classifyProviderLimitError(err); ok {
-		displayErr = limit.display()
+	if limit, ok := session.ClassifyProviderLimitError(err); ok {
+		displayErr = limit.Display()
 		cmds = append(
 			cmds,
 			m.persistEntryCmd(
 				"persist routing stop",
-				m.routingDecision("stop", limit.reason, limit.raw),
+				m.routingDecision("stop", limit.Reason, limit.Raw),
 			),
 		)
 	}
@@ -513,30 +513,6 @@ func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
 func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdated) (Model, tea.Cmd) {
 	m.turnReducer().setBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
-}
-
-func sessionErrorDisplay(err error) string {
-	if err == nil {
-		return "session error"
-	}
-	raw := strings.Join(strings.Fields(err.Error()), " ")
-	if raw == "" {
-		return "session error"
-	}
-	lower := strings.ToLower(raw)
-	if strings.Contains(lower, "assistant response has no content") {
-		return "Provider returned an empty response. Try again or switch models."
-	}
-	if strings.Contains(lower, "status code: 422") || strings.Contains(lower, "unprocessable entity") {
-		return "Model rejected the request (422). This often happens with reasoning models that don't accept temperature. Try /model to switch models."
-	}
-	if strings.Contains(lower, "message has invalid role") {
-		return "Session history contains an invalid message role. Try starting a new session with /session."
-	}
-	if strings.Contains(lower, "too many empty") || strings.Contains(lower, "empty messages") {
-		return "Provider sent too many empty responses. Try again or switch models with /model."
-	}
-	return privacy.Redact(raw)
 }
 
 func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
