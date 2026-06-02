@@ -8,12 +8,11 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/llm/providers"
 )
 
 // Backend implements backend.Backend using the agent loop.
@@ -86,7 +85,7 @@ func (b *Backend) ContextLimit() int {
 	}
 
 	// Try to get from model metadata
-	if meta, ok := models.GetCachedMetadata(b.Provider(), b.Model()); ok {
+	if meta, ok := llm.GetCachedMetadata(b.Provider(), b.Model()); ok {
 		return meta.ContextLimit
 	}
 
@@ -152,7 +151,7 @@ func (b *Backend) createSession() *SessionAdapter {
 
 	// Get model from config
 	model := llm.Model{ID: b.Model()}
-	if meta, ok := models.GetCachedMetadata(b.Provider(), b.Model()); ok {
+	if meta, ok := llm.GetCachedMetadata(b.Provider(), b.Model()); ok {
 		model.ContextWindow = meta.ContextLimit
 		model.CostPer1MIn = meta.InputPrice
 		model.CostPer1MOut = meta.OutputPrice

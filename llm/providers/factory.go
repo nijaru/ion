@@ -6,11 +6,11 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/providers/anthropic"
-	"github.com/nijaru/ion/providers/gemini"
-	"github.com/nijaru/ion/providers/ollama"
-	"github.com/nijaru/ion/providers/openai"
-	"github.com/nijaru/ion/providers/openrouter"
+	"github.com/nijaru/ion/llm/providers/anthropic"
+	"github.com/nijaru/ion/llm/providers/gemini"
+	"github.com/nijaru/ion/llm/providers/ollama"
+	"github.com/nijaru/ion/llm/providers/openai"
+	"github.com/nijaru/ion/llm/providers/openrouter"
 )
 
 // NewProviderFromConfig creates an llm.Provider from a config.Config.
@@ -26,48 +26,48 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 		return nil, fmt.Errorf("provider not specified")
 	}
 
-	def, ok := Lookup(providerName)
+	def, ok := llm.Lookup(providerName)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", providerName)
 	}
 
-	apiKey := ResolvedAuthToken(cfg, def)
-	endpoint := ResolvedEndpoint(cfg)
+	apiKey := llm.ResolvedAuthToken(cfg, def)
+	endpoint := llm.ResolvedEndpoint(cfg)
 
 	providerCfg := llm.ProviderConfig{
 		ID:             def.ID,
 		APIKey:         apiKey,
 		APIEndpoint:    endpoint,
-		DefaultHeaders: ResolvedHeaders(cfg),
+		DefaultHeaders: llm.ResolvedHeaders(cfg),
 		Models:         configModels(cfg),
 	}
 
 	switch def.Family {
-	case FamilyAnthropic:
+	case llm.FamilyAnthropic:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", llm.MissingAuthDetail(cfg, def))
 		}
 		return anthropic.NewProvider(providerCfg), nil
 
-	case FamilyOpenAI:
-		if RequiresAuth(cfg, def) && apiKey == "" {
-			return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
+	case llm.FamilyOpenAI:
+		if llm.RequiresAuth(cfg, def) && apiKey == "" {
+			return nil, fmt.Errorf("%s not set", llm.MissingAuthDetail(cfg, def))
 		}
 		return openai.NewProvider(providerCfg), nil
 
-	case FamilyOpenRouter:
+	case llm.FamilyOpenRouter:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", llm.MissingAuthDetail(cfg, def))
 		}
 		return openrouter.NewProvider(providerCfg), nil
 
-	case FamilyGemini:
+	case llm.FamilyGemini:
 		if apiKey == "" {
-			return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
+			return nil, fmt.Errorf("%s not set", llm.MissingAuthDetail(cfg, def))
 		}
 		return gemini.NewProvider(providerCfg), nil
 
-	case FamilyOllama:
+	case llm.FamilyOllama:
 		return ollama.NewProvider(providerCfg), nil
 
 	default:
@@ -76,7 +76,7 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 }
 
 // configModels creates basic model definitions from config without metadata.
-// The caller should enrich these with models.GetCachedMetadata if available.
+// The caller should enrich these with llm.GetCachedMetadata if available.
 func configModels(cfg *config.Config) []llm.Model {
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" || strings.TrimSpace(cfg.Model) == "" {
 		return nil

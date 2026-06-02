@@ -5,9 +5,9 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
 )
 
 // Backend implements the backend.Backend interface for external agent processes
@@ -53,7 +53,7 @@ func (b *Backend) ContextLimit() int {
 	}
 	provider := b.Provider()
 	model := b.Model()
-	if meta, ok := models.GetMetadata(context.Background(), provider, model); ok {
+	if meta, ok := llm.GetMetadata(context.Background(), provider, model); ok {
 		return meta.ContextLimit
 	}
 	return 0

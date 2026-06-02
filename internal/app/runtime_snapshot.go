@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nijaru/ion/llm"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/providers"
 )
 
 type providerSelection struct {
@@ -115,7 +116,7 @@ func providerSelectionForConfig(
 	}
 	selection := providerSelection{
 		cfg:                  updated,
-		supportsModelListing: providers.SupportsModelListing(updated),
+		supportsModelListing: llm.SupportsModelListing(updated),
 	}
 	if !selection.supportsModelListing {
 		selection.transition = newRuntimeTransition(
@@ -132,13 +133,13 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (setupPromptKi
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
 		return 0, nil
 	}
-	def, ok := providers.Lookup(cfg.Provider)
+	def, ok := llm.Lookup(cfg.Provider)
 	if !ok {
 		return 0, fmt.Errorf("unsupported provider %q", strings.TrimSpace(cfg.Provider))
 	}
-	missingAuth := providers.RequiresAuth(cfg, def) &&
-		providers.ResolvedAuthToken(cfg, def) == ""
-	if def.ID == providers.OpenAICompatibleID {
+	missingAuth := llm.RequiresAuth(cfg, def) &&
+		llm.ResolvedAuthToken(cfg, def) == ""
+	if def.ID == llm.OpenAICompatibleID {
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
 			return setupPromptAPIKey, nil
 		}

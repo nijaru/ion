@@ -9,22 +9,21 @@ import (
 	"unicode/utf8"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/llm"
 )
 
 var (
-	listModels            = models.ListModels
-	listModelsForConfig   = models.ListModelsForConfig
-	cachedModelsForConfig = models.CachedModelsForConfig
+	listModels            = llm.ListModels
+	listModelsForConfig   = llm.ListModelsForConfig
+	cachedModelsForConfig = llm.CachedModelsForConfig
 )
 
 const pickerPageSize = 8
 
 func providerItems(cfg *config.Config) []pickerItem {
-	items := make([]pickerItem, 0, len(providers.Native()))
-	for _, def := range providers.Native() {
-		if !providers.ShowInPicker(cfg, def) {
+	items := make([]pickerItem, 0, len(llm.Native()))
+	for _, def := range llm.Native() {
+		if !llm.ShowInPicker(cfg, def) {
 			continue
 		}
 		items = append(items, buildProviderItem(cfg, def))
@@ -60,7 +59,7 @@ func pickerItemByValue(items []pickerItem, value string) (pickerItem, bool) {
 }
 
 func providerDisplayName(value string) string {
-	return providers.DisplayName(value)
+	return llm.DisplayName(value)
 }
 
 func modelItemsForProvider(ctx context.Context, cfg *config.Config) ([]pickerItem, error) {
@@ -79,9 +78,9 @@ func cachedModelItemsForProvider(cfg *config.Config) ([]pickerItem, bool, bool) 
 	return modelItemsFromMetadata(models), fresh, true
 }
 
-func modelItemsFromMetadata(metas []models.ModelMetadata) []pickerItem {
-	metas = append([]models.ModelMetadata(nil), metas...)
-	slices.SortFunc(metas, func(a, b models.ModelMetadata) int {
+func modelItemsFromMetadata(metas []llm.ModelMetadata) []pickerItem {
+	metas = append([]llm.ModelMetadata(nil), metas...)
+	slices.SortFunc(metas, func(a, b llm.ModelMetadata) int {
 		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
 			return strings.Compare(orgA, orgB)
 		}
@@ -125,14 +124,14 @@ func modelOrg(id string) string {
 }
 
 func providerItem(label, value string) pickerItem {
-	def, _ := providers.Lookup(value)
+	def, _ := llm.Lookup(value)
 	return buildProviderItem(nil, def)
 }
 
-func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem {
+func buildProviderItem(cfg *config.Config, def llm.Definition) pickerItem {
 	detail, tone, ready := providerDetail(cfg, def)
 	label, detail := providerItemLabelAndDetail(cfg, def, detail)
-	group := providers.GroupName(def)
+	group := llm.GroupName(def)
 	if !ready && strings.HasPrefix(detail, "Set ") {
 		group = "Needs setup"
 	}
@@ -151,10 +150,10 @@ func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem 
 
 func providerItemLabelAndDetail(
 	cfg *config.Config,
-	def providers.Definition,
+	def llm.Definition,
 	detail string,
 ) (string, string) {
-	if def.ID != providers.OpenAICompatibleID {
+	if def.ID != llm.OpenAICompatibleID {
 		return def.DisplayName, detail
 	}
 
@@ -175,7 +174,7 @@ func providerItemLabelAndDetail(
 
 func providerItemEndpointDisplay(cfg *config.Config, detail string) string {
 	if cfg != nil {
-		if endpoint := providers.EndpointDisplayName(cfg.Endpoint); endpoint != "" {
+		if endpoint := llm.EndpointDisplayName(cfg.Endpoint); endpoint != "" {
 			return endpoint
 		}
 	}
@@ -185,11 +184,11 @@ func providerItemEndpointDisplay(cfg *config.Config, detail string) string {
 	return ""
 }
 
-func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone, bool) {
-	if def.ID == providers.OpenAICompatibleID {
+func providerDetail(cfg *config.Config, def llm.Definition) (string, pickerTone, bool) {
+	if def.ID == llm.OpenAICompatibleID {
 		return openAICompatibleProviderDetail(cfg, def)
 	}
-	detail, ready := providers.CredentialStateContext(
+	detail, ready := llm.CredentialStateContext(
 		context.Background(),
 		cfgForProvider(cfg, def.ID),
 		def,
@@ -202,18 +201,18 @@ func providerDetail(cfg *config.Config, def providers.Definition) (string, picke
 
 func openAICompatibleProviderDetail(
 	cfg *config.Config,
-	def providers.Definition,
+	def llm.Definition,
 ) (string, pickerTone, bool) {
 	providerCfg := cfgForProvider(cfg, def.ID)
-	if providers.RequiresAuth(providerCfg, def) &&
-		providers.ResolvedAuthToken(providerCfg, def) == "" {
-		return fmt.Sprintf("Set %s", providers.MissingAuthDetail(providerCfg, def)),
+	if llm.RequiresAuth(providerCfg, def) &&
+		llm.ResolvedAuthToken(providerCfg, def) == "" {
+		return fmt.Sprintf("Set %s", llm.MissingAuthDetail(providerCfg, def)),
 			pickerToneWarn,
 			false
 	}
-	if endpoint, ready, ok := providers.CachedLocalAPIState(providerCfg); ok {
+	if endpoint, ready, ok := llm.CachedLocalAPIState(providerCfg); ok {
 		if ready {
-			return "Ready at " + providers.EndpointDisplayName(endpoint), pickerToneDefault, true
+			return "Ready at " + llm.EndpointDisplayName(endpoint), pickerToneDefault, true
 		}
 		return "Not running", pickerToneDefault, false
 	}
@@ -224,12 +223,12 @@ func openAICompatibleProviderDetail(
 }
 
 func providerSortRank(cfg *config.Config, provider string) int {
-	def, ok := providers.Lookup(provider)
+	def, ok := llm.Lookup(provider)
 	if !ok {
 		return 99
 	}
 	_, _, ready := providerDetail(cfg, def)
-	isLocal := def.Kind == providers.KindLocal || def.ID == providers.OpenAICompatibleID
+	isLocal := def.Kind == llm.KindLocal || def.ID == llm.OpenAICompatibleID
 	rank := 3
 	switch {
 	case ready && !isLocal:
@@ -243,11 +242,11 @@ func providerSortRank(cfg *config.Config, provider string) int {
 		return rank
 	}
 	switch def.Kind {
-	case providers.KindDirect:
+	case llm.KindDirect:
 		return 3
-	case providers.KindRouter:
+	case llm.KindRouter:
 		return 4
-	case providers.KindCustom:
+	case llm.KindCustom:
 		return 5
 	default:
 		return rank
@@ -255,11 +254,11 @@ func providerSortRank(cfg *config.Config, provider string) int {
 }
 
 func providerCredentialSet(provider string) bool {
-	def, ok := providers.Lookup(provider)
+	def, ok := llm.Lookup(provider)
 	if !ok {
 		return false
 	}
-	_, ready := providers.CredentialStateContext(
+	_, ready := llm.CredentialStateContext(
 		context.Background(),
 		cfgForProvider(nil, def.ID),
 		def,
@@ -267,7 +266,7 @@ func providerCredentialSet(provider string) bool {
 	return ready
 }
 
-func modelMetrics(meta models.ModelMetadata) *pickerMetrics {
+func modelMetrics(meta llm.ModelMetadata) *pickerMetrics {
 	metrics := &pickerMetrics{}
 	if meta.ContextLimit > 0 {
 		if meta.ContextLimit >= 1000 {
@@ -321,10 +320,10 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 		return &config.Config{Provider: provider}
 	}
 	copy := *cfg
-	activeProvider := providers.ResolveID(copy.Provider)
-	targetProvider := providers.ResolveID(provider)
+	activeProvider := llm.ResolveID(copy.Provider)
+	targetProvider := llm.ResolveID(provider)
 	copy.Provider = targetProvider
-	if activeProvider != targetProvider && !providers.IsOpenAICompatible(targetProvider) {
+	if activeProvider != targetProvider && !llm.IsOpenAICompatible(targetProvider) {
 		copy.Endpoint = ""
 		copy.AuthEnvVar = ""
 		copy.ExtraHeaders = nil

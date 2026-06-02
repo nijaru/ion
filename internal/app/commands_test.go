@@ -14,10 +14,10 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/llm"
 )
 
 func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
@@ -250,14 +250,14 @@ func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "anthropic" {
 				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
 			}
 			if cfg.Model != "" {
 				t.Fatalf("model = %q, want staged provider without model", cfg.Model)
 			}
-			return []models.ModelMetadata{{ID: "claude-test"}}, nil
+			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 		},
 	)
 
@@ -369,11 +369,11 @@ func TestStartupPickerCmdLoadsInitialModelPicker(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
-			return []models.ModelMetadata{{ID: "openai/gpt-5.5"}}, nil
+			return []llm.ModelMetadata{{ID: "openai/gpt-5.5"}}, nil
 		},
 	)
 
@@ -446,14 +446,14 @@ func TestProviderCommandCurrentProviderKeepsConfiguredModel(t *testing.T) {
 	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
 			if cfg.Model != "z-ai/glm-5" {
 				t.Fatalf("model = %q, want current model", cfg.Model)
 			}
-			return []models.ModelMetadata{{ID: "z-ai/glm-5"}}, nil
+			return []llm.ModelMetadata{{ID: "z-ai/glm-5"}}, nil
 		},
 	)
 

@@ -1,4 +1,4 @@
-package models
+package llm
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 
 	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
 )
 
 type providerModelsCache struct {
@@ -122,7 +121,7 @@ func withModelListTimeout(ctx context.Context) (context.Context, context.CancelF
 func wrapModelListError(cfg *config.Config, timeout time.Duration, err error) error {
 	operation := "list models"
 	if cfg != nil && strings.TrimSpace(cfg.Provider) != "" {
-		operation = fmt.Sprintf("list models for %s", providers.ResolveID(cfg.Provider))
+		operation = fmt.Sprintf("list models for %s", ResolveID(cfg.Provider))
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return apperrors.Timeout(operation, timeout, err)
@@ -142,7 +141,7 @@ func fetchModels(
 	provider string,
 	cfg *config.Config,
 ) ([]ModelMetadata, error) {
-	provider = providers.ResolveID(provider)
+	provider = ResolveID(provider)
 	switch provider {
 	case "anthropic":
 		return anthropicFetcher(ctx)
@@ -153,36 +152,36 @@ func fetchModels(
 	case "gemini":
 		return geminiFetcher(ctx)
 	case "ollama":
-		if endpoint := providers.ResolvedEndpoint(cfg); endpoint != "" &&
+		if endpoint := ResolvedEndpoint(cfg); endpoint != "" &&
 			endpoint != "http://localhost:11434/v1" {
 			return fetchOpenAICompatibleModels(
 				ctx,
 				provider,
-				providers.ResolvedEndpoint(cfg),
+				ResolvedEndpoint(cfg),
 				"",
 				nil,
 			)
 		}
 		return ollamaFetcher(ctx)
-	case providers.OpenAICompatibleID:
-		endpoint := providers.ResolvedEndpointContext(ctx, cfg)
+	case OpenAICompatibleID:
+		endpoint := ResolvedEndpointContext(ctx, cfg)
 		if endpoint == "" {
 			return nil, fmt.Errorf("OpenAI-compatible endpoint is not configured")
 		}
-		def, _ := providers.Lookup(provider)
+		def, _ := Lookup(provider)
 		return fetchOpenAICompatibleModels(
 			ctx,
 			provider,
 			endpoint,
-			providers.ResolvedAuthToken(cfg, def),
-			providers.ResolvedHeaders(cfg),
+			ResolvedAuthToken(cfg, def),
+			ResolvedHeaders(cfg),
 		)
 	default:
-		def, ok := providers.Lookup(provider)
-		if !ok || def.Family != providers.FamilyOpenAI {
+		def, ok := Lookup(provider)
+		if !ok || def.Family != FamilyOpenAI {
 			return nil, fmt.Errorf("no model listing available for provider %s", provider)
 		}
-		endpoint := providers.ResolvedEndpointContext(ctx, cfg)
+		endpoint := ResolvedEndpointContext(ctx, cfg)
 		if endpoint == "" {
 			return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 		}
@@ -190,8 +189,8 @@ func fetchModels(
 			ctx,
 			provider,
 			endpoint,
-			providers.ResolvedAuthToken(cfg, def),
-			providers.ResolvedHeaders(cfg),
+			ResolvedAuthToken(cfg, def),
+			ResolvedHeaders(cfg),
 		)
 	}
 }
@@ -495,13 +494,13 @@ func modelCacheTTL(cfg *config.Config) time.Duration {
 	if cfg == nil {
 		return time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
 	}
-	provider := providers.ResolveID(cfg.Provider)
+	provider := ResolveID(cfg.Provider)
 	switch provider {
-	case providers.OpenAICompatibleID, "ollama":
+	case OpenAICompatibleID, "ollama":
 		return localModelCacheTTL
 	}
 	endpoint := strings.ToLower(
-		strings.TrimSpace(providers.ResolvedEndpointContext(context.Background(), cfg)),
+		strings.TrimSpace(ResolvedEndpointContext(context.Background(), cfg)),
 	)
 	if strings.Contains(endpoint, "://localhost") ||
 		strings.Contains(endpoint, "://127.") ||
@@ -819,9 +818,9 @@ func providerCacheKey(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	provider := providers.ResolveID(cfg.Provider)
-	endpoint := providers.ResolvedEndpointContext(context.Background(), cfg)
-	authEnv := providers.ResolvedAuthEnvVar(cfg)
+	provider := ResolveID(cfg.Provider)
+	endpoint := ResolvedEndpointContext(context.Background(), cfg)
+	authEnv := ResolvedAuthEnvVar(cfg)
 	return strings.Join([]string{
 		provider,
 		strings.ToLower(strings.TrimSpace(endpoint)),

@@ -1,4 +1,4 @@
-package models
+package llm
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
 )
 
 type ModelMetadata struct {
@@ -80,7 +79,7 @@ func CachedContextLimitForConfig(cfg *config.Config) (int, bool) {
 	if limit, ok := CachedContextLimit(cfg.Provider, cfg.Model); ok {
 		return limit, true
 	}
-	if providers.IsOpenAICompatible(cfg.Provider) && strings.TrimSpace(cfg.Endpoint) == "" {
+	if IsOpenAICompatible(cfg.Provider) && strings.TrimSpace(cfg.Endpoint) == "" {
 		return 0, false
 	}
 	models, _, ok := CachedModelsForConfig(cfg)
@@ -111,7 +110,7 @@ func metadataKey(provider, model string) string {
 }
 
 func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
-	if def, ok := providers.Lookup(provider); ok && def.Runtime == providers.RuntimeNative {
+	if def, ok := Lookup(provider); ok && def.Runtime == RuntimeNative {
 		models, err := ListModelsForConfig(ctx, &config.Config{Provider: provider})
 		if err != nil {
 			return ModelMetadata{}, err

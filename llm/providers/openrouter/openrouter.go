@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/providers/openai"
+	"github.com/nijaru/ion/llm/providers/openai"
 	sashaoai "github.com/sashabaranov/go-openai"
 )
 

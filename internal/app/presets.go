@@ -6,8 +6,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/llm"
 )
 
 func (m Model) activePreset() Preset {
@@ -36,7 +35,7 @@ func (m Model) runtimeConfigForPreset(
 	cfg *config.Config,
 	preset Preset,
 ) (*config.Config, error) {
-	return models.ResolveRuntimeConfig(context.Background(), cfg, models.Preset(preset))
+	return llm.ResolveRuntimeConfig(context.Background(), cfg, llm.Preset(preset))
 }
 
 func (m Model) runtimeConfigForActivePreset(cfg *config.Config) (*config.Config, error) {
@@ -83,17 +82,17 @@ func updateProviderSelection(
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	resolved := providers.ResolveID(provider)
-	def, ok := providers.Lookup(resolved)
+	resolved := llm.ResolveID(provider)
+	def, ok := llm.Lookup(resolved)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", strings.TrimSpace(provider))
 	}
-	if def.Runtime != providers.RuntimeNative {
+	if def.Runtime != llm.RuntimeNative {
 		return nil, fmt.Errorf("ACP providers are deferred until the advanced integration phase")
 	}
 	updated := *cfg
 	updated.Provider = def.ID
-	if providers.ResolveID(cfg.Provider) == def.ID {
+	if llm.ResolveID(cfg.Provider) == def.ID {
 		return &updated, nil
 	}
 	updated.Model = ""

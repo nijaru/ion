@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/providers/openai"
+	"github.com/nijaru/ion/llm/providers/openai"
 )
 
 // Provider implements the llm.Provider interface for Gemini via its OpenAI-compatible endpoint.

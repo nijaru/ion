@@ -5,10 +5,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/nijaru/ion/llm"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
 )
 
 var (
@@ -23,7 +24,7 @@ func (m Model) openAPIKeyPrompt(
 	provider string,
 	preset Preset,
 ) (Model, tea.Cmd) {
-	def, ok := providers.Lookup(provider)
+	def, ok := llm.Lookup(provider)
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unsupported provider %q", strings.TrimSpace(provider)))
 	}
@@ -45,9 +46,9 @@ func (m Model) openAPIKeyPrompt(
 	return m, nil
 }
 
-func providerSupportsAPIKeyPrompt(def providers.Definition) bool {
+func providerSupportsAPIKeyPrompt(def llm.Definition) bool {
 	switch def.AuthKind {
-	case providers.AuthAPIKey, providers.AuthToken, providers.AuthOptional:
+	case llm.AuthAPIKey, llm.AuthToken, llm.AuthOptional:
 		return true
 	default:
 		return false
@@ -59,11 +60,11 @@ func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea
 		cfg = &config.Config{}
 	}
 	cfgCopy := *cfg
-	cfgCopy.Provider = providers.OpenAICompatibleID
+	cfgCopy.Provider = llm.OpenAICompatibleID
 	m.pickerReducer().openSetup(setupPromptState{
 		kind:         setupPromptEndpoint,
-		provider:     providers.OpenAICompatibleID,
-		providerName: providers.DisplayName(providers.OpenAICompatibleID),
+		provider:     llm.OpenAICompatibleID,
+		providerName: llm.DisplayName(llm.OpenAICompatibleID),
 		value:        strings.TrimSpace(cfgCopy.Endpoint),
 		preset:       preset,
 		cfg:          cfgCopy,

@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nijaru/ion/llm"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/providers"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -283,11 +284,11 @@ func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Confi
 		return cfg
 	}
 
-	def, ok := providers.Lookup(provider)
-	if !ok || def.Runtime != providers.RuntimeNative {
+	def, ok := llm.Lookup(provider)
+	if !ok || def.Runtime != llm.RuntimeNative {
 		return cfg
 	}
-	if def.ID == providers.OpenAICompatibleID && strings.TrimSpace(cfg.Endpoint) == "" {
+	if def.ID == llm.OpenAICompatibleID && strings.TrimSpace(cfg.Endpoint) == "" {
 		return cfg
 	}
 

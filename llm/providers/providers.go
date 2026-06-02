@@ -4,11 +4,11 @@ import (
 	"fmt"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/providers/anthropic"
-	"github.com/nijaru/ion/providers/gemini"
-	"github.com/nijaru/ion/providers/ollama"
-	openaipkg "github.com/nijaru/ion/providers/openai"
-	"github.com/nijaru/ion/providers/openrouter"
+	"github.com/nijaru/ion/llm/providers/anthropic"
+	"github.com/nijaru/ion/llm/providers/gemini"
+	"github.com/nijaru/ion/llm/providers/ollama"
+	openaipkg "github.com/nijaru/ion/llm/providers/openai"
+	"github.com/nijaru/ion/llm/providers/openrouter"
 )
 
 type Config struct {
@@ -100,4 +100,15 @@ func buildConfig(id string, config Config) llm.ProviderConfig {
 		DefaultHeaders: cloneHeaders(config.Headers),
 		Models:         append([]llm.Model(nil), config.Models...),
 	}
+}
+
+func cloneHeaders(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

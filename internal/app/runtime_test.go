@@ -16,10 +16,10 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/llm"
 )
 
 func TestNewRestoresActivePresetFromState(t *testing.T) {
@@ -512,11 +512,11 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	}
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
-			return []models.ModelMetadata{
+			return []llm.ModelMetadata{
 				{ID: "z-ai/glm-4.5"},
 				{ID: "z-ai/glm-5"},
 				{ID: "z-ai/glm-5-turbo"},
@@ -568,11 +568,11 @@ func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "anthropic" {
 				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
 			}
-			return []models.ModelMetadata{{ID: "claude-test"}}, nil
+			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 		},
 	)
 
@@ -677,11 +677,11 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "anthropic" {
 				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
 			}
-			return []models.ModelMetadata{{ID: "claude-test"}}, nil
+			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 		},
 	)
 

@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nijaru/ion/llm"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
 )
 
 func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
@@ -22,10 +23,10 @@ func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
 }
 
 func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config) error {
-	if cfg == nil || !providers.IsOpenAICompatible(cfg.Provider) {
+	if cfg == nil || !llm.IsOpenAICompatible(cfg.Provider) {
 		return nil
 	}
-	if _, ready := providers.ProbeLocalAPIFresh(ctx, cfg); ready {
+	if _, ready := llm.ProbeLocalAPIFresh(ctx, cfg); ready {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Endpoint) != "" {
@@ -95,10 +96,10 @@ func (m Model) openModelPickerForPreset(
 	if cfg.Provider == "" {
 		return m.openProviderPickerWithConfig(cfg)
 	}
-	if !providers.SupportsModelListing(cfg) {
+	if !llm.SupportsModelListing(cfg) {
 		return m, cmdError(providerModelEntryNotice(cfg.Provider))
 	}
-	if providers.IsOpenAICompatible(cfg.Provider) {
+	if llm.IsOpenAICompatible(cfg.Provider) {
 		return m.beginModelPickerSetupCheck(cfg, preset)
 	}
 	setup, err := providerSetupPrompt(context.Background(), cfg)

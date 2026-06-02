@@ -9,9 +9,8 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/llm"
 )
 
 var (
@@ -24,7 +23,7 @@ var (
 )
 
 func resolveStartupConfig(cfg *config.Config) error {
-	cfg.Provider = providers.ResolveID(cfg.Provider)
+	cfg.Provider = llm.ResolveID(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
@@ -32,11 +31,11 @@ func resolveStartupConfig(cfg *config.Config) error {
 	if cfg.Provider == "" {
 		return errNoProviderConfigured
 	}
-	def, ok := providers.Lookup(cfg.Provider)
+	def, ok := llm.Lookup(cfg.Provider)
 	if !ok {
 		return fmt.Errorf("unsupported provider %q", cfg.Provider)
 	}
-	if providers.RequiresEndpoint(cfg) && providers.ResolvedEndpoint(cfg) == "" {
+	if llm.RequiresEndpoint(cfg) && llm.ResolvedEndpoint(cfg) == "" {
 		return fmt.Errorf("%s requires endpoint configuration", def.DisplayName)
 	}
 
@@ -55,8 +54,8 @@ func applyCLIConfigOverrides(
 		return
 	}
 	if strings.TrimSpace(providerOverride) != "" {
-		provider := providers.ResolveID(providerOverride)
-		if provider != providers.ResolveID(cfg.Provider) {
+		provider := llm.ResolveID(providerOverride)
+		if provider != llm.ResolveID(cfg.Provider) {
 			if strings.TrimSpace(modelOverride) == "" {
 				cfg.Model = ""
 			}
@@ -67,8 +66,8 @@ func applyCLIConfigOverrides(
 	if model := strings.TrimSpace(modelOverride); model != "" {
 		if cfg.Provider == "" {
 			if provider, rest, ok := strings.Cut(model, "/"); ok {
-				resolved := providers.ResolveID(provider)
-				if _, exists := providers.Lookup(resolved); exists {
+				resolved := llm.ResolveID(provider)
+				if _, exists := llm.Lookup(resolved); exists {
 					cfg.Provider = resolved
 					cfg.Model = strings.TrimSpace(rest)
 					model = ""
@@ -107,7 +106,7 @@ func startupRuntimeConfig(
 		preset = "primary"
 	}
 
-	resolved, err := models.ResolveRuntimeConfig(ctx, cfg, models.Preset(preset))
+	resolved, err := llm.ResolveRuntimeConfig(ctx, cfg, llm.Preset(preset))
 	if err == nil {
 		return resolved, preset, nil
 	}
@@ -115,7 +114,7 @@ func startupRuntimeConfig(
 		return nil, preset, err
 	}
 
-	resolved, err = models.ResolveRuntimeConfig(ctx, cfg, models.PresetPrimary)
+	resolved, err = llm.ResolveRuntimeConfig(ctx, cfg, llm.PresetPrimary)
 	if err != nil {
 		return nil, "primary", err
 	}
@@ -151,7 +150,7 @@ func applySessionConfigFromMetadata(
 	if provider == "" {
 		return nil
 	}
-	if providers.ResolveID(cfg.Provider) != providers.ResolveID(provider) {
+	if llm.ResolveID(cfg.Provider) != llm.ResolveID(provider) {
 		clearProviderScopedPresets(cfg)
 	}
 	cfg.Provider = provider
@@ -160,21 +159,21 @@ func applySessionConfigFromMetadata(
 }
 
 func backendForProvider(provider string) (backend.Backend, error) {
-	provider = providers.ResolveID(provider)
+	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
 	}
 
-	def, ok := providers.Lookup(provider)
+	def, ok := llm.Lookup(provider)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	if def.Runtime == providers.RuntimeACP {
+	if def.Runtime == llm.RuntimeACP {
 		return nil, fmt.Errorf(
 			"ACP providers are deferred until the advanced integration phase",
 		)
 	}
-	if def.Runtime == providers.RuntimeNative {
+	if def.Runtime == llm.RuntimeNative {
 		return agent.NewBackend(), nil
 	}
 

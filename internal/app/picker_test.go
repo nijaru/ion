@@ -16,10 +16,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/llm"
 )
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
@@ -781,11 +780,11 @@ func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 
 func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 		if cfg.Provider != "openrouter" {
 			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
-		return []models.ModelMetadata{
+		return []llm.ModelMetadata{
 			{
 				ID:               "z-ai/glm-4.5",
 				Created:          time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(),
@@ -840,8 +839,8 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 
 func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
-		return []models.ModelMetadata{
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
+		return []llm.ModelMetadata{
 			{
 				ID:               "vendor/model-free",
 				ContextLimit:     128000,
@@ -885,7 +884,7 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 }
 
 func TestPickerSearchMatchesAllQueryKeywords(t *testing.T) {
-	items := modelItemsFromMetadata([]models.ModelMetadata{
+	items := modelItemsFromMetadata([]llm.ModelMetadata{
 		{ID: "deepseek/deepseek-v4-flash"},
 		{ID: "deepseek/deepseek-r1"},
 		{ID: "openai/gpt-5.5"},
@@ -902,7 +901,7 @@ func TestPickerSearchMatchesAllQueryKeywords(t *testing.T) {
 }
 
 func TestModelMetricsRenderFreeAndUnknownDistinctly(t *testing.T) {
-	free := modelMetrics(models.ModelMetadata{
+	free := modelMetrics(llm.ModelMetadata{
 		ContextLimit:     128000,
 		InputPrice:       0,
 		OutputPrice:      0,
@@ -913,7 +912,7 @@ func TestModelMetricsRenderFreeAndUnknownDistinctly(t *testing.T) {
 		t.Fatalf("expected free metrics, got %#v", free)
 	}
 
-	unknown := modelMetrics(models.ModelMetadata{
+	unknown := modelMetrics(llm.ModelMetadata{
 		ContextLimit: 128000,
 	})
 	if unknown == nil {
@@ -1417,9 +1416,9 @@ func TestOpenModelPickerDoesNotFetchBeforeReturning(t *testing.T) {
 	called := false
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			called = true
-			return []models.ModelMetadata{{ID: "vendor/model-a"}}, nil
+			return []llm.ModelMetadata{{ID: "vendor/model-a"}}, nil
 		},
 	)
 
@@ -1478,11 +1477,11 @@ func TestOpenModelPickerReturnsBeforeEndpointProbeCompletes(t *testing.T) {
 	endpoint := srv.URL + "/v1"
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Endpoint != endpoint {
 				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
 			}
-			return []models.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+			return []llm.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
 		},
 	)
 
@@ -1557,12 +1556,12 @@ func TestOpenModelPickerUsesFreshCacheWithoutRefresh(t *testing.T) {
 	withOpenRouterKey(t)
 	oldListModelsForConfig := listModelsForConfig
 	oldCachedModelsForConfig := cachedModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 		t.Fatal("fresh cache should not trigger model catalog refresh")
 		return nil, nil
 	}
-	cachedModelsForConfig = func(cfg *config.Config) ([]models.ModelMetadata, bool, bool) {
-		return []models.ModelMetadata{{ID: "vendor/cached"}}, true, true
+	cachedModelsForConfig = func(cfg *config.Config) ([]llm.ModelMetadata, bool, bool) {
+		return []llm.ModelMetadata{{ID: "vendor/cached"}}, true, true
 	}
 	t.Cleanup(func() {
 		listModelsForConfig = oldListModelsForConfig
@@ -1591,11 +1590,11 @@ func TestOpenModelPickerShowsStaleCacheWhileRefreshing(t *testing.T) {
 	withOpenRouterKey(t)
 	oldListModelsForConfig := listModelsForConfig
 	oldCachedModelsForConfig := cachedModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
-		return []models.ModelMetadata{{ID: "vendor/fresh"}}, nil
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
+		return []llm.ModelMetadata{{ID: "vendor/fresh"}}, nil
 	}
-	cachedModelsForConfig = func(cfg *config.Config) ([]models.ModelMetadata, bool, bool) {
-		return []models.ModelMetadata{{ID: "vendor/stale"}}, false, true
+	cachedModelsForConfig = func(cfg *config.Config) ([]llm.ModelMetadata, bool, bool) {
+		return []llm.ModelMetadata{{ID: "vendor/stale"}}, false, true
 	}
 	t.Cleanup(func() {
 		listModelsForConfig = oldListModelsForConfig
@@ -1627,11 +1626,11 @@ func TestModelPickerListsSelectedModelsAtTop(t *testing.T) {
 	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
-			return []models.ModelMetadata{
+			return []llm.ModelMetadata{
 				{ID: "vendor/model-a"},
 				{ID: "vendor/model-b"},
 				{ID: "vendor/model-c"},
@@ -1683,8 +1682,8 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 	withOpenRouterKey(t)
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
-			return []models.ModelMetadata{
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
+			return []llm.ModelMetadata{
 				{ID: "google/gemini-2.0-flash-lite-001"},
 				{ID: "vendor/model-c"},
 			}, nil
@@ -1736,14 +1735,14 @@ func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
 			if cfg.Model != "tencent/hy3-preview:free" {
 				t.Fatalf("model = %q, want runtime CLI override", cfg.Model)
 			}
-			return []models.ModelMetadata{
+			return []llm.ModelMetadata{
 				{ID: "anthropic/claude-sonnet-4.5"},
 				{ID: "tencent/hy3-preview:free"},
 			}, nil
@@ -1840,7 +1839,7 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	}); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
-	if _, ok := providers.ProbeLocalAPI(context.Background(), &config.Config{
+	if _, ok := llm.ProbeLocalAPI(context.Background(), &config.Config{
 		Provider: "local-api",
 		Endpoint: endpoint,
 	}); ok {
@@ -1849,14 +1848,14 @@ func TestProviderPickerLocalAPISelectionRefreshesConfiguredEndpoint(t *testing.T
 	ready = true
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openai-compatible" {
 				t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 			}
 			if cfg.Endpoint != endpoint {
 				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
 			}
-			return []models.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+			return []llm.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
 		},
 	)
 
@@ -1930,11 +1929,11 @@ func TestProviderPickerSelectionReturnsBeforeEndpointProbeCompletes(t *testing.T
 	}
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Endpoint != endpoint {
 				t.Fatalf("endpoint = %q, want configured endpoint %q", cfg.Endpoint, endpoint)
 			}
-			return []models.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+			return []llm.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
 		},
 	)
 
@@ -2305,11 +2304,11 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "anthropic" {
 				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
 			}
-			return []models.ModelMetadata{{ID: "claude-test"}}, nil
+			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 		},
 	)
 
@@ -2426,8 +2425,8 @@ func TestSetupPromptSaveReturnsBeforeCredentialWriteCompletes(t *testing.T) {
 func TestAPIKeySetupDoesNotExposeSecretInTUIOrSessionStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stubModelCatalog(t, func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
-		return []models.ModelMetadata{{ID: "claude-test"}}, nil
+	stubModelCatalog(t, func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
+		return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 	})
 
 	const secret = "sk-or-secret-test"
@@ -2536,14 +2535,14 @@ func TestOpenAICompatibleEndpointPromptSavesEndpointAndOpensModels(t *testing.T)
 	endpoint := srv.URL + "/v1"
 	stubModelCatalog(
 		t,
-		func(ctx context.Context, cfg *config.Config) ([]models.ModelMetadata, error) {
+		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
 			if cfg.Provider != "openai-compatible" {
 				t.Fatalf("provider = %q, want openai-compatible", cfg.Provider)
 			}
 			if cfg.Endpoint != endpoint {
 				t.Fatalf("endpoint = %q, want normalized endpoint %q", cfg.Endpoint, endpoint)
 			}
-			return []models.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
+			return []llm.ModelMetadata{{ID: "qwen3.6:27b"}}, nil
 		},
 	)
 
