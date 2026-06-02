@@ -6,8 +6,8 @@ package agent
 import (
 	"context"
 
-	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 // StreamFn is the function signature for streaming LLM completions.
@@ -228,7 +228,7 @@ type AgentLoopConfig struct {
 	// ToolExecutor executes tool calls.
 	ToolExecutor ToolExecutor `json:"-"`
 	// OnEvent is called when a session event is emitted.
-	OnEvent func(event session.Event) `json:"-"`
+	OnEvent func(event session.AgentEvent) `json:"-"`
 	// OnModelMessage is called when a provider-visible message is committed.
 	OnModelMessage ModelMessageWriter `json:"-"`
 

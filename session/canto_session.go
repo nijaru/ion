@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -7,13 +7,12 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/session"
 )
 
 type cantoSession struct {
 	id    string
 	store *cantoStore
-	meta  Meta
+	meta  StoreMeta
 }
 
 func (s *cantoSession) ID() string { return s.id }
@@ -28,36 +27,36 @@ func (s *cantoSession) Meta() Metadata {
 	}
 }
 
-func (s *cantoSession) Append(ctx context.Context, event Event) error {
+func (s *cantoSession) Append(ctx context.Context, event StoreEvent) error {
 	var title string
 	var preview string
 	var err error
 	switch e := event.(type) {
-	case Subagent:
+	case StoreSubagent:
 		preview = sessionSummary(e.Content)
 		ev := newStoredEvent(s.id, ionSubagentEvent, e, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case Status:
+	case StoreStatus:
 		if !isDurableResumeStatus(e.Status) {
 			return nil
 		}
-		ev := newStoredEvent(s.id, session.EventType("status_changed"), map[string]any{
+		ev := newStoredEvent(s.id, EventType("status_changed"), map[string]any{
 			"status": e.Status,
 		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case System:
+	case StoreSystem:
 		preview = ""
 		ev := newStoredEvent(s.id, ionSystemEvent, e, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case TokenUsage:
-		ev := newStoredEvent(s.id, session.EventType("token_usage"), map[string]any{
+	case StoreTokenUsage:
+		ev := newStoredEvent(s.id, EventType("token_usage"), map[string]any{
 			"input":  e.Input,
 			"output": e.Output,
 			"cost":   e.Cost,
 		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case RoutingDecision:
-		ev := newStoredEvent(s.id, session.EventType("routing_decision"), map[string]any{
+	case StoreRoutingDecision:
+		ev := newStoredEvent(s.id, EventType("routing_decision"), map[string]any{
 			"decision":         e.Decision,
 			"reason":           e.Reason,
 			"model_slot":       e.ModelSlot,
@@ -89,7 +88,7 @@ func (s *cantoSession) AppendModelMessage(ctx context.Context, message llm.Messa
 	if isEmptyModelMessage(message) {
 		return nil
 	}
-	if err := s.store.canto.Save(ctx, session.NewMessage(s.id, message)); err != nil {
+	if err := s.store.canto.Save(ctx, NewMessage(s.id, message)); err != nil {
 		return err
 	}
 	text := message.TextContent()
@@ -114,11 +113,11 @@ func (s *cantoSession) ModelMessages(ctx context.Context) ([]llm.Message, error)
 
 func newStoredEvent(
 	sessionID string,
-	eventType session.EventType,
+	eventType EventType,
 	data any,
 	unixTS int64,
-) session.Event {
-	ev := session.NewEvent(sessionID, eventType, data)
+) Event {
+	ev := NewEvent(sessionID, eventType, data)
 	if unixTS > 0 {
 		ev.Timestamp = time.Unix(unixTS, 0).UTC()
 	}
@@ -149,19 +148,19 @@ func isDurableResumeStatus(status string) bool {
 	return strings.Contains(strings.ToLower(status), "retrying")
 }
 
-func clearsDurableResumeStatus(eventType session.EventType) bool {
+func clearsDurableResumeStatus(eventType EventType) bool {
 	switch eventType {
-	case session.MessageAdded,
-		session.ContextAdded,
-		session.TurnCompleted,
-		session.ToolCompleted,
-		session.ApprovalResolved,
-		session.ApprovalCanceled,
-		session.CompactionTriggered,
+	case MessageAdded,
+		ContextAdded,
+		TurnCompleted,
+		ToolCompleted,
+		ApprovalResolved,
+		ApprovalCanceled,
+		CompactionTriggered,
 		ionSystemEvent,
 		ionSubagentEvent,
-		session.EventType("token_usage"),
-		session.EventType("routing_decision"):
+		EventType("token_usage"),
+		EventType("routing_decision"):
 		return true
 	default:
 		return false

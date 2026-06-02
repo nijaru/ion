@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
 
@@ -33,7 +33,7 @@ func (m Model) toolOutputHidden(e session.Entry) bool {
 }
 
 func (m Model) shouldSummarizeToolOutput(e session.Entry) bool {
-	if e.Role != session.Tool || e.IsError {
+	if e.Role != session.RoleTool || e.IsError {
 		return false
 	}
 	if isReadLikeTool(e.Title) {

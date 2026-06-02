@@ -11,9 +11,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 	csession "github.com/nijaru/ion/session"
 )
 
@@ -29,21 +28,21 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 		t.Fatalf("submitted turns = %#v, want run smoke", sess.submits)
 	}
 
-	for _, ev := range []session.Event{
-		session.TurnStarted{},
-		session.TokenUsage{Input: 12, Output: 4, Cost: 0.0012},
-		session.AgentDelta{Delta: "working"},
-		session.ToolCallStarted{ToolUseID: "tool-1", ToolName: "bash", Args: "echo smoke"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "sm"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "oke\n"},
-		session.ToolResult{ToolUseID: "tool-1", ToolName: "bash", Result: "smoke\n"},
-		session.AgentMessage{Message: "done"},
-		session.TurnFinished{},
+	for _, ev := range []session.AgentEvent{
+		session.TurnStartedEvent{},
+		session.TokenUsageEvent{Input: 12, Output: 4, Cost: 0.0012},
+		session.AgentDeltaEvent{Delta: "working"},
+		session.ToolCallStartedEvent{ToolUseID: "tool-1", ToolName: "bash", Args: "echo smoke"},
+		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "sm"},
+		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "oke\n"},
+		session.ToolResultEvent{ToolUseID: "tool-1", ToolName: "bash", Result: "smoke\n"},
+		session.AgentMessageEvent{Message: "done"},
+		session.TurnFinishedEvent{},
 	} {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
 		model = testModel(t, updated)
-		if _, ok := ev.(session.TokenUsage); ok {
+		if _, ok := ev.(session.TokenUsageEvent); ok {
 			runSequencePrefix(t, cmd, 1)
 		}
 	}
@@ -77,9 +76,9 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	requireEntry(t, entries, session.User, "run smoke")
-	requireEntry(t, entries, session.Agent, "done")
-	requireEntry(t, entries, session.Tool, "smoke")
+	requireEntry(t, entries, session.RoleUser, "run smoke")
+	requireEntry(t, entries, session.RoleAgent, "done")
+	requireEntry(t, entries, session.RoleTool, "smoke")
 
 	input, output, cost, err := resumed.Usage(context.Background())
 	if err != nil {
@@ -104,21 +103,21 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 		t.Fatalf("submitted turns = %#v, want inspect workspace", sess.submits)
 	}
 
-	for _, ev := range []session.Event{
-		session.TurnStarted{},
-		session.TokenUsage{Input: 20, Output: 8, Cost: 0.003},
-		session.AgentDelta{Delta: "\n\nReading before tool"},
-		session.ToolCallStarted{ToolUseID: "tool-1", ToolName: "read", Args: "README.md"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
-		session.ToolResult{ToolUseID: "tool-1", ToolName: "read", Result: "# ion\n"},
-		session.AgentDelta{Delta: " composing final"},
-		session.AgentMessage{Message: "Done with `README.md`."},
-		session.TurnFinished{},
+	for _, ev := range []session.AgentEvent{
+		session.TurnStartedEvent{},
+		session.TokenUsageEvent{Input: 20, Output: 8, Cost: 0.003},
+		session.AgentDeltaEvent{Delta: "\n\nReading before tool"},
+		session.ToolCallStartedEvent{ToolUseID: "tool-1", ToolName: "read", Args: "README.md"},
+		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.ToolResultEvent{ToolUseID: "tool-1", ToolName: "read", Result: "# ion\n"},
+		session.AgentDeltaEvent{Delta: " composing final"},
+		session.AgentMessageEvent{Message: "Done with `README.md`."},
+		session.TurnFinishedEvent{},
 	} {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
 		model = testModel(t, updated)
-		if _, ok := ev.(session.TokenUsage); ok {
+		if _, ok := ev.(session.TokenUsageEvent); ok {
 			runSequencePrefix(t, cmd, 1)
 		}
 	}
@@ -165,16 +164,16 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 		t.Fatalf("entries: %v", err)
 	}
 	requireEntriesInOrder(t, entries, []entryWant{
-		{role: session.User, content: "inspect workspace"},
-		{role: session.Tool, content: "# ion"},
-		{role: session.Agent, content: "Done with `README.md`."},
+		{role: session.RoleUser, content: "inspect workspace"},
+		{role: session.RoleTool, content: "# ion"},
+		{role: session.RoleAgent, content: "Done with `README.md`."},
 	})
 }
 
 func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {
 	model, sess, store, stored := newCoreLoopSmokeModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	model = testModel(t, updated)
@@ -198,13 +197,13 @@ func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	requireEntry(t, entries, session.System, "Canceled by user")
+	requireEntry(t, entries, session.RoleSystem, "Canceled by user")
 }
 
 func TestCoreLoopSmokeStreamCloseDuringTurnStopsBusyState(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
 	updated, cmd := model.Update(streamClosedMsg{generation: model.Model.EventGeneration})
 	model = testModel(t, updated)
@@ -231,7 +230,7 @@ func TestCoreLoopSmokeStreamCloseDuringTurnStopsBusyState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	requireEntry(t, entries, session.System, "Error: session event stream closed")
+	requireEntry(t, entries, session.RoleSystem, "Error: session event stream closed")
 }
 
 func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
@@ -239,7 +238,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.Event)},
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -251,9 +250,9 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 		nil,
 	)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd := model.Update(session.ErrorEvent{Err: errors.New("status 429: rate limit exceeded")})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 2)
 
@@ -265,7 +264,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	}
 	var found bool
 	for _, appended := range stored.appends {
-		decision, ok := appended.(storage.RoutingDecision)
+		decision, ok := appended.(session.StoreRoutingDecision)
 		if ok && decision.Decision == "stop" && decision.Reason == "rate_limit" {
 			found = true
 			break
@@ -279,12 +278,12 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	updated, cmd := model.Update(session.TokenUsageEvent{Input: 20, Output: 3, Cost: 0.02})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
-	updated, cmd = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd = model.Update(session.ErrorEvent{Err: errors.New("status 429: rate limit exceeded")})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 3)
 
@@ -300,7 +299,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	requireEntry(t, entries, session.System, "Error: API rate limit")
+	requireEntry(t, entries, session.RoleSystem, "Error: API rate limit")
 
 	input, output, cost, err := resumed.Usage(context.Background())
 	if err != nil {
@@ -315,9 +314,9 @@ func TestCoreLoopSmokeBudgetCancellationPersistsForResume(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	updated, cmd := model.Update(session.TokenUsageEvent{Input: 20, Output: 3, Cost: 0.02})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 4)
 
@@ -333,7 +332,7 @@ func TestCoreLoopSmokeBudgetCancellationPersistsForResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	requireEntry(t, entries, session.System, "Canceled: turn cost limit reached")
+	requireEntry(t, entries, session.RoleSystem, "Canceled: turn cost limit reached")
 
 	input, output, cost, err := resumed.Usage(context.Background())
 	if err != nil {
@@ -349,7 +348,7 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.Event)},
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -362,7 +361,7 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	)
 
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
-	updated, cmd := model.Update(session.StatusChanged{Status: status})
+	updated, cmd := model.Update(session.StatusChangedEvent{Status: status})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 
@@ -371,7 +370,7 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	}
 	var found bool
 	for _, appended := range stored.appends {
-		record, ok := appended.(storage.Status)
+		record, ok := appended.(session.StoreStatus)
 		if ok && record.Status == status {
 			found = true
 			break
@@ -386,7 +385,7 @@ func TestCoreLoopSmokeRetryStatusPersistsForResume(t *testing.T) {
 	model, _, store, stored := newCoreLoopSmokeModel(t)
 
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
-	updated, cmd := model.Update(session.StatusChanged{Status: status})
+	updated, cmd := model.Update(session.StatusChangedEvent{Status: status})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 
@@ -412,7 +411,7 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.Event)},
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -424,7 +423,7 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 		nil,
 	)
 
-	updated, _ := model.Update(session.ToolCallStarted{
+	updated, _ := model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-1",
 		ToolName:  "bash",
 		Args:      `curl -H "Authorization: Bearer abc.def-123" https://example.test`,
@@ -445,11 +444,11 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	}
 }
 
-func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, storage.Store, storage.Session) {
+func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, session.SessionStore, session.SessionHandle) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
-	store, err := storage.NewCantoStore(filepath.Join(t.TempDir(), "store"))
+	store, err := session.NewCantoStore(filepath.Join(t.TempDir(), "store"))
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -457,7 +456,7 @@ func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, storage.Store, st
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := New(
 		stubBackend{sess: sess, provider: "fake", model: "model"},
 		stored,
@@ -512,7 +511,7 @@ func requireEntriesInOrder(t *testing.T, entries []session.Entry, wants []entryW
 func appendCantoHistory(
 	t *testing.T,
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID string,
 	messages ...llm.Message,
 ) {

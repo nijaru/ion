@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 var (
@@ -65,7 +64,7 @@ func BenchmarkP1BurstAgentDeltaReduction(b *testing.B) {
 	for b.Loop() {
 		model := base
 		model.InFlight.Subagents = make(map[string]*SubagentProgress)
-		updated, _ := model.Update(session.TurnStarted{})
+		updated, _ := model.Update(session.TurnStartedEvent{})
 		model = (*updated.(*Model))
 		for _, ev := range deltas {
 			updated, _ := model.Update(ev)
@@ -89,7 +88,7 @@ func BenchmarkViewStreamingAgent(b *testing.B) {
 	model.Progress.Status = "Thinking..."
 	model.Progress.TurnStartedAt = time.Now().Add(-3 * time.Second)
 	model.InFlight.Pending = &session.Entry{
-		Role:    session.Agent,
+		Role:    session.RoleAgent,
 		Content: strings.Repeat("streamed assistant text with enough words to wrap cleanly ", 120),
 	}
 
@@ -211,7 +210,7 @@ func benchmarkSessionPickerItems(count int, workdir string) []sessionPickerItem 
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	for i := range count {
 		items = append(items, sessionPickerItem{
-			info: storage.SessionInfo{
+			info: session.SessionInfo{
 				ID:           fmt.Sprintf("session-%04d", i),
 				CWD:          workdir,
 				Model:        "qwen3.6:27b",
@@ -237,11 +236,11 @@ func benchmarkReplayEntries(count int) []session.Entry {
 		entries = append(
 			entries,
 			session.Entry{
-				Role:    session.User,
+				Role:    session.RoleUser,
 				Content: fmt.Sprintf("Please inspect the runtime transition path for case %d.", i),
 			},
 			session.Entry{
-				Role: session.Agent,
+				Role: session.RoleAgent,
 				Content: strings.Join([]string{
 					fmt.Sprintf("Result for case %d:", i),
 					"",
@@ -255,7 +254,7 @@ func benchmarkReplayEntries(count int) []session.Entry {
 				}, "\n"),
 			},
 			session.Entry{
-				Role:    session.Tool,
+				Role:    session.RoleTool,
 				Title:   "Bash(go test ./internal/app)",
 				Content: "ok github.com/nijaru/ion/internal/app 0.123s\n",
 			},
@@ -264,25 +263,25 @@ func benchmarkReplayEntries(count int) []session.Entry {
 	return entries
 }
 
-func benchmarkP1TurnEvents(deltaCount int) []session.Event {
-	events := []session.Event{
-		session.UserMessage{Message: "inspect the workspace"},
-		session.TurnStarted{},
-		session.StatusChanged{Status: "Thinking..."},
+func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
+	events := []session.AgentEvent{
+		session.UserMessageEvent{Message: "inspect the workspace"},
+		session.TurnStartedEvent{},
+		session.StatusChangedEvent{Status: "Thinking..."},
 	}
 	for i := range deltaCount {
-		events = append(events, session.AgentDelta{
+		events = append(events, session.AgentDeltaEvent{
 			Delta: fmt.Sprintf("stream chunk %02d with enough text to render ", i),
 		})
 	}
 	events = append(
 		events,
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"ai/STATUS.md"}`,
 		},
-		session.ToolOutputDelta{
+		session.ToolOutputDeltaEvent{
 			ToolUseID: "tool-1",
 			Delta:     strings.Repeat("status line\n", 24),
 		},
@@ -290,10 +289,10 @@ func benchmarkP1TurnEvents(deltaCount int) []session.Event {
 	return events
 }
 
-func benchmarkAgentDeltas(count int) []session.Event {
-	events := make([]session.Event, 0, count)
+func benchmarkAgentDeltas(count int) []session.AgentEvent {
+	events := make([]session.AgentEvent, 0, count)
 	for i := range count {
-		events = append(events, session.AgentDelta{
+		events = append(events, session.AgentDeltaEvent{
 			Delta: fmt.Sprintf("delta-%03d ", i),
 		})
 	}

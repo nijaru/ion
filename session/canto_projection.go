@@ -1,14 +1,11 @@
-package storage
+package session
 
 import (
 	"context"
 	"time"
-
-	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/session"
 )
 
-func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
+func (s *cantoSession) Entries(ctx context.Context) ([]Entry, error) {
 	sess, err := s.store.canto.Load(ctx, s.id)
 	if err != nil {
 		return nil, err
@@ -18,16 +15,16 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 
 func displayEntriesFromSession(
 	workdir string,
-	sess *session.Session,
-) ([]ionsession.Entry, error) {
+	sess *Session,
+) ([]Entry, error) {
 	history, err := sess.EffectiveEntries()
 	if err != nil {
 		return nil, err
 	}
 
-	projector := New(workdir)
-	entries := make([]ionsession.Entry, 0, len(history))
-	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
+	projector := NewProjector(workdir)
+	entries := make([]Entry, 0, len(history))
+	effectiveByEventID := make(map[string]HistoryEntry, len(history))
 	for _, entry := range history {
 		if entry.EventID == "" {
 			if display, ok := projector.HistoryEntry(entry); ok {
@@ -71,7 +68,7 @@ func displayEntriesFromSession(
 	return Normalize(entries), nil
 }
 
-func latestDisplayCutoff(events []session.Event) (string, bool) {
+func latestDisplayCutoff(events []Event) (string, bool) {
 	for i := len(events) - 1; i >= 0; i-- {
 		if snapshot, ok, err := events[i].ProjectionSnapshot(); err == nil &&
 			ok &&
@@ -87,26 +84,26 @@ func latestDisplayCutoff(events []session.Event) (string, bool) {
 	return "", false
 }
 
-func usableDisplaySnapshot(snapshot session.CompactionSnapshot) bool {
+func usableDisplaySnapshot(snapshot CompactionSnapshot) bool {
 	return snapshot.CutoffEventID != "" &&
 		(len(snapshot.Entries) > 0 || len(snapshot.Messages) > 0)
 }
 
-func displayEventEntry(ev session.Event) (ionsession.Entry, bool) {
+func displayEventEntry(ev Event) (Entry, bool) {
 	switch ev.Type {
 	case ionSystemEvent:
-		var data System
+		var data StoreSystem
 		if err := ev.UnmarshalData(&data); err != nil {
-			return ionsession.Entry{}, false
+			return Entry{}, false
 		}
 		return EntrySystem(data.Content, time.Time{})
 	case ionSubagentEvent:
-		var data Subagent
+		var data StoreSubagent
 		if err := ev.UnmarshalData(&data); err != nil {
-			return ionsession.Entry{}, false
+			return Entry{}, false
 		}
 		return EntrySubagent(data.Name, data.Content, data.IsError, time.Time{})
 	default:
-		return ionsession.Entry{}, false
+		return Entry{}, false
 	}
 }

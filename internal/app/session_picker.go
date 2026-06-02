@@ -12,7 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (m Model) openSessionPicker() (Model, tea.Cmd) {
@@ -25,7 +25,7 @@ func (m Model) openSessionPicker() (Model, tea.Cmd) {
 	return m, loadSessionPickerItems(requestID, m.Model.Store, m.App.Workdir)
 }
 
-func loadSessionPickerItems(requestID uint64, store storage.Store, workdir string) tea.Cmd {
+func loadSessionPickerItems(requestID uint64, store session.SessionStore, workdir string) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := store.ListSessions(context.Background(), workdir)
 		return sessionPickerLoadedMsg{requestID: requestID, sessions: sessions, err: err}
@@ -247,7 +247,7 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	return filtered
 }
 
-func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
+func sessionPickerLine(cwd string, info session.SessionInfo) (string, string) {
 	label, preview, metadataParts := sessionPickerParts(cwd, info)
 	detailParts := make([]string, 0, len(metadataParts)+1)
 	if preview != "" {
@@ -257,7 +257,7 @@ func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
 	return label, strings.Join(detailParts, " • ")
 }
 
-func sessionPickerRenderedLine(cwd string, info storage.SessionInfo, width int) string {
+func sessionPickerRenderedLine(cwd string, info session.SessionInfo, width int) string {
 	label, preview, metadataParts := sessionPickerParts(cwd, info)
 	metadata := fitSessionPickerMetadata(metadataParts, width)
 	lead := label
@@ -300,7 +300,7 @@ func fitSessionPickerMetadata(parts []string, width int) string {
 	return fitLine(parts[0], width-tailWidth) + sep + tail
 }
 
-func sessionPickerParts(cwd string, info storage.SessionInfo) (string, string, []string) {
+func sessionPickerParts(cwd string, info session.SessionInfo) (string, string, []string) {
 	title := strings.TrimSpace(info.Title)
 	summary := strings.TrimSpace(info.Summary)
 	preview := strings.TrimSpace(info.LastPreview)

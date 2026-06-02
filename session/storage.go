@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -6,17 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 )
 
 // Store defines the interface for session and input history persistence.
-type Store interface {
+type SessionStore interface {
 	// OpenSession initializes a new session and its storage file.
-	OpenSession(ctx context.Context, cwd, model, branch string) (Session, error)
+	OpenSession(ctx context.Context, cwd, model, branch string) (SessionHandle, error)
 
 	// ResumeSession loads an existing session by ID.
-	ResumeSession(ctx context.Context, id string) (Session, error)
+	ResumeSession(ctx context.Context, id string) (SessionHandle, error)
 
 	// ListSessions returns a list of sessions for the given working directory.
 	ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error)
@@ -37,13 +36,13 @@ type Store interface {
 	Close() error
 }
 
-type ForkOptions struct {
+type SessionForkOptions struct {
 	Label  string
 	Reason string
 }
 
 type SessionForker interface {
-	ForkSession(ctx context.Context, parentID string, opts ForkOptions) (Session, error)
+	ForkSession(ctx context.Context, parentID string, opts SessionForkOptions) (SessionHandle, error)
 }
 
 type SessionTree struct {
@@ -91,7 +90,7 @@ type SessionBundleImporter interface {
 }
 
 // Session handles appending events to a specific session's storage.
-type Session interface {
+type SessionHandle interface {
 	// ID returns the unique session identifier.
 	ID() string
 
@@ -99,7 +98,7 @@ type Session interface {
 	Meta() Metadata
 
 	// Append appends an Ion-owned display/progress event to the session storage.
-	Append(ctx context.Context, event Event) error
+	Append(ctx context.Context, event StoreEvent) error
 
 	// AppendModelMessage appends a provider-visible message to durable history.
 	AppendModelMessage(ctx context.Context, message llm.Message) error
@@ -108,7 +107,7 @@ type Session interface {
 	ModelMessages(ctx context.Context) ([]llm.Message, error)
 
 	// Entries returns all entries stored in the session so far.
-	Entries(ctx context.Context) ([]session.Entry, error)
+	Entries(ctx context.Context) ([]Entry, error)
 
 	// LastStatus returns the most recent status persisted in the session.
 	LastStatus(ctx context.Context) (string, error)
@@ -157,13 +156,13 @@ func IsConversationSessionInfo(info SessionInfo) bool {
 
 // Event is a sealed storage event. Provider-visible messages use
 // AppendModelMessage instead of this display/progress append path.
-type Event interface {
+type StoreEvent interface {
 	isStorageEvent()
 }
 
 // Event projection types persisted into Canto for Ion-owned display/session state.
 type (
-	Meta struct {
+	StoreMeta struct {
 		Type      string `json:"type"` // "meta"
 		ID        string `json:"id"`
 		CWD       string `json:"cwd"`
@@ -172,19 +171,19 @@ type (
 		CreatedAt int64  `json:"created_at"`
 	}
 
-	Status struct {
+	StoreStatus struct {
 		Type   string `json:"type"` // "status"
 		Status string `json:"status"`
 		TS     int64  `json:"ts"`
 	}
 
-	System struct {
+	StoreSystem struct {
 		Type    string `json:"type"` // "system"
 		Content string `json:"content"`
 		TS      int64  `json:"ts"`
 	}
 
-	TokenUsage struct {
+	StoreTokenUsage struct {
 		Type   string  `json:"type"` // "token_usage"
 		Input  int     `json:"input"`
 		Output int     `json:"output"`
@@ -192,7 +191,7 @@ type (
 		TS     int64   `json:"ts"`
 	}
 
-	RoutingDecision struct {
+	StoreRoutingDecision struct {
 		Type           string  `json:"type"` // "routing_decision"
 		Decision       string  `json:"decision"`
 		Reason         string  `json:"reason"`
@@ -208,7 +207,7 @@ type (
 		TS             int64   `json:"ts"`
 	}
 
-	Subagent struct {
+	StoreSubagent struct {
 		Type    string `json:"type"` // "subagent"
 		Name    string `json:"name"`
 		Content string `json:"content"`
@@ -217,11 +216,11 @@ type (
 	}
 )
 
-func (Status) isStorageEvent()          {}
-func (System) isStorageEvent()          {}
-func (TokenUsage) isStorageEvent()      {}
-func (RoutingDecision) isStorageEvent() {}
-func (Subagent) isStorageEvent()        {}
+func (StoreStatus) isStorageEvent()          {}
+func (StoreSystem) isStorageEvent()          {}
+func (StoreTokenUsage) isStorageEvent()      {}
+func (StoreRoutingDecision) isStorageEvent() {}
+func (StoreSubagent) isStorageEvent()        {}
 
 func sessionTitle(text string) string {
 	return compactSessionText(text, 72)

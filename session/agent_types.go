@@ -5,11 +5,11 @@ import "time"
 type Role string
 
 const (
-	User     Role = "user"
-	Agent    Role = "agent"
-	System   Role = "system"
-	Tool     Role = "tool"
-	Subagent Role = "subagent"
+	RoleUser     Role = "user"
+	RoleAgent    Role = "agent"
+	RoleSystem   Role = "system"
+	RoleTool     Role = "tool"
+	RoleSubagent Role = "subagent"
 )
 
 type Entry struct {

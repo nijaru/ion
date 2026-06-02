@@ -7,8 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64) string {
@@ -49,7 +48,7 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, sess storage.Session) tea.Cmd {
+func loadSessionUsageCmd(generation uint64, sess session.SessionHandle) tea.Cmd {
 	if sess == nil {
 		return nil
 	}
@@ -115,7 +114,7 @@ func (m Model) sessionInfoCmd() tea.Cmd {
 func (m Model) sessionInfoNotice() (string, error) {
 	sessionID := m.Model.Runtime.MaterializedSessionID()
 	if m.Model.Storage != nil {
-		if sessionID == "" && storage.IsMaterialized(m.Model.Storage) {
+		if sessionID == "" && session.IsMaterialized(m.Model.Storage) {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
 		}
 	} else if m.Model.Session != nil {
@@ -184,11 +183,11 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	for _, entry := range entries {
 		counts.total++
 		switch entry.Role {
-		case session.User:
+		case session.RoleUser:
 			counts.user++
-		case session.Agent:
+		case session.RoleAgent:
 			counts.agent++
-		case session.Tool:
+		case session.RoleTool:
 			counts.tool++
 		}
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func TestLayoutClampsComposerHeight(t *testing.T) {
@@ -377,7 +377,7 @@ func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 	model.Progress.Status = "Running bash..."
 	model.InFlight.PendingTools = map[string]*session.Entry{
 		"bash-1": {
-			Role:  session.Tool,
+			Role:  session.RoleTool,
 			Title: "Bash(go test ./...)",
 		},
 	}
@@ -539,7 +539,7 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
 	model = testModel(t, updated)
 	model.Model.Backend = stubBackend{
-		sess:         &stubSession{events: make(chan session.Event)},
+		sess:         &stubSession{events: make(chan session.AgentEvent)},
 		provider:     "subscription-provider-with-a-very-long-name",
 		model:        "model-name-that-would-wrap-in-a-small-terminal",
 		contextLimit: 128000,
@@ -621,7 +621,7 @@ func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
 	model = testModel(t, updated)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.Event)},
+		sess:     &stubSession{events: make(chan session.AgentEvent)},
 		provider: "openrouter",
 		model:    "short-model",
 	}
@@ -637,7 +637,7 @@ func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
 func TestStatusLineMarksFastPresetOnModelSegment(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.Event)},
+		sess:     &stubSession{events: make(chan session.AgentEvent)},
 		provider: "openrouter",
 		model:    "deepseek/deepseek-v4-flash:free",
 	}
@@ -663,7 +663,7 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	model.Progress.TokensReceived = 0
 	model.Progress.ContextTokens = 0
 	model.Progress.TotalCost = 0
-	model.Model.Backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
+	model.Model.Backend = stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}}
 
 	line := ansi.Strip(model.statusLine())
 	if strings.Contains(line, "0 tokens") {
@@ -688,7 +688,7 @@ func TestStatusLineColorsContextUsageByContextPercentage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			model := readyModel(t)
 			model.Model.Backend = stubBackend{
-				sess:         &stubSession{events: make(chan session.Event)},
+				sess:         &stubSession{events: make(chan session.AgentEvent)},
 				contextLimit: 100_000,
 			}
 			model.Progress.ContextTokens = tt.total
@@ -709,7 +709,7 @@ func TestStatusLineColorsContextUsageByContextPercentage(t *testing.T) {
 func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:         &stubSession{events: make(chan session.Event)},
+		sess:         &stubSession{events: make(chan session.AgentEvent)},
 		contextLimit: 100_000,
 	}
 	model.Progress.TokensSent = 180_000
@@ -728,7 +728,7 @@ func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
 func TestStatusLineShowsSmallContextUsageWithoutZeroK(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:         &stubSession{events: make(chan session.Event)},
+		sess:         &stubSession{events: make(chan session.AgentEvent)},
 		contextLimit: 128_000,
 	}
 	model.Progress.ContextTokens = 999
@@ -757,7 +757,7 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.ReasoningEffort = "high"
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.Event)},
+		sess:     &stubSession{events: make(chan session.AgentEvent)},
 		provider: "openrouter",
 		model:    "o3-mini",
 	}
@@ -774,7 +774,7 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 	model := New(
 		stubBackend{
-			sess: &stubSession{events: make(chan session.Event)},
+			sess: &stubSession{events: make(chan session.AgentEvent)},
 			surface: backend.ToolSurface{
 				Count:   2,
 				Names:   []string{"bash", "read"},

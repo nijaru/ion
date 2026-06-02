@@ -10,9 +10,8 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
+	"github.com/nijaru/ion/session"
 )
 
 const (
@@ -22,7 +21,7 @@ const (
 
 type sessionEventMsg struct {
 	generation uint64
-	event      session.Event
+	event      session.AgentEvent
 }
 
 type streamClosedMsg struct {
@@ -189,12 +188,12 @@ type turnCancelResultMsg struct {
 }
 
 type sessionPickerItem struct {
-	info storage.SessionInfo
+	info session.SessionInfo
 }
 
 type sessionPickerLoadedMsg struct {
 	requestID uint64
-	sessions  []storage.SessionInfo
+	sessions  []session.SessionInfo
 	err       error
 }
 
@@ -324,8 +323,8 @@ type AppState struct {
 type ModelState struct {
 	Backend              backend.Backend
 	Session              session.AgentSession
-	Storage              storage.Session
-	Store                storage.Store
+	Storage              session.SessionHandle
+	Store                session.SessionStore
 	Switcher             Switcher
 	Config               *config.Config
 	Runtime              Snapshot
@@ -442,8 +441,8 @@ type Model struct {
 
 func New(
 	b backend.Backend,
-	s storage.Session,
-	store storage.Store,
+	s session.SessionHandle,
+	store session.SessionStore,
 	workdir, branch, version string,
 	switcher Switcher,
 ) Model {

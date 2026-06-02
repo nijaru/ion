@@ -8,9 +8,8 @@ import (
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 type closeStorageSession struct {
@@ -20,11 +19,11 @@ type closeStorageSession struct {
 
 func (s *closeStorageSession) ID() string { return s.id }
 
-func (s *closeStorageSession) Meta() storage.Metadata {
-	return storage.Metadata{ID: s.id, CreatedAt: time.Now()}
+func (s *closeStorageSession) Meta() session.Metadata {
+	return session.Metadata{ID: s.id, CreatedAt: time.Now()}
 }
 
-func (s *closeStorageSession) Append(ctx context.Context, event storage.Event) error { return nil }
+func (s *closeStorageSession) Append(ctx context.Context, event session.StoreEvent) error { return nil }
 
 func (s *closeStorageSession) AppendModelMessage(ctx context.Context, msg llm.Message) error {
 	return nil
@@ -78,9 +77,9 @@ func (b providerBackend) Session() session.AgentSession {
 	return nil
 }
 
-func (b providerBackend) SetStore(storage.Store) {}
+func (b providerBackend) SetStore(session.SessionStore) {}
 
-func (b providerBackend) SetSession(storage.Session) {}
+func (b providerBackend) SetSession(session.SessionHandle) {}
 
 func (b providerBackend) SetConfig(*config.Config) {}
 

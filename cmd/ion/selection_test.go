@@ -12,30 +12,30 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type metadataStore struct {
-	updated  storage.SessionInfo
-	sessions []storage.SessionInfo
+	updated  session.SessionInfo
+	sessions []session.SessionInfo
 	listErr  error
 }
 
 func (s *metadataStore) OpenSession(
 	ctx context.Context,
 	cwd, model, branch string,
-) (storage.Session, error) {
+) (session.SessionHandle, error) {
 	return nil, nil
 }
 
-func (s *metadataStore) ResumeSession(ctx context.Context, id string) (storage.Session, error) {
+func (s *metadataStore) ResumeSession(ctx context.Context, id string) (session.SessionHandle, error) {
 	return nil, nil
 }
 
 func (s *metadataStore) ListSessions(
 	ctx context.Context,
 	cwd string,
-) ([]storage.SessionInfo, error) {
+) ([]session.SessionInfo, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
@@ -45,7 +45,7 @@ func (s *metadataStore) ListSessions(
 func (s *metadataStore) GetRecentSession(
 	ctx context.Context,
 	cwd string,
-) (*storage.SessionInfo, error) {
+) (*session.SessionInfo, error) {
 	return nil, nil
 }
 
@@ -55,7 +55,7 @@ func (s *metadataStore) GetInputs(ctx context.Context, cwd string, limit int) ([
 	return nil, nil
 }
 
-func (s *metadataStore) UpdateSession(ctx context.Context, si storage.SessionInfo) error {
+func (s *metadataStore) UpdateSession(ctx context.Context, si session.SessionInfo) error {
 	s.updated = si
 	return nil
 }
@@ -349,7 +349,7 @@ func TestStartupRuntimeConfigFallsBackWhenPersistedFastIsNotConfigured(t *testin
 }
 
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
-	store := &metadataStore{sessions: []storage.SessionInfo{
+	store := &metadataStore{sessions: []session.SessionInfo{
 		{ID: "empty"},
 		{ID: "slash", LastPreview: "/resume"},
 		{ID: "slash-title", Title: "/model", LastPreview: "hi"},
@@ -366,7 +366,7 @@ func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
 }
 
 func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
-	store := &metadataStore{sessions: []storage.SessionInfo{
+	store := &metadataStore{sessions: []session.SessionInfo{
 		{ID: "empty"},
 		{ID: "real", LastPreview: "hello"},
 	}}
@@ -399,7 +399,7 @@ func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
 }
 
 func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
-	store := &metadataStore{sessions: []storage.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
+	store := &metadataStore{sessions: []session.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
 
 	id, err := startupSessionID(
 		context.Background(),
@@ -610,7 +610,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestOpenRuntimeDefersACPProviders(t *testing.T) {
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testin
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -756,7 +756,7 @@ func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *t
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *t
 		t.Fatalf("open seed session: %v", err)
 	}
 	seedID := seed.ID()
-	if err := seed.Append(ctx, storage.System{Type: "system", Content: "seeded", TS: 1}); err != nil {
+	if err := seed.Append(ctx, session.StoreSystem{Type: "system", Content: "seeded", TS: 1}); err != nil {
 		t.Fatalf("append seed event: %v", err)
 	}
 	if err := seed.Close(); err != nil {
@@ -814,7 +814,7 @@ func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
 		t.Fatalf("default data dir: %v", err)
 	}
 
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -832,7 +832,7 @@ func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
 	if sess == nil {
 		t.Fatal("storage session = nil, want lazy session")
 	}
-	if storage.IsMaterialized(sess) {
+	if session.IsMaterialized(sess) {
 		t.Fatal("fresh runtime materialized session before a model-visible turn")
 	}
 	sessions, err := store.ListSessions(context.Background(), "/tmp/test")
@@ -860,7 +860,7 @@ func TestApplySessionConfigFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default data dir: %v", err)
 	}
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -913,7 +913,7 @@ func TestOpenRuntimeResumeCanKeepRuntimeOverrideProcessLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default data dir: %v", err)
 	}
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := session.NewCantoStore(dataDir)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -990,7 +990,7 @@ func TestSyncSessionMetadata(t *testing.T) {
 }
 
 func TestSyncSessionMetadataPreservesRecentOrdering(t *testing.T) {
-	storeAny, err := storage.NewCantoStore(t.TempDir())
+	storeAny, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -1041,7 +1041,7 @@ func TestSyncSessionMetadataPreservesRecentOrdering(t *testing.T) {
 			newer.ID(),
 		)
 	}
-	var synced storage.SessionInfo
+	var synced session.SessionInfo
 	for _, info := range after {
 		if info.ID == older.ID() {
 			synced = info

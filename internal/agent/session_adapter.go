@@ -6,22 +6,21 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 // SessionAdapter wraps an Agent to implement session.AgentSession,
 // session.SteeringSession, and session.QueuedInputSession interfaces.
 type SessionAdapter struct {
 	agent  *Agent
-	store  storage.Store
-	sess   storage.Session
+	store  session.SessionStore
+	sess   session.SessionHandle
 	config *SessionAdapterConfig
 
 	mu            sync.Mutex
 	id            string
-	events        chan session.Event
+	events        chan session.AgentEvent
 	closed        bool
 	closeOnce     sync.Once
 	steeringQueue []string
@@ -63,7 +62,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 	s := &SessionAdapter{
 		config: config,
 		id:     config.ID,
-		events: make(chan session.Event, 100),
+		events: make(chan session.AgentEvent, 100),
 	}
 
 	queueMode := config.QueueMode
@@ -79,7 +78,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		Temperature:   config.Temperature,
 		StreamFn:      config.StreamFn,
 		ToolExecutor:  config.ToolExecutor,
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
@@ -144,7 +143,7 @@ func (s *SessionAdapter) emitQueueUpdatedLocked() {
 		Steering: append([]string(nil), s.steeringQueue...),
 		FollowUp: append([]string(nil), s.followUpQueue...),
 	}
-	s.events <- session.QueuedInputUpdated{
+	s.events <- session.QueuedInputUpdatedEvent{
 		Base:     session.BaseNow(),
 		Snapshot: snapshot,
 	}
@@ -160,7 +159,7 @@ func (s *SessionAdapter) Open(ctx context.Context) error {
 	}
 
 	// Emit metadata loaded event
-	s.events <- session.MetadataLoaded{
+	s.events <- session.MetadataLoadedEvent{
 		Base:      session.BaseNow(),
 		SessionID: s.id,
 	}
@@ -186,7 +185,7 @@ func (s *SessionAdapter) Resume(ctx context.Context, sessionID string) error {
 	}
 
 	// Emit metadata loaded event
-	s.events <- session.MetadataLoaded{
+	s.events <- session.MetadataLoadedEvent{
 		Base:      session.BaseNow(),
 		SessionID: s.id,
 	}
@@ -239,10 +238,10 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			s.mu.Unlock()
 			if !closed {
 				if errors.Is(err, context.Canceled) {
-					s.events <- session.TurnFinished{Base: session.BaseNow()}
+					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 					return
 				}
-				s.events <- session.Error{
+				s.events <- session.ErrorEvent{
 					Base:  session.BaseNow(),
 					Err:   err,
 					Fatal: true,
@@ -310,7 +309,7 @@ func (s *SessionAdapter) Close() error {
 }
 
 // Events returns a read-only channel of typed events emitted by the session.
-func (s *SessionAdapter) Events() <-chan session.Event {
+func (s *SessionAdapter) Events() <-chan session.AgentEvent {
 	return s.events
 }
 
@@ -396,14 +395,14 @@ func (s *SessionAdapter) ClearQueuedInput(
 }
 
 // SetStore sets the storage store.
-func (s *SessionAdapter) SetStore(store storage.Store) {
+func (s *SessionAdapter) SetStore(store session.SessionStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store = store
 }
 
 // SetSession sets the storage session.
-func (s *SessionAdapter) SetSession(sess storage.Session) {
+func (s *SessionAdapter) SetSession(sess session.SessionHandle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sess = sess

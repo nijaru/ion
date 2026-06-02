@@ -4,8 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type turnReducer struct {
@@ -74,7 +73,7 @@ func (r turnReducer) rejectSubmit() {
 	r.progress.TurnStartedAt = time.Time{}
 }
 
-func (r turnReducer) applyTokenUsage(msg session.TokenUsage) {
+func (r turnReducer) applyTokenUsage(msg session.TokenUsageEvent) {
 	r.progress.TokensSent += msg.Input
 	r.progress.TokensReceived += msg.Output
 	r.progress.ContextTokens += tokenUsageTotal(msg)
@@ -97,7 +96,7 @@ func (r turnReducer) streamClosed(now time.Time) (session.Entry, bool) {
 	r.progress.Status = ""
 	r.progress.LastError = decision.DisplayError
 	r.recordFinishedTurnSummary(now)
-	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
+	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return entry, true
 }
 
@@ -127,7 +126,7 @@ func (r turnReducer) clearLocalErrorIfIdle() {
 	r.progress.LastError = ""
 }
 
-func (r turnReducer) applyStatusChanged(msg session.StatusChanged) session.StatusChangeDecision {
+func (r turnReducer) applyStatusChanged(msg session.StatusChangedEvent) session.StatusChangeDecision {
 	decision := session.DecideStatusChange(session.StatusChangeInput{
 		AgentID:   msg.AgentID,
 		Status:    msg.Status,
@@ -163,7 +162,7 @@ func (r turnReducer) applyBudgetStop(reason string, timestamp time.Time) (sessio
 	r.inFlight.Thinking = true
 	r.progress.Mode = stateCancelled
 	r.progress.Status = ""
-	entry, _ := storage.EntrySystem(decision.EntryContent, timestamp)
+	entry, _ := session.EntrySystem(decision.EntryContent, timestamp)
 	return entry, true
 }
 
@@ -203,7 +202,7 @@ func (r turnReducer) startTurn(timestamp, startedAt time.Time) {
 	r.progress.CurrentTurnCost = 0
 	r.progress.ContextTokens = 0
 	r.progress.BudgetStopReason = ""
-	r.inFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: timestamp}
+	r.inFlight.Pending = &session.Entry{Role: session.RoleAgent, Timestamp: timestamp}
 	r.inFlight.PendingTools = nil
 	r.inFlight.StreamBuf = ""
 	r.inFlight.StreamChunks = nil
@@ -214,7 +213,7 @@ func (r turnReducer) finishPendingAssistant() (session.Entry, bool, bool) {
 	assistantCompleted := r.inFlight.AgentCommitted
 	streamContent := r.agentStreamContent()
 	if !r.inFlight.AgentCommitted &&
-		r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Agent &&
+		r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.RoleAgent &&
 		(strings.TrimSpace(streamContent) != "" ||
 			strings.TrimSpace(r.inFlight.Pending.Reasoning) != "" ||
 			strings.TrimSpace(r.inFlight.ReasonBuf) != "") {
@@ -224,7 +223,7 @@ func (r turnReducer) finishPendingAssistant() (session.Entry, bool, bool) {
 		if strings.TrimSpace(r.inFlight.Pending.Reasoning) == "" {
 			r.inFlight.Pending.Reasoning = r.inFlight.ReasonBuf
 		}
-		entry, ok := storage.EntryAgent(
+		entry, ok := session.EntryAgent(
 			r.inFlight.Pending.Content,
 			r.inFlight.Pending.Reasoning,
 			r.inFlight.Pending.Timestamp,
@@ -270,7 +269,7 @@ func (r turnReducer) finishTurnMode(assistantCompleted bool) (session.Entry, boo
 		r.progress.Mode = stateError
 		r.progress.LastError = decision.DisplayError
 		r.progress.Status = ""
-		entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
+		entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 		return entry, true
 	case session.TurnFinishComplete:
 		r.progress.Mode = stateComplete

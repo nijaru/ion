@@ -4,7 +4,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -191,29 +191,29 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		next, cmd := m.handleTurnCancelResult(msg)
 		return next, cmd, true
 
-	case session.StatusChanged,
-		session.TokenUsage,
-		session.QueuedInputUpdated,
-		session.TurnStarted,
-		session.TurnSavePoint,
-		session.TurnFinished,
-		session.ThinkingDelta,
-		session.UserMessage,
-		session.AgentDelta,
-		session.AgentMessage,
-		session.ToolCallStarted,
-		session.ToolOutputDelta,
-		session.ToolResult,
-		session.VerificationResult,
-		session.ChildRequested,
-		session.ChildStarted,
-		session.ChildDelta,
-		session.ChildCompleted,
-		session.ChildBlocked,
-		session.ChildFailed,
-		session.ChildCanceled,
-		session.Error:
-		next, cmd := m.handleSessionEvent(msg.(session.Event))
+	case session.StatusChangedEvent,
+		session.TokenUsageEvent,
+		session.QueuedInputUpdatedEvent,
+		session.TurnStartedEvent,
+		session.TurnSavePointEvent,
+		session.TurnFinishedEvent,
+		session.ThinkingDeltaEvent,
+		session.UserMessageEvent,
+		session.AgentDeltaEvent,
+		session.AgentMessageEvent,
+		session.ToolCallStartedEvent,
+		session.ToolOutputDeltaEvent,
+		session.ToolResultEvent,
+		session.VerificationResultEvent,
+		session.ChildRequestedEvent,
+		session.ChildStartedEvent,
+		session.ChildDeltaEvent,
+		session.ChildCompletedEvent,
+		session.ChildBlockedEvent,
+		session.ChildFailedEvent,
+		session.ChildCanceledEvent,
+		session.ErrorEvent:
+		next, cmd := m.handleSessionEvent(msg.(session.AgentEvent))
 		return next, cmd, true
 	}
 

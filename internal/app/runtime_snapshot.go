@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 type providerSelection struct {

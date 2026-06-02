@@ -5,8 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type UnconfiguredBackend struct {
@@ -61,9 +60,9 @@ func (b *UnconfiguredBackend) Session() session.AgentSession {
 	return b.session
 }
 
-func (b *UnconfiguredBackend) SetStore(storage.Store) {}
+func (b *UnconfiguredBackend) SetStore(session.SessionStore) {}
 
-func (b *UnconfiguredBackend) SetSession(s storage.Session) {
+func (b *UnconfiguredBackend) SetSession(s session.SessionHandle) {
 	b.session.setStorage(s)
 }
 
@@ -72,7 +71,7 @@ func (b *UnconfiguredBackend) SetConfig(cfg *config.Config) {
 }
 
 type unconfiguredSession struct {
-	events chan session.Event
+	events chan session.AgentEvent
 	reason error
 	id     string
 	meta   map[string]string
@@ -80,13 +79,13 @@ type unconfiguredSession struct {
 
 func newUnconfiguredSession(reason error) *unconfiguredSession {
 	return &unconfiguredSession{
-		events: make(chan session.Event, 10),
+		events: make(chan session.AgentEvent, 10),
 		reason: reason,
 		meta:   map[string]string{},
 	}
 }
 
-func (s *unconfiguredSession) setStorage(storageSession storage.Session) {
+func (s *unconfiguredSession) setStorage(storageSession session.SessionHandle) {
 	if storageSession == nil {
 		return
 	}
@@ -123,7 +122,7 @@ func (s *unconfiguredSession) Close() error {
 	return nil
 }
 
-func (s *unconfiguredSession) Events() <-chan session.Event {
+func (s *unconfiguredSession) Events() <-chan session.AgentEvent {
 	return s.events
 }
 

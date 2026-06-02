@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"bytes"
@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	csession "github.com/nijaru/ion/session"
 )
 
 const sessionBundleVersion = 1
@@ -24,8 +22,8 @@ var (
 
 type preparedBundleRecord struct {
 	record   SessionBundleRecord
-	ancestry csession.SessionAncestry
-	events   []csession.Event
+	ancestry SessionAncestry
+	events   []Event
 }
 
 func (s *cantoStore) ExportSessionBundle(
@@ -55,7 +53,7 @@ func (s *cantoStore) ExportSessionBundle(
 		events := sess.Events()
 		rawEvents := make([]json.RawMessage, 0, len(events))
 		for _, event := range events {
-			raw, err := csession.MarshalEventJSON(event)
+			raw, err := MarshalEventJSON(event)
 			if err != nil {
 				return SessionBundle{}, fmt.Errorf("encode event %s: %w", event.ID, err)
 			}
@@ -238,9 +236,9 @@ func prepareSessionBundle(bundle SessionBundle) ([]preparedBundleRecord, error) 
 			return nil, fmt.Errorf("%w: session %s event checksum mismatch",
 				ErrSessionBundleIntegrity, id)
 		}
-		events := make([]csession.Event, 0, len(record.Events))
+		events := make([]Event, 0, len(record.Events))
 		for _, raw := range record.Events {
-			event, err := csession.UnmarshalEventJSON(raw)
+			event, err := UnmarshalEventJSON(raw)
 			if err != nil {
 				return nil, fmt.Errorf("%w: decode session %s event: %v",
 					ErrSessionBundleIntegrity, id, err)
@@ -321,7 +319,7 @@ func checksumHex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func sessionAncestryInfos(records []csession.SessionAncestry) []SessionAncestryInfo {
+func sessionAncestryInfos(records []SessionAncestry) []SessionAncestryInfo {
 	infos := make([]SessionAncestryInfo, 0, len(records))
 	for _, record := range records {
 		infos = append(infos, SessionAncestryInfo{
@@ -337,8 +335,8 @@ func sessionAncestryInfos(records []csession.SessionAncestry) []SessionAncestryI
 	return infos
 }
 
-func cantoAncestry(info SessionAncestryInfo) csession.SessionAncestry {
-	return csession.SessionAncestry{
+func cantoAncestry(info SessionAncestryInfo) SessionAncestry {
+	return SessionAncestry{
 		SessionID:        info.SessionID,
 		ParentSessionID:  info.ParentSessionID,
 		ForkPointEventID: info.ForkPointEventID,

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/apperrors"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 type printResult struct {
@@ -102,29 +102,29 @@ func runPromptTurn(
 				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
-			case session.ApprovalRequest:
+			case session.ApprovalRequestEvent:
 				cancelPrintTurn(agent)
 				return printResult{}, fmt.Errorf("unexpected approval request for %s", msg.ToolName)
-			case session.ToolCallStarted:
+			case session.ToolCallStartedEvent:
 				result.ToolCalls = append(result.ToolCalls, msg.ToolName)
-			case session.AgentDelta:
+			case session.AgentDeltaEvent:
 				agentText.WriteString(msg.Delta)
-			case session.AgentMessage:
+			case session.AgentMessageEvent:
 				if msg.Message != "" {
 					agentText.Reset()
 					agentText.WriteString(msg.Message)
 				}
-			case session.TokenUsage:
+			case session.TokenUsageEvent:
 				result.InputTokens += msg.Input
 				result.OutputTokens += msg.Output
 				result.Cost += msg.Cost
-			case session.Error:
+			case session.ErrorEvent:
 				cancelPrintTurn(agent)
 				if msg.Err == nil {
 					return printResult{}, fmt.Errorf("session error")
 				}
 				return printResult{}, fmt.Errorf("session error: %w", msg.Err)
-			case session.TurnFinished:
+			case session.TurnFinishedEvent:
 				seenTurnFinished = true
 			}
 			if seenTurnFinished {

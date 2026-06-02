@@ -18,8 +18,7 @@ import (
 	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/privacy"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 // terminal tracks a running process created by CreateTerminal.
@@ -63,11 +62,11 @@ func trimTerminalOutput(output string, limit int) string {
 }
 
 // Session is ion's ACP client session. It spawns an external agent process,
-// connects via JSON-RPC 2.0 over stdio, and translates ACP events to session.Event.
+// connects via JSON-RPC 2.0 over stdio, and translates ACP events to session.AgentEvent.
 type Session struct {
-	events  chan session.Event
-	store   storage.Store
-	storage storage.Session
+	events  chan session.AgentEvent
+	store   session.SessionStore
+	storage session.SessionHandle
 	policy  *PolicyEngine
 
 	conn            *acp.ClientSideConnection
@@ -94,7 +93,7 @@ type Session struct {
 
 func newSession() *Session {
 	return &Session{
-		events:           make(chan session.Event, 100),
+		events:           make(chan session.AgentEvent, 100),
 		policy:           NewPolicyEngine(),
 		done:             make(chan struct{}),
 		pendingApprovals: make(map[string]chan bool),
@@ -280,7 +279,7 @@ func (s *Session) Close() error {
 	return nil
 }
 
-func (s *Session) Events() <-chan session.Event { return s.events }
+func (s *Session) Events() <-chan session.AgentEvent { return s.events }
 
 func (s *Session) ID() string {
 	if s.storage != nil {
@@ -322,7 +321,7 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	if !s.emit(session.TurnStarted{Base: session.BaseNow()}) {
+	if !s.emit(session.TurnStartedEvent{Base: session.BaseNow()}) {
 		s.finishTurn()
 		turnCancel()
 		return fmt.Errorf("session closed")
@@ -338,9 +337,9 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		})
 		if err != nil && !isPromptCancellation(err) {
 			base := session.BaseNow()
-			s.emit(session.Error{Base: base, Err: fmt.Errorf("prompt: %w", err)})
+			s.emit(session.ErrorEvent{Base: base, Err: fmt.Errorf("prompt: %w", err)})
 		}
-		s.emit(session.TurnFinished{Base: session.BaseNow()})
+		s.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 	})
 
 	return nil
@@ -380,7 +379,7 @@ func (s *Session) Approve(ctx context.Context, requestID string, approved bool) 
 	return nil
 }
 
-func (s *Session) emit(ev session.Event) bool {
+func (s *Session) emit(ev session.AgentEvent) bool {
 	s.eventMu.RLock()
 	defer s.eventMu.RUnlock()
 	if s.eventClosed {
@@ -451,7 +450,7 @@ func (w redactingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// SessionUpdate implements acp.Client — translates ACP notifications to session.Event.
+// SessionUpdate implements acp.Client — translates ACP notifications to session.AgentEvent.
 func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
 	update := n.Update
 	usage, hasUsage := tokenUsageFromNotification(n)
@@ -459,7 +458,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 	switch {
 	case update.AgentMessageChunk != nil:
 		if update.AgentMessageChunk.Content.Text != nil {
-			s.emit(session.AgentDelta{
+			s.emit(session.AgentDeltaEvent{
 				Base:  session.BaseNow(),
 				Delta: update.AgentMessageChunk.Content.Text.Text,
 			})
@@ -467,7 +466,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 	case update.AgentThoughtChunk != nil:
 		if update.AgentThoughtChunk.Content.Text != nil {
-			s.emit(session.ThinkingDelta{
+			s.emit(session.ThinkingDeltaEvent{
 				Base:  session.BaseNow(),
 				Delta: update.AgentThoughtChunk.Content.Text.Text,
 			})
@@ -483,7 +482,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		if tc.RawInput != nil {
 			args = fmt.Sprintf("%v", tc.RawInput)
 		}
-		s.emit(session.ToolCallStarted{
+		s.emit(session.ToolCallStartedEvent{
 			Base:      session.BaseNow(),
 			ToolUseID: string(tc.ToolCallId),
 			ToolName:  toolName,
@@ -498,7 +497,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			if output == "" && tcu.RawOutput != nil {
 				output = fmt.Sprintf("%v", tcu.RawOutput)
 			}
-			s.emit(session.ToolResult{
+			s.emit(session.ToolResultEvent{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
@@ -506,7 +505,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 		case tcu.Status != nil && *tcu.Status == acp.ToolCallStatusFailed:
 			output := toolContentText(tcu.Content)
-			s.emit(session.ToolResult{
+			s.emit(session.ToolResultEvent{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
@@ -515,7 +514,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 		default:
 			if delta := toolContentText(tcu.Content); delta != "" {
-				s.emit(session.ToolOutputDelta{
+				s.emit(session.ToolOutputDeltaEvent{
 					Base:      session.BaseNow(),
 					ToolUseID: string(tcu.ToolCallId),
 					Delta:     delta,
@@ -525,7 +524,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 	case update.Plan != nil:
 		if len(update.Plan.Entries) > 0 {
-			s.emit(session.StatusChanged{
+			s.emit(session.StatusChangedEvent{
 				Base:   session.BaseNow(),
 				Status: update.Plan.Entries[0].Content,
 			})
@@ -571,7 +570,7 @@ func (s *Session) RequestPermission(
 	s.pendingApprovals[requestID] = ch
 	s.mu.Unlock()
 
-	if !s.emit(session.ApprovalRequest{
+	if !s.emit(session.ApprovalRequestEvent{
 		Base:        session.BaseNow(),
 		RequestID:   requestID,
 		ToolName:    toolName,
@@ -861,7 +860,7 @@ func toolContentText(content []acp.ToolCallContent) string {
 	return sb.String()
 }
 
-func cwdFromStorage(stor storage.Session) string {
+func cwdFromStorage(stor session.SessionHandle) string {
 	cwd := ""
 	if stor != nil {
 		if m := stor.Meta(); m.CWD != "" {

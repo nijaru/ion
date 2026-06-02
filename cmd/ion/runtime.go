@@ -9,16 +9,15 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
 
 func closeRuntimeHandles(
 	agent session.AgentSession,
-	sess storage.Session,
-	store storage.Store,
+	sess session.SessionHandle,
+	store session.SessionStore,
 ) error {
 	var errs []error
 	if agent != nil {
@@ -35,15 +34,15 @@ func closeRuntimeHandles(
 
 func recentSessionForContinue(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	cwd string,
-) (*storage.SessionInfo, error) {
+) (*session.SessionInfo, error) {
 	sessions, err := store.ListSessions(ctx, cwd)
 	if err != nil {
 		return nil, err
 	}
 	for i := range sessions {
-		if !storage.IsConversationSessionInfo(sessions[i]) {
+		if !session.IsConversationSessionInfo(sessions[i]) {
 			continue
 		}
 		return &sessions[i], nil
@@ -51,20 +50,20 @@ func recentSessionForContinue(
 	return nil, nil
 }
 
-func openStartupStore(noSession bool) (storage.Store, error) {
+func openStartupStore(noSession bool) (session.SessionStore, error) {
 	if noSession {
-		return storage.NewEphemeralCantoStore()
+		return session.NewEphemeralCantoStore()
 	}
 	dataDir, err := config.DefaultDataDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve data dir: %w", err)
 	}
-	return storage.NewCantoStore(dataDir)
+	return session.NewCantoStore(dataDir)
 }
 
 func startupSessionID(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	cwd string,
 	sessionID string,
 	resumeID string,
@@ -95,12 +94,12 @@ func startupSessionID(
 
 func openRuntime(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	cwd, branch string,
 	cfg *config.Config,
 	sessionID string,
 	persistResumedSessionModel bool,
-) (backend.Backend, storage.Session, error) {
+) (backend.Backend, session.SessionHandle, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		b := backend.NewUnconfigured(&runtimeCfg, err)
@@ -166,7 +165,7 @@ func openRuntime(
 		)
 	}
 
-	sess := storage.NewLazySession(store, cwd, modelName, branch)
+	sess := session.NewLazySession(store, cwd, modelName, branch)
 	b.SetSession(sess)
 	if err := b.Session().Open(ctx); err != nil {
 		return nil, nil, closeRuntimeOpenError(
@@ -183,7 +182,7 @@ func closeRuntimeOpenError(
 	label string,
 	err error,
 	agent session.AgentSession,
-	sess storage.Session,
+	sess session.SessionHandle,
 ) error {
 	if closeErr := closeRuntimeHandles(agent, sess, nil); closeErr != nil {
 		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))
@@ -193,13 +192,13 @@ func closeRuntimeOpenError(
 
 func syncSessionMetadata(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID, modelName, branch string,
 ) error {
 	if store == nil || sessionID == "" {
 		return nil
 	}
-	return store.UpdateSession(ctx, storage.SessionInfo{
+	return store.UpdateSession(ctx, session.SessionInfo{
 		ID:                sessionID,
 		Model:             modelName,
 		Branch:            branch,

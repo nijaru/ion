@@ -3,8 +3,7 @@ package app
 import (
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (r turnReducer) appendToolOutput(toolUseID, delta string, snapshot bool) {
@@ -27,14 +26,14 @@ func (r turnReducer) startToolCall(
 	if r.progress.LastToolUseID == "" {
 		r.progress.LastToolUseID = session.ShortID()
 	}
-	projected, _ := storage.Tool(title, "", false, timestamp)
+	projected, _ := session.Tool(title, "", false, timestamp)
 	entry := &projected
 	if r.inFlight.PendingTools == nil {
 		r.inFlight.PendingTools = make(map[string]*session.Entry)
 	}
 	r.inFlight.PendingTools[r.progress.LastToolUseID] = entry
-	if r.inFlight.Pending == nil || r.inFlight.Pending.Role == session.Tool ||
-		(r.inFlight.Pending.Role == session.Agent &&
+	if r.inFlight.Pending == nil || r.inFlight.Pending.Role == session.RoleTool ||
+		(r.inFlight.Pending.Role == session.RoleAgent &&
 			r.agentStreamEmpty() &&
 			r.inFlight.ReasonBuf == "") {
 		r.inFlight.Pending = entry
@@ -44,7 +43,7 @@ func (r turnReducer) startToolCall(
 
 func (r turnReducer) completeToolResult(
 	toolUseID string,
-	msg session.ToolResult,
+	msg session.ToolResultEvent,
 ) (session.Entry, bool) {
 	pending := r.pendingToolEntry(toolUseID)
 	if pending == nil {
@@ -53,7 +52,7 @@ func (r turnReducer) completeToolResult(
 	pending.Content = msg.Result
 	pending.IsError = msg.Error != nil
 	setEntryTimestamp(pending, msg.Timestamp)
-	entry, _ := storage.Tool(pending.Title, pending.Content, pending.IsError, pending.Timestamp)
+	entry, _ := session.Tool(pending.Title, pending.Content, pending.IsError, pending.Timestamp)
 	r.clearPendingTool(toolUseID, pending)
 	if len(r.inFlight.PendingTools) == 0 {
 		r.progress.Mode = stateIonizing
@@ -67,7 +66,7 @@ func (r turnReducer) pendingToolEntry(toolUseID string) *session.Entry {
 	if toolUseID != "" {
 		return r.inFlight.PendingTools[toolUseID]
 	}
-	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Tool {
+	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.RoleTool {
 		return r.inFlight.Pending
 	}
 	return nil

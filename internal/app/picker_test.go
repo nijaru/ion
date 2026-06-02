@@ -16,9 +16,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
@@ -365,7 +364,7 @@ func TestMatchingWorkspaceFileReferencesRejectsSymlinkDirEscapes(t *testing.T) {
 }
 
 func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
-	info := storage.SessionInfo{
+	info := session.SessionInfo{
 		ID:          "sess-1",
 		Model:       "local-api/qwen3.6:27b",
 		Branch:      "main",
@@ -386,7 +385,7 @@ func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
 }
 
 func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
-	info := storage.SessionInfo{
+	info := session.SessionInfo{
 		ID:          "sess-1",
 		LastPreview: "hello",
 	}
@@ -404,13 +403,13 @@ type blockingSessionListStore struct {
 	resumeOnlyStore
 	started  chan struct{}
 	release  chan struct{}
-	sessions []storage.SessionInfo
+	sessions []session.SessionInfo
 }
 
 func (s *blockingSessionListStore) ListSessions(
 	ctx context.Context,
 	cwd string,
-) ([]storage.SessionInfo, error) {
+) ([]session.SessionInfo, error) {
 	close(s.started)
 	select {
 	case <-s.release:
@@ -424,7 +423,7 @@ func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
 	store := &blockingSessionListStore{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
-		sessions: []storage.SessionInfo{{
+		sessions: []session.SessionInfo{{
 			ID:          "sess-1",
 			Title:       "Resume task",
 			LastPreview: "continue work",
@@ -503,7 +502,7 @@ func TestStartupPickerCmdLoadsInitialSessionPicker(t *testing.T) {
 	store := &blockingSessionListStore{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
-		sessions: []storage.SessionInfo{{
+		sessions: []session.SessionInfo{{
 			ID:          "sess-startup",
 			Title:       "Resume startup picker",
 			LastPreview: "continue after launch",
@@ -551,7 +550,7 @@ func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 
 	updated, cmd := model.Update(sessionPickerLoadedMsg{
 		requestID: 1,
-		sessions: []storage.SessionInfo{{
+		sessions: []session.SessionInfo{{
 			ID:    "stale",
 			Title: "stale session",
 		}},
@@ -570,13 +569,13 @@ func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 
 func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
 	items := []sessionPickerItem{
-		{info: storage.SessionInfo{
+		{info: session.SessionInfo{
 			ID:          "sess-1",
 			Title:       "Fix Resume Flow",
 			Summary:     "Workspace history",
 			LastPreview: "Recovered stalled session",
 		}},
-		{info: storage.SessionInfo{
+		{info: session.SessionInfo{
 			ID:          "sess-2",
 			Title:       "Tool output cleanup",
 			Summary:     "Background jobs",
@@ -599,8 +598,8 @@ func TestSessionPickerFilteringSelectsTopRankedMatch(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "sess-1", Title: "zz resume"}},
-			{info: storage.SessionInfo{ID: "sess-2", Title: "resume"}},
+			{info: session.SessionInfo{ID: "sess-1", Title: "zz resume"}},
+			{info: session.SessionInfo{ID: "sess-2", Title: "resume"}},
 		},
 		index: 1,
 	}
@@ -627,8 +626,8 @@ func TestSessionPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "sess-1", Title: "zz resume"}},
-			{info: storage.SessionInfo{ID: "sess-2", Title: "resume"}},
+			{info: session.SessionInfo{ID: "sess-1", Title: "zz resume"}},
+			{info: session.SessionInfo{ID: "sess-2", Title: "resume"}},
 		},
 		index: 1,
 	}
@@ -653,10 +652,10 @@ func TestSessionPickerIgnoresControlKeyText(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "sess-1", Title: "resume"}},
+			{info: session.SessionInfo{ID: "sess-1", Title: "resume"}},
 		},
 		filtered: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "sess-1", Title: "resume"}},
+			{info: session.SessionInfo{ID: "sess-1", Title: "resume"}},
 		},
 		query: "res",
 	}
@@ -684,7 +683,7 @@ func TestSessionPickerPageKeysJumpByPage(t *testing.T) {
 	items := make([]sessionPickerItem, 12)
 	for i := range items {
 		items[i] = sessionPickerItem{
-			info: storage.SessionInfo{
+			info: session.SessionInfo{
 				ID:    "sess-" + string(rune('a'+i)),
 				Title: "session " + string(rune('a'+i)),
 			},
@@ -714,7 +713,7 @@ func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	model.App.Width = 80
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{{
-			info: storage.SessionInfo{
+			info: session.SessionInfo{
 				ID:          "sess-1",
 				Model:       "local-api/qwen3.6:27b-uncensored",
 				Branch:      "feature/very-long-session-picker-branch-name",
@@ -2694,7 +2693,7 @@ func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testin
 }
 
 func TestNewModelAllowsNilBackendForPreStartupPicker(t *testing.T) {
-	store, err := storage.NewCantoStore(t.TempDir())
+	store, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
@@ -2719,7 +2718,7 @@ func TestNewModelAllowsNilBackendForPreStartupPicker(t *testing.T) {
 }
 
 func TestInitWithoutSessionDoesNotAwaitSessionEvent(t *testing.T) {
-	store, err := storage.NewCantoStore(t.TempDir())
+	store, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
@@ -2735,7 +2734,7 @@ func TestInitWithoutSessionDoesNotAwaitSessionEvent(t *testing.T) {
 	}
 
 	// Model with active session
-	activeSession := &stubSession{events: make(chan session.Event)}
+	activeSession := &stubSession{events: make(chan session.AgentEvent)}
 	activeStorageSession := &stubStorageSession{}
 	activeBackend := stubBackend{sess: activeSession}
 	modelWithSess := New(activeBackend, activeStorageSession, store, "/tmp/test", "main", "dev", nil)

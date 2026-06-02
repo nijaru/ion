@@ -9,8 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/privacy"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type localErrorMsg struct {
@@ -181,7 +180,7 @@ func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 	decision := session.DecideSteeringResult(msg.result, msg.err)
 	if decision.Action == session.BusyInputResultAccepted {
-		entry, _ := storage.EntrySystem(decision.NoticeContent, time.Time{})
+		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInput(msg.text)
@@ -213,7 +212,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 	})
 	if decision.Action == session.BusyInputResultAccepted {
 		m.turnReducer().setBackendQueuedInput(m.InFlight.QueuedSteering, decision.FollowUp)
-		entry, _ := storage.EntrySystem(decision.NoticeContent, time.Time{})
+		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
 	return m.queueBusyInputLocal(msg.text)
@@ -222,7 +221,7 @@ func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
 func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().queueTurn(text)
 	m.resetComposerDraft()
-	entry, _ := storage.EntrySystem("Queued follow-up", time.Time{})
+	entry, _ := session.EntrySystem("Queued follow-up", time.Time{})
 	return m, m.terminalCommit().Entries(entry)
 }
 
@@ -257,10 +256,10 @@ func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	decision := m.turnReducer().cancelActiveTurn(reason, time.Now())
-	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
+	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
-		m.persistEntryCmd("persist cancellation", storage.System{
+		m.persistEntryCmd("persist cancellation", session.StoreSystem{
 			Type:    "system",
 			Content: entry.Content,
 			TS:      now(),
@@ -305,7 +304,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.Error{
+				event: session.ErrorEvent{
 					Base:  session.BaseNow(),
 					Err:   errors.New("session unavailable"),
 					Fatal: true,
@@ -318,7 +317,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.Error{
+				event: session.ErrorEvent{
 					Base:  session.BaseNow(),
 					Err:   errors.New("session event stream unavailable"),
 					Fatal: true,
@@ -336,7 +335,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 }
 
 // handleSessionEvent processes events from the agent session channel.
-func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
+func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	turn := m.turnReducer()
 	if turn.drainingUntilTurnStarted() {
 		decision := session.DecideEventDrain(session.EventDrainInput{
@@ -353,78 +352,78 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	switch msg := ev.(type) {
-	case session.StatusChanged:
+	case session.StatusChangedEvent:
 		return m.handleStatusChanged(msg)
 
-	case session.TokenUsage:
+	case session.TokenUsageEvent:
 		return m.handleTokenUsage(msg)
 
-	case session.QueuedInputUpdated:
+	case session.QueuedInputUpdatedEvent:
 		return m.handleQueuedInputUpdated(msg)
 
-	case session.TurnStarted:
+	case session.TurnStartedEvent:
 		return m.handleTurnStarted(msg)
 
-	case session.TurnSavePoint:
+	case session.TurnSavePointEvent:
 		return m, m.awaitSessionEvent()
 
-	case session.TurnFinished:
+	case session.TurnFinishedEvent:
 		return m.handleTurnFinished()
 
-	case session.ThinkingDelta:
+	case session.ThinkingDeltaEvent:
 		return m.handleThinkingDelta(msg)
 
-	case session.UserMessage:
+	case session.UserMessageEvent:
 		return m.handleUserMessage(msg)
 
-	case session.AgentDelta:
+	case session.AgentDeltaEvent:
 		return m.handleAgentDelta(msg)
 
-	case session.AgentMessage:
+	case session.AgentMessageEvent:
 		return m.handleAgentMessage(msg)
 
-	case session.ToolCallStarted:
+	case session.ToolCallStartedEvent:
 		return m.handleToolCallStarted(msg)
 
-	case session.ToolOutputDelta:
+	case session.ToolOutputDeltaEvent:
 		return m.handleToolOutputDelta(msg)
 
-	case session.ToolResult:
+	case session.ToolResultEvent:
 		return m.handleToolResult(msg)
 
-	case session.VerificationResult:
+	case session.VerificationResultEvent:
 		return m, m.awaitSessionEvent()
 
-	case session.ChildRequested:
+	case session.ChildRequestedEvent:
 		return m.handleChildRequested(msg)
 
-	case session.ChildStarted:
+	case session.ChildStartedEvent:
 		return m.handleChildStarted(msg)
 
-	case session.ChildDelta:
+	case session.ChildDeltaEvent:
 		return m.handleChildDelta(msg)
 
-	case session.ChildCompleted:
+	case session.ChildCompletedEvent:
 		return m.handleChildCompleted(msg)
 
-	case session.ChildBlocked:
+	case session.ChildBlockedEvent:
 		return m.handleChildBlocked(msg)
 
-	case session.ChildFailed:
+	case session.ChildFailedEvent:
 		return m.handleChildFailed(msg)
 
-	case session.ChildCanceled:
+	case session.ChildCanceledEvent:
 		return m.handleChildCanceled(msg)
 
-	case session.Error:
+	case session.ErrorEvent:
 		return m.handleSessionError(msg.Err, true)
 	}
 
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, ok := storage.EntryUser(msg.Message, msg.Timestamp)
+func (m Model) handleUserMessage(msg session.UserMessageEvent) (Model, tea.Cmd) {
+	entry, ok := session.EntryUser(msg.Message, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}
@@ -438,7 +437,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	}
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
-	cmds = append(cmds, m.persistEntryCmd("persist stream close error", storage.System{
+	cmds = append(cmds, m.persistEntryCmd("persist stream close error", session.StoreSystem{
 		Type:    "system",
 		Content: entry.Content,
 		TS:      now(),
@@ -452,7 +451,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		AwaitTerminal: awaitTerminal,
 	})
 	var cmds []tea.Cmd
-	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
+	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 
 	if decision.RoutingStop != nil {
@@ -470,7 +469,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.turnReducer().failTurn(decision.DisplayError, time.Now())
 	if decision.PersistSystem {
-		cmds = append(cmds, m.persistEntryCmd("persist session error", storage.System{
+		cmds = append(cmds, m.persistEntryCmd("persist session error", session.StoreSystem{
 			Type:    "system",
 			Content: entry.Content,
 			TS:      now(),
@@ -489,7 +488,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	if !m.InFlight.Thinking {
 		m.progressReducer().clearLocalBusyStatus()
 	}
-	entry, _ := storage.EntrySystem("Error: "+err.Error(), time.Time{})
+	entry, _ := session.EntrySystem("Error: "+err.Error(), time.Time{})
 	return m, m.terminalCommit().Entries(entry)
 }
 
@@ -505,27 +504,27 @@ func isLocalBusyStatus(status string) bool {
 		isCompactingStatus(trimmed)
 }
 
-func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
+func (m Model) handleStatusChanged(msg session.StatusChangedEvent) (Model, tea.Cmd) {
 	decision := m.turnReducer().applyStatusChanged(msg)
 	persistTimestamp := msg.Timestamp
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp
 	}
-	return m, batchCmds(m.persistEntryCmd("persist status", storage.Status{
+	return m, batchCmds(m.persistEntryCmd("persist status", session.StoreStatus{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(persistTimestamp),
 	}), m.awaitSessionEvent())
 }
 
-func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdated) (Model, tea.Cmd) {
+func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdatedEvent) (Model, tea.Cmd) {
 	m.turnReducer().setBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
+func (m Model) handleTokenUsage(msg session.TokenUsageEvent) (Model, tea.Cmd) {
 	m.turnReducer().applyTokenUsage(msg)
-	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", storage.TokenUsage{
+	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
 		Type:   "token_usage",
 		Input:  msg.Input,
 		Output: msg.Output,
@@ -543,7 +542,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 			),
 		)
 		if entry.Content != "" {
-			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", storage.System{
+			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
 				Type:    "system",
 				Content: entry.Content,
 				TS:      entryUnix(msg.Timestamp),
@@ -562,7 +561,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	return m, batchCmds(cmds...)
 }
 
-func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
+func (m Model) handleTurnStarted(msg session.TurnStartedEvent) (Model, tea.Cmd) {
 	m.turnReducer().startTurn(msg.Timestamp, time.Now())
 	return m, m.awaitSessionEvent()
 }
@@ -599,17 +598,17 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	return m, tea.Sequence(cmds...)
 }
 
-func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
+func (m Model) handleThinkingDelta(msg session.ThinkingDeltaEvent) (Model, tea.Cmd) {
 	m.turnReducer().appendThinkingDelta(msg.AgentID, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
+func (m Model) handleAgentDelta(msg session.AgentDeltaEvent) (Model, tea.Cmd) {
 	m.turnReducer().appendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
+func (m Model) handleAgentMessage(msg session.AgentMessageEvent) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
 		return m.handleSubagentMessage(msg)
 	}
@@ -619,7 +618,7 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cmd) {
+func (m Model) handleToolCallStarted(msg session.ToolCallStartedEvent) (Model, tea.Cmd) {
 	m.turnReducer().startToolCall(
 		msg.ToolUseID,
 		msg.Timestamp,
@@ -628,12 +627,12 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cm
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
+func (m Model) handleToolOutputDelta(msg session.ToolOutputDeltaEvent) (Model, tea.Cmd) {
 	m.turnReducer().appendToolOutput(msg.ToolUseID, msg.Delta, msg.Snapshot)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
+func (m Model) handleToolResult(msg session.ToolResultEvent) (Model, tea.Cmd) {
 	toolUseID := msg.ToolUseID
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID
@@ -644,7 +643,7 @@ func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func tokenUsageTotal(msg session.TokenUsage) int {
+func tokenUsageTotal(msg session.TokenUsageEvent) int {
 	if msg.Total > 0 {
 		return msg.Total
 	}

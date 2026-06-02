@@ -10,8 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func TestP1InlineScenarioMatrix(t *testing.T) {
@@ -58,23 +57,23 @@ func p1MatrixSubmitStreamToolCommit(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.UserMessage{Message: "inspect workspace"},
-		session.TurnStarted{},
-		session.TokenUsage{Input: 12, Output: 4, Cost: 0.001},
-		session.AgentDelta{Delta: "streaming answer"},
-		session.ToolCallStarted{
+		session.UserMessageEvent{Message: "inspect workspace"},
+		session.TurnStartedEvent{},
+		session.TokenUsageEvent{Input: 12, Output: 4, Cost: 0.001},
+		session.AgentDeltaEvent{Delta: "streaming answer"},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"README.md"}`,
 		},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
-		session.ToolResult{
+		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.ToolResultEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Result:    "# ion\n",
 		},
-		session.AgentMessage{Message: "done"},
-		session.TurnFinished{},
+		session.AgentMessageEvent{Message: "done"},
+		session.TurnFinishedEvent{},
 	)
 
 	if model.Progress.Mode != stateComplete {
@@ -93,33 +92,33 @@ func p1MatrixFileToolRowsKeepShellFrame(t *testing.T) {
 	model = applyP1Events(
 		t,
 		model,
-		session.TurnStarted{},
-		session.ToolCallStarted{
+		session.TurnStartedEvent{},
+		session.ToolCallStartedEvent{
 			ToolUseID: "read-1",
 			ToolName:  "read",
 			Args:      `{"path":"ai/STATUS.md"}`,
 		},
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "find-1",
 			ToolName:  "find",
 			Args:      `{"pattern":"ai/*.md"}`,
 		},
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "grep-1",
 			ToolName:  "grep",
 			Args:      `{"pattern":"needle","path":"ai"}`,
 		},
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "ls-1",
 			ToolName:  "ls",
 			Args:      `{"path":"ai"}`,
 		},
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "write-1",
 			ToolName:  "write",
 			Args:      `{"path":"notes/todo.md"}`,
 		},
-		session.ToolCallStarted{
+		session.ToolCallStartedEvent{
 			ToolUseID: "edit-1",
 			ToolName:  "edit",
 			Args:      `{"path":"src/main.go"}`,
@@ -145,16 +144,16 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.TurnStarted{},
-		session.StatusChanged{Status: "Running tool..."},
-		session.TokenUsage{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
-		session.AgentDelta{Delta: "working"},
-		session.ToolCallStarted{
+		session.TurnStartedEvent{},
+		session.StatusChangedEvent{Status: "Running tool..."},
+		session.TokenUsageEvent{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
+		session.AgentDeltaEvent{Delta: "working"},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
 		},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "ion-tmux-"},
+		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "ion-tmux-"},
 	)
 
 	view := assertP1ShellFrame(t, model)
@@ -167,7 +166,7 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 
 func p1MatrixQueuedInputVisible(t *testing.T) {
 	model := readyModel(t)
-	model = applyP1Events(t, model, session.TurnStarted{})
+	model = applyP1Events(t, model, session.TurnStartedEvent{})
 	model.Input.Composer.SetValue("follow up after this")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -187,7 +186,7 @@ func p1MatrixQueuedInputVisible(t *testing.T) {
 
 func p1MatrixSettingsCommandLocalWhileActive(t *testing.T) {
 	model := readyModel(t)
-	model = applyP1Events(t, model, session.TurnStarted{})
+	model = applyP1Events(t, model, session.TurnStartedEvent{})
 	model.Input.Composer.SetValue("/settings")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -220,8 +219,8 @@ func p1MatrixSettingsSelectionLocalWhileActive(t *testing.T) {
 	model = applyP1Events(
 		t,
 		model,
-		session.TurnStarted{},
-		session.StatusChanged{Status: "Running bash..."},
+		session.TurnStartedEvent{},
+		session.StatusChangedEvent{Status: "Running bash..."},
 	)
 
 	updated, cmd := model.handleCommand("/settings")
@@ -300,7 +299,7 @@ func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
 		t.Run(tt.command, func(t *testing.T) {
 			model := readyModel(t)
 			model.Model.Config = &config.Config{}
-			model = applyP1Events(t, model, session.TurnStarted{})
+			model = applyP1Events(t, model, session.TurnStartedEvent{})
 			model.Input.Composer.SetValue(tt.command)
 
 			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -333,14 +332,14 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 	tests := []string{"/help", "/session", "/cost", "/tools", "/status", "/skills"}
 	for _, command := range tests {
 		t.Run(command, func(t *testing.T) {
-			sess := &stubSession{events: make(chan session.Event)}
+			sess := &stubSession{events: make(chan session.AgentEvent)}
 			model := readyModel(t)
 			model.Model.Session = sess
 			model = applyP1Events(
 				t,
 				model,
-				session.TurnStarted{},
-				session.AgentDelta{Delta: "still running"},
+				session.TurnStartedEvent{},
+				session.AgentDeltaEvent{Delta: "still running"},
 			)
 			model.Input.Composer.SetValue(command)
 
@@ -389,13 +388,13 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 }
 
 func p1MatrixCancelActiveTool(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model = applyP1Events(
 		t, model,
-		session.TurnStarted{},
-		session.ToolCallStarted{
+		session.TurnStartedEvent{},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 60"}`,
@@ -419,8 +418,8 @@ func p1MatrixProviderError(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.TurnStarted{},
-		session.Error{Err: errors.New("provider failed while streaming")},
+		session.TurnStartedEvent{},
+		session.ErrorEvent{Err: errors.New("provider failed while streaming")},
 	)
 
 	if model.Progress.Mode != stateError {
@@ -438,10 +437,10 @@ func p1MatrixResizeWrapSafe(t *testing.T) {
 	model = testModel(t, updated)
 	model = applyP1Events(
 		t, model,
-		session.TurnStarted{},
-		session.StatusChanged{Status: strings.Repeat("streaming very long status ", 4)},
-		session.AgentDelta{Delta: strings.Repeat("long streamed output ", 8)},
-		session.ToolCallStarted{
+		session.TurnStartedEvent{},
+		session.StatusChangedEvent{Status: strings.Repeat("streaming very long status ", 4)},
+		session.AgentDeltaEvent{Delta: strings.Repeat("long streamed output ", 8)},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "grep",
 			Args:      `{"pattern":"very long search pattern that wraps"}`,
@@ -475,7 +474,7 @@ func p1MatrixPickerOverlaysKeepShellFrame(t *testing.T) {
 	view := assertP1ShellFrame(t, model)
 	assertP1ViewContains(t, view, "Pick a command")
 
-	item := sessionPickerItem{info: storage.SessionInfo{
+	item := sessionPickerItem{info: session.SessionInfo{
 		ID:          "session-1",
 		CWD:         model.App.Workdir,
 		Model:       "fake/model",
@@ -497,9 +496,9 @@ func p1MatrixPickerOverlaysKeepShellFrame(t *testing.T) {
 func p1MatrixResumeProjection(t *testing.T) {
 	model := readyModel(t)
 	rendered := model.RenderEntries(
-		session.Entry{Role: session.User, Content: "read status"},
-		session.Entry{Role: session.Tool, Title: "read ai/STATUS.md", Content: "phase\nfocus\n"},
-		session.Entry{Role: session.Agent, Content: "status loaded"},
+		session.Entry{Role: session.RoleUser, Content: "read status"},
+		session.Entry{Role: session.RoleTool, Title: "read ai/STATUS.md", Content: "phase\nfocus\n"},
+		session.Entry{Role: session.RoleAgent, Content: "status loaded"},
 	)
 
 	joined := ansi.Strip(strings.Join(rendered, "\n"))
@@ -516,7 +515,7 @@ func p1MatrixLocalStatus(t *testing.T) {
 	assertP1ViewContains(t, view, "Loading settings")
 }
 
-func applyP1Events(t *testing.T, model Model, events ...session.Event) Model {
+func applyP1Events(t *testing.T, model Model, events ...session.AgentEvent) Model {
 	t.Helper()
 	for _, ev := range events {
 		updated, _ := model.Update(ev)

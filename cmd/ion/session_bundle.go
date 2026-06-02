@@ -8,21 +8,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type exportedSessionBundle struct {
-	Bundle storage.SessionBundle
+	Bundle session.SessionBundle
 	Path   string
 }
 
 func exportSessionBundleFile(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID string,
 	path string,
 ) (exportedSessionBundle, error) {
-	exporter, ok := store.(storage.SessionBundleExporter)
+	exporter, ok := store.(session.SessionBundleExporter)
 	if !ok {
 		return exportedSessionBundle{}, fmt.Errorf("session store does not support export")
 	}
@@ -47,10 +47,10 @@ func exportSessionBundleFile(
 
 func importSessionBundleFile(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	path string,
-) ([]storage.SessionInfo, error) {
-	importer, ok := store.(storage.SessionBundleImporter)
+) ([]session.SessionInfo, error) {
+	importer, ok := store.(session.SessionBundleImporter)
 	if !ok {
 		return nil, fmt.Errorf("session store does not support import")
 	}
@@ -62,7 +62,7 @@ func importSessionBundleFile(
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	var bundle storage.SessionBundle
+	var bundle session.SessionBundle
 	if err := json.Unmarshal(raw, &bundle); err != nil {
 		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
 	}
@@ -79,7 +79,7 @@ func printSessionBundleExport(w io.Writer, exported exportedSessionBundle) {
 	)
 }
 
-func printSessionBundleImport(w io.Writer, imported []storage.SessionInfo) {
+func printSessionBundleImport(w io.Writer, imported []session.SessionInfo) {
 	switch len(imported) {
 	case 0:
 		fmt.Fprintln(w, "Imported 0 sessions")

@@ -1,9 +1,7 @@
-package tool
+package session
 
 import (
 	"fmt"
-
-	"github.com/nijaru/ion/session"
 )
 
 // ReplayAction describes how the tool boundary should handle a replayed call.
@@ -27,10 +25,10 @@ type ACRFence struct{}
 // Validate decides whether the caller should execute the tool, reuse a prior
 // completed output, or stop because prior execution is ambiguous.
 func (ACRFence) Validate(
-	s *session.Session,
+	s *Session,
 	idempotencyKey string,
 ) (ReplayDecision, error) {
-	record, ok, err := session.FindToolExecutionByKey(s, idempotencyKey)
+	record, ok, err := FindToolExecutionByKey(s, idempotencyKey)
 	if err != nil {
 		return ReplayDecision{}, fmt.Errorf("acrfence: lookup tool execution: %w", err)
 	}

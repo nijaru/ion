@@ -9,7 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
@@ -55,7 +55,7 @@ func TestTerminalCommitDefersEveryScrollbackCommit(t *testing.T) {
 		{
 			name: "entries",
 			cmd: model.terminalCommit().Entries(
-				session.Entry{Role: session.System, Content: "notice"},
+				session.Entry{Role: session.RoleSystem, Content: "notice"},
 			),
 		},
 		{name: "help", cmd: model.terminalCommit().Help("help text")},

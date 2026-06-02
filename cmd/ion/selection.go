@@ -9,8 +9,8 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 var (
@@ -132,7 +132,7 @@ func firstNonEmpty(values ...string) string {
 
 func applySessionConfigFromMetadata(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID string,
 	cfg *config.Config,
 ) error {

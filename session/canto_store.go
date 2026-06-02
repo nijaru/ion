@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -10,14 +10,12 @@ import (
 	"sync"
 	"time"
 
-	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/session"
 	_ "modernc.org/sqlite"
 )
 
 type cantoStore struct {
 	dbPath string
-	canto  *session.SQLiteStore
+	canto  *SQLiteStore
 	db     *sql.DB // Direct access for inputs and index
 
 	mu sync.Mutex
@@ -29,8 +27,8 @@ const (
 )
 
 const (
-	ionSystemEvent   session.EventType = "ion_system"
-	ionSubagentEvent session.EventType = "ion_subagent"
+	ionSystemEvent   EventType = "ion_system"
+	ionSubagentEvent EventType = "ion_subagent"
 )
 
 const (
@@ -58,7 +56,7 @@ func metadataTime(value int64) time.Time {
 	}
 }
 
-func NewCantoStore(root string) (Store, error) {
+func NewCantoStore(root string) (SessionStore, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
@@ -69,16 +67,16 @@ func NewCantoStore(root string) (Store, error) {
 	return newCantoStore(dbPath, dsn)
 }
 
-func NewEphemeralCantoStore() (Store, error) {
+func NewEphemeralCantoStore() (SessionStore, error) {
 	dsn := fmt.Sprintf(
 		"file:ion-%s?mode=memory&cache=shared&_pragma=busy_timeout(5000)",
-		ionsession.ShortID(),
+		ShortID(),
 	)
 	return newCantoStore("", dsn)
 }
 
-func newCantoStore(dbPath, dsn string) (Store, error) {
-	cStore, err := session.NewSQLiteStore(dsn)
+func newCantoStore(dbPath, dsn string) (SessionStore, error) {
+	cStore, err := NewSQLiteStore(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -177,16 +175,16 @@ func (s *cantoStore) init() error {
 	return nil
 }
 
-func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
+func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (SessionHandle, error) {
 	now := time.Now().UTC()
-	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
+	id := fmt.Sprintf("%d-%s", now.Unix(), ShortID())
 	return s.OpenSessionWithID(ctx, id, cwd, model, branch)
 }
 
 func (s *cantoStore) OpenSessionWithID(
 	ctx context.Context,
 	id, cwd, model, branch string,
-) (Session, error) {
+) (SessionHandle, error) {
 	now := time.Now().UTC()
 	storedNow := metadataTimestamp(now)
 
@@ -208,7 +206,7 @@ func (s *cantoStore) OpenSessionWithID(
 	return &cantoSession{
 		id:    id,
 		store: s,
-		meta: Meta{
+		meta: StoreMeta{
 			ID:        id,
 			CWD:       cwd,
 			Model:     model,
@@ -218,8 +216,8 @@ func (s *cantoStore) OpenSessionWithID(
 	}, nil
 }
 
-func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, error) {
-	var m Meta
+func (s *cantoStore) ResumeSession(ctx context.Context, id string) (SessionHandle, error) {
+	var m StoreMeta
 	var ca int64
 	err := s.db.QueryRowContext(ctx, "SELECT id, cwd, model, branch, created_at FROM session_meta WHERE id = ?", id).
 		Scan(&m.ID, &m.CWD, &m.Model, &m.Branch, &ca)
@@ -238,16 +236,16 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 func (s *cantoStore) ForkSession(
 	ctx context.Context,
 	parentID string,
-	opts ForkOptions,
-) (Session, error) {
+	opts SessionForkOptions,
+) (SessionHandle, error) {
 	parent, err := s.sessionInfo(ctx, parentID)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	storedNow := metadataTimestamp(now)
-	childID := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
-	_, err = s.canto.ForkWithOptions(ctx, parentID, childID, session.ForkOptions{
+	childID := fmt.Sprintf("%d-%s", now.Unix(), ShortID())
+	_, err = s.canto.ForkWithOptions(ctx, parentID, childID, ForkOptions{
 		BranchLabel: strings.TrimSpace(opts.Label),
 		ForkReason:  strings.TrimSpace(opts.Reason),
 	})
@@ -279,7 +277,7 @@ func (s *cantoStore) ForkSession(
 	return &cantoSession{
 		id:    childID,
 		store: s,
-		meta: Meta{
+		meta: StoreMeta{
 			ID:        childID,
 			CWD:       parent.CWD,
 			Model:     parent.Model,
@@ -347,7 +345,7 @@ func (s *cantoStore) SessionTree(ctx context.Context, sessionID string) (Session
 
 func (s *cantoStore) sessionInfoFromAncestry(
 	ctx context.Context,
-	record session.SessionAncestry,
+	record SessionAncestry,
 ) SessionInfo {
 	info, err := s.sessionInfo(ctx, record.SessionID)
 	if err == nil {
@@ -441,7 +439,7 @@ func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]st
 	return inputs, nil
 }
 
-func (s *cantoStore) Canto() *session.SQLiteStore {
+func (s *cantoStore) Canto() *SQLiteStore {
 	return s.canto
 }
 

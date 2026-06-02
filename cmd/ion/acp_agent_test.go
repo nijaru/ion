@@ -13,7 +13,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	ionacp "github.com/nijaru/ion/internal/acp"
-	ionsession "github.com/nijaru/ion/internal/session"
+	session "github.com/nijaru/ion/session"
 )
 
 type acpTestClient struct {
@@ -108,18 +108,18 @@ func (f *fakeACPRuntimeFactory) Open(
 	_ context.Context,
 	cwd string,
 	_ string,
-) (ionsession.AgentSession, func() error, error) {
+) (session.AgentSession, func() error, error) {
 	f.cwd = cwd
 	return f.session, func() error { return f.session.Close() }, nil
 }
 
 type fakeACPAgentSession struct {
 	id        string
-	events    chan ionsession.Event
+	events    chan session.AgentEvent
 	submitted chan string
 	canceled  chan struct{}
 	closed    chan struct{}
-	script    []ionsession.Event
+	script    []session.AgentEvent
 
 	mu           sync.Mutex
 	mode         ionacp.Mode
@@ -127,10 +127,10 @@ type fakeACPAgentSession struct {
 	approvals    []bool
 }
 
-func newFakeACPAgentSession(id string, script ...ionsession.Event) *fakeACPAgentSession {
+func newFakeACPAgentSession(id string, script ...session.AgentEvent) *fakeACPAgentSession {
 	return &fakeACPAgentSession{
 		id:        id,
-		events:    make(chan ionsession.Event, 16),
+		events:    make(chan session.AgentEvent, 16),
 		submitted: make(chan string, 1),
 		canceled:  make(chan struct{}, 1),
 		closed:    make(chan struct{}),
@@ -190,7 +190,7 @@ func (s *fakeACPAgentSession) Close() error {
 	return nil
 }
 
-func (s *fakeACPAgentSession) Events() <-chan ionsession.Event { return s.events }
+func (s *fakeACPAgentSession) Events() <-chan session.AgentEvent { return s.events }
 
 func (s *fakeACPAgentSession) ID() string { return s.id }
 
@@ -217,16 +217,16 @@ func TestIonACPAgentStreamsSessionUpdates(t *testing.T) {
 	readPath := workdir + "/README.md"
 	fakeSession := newFakeACPAgentSession(
 		"session-1",
-		ionsession.TurnStarted{},
-		ionsession.AgentDelta{Delta: "hello"},
-		ionsession.ThinkingDelta{Delta: "thinking"},
-		ionsession.ToolCallStarted{
+		session.TurnStartedEvent{},
+		session.AgentDeltaEvent{Delta: "hello"},
+		session.ThinkingDeltaEvent{Delta: "thinking"},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"` + readPath + `"}`,
 		},
-		ionsession.ToolResult{ToolUseID: "tool-1", Result: "file contents"},
-		ionsession.TurnFinished{},
+		session.ToolResultEvent{ToolUseID: "tool-1", Result: "file contents"},
+		session.TurnFinishedEvent{},
 	)
 	factory := &fakeACPRuntimeFactory{session: fakeSession}
 	agent := newIonACPAgent(factory, "test-version", ionacp.ModeEdit)
@@ -387,7 +387,7 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 		t.Fatal("timed out waiting for first prompt submission")
 	}
 
-	fakeSession.events <- ionsession.TurnFinished{}
+	fakeSession.events <- session.TurnFinishedEvent{}
 	done := make(chan error, 1)
 	go func() {
 		_, err := agent.Prompt(t.Context(), acp.PromptRequest{
@@ -408,7 +408,7 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 		t.Fatal("timed out waiting for second prompt submission")
 	}
 
-	fakeSession.events <- ionsession.TurnFinished{}
+	fakeSession.events <- session.TurnFinishedEvent{}
 	select {
 	case err := <-done:
 		if err != nil {
@@ -420,20 +420,20 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 }
 
 func TestACPToolUpdatesRedactSensitivePayloads(t *testing.T) {
-	start := acpToolCallStart(t.TempDir(), ionsession.ToolCallStarted{
+	start := acpToolCallStart(t.TempDir(), session.ToolCallStartedEvent{
 		ToolUseID: "tool-1",
 		ToolName:  "bash",
 		Args:      `{"command":"curl -H 'Authorization: Bearer abc.def-123' https://jane.doe@example.com"}`,
 	})
 	assertACPUpdateRedacted(t, start, []string{"abc.def-123", "jane.doe@example.com"})
 
-	delta := acpToolOutputDelta(ionsession.ToolOutputDelta{
+	delta := acpToolOutputDelta(session.ToolOutputDeltaEvent{
 		ToolUseID: "tool-1",
 		Delta:     "token=sk-test1234567890",
 	})
 	assertACPUpdateRedacted(t, delta, []string{"sk-test1234567890"})
 
-	result := acpToolCallResult(ionsession.ToolResult{
+	result := acpToolCallResult(session.ToolResultEvent{
 		ToolUseID: "tool-1",
 		Result:    "email jane.doe@example.com token=sk-test1234567890",
 	})

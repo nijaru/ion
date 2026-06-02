@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -15,20 +14,20 @@ type materializedSession interface {
 }
 
 type sessionOpenerWithID interface {
-	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (Session, error)
+	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (SessionHandle, error)
 }
 
 type LazySession struct {
 	mu      sync.Mutex
-	store   Store
+	store   SessionStore
 	id      string
 	meta    Metadata
-	created Session
+	created SessionHandle
 }
 
-func NewLazySession(store Store, cwd, model, branch string) *LazySession {
+func NewLazySession(store SessionStore, cwd, model, branch string) *LazySession {
 	now := time.Now()
-	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
+	id := fmt.Sprintf("%d-%s", now.Unix(), ShortID())
 	return &LazySession{
 		store: store,
 		id:    id,
@@ -52,7 +51,7 @@ func (s *LazySession) Materialized() bool {
 	return s.created != nil
 }
 
-func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
+func (s *LazySession) Ensure(ctx context.Context) (SessionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.created != nil {
@@ -62,7 +61,7 @@ func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
 		return nil, fmt.Errorf("open lazy session %s: storage store is not configured", s.id)
 	}
 	var (
-		created Session
+		created SessionHandle
 		err     error
 	)
 	if opener, ok := s.store.(sessionOpenerWithID); ok {
@@ -79,7 +78,7 @@ func (s *LazySession) Ensure(ctx context.Context) (Session, error) {
 	return created, nil
 }
 
-func (s *LazySession) Append(ctx context.Context, event Event) error {
+func (s *LazySession) Append(ctx context.Context, event StoreEvent) error {
 	s.mu.Lock()
 	created := s.created
 	s.mu.Unlock()
@@ -122,7 +121,7 @@ func (s *LazySession) ModelMessages(ctx context.Context) ([]llm.Message, error) 
 	return reader.ModelMessages(ctx)
 }
 
-func (s *LazySession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
+func (s *LazySession) Entries(ctx context.Context) ([]Entry, error) {
 	s.mu.Lock()
 	created := s.created
 	s.mu.Unlock()
@@ -162,7 +161,7 @@ func (s *LazySession) Close() error {
 	return created.Close()
 }
 
-func IsMaterialized(sess Session) bool {
+func IsMaterialized(sess SessionHandle) bool {
 	if sess == nil {
 		return false
 	}

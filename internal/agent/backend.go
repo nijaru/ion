@@ -8,18 +8,17 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/skills"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
+	"github.com/nijaru/ion/session"
 )
 
 // Backend implements backend.Backend using the agent loop.
 type Backend struct {
 	cfg      *config.Config
-	store    storage.Store
-	sess     storage.Session
+	store    session.SessionStore
+	sess     session.SessionHandle
 	provider llm.Provider
 	session  *SessionAdapter
 
@@ -109,7 +108,7 @@ func (b *Backend) Session() session.AgentSession {
 }
 
 // SetStore sets the storage store.
-func (b *Backend) SetStore(store storage.Store) {
+func (b *Backend) SetStore(store session.SessionStore) {
 	b.store = store
 	if b.session != nil {
 		b.session.SetStore(store)
@@ -117,7 +116,7 @@ func (b *Backend) SetStore(store storage.Store) {
 }
 
 // SetSession sets the storage session.
-func (b *Backend) SetSession(sess storage.Session) {
+func (b *Backend) SetSession(sess session.SessionHandle) {
 	b.sess = sess
 	if b.session != nil {
 		b.session.SetSession(sess)

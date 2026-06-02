@@ -5,8 +5,8 @@ import "time"
 // Event is the base interface for all strongly typed session events.
 // These are decoupled from the host UI (e.g. Bubble Tea) and represent
 // the domain model of a native or ACP agent session.
-type Event interface {
-	isEvent()
+type AgentEvent interface {
+	isAgentEvent()
 }
 
 // Base provides common fields for events in a swarm/multi-agent session.
@@ -28,75 +28,75 @@ func BaseNow() Base {
 }
 
 // MetadataLoaded fires when a session's metadata is loaded or created.
-type MetadataLoaded struct {
+type MetadataLoadedEvent struct {
 	Base
 	SessionID string `json:"session_id"`
 }
 
-func (e MetadataLoaded) isEvent() {}
+func (e MetadataLoadedEvent) isAgentEvent() {}
 
 // StatusChanged fires when the agent updates its internal status
 // or progresses on a long-running step.
-type StatusChanged struct {
+type StatusChangedEvent struct {
 	Base
 	Status string `json:"status"`
 }
 
-func (e StatusChanged) isEvent() {}
+func (e StatusChangedEvent) isAgentEvent() {}
 
 // PlanUpdated fires when the agent's internal plan of execution changes.
-type PlanUpdated struct {
+type PlanUpdatedEvent struct {
 	Base
 	Plan string `json:"plan"`
 }
 
-func (e PlanUpdated) isEvent() {}
+func (e PlanUpdatedEvent) isAgentEvent() {}
 
 // AgentDelta is an incremental chunk of agent output text.
-type AgentDelta struct {
+type AgentDeltaEvent struct {
 	Base
 	Delta string `json:"delta"`
 }
 
-func (e AgentDelta) isEvent() {}
+func (e AgentDeltaEvent) isAgentEvent() {}
 
 // ThinkingDelta is an incremental chunk of agent reasoning/thinking text.
-type ThinkingDelta struct {
+type ThinkingDeltaEvent struct {
 	Base
 	Delta string `json:"delta"`
 }
 
-func (e ThinkingDelta) isEvent() {}
+func (e ThinkingDeltaEvent) isAgentEvent() {}
 
 // UserMessage fires when a user message is committed to the durable session.
-type UserMessage struct {
+type UserMessageEvent struct {
 	Base
 	Message string `json:"message"`
 }
 
-func (e UserMessage) isEvent() {}
+func (e UserMessageEvent) isAgentEvent() {}
 
 // AgentMessage fires when a complete agent message is committed.
-type AgentMessage struct {
+type AgentMessageEvent struct {
 	Base
 	Message   string `json:"message"`
 	Reasoning string `json:"reasoning,omitempty"`
 }
 
-func (e AgentMessage) isEvent() {}
+func (e AgentMessageEvent) isAgentEvent() {}
 
 // ToolCallStarted fires when the agent starts executing a tool.
-type ToolCallStarted struct {
+type ToolCallStartedEvent struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name"`
 	Args      string `json:"args"`
 }
 
-func (e ToolCallStarted) isEvent() {}
+func (e ToolCallStartedEvent) isAgentEvent() {}
 
 // ToolResult fires when the agent finishes executing a tool.
-type ToolResult struct {
+type ToolResultEvent struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name"`
@@ -104,21 +104,21 @@ type ToolResult struct {
 	Error     error  `json:"error,omitempty"`
 }
 
-func (e ToolResult) isEvent() {}
+func (e ToolResultEvent) isAgentEvent() {}
 
 // ToolOutputDelta is an incremental chunk of tool output text.
-type ToolOutputDelta struct {
+type ToolOutputDeltaEvent struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Delta     string `json:"delta"`
 	Snapshot  bool   `json:"snapshot,omitempty"`
 }
 
-func (e ToolOutputDelta) isEvent() {}
+func (e ToolOutputDeltaEvent) isAgentEvent() {}
 
 // VerificationResult fires when an objective function (test, benchmark,
 // compile check) completes. Essential for RLM loops.
-type VerificationResult struct {
+type VerificationResultEvent struct {
 	Base
 	Command string `json:"command"`
 	Passed  bool   `json:"passed"`
@@ -126,11 +126,11 @@ type VerificationResult struct {
 	Output  string `json:"output,omitempty"`
 }
 
-func (e VerificationResult) isEvent() {}
+func (e VerificationResultEvent) isAgentEvent() {}
 
 // ApprovalRequest is emitted by optional compatibility backends that support
 // host-mediated permission prompts. The native Ion path does not emit it.
-type ApprovalRequest struct {
+type ApprovalRequestEvent struct {
 	Base
 	RequestID   string `json:"request_id"`
 	Description string `json:"description"`
@@ -139,104 +139,104 @@ type ApprovalRequest struct {
 	Environment string `json:"environment,omitzero"`
 }
 
-func (e ApprovalRequest) isEvent() {}
+func (e ApprovalRequestEvent) isAgentEvent() {}
 
 // TurnStarted fires when the backend begins processing a turn.
-type TurnStarted struct {
+type TurnStartedEvent struct {
 	Base
 }
 
-func (e TurnStarted) isEvent() {}
+func (e TurnStartedEvent) isAgentEvent() {}
 
 // TurnFinished fires when the backend has finished its generation cycle for a turn.
-type TurnFinished struct {
+type TurnFinishedEvent struct {
 	Base
 }
 
-func (e TurnFinished) isEvent() {}
+func (e TurnFinishedEvent) isAgentEvent() {}
 
 // TurnSavePoint fires when the backend has flushed durable writes for a turn.
-type TurnSavePoint struct {
+type TurnSavePointEvent struct {
 	Base
 	HadPendingMutations bool `json:"had_pending_mutations,omitempty"`
 }
 
-func (e TurnSavePoint) isEvent() {}
+func (e TurnSavePointEvent) isAgentEvent() {}
 
 // Error represents a recoverable or fatal error in the session.
-type Error struct {
+type ErrorEvent struct {
 	Base
 	Err   error `json:"err"`
 	Fatal bool  `json:"fatal"`
 }
 
-func (e Error) isEvent() {}
+func (e ErrorEvent) isAgentEvent() {}
 
 // ChildRequested fires when the main agent requests a child execution.
-type ChildRequested struct {
+type ChildRequestedEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Query     string `json:"query"`
 }
 
-func (e ChildRequested) isEvent() {}
+func (e ChildRequestedEvent) isAgentEvent() {}
 
 // ChildStarted fires when the child execution begins.
-type ChildStarted struct {
+type ChildStartedEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	SessionID string `json:"session_id"`
 }
 
-func (e ChildStarted) isEvent() {}
+func (e ChildStartedEvent) isAgentEvent() {}
 
 // ChildDelta is an incremental chunk of child subagent output.
-type ChildDelta struct {
+type ChildDeltaEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Delta     string `json:"delta"`
 }
 
-func (e ChildDelta) isEvent() {}
+func (e ChildDeltaEvent) isAgentEvent() {}
 
 // ChildCompleted fires when the child execution finishes successfully.
-type ChildCompleted struct {
+type ChildCompletedEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Result    string `json:"result"`
 }
 
-func (e ChildCompleted) isEvent() {}
+func (e ChildCompletedEvent) isAgentEvent() {}
 
 // ChildBlocked fires when the child execution cannot continue without input.
-type ChildBlocked struct {
+type ChildBlockedEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Reason    string `json:"reason"`
 }
 
-func (e ChildBlocked) isEvent() {}
+func (e ChildBlockedEvent) isAgentEvent() {}
 
 // ChildFailed fires when the child execution fails.
-type ChildFailed struct {
+type ChildFailedEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Error     string `json:"error"`
 }
 
-func (e ChildFailed) isEvent() {}
+func (e ChildFailedEvent) isAgentEvent() {}
 
 // ChildCanceled fires when the child execution is canceled.
-type ChildCanceled struct {
+type ChildCanceledEvent struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Reason    string `json:"reason"`
 }
 
-func (e ChildCanceled) isEvent() {}
+func (e ChildCanceledEvent) isAgentEvent() {}
 
 // TokenUsage fires when the agent reports its token consumption.
-type TokenUsage struct {
+type TokenUsageEvent struct {
 	Base
 	Input  int     `json:"input"`
 	Output int     `json:"output"`
@@ -244,11 +244,11 @@ type TokenUsage struct {
 	Cost   float64 `json:"cost,omitempty"`
 }
 
-func (e TokenUsage) isEvent() {}
+func (e TokenUsageEvent) isAgentEvent() {}
 
-type QueuedInputUpdated struct {
+type QueuedInputUpdatedEvent struct {
 	Base
 	Snapshot QueuedInputSnapshot `json:"snapshot"`
 }
 
-func (e QueuedInputUpdated) isEvent() {}
+func (e QueuedInputUpdatedEvent) isAgentEvent() {}

@@ -13,8 +13,7 @@ import (
 	ionacp "github.com/nijaru/ion/internal/acp"
 	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/config"
-	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type acpRuntimeFactory interface {
@@ -22,11 +21,11 @@ type acpRuntimeFactory interface {
 		ctx context.Context,
 		cwd string,
 		sessionID string,
-	) (ionsession.AgentSession, func() error, error)
+	) (session.AgentSession, func() error, error)
 }
 
 type ionACPRuntimeFactory struct {
-	store  storage.Store
+	store  session.SessionStore
 	cfg    *config.Config
 	branch string
 	mode   ionacp.Mode
@@ -36,7 +35,7 @@ func (f ionACPRuntimeFactory) Open(
 	ctx context.Context,
 	cwd string,
 	sessionID string,
-) (ionsession.AgentSession, func() error, error) {
+) (session.AgentSession, func() error, error) {
 	runtimeCfg := *f.cfg
 	if sessionID != "" {
 		if err := applySessionConfigFromMetadata(ctx, f.store, sessionID, &runtimeCfg); err != nil {
@@ -82,7 +81,7 @@ type ionACPAgent struct {
 }
 
 type ionACPHeadlessSession struct {
-	agent ionsession.AgentSession
+	agent session.AgentSession
 	close func() error
 	cwd   string
 	mode  ionacp.Mode
@@ -106,7 +105,7 @@ func runACPAgent(
 	ctx context.Context,
 	r io.Reader,
 	w io.Writer,
-	store storage.Store,
+	store session.SessionStore,
 	cfg *config.Config,
 	branch string,
 	mode ionacp.Mode,
@@ -331,7 +330,7 @@ func (a *ionACPAgent) Prompt(
 	}
 }
 
-func drainStaleSessionEvents(events <-chan ionsession.Event) {
+func drainStaleSessionEvents(events <-chan session.AgentEvent) {
 	for {
 		select {
 		case _, ok := <-events:

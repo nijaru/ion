@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	csession "github.com/nijaru/ion/session"
 )
 
 type progressProjection struct {
@@ -59,7 +57,7 @@ func (s *cantoSession) buildProgressProjection(ctx context.Context) (progressPro
 	return projection, nil
 }
 
-func (p *progressProjection) applyEvents(events []csession.Event) {
+func (p *progressProjection) applyEvents(events []Event) {
 	for _, ev := range events {
 		if ev.Seq > p.cutoffSeq {
 			p.cutoffSeq = ev.Seq
@@ -70,8 +68,8 @@ func (p *progressProjection) applyEvents(events []csession.Event) {
 	}
 }
 
-func (p *progressProjection) applyStatusEvent(ev csession.Event) {
-	if ev.Type == csession.EventType("status_changed") {
+func (p *progressProjection) applyStatusEvent(ev Event) {
+	if ev.Type == EventType("status_changed") {
 		var data struct {
 			Status string `json:"status"`
 		}
@@ -90,12 +88,12 @@ func (p *progressProjection) applyStatusEvent(ev csession.Event) {
 	}
 }
 
-func (p *progressProjection) applyUsageEvent(ev csession.Event) {
+func (p *progressProjection) applyUsageEvent(ev Event) {
 	switch ev.Type {
-	case csession.TurnStarted:
+	case TurnStarted:
 		p.usage.add(p.pendingUsage)
 		p.pendingUsage = usageAccumulator{}
-	case csession.EventType("token_usage"):
+	case EventType("token_usage"):
 		var data struct {
 			Input  int     `json:"input"`
 			Output int     `json:"output"`
@@ -104,7 +102,7 @@ func (p *progressProjection) applyUsageEvent(ev csession.Event) {
 		if err := ev.UnmarshalData(&data); err == nil {
 			p.pendingUsage.addValues(data.Input, data.Output, data.Cost)
 		}
-	case csession.TurnCompleted:
+	case TurnCompleted:
 		data, ok, err := ev.TurnCompletedData()
 		if err == nil && ok && usageHasValue(data.Usage) {
 			p.usage.addUsage(data.Usage)

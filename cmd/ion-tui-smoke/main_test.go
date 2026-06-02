@@ -4,15 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
-	csession "github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/session"
 )
 
 func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
-	store, err := storage.NewCantoStore(root)
+	store, err := session.NewCantoStore(root)
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
@@ -33,7 +31,7 @@ func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	eventStore, err := csession.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	eventStore, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
 	if err != nil {
 		t.Fatalf("new event store: %v", err)
 	}
@@ -43,21 +41,21 @@ func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
 	backend.SetSession(stored)
 	backend.SetCantoEventStore(eventStore)
 
-	for _, event := range []ionsession.Event{
-		ionsession.UserMessage{Message: "build deterministic resume transcript"},
-		ionsession.TurnStarted{},
-		ionsession.ToolCallStarted{
+	for _, event := range []session.AgentEvent{
+		session.UserMessageEvent{Message: "build deterministic resume transcript"},
+		session.TurnStartedEvent{},
+		session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
 		},
-		ionsession.ToolResult{
+		session.ToolResultEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Result:    "ion-tmux-smoke\n",
 		},
-		ionsession.AgentMessage{Message: "done"},
-		ionsession.TurnFinished{},
+		session.AgentMessageEvent{Message: "done"},
+		session.TurnFinishedEvent{},
 	} {
 		if !backend.emit(ctx, event) {
 			t.Fatalf("emit failed for %T", event)
@@ -71,16 +69,16 @@ func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("entries length = %d, want 3: %#v", len(entries), entries)
 	}
-	if entries[0].Role != ionsession.User ||
+	if entries[0].Role != session.RoleUser ||
 		entries[0].Content != "build deterministic resume transcript" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Tool ||
+	if entries[1].Role != session.RoleTool ||
 		entries[1].Title != "Bash(sleep 2; echo ion-tmux-smoke)" ||
 		entries[1].Content != "ion-tmux-smoke\n" {
 		t.Fatalf("tool entry = %#v", entries[1])
 	}
-	if entries[2].Role != ionsession.Agent || entries[2].Content != "done" {
+	if entries[2].Role != session.RoleAgent || entries[2].Content != "done" {
 		t.Fatalf("agent entry = %#v", entries[2])
 	}
 }

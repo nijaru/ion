@@ -1,4 +1,4 @@
-package storage
+package session
 
 import (
 	"context"
@@ -11,9 +11,7 @@ import (
 	"testing"
 	"time"
 
-	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
-	csession "github.com/nijaru/ion/session"
 )
 
 func appendCantoMessage(
@@ -24,7 +22,7 @@ func appendCantoMessage(
 	msg llm.Message,
 ) {
 	t.Helper()
-	if err := store.canto.Save(ctx, csession.NewEvent(sessionID, csession.MessageAdded, msg)); err != nil {
+	if err := store.canto.Save(ctx, NewEvent(sessionID, MessageAdded, msg)); err != nil {
 		t.Fatalf("append canto message: %v", err)
 	}
 }
@@ -37,7 +35,7 @@ func appendLegacyCantoMessage(
 	msg llm.Message,
 ) {
 	t.Helper()
-	event := csession.NewEvent(sessionID, csession.MessageAdded, msg)
+	event := NewEvent(sessionID, MessageAdded, msg)
 	if _, err := store.db.ExecContext(
 		ctx,
 		"INSERT INTO events (id, session_id, type, timestamp, data, metadata, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -60,7 +58,7 @@ func assistantToolCall(id, name string) llm.Call {
 	return call
 }
 
-func withCantoTimestamp(event csession.Event, timestamp time.Time) csession.Event {
+func withCantoTimestamp(event Event, timestamp time.Time) Event {
 	event.Timestamp = timestamp.UTC()
 	return event
 }
@@ -82,7 +80,7 @@ func TestNewEphemeralCantoStorePersistsWithinProcessOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if err := sess.Append(ctx, Status{Status: "Ready"}); err != nil {
+	if err := sess.Append(ctx, StoreStatus{Status: "Ready"}); err != nil {
 		t.Fatalf("append status: %v", err)
 	}
 
@@ -168,18 +166,18 @@ func TestCantoSessionUsagePrefersTurnCompletedUsage(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, csession.NewTurnStartedEvent(
+	if err := store.canto.Save(ctx, NewTurnStartedEvent(
 		sess.ID(),
-		csession.TurnStartedData{AgentID: "ion"},
+		TurnStartedData{AgentID: "ion"},
 	)); err != nil {
 		t.Fatalf("save turn started: %v", err)
 	}
-	if err := sess.Append(ctx, TokenUsage{Input: 10, Output: 2, Cost: 0.01}); err != nil {
+	if err := sess.Append(ctx, StoreTokenUsage{Input: 10, Output: 2, Cost: 0.01}); err != nil {
 		t.Fatalf("append token usage: %v", err)
 	}
-	if err := store.canto.Save(ctx, csession.NewTurnCompletedEvent(
+	if err := store.canto.Save(ctx, NewTurnCompletedEvent(
 		sess.ID(),
-		csession.TurnCompletedData{
+		TurnCompletedData{
 			AgentID: "ion",
 			Usage: llm.Usage{
 				InputTokens:  10,
@@ -214,18 +212,18 @@ func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testi
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, csession.NewTurnStartedEvent(
+	if err := store.canto.Save(ctx, NewTurnStartedEvent(
 		sess.ID(),
-		csession.TurnStartedData{AgentID: "ion"},
+		TurnStartedData{AgentID: "ion"},
 	)); err != nil {
 		t.Fatalf("save turn started: %v", err)
 	}
-	if err := sess.Append(ctx, TokenUsage{Input: 5, Output: 1, Cost: 0.02}); err != nil {
+	if err := sess.Append(ctx, StoreTokenUsage{Input: 5, Output: 1, Cost: 0.02}); err != nil {
 		t.Fatalf("append token usage: %v", err)
 	}
-	if err := store.canto.Save(ctx, csession.NewTurnCompletedEvent(
+	if err := store.canto.Save(ctx, NewTurnCompletedEvent(
 		sess.ID(),
-		csession.TurnCompletedData{
+		TurnCompletedData{
 			AgentID: "ion",
 			Error:   "stream failed before final usage",
 		},
@@ -340,7 +338,7 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 
 	time.Sleep(1100 * time.Millisecond)
 
-	if err := first.Append(ctx, Status{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err != nil {
+	if err := first.Append(ctx, StoreStatus{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err != nil {
 		t.Fatalf("append status: %v", err)
 	}
 
@@ -481,7 +479,7 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	}
 	parentAt := time.Date(2026, 5, 2, 15, 0, 0, 0, time.UTC)
 	parentEvent := withCantoTimestamp(
-		csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
+		NewEvent(parent.ID(), MessageAdded, llm.Message{
 			Role:    llm.RoleUser,
 			Content: "debug the flaky test",
 		}),
@@ -498,7 +496,7 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 		t.Fatalf("update parent session: %v", err)
 	}
 
-	child, err := store.ForkSession(ctx, parent.ID(), ForkOptions{
+	child, err := store.ForkSession(ctx, parent.ID(), SessionForkOptions{
 		Label:  "try alternate fix",
 		Reason: "test fork",
 	})
@@ -584,7 +582,7 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 	}
 	parentAt := time.Date(2026, 5, 2, 16, 0, 0, 0, time.UTC)
 	parentEvent := withCantoTimestamp(
-		csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
+		NewEvent(parent.ID(), MessageAdded, llm.Message{
 			Role:    llm.RoleUser,
 			Content: "debug the flaky test",
 		}),
@@ -601,7 +599,7 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		t.Fatalf("update parent session: %v", err)
 	}
 
-	child, err := exportStore.ForkSession(ctx, parent.ID(), ForkOptions{
+	child, err := exportStore.ForkSession(ctx, parent.ID(), SessionForkOptions{
 		Label:  "try alternate fix",
 		Reason: "test fork",
 	})
@@ -610,7 +608,7 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 	}
 	childAt := parentAt.Add(time.Minute)
 	childEvent := withCantoTimestamp(
-		csession.NewEvent(child.ID(), csession.MessageAdded, llm.Message{
+		NewEvent(child.ID(), MessageAdded, llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: "alternate fix works",
 		}),
@@ -776,7 +774,7 @@ func TestCantoStoreLastStatusIgnoresTransientProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if err := sess.Append(ctx, Status{Status: "Running read..."}); err != nil {
+	if err := sess.Append(ctx, StoreStatus{Status: "Running read..."}); err != nil {
 		t.Fatalf("append running status: %v", err)
 	}
 
@@ -802,10 +800,10 @@ func TestCantoStoreLastStatusClearsRetryAfterTerminalEvent(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
-	if err := sess.Append(ctx, Status{Status: status}); err != nil {
+	if err := sess.Append(ctx, StoreStatus{Status: status}); err != nil {
 		t.Fatalf("append retry status: %v", err)
 	}
-	if err := sess.Append(ctx, System{Content: "Canceled by user"}); err != nil {
+	if err := sess.Append(ctx, StoreSystem{Content: "Canceled by user"}); err != nil {
 		t.Fatalf("append terminal system event: %v", err)
 	}
 
@@ -831,7 +829,7 @@ func TestCantoStoreLastStatusKeepsRetryStatus(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 	status := "Network error. Retrying in 2s... Ctrl+C stops."
-	if err := sess.Append(ctx, Status{Status: status}); err != nil {
+	if err := sess.Append(ctx, StoreStatus{Status: status}); err != nil {
 		t.Fatalf("append retry status: %v", err)
 	}
 
@@ -1066,7 +1064,7 @@ func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 		t.Fatal("lazy session materialized before append")
 	}
 
-	if err := lazy.Append(ctx, System{Content: "local notice"}); err != nil {
+	if err := lazy.Append(ctx, StoreSystem{Content: "local notice"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if IsMaterialized(lazy) {
@@ -1095,7 +1093,7 @@ func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 		t.Fatal("lazy session did not materialize after ensure")
 	}
 
-	if err := lazy.Append(ctx, System{Content: "local notice after turn"}); err != nil {
+	if err := lazy.Append(ctx, StoreSystem{Content: "local notice after turn"}); err != nil {
 		t.Fatalf("append after ensure: %v", err)
 	}
 	recent, err = store.GetRecentSession(ctx, cwd)
@@ -1150,7 +1148,7 @@ func TestCantoStoreAppendPreservesIonEventTimestamp(t *testing.T) {
 	}
 
 	eventAt := time.Date(2026, 5, 4, 12, 34, 56, 0, time.UTC)
-	if err := sess.Append(ctx, System{
+	if err := sess.Append(ctx, StoreSystem{
 		Type:    "system",
 		Content: "Paused for review",
 		TS:      eventAt.Unix(),
@@ -1189,7 +1187,7 @@ func TestCantoStoreAppendReturnsPersistenceErrors(t *testing.T) {
 		t.Fatalf("close db: %v", err)
 	}
 
-	if err := sess.Append(ctx, Status{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err == nil {
+	if err := sess.Append(ctx, StoreStatus{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err == nil {
 		t.Fatal("expected append to return an error when session metadata update fails")
 	}
 }
@@ -1217,13 +1215,13 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	userAt := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
 	agentAt := userAt.Add(time.Minute)
 	toolAt := agentAt.Add(time.Minute)
-	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "hello",
 	}), userAt)); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:      llm.RoleAssistant,
 		Content:   "hi there",
 		Reasoning: "reasoning",
@@ -1231,7 +1229,7 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	}), agentAt)); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
-	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-bash",
 		Name:    "bash",
@@ -1247,20 +1245,20 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("entries length = %d, want 3", len(entries))
 	}
-	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
+	if entries[0].Role != RoleUser || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
 	if !entries[0].Timestamp.Equal(userAt) {
 		t.Fatalf("user timestamp = %s, want %s", entries[0].Timestamp, userAt)
 	}
-	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" ||
+	if entries[1].Role != RoleAgent || entries[1].Content != "hi there" ||
 		entries[1].Reasoning != "reasoning" {
 		t.Fatalf("agent entry = %#v", entries[1])
 	}
 	if !entries[1].Timestamp.Equal(agentAt) {
 		t.Fatalf("agent timestamp = %s, want %s", entries[1].Timestamp, agentAt)
 	}
-	if entries[2].Role != ionsession.Tool || entries[2].Title != "Bash" ||
+	if entries[2].Role != RoleTool || entries[2].Title != "Bash" ||
 		entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
 	}
@@ -1286,10 +1284,10 @@ func TestCantoStoreDisplayReplaySharesProviderHistorySource(t *testing.T) {
 		Role:    llm.RoleUser,
 		Content: "first",
 	})
-	if err := sess.Append(ctx, TokenUsage{Input: 4, Output: 1, Cost: 0.01}); err != nil {
+	if err := sess.Append(ctx, StoreTokenUsage{Input: 4, Output: 1, Cost: 0.01}); err != nil {
 		t.Fatalf("append first usage: %v", err)
 	}
-	if err := sess.Append(ctx, Status{
+	if err := sess.Append(ctx, StoreStatus{
 		Status: "Network error. Retrying in 2s... Ctrl+C stops.",
 	}); err != nil {
 		t.Fatalf("append retry status: %v", err)
@@ -1329,7 +1327,7 @@ func TestCantoStoreDisplayReplaySharesProviderHistorySource(t *testing.T) {
 		Role:    llm.RoleAssistant,
 		Content: "second",
 	})
-	if err := sess.Append(ctx, TokenUsage{Input: 6, Output: 2, Cost: 0.02}); err != nil {
+	if err := sess.Append(ctx, StoreTokenUsage{Input: 6, Output: 2, Cost: 0.02}); err != nil {
 		t.Fatalf("append second usage: %v", err)
 	}
 
@@ -1383,8 +1381,8 @@ func TestCantoStoreEntriesApplyIncrementalContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewContext(sess.ID(), csession.ContextEntry{
-		Kind:    csession.ContextKindSummary,
+	if err := cantoSess.Append(ctx, NewContext(sess.ID(), ContextEntry{
+		Kind:    ContextKindSummary,
 		Content: "summary context",
 	})); err != nil {
 		t.Fatalf("append context: %v", err)
@@ -1397,7 +1395,7 @@ func TestCantoStoreEntriesApplyIncrementalContext(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
 	}
-	if entries[1].Role != ionsession.System || entries[1].Content != "summary context" {
+	if entries[1].Role != RoleSystem || entries[1].Content != "summary context" {
 		t.Fatalf("context entry = %#v", entries[1])
 	}
 }
@@ -1428,27 +1426,27 @@ func TestCantoStoreEntriesPreserveIncrementalToolLifecycleDisplay(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+	if err := cantoSess.Append(ctx, NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
 		Arguments: `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
 	})); err != nil {
 		t.Fatalf("append read start: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := cantoSess.Append(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "read",
 		ID:     "tool-read",
 		Output: "tool output",
 	})); err != nil {
 		t.Fatalf("append read completion: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-read",
 		Name:    "read",
@@ -1464,7 +1462,7 @@ func TestCantoStoreEntriesPreserveIncrementalToolLifecycleDisplay(t *testing.T) 
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
 	}
-	if entries[1].Role != ionsession.Tool ||
+	if entries[1].Role != RoleTool ||
 		entries[1].Title != "Read(AGENTS.md)" ||
 		entries[1].Content != "tool output" {
 		t.Fatalf("incremental tool entry = %#v", entries[1])
@@ -1496,13 +1494,13 @@ func TestCantoStoreEntriesRecoverIncrementalToolCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+	if err := cantoSess.Append(ctx, NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
 		Arguments: `{"file_path":"AGENTS.md"}`,
@@ -1510,14 +1508,14 @@ func TestCantoStoreEntriesRecoverIncrementalToolCompletion(t *testing.T) {
 		t.Fatalf("append read start: %v", err)
 	}
 	completedAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
-	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "read",
 		ID:     "tool-read",
 		Output: "recovered contents",
 	}), completedAt)); err != nil {
 		t.Fatalf("append read completion: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewTurnCompletedEvent(sess.ID(), csession.TurnCompletedData{})); err != nil {
+	if err := cantoSess.Append(ctx, NewTurnCompletedEvent(sess.ID(), TurnCompletedData{})); err != nil {
 		t.Fatalf("append turn completion: %v", err)
 	}
 
@@ -1528,7 +1526,7 @@ func TestCantoStoreEntriesRecoverIncrementalToolCompletion(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
 	}
-	if entries[1].Role != ionsession.Tool ||
+	if entries[1].Role != RoleTool ||
 		entries[1].Title != "Read(AGENTS.md)" ||
 		entries[1].Content != "recovered contents" {
 		t.Fatalf("recovered incremental tool entry = %#v", entries[1])
@@ -1560,20 +1558,20 @@ func TestCantoStoreEntriesDoNotDuplicateRecoveredToolMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+	if err := cantoSess.Append(ctx, NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
 		Arguments: `{"file_path":"AGENTS.md"}`,
 	})); err != nil {
 		t.Fatalf("append read start: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := cantoSess.Append(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "read",
 		ID:     "tool-read",
 		Output: "recovered contents",
@@ -1589,7 +1587,7 @@ func TestCantoStoreEntriesDoNotDuplicateRecoveredToolMessage(t *testing.T) {
 		t.Fatalf("seed entries = %#v, want one recovered tool entry", entries)
 	}
 
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-read",
 		Name:    "read",
@@ -1610,10 +1608,10 @@ func TestCantoStoreEntriesDoNotDuplicateRecoveredToolMessage(t *testing.T) {
 	}
 }
 
-func toolEntryCount(entries []ionsession.Entry) int {
+func toolEntryCount(entries []Entry) int {
 	count := 0
 	for _, entry := range entries {
-		if entry.Role == ionsession.Tool {
+		if entry.Role == RoleTool {
 			count++
 		}
 	}
@@ -1711,26 +1709,26 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 		t.Fatalf("load canto session: %v", err)
 	}
 
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "hello",
 	})); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+	if err := cantoSess.Append(ctx, NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
 		Arguments: `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
 	})); err != nil {
 		t.Fatalf("append read start: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-read",
 		Name:    "read",
@@ -1746,11 +1744,11 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
 	}
-	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
+	if entries[0].Role != RoleUser || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
 	wantContent := strings.Join([]string{"line 1", "line 2", "line 3"}, "\n")
-	if entries[1].Role != ionsession.Tool || entries[1].Title != "Read(AGENTS.md)" ||
+	if entries[1].Role != RoleTool || entries[1].Title != "Read(AGENTS.md)" ||
 		entries[1].Content != wantContent {
 		t.Fatalf("read entry = %#v", entries[1])
 	}
@@ -1776,13 +1774,13 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 
 	call := assistantToolCall("tool-read", "read")
 	call.Function.Arguments = `{"file_path":"AGENTS.md"}`
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{call},
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+	if err := cantoSess.Append(ctx, NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
 		Arguments: `{"file_path":"AGENTS.md"}`,
@@ -1790,7 +1788,7 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 		t.Fatalf("append read start: %v", err)
 	}
 	completedAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
-	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "read",
 		ID:     "tool-read",
 		Output: "recovered contents",
@@ -1805,7 +1803,7 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1: %#v", len(entries), entries)
 	}
-	if entries[0].Role != ionsession.Tool ||
+	if entries[0].Role != RoleTool ||
 		entries[0].Title != "Read(AGENTS.md)" ||
 		entries[0].Content != "recovered contents" {
 		t.Fatalf("recovered tool entry = %#v", entries[0])
@@ -1845,7 +1843,7 @@ func TestCantoStoreEntriesDropDanglingToolCall(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1: %#v", len(entries), entries)
 	}
-	if entries[0].Role != ionsession.User || entries[0].Content != "next turn" {
+	if entries[0].Role != RoleUser || entries[0].Content != "next turn" {
 		t.Fatalf("remaining entry = %#v", entries[0])
 	}
 }
@@ -1875,7 +1873,7 @@ func TestCantoStoreAppendSkipsEmptyModelMessages(t *testing.T) {
 		t.Fatalf("load canto session: %v", err)
 	}
 	for _, ev := range cantoSess.Events() {
-		if ev.Type != csession.MessageAdded {
+		if ev.Type != MessageAdded {
 			continue
 		}
 		var msg llm.Message
@@ -1923,7 +1921,7 @@ func TestCantoStoreEntriesPreserveReasoningOnlyAgentMessages(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.Agent || entries[0].Content != "" ||
+	if entries[0].Role != RoleAgent || entries[0].Content != "" ||
 		entries[0].Reasoning != reasoning {
 		t.Fatalf("reasoning-only agent entry = %#v", entries[0])
 	}
@@ -1949,7 +1947,7 @@ func TestCantoStoreEntriesDropEmptyAgentMessages(t *testing.T) {
 
 	appendMessage := func(role llm.Role, content string) {
 		t.Helper()
-		if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 			Role:    role,
 			Content: content,
 		})); err != nil {
@@ -1967,7 +1965,7 @@ func TestCantoStoreEntriesDropEmptyAgentMessages(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2: %#v", len(entries), entries)
 	}
-	if entries[1].Role != ionsession.Agent || entries[1].Content != "same" {
+	if entries[1].Role != RoleAgent || entries[1].Content != "same" {
 		t.Fatalf("agent entry = %#v", entries[1])
 	}
 }
@@ -1986,7 +1984,7 @@ func TestCantoStoreEntriesMapSystemMessages(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := sess.Append(ctx, System{Content: "Error: backend unavailable"}); err != nil {
+	if err := sess.Append(ctx, StoreSystem{Content: "Error: backend unavailable"}); err != nil {
 		t.Fatalf("append system: %v", err)
 	}
 
@@ -1997,7 +1995,7 @@ func TestCantoStoreEntriesMapSystemMessages(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.System || entries[0].Content != "Error: backend unavailable" {
+	if entries[0].Role != RoleSystem || entries[0].Content != "Error: backend unavailable" {
 		t.Fatalf("system entry = %#v", entries[0])
 	}
 }
@@ -2020,7 +2018,7 @@ func TestCantoStoreEntriesInterleaveSystemMessagesWithHistory(t *testing.T) {
 		Role:    llm.RoleUser,
 		Content: "first turn",
 	})
-	if err := sess.Append(ctx, System{Content: "Canceled by user"}); err != nil {
+	if err := sess.Append(ctx, StoreSystem{Content: "Canceled by user"}); err != nil {
 		t.Fatalf("append system: %v", err)
 	}
 	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
@@ -2035,13 +2033,13 @@ func TestCantoStoreEntriesInterleaveSystemMessagesWithHistory(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("entries length = %d, want 3", len(entries))
 	}
-	if entries[0].Role != ionsession.User || entries[0].Content != "first turn" {
+	if entries[0].Role != RoleUser || entries[0].Content != "first turn" {
 		t.Fatalf("first entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.System || entries[1].Content != "Canceled by user" {
+	if entries[1].Role != RoleSystem || entries[1].Content != "Canceled by user" {
 		t.Fatalf("second entry = %#v", entries[1])
 	}
-	if entries[2].Role != ionsession.User || entries[2].Content != "second turn" {
+	if entries[2].Role != RoleUser || entries[2].Content != "second turn" {
 		t.Fatalf("third entry = %#v", entries[2])
 	}
 }
@@ -2101,8 +2099,8 @@ func TestCantoStoreEntriesPreserveFullAgentContent(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.Agent {
-		t.Fatalf("agent entry role = %q, want %q", entries[0].Role, ionsession.Agent)
+	if entries[0].Role != RoleAgent {
+		t.Fatalf("agent entry role = %q, want %q", entries[0].Role, RoleAgent)
 	}
 	if entries[0].Content != content {
 		t.Fatalf("agent content = %q, want full content %q", entries[0].Content, content)
@@ -2133,7 +2131,7 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 		Name:    "bash",
 		Content: "exit status 1",
 	})
-	if err := store.canto.Save(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "bash",
 		ID:     "tool-err",
 		Output: "exit status 1",
@@ -2149,8 +2147,8 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.Tool {
-		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, ionsession.Tool)
+	if entries[0].Role != RoleTool {
+		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, RoleTool)
 	}
 	if !entries[0].IsError {
 		t.Fatal("tool entry IsError = false, want true")
@@ -2182,7 +2180,7 @@ func TestCantoStoreEntriesDoNotCompactRoutineToolErrors(t *testing.T) {
 		Name:    "list",
 		Content: fullError,
 	})
-	if err := store.canto.Save(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "list",
 		ID:     "tool-list-error",
 		Output: fullError,
@@ -2220,13 +2218,13 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := store.canto.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-err", "bash")},
 	})); err != nil {
 		t.Fatalf("save assistant tool call: %v", err)
 	}
-	if err := store.canto.Save(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := store.canto.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-err",
 		Name:    "bash",
@@ -2234,7 +2232,7 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("save tool message: %v", err)
 	}
-	if err := store.canto.Save(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "bash",
 		ID:     "tool-err",
 		Output: "exit status 1",
@@ -2250,8 +2248,8 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.Tool {
-		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, ionsession.Tool)
+	if entries[0].Role != RoleTool {
+		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, RoleTool)
 	}
 	if !entries[0].IsError {
 		t.Fatal("tool entry IsError = false, want true")
@@ -2277,14 +2275,14 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 		t.Fatalf("load canto session: %v", err)
 	}
 
-	userEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	userEvent := NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "old question",
 	})
 	if err := cantoSess.Append(ctx, userEvent); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	agentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	agentEvent := NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "old answer",
 	})
@@ -2293,7 +2291,7 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	}
 	recentAt := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC)
 	recentEvent := withCantoTimestamp(
-		csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		NewEvent(sess.ID(), MessageAdded, llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: "recent answer",
 		}),
@@ -2303,10 +2301,10 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 		t.Fatalf("append recent agent: %v", err)
 	}
 
-	snapshot := csession.CompactionSnapshot{
+	snapshot := CompactionSnapshot{
 		Strategy:      "summarize",
 		CutoffEventID: recentEvent.ID.String(),
-		Entries: []csession.HistoryEntry{
+		Entries: []HistoryEntry{
 			{
 				Message: llm.Message{
 					Role:    llm.RoleSystem,
@@ -2319,7 +2317,7 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 			},
 		},
 	}
-	if err := cantoSess.Append(ctx, csession.NewCompactionEvent(sess.ID(), snapshot)); err != nil {
+	if err := cantoSess.Append(ctx, NewCompactionEvent(sess.ID(), snapshot)); err != nil {
 		t.Fatalf("append compaction: %v", err)
 	}
 
@@ -2330,11 +2328,11 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2", len(entries))
 	}
-	if entries[0].Role != ionsession.System ||
+	if entries[0].Role != RoleSystem ||
 		entries[0].Content != "<conversation_summary>\nsummary\n</conversation_summary>" {
 		t.Fatalf("summary entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Agent || entries[1].Content != "recent answer" {
+	if entries[1].Role != RoleAgent || entries[1].Content != "recent answer" {
 		t.Fatalf("recent entry = %#v", entries[1])
 	}
 	if !entries[1].Timestamp.Equal(recentAt) {
@@ -2360,20 +2358,20 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "old question",
 	})); err != nil {
 		t.Fatalf("append old user: %v", err)
 	}
-	if err := sess.Append(ctx, System{
+	if err := sess.Append(ctx, StoreSystem{
 		Type:    "system",
 		Content: "old display marker",
 		TS:      time.Now().Unix(),
 	}); err != nil {
 		t.Fatalf("append old display event: %v", err)
 	}
-	recentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	recentEvent := NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "recent answer",
 	})
@@ -2381,10 +2379,10 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 		t.Fatalf("append recent agent: %v", err)
 	}
 
-	snapshot := csession.CompactionSnapshot{
+	snapshot := CompactionSnapshot{
 		Strategy:      "summarize",
 		CutoffEventID: recentEvent.ID.String(),
-		Entries: []csession.HistoryEntry{
+		Entries: []HistoryEntry{
 			{
 				Message: llm.Message{
 					Role:    llm.RoleSystem,
@@ -2397,7 +2395,7 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 			},
 		},
 	}
-	if err := cantoSess.Append(ctx, csession.NewCompactionEvent(sess.ID(), snapshot)); err != nil {
+	if err := cantoSess.Append(ctx, NewCompactionEvent(sess.ID(), snapshot)); err != nil {
 		t.Fatalf("append compaction: %v", err)
 	}
 
@@ -2406,7 +2404,7 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 		t.Fatalf("entries: %v", err)
 	}
 	for _, entry := range entries {
-		if entry.Role == ionsession.System &&
+		if entry.Role == RoleSystem &&
 			strings.Contains(entry.Content, "old display marker") {
 			t.Fatalf("compacted entries retained display-only event before cutoff: %#v", entries)
 		}
@@ -2434,17 +2432,17 @@ func TestCantoStoreEntriesPreserveDisplayOnlyEventsAfterCompactionCutoff(t *test
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
-	recentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	recentEvent := NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "recent answer",
 	})
 	if err := cantoSess.Append(ctx, recentEvent); err != nil {
 		t.Fatalf("append recent agent: %v", err)
 	}
-	snapshot := csession.CompactionSnapshot{
+	snapshot := CompactionSnapshot{
 		Strategy:      "summarize",
 		CutoffEventID: recentEvent.ID.String(),
-		Entries: []csession.HistoryEntry{
+		Entries: []HistoryEntry{
 			{
 				Message: llm.Message{
 					Role:    llm.RoleSystem,
@@ -2457,11 +2455,11 @@ func TestCantoStoreEntriesPreserveDisplayOnlyEventsAfterCompactionCutoff(t *test
 			},
 		},
 	}
-	if err := cantoSess.Append(ctx, csession.NewCompactionEvent(sess.ID(), snapshot)); err != nil {
+	if err := cantoSess.Append(ctx, NewCompactionEvent(sess.ID(), snapshot)); err != nil {
 		t.Fatalf("append compaction: %v", err)
 	}
 	afterAt := time.Date(2026, 5, 2, 14, 0, 0, 0, time.UTC)
-	if err := sess.Append(ctx, System{
+	if err := sess.Append(ctx, StoreSystem{
 		Type:    "system",
 		Content: "fresh display marker",
 		TS:      afterAt.Unix(),
@@ -2476,7 +2474,7 @@ func TestCantoStoreEntriesPreserveDisplayOnlyEventsAfterCompactionCutoff(t *test
 	if len(entries) != 3 {
 		t.Fatalf("entries length = %d, want 3: %#v", len(entries), entries)
 	}
-	if entries[2].Role != ionsession.System ||
+	if entries[2].Role != RoleSystem ||
 		entries[2].Content != "fresh display marker" ||
 		!entries[2].Timestamp.Equal(afterAt) {
 		t.Fatalf("fresh display entry = %#v, want marker at %s", entries[2], afterAt)

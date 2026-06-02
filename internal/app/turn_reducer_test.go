@@ -4,12 +4,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	model := readyModel(t)
-	tool := &session.Entry{Role: session.Tool, Content: "partial"}
+	tool := &session.Entry{Role: session.RoleTool, Content: "partial"}
 	model.InFlight.Thinking = true
 	model.InFlight.Pending = tool
 	model.InFlight.PendingTools = map[string]*session.Entry{"tool-a": tool}
@@ -53,7 +53,7 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Pending = &session.Entry{
-		Role:    session.Agent,
+		Role:    session.RoleAgent,
 		Content: "answer",
 	}
 	model.InFlight.StreamBuf = "answer"
@@ -83,13 +83,13 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 	model.Progress.LastError = ""
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"stale follow-up"}
-	model.InFlight.Pending = &session.Entry{Role: session.Agent}
+	model.InFlight.Pending = &session.Entry{Role: session.RoleAgent}
 
 	entry, ok := model.turnReducer().finishTurnMode(false)
 	if !ok {
 		t.Fatal("finishTurnMode did not return visible error entry")
 	}
-	if entry.Role != session.System ||
+	if entry.Role != session.RoleSystem ||
 		entry.Content != "Error: turn finished without assistant response" {
 		t.Fatalf("entry = %#v, want empty-assistant system error", entry)
 	}
@@ -107,8 +107,8 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 
 func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	model := readyModel(t)
-	toolA := &session.Entry{Role: session.Tool, Content: "a partial"}
-	toolB := &session.Entry{Role: session.Tool, Content: "b partial"}
+	toolA := &session.Entry{Role: session.RoleTool, Content: "a partial"}
+	toolB := &session.Entry{Role: session.RoleTool, Content: "b partial"}
 	model.Progress.Mode = stateWorking
 	model.Progress.Status = "Running tools..."
 	model.Progress.ContextTokens = 456
@@ -118,7 +118,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 		"tool-b": toolB,
 	}
 
-	entry, ok := model.turnReducer().completeToolResult("tool-a", session.ToolResult{
+	entry, ok := model.turnReducer().completeToolResult("tool-a", session.ToolResultEvent{
 		ToolUseID: "tool-a",
 		Result:    "a done",
 	})
@@ -140,7 +140,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 		t.Fatalf("progress changed before final tool finished: %#v", model.Progress)
 	}
 
-	entry, ok = model.turnReducer().completeToolResult("tool-b", session.ToolResult{
+	entry, ok = model.turnReducer().completeToolResult("tool-b", session.ToolResultEvent{
 		ToolUseID: "tool-b",
 		Result:    "b done",
 	})
@@ -188,7 +188,7 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 	if !ok {
 		t.Fatal("completeChild returned false")
 	}
-	if entry.Role != session.Subagent ||
+	if entry.Role != session.RoleSubagent ||
 		entry.Title != "worker" ||
 		entry.Content != "Completed: done" {
 		t.Fatalf("completion entry = %#v", entry)
@@ -208,7 +208,7 @@ func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
 	if !ok {
 		t.Fatal("failChild returned false")
 	}
-	if entry.Role != session.Subagent ||
+	if entry.Role != session.RoleSubagent ||
 		!entry.IsError ||
 		entry.Content != "Failed: boom" {
 		t.Fatalf("failure entry = %#v", entry)

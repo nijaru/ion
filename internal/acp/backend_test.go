@@ -11,8 +11,7 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 // mockAgent is a minimal ACP agent-side implementation for tests.
@@ -131,7 +130,7 @@ func newTestPairWithAgent(t *testing.T) (*Session, *acp.AgentSideConnection, *mo
 }
 
 // drainOne reads one event from the channel or fails the test after timeout.
-func drainOne(t *testing.T, ch <-chan session.Event, timeout time.Duration) session.Event {
+func drainOne(t *testing.T, ch <-chan session.AgentEvent, timeout time.Duration) session.AgentEvent {
 	t.Helper()
 	select {
 	case ev := <-ch:
@@ -154,7 +153,7 @@ func TestACPSessionUpdateTextChunk(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	delta, ok := ev.(session.AgentDelta)
+	delta, ok := ev.(session.AgentDeltaEvent)
 	if !ok {
 		t.Fatalf("expected AgentDelta, got %T", ev)
 	}
@@ -175,7 +174,7 @@ func TestACPSessionUpdateThought(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	delta, ok := ev.(session.ThinkingDelta)
+	delta, ok := ev.(session.ThinkingDeltaEvent)
 	if !ok {
 		t.Fatalf("expected ThinkingDelta, got %T", ev)
 	}
@@ -196,7 +195,7 @@ func TestACPSessionUpdateToolCall(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	tc, ok := ev.(session.ToolCallStarted)
+	tc, ok := ev.(session.ToolCallStartedEvent)
 	if !ok {
 		t.Fatalf("expected ToolCallStarted, got %T", ev)
 	}
@@ -229,7 +228,7 @@ func TestACPSessionUpdateToolCompletion(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	result, ok := ev.(session.ToolResult)
+	result, ok := ev.(session.ToolResultEvent)
 	if !ok {
 		t.Fatalf("expected ToolResult, got %T", ev)
 	}
@@ -255,7 +254,7 @@ func TestACPSessionUpdateTokenUsageFromNotificationMeta(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	usage, ok := ev.(session.TokenUsage)
+	usage, ok := ev.(session.TokenUsageEvent)
 	if !ok {
 		t.Fatalf("expected TokenUsage, got %T", ev)
 	}
@@ -283,11 +282,11 @@ func TestACPSessionUpdateTokenUsageFromUpdateMeta(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev.(session.AgentDelta); !ok {
+	if _, ok := ev.(session.AgentDeltaEvent); !ok {
 		t.Fatalf("expected AgentDelta first, got %T", ev)
 	}
 	ev = drainOne(t, client.events, 500*time.Millisecond)
-	usage, ok := ev.(session.TokenUsage)
+	usage, ok := ev.(session.TokenUsageEvent)
 	if !ok {
 		t.Fatalf("expected TokenUsage, got %T", ev)
 	}
@@ -325,7 +324,7 @@ func TestACPApprovalBridge(t *testing.T) {
 
 	// Wait for ApprovalRequest to arrive
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	req, ok := ev.(session.ApprovalRequest)
+	req, ok := ev.(session.ApprovalRequestEvent)
 	if !ok {
 		t.Fatalf("expected ApprovalRequest, got %T", ev)
 	}
@@ -365,7 +364,7 @@ func TestACPFullTurn(t *testing.T) {
 	}
 
 	ev1 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev1.(session.TurnStarted); !ok {
+	if _, ok := ev1.(session.TurnStartedEvent); !ok {
 		t.Fatalf("expected TurnStarted, got %T", ev1)
 	}
 
@@ -373,7 +372,7 @@ func TestACPFullTurn(t *testing.T) {
 	for {
 		select {
 		case ev := <-client.events:
-			if _, ok := ev.(session.TurnFinished); ok {
+			if _, ok := ev.(session.TurnFinishedEvent); ok {
 				return
 			}
 		case <-deadline:
@@ -400,7 +399,7 @@ func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
 	if err := client.SubmitTurn(t.Context(), "hello"); err != nil {
 		t.Fatalf("SubmitTurn: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	select {
@@ -417,9 +416,9 @@ func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
 		select {
 		case ev := <-client.events:
 			switch msg := ev.(type) {
-			case session.Error:
+			case session.ErrorEvent:
 				t.Fatalf("cancel emitted prompt error: %v", msg.Err)
-			case session.TurnFinished:
+			case session.TurnFinishedEvent:
 				return
 			}
 		case <-deadline:
@@ -440,7 +439,7 @@ func TestACPCloseDuringPromptClosesEventsWithoutLateSend(t *testing.T) {
 	if err := client.SubmitTurn(context.Background(), "hello"); err != nil {
 		t.Fatalf("SubmitTurn: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	select {
@@ -481,7 +480,7 @@ func TestACPRejectsConcurrentSubmit(t *testing.T) {
 	if err := client.SubmitTurn(t.Context(), "first"); err != nil {
 		t.Fatalf("SubmitTurn first: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	if err := client.SubmitTurn(t.Context(), "second"); err == nil ||
@@ -507,7 +506,7 @@ func TestACPRequestPermissionCancelRemovesPendingApproval(t *testing.T) {
 	}()
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev.(session.ApprovalRequest); !ok {
+	if _, ok := ev.(session.ApprovalRequestEvent); !ok {
 		t.Fatalf("expected ApprovalRequest, got %T", ev)
 	}
 	client.mu.Lock()
@@ -540,7 +539,7 @@ func TestACPSessionRequestIncludesInitialContext(t *testing.T) {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
-	stor := storage.NewLazySession(nil, cwd, "openrouter/model-a", "feature/acp")
+	stor := session.NewLazySession(nil, cwd, "openrouter/model-a", "feature/acp")
 	client := newSession()
 	client.storage = stor
 	client.resumeSessionID = "external-session-123"
@@ -583,7 +582,7 @@ func TestACPSessionRequestIncludesInitialContext(t *testing.T) {
 
 func TestACPSessionRequestNormalizesRelativeCWD(t *testing.T) {
 	client := newSession()
-	client.storage = storage.NewLazySession(nil, ".", "model-a", "main")
+	client.storage = session.NewLazySession(nil, ".", "model-a", "main")
 
 	req, err := client.newSessionRequest()
 	if err != nil {
@@ -607,7 +606,7 @@ func TestACPFileBridgeResolvesRelativePathsAgainstSessionCWD(t *testing.T) {
 	}
 
 	client := newSession()
-	client.storage = storage.NewLazySession(nil, cwd, "model-a", "main")
+	client.storage = session.NewLazySession(nil, cwd, "model-a", "main")
 
 	line := 2
 	limit := 1
@@ -644,7 +643,7 @@ func TestACPFileBridgeResolvesRelativePathsAgainstSessionCWD(t *testing.T) {
 func TestACPFileBridgeRejectsEscapingPaths(t *testing.T) {
 	cwd := t.TempDir()
 	client := newSession()
-	client.storage = storage.NewLazySession(nil, cwd, "model-a", "main")
+	client.storage = session.NewLazySession(nil, cwd, "model-a", "main")
 	client.ctx = t.Context()
 
 	if _, err := client.ReadTextFile(t.Context(), acp.ReadTextFileRequest{Path: "../outside.txt"}); err == nil {

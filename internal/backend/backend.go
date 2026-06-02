@@ -5,8 +5,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type Bootstrap struct {
@@ -22,8 +21,8 @@ type Backend interface {
 	ContextLimit() int
 	Bootstrap() Bootstrap
 	Session() session.AgentSession
-	SetStore(storage.Store)
-	SetSession(storage.Session)
+	SetStore(session.SessionStore)
+	SetSession(session.SessionHandle)
 	SetConfig(*config.Config)
 }
 

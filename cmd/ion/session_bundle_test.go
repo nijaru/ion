@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func TestMain(m *testing.M) {
@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 
 func TestSessionBundleFileExportImport(t *testing.T) {
 	ctx := t.Context()
-	exportStore, err := storage.NewCantoStore(t.TempDir())
+	exportStore, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new export store: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestSessionBundleFileExportImport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if err := sess.Append(ctx, storage.System{Content: "portable note"}); err != nil {
+	if err := sess.Append(ctx, session.StoreSystem{Content: "portable note"}); err != nil {
 		t.Fatalf("append system note: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestSessionBundleFileExportImport(t *testing.T) {
 		t.Fatalf("bundle file missing checksum: %s", raw)
 	}
 
-	importStore, err := storage.NewCantoStore(t.TempDir())
+	importStore, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new import store: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestSessionBundleFileExportImport(t *testing.T) {
 	}
 	if _, err := importSessionBundleFile(ctx, importStore, path); !errors.Is(
 		err,
-		storage.ErrSessionBundleConflict,
+		session.ErrSessionBundleConflict,
 	) {
 		t.Fatalf("second import error = %v, want conflict", err)
 	}
@@ -88,7 +88,7 @@ func TestSessionBundleCLIImportExportSmoke(t *testing.T) {
 	ctx := t.Context()
 	exportHome := t.TempDir()
 	exportDataDir := filepath.Join(exportHome, ".ion", "data")
-	exportStore, err := storage.NewCantoStore(exportDataDir)
+	exportStore, err := session.NewCantoStore(exportDataDir)
 	if err != nil {
 		t.Fatalf("new export store: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSessionBundleCLIImportExportSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if err := sess.Append(ctx, storage.System{Content: "cli portable note"}); err != nil {
+	if err := sess.Append(ctx, session.StoreSystem{Content: "cli portable note"}); err != nil {
 		t.Fatalf("append system note: %v", err)
 	}
 	if err := exportStore.Close(); err != nil {
@@ -125,7 +125,7 @@ func TestSessionBundleCLIImportExportSmoke(t *testing.T) {
 		t.Fatalf("import output = %q, want session id", out)
 	}
 
-	importStore, err := storage.NewCantoStore(filepath.Join(importHome, ".ion", "data"))
+	importStore, err := session.NewCantoStore(filepath.Join(importHome, ".ion", "data"))
 	if err != nil {
 		t.Fatalf("new import store: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestSessionBundleFlagValidationRejectsBothDirections(t *testing.T) {
 
 func TestPrintSessionBundleMessages(t *testing.T) {
 	var out bytes.Buffer
-	printSessionBundleImport(&out, []storage.SessionInfo{{ID: "one"}, {ID: "two"}})
+	printSessionBundleImport(&out, []session.SessionInfo{{ID: "one"}, {ID: "two"}})
 	if got := out.String(); !strings.Contains(got, "Imported 2 sessions") ||
 		!strings.Contains(got, "- one") ||
 		!strings.Contains(got, "- two") {

@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
-func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsage, bool) {
+func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsageEvent, bool) {
 	metas := []any{n.Meta}
 	update := n.Update
 	switch {
@@ -38,17 +38,17 @@ func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsage, 
 			return usage, true
 		}
 	}
-	return session.TokenUsage{}, false
+	return session.TokenUsageEvent{}, false
 }
 
-func tokenUsageFromMeta(meta any) (session.TokenUsage, bool) {
+func tokenUsageFromMeta(meta any) (session.TokenUsageEvent, bool) {
 	root, ok := metaMap(meta)
 	if !ok {
-		return session.TokenUsage{}, false
+		return session.TokenUsageEvent{}, false
 	}
 
 	for _, candidate := range usageCandidates(root) {
-		usage := session.TokenUsage{
+		usage := session.TokenUsageEvent{
 			Input: fieldInt(
 				candidate,
 				"input", "inputTokens", "input_tokens", "promptTokens", "prompt_tokens",
@@ -63,7 +63,7 @@ func tokenUsageFromMeta(meta any) (session.TokenUsage, bool) {
 			return usage, true
 		}
 	}
-	return session.TokenUsage{}, false
+	return session.TokenUsageEvent{}, false
 }
 
 func usageCandidates(root map[string]any) []map[string]any {

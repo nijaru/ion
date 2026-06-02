@@ -8,9 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 type mockStream struct {
@@ -32,7 +31,7 @@ func (s *mockStream) Err() error   { return s.err }
 func (s *mockStream) Close() error { return nil }
 
 func TestAgentEventsAndLoop(t *testing.T) {
-	var events []session.Event
+	var events []session.AgentEvent
 
 	chunks := []*llm.Chunk{
 		{Reasoning: "thinking..."},
@@ -76,7 +75,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 		ThinkingLevel: ThinkingLevelMedium,
 		StreamFn:      streamFn,
 		ToolExecutor:  toolExecutor,
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			events = append(events, ev)
 		},
 		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
@@ -114,23 +113,23 @@ func TestAgentEventsAndLoop(t *testing.T) {
 
 	for _, ev := range events {
 		switch msg := ev.(type) {
-		case session.UserMessage:
+		case session.UserMessageEvent:
 			if msg.Message == "run test" {
 				gotUserMessage = true
 			}
-		case session.TurnStarted:
+		case session.TurnStartedEvent:
 			gotTurnStarted = true
-		case session.ThinkingDelta:
+		case session.ThinkingDeltaEvent:
 			gotThinkingDelta = true
-		case session.AgentDelta:
+		case session.AgentDeltaEvent:
 			gotAgentDelta = true
-		case session.AgentMessage:
+		case session.AgentMessageEvent:
 			gotAgentMessage = true
-		case session.ToolCallStarted:
+		case session.ToolCallStartedEvent:
 			gotToolCallStarted = true
-		case session.ToolResult:
+		case session.ToolResultEvent:
 			gotToolResult = true
-		case session.TurnFinished:
+		case session.TurnFinishedEvent:
 			gotTurnFinished = true
 		}
 	}
@@ -162,13 +161,13 @@ func TestAgentEventsAndLoop(t *testing.T) {
 }
 
 func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
-	var events []session.Event
+	var events []session.AgentEvent
 	agent := New(AgentLoopConfig{
 		Model: llm.Model{ID: "test-model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
 		},
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			events = append(events, ev)
 		},
 	})
@@ -182,7 +181,7 @@ func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("missing events")
 	}
-	msg, ok := events[0].(session.UserMessage)
+	msg, ok := events[0].(session.UserMessageEvent)
 	if !ok || msg.Message != "project me" {
 		t.Fatalf("first event = %#v, want prompt UserMessage", events[0])
 	}
@@ -310,9 +309,9 @@ func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch ev.(type) {
-			case session.Error:
+			case session.ErrorEvent:
 				t.Fatalf("cancel emitted session error: %#v", ev)
-			case session.TurnFinished:
+			case session.TurnFinishedEvent:
 				sawFinished = true
 			}
 		case <-time.After(time.Second):
@@ -322,13 +321,13 @@ func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 }
 
 func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
-	store, err := storage.NewEphemeralCantoStore()
+	store, err := session.NewEphemeralCantoStore()
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	defer store.Close()
 
-	lazy := storage.NewLazySession(store, "/tmp/ion", "model", "main")
+	lazy := session.NewLazySession(store, "/tmp/ion", "model", "main")
 	streamEntered := make(chan struct{})
 	adapter := NewSessionAdapter(&SessionAdapterConfig{
 		ID:    lazy.ID(),
@@ -344,7 +343,7 @@ func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
 	if err := adapter.SubmitTurn(context.Background(), "commit first"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if !storage.IsMaterialized(lazy) {
+	if !session.IsMaterialized(lazy) {
 		t.Fatal("lazy session was not materialized before SubmitTurn returned")
 	}
 	messages, err := lazy.ModelMessages(context.Background())
@@ -406,9 +405,9 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch msg := ev.(type) {
-			case session.UserMessage:
+			case session.UserMessageEvent:
 				users = append(users, msg.Message)
-			case session.TurnFinished:
+			case session.TurnFinishedEvent:
 				want := []string{"initial", "follow one", "follow two"}
 				if strings.Join(users, ",") != strings.Join(want, ",") {
 					t.Fatalf("user events = %v, want %v", users, want)
@@ -621,13 +620,13 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 				return AgentToolResult{}, errors.New("unexpected tool")
 			}
 		},
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch msg := ev.(type) {
-			case session.ToolCallStarted:
+			case session.ToolCallStartedEvent:
 				lifecycle = append(lifecycle, "start:"+msg.ToolName)
-			case session.ToolResult:
+			case session.ToolResultEvent:
 				lifecycle = append(lifecycle, "result:"+msg.ToolName)
 			}
 		},
@@ -772,7 +771,7 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 }
 
 func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
-	var events []session.Event
+	var events []session.AgentEvent
 	var committed []llm.Message
 	requests := 0
 	followUpSent := false
@@ -789,7 +788,7 @@ func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
 			followUpSent = true
 			return []AgentMessage{{Role: "user", Content: "queued follow-up"}}
 		},
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			events = append(events, ev)
 		},
 		OnModelMessage: func(ctx context.Context, message llm.Message) error {
@@ -806,7 +805,7 @@ func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
 	}
 	var sawFollowUpEvent bool
 	for _, ev := range events {
-		msg, ok := ev.(session.UserMessage)
+		msg, ok := ev.(session.UserMessageEvent)
 		if ok && msg.Message == "queued follow-up" {
 			sawFollowUpEvent = true
 			break
@@ -828,7 +827,7 @@ func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
 }
 
 func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
-	var events []session.Event
+	var events []session.AgentEvent
 	var committed []llm.Message
 	streamErr := errors.New("provider stream failed")
 	agent := New(AgentLoopConfig{
@@ -839,7 +838,7 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 				err:    streamErr,
 			}, nil
 		},
-		OnEvent: func(ev session.Event) {
+		OnEvent: func(ev session.AgentEvent) {
 			events = append(events, ev)
 		},
 		OnModelMessage: func(ctx context.Context, message llm.Message) error {
@@ -865,17 +864,17 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 		t.Fatalf("committed messages = %#v, want only user prompt", committed)
 	}
 	for _, ev := range events {
-		if _, ok := ev.(session.AgentMessage); ok {
+		if _, ok := ev.(session.AgentMessageEvent); ok {
 			t.Fatalf("unexpected assistant message event after stream error: %#v", ev)
 		}
-		if _, ok := ev.(session.TurnFinished); ok {
+		if _, ok := ev.(session.TurnFinishedEvent); ok {
 			t.Fatalf("unexpected turn-finished event after stream error: %#v", ev)
 		}
 	}
 }
 
 func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
-	store, err := storage.NewEphemeralCantoStore()
+	store, err := session.NewEphemeralCantoStore()
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

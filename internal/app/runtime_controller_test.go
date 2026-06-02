@@ -7,9 +7,8 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
@@ -24,7 +23,7 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 			ctx context.Context,
 			cfg *config.Config,
 			sessionID string,
-		) (backend.Backend, session.AgentSession, storage.Session, error) {
+		) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			targetSessionID = sessionID
 			return fakeBackend{
 				provider: cfg.Provider,
@@ -82,7 +81,7 @@ func TestSwitchLeavesCurrentRuntimeUntouchedWhenOpenFails(t *testing.T) {
 			context.Context,
 			*config.Config,
 			string,
-		) (backend.Backend, session.AgentSession, storage.Session, error) {
+		) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			return nil, nil, nil, openErr
 		},
 		Transition: NewTransition(
@@ -120,7 +119,7 @@ func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 			context.Context,
 			*config.Config,
 			string,
-		) (backend.Backend, session.AgentSession, storage.Session, error) {
+		) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
 		Transition: NewTransition(
@@ -165,7 +164,7 @@ func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T
 			context.Context,
 			*config.Config,
 			string,
-		) (backend.Backend, session.AgentSession, storage.Session, error) {
+		) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
 		Transition: NewTransition(
@@ -225,9 +224,9 @@ func (b fakeBackend) Bootstrap() backend.Bootstrap {
 
 func (b fakeBackend) Session() session.AgentSession { return b.session }
 
-func (b fakeBackend) SetStore(storage.Store) {}
+func (b fakeBackend) SetStore(session.SessionStore) {}
 
-func (b fakeBackend) SetSession(storage.Session) {}
+func (b fakeBackend) SetSession(session.SessionHandle) {}
 
 func (b fakeBackend) SetConfig(*config.Config) {}
 
@@ -235,7 +234,7 @@ type fakeSession struct {
 	id      string
 	cancels int
 	closed  bool
-	events  chan session.Event
+	events  chan session.AgentEvent
 }
 
 func (s *fakeSession) Open(context.Context) error { return nil }
@@ -254,7 +253,7 @@ func (s *fakeSession) Close() error {
 	return nil
 }
 
-func (s *fakeSession) Events() <-chan session.Event { return s.events }
+func (s *fakeSession) Events() <-chan session.AgentEvent { return s.events }
 
 func (s *fakeSession) ID() string { return s.id }
 
@@ -270,11 +269,11 @@ type fakeStorage struct {
 
 func (s *fakeStorage) ID() string { return s.id }
 
-func (s *fakeStorage) Meta() storage.Metadata {
-	return storage.Metadata{ID: s.id, Branch: s.branch}
+func (s *fakeStorage) Meta() session.Metadata {
+	return session.Metadata{ID: s.id, Branch: s.branch}
 }
 
-func (s *fakeStorage) Append(context.Context, storage.Event) error { return nil }
+func (s *fakeStorage) Append(context.Context, session.StoreEvent) error { return nil }
 
 func (s *fakeStorage) AppendModelMessage(context.Context, llm.Message) error { return nil }
 

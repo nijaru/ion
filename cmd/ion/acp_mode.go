@@ -2,7 +2,7 @@ package main
 
 import (
 	ionacp "github.com/nijaru/ion/internal/acp"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 type modeConfigurableSession interface {

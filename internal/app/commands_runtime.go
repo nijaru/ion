@@ -8,8 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
@@ -34,7 +33,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 func (m Model) storedSessionConfig(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID string,
 ) (*config.Config, error) {
 	resumed, err := store.ResumeSession(ctx, sessionID)
@@ -112,7 +111,7 @@ func (m Model) currentMaterializedSessionID() string {
 	if m.Model.Storage == nil {
 		return m.Model.Session.ID()
 	}
-	if !storage.IsMaterialized(m.Model.Storage) {
+	if !session.IsMaterialized(m.Model.Storage) {
 		return ""
 	}
 	return strings.TrimSpace(m.Model.Storage.ID())
@@ -270,7 +269,7 @@ func closeRuntimeHandles(handles Handles) {
 	CloseHandles(handles)
 }
 
-func currentBranchName(defaultBranch string, sess storage.Session) string {
+func currentBranchName(defaultBranch string, sess session.SessionHandle) string {
 	if sess == nil {
 		return defaultBranch
 	}

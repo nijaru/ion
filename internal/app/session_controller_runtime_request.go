@@ -1,6 +1,6 @@
 package app
 
-import "github.com/nijaru/ion/internal/session"
+import "github.com/nijaru/ion/session"
 
 type runtimeRequestController struct {
 	model *Model

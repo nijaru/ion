@@ -8,7 +8,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/privacy"
-	ionsession "github.com/nijaru/ion/internal/session"
+	session "github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
 
@@ -20,36 +20,36 @@ func (a *ionACPAgent) forwardEvent(
 	ctx context.Context,
 	sessionID string,
 	sess *ionACPHeadlessSession,
-	event ionsession.Event,
+	event session.AgentEvent,
 ) (bool, acp.StopReason, error) {
 	switch e := event.(type) {
-	case ionsession.TurnStarted:
+	case session.TurnStartedEvent:
 		return false, "", nil
-	case ionsession.TurnFinished:
+	case session.TurnFinishedEvent:
 		return true, acp.StopReasonEndTurn, nil
-	case ionsession.AgentDelta:
+	case session.AgentDeltaEvent:
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentMessageText(e.Delta))
-	case ionsession.ThinkingDelta:
+	case session.ThinkingDeltaEvent:
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentThoughtText(e.Delta))
-	case ionsession.AgentMessage:
+	case session.AgentMessageEvent:
 		if e.Reasoning != "" {
 			if err := a.sessionUpdate(ctx, sessionID, acp.UpdateAgentThoughtText(e.Reasoning)); err != nil {
 				return false, "", err
 			}
 		}
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentMessageText(e.Message))
-	case ionsession.ToolCallStarted:
+	case session.ToolCallStartedEvent:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallStart(sess.cwd, e))
-	case ionsession.ToolOutputDelta:
+	case session.ToolOutputDeltaEvent:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolOutputDelta(e))
-	case ionsession.ToolResult:
+	case session.ToolResultEvent:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallResult(e))
-	case ionsession.ApprovalRequest:
+	case session.ApprovalRequestEvent:
 		if err := a.requestPermission(ctx, sessionID, sess, e); err != nil {
 			return false, "", err
 		}
 		return false, "", nil
-	case ionsession.Error:
+	case session.ErrorEvent:
 		if e.Err != nil {
 			return false, "", e.Err
 		}
@@ -77,7 +77,7 @@ func (a *ionACPAgent) requestPermission(
 	ctx context.Context,
 	sessionID string,
 	sess *ionACPHeadlessSession,
-	req ionsession.ApprovalRequest,
+	req session.ApprovalRequestEvent,
 ) error {
 	approvalSession, ok := sess.agent.(acpApprovalSession)
 	if !ok {
@@ -144,7 +144,7 @@ func acpPromptText(blocks []acp.ContentBlock) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
-func acpToolCallStart(workdir string, e ionsession.ToolCallStarted) acp.SessionUpdate {
+func acpToolCallStart(workdir string, e session.ToolCallStartedEvent) acp.SessionUpdate {
 	title := privacy.Redact(tool.Title(e.ToolName, e.Args, tool.Options{
 		Workdir: workdir,
 		Width:   100,
@@ -160,7 +160,7 @@ func acpToolCallStart(workdir string, e ionsession.ToolCallStarted) acp.SessionU
 	)
 }
 
-func acpToolOutputDelta(e ionsession.ToolOutputDelta) acp.SessionUpdate {
+func acpToolOutputDelta(e session.ToolOutputDeltaEvent) acp.SessionUpdate {
 	delta := privacy.Redact(e.Delta)
 	return acp.UpdateToolCall(
 		acp.ToolCallId(e.ToolUseID),
@@ -171,7 +171,7 @@ func acpToolOutputDelta(e ionsession.ToolOutputDelta) acp.SessionUpdate {
 	)
 }
 
-func acpToolCallResult(e ionsession.ToolResult) acp.SessionUpdate {
+func acpToolCallResult(e session.ToolResultEvent) acp.SessionUpdate {
 	status := acp.ToolCallStatusCompleted
 	output := e.Result
 	if e.Error != nil {

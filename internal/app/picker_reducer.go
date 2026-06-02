@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type pickerReducer struct {
@@ -287,7 +287,7 @@ func (r pickerReducer) beginSessionLoad() uint64 {
 
 func (r pickerReducer) applySessionLoad(
 	requestID uint64,
-	sessions []storage.SessionInfo,
+	sessions []session.SessionInfo,
 	err error,
 ) bool {
 	if !r.sessionLoadMatches(requestID) {
@@ -301,7 +301,7 @@ func (r pickerReducer) applySessionLoad(
 	}
 	items := make([]sessionPickerItem, 0, len(sessions))
 	for _, info := range sessions {
-		if !storage.IsConversationSessionInfo(info) {
+		if !session.IsConversationSessionInfo(info) {
 			continue
 		}
 		items = append(items, sessionPickerItem{info: info})
@@ -330,13 +330,13 @@ func (r pickerReducer) closeSession() {
 	r.picker.Session = nil
 }
 
-func (r pickerReducer) selectedSession() (storage.SessionInfo, bool) {
+func (r pickerReducer) selectedSession() (session.SessionInfo, bool) {
 	if r.picker.Session == nil || len(r.picker.Session.filtered) == 0 {
-		return storage.SessionInfo{}, false
+		return session.SessionInfo{}, false
 	}
 	index := r.picker.Session.index
 	if index < 0 || index >= len(r.picker.Session.filtered) {
-		return storage.SessionInfo{}, false
+		return session.SessionInfo{}, false
 	}
 	return r.picker.Session.filtered[index].info, true
 }

@@ -7,14 +7,14 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool
-	hasPendingAgent := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent
+	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.RoleTool
+	hasPendingAgent := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.RoleAgent
 	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
 		!hasPendingAgent &&
 		m.InFlight.ReasonBuf == "" &&
@@ -97,12 +97,12 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	toolVerbosity := m.verbosity("tool")
 
 	switch e.Role {
-	case session.Agent:
+	case session.RoleAgent:
 		if e.Content == "" {
 			return m.planeBLine(m.st.dim, 2, "• ...")
 		}
 		return m.renderLiveAgentContent(e.Content)
-	case session.Tool:
+	case session.RoleTool:
 		label := m.normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
@@ -140,7 +140,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			}
 		}
 		return b.String()
-	case session.Subagent:
+	case session.RoleSubagent:
 		label := e.Title
 		if label == "" {
 			label = "subagent"
@@ -286,10 +286,10 @@ func (m Model) renderEntry(e session.Entry) string {
 	toolVerbosity := m.verbosity("tool")
 
 	switch e.Role {
-	case session.User:
+	case session.RoleUser:
 		return m.renderUserEntry(e.Content)
 
-	case session.Agent:
+	case session.RoleAgent:
 		var b strings.Builder
 		if e.Reasoning != "" && thinkingVerbosity != "hidden" {
 			if thinkingVerbosity == "collapsed" {
@@ -320,7 +320,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		b.WriteString(m.renderCompletedAgentContent(rendered))
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
-	case session.Tool:
+	case session.RoleTool:
 		label := m.normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
@@ -366,7 +366,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
-	case session.Subagent:
+	case session.RoleSubagent:
 		label := e.Title
 		if label == "" {
 			label = "subagent"
@@ -379,7 +379,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
-	case session.System:
+	case session.RoleSystem:
 		if strings.HasPrefix(e.Content, "Error: ") {
 			return m.st.warn.Render("× " + e.Content)
 		}

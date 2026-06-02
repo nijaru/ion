@@ -23,7 +23,7 @@ type AgentSession interface {
 	Close() error
 	// Events returns a read-only channel of typed events emitted by the session.
 	// The host UI consumes these events and translates them into UI commands.
-	Events() <-chan Event
+	Events() <-chan AgentEvent
 
 	// ID returns the session identifier.
 	ID() string

@@ -14,8 +14,7 @@ import (
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
@@ -263,7 +262,7 @@ func main() {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 		switchedBackend, switchedSession, err := openRuntime(
 			ctx,
 			store,
@@ -340,8 +339,8 @@ func startupModelMissing(b backend.Backend) bool {
 func runtimeHandlesForClose(
 	finalModel tea.Model,
 	fallbackAgent session.AgentSession,
-	fallbackSession storage.Session,
-) (session.AgentSession, storage.Session) {
+	fallbackSession session.SessionHandle,
+) (session.AgentSession, session.SessionHandle) {
 	if model, ok := finalModel.(*app.Model); ok && model != nil {
 		return model.Model.Session, model.Model.Storage
 	}

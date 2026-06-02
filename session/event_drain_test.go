@@ -18,7 +18,7 @@ func TestDecideEventDrain(t *testing.T) {
 		{
 			name: "inactive drain processes event",
 			input: EventDrainInput{
-				Event: UserMessage{Base: BaseAt(beforeDrain), Message: "stale"},
+				Event: UserMessageEvent{Base: BaseAt(beforeDrain), Message: "stale"},
 			},
 			want: EventDrainDecision{Action: EventDrainProcess},
 		},
@@ -27,7 +27,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          UserMessage{Base: BaseAt(beforeDrain), Message: "stale"},
+				Event:          UserMessageEvent{Base: BaseAt(beforeDrain), Message: "stale"},
 			},
 			want: EventDrainDecision{Action: EventDrainAwait},
 		},
@@ -36,7 +36,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          UserMessage{Base: BaseAt(afterDrain), Message: "fresh"},
+				Event:          UserMessageEvent{Base: BaseAt(afterDrain), Message: "fresh"},
 			},
 			want: EventDrainDecision{Action: EventDrainProcess, FinishDrain: true},
 		},
@@ -45,7 +45,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          UserMessage{Message: "fresh enough"},
+				Event:          UserMessageEvent{Message: "fresh enough"},
 			},
 			want: EventDrainDecision{Action: EventDrainProcess, FinishDrain: true},
 		},
@@ -54,7 +54,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          TurnStarted{Base: BaseAt(beforeDrain)},
+				Event:          TurnStartedEvent{Base: BaseAt(beforeDrain)},
 			},
 			want: EventDrainDecision{Action: EventDrainAwait},
 		},
@@ -63,7 +63,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          TurnStarted{Base: BaseAt(afterDrain)},
+				Event:          TurnStartedEvent{Base: BaseAt(afterDrain)},
 			},
 			want: EventDrainDecision{Action: EventDrainProcess, FinishDrain: true},
 		},
@@ -72,7 +72,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          TurnFinished{Base: BaseAt(beforeDrain)},
+				Event:          TurnFinishedEvent{Base: BaseAt(beforeDrain)},
 			},
 			want: EventDrainDecision{Action: EventDrainProcess, FinishDrain: true},
 		},
@@ -81,7 +81,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          AgentDelta{Base: BaseAt(afterDrain), Delta: "ignored"},
+				Event:          AgentDeltaEvent{Base: BaseAt(afterDrain), Delta: "ignored"},
 			},
 			want: EventDrainDecision{Action: EventDrainAwait},
 		},

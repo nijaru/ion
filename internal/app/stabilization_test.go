@@ -6,27 +6,27 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func TestToolStreaming(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event, 10)}
+	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
 	// 1. Tool started
-	updated, _ := m.Update(session.ToolCallStarted{
+	updated, _ := m.Update(session.ToolCallStartedEvent{
 		ToolName: "bash",
 		Args:     "ls",
 	})
 	m = testModel(t, updated)
 
-	if m.InFlight.Pending == nil || m.InFlight.Pending.Role != session.Tool {
+	if m.InFlight.Pending == nil || m.InFlight.Pending.Role != session.RoleTool {
 		t.Fatal("expected pending tool entry")
 	}
 
 	// 2. Output delta
-	updated, _ = m.Update(session.ToolOutputDelta{Delta: "file1.txt\n"})
+	updated, _ = m.Update(session.ToolOutputDeltaEvent{Delta: "file1.txt\n"})
 	m = testModel(t, updated)
 
 	if m.InFlight.Pending.Content != "file1.txt\n" {
@@ -34,7 +34,7 @@ func TestToolStreaming(t *testing.T) {
 	}
 
 	// 3. Tool result
-	updated, cmd := m.Update(session.ToolResult{
+	updated, cmd := m.Update(session.ToolResultEvent{
 		ToolName: "bash",
 		Result:   "file1.txt\nfile2.txt\n",
 	})
@@ -54,7 +54,7 @@ func TestRenderEntry(t *testing.T) {
 
 	// 1. Agent message with multiple lines
 	entry := session.Entry{
-		Role:    session.Agent,
+		Role:    session.RoleAgent,
 		Content: "Line 1\n\nLine 2\n\nLine 3",
 	}
 	rendered := m.renderEntry(entry)
@@ -66,7 +66,7 @@ func TestRenderEntry(t *testing.T) {
 
 	// 2. Agent message with reasoning
 	entry = session.Entry{
-		Role:      session.Agent,
+		Role:      session.RoleAgent,
 		Reasoning: "Thought 1",
 		Content:   "Reply 1",
 	}
@@ -83,19 +83,19 @@ func TestRenderEntry(t *testing.T) {
 }
 
 func TestAsyncSubagents(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event, 10)}
+	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
 	// 1. Worker 1 requested
-	updated, _ := m.Update(session.ChildRequested{
+	updated, _ := m.Update(session.ChildRequestedEvent{
 		AgentName: "worker-1",
 		Query:     "task 1",
 	})
 	m = testModel(t, updated)
 
 	// 2. Worker 2 requested
-	updated, _ = m.Update(session.ChildRequested{
+	updated, _ = m.Update(session.ChildRequestedEvent{
 		AgentName: "worker-2",
 		Query:     "task 2",
 	})
@@ -106,14 +106,14 @@ func TestAsyncSubagents(t *testing.T) {
 	}
 
 	// 3. Worker 1 progresses
-	updated, _ = m.Update(session.ChildDelta{
+	updated, _ = m.Update(session.ChildDeltaEvent{
 		AgentName: "worker-1",
 		Delta:     "working on 1...",
 	})
 	m = testModel(t, updated)
 
 	// 4. Worker 2 progresses
-	updated, _ = m.Update(session.ChildDelta{
+	updated, _ = m.Update(session.ChildDeltaEvent{
 		AgentName: "worker-2",
 		Delta:     "working on 2...",
 	})
@@ -127,7 +127,7 @@ func TestAsyncSubagents(t *testing.T) {
 	}
 
 	// 5. Worker 1 completes
-	updated, _ = m.Update(session.ChildCompleted{
+	updated, _ = m.Update(session.ChildCompletedEvent{
 		AgentName: "worker-1",
 		Result:    "result 1",
 	})
@@ -142,14 +142,14 @@ func TestAsyncSubagents(t *testing.T) {
 }
 
 func TestSubagentCollapseRule(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event, 10)}
+	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
 	// 1. Request 5 workers
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("worker-%d", i)
-		updated, _ := m.Update(session.ChildRequested{
+		updated, _ := m.Update(session.ChildRequestedEvent{
 			AgentName: name,
 			Query:     "task",
 		})

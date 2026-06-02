@@ -7,14 +7,13 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type Backend struct {
-	events  chan session.Event
-	storage storage.Store
-	sess    storage.Session
+	events  chan session.AgentEvent
+	storage session.SessionStore
+	sess    session.SessionHandle
 	script  []ScriptStep
 	cfg     *config.Config
 }
@@ -24,7 +23,7 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 }
 
 type ScriptStep struct {
-	Event session.Event
+	Event session.AgentEvent
 	Delay time.Duration
 }
 
@@ -32,11 +31,11 @@ func (b *Backend) SetScript(steps []ScriptStep) {
 	b.script = steps
 }
 
-func (b *Backend) SetStore(s storage.Store) {
+func (b *Backend) SetStore(s session.SessionStore) {
 	b.storage = s
 }
 
-func (b *Backend) SetSession(s storage.Session) {
+func (b *Backend) SetSession(s session.SessionHandle) {
 	b.sess = s
 }
 
@@ -55,7 +54,7 @@ func (b *Backend) Meta() map[string]string {
 
 func New() *Backend {
 	return &Backend{
-		events: make(chan session.Event, 100),
+		events: make(chan session.AgentEvent, 100),
 	}
 }
 
@@ -87,9 +86,9 @@ func (b *Backend) ContextLimit() int {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
-			{Role: session.System, Content: "ion test backend"},
+			{Role: session.RoleSystem, Content: "ion test backend"},
 			{
-				Role:    session.Agent,
+				Role:    session.RoleAgent,
 				Content: "This backend emits deterministic stream, tool, progress, and completion events for TUI tests.",
 			},
 		},
@@ -123,32 +122,32 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 
 	go func() {
-		b.events <- session.UserMessage{Message: input}
-		b.events <- session.TurnStarted{}
-		b.events <- session.StatusChanged{Status: "[fake] planning reply"}
+		b.events <- session.UserMessageEvent{Message: input}
+		b.events <- session.TurnStartedEvent{}
+		b.events <- session.StatusChangedEvent{Status: "[fake] planning reply"}
 
 		time.Sleep(120 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		b.events <- session.AgentDeltaEvent{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		b.events <- session.AgentDeltaEvent{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
 
 		time.Sleep(140 * time.Millisecond)
-		b.events <- session.ToolCallStarted{ToolName: "bash", Args: "git status --short"}
+		b.events <- session.ToolCallStartedEvent{ToolName: "bash", Args: "git status --short"}
 
 		time.Sleep(100 * time.Millisecond)
-		b.events <- session.ToolResult{
+		b.events <- session.ToolResultEvent{
 			ToolName: "bash",
 			Result:   "test tool result: working tree checked",
 		}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		b.events <- session.AgentDeltaEvent{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentMessage{Message: ""} // Signal end of message
-		b.events <- session.StatusChanged{Status: "[fake] turn complete"}
-		b.events <- session.TurnFinished{}
+		b.events <- session.AgentMessageEvent{Message: ""} // Signal end of message
+		b.events <- session.StatusChangedEvent{Status: "[fake] turn complete"}
+		b.events <- session.TurnFinishedEvent{}
 	}()
 	return nil
 }
@@ -162,6 +161,6 @@ func (b *Backend) Close() error {
 	return nil
 }
 
-func (b *Backend) Events() <-chan session.Event {
+func (b *Backend) Events() <-chan session.AgentEvent {
 	return b.events
 }

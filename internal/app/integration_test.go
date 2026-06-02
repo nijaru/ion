@@ -10,15 +10,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/session"
 )
 
 func TestIntegrationFullLoop(t *testing.T) {
 	// 1. Setup storage
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, err := storage.NewCantoStore(tmpRoot)
+	store, err := session.NewCantoStore(tmpRoot)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -33,11 +32,11 @@ func TestIntegrationFullLoop(t *testing.T) {
 	b := testutil.New()
 	b.SetStore(store)
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStarted{}, Delay: 0},
-		{Event: session.AgentDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
-		{Event: session.AgentDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
-		{Event: session.AgentMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
-		{Event: session.TurnFinished{}, Delay: 0},
+		{Event: session.TurnStartedEvent{}, Delay: 0},
+		{Event: session.AgentDeltaEvent{Delta: "Hello "}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentDeltaEvent{Delta: "world"}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentMessageEvent{Message: "Hello world"}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnFinishedEvent{}, Delay: 0},
 	})
 
 	// 3. Setup Model
@@ -58,7 +57,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ = model.Update(ev)
 			model = testModel(t, updated)
-			if _, ok := ev.(session.TurnFinished); ok {
+			if _, ok := ev.(session.TurnFinishedEvent); ok {
 				done = true
 			}
 		case <-timeout:
@@ -80,7 +79,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 	}
 
 	for _, e := range storedEntries {
-		if e.Role == session.User || e.Role == session.Agent {
+		if e.Role == session.RoleUser || e.Role == session.RoleAgent {
 			t.Fatalf(
 				"test backend should not create transcript entries through app persistence: %#v",
 				storedEntries,
@@ -92,34 +91,34 @@ func TestIntegrationFullLoop(t *testing.T) {
 func TestMultiplexedSwarms(t *testing.T) {
 	// Setup store and session
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, _ := storage.NewCantoStore(tmpRoot)
+	store, _ := session.NewCantoStore(tmpRoot)
 	cwd, _ := os.Getwd()
 	sess, _ := store.OpenSession(context.Background(), cwd, "swarm-test", "main")
 
 	// Setup script with two sub-agents
 	b := testutil.New()
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStarted{}, Delay: 0},
+		{Event: session.TurnStartedEvent{}, Delay: 0},
 		{
-			Event: session.StatusChanged{
+			Event: session.StatusChangedEvent{
 				Base:   session.Base{AgentID: "Explorer"},
 				Status: "Mapping codebase...",
 			},
 			Delay: 10 * time.Millisecond,
 		},
-		{Event: session.ToolCallStarted{
+		{Event: session.ToolCallStartedEvent{
 			Base:     session.Base{AgentID: "Tester"},
 			ToolName: "bash",
 			Args:     "go test ./...",
 		}, Delay: 10 * time.Millisecond},
-		{Event: session.ToolResult{
+		{Event: session.ToolResultEvent{
 			Base:      session.Base{AgentID: "Tester"},
 			ToolName:  "bash",
 			ToolUseID: "bash-1",
 			Result:    "OK",
 		}, Delay: 20 * time.Millisecond},
-		{Event: session.AgentMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
-		{Event: session.TurnFinished{}, Delay: 0},
+		{Event: session.AgentMessageEvent{Message: "All good."}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnFinishedEvent{}, Delay: 0},
 	})
 
 	model := New(b, sess, store, "/tmp/test", "main", "dev", nil)
@@ -135,7 +134,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ := model.Update(ev)
 			model = testModel(t, updated)
-			if _, ok := ev.(session.TurnFinished); ok {
+			if _, ok := ev.(session.TurnFinishedEvent); ok {
 				done = true
 			}
 		case <-timeout:
@@ -148,7 +147,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 	resumed, _ := store.ResumeSession(context.Background(), sess.ID())
 	storedEntries, _ := resumed.Entries(context.Background())
 	for _, e := range storedEntries {
-		if e.Role == session.Tool && strings.Contains(e.Title, "bash") {
+		if e.Role == session.RoleTool && strings.Contains(e.Title, "bash") {
 			t.Fatalf("live tool result should not be app-persisted: %#v", storedEntries)
 		}
 	}
@@ -157,7 +156,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 func TestIntegrationSubagentDurability(t *testing.T) {
 	// 1. Setup storage
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, _ := storage.NewCantoStore(tmpRoot)
+	store, _ := session.NewCantoStore(tmpRoot)
 	cwd, _ := os.Getwd()
 	sess, _ := store.OpenSession(context.Background(), cwd, "subagent-durability-test", "main")
 
@@ -166,16 +165,16 @@ func TestIntegrationSubagentDurability(t *testing.T) {
 	b.SetStore(store)
 
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStarted{}, Delay: 0},
+		{Event: session.TurnStartedEvent{}, Delay: 0},
 		{
-			Event: session.ChildRequested{AgentName: "worker-1", Query: "task 1"},
+			Event: session.ChildRequestedEvent{AgentName: "worker-1", Query: "task 1"},
 			Delay: 10 * time.Millisecond,
 		},
 		{
-			Event: session.ChildCompleted{AgentName: "worker-1", Result: "result 1"},
+			Event: session.ChildCompletedEvent{AgentName: "worker-1", Result: "result 1"},
 			Delay: 10 * time.Millisecond,
 		},
-		{Event: session.TurnFinished{}, Delay: 0},
+		{Event: session.TurnFinishedEvent{}, Delay: 0},
 	})
 
 	// 3. Setup Model
@@ -193,10 +192,10 @@ loop:
 			updated, cmd := model.Update(ev)
 			model = testModel(t, updated)
 			switch ev.(type) {
-			case session.ChildRequested, session.ChildCompleted, session.ChildFailed:
+			case session.ChildRequestedEvent, session.ChildCompletedEvent, session.ChildFailedEvent:
 				runSequencePrefix(t, cmd, 2)
 			}
-			if _, ok := ev.(session.TurnFinished); ok {
+			if _, ok := ev.(session.TurnFinishedEvent); ok {
 				break loop
 			}
 		case <-timeout:
@@ -210,7 +209,7 @@ loop:
 
 	foundSubagent := false
 	for _, e := range entries {
-		if e.Role == session.Subagent && e.Title == "worker-1" {
+		if e.Role == session.RoleSubagent && e.Title == "worker-1" {
 			foundSubagent = true
 			if !strings.Contains(e.Content, "Completed: result 1") &&
 				!strings.Contains(e.Content, "Started: task 1") {

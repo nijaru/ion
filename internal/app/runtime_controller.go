@@ -7,8 +7,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 type Preset string
@@ -34,12 +33,12 @@ func PresetFromString(value string) Preset {
 	return PresetPrimary
 }
 
-type Switcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
+type Switcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, session.SessionHandle, error)
 
 type Handles struct {
 	Backend backend.Backend
 	Session session.AgentSession
-	Storage storage.Session
+	Storage session.SessionHandle
 }
 
 type Snapshot struct {
@@ -312,7 +311,7 @@ func CloseHandles(handles Handles) {
 func SessionState(handles Handles) (string, bool) {
 	if handles.Storage != nil {
 		id := strings.TrimSpace(handles.Storage.ID())
-		return id, storage.IsMaterialized(handles.Storage)
+		return id, session.IsMaterialized(handles.Storage)
 	}
 	if handles.Session == nil {
 		return "", false

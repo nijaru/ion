@@ -6,8 +6,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (m Model) configurationStatus() string {
@@ -103,7 +102,7 @@ func (m Model) configuredBudgetStopReason() string {
 	})
 }
 
-func (m Model) routingDecision(decision, reason, stopReason string) storage.RoutingDecision {
+func (m Model) routingDecision(decision, reason, stopReason string) session.StoreRoutingDecision {
 	provider := m.runtimeProvider()
 	model := m.runtimeModel()
 	var maxSessionCost, maxTurnCost float64
@@ -111,7 +110,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) storage.Rout
 		maxSessionCost = m.Model.Config.MaxSessionCost
 		maxTurnCost = m.Model.Config.MaxTurnCost
 	}
-	return storage.RoutingDecision{
+	return session.StoreRoutingDecision{
 		Type:           "routing_decision",
 		Decision:       decision,
 		Reason:         reason,

@@ -4,8 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func (r turnReducer) appendThinkingDelta(agentID, delta string) {
@@ -27,9 +26,9 @@ func (r turnReducer) appendAgentDelta(agentID, delta string, timestamp time.Time
 			return
 		}
 		r.progress.Mode = stateStreaming
-		if r.inFlight.Pending == nil || r.inFlight.Pending.Role != session.Agent {
+		if r.inFlight.Pending == nil || r.inFlight.Pending.Role != session.RoleAgent {
 			r.inFlight.Pending = &session.Entry{
-				Role:      session.Agent,
+				Role:      session.RoleAgent,
 				Timestamp: timestamp,
 			}
 		}
@@ -47,11 +46,11 @@ func (r turnReducer) appendAgentDelta(agentID, delta string, timestamp time.Time
 	}
 }
 
-func (r turnReducer) commitAgentMessage(msg session.AgentMessage) (session.Entry, bool) {
+func (r turnReducer) commitAgentMessage(msg session.AgentMessageEvent) (session.Entry, bool) {
 	if msg.AgentID != "" {
 		return session.Entry{}, false
 	}
-	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Agent {
+	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.RoleAgent {
 		if msg.Message != "" {
 			r.inFlight.Pending.Content = msg.Message
 		} else if streamContent := r.agentStreamContent(); streamContent != "" {
@@ -64,7 +63,7 @@ func (r turnReducer) commitAgentMessage(msg session.AgentMessage) (session.Entry
 		setEntryTimestamp(r.inFlight.Pending, msg.Timestamp)
 		entry := *r.inFlight.Pending
 		r.clearPendingAssistant()
-		entry, ok := storage.EntryAgent(entry.Content, entry.Reasoning, entry.Timestamp)
+		entry, ok := session.EntryAgent(entry.Content, entry.Reasoning, entry.Timestamp)
 		if !ok {
 			return session.Entry{}, false
 		}
@@ -78,7 +77,7 @@ func (r turnReducer) commitAgentMessage(msg session.AgentMessage) (session.Entry
 	r.inFlight.StreamBuf = ""
 	r.inFlight.StreamChunks = nil
 	r.inFlight.ReasonBuf = ""
-	entry, ok := storage.EntryAgent(msg.Message, reasoning, msg.Timestamp)
+	entry, ok := session.EntryAgent(msg.Message, reasoning, msg.Timestamp)
 	if !ok {
 		return session.Entry{}, false
 	}
@@ -90,7 +89,7 @@ func (r turnReducer) agentStreamContent() string {
 	if len(r.inFlight.StreamChunks) > 0 {
 		return strings.Join(r.inFlight.StreamChunks, "")
 	}
-	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.Agent {
+	if r.inFlight.Pending != nil && r.inFlight.Pending.Role == session.RoleAgent {
 		return r.inFlight.Pending.Content
 	}
 	return r.inFlight.StreamBuf

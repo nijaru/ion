@@ -1,14 +1,12 @@
-package tool
+package session
 
 import (
 	"testing"
-
-	"github.com/nijaru/ion/session"
 )
 
 func TestACRFenceValidateReuseCompletedOutput(t *testing.T) {
-	sess := session.New("sess")
-	if err := sess.Append(t.Context(), session.NewToolCompletedEvent(sess.ID(), session.ToolCompletedData{
+	sess := New("sess")
+	if err := sess.Append(t.Context(), NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:           "read_file",
 		ID:             "call-1",
 		IdempotencyKey: "key-1",
@@ -27,8 +25,8 @@ func TestACRFenceValidateReuseCompletedOutput(t *testing.T) {
 }
 
 func TestACRFenceValidateRejectsAmbiguousStartedOnlyExecution(t *testing.T) {
-	sess := session.New("sess")
-	if err := sess.Append(t.Context(), session.NewToolStartedEvent(sess.ID(), session.ToolStartedData{
+	sess := New("sess")
+	if err := sess.Append(t.Context(), NewToolStartedEvent(sess.ID(), ToolStartedData{
 		Tool:           "read_file",
 		Arguments:      `{"path":"main.go"}`,
 		ID:             "call-1",

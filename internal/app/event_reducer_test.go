@@ -10,8 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
@@ -19,16 +18,16 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "streamed reply"})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "streamed reply"})
 	model = testModel(t, updated)
 
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "streamed reply" {
 		t.Fatalf("expected pending streamed agent entry, got %#v", model.InFlight.Pending)
 	}
 
-	updated, cmd := model.Update(session.AgentMessage{})
+	updated, cmd := model.Update(session.AgentMessageEvent{})
 	model = testModel(t, updated)
 
 	if model.InFlight.Pending != nil {
@@ -46,7 +45,7 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 func TestUserMessagePrintsFromSessionEvent(t *testing.T) {
 	model := readyModel(t)
 
-	updated, cmd := model.Update(session.UserMessage{Message: "read README.md"})
+	updated, cmd := model.Update(session.UserMessageEvent{Message: "read README.md"})
 	model = testModel(t, updated)
 
 	if cmd == nil {
@@ -64,7 +63,7 @@ func TestPlaneBShowsPendingAgentText(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 24
 	model.InFlight.Pending = &session.Entry{
-		Role:    session.Agent,
+		Role:    session.RoleAgent,
 		Content: "streamed reply with a long tail",
 	}
 
@@ -79,7 +78,7 @@ func TestPlaneBShowsPendingAgentTextWithoutMarkdownRendering(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 80
 	model.InFlight.Pending = &session.Entry{
-		Role: session.Agent,
+		Role: session.RoleAgent,
 		Content: strings.Join([]string{
 			"Working:",
 			"",
@@ -104,7 +103,7 @@ func TestPlaneBTrimsLeadingNewlinesFromPendingAgentText(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 80
 	model.InFlight.Pending = &session.Entry{
-		Role:    session.Agent,
+		Role:    session.RoleAgent,
 		Content: "\n\n- first streamed bullet",
 	}
 
@@ -120,11 +119,11 @@ func TestPlaneBTrimsLeadingNewlinesFromPendingAgentText(t *testing.T) {
 func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "partial"})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "partial"})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.AgentMessage{Message: "final"})
+	updated, cmd := model.Update(session.AgentMessageEvent{Message: "final"})
 	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected committed assistant print command")
@@ -133,7 +132,7 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 		t.Fatal("agent commit marker was not set")
 	}
 
-	updated, _ = model.Update(session.AgentDelta{Delta: "late"})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "late"})
 	model = testModel(t, updated)
 	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
 		t.Fatalf(
@@ -143,13 +142,13 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.Update(session.ThinkingDelta{Delta: "late thinking"})
+	updated, _ = model.Update(session.ThinkingDeltaEvent{Delta: "late thinking"})
 	model = testModel(t, updated)
 	if model.InFlight.ReasonBuf != "" {
 		t.Fatalf("late thinking buffer = %q, want ignored", model.InFlight.ReasonBuf)
 	}
 
-	updated, _ = model.Update(session.TurnFinished{})
+	updated, _ = model.Update(session.TurnFinishedEvent{})
 	model = testModel(t, updated)
 	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" ||
 		model.InFlight.ReasonBuf != "" {
@@ -166,19 +165,19 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)
 	model.Model.Storage = storageSess
-	updated, _ := model.Update(session.ToolCallStarted{
+	updated, _ := model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Args:      "ls",
 	})
 	model = testModel(t, updated)
 
-	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Tool {
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.RoleTool {
 		t.Fatalf("expected pending tool entry")
 	}
 	model.Progress.Status = "Running bash..."
 
-	updated, cmd := model.Update(session.ToolResult{
+	updated, cmd := model.Update(session.ToolResultEvent{
 		ToolName: "bash",
 		Result:   "ok",
 	})
@@ -206,11 +205,11 @@ func TestTokenUsageSeparatesSessionTotalsFromContextEstimate(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10, Cost: 0.01})
+	updated, _ = model.Update(session.TokenUsageEvent{Input: 100, Output: 10, Cost: 0.01})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 20, Output: 5, Cost: 0.02})
+	updated, _ = model.Update(session.TokenUsageEvent{Input: 20, Output: 5, Cost: 0.02})
 	model = testModel(t, updated)
 
 	if model.Progress.TokensSent != 120 || model.Progress.TokensReceived != 15 {
@@ -240,7 +239,7 @@ func TestTokenUsagePersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) 
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.TokenUsage{Input: 10, Output: 2, Cost: 0.01})
+	next, cmd := model.Update(session.TokenUsageEvent{Input: 10, Output: 2, Cost: 0.01})
 	model = testModel(t, next)
 
 	if model.Progress.TokensSent != 10 || model.Progress.TokensReceived != 2 {
@@ -262,7 +261,7 @@ func TestTokenUsagePersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) 
 	}()
 	select {
 	case event := <-storageSess.entered:
-		usage, ok := event.(storage.TokenUsage)
+		usage, ok := event.(session.StoreTokenUsage)
 		if !ok {
 			t.Fatalf("append event = %#v, want token usage", event)
 		}
@@ -286,17 +285,17 @@ func TestTokenUsagePersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) 
 func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10})
+	updated, _ = model.Update(session.TokenUsageEvent{Input: 100, Output: 10})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolCallStarted{
+	updated, _ = model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Args:      "echo ok",
 	})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolResult{
+	updated, _ = model.Update(session.ToolResultEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Result:    "ok\n",
@@ -307,7 +306,7 @@ func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
 		t.Fatalf("context tokens after tool = %d, want reset", model.Progress.ContextTokens)
 	}
 
-	updated, _ = model.Update(session.TokenUsage{Input: 140, Output: 20})
+	updated, _ = model.Update(session.TokenUsageEvent{Input: 140, Output: 20})
 	model = testModel(t, updated)
 
 	if model.Progress.TokensSent != 240 || model.Progress.TokensReceived != 30 {
@@ -325,18 +324,18 @@ func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
 func TestAgentDeltaDoesNotAppendToPendingToolEntry(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolCallStarted{
+	updated, _ = model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Args:      "echo ok",
 	})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "assistant text"})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "assistant text"})
 	model = testModel(t, updated)
 
-	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Agent {
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.RoleAgent {
 		t.Fatalf("pending entry = %#v, want agent entry", model.InFlight.Pending)
 	}
 	if model.InFlight.Pending.Content != "assistant text" {
@@ -354,11 +353,11 @@ func TestAgentDeltaDoesNotAppendToPendingToolEntry(t *testing.T) {
 func TestAgentDeltaChunksRenderAndFinalize(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "hello "})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "hello "})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "world"})
+	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "world"})
 	model = testModel(t, updated)
 
 	if got := model.agentStreamContent(); got != "hello world" {
@@ -379,7 +378,7 @@ func TestAgentMessagePrintsWithoutPendingStream(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, cmd := model.Update(session.AgentMessage{Message: "done"})
+	updated, cmd := model.Update(session.AgentMessageEvent{Message: "done"})
 	model = testModel(t, updated)
 
 	if cmd == nil {
@@ -398,15 +397,15 @@ func TestAgentMessageAfterToolResultPrintsFinalAnswer(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolCallStarted{
+	updated, _ = model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Args:      "echo ok",
 	})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolResult{
+	updated, _ = model.Update(session.ToolResultEvent{
 		ToolUseID: "tool-call-1",
 		ToolName:  "bash",
 		Result:    "ok\n",
@@ -414,7 +413,7 @@ func TestAgentMessageAfterToolResultPrintsFinalAnswer(t *testing.T) {
 	model = testModel(t, updated)
 
 	model.App.PrintedTranscript = false
-	updated, cmd := model.Update(session.AgentMessage{Message: "done"})
+	updated, cmd := model.Update(session.AgentMessageEvent{Message: "done"})
 	model = testModel(t, updated)
 
 	if cmd == nil {
@@ -436,23 +435,23 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, _ := model.Update(session.ToolCallStarted{
+	updated, _ := model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-a",
 		ToolName:  "bash",
 		Args:      "first",
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolCallStarted{
+	updated, _ = model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-b",
 		ToolName:  "bash",
 		Args:      "second",
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "a partial"})
+	updated, _ = model.Update(session.ToolOutputDeltaEvent{ToolUseID: "tool-a", Delta: "a partial"})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-b", Delta: "b partial"})
+	updated, _ = model.Update(session.ToolOutputDeltaEvent{ToolUseID: "tool-b", Delta: "b partial"})
 	model = testModel(t, updated)
 
 	if got := model.InFlight.PendingTools["tool-a"].Content; got != "a partial" {
@@ -462,7 +461,7 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 		t.Fatalf("tool-b pending content = %q, want b partial", got)
 	}
 
-	updated, _ = model.Update(session.ToolResult{
+	updated, _ = model.Update(session.ToolResultEvent{
 		ToolUseID: "tool-a",
 		ToolName:  "bash",
 		Result:    "a done",
@@ -476,7 +475,7 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 		t.Fatalf("tool-b pending content = %q, want b partial", got)
 	}
 
-	updated, _ = model.Update(session.ToolResult{
+	updated, _ = model.Update(session.ToolResultEvent{
 		ToolUseID: "tool-b",
 		ToolName:  "bash",
 		Result:    "b done",
@@ -494,16 +493,16 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 func TestToolOutputSnapshotReplacesPendingContent(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.ToolCallStarted{
+	updated, _ := model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-a",
 		ToolName:  "bash",
 		Args:      "first",
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "head"})
+	updated, _ = model.Update(session.ToolOutputDeltaEvent{ToolUseID: "tool-a", Delta: "head"})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolOutputDelta{
+	updated, _ = model.Update(session.ToolOutputDeltaEvent{
 		ToolUseID: "tool-a",
 		Delta:     "tail snapshot",
 		Snapshot:  true,
@@ -520,14 +519,14 @@ func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	updated, _ := model.Update(session.ToolCallStarted{
+	updated, _ := model.Update(session.ToolCallStartedEvent{
 		ToolUseID: "tool-a",
 		ToolName:  "bash",
 		Args:      "first",
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolResult{
+	updated, _ = model.Update(session.ToolResultEvent{
 		ToolUseID: "missing-tool",
 		ToolName:  "bash",
 		Result:    "wrong result",
@@ -551,7 +550,7 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	model.Progress.CurrentTurnInput = 1200
 	model.Progress.CurrentTurnOutput = 300
 
-	updated, _ := model.Update(session.TurnFinished{})
+	updated, _ := model.Update(session.TurnFinishedEvent{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateComplete {
@@ -574,12 +573,12 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 func TestTurnFinishedCommitsPendingStreamWhenNoAgentMessageArrives(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateStreaming
-	model.InFlight.Pending = &session.Entry{Role: session.Agent, Content: "streamed answer"}
+	model.InFlight.Pending = &session.Entry{Role: session.RoleAgent, Content: "streamed answer"}
 	model.InFlight.StreamBuf = "streamed answer"
 	model.InFlight.ReasonBuf = "brief reasoning"
 	model.InFlight.Thinking = true
 
-	updated, cmd := model.Update(session.TurnFinished{})
+	updated, cmd := model.Update(session.TurnFinishedEvent{})
 	model = testModel(t, updated)
 
 	if model.InFlight.Pending != nil {
@@ -604,11 +603,11 @@ func TestTurnFinishedWithoutAssistantResponseShowsError(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateWorking
 	model.Progress.TurnStartedAt = time.Now().Add(-2 * time.Second)
-	model.InFlight.Pending = &session.Entry{Role: session.Agent}
+	model.InFlight.Pending = &session.Entry{Role: session.RoleAgent}
 	model.InFlight.QueuedTurns = []string{"follow-up"}
 	model.InFlight.Thinking = true
 
-	updated, cmd := model.Update(session.TurnFinished{})
+	updated, cmd := model.Update(session.TurnFinishedEvent{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateError {
@@ -627,7 +626,7 @@ func TestTurnFinishedWithoutAssistantResponseShowsError(t *testing.T) {
 
 func TestTurnFinishedWithoutAssistantResponseClearsPendingToolState(t *testing.T) {
 	model := readyModel(t)
-	toolEntry := &session.Entry{Role: session.Tool, Title: "Bash(sleep 10)"}
+	toolEntry := &session.Entry{Role: session.RoleTool, Title: "Bash(sleep 10)"}
 	model.Progress.Mode = stateWorking
 	model.Progress.Status = "Running bash..."
 	model.Progress.LastToolUseID = "tool-a"
@@ -635,7 +634,7 @@ func TestTurnFinishedWithoutAssistantResponseClearsPendingToolState(t *testing.T
 	model.InFlight.Pending = toolEntry
 	model.InFlight.PendingTools = map[string]*session.Entry{"tool-a": toolEntry}
 
-	updated, _ := model.Update(session.TurnFinished{})
+	updated, _ := model.Update(session.TurnFinishedEvent{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateError {
@@ -661,7 +660,7 @@ func TestTurnFinishedWithoutAssistantResponseClearsPendingToolState(t *testing.T
 func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.handleSessionEvent(session.ChildRequested{
+	updated, _ := model.handleSessionEvent(session.ChildRequestedEvent{
 		AgentName: "worker-1",
 		Query:     "inspect the repo",
 	})
@@ -680,7 +679,7 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		t.Fatalf("child intent = %q, want query", model.InFlight.Subagents["worker-1"].Intent)
 	}
 
-	updated, _ = model.handleSessionEvent(session.ChildStarted{
+	updated, _ = model.handleSessionEvent(session.ChildStartedEvent{
 		AgentName: "worker-1",
 	})
 	model = updated
@@ -692,7 +691,7 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.handleSessionEvent(session.ChildDelta{
+	updated, _ = model.handleSessionEvent(session.ChildDeltaEvent{
 		AgentName: "worker-1",
 		Delta:     "thinking...\n",
 	})
@@ -705,7 +704,7 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.handleSessionEvent(session.ChildCompleted{
+	updated, _ = model.handleSessionEvent(session.ChildCompletedEvent{
 		AgentName: "worker-1",
 		Result:    "done",
 	})
@@ -717,13 +716,13 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		t.Fatalf("progress mode after child complete = %v, want stateComplete", model.Progress.Mode)
 	}
 
-	updated, _ = model.handleSessionEvent(session.ChildRequested{
+	updated, _ = model.handleSessionEvent(session.ChildRequestedEvent{
 		AgentName: "worker-2",
 		Query:     "recover from failure",
 	})
 	model = updated
 
-	updated, _ = model.handleSessionEvent(session.ChildFailed{
+	updated, _ = model.handleSessionEvent(session.ChildFailedEvent{
 		AgentName: "worker-2",
 		Error:     "boom",
 	})
@@ -753,7 +752,7 @@ func TestChildRequestedPersistenceReturnsBeforeStorageAppendCompletes(t *testing
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.ChildRequested{
+	next, cmd := model.Update(session.ChildRequestedEvent{
 		AgentName: "worker-1",
 		Query:     "inspect the repo",
 	})
@@ -777,7 +776,7 @@ func TestChildRequestedPersistenceReturnsBeforeStorageAppendCompletes(t *testing
 	}()
 	select {
 	case event := <-storageSess.entered:
-		subagent, ok := event.(storage.Subagent)
+		subagent, ok := event.(session.StoreSubagent)
 		if !ok {
 			t.Fatalf("append event = %#v, want subagent", event)
 		}
@@ -813,7 +812,7 @@ func TestChildCompletionPersistenceReturnsBeforeStorageAppendCompletes(t *testin
 		Status: "Started",
 	}
 
-	next, cmd := model.Update(session.ChildCompleted{
+	next, cmd := model.Update(session.ChildCompletedEvent{
 		AgentName: "worker-1",
 		Result:    "done",
 	})
@@ -837,7 +836,7 @@ func TestChildCompletionPersistenceReturnsBeforeStorageAppendCompletes(t *testin
 	}()
 	select {
 	case event := <-storageSess.entered:
-		subagent, ok := event.(storage.Subagent)
+		subagent, ok := event.(session.StoreSubagent)
 		if !ok {
 			t.Fatalf("append event = %#v, want subagent", event)
 		}
@@ -875,7 +874,7 @@ func TestChildCancellationDoesNotMarkParentFailed(t *testing.T) {
 		Status: "Started",
 	}
 
-	next, cmd := model.Update(session.ChildCanceled{
+	next, cmd := model.Update(session.ChildCanceledEvent{
 		AgentName: "worker-2",
 		Reason:    "user stopped it",
 	})
@@ -902,7 +901,7 @@ func TestChildCancellationDoesNotMarkParentFailed(t *testing.T) {
 	}()
 	select {
 	case event := <-storageSess.entered:
-		subagent, ok := event.(storage.Subagent)
+		subagent, ok := event.(session.StoreSubagent)
 		if !ok {
 			t.Fatalf("append event = %#v, want subagent", event)
 		}
@@ -932,7 +931,7 @@ func TestChildFailurePersistenceFailureKeepsReducerArmed(t *testing.T) {
 		Status: "Started",
 	}
 
-	next, cmd := model.Update(session.ChildFailed{
+	next, cmd := model.Update(session.ChildFailedEvent{
 		AgentName: "worker-2",
 		Error:     "boom",
 	})
@@ -973,7 +972,7 @@ func TestChildCompletedDuringTurnDoesNotMarkParentComplete(t *testing.T) {
 		Status: "Started",
 	}
 
-	updated, _ := model.handleSessionEvent(session.ChildCompleted{
+	updated, _ := model.handleSessionEvent(session.ChildCompletedEvent{
 		AgentName: "worker-1",
 		Result:    "done",
 	})
@@ -996,13 +995,13 @@ func TestChildCompletedDuringTurnDoesNotMarkParentComplete(t *testing.T) {
 func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 
-	next, _ := model.Update(session.ChildRequested{
+	next, _ := model.Update(session.ChildRequestedEvent{
 		AgentName: "worker-3",
 		Query:     "wait for approval",
 	})
 	model = testModel(t, next)
 
-	next, _ = model.Update(session.ChildBlocked{
+	next, _ = model.Update(session.ChildBlockedEvent{
 		AgentName: "worker-3",
 		Reason:    "needs approval",
 	})
@@ -1037,7 +1036,7 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
 	model.Progress.LastError = "old error"
 
-	next, _ := model.Update(session.Error{Err: errors.New("backend failed")})
+	next, _ := model.Update(session.ErrorEvent{Err: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
@@ -1057,7 +1056,7 @@ func TestSessionErrorPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	model.Model.Storage = storageSess
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
 
-	next, cmd := model.Update(session.Error{Err: errors.New("backend failed")})
+	next, cmd := model.Update(session.ErrorEvent{Err: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError {
@@ -1091,7 +1090,7 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.Error{Err: errors.New("backend failed")})
+	next, cmd := model.Update(session.ErrorEvent{Err: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError || model.Progress.LastError != "backend failed" {
@@ -1113,7 +1112,7 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 	}()
 	select {
 	case event := <-storageSess.entered:
-		system, ok := event.(storage.System)
+		system, ok := event.(session.StoreSystem)
 		if !ok {
 			t.Fatalf("append event = %#v, want system", event)
 		}
@@ -1137,7 +1136,7 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
 	model := readyModel(t)
 
-	next, _ := model.Update(session.Error{})
+	next, _ := model.Update(session.ErrorEvent{})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError {
@@ -1153,7 +1152,7 @@ func TestSessionErrorSoftensEmptyAssistantResponse(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.Error{
+	next, cmd := model.Update(session.ErrorEvent{
 		Err: errors.New(
 			"assistant response has no content, reasoning, thinking blocks, or tool calls",
 		),
@@ -1168,9 +1167,9 @@ func TestSessionErrorSoftensEmptyAssistantResponse(t *testing.T) {
 	if got := ansi.Strip(model.progressLine()); got != "" {
 		t.Fatalf("progress line = %q, want printed transcript to own the error", got)
 	}
-	var sys storage.System
+	var sys session.StoreSystem
 	for _, event := range storageSess.appends {
-		if e, ok := event.(storage.System); ok {
+		if e, ok := event.(session.StoreSystem); ok {
 			sys = e
 		}
 	}
@@ -1184,7 +1183,7 @@ func TestStatusPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.StatusChanged{Status: "Thinking..."})
+	next, cmd := model.Update(session.StatusChangedEvent{Status: "Thinking..."})
 	model = testModel(t, next)
 
 	if model.Progress.Status != "Thinking..." {
@@ -1209,7 +1208,7 @@ type blockingAppendStorage struct {
 	release chan struct{}
 }
 
-func (s *blockingAppendStorage) Append(ctx context.Context, event storage.Event) error {
+func (s *blockingAppendStorage) Append(ctx context.Context, event session.StoreEvent) error {
 	s.entered <- event
 	<-s.release
 	return s.stubStorageSession.Append(ctx, event)
@@ -1221,11 +1220,11 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	model := readyModel(t)
-	sess := &stubSession{events: make(chan session.Event, 1)}
+	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
 	model.Model.Session = sess
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.StatusChanged{Status: "Thinking..."})
+	next, cmd := model.Update(session.StatusChangedEvent{Status: "Thinking..."})
 	model = testModel(t, next)
 
 	if model.Progress.Status != "Thinking..." {
@@ -1249,13 +1248,13 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 	}
 	select {
 	case event := <-storageSess.entered:
-		if status, ok := event.(storage.Status); !ok || status.Status != "Thinking..." {
+		if status, ok := event.(session.StoreStatus); !ok || status.Status != "Thinking..." {
 			t.Fatalf("append event = %#v, want status", event)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("status persistence command did not start append")
 	}
-	sess.events <- session.TurnStarted{}
+	sess.events <- session.TurnStartedEvent{}
 	completed := 0
 	var sawEvent bool
 	for !sawEvent {
@@ -1341,7 +1340,7 @@ func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("error, status code: 429 Too Many Requests: rate limit exceeded")
-	next, cmd := model.Update(session.Error{Err: err})
+	next, cmd := model.Update(session.ErrorEvent{Err: err})
 	model = testModel(t, next)
 	runSequencePrefix(t, cmd, 3)
 
@@ -1351,13 +1350,13 @@ func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	if !strings.Contains(model.Progress.LastError, err.Error()) {
 		t.Fatalf("last error = %q, want raw provider error", model.Progress.LastError)
 	}
-	var decision storage.RoutingDecision
-	var sys storage.System
+	var decision session.StoreRoutingDecision
+	var sys session.StoreSystem
 	for _, event := range storageSess.appends {
 		switch e := event.(type) {
-		case storage.RoutingDecision:
+		case session.StoreRoutingDecision:
 			decision = e
-		case storage.System:
+		case session.StoreSystem:
 			sys = e
 		}
 	}
@@ -1378,16 +1377,16 @@ func TestSessionErrorClassifiesProviderQuotaLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("insufficient_quota: billing hard limit has been reached")
-	next, cmd := model.Update(session.Error{Err: err})
+	next, cmd := model.Update(session.ErrorEvent{Err: err})
 	model = testModel(t, next)
 	runSequencePrefix(t, cmd, 2)
 
 	if !strings.HasPrefix(model.Progress.LastError, "API quota or usage limit: ") {
 		t.Fatalf("last error = %q, want quota limit prefix", model.Progress.LastError)
 	}
-	var decision storage.RoutingDecision
+	var decision session.StoreRoutingDecision
 	for _, event := range storageSess.appends {
-		if e, ok := event.(storage.RoutingDecision); ok {
+		if e, ok := event.(session.StoreRoutingDecision); ok {
 			decision = e
 			break
 		}
@@ -1401,7 +1400,7 @@ func TestTurnStartedClearsStaleToolStatus(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Status = "Running bash..."
 
-	updated, _ := model.Update(session.TurnStarted{})
+	updated, _ := model.Update(session.TurnStartedEvent{})
 	model = testModel(t, updated)
 
 	if model.Progress.Status != "" {

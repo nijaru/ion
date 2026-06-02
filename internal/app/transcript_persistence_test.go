@@ -5,8 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/session"
 )
 
 func TestTerminalCommitMarksPrintedTranscript(t *testing.T) {
@@ -24,7 +23,7 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
 
-	if cmd := model.terminalCommit().Entries(session.Entry{Role: session.System, Content: "notice"}); cmd == nil {
+	if cmd := model.terminalCommit().Entries(session.Entry{Role: session.RoleSystem, Content: "notice"}); cmd == nil {
 		t.Fatal("terminal entries commit returned nil command")
 	}
 	if !model.App.PrintedTranscript {
@@ -54,7 +53,7 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	cmd := model.persistenceController().appendEntry("persist test", storage.System{
+	cmd := model.persistenceController().appendEntry("persist test", session.StoreSystem{
 		Type:    "system",
 		Content: "hello",
 	})
@@ -69,7 +68,7 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	}
 
 	storageSess.appendErr = errors.New("disk full")
-	cmd = model.persistenceController().appendEntry("persist test", storage.System{
+	cmd = model.persistenceController().appendEntry("persist test", session.StoreSystem{
 		Type:    "system",
 		Content: "failed",
 	})
@@ -87,7 +86,7 @@ func TestPersistenceControllerReturnsNilWithoutStorage(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = nil
 
-	if cmd := model.persistenceController().appendEntry("persist test", storage.System{}); cmd != nil {
+	if cmd := model.persistenceController().appendEntry("persist test", session.StoreSystem{}); cmd != nil {
 		t.Fatalf("appendEntry command = %#v, want nil without storage", cmd)
 	}
 }

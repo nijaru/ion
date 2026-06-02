@@ -15,9 +15,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/session"
 )
 
 func TestComposerLayoutResetsAfterClear(t *testing.T) {
@@ -72,7 +71,7 @@ func TestComposerAcceptsTypedText(t *testing.T) {
 func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := storage.NewCantoStore(t.TempDir())
+	store, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -86,7 +85,7 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.Event)},
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -110,7 +109,7 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := storage.NewCantoStore(t.TempDir())
+	store, err := session.NewCantoStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -118,7 +117,7 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	cwd := t.TempDir()
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.Event)},
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -243,7 +242,7 @@ func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
 }
 
 func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.RuntimeSwitchRequest = 1
@@ -336,7 +335,7 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 }
 
 func TestCtrlCCancelsRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -373,7 +372,7 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 }
 
 func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -477,7 +476,7 @@ func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 }
 
 func TestCtrlDIgnoredWhileRunning(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -499,7 +498,7 @@ func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 }
 
 func TestEscCancelsRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	sess := &stubSession{events: make(chan session.AgentEvent)}
 	stored := &stubStorageSession{}
 	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.InFlight.Thinking = true
@@ -533,7 +532,7 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 			stored.appends,
 		)
 	}
-	system, ok := stored.appends[0].(storage.System)
+	system, ok := stored.appends[0].(session.StoreSystem)
 	if !ok || system.Content != "Canceled by user" {
 		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}
@@ -781,7 +780,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.Event)}
+	oldSession := &stubSession{events: make(chan session.AgentEvent)}
 	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
 
 	var observedModels []string
@@ -792,7 +791,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := testutil.New()
@@ -867,7 +866,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 }
 
 func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
-	oldSession := &stubSession{events: make(chan session.Event)}
+	oldSession := &stubSession{events: make(chan session.AgentEvent)}
 	model := New(
 		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
 		nil,
@@ -875,7 +874,7 @@ func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

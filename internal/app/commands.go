@@ -6,13 +6,13 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	ionskills "github.com/nijaru/ion/internal/skills"
-	"github.com/nijaru/ion/internal/storage"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -248,7 +248,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.sessionInfoCmd()
 
 	case "/compact":
-		if m.Model.Storage != nil && !storage.IsMaterialized(m.Model.Storage) {
+		if m.Model.Storage != nil && !session.IsMaterialized(m.Model.Storage) {
 			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
 		}
 		compactor, ok := m.Model.Backend.(backend.Compactor)

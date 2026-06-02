@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 // Agent is the core agent loop primitive. It manages the lifecycle of an
@@ -31,7 +31,7 @@ func New(config AgentLoopConfig) *Agent {
 	}
 }
 
-func (a *Agent) emit(ev session.Event) {
+func (a *Agent) emit(ev session.AgentEvent) {
 	a.mu.RLock()
 	onEvent := a.config.OnEvent
 	a.mu.RUnlock()
@@ -44,7 +44,7 @@ func (a *Agent) emitInputMessage(message AgentMessage) {
 	if message.Role != "user" {
 		return
 	}
-	a.emit(session.UserMessage{
+	a.emit(session.UserMessageEvent{
 		Base:    session.BaseNow(),
 		Message: message.Content,
 	})
@@ -208,9 +208,9 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			}
 
 			if !firstTurn {
-				a.emit(session.TurnStarted{Base: session.BaseNow()})
+				a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
 			} else {
-				a.emit(session.TurnStarted{Base: session.BaseNow()})
+				a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
 				firstTurn = false
 			}
 
@@ -241,7 +241,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			*newMessages = append(*newMessages, message)
 
 			// Emit complete assistant message event
-			a.emit(session.AgentMessage{
+			a.emit(session.AgentMessageEvent{
 				Base:      session.BaseNow(),
 				Message:   message.Content,
 				Reasoning: message.Reasoning,
@@ -252,7 +252,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 
 			// Check for error/abort
 			if message.IsError {
-				a.emit(session.TurnFinished{Base: session.BaseNow()})
+				a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 				return nil
 			}
 
@@ -302,7 +302,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			// Check if we should stop after this turn
 			if a.config.ShouldStopAfterTurn != nil {
 				if a.config.ShouldStopAfterTurn(turnContext) {
-					a.emit(session.TurnFinished{Base: session.BaseNow()})
+					a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 					return nil
 				}
 			}
@@ -319,7 +319,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 		}
 
 		// No more messages, exit
-		a.emit(session.TurnFinished{Base: session.BaseNow()})
+		a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 		return nil
 	}
 }
@@ -376,14 +376,14 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 
 		if chunk.Content != "" {
 			content += chunk.Content
-			a.emit(session.AgentDelta{
+			a.emit(session.AgentDeltaEvent{
 				Base:  session.BaseNow(),
 				Delta: chunk.Content,
 			})
 		}
 		if chunk.Reasoning != "" {
 			reasoning += chunk.Reasoning
-			a.emit(session.ThinkingDelta{
+			a.emit(session.ThinkingDeltaEvent{
 				Base:  session.BaseNow(),
 				Delta: chunk.Reasoning,
 			})
@@ -392,7 +392,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 			thinkingBlocks = append(thinkingBlocks, chunk.ThinkingBlocks...)
 		}
 		if chunk.Usage != nil {
-			a.emit(session.TokenUsage{
+			a.emit(session.TokenUsageEvent{
 				Base:   session.BaseNow(),
 				Input:  chunk.Usage.InputTokens,
 				Output: chunk.Usage.OutputTokens,
@@ -660,7 +660,7 @@ type finalizedToolCall struct {
 }
 
 func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
-	a.emit(session.ToolCallStarted{
+	a.emit(session.ToolCallStartedEvent{
 		Base:      session.BaseNow(),
 		ToolUseID: toolCall.ID,
 		ToolName:  toolCall.Name,
@@ -669,7 +669,7 @@ func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
 }
 
 func (a *Agent) emitToolResult(result finalizedToolCall) {
-	a.emit(session.ToolResult{
+	a.emit(session.ToolResultEvent{
 		Base:      session.BaseNow(),
 		ToolUseID: result.toolCall.ID,
 		ToolName:  result.toolCall.Name,

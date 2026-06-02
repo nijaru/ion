@@ -15,9 +15,8 @@ import (
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 	csession "github.com/nijaru/ion/session"
 )
 
@@ -57,7 +56,7 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	if err != nil {
 		return err
 	}
-	store, err := storage.NewCantoStore(storeRoot)
+	store, err := session.NewCantoStore(storeRoot)
 	if err != nil {
 		return err
 	}
@@ -127,15 +126,15 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 }
 
 type storeWithSessionID interface {
-	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (storage.Session, error)
+	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (session.SessionHandle, error)
 }
 
 func openSmokeSession(
 	ctx context.Context,
-	store storage.Store,
+	store session.SessionStore,
 	sessionID, cwd string,
 	resume bool,
-) (storage.Session, error) {
+) (session.SessionHandle, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if resume {
 		if sessionID == "" {
@@ -153,7 +152,7 @@ func openSmokeSession(
 	return opener.OpenSessionWithID(ctx, sessionID, cwd, "fake/fake-model", "smoke")
 }
 
-func seedSmokeSessionPicker(ctx context.Context, store storage.Store, cwd string) error {
+func seedSmokeSessionPicker(ctx context.Context, store session.SessionStore, cwd string) error {
 	opener, ok := store.(storeWithSessionID)
 	if !ok {
 		return fmt.Errorf("store does not support deterministic session ids")
@@ -182,7 +181,7 @@ func seedSmokeSessionPicker(ctx context.Context, store storage.Store, cwd string
 		if err := sess.Close(); err != nil {
 			return fmt.Errorf("close seed session %s: %w", fixture.id, err)
 		}
-		if err := store.UpdateSession(ctx, storage.SessionInfo{
+		if err := store.UpdateSession(ctx, session.SessionInfo{
 			ID:          fixture.id,
 			Title:       fixture.title,
 			LastPreview: fixture.preview,
@@ -208,9 +207,9 @@ func printSmokeStartup(renderedEntries []string) {
 
 type smokeBackend struct {
 	mode       string
-	events     chan session.Event
+	events     chan session.AgentEvent
 	eventStore csession.Writer
-	storage    storage.Session
+	storage    session.SessionHandle
 	cfg        *config.Config
 
 	mu     sync.Mutex
@@ -220,7 +219,7 @@ type smokeBackend struct {
 func newSmokeBackend(mode string) *smokeBackend {
 	return &smokeBackend{
 		mode:   mode,
-		events: make(chan session.Event, 64),
+		events: make(chan session.AgentEvent, 64),
 	}
 }
 
@@ -248,9 +247,9 @@ func (b *smokeBackend) Bootstrap() backend.Bootstrap {
 
 func (b *smokeBackend) Session() session.AgentSession { return b }
 
-func (b *smokeBackend) SetStore(storage.Store) {}
+func (b *smokeBackend) SetStore(session.SessionStore) {}
 
-func (b *smokeBackend) SetSession(s storage.Session) {
+func (b *smokeBackend) SetSession(s session.SessionHandle) {
 	b.storage = s
 }
 
@@ -310,7 +309,7 @@ func (b *smokeBackend) Close() error {
 	return nil
 }
 
-func (b *smokeBackend) Events() <-chan session.Event { return b.events }
+func (b *smokeBackend) Events() <-chan session.AgentEvent { return b.events }
 
 func (b *smokeBackend) ID() string {
 	if b.storage != nil {
@@ -326,18 +325,18 @@ func (b *smokeBackend) Meta() map[string]string {
 func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	switch b.mode {
 	case "cancel":
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStarted{})
-		b.emit(ctx, session.StatusChanged{Status: "[smoke] waiting for cancel"})
+		b.emit(ctx, session.UserMessageEvent{Message: input})
+		b.emit(ctx, session.TurnStartedEvent{})
+		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStarted{})
-		b.emit(ctx, session.StatusChanged{Status: "[smoke] active before error"})
+		b.emit(ctx, session.UserMessageEvent{Message: input})
+		b.emit(ctx, session.TurnStartedEvent{})
+		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.Error{Err: fmt.Errorf("smoke provider failure")})
+		b.emit(ctx, session.ErrorEvent{Err: fmt.Errorf("smoke provider failure")})
 	case "controls":
 		b.runActiveControlsScript(ctx, input)
 	case "files":
@@ -345,17 +344,17 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "markdown":
 		b.runMarkdownScript(ctx, input)
 	default:
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStarted{})
-		b.emit(ctx, session.StatusChanged{Status: "[smoke] active progress"})
+		b.emit(ctx, session.UserMessageEvent{Message: input})
+		b.emit(ctx, session.TurnStartedEvent{})
+		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentDelta{Delta: "streaming from deterministic smoke backend"})
+		b.emit(ctx, session.AgentDeltaEvent{Delta: "streaming from deterministic smoke backend"})
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolCallStarted{
+		b.emit(ctx, session.ToolCallStartedEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
@@ -363,14 +362,14 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 1200*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolOutputDelta{
+		b.emit(ctx, session.ToolOutputDeltaEvent{
 			ToolUseID: "tool-1",
 			Delta:     "ion-tmux-",
 		})
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolResult{
+		b.emit(ctx, session.ToolResultEvent{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Result:    "ion-tmux-smoke\n",
@@ -378,19 +377,19 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentMessage{Message: "done"})
-		b.emit(ctx, session.TurnFinished{})
+		b.emit(ctx, session.AgentMessageEvent{Message: "done"})
+		b.emit(ctx, session.TurnFinishedEvent{})
 	}
 }
 
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStarted{})
-	b.emit(ctx, session.StatusChanged{Status: "[smoke] markdown stream"})
+	b.emit(ctx, session.UserMessageEvent{Message: input})
+	b.emit(ctx, session.TurnStartedEvent{})
+	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentDelta{Delta: strings.Join([]string{
+	b.emit(ctx, session.AgentDeltaEvent{Delta: strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -400,7 +399,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentMessage{Message: strings.Join([]string{
+	b.emit(ctx, session.AgentMessageEvent{Message: strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -412,24 +411,24 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 		"",
 		"Bottom line: formatted final output should be the only committed assistant entry.",
 	}, "\n")})
-	b.emit(ctx, session.TurnFinished{})
+	b.emit(ctx, session.TurnFinishedEvent{})
 }
 
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStarted{})
-	b.emit(ctx, session.StatusChanged{Status: "[smoke] active controls"})
+	b.emit(ctx, session.UserMessageEvent{Message: input})
+	b.emit(ctx, session.TurnStartedEvent{})
+	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
-	b.emit(ctx, session.AgentMessage{Message: "controls done"})
-	b.emit(ctx, session.TurnFinished{})
+	b.emit(ctx, session.AgentMessageEvent{Message: "controls done"})
+	b.emit(ctx, session.TurnFinishedEvent{})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStarted{})
-	b.emit(ctx, session.StatusChanged{Status: "[smoke] file tool rows"})
+	b.emit(ctx, session.UserMessageEvent{Message: input})
+	b.emit(ctx, session.TurnStartedEvent{})
+	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -477,7 +476,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		},
 	}
 	for _, tool := range tools {
-		b.emit(ctx, session.ToolCallStarted{
+		b.emit(ctx, session.ToolCallStartedEvent{
 			ToolUseID: tool.id,
 			ToolName:  tool.name,
 			Args:      tool.args,
@@ -485,7 +484,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 150*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolResult{
+		b.emit(ctx, session.ToolResultEvent{
 			ToolUseID: tool.id,
 			ToolName:  tool.name,
 			Result:    tool.result,
@@ -494,15 +493,15 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 			return
 		}
 	}
-	b.emit(ctx, session.AgentMessage{Message: "file tools done"})
-	b.emit(ctx, session.TurnFinished{})
+	b.emit(ctx, session.AgentMessageEvent{Message: "file tools done"})
+	b.emit(ctx, session.TurnFinishedEvent{})
 }
 
-func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
+func (b *smokeBackend) emit(ctx context.Context, event session.AgentEvent) bool {
 	if err := b.persistEvent(ctx, event); err != nil {
 		select {
 		case <-ctx.Done():
-		case b.events <- session.Error{Err: fmt.Errorf("persist smoke event: %w", err)}:
+		case b.events <- session.ErrorEvent{Err: fmt.Errorf("persist smoke event: %w", err)}:
 		}
 		return false
 	}
@@ -514,29 +513,29 @@ func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
 	}
 }
 
-func (b *smokeBackend) persistEvent(ctx context.Context, event session.Event) error {
+func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEvent) error {
 	if b.eventStore == nil || b.storage == nil {
 		return nil
 	}
 
 	sessionID := b.storage.ID()
 	switch msg := event.(type) {
-	case session.UserMessage:
+	case session.UserMessageEvent:
 		if strings.TrimSpace(msg.Message) == "" {
 			return nil
 		}
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,
-			csession.NewUserMessage(sessionID, msg.Message),
+			csession.NewMessage(sessionID, llm.TextMessage(llm.RoleUser, msg.Message)),
 		)
-	case session.TurnStarted:
+	case session.TurnStartedEvent:
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,
 			csession.NewTurnStartedEvent(sessionID, csession.TurnStartedData{}),
 		)
-	case session.ToolCallStarted:
+	case session.ToolCallStartedEvent:
 		call := llm.Call{ID: msg.ToolUseID, Type: "function"}
 		call.Function.Name = msg.ToolName
 		call.Function.Arguments = msg.Args
@@ -559,7 +558,7 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.Event) er
 				Arguments: msg.Args,
 			}),
 		)
-	case session.ToolResult:
+	case session.ToolResultEvent:
 		completed := csession.ToolCompletedData{
 			Tool:   msg.ToolName,
 			ID:     msg.ToolUseID,
@@ -571,16 +570,16 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.Event) er
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,
-			csession.NewToolCompletedEvent(sessionID, completed),
+			csession.NewEvent(sessionID, csession.ToolCompleted, completed),
 		)
-	case session.AgentMessage:
+	case session.AgentMessageEvent:
 		if strings.TrimSpace(msg.Message) == "" && strings.TrimSpace(msg.Reasoning) == "" {
 			return nil
 		}
 		agent := llm.TextMessage(llm.RoleAssistant, msg.Message)
 		agent.Reasoning = msg.Reasoning
 		return b.saveCantoEvent(ctx, msg.Timestamp, csession.NewMessage(sessionID, agent))
-	case session.TurnFinished:
+	case session.TurnFinishedEvent:
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,
