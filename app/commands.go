@@ -39,14 +39,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unknown command: %s", command))
 	}
-	if !commandInfo.available() {
-		return m, cmdError(deferredFeatureMessage(commandInfo.name))
+	if !commandInfo.Available() {
+		return m, cmdError(deferredFeatureMessage(commandInfo.Name))
 	}
 	if m.commandRequiresIdle(commandInfo, fields) && m.localCommandBusy() {
-		return m, cmdError(m.localCommandBusyMessage(commandInfo.name))
+		return m, cmdError(m.localCommandBusyMessage(commandInfo.Name))
 	}
 
-	switch commandInfo.name {
+	switch commandInfo.Name {
 	case "/help":
 		return m, m.terminalCommit().Help(helpText())
 
@@ -320,7 +320,7 @@ func (m Model) localCommandBusyMessage(action string) string {
 }
 
 func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bool {
-	switch command.idle {
+	switch command.Idle {
 	case slashCommandIdleAlways:
 		return true
 	case slashCommandIdleWithArgs:
