@@ -54,16 +54,10 @@ const (
 
 const pendingActionTimeout = 1500 * time.Millisecond
 
-
 const (
 	presetPrimary = PresetPrimary
 	presetFast    = PresetFast
 )
-
-
-
-
-
 
 type runtimeSwitchedMsg struct {
 	switchID      uint64
@@ -535,8 +529,6 @@ func New(
 
 	return m
 }
-
-
 
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{

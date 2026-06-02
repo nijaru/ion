@@ -8,10 +8,10 @@ import (
 
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/providers"
 )
 
 var (

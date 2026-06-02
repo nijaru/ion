@@ -77,12 +77,12 @@ type ProviderCompat struct {
 // DefaultProviderCompat returns the default compatibility settings for OpenAI-compatible providers.
 func DefaultProviderCompat() ProviderCompat {
 	return ProviderCompat{
-		ThinkingFormat:       ThinkingFormatOpenAI,
+		ThinkingFormat:          ThinkingFormatOpenAI,
 		SupportsReasoningEffort: true,
-		MaxTokensField:       "max_completion_tokens",
-		SupportsStore:        true,
-		SupportsDeveloperRole: true,
-		SupportsStrictMode:   true,
+		MaxTokensField:          "max_completion_tokens",
+		SupportsStore:           true,
+		SupportsDeveloperRole:   true,
+		SupportsStrictMode:      true,
 	}
 }
 

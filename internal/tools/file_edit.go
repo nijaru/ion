@@ -16,6 +16,7 @@ import (
 	"github.com/aymanbagabas/go-udiff"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/ion/llm"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Edit tool
@@ -217,39 +218,88 @@ func applyEditReplacements(
 	filePath, content string,
 	edits []editReplacement,
 ) (string, int, error) {
-	matches := make([]matchedReplacement, 0, len(edits))
+	bom, strippedContent := stripBom(content)
+	originalEnding := detectLineEnding(strippedContent)
+	normalizedContent := normalizeToLF(strippedContent)
+
+	normalizedEdits := make([]editReplacement, len(edits))
 	for i, edit := range edits {
-		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
-			return "", 0, fmt.Errorf("edit[%d] in %s: %w", i, filePath, err)
+		if edit.OldString == "" {
+			return "", 0, fmt.Errorf("edit[%d].oldText must not be empty in %s", i, filePath)
 		}
-		oldString, newString := matchEditStrings(content, edit.OldString, edit.NewString)
-		count, err := replacementCount(
-			filePath,
-			content,
-			oldString,
-			edit.ReplaceAll,
-			edit.Expected,
-		)
-		if err != nil {
-			return "", 0, fmt.Errorf("edit[%d]: %w", i, err)
+		normalizedEdits[i] = editReplacement{
+			OldString:  normalizeToLF(edit.OldString),
+			NewString:  normalizeToLF(edit.NewString),
+			ReplaceAll: edit.ReplaceAll,
+			Expected:   edit.Expected,
 		}
-		for _, start := range replacementIndexes(content, oldString, edit.ReplaceAll) {
+	}
+
+	anyFuzzy := false
+	for _, edit := range normalizedEdits {
+		match := fuzzyFindText(normalizedContent, edit.OldString)
+		if match.usedFuzzyMatch {
+			anyFuzzy = true
+			break
+		}
+	}
+
+	var baseContent string
+	if anyFuzzy {
+		baseContent = normalizeForFuzzyMatch(normalizedContent)
+	} else {
+		baseContent = normalizedContent
+	}
+
+	matches := make([]matchedReplacement, 0, len(normalizedEdits))
+	for i, edit := range normalizedEdits {
+		matchResult := fuzzyFindText(baseContent, edit.OldString)
+		if !matchResult.found {
+			return "", 0, fmt.Errorf(
+				"could not find edits[%d].oldText in %s. The old text must match exactly including all whitespace and newlines",
+				i,
+				filePath,
+			)
+		}
+
+		occurrences := countOccurrences(baseContent, edit.OldString)
+		if occurrences > 1 && !edit.ReplaceAll {
+			return "", 0, fmt.Errorf(
+				"found %d occurrences of edits[%d].oldText in %s. Each oldText must be unique. Please provide more context to make it unique%s",
+				occurrences,
+				i,
+				filePath,
+				occurrenceLineSummary(baseContent, edit.OldString),
+			)
+		}
+
+		if edit.Expected > 0 && occurrences != edit.Expected {
+			return "", 0, fmt.Errorf(
+				"oldText expected %d replacement(s) in %s, found %d%s",
+				edit.Expected,
+				filePath,
+				occurrences,
+				occurrenceLineSummary(baseContent, edit.OldString),
+			)
+		}
+
+		var indices []int
+		if edit.ReplaceAll {
+			indices = replacementIndexes(baseContent, edit.OldString, true)
+		} else {
+			indices = []int{matchResult.index}
+		}
+
+		for _, start := range indices {
 			matches = append(matches, matchedReplacement{
 				editIndex: i,
 				start:     start,
-				end:       start + len(oldString),
-				newString: newString,
+				end:       start + matchResult.matchLength,
+				newString: edit.NewString,
 			})
 		}
-		if !edit.ReplaceAll && count != 1 {
-			return "", 0, fmt.Errorf(
-				"edit[%d]: expected one replacement in %s, found %d",
-				i,
-				filePath,
-				count,
-			)
-		}
 	}
+
 	if len(matches) == 0 {
 		return "", 0, fmt.Errorf("edit produced no replacements in %s", filePath)
 	}
@@ -260,12 +310,13 @@ func applyEditReplacements(
 		}
 		return a.end - b.end
 	})
+
 	for i := 1; i < len(matches); i++ {
 		prev := matches[i-1]
 		cur := matches[i]
 		if prev.end > cur.start {
 			return "", 0, fmt.Errorf(
-				"edit[%d] and edit[%d] overlap in %s; merge them into one edit",
+				"edits[%d] and edits[%d] overlap in %s; merge them into one edit",
 				prev.editIndex,
 				cur.editIndex,
 				filePath,
@@ -273,15 +324,18 @@ func applyEditReplacements(
 		}
 	}
 
-	newContent := content
+	newContent := baseContent
 	for i := len(matches) - 1; i >= 0; i-- {
 		match := matches[i]
 		newContent = newContent[:match.start] + match.newString + newContent[match.end:]
 	}
-	if newContent == content {
+
+	if newContent == baseContent {
 		return "", 0, fmt.Errorf("edit produced no content changes in %s", filePath)
 	}
-	return newContent, len(matches), nil
+
+	finalContent := bom + restoreLineEndings(newContent, originalEnding)
+	return finalContent, len(matches), nil
 }
 
 func replacementIndexes(content, oldString string, replaceAll bool) []int {
@@ -309,78 +363,135 @@ func randomHexSuffix() (string, error) {
 	return hex.EncodeToString(buf[:]), nil
 }
 
-func validateEditStrings(oldString, newString string) error {
-	if oldString == "" {
-		return fmt.Errorf("oldText must not be empty")
+func detectLineEnding(content string) string {
+	crlfIdx := strings.Index(content, "\r\n")
+	lfIdx := strings.Index(content, "\n")
+	if lfIdx == -1 {
+		return "\n"
 	}
-	if oldString == newString {
-		return fmt.Errorf("newText must differ from oldText")
+	if crlfIdx == -1 {
+		return "\n"
 	}
-	return nil
+	if crlfIdx < lfIdx {
+		return "\r\n"
+	}
+	return "\n"
 }
 
-func matchEditStrings(content, oldString, newString string) (string, string) {
-	if strings.Contains(content, "\r\n") && !strings.Contains(oldString, "\r\n") {
-		oldString = strings.ReplaceAll(oldString, "\n", "\r\n")
-		newString = strings.ReplaceAll(newString, "\n", "\r\n")
-	}
-	if strings.HasPrefix(content, "\ufeff"+oldString) && !strings.HasPrefix(oldString, "\ufeff") {
-		oldString = "\ufeff" + oldString
-		newString = "\ufeff" + newString
-	}
-	return oldString, newString
+func normalizeToLF(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 }
 
-func replacementCount(
-	filePath, content, oldString string,
-	replaceAll bool,
-	expected int,
-) (int, error) {
-	if expected < 0 {
-		return 0, fmt.Errorf("%s: expected_replacements must be non-negative", filePath)
+func restoreLineEndings(text, ending string) string {
+	if ending == "\r\n" {
+		return strings.ReplaceAll(text, "\n", "\r\n")
 	}
-	count := strings.Count(content, oldString)
-	lines := occurrenceLineSummary(content, oldString)
-	if count == 0 {
-		return 0, fmt.Errorf("oldText not found in %s", filePath)
+	return text
+}
+
+func stripBom(content string) (string, string) {
+	if strings.HasPrefix(content, "\ufeff") {
+		return "\ufeff", content[len("\ufeff"):]
 	}
-	if expected > 0 && count != expected {
-		return 0, fmt.Errorf(
-			"oldText expected %d replacement(s) in %s, found %d%s",
-			expected,
-			filePath,
-			count,
-			lines,
-		)
+	return "", content
+}
+
+func normalizeForFuzzyMatch(text string) string {
+	text = norm.NFKC.String(text)
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t\r")
 	}
-	if !replaceAll && count > 1 {
-		return 0, fmt.Errorf(
-			"oldText is not unique in %s, found %d occurrences%s. Provide more context or use a legacy replace_all call with expected_replacements.",
-			filePath,
-			count,
-			lines,
-		)
+	text = strings.Join(lines, "\n")
+	text = replaceRunes(text, []rune{'\u2018', '\u2019', '\u201a', '\u201b'}, '\'')
+	text = replaceRunes(text, []rune{'\u201c', '\u201d', '\u201e', '\u201f'}, '"')
+	text = replaceRunes(text, []rune{'\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212'}, '-')
+	specialSpaces := []rune{'\u00a0', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000'}
+	text = replaceRunes(text, specialSpaces, ' ')
+	return text
+}
+
+func replaceRunes(text string, targets []rune, replacement rune) string {
+	targetMap := make(map[rune]bool, len(targets))
+	for _, r := range targets {
+		targetMap[r] = true
 	}
-	return count, nil
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		if targetMap[r] {
+			b.WriteRune(replacement)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+type fuzzyMatchResult struct {
+	found                 bool
+	index                 int
+	matchLength           int
+	usedFuzzyMatch        bool
+	contentForReplacement string
+}
+
+func fuzzyFindText(content, oldText string) fuzzyMatchResult {
+	if idx := strings.Index(content, oldText); idx != -1 {
+		return fuzzyMatchResult{
+			found:                 true,
+			index:                 idx,
+			matchLength:           len(oldText),
+			usedFuzzyMatch:        false,
+			contentForReplacement: content,
+		}
+	}
+	fuzzyContent := normalizeForFuzzyMatch(content)
+	fuzzyOldText := normalizeForFuzzyMatch(oldText)
+	if idx := strings.Index(fuzzyContent, fuzzyOldText); idx != -1 {
+		return fuzzyMatchResult{
+			found:                 true,
+			index:                 idx,
+			matchLength:           len(fuzzyOldText),
+			usedFuzzyMatch:        true,
+			contentForReplacement: fuzzyContent,
+		}
+	}
+	return fuzzyMatchResult{
+		found:                 false,
+		index:                 -1,
+		matchLength:           0,
+		usedFuzzyMatch:        false,
+		contentForReplacement: content,
+	}
+}
+
+func countOccurrences(content, oldText string) int {
+	fuzzyContent := normalizeForFuzzyMatch(content)
+	fuzzyOldText := normalizeForFuzzyMatch(oldText)
+	if fuzzyOldText == "" {
+		return 0
+	}
+	return strings.Count(fuzzyContent, fuzzyOldText)
 }
 
 func occurrenceLineSummary(content, needle string) string {
-	if needle == "" {
+	fuzzyContent := normalizeForFuzzyMatch(content)
+	fuzzyNeedle := normalizeForFuzzyMatch(needle)
+	if fuzzyNeedle == "" {
 		return ""
 	}
 	var lines []string
-	lineNumber := 1
-	for _, line := range strings.Split(content, "\n") {
-		remaining := line
-		for {
-			idx := strings.Index(remaining, needle)
-			if idx < 0 {
-				break
-			}
-			lines = append(lines, fmt.Sprintf("%d", lineNumber))
-			remaining = remaining[idx+len(needle):]
+	start := 0
+	for {
+		idx := strings.Index(fuzzyContent[start:], fuzzyNeedle)
+		if idx < 0 {
+			break
 		}
-		lineNumber++
+		absoluteOffset := start + idx
+		lineNum := strings.Count(fuzzyContent[:absoluteOffset], "\n") + 1
+		lines = append(lines, fmt.Sprintf("%d", lineNum))
+		start = absoluteOffset + len(fuzzyNeedle)
 	}
 	if len(lines) == 0 {
 		return ""

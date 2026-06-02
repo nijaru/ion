@@ -114,8 +114,11 @@ func TestBuildInstructionsIncludesProjectSection(t *testing.T) {
 	if !strings.Contains(out, "base rules") {
 		t.Fatalf("instructions missing base rules: %q", out)
 	}
-	if !strings.Contains(out, "## Project Instructions") {
-		t.Fatalf("instructions missing project heading: %q", out)
+	if !strings.Contains(out, "<project_context>") {
+		t.Fatalf("instructions missing project_context XML tag: %q", out)
+	}
+	if !strings.Contains(out, "<project_instructions path=") {
+		t.Fatalf("instructions missing project_instructions path XML tag: %q", out)
 	}
 	if !strings.Contains(out, "project rules") {
 		t.Fatalf("instructions missing project content: %q", out)

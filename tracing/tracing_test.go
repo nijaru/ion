@@ -10,10 +10,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	xtest "github.com/nijaru/ion/cantotesting"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 	"github.com/nijaru/ion/tracing"
-	xtest "github.com/nijaru/ion/cantotesting"
 )
 
 type cancelAwareStreamingTool struct {

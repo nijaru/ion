@@ -9,9 +9,9 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/providers"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/providers"
 )
 
 // handleCommand dispatches a slash command entered by the user.

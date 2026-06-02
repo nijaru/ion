@@ -650,7 +650,6 @@ func (a *Agent) executeToolCallsParallel(
 	return toolMessages(finalized)
 }
 
-
 type finalizedToolCall struct {
 	toolCall  AgentToolCall
 	result    AgentToolResult

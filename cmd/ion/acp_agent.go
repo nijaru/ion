@@ -10,8 +10,8 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/internal/apperrors"
 	ionacp "github.com/nijaru/ion/internal/acp"
+	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"

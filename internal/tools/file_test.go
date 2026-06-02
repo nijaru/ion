@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/llm"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
+	"github.com/nijaru/ion/llm"
 )
 
 func newTestFileTool(t *testing.T, cwd string) *FileTool {

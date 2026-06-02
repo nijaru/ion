@@ -575,7 +575,7 @@ func TestACPSessionRequestIncludesInitialContext(t *testing.T) {
 	if meta.ResumeSession != "external-session-123" {
 		t.Fatalf("resume session = %q, want external-session-123", meta.ResumeSession)
 	}
-	if !strings.Contains(meta.SystemPrompt, "## Project Instructions") ||
+	if !strings.Contains(meta.SystemPrompt, "<project_context>") ||
 		!strings.Contains(meta.SystemPrompt, "project instruction") {
 		t.Fatalf("system prompt missing project instructions: %q", meta.SystemPrompt)
 	}

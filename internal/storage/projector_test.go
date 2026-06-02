@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
+	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/llm"
 	csession "github.com/nijaru/ion/session"
-	ionsession "github.com/nijaru/ion/internal/session"
 )
 
 func TestLiveAndHistoryProjectionShareEntryShape(t *testing.T) {

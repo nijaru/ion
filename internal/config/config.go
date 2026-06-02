@@ -16,36 +16,36 @@ const (
 )
 
 type Config struct {
-	Provider               string                    `toml:"provider,omitempty"`
-	Model                  string                    `toml:"model,omitempty"`
-	ReasoningEffort        string                    `toml:"reasoning_effort,omitempty"`
-	FastModel              string                    `toml:"fast_model,omitempty"`
-	FastReasoningEffort    string                    `toml:"fast_reasoning_effort,omitempty"`
-	SummaryModel           string                    `toml:"summary_model,omitempty"`
-	SummaryReasoningEffort string                    `toml:"summary_reasoning_effort,omitempty"`
-	Endpoint               string                    `toml:"endpoint,omitempty"`
-	AuthEnvVar             string                    `toml:"auth_env_var,omitempty"`
-	ExtraHeaders           map[string]string         `toml:"extra_headers,omitempty"`
-	ContextLimit           int                       `toml:"context_limit,omitempty"`
-	MaxSessionCost         float64                   `toml:"max_session_cost,omitempty"`
-	MaxTurnCost            float64                   `toml:"max_turn_cost,omitempty"`
-	RetryUntilCancelled    *bool                     `toml:"retry_until_cancelled,omitempty"`
-	TelemetryOTLPEndpoint  string                    `toml:"telemetry_otlp_endpoint,omitempty"`
-	TelemetryOTLPInsecure  bool                      `toml:"telemetry_otlp_insecure,omitempty"`
-	TelemetryOTLPHeaders   map[string]string         `toml:"telemetry_otlp_headers,omitempty"`
-	SubagentsPath          string                    `toml:"subagents_path,omitempty"`
-	SessionRetentionDays   int                       `toml:"session_retention_days,omitempty"`
-	ToolVerbosity          string                    `toml:"tool_verbosity,omitempty"`
-	ReadOutput             string                    `toml:"read_output,omitempty"`
-	WriteOutput            string                    `toml:"write_output,omitempty"`
-	BashOutput             string                    `toml:"bash_output,omitempty"`
-	ThinkingVerbosity      string                    `toml:"thinking_verbosity,omitempty"`
-	BusyInput              string                    `toml:"busy_input,omitempty"`
-	SkillTools             string                    `toml:"skill_tools,omitempty"`
-	SubagentTools          string                    `toml:"subagent_tools,omitempty"`
-	ToolMode               string                    `toml:"tool_mode,omitempty"`
-	ToolEnv                string                    `toml:"tool_env,omitempty"`
-	Models                 []ModelDef                `toml:"models,omitempty" json:"models,omitempty"`
+	Provider               string            `toml:"provider,omitempty"`
+	Model                  string            `toml:"model,omitempty"`
+	ReasoningEffort        string            `toml:"reasoning_effort,omitempty"`
+	FastModel              string            `toml:"fast_model,omitempty"`
+	FastReasoningEffort    string            `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           string            `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort string            `toml:"summary_reasoning_effort,omitempty"`
+	Endpoint               string            `toml:"endpoint,omitempty"`
+	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
+	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
+	ContextLimit           int               `toml:"context_limit,omitempty"`
+	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
+	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
+	RetryUntilCancelled    *bool             `toml:"retry_until_cancelled,omitempty"`
+	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
+	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
+	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
+	SubagentsPath          string            `toml:"subagents_path,omitempty"`
+	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
+	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
+	ReadOutput             string            `toml:"read_output,omitempty"`
+	WriteOutput            string            `toml:"write_output,omitempty"`
+	BashOutput             string            `toml:"bash_output,omitempty"`
+	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
+	BusyInput              string            `toml:"busy_input,omitempty"`
+	SkillTools             string            `toml:"skill_tools,omitempty"`
+	SubagentTools          string            `toml:"subagent_tools,omitempty"`
+	ToolMode               string            `toml:"tool_mode,omitempty"`
+	ToolEnv                string            `toml:"tool_env,omitempty"`
+	Models                 []ModelDef        `toml:"models,omitempty" json:"models,omitempty"`
 }
 
 type ModelDef struct {

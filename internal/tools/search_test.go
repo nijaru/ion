@@ -192,6 +192,15 @@ func TestSearchTools(t *testing.T) {
 			t.Errorf("expected hidden and normal go files, got %q", res)
 		}
 
+		// Test recursive basename matching when pattern does not contain slashes
+		res, err = find.Execute(context.Background(), `{"pattern": "*.go"}`)
+		if err != nil {
+			t.Fatalf("find failed: %v", err)
+		}
+		if !strings.Contains(res, "src/another.go") {
+			t.Errorf("expected recursive match of src/another.go when pattern is *.go, got %q", res)
+		}
+
 		res, err = find.Execute(context.Background(), `{"pattern":"*.go","path":"src","limit":1}`)
 		if err != nil {
 			t.Fatalf("find with search path and limit failed: %v", err)

@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nijaru/ion/tool"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/tools"
+	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/tool"
 )
 
 func closeRuntimeHandles(

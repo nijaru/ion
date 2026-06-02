@@ -36,16 +36,18 @@ func BuildInstructions(base, cwd string) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(base)
-	b.WriteString("\n\n## Project Instructions\n")
+	b.WriteString("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n")
 	for _, layer := range layers {
-		b.WriteString("\n### ")
+		b.WriteString(`<project_instructions path="`)
 		b.WriteString(layer.Path)
-		b.WriteString("\n")
+		b.WriteString(`">` + "\n")
 		b.WriteString(layer.Content)
 		if !strings.HasSuffix(layer.Content, "\n") {
 			b.WriteByte('\n')
 		}
+		b.WriteString("</project_instructions>\n\n")
 	}
+	b.WriteString("</project_context>\n")
 	return b.String(), nil
 }
 

@@ -43,12 +43,12 @@ func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
-			ID:        "xiaomi/mimo-v2.5-pro",
+			ID: "xiaomi/mimo-v2.5-pro",
 			Capabilities: &llm.Capabilities{
-				Streaming:  true,
-				Tools:      true,
+				Streaming:   true,
+				Tools:       true,
 				Temperature: false,
-				SystemRole: llm.RoleSystem,
+				SystemRole:  llm.RoleSystem,
 				Reasoning: llm.ReasoningCapabilities{
 					Kind:       llm.ReasoningKindEffort,
 					Efforts:    []string{"minimal", "low", "medium", "high"},
@@ -59,8 +59,8 @@ func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
 	})
 
 	req := &llm.Request{
-		Model:          "xiaomi/mimo-v2.5-pro",
-		Messages:       []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		Model:           "xiaomi/mimo-v2.5-pro",
+		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
 		ReasoningEffort: "medium",
 	}
 
@@ -130,7 +130,7 @@ func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
-			ID:        "xiaomi/mimo-v2.5-pro",
+			ID: "xiaomi/mimo-v2.5-pro",
 			Capabilities: &llm.Capabilities{
 				Streaming:   true,
 				Tools:       true,
@@ -268,7 +268,7 @@ func TestOpenRouterProviderUsesBaseCapabilities(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
-			ID:        "xiaomi/mimo-v2.5-pro",
+			ID: "xiaomi/mimo-v2.5-pro",
 			Capabilities: &llm.Capabilities{
 				Streaming:   true,
 				Tools:       true,

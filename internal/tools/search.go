@@ -497,15 +497,21 @@ func globMatches(pattern, output, searchArg string) ([]string, error) {
 		}
 		path = strings.TrimPrefix(path, "./")
 		displayPath := searchRelativePath(path, searchArg)
-		matched, err := doublestar.Match(matchPattern, displayPath)
-		if err != nil {
-			return nil, err
-		}
-		if !matched && strings.Contains(pattern, "/") {
-			matched, err = doublestar.Match(matchPattern, path)
+		var matched bool
+		var err error
+		if !strings.Contains(pattern, "/") {
+			matched, err = doublestar.Match(pattern, filepath.Base(displayPath))
+		} else {
+			matched, err = doublestar.Match(matchPattern, displayPath)
 			if err != nil {
 				return nil, err
 			}
+			if !matched {
+				matched, err = doublestar.Match(matchPattern, path)
+			}
+		}
+		if err != nil {
+			return nil, err
 		}
 		if matched {
 			matches = append(matches, displayPath)

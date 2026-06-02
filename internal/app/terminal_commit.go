@@ -103,7 +103,6 @@ func (c terminalCommitController) SwitchReplay(
 	return deferredTerminalCommitCmd(lines...)
 }
 
-
 func (m Model) RenderEntries(entries ...session.Entry) []string {
 	lines := make([]string, 0, len(entries)*2)
 	for _, entry := range entries {

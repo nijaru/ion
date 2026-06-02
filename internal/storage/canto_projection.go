@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/nijaru/ion/session"
 	ionsession "github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/session"
 )
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {

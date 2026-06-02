@@ -3,15 +3,17 @@ package agent
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/models"
-	"github.com/nijaru/ion/providers"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/providers"
 )
 
 // Backend implements backend.Backend using the agent loop.
@@ -172,6 +174,31 @@ func (b *Backend) createSession() *SessionAdapter {
 	if workdir != "" {
 		if insts, err := backend.BuildInstructions("", workdir); err == nil {
 			systemPrompt = insts
+		}
+	}
+
+	// Load and format skills if 'read' tool is available
+	hasRead := false
+	for _, t := range b.tools {
+		if t.Name == "read" {
+			hasRead = true
+			break
+		}
+	}
+	if hasRead {
+		var skillPaths []string
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			skillPaths = append(skillPaths, filepath.Join(home, ".ion", "skills"))
+		}
+		if workdir != "" {
+			skillPaths = append(skillPaths, filepath.Join(workdir, ".ion", "skills"))
+		}
+		if formattedSkills, err := skills.FormatSkillsForPrompt(skillPaths...); err == nil && formattedSkills != "" {
+			if systemPrompt != "" {
+				systemPrompt += "\n" + formattedSkills
+			} else {
+				systemPrompt = formattedSkills
+			}
 		}
 	}
 

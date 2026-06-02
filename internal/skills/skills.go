@@ -2,6 +2,7 @@ package skills
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -155,4 +156,75 @@ func FormatNotice(paths []string, query string, items []Summary) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func FormatSkillsForPrompt(paths ...string) (string, error) {
+	summaries, err := List(paths...)
+	if err != nil {
+		return "", err
+	}
+	if len(summaries) == 0 {
+		return "", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\nThe following skills provide specialized instructions for specific tasks.\n")
+	b.WriteString("Use the read tool to load a skill's file when the task matches its description.\n")
+	b.WriteString("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n")
+	b.WriteString("<available_skills>\n")
+
+	for _, s := range summaries {
+		// Find location for this skill
+		location := ""
+		for _, baseDir := range paths {
+			// 1. Check if the directory itself is the skill
+			selfSkill := filepath.Join(baseDir, "SKILL.md")
+			if info, err := os.Stat(selfSkill); err == nil && !info.IsDir() {
+				if strings.EqualFold(filepath.Base(baseDir), s.Name) {
+					abs, _ := filepath.Abs(selfSkill)
+					location = abs
+					break
+				}
+			}
+			// 2. Check subdirectories
+			subSkill := filepath.Join(baseDir, s.Name, "SKILL.md")
+			if info, err := os.Stat(subSkill); err == nil && !info.IsDir() {
+				abs, _ := filepath.Abs(subSkill)
+				location = abs
+				break
+			}
+			// 3. Check direct .md files (e.g. dir/name.md)
+			mdSkill := filepath.Join(baseDir, s.Name+".md")
+			if info, err := os.Stat(mdSkill); err == nil && !info.IsDir() {
+				abs, _ := filepath.Abs(mdSkill)
+				location = abs
+				break
+			}
+		}
+
+		if location == "" {
+			if len(paths) > 0 {
+				abs, _ := filepath.Abs(filepath.Join(paths[0], s.Name, "SKILL.md"))
+				location = abs
+			}
+		}
+
+		b.WriteString("  <skill>\n")
+		b.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeXml(s.Name)))
+		b.WriteString(fmt.Sprintf("    <description>%s</description>\n", escapeXml(s.Description)))
+		b.WriteString(fmt.Sprintf("    <location>%s</location>\n", escapeXml(location)))
+		b.WriteString("  </skill>\n")
+	}
+
+	b.WriteString("</available_skills>")
+	return b.String(), nil
+}
+
+func escapeXml(str string) string {
+	str = strings.ReplaceAll(str, "&", "&amp;")
+	str = strings.ReplaceAll(str, "<", "&lt;")
+	str = strings.ReplaceAll(str, ">", "&gt;")
+	str = strings.ReplaceAll(str, "\"", "&quot;")
+	str = strings.ReplaceAll(str, "'", "&apos;")
+	return str
 }

@@ -209,7 +209,6 @@ type AgentState struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
-
 // AgentLoopConfig is the configuration for the agent loop.
 type AgentLoopConfig struct {
 	// Model is the model to use for completions.

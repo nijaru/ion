@@ -505,7 +505,7 @@ func (m Model) matchingCustomCommands(query string) []string {
 	var pickerItems []pickerItem
 	for _, skill := range skillSummaries {
 		search := pickerSearchIndex(
-			"//" + skill.Name,
+			"//"+skill.Name,
 			skill.Name,
 			skill.Description,
 			"Skills",
@@ -548,7 +548,7 @@ func (m Model) openCustomCommandPicker(prefix string) Model {
 	var items []pickerItem
 	for _, skill := range skillSummaries {
 		search := pickerSearchIndex(
-			"//" + skill.Name,
+			"//"+skill.Name,
 			skill.Name,
 			skill.Description,
 			"Skills",

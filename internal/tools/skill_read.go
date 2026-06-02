@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/ion/llm"
 	ionskills "github.com/nijaru/ion/internal/skills"
+	"github.com/nijaru/ion/llm"
 )
 
 type ReadSkill struct {

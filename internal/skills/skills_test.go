@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,5 +118,38 @@ func writeSkill(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write skill: %v", err)
+	}
+}
+
+func TestFormatSkillsForPrompt(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "test-skill")
+	writeSkill(t, filepath.Join(skillDir, "SKILL.md"), `---
+name: test-skill
+description: "A <test> skill with & character & quotes \"'."
+---
+Instructions here.
+`)
+
+	prompt, err := FormatSkillsForPrompt(root)
+	if err != nil {
+		t.Fatalf("FormatSkillsForPrompt returned error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "<available_skills>") {
+		t.Errorf("prompt missing <available_skills>: %q", prompt)
+	}
+	if !strings.Contains(prompt, "<name>test-skill</name>") {
+		t.Errorf("prompt missing name: %q", prompt)
+	}
+	// Verify XML escaping of description
+	expectedDesc := "A &lt;test&gt; skill with &amp; character &amp; quotes &quot;&apos;."
+	if !strings.Contains(prompt, fmt.Sprintf("<description>%s</description>", expectedDesc)) {
+		t.Errorf("prompt missing escaped description: %q", prompt)
+	}
+	// Verify location is absolute path to SKILL.md
+	absPath, _ := filepath.Abs(filepath.Join(skillDir, "SKILL.md"))
+	if !strings.Contains(prompt, fmt.Sprintf("<location>%s</location>", absPath)) {
+		t.Errorf("prompt missing location path: %q", prompt)
 	}
 }

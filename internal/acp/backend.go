@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/models"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )

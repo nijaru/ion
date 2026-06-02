@@ -240,7 +240,7 @@ func (m Model) customComposerCompletionItems(text string) []completionItem {
 	var pickerItems []pickerItem
 	for _, skill := range skillSummaries {
 		search := pickerSearchIndex(
-			"//" + skill.Name,
+			"//"+skill.Name,
 			skill.Name,
 			skill.Description,
 			"Skills",
