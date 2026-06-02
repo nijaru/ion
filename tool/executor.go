@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -83,10 +83,10 @@ func (p EnvironmentPolicy) commandEnv() []string {
 	if p.mode != executorEnvironmentStripProviders {
 		return nil
 	}
-	return filterEnvironment(os.Environ(), p.deny)
+	return FilterEnvironment(os.Environ(), p.deny)
 }
 
-func filterEnvironment(env []string, deny map[string]struct{}) []string {
+func FilterEnvironment(env []string, deny map[string]struct{}) []string {
 	if len(deny) == 0 {
 		return env
 	}

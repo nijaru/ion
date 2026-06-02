@@ -1,14 +1,12 @@
-package tools
+package tool
 
 import (
 	"slices"
 	"testing"
-
-	"github.com/nijaru/ion/tool"
 )
 
 func TestRegisterCodingToolsOwnsDefaultSurface(t *testing.T) {
-	registry := tool.NewRegistry()
+	registry := NewRegistry()
 	if err := RegisterCodingTools(registry, CodingToolsConfig{
 		Workdir:     t.TempDir(),
 		Environment: NewEnvironmentPolicy(executorEnvironmentInherit, nil),

@@ -1,10 +1,9 @@
-package tools
+package tool
 
 import (
 	"fmt"
 
 	"github.com/go-json-experiment/json"
-	cantotool "github.com/nijaru/ion/tool"
 )
 
 type readInput struct {
@@ -180,7 +179,7 @@ func findParameters() map[string]any {
 }
 
 func typedParameters[A any](required []string) map[string]any {
-	schema, err := cantotool.SchemaFor[A]()
+	schema, err := SchemaFor[A]()
 	if err != nil {
 		panic(fmt.Sprintf("infer tool schema: %v", err))
 	}

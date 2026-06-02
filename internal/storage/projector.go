@@ -5,9 +5,9 @@ import (
 	"time"
 
 	ionsession "github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/tools"
 	"github.com/nijaru/ion/llm"
 	csession "github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 type Projector struct {
@@ -113,7 +113,7 @@ func (p Projector) HistoryEntry(entry csession.HistoryEntry) (ionsession.Entry, 
 			args = entry.Tool.Arguments
 			isError = entry.Tool.IsError || strings.TrimSpace(entry.Tool.Error) != ""
 		}
-		title := tools.Title(name, args, tools.Options{Workdir: p.workdir})
+		title := tool.Title(name, args, tool.Options{Workdir: p.workdir})
 		return Tool(title, msg.Content, isError, time.Time{})
 	case llm.RoleSystem, llm.RoleDeveloper:
 		return EntrySystem(msg.Content, time.Time{})

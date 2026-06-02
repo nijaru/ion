@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/tool"
 )
 
 // Read tool (formerly read_file)
@@ -21,7 +20,7 @@ const (
 	maxInlineImageBytes  = 5 * 1024 * 1024
 )
 
-var _ tool.ContentTool = (*Read)(nil)
+var _ ContentTool = (*Read)(nil)
 
 func (r *Read) Spec() llm.Spec {
 	return llm.Spec{
@@ -136,7 +135,7 @@ func numberedReadOutput(content string, offset, limit int) (string, error) {
 	} else {
 		maxEnd = min(start+defaultReadLineLimit, len(lines))
 	}
-	output, end, byteLimited := numberedLinesLimited(lines, start, maxEnd, maxToolOutputSize)
+	output, end, byteLimited := numberedLinesLimited(lines, start, maxEnd, MaxToolOutputSize)
 	if byteLimited {
 		output += readContinuationNotice(start, end, len(lines), true)
 	} else if userLimited && end < len(lines) {
@@ -184,13 +183,13 @@ func readContinuationNotice(start, end, total int, byteLimited bool) string {
 		return fmt.Sprintf(
 			"[Line %d exceeds %d bytes after numbering. Use offset=%d with a narrower command or bash to inspect it.]",
 			start+1,
-			maxToolOutputSize,
+			MaxToolOutputSize,
 			start+1,
 		)
 	}
 	limitReason := fmt.Sprintf("%d line limit", defaultReadLineLimit)
 	if byteLimited {
-		limitReason = fmt.Sprintf("%d byte limit", maxToolOutputSize)
+		limitReason = fmt.Sprintf("%d byte limit", MaxToolOutputSize)
 	}
 	return fmt.Sprintf(
 		"\n\n[Showing lines %d-%d of %d (%s). Use offset=%d to continue.]",

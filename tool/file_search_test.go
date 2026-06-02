@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -14,7 +14,7 @@ func TestSearchTools(t *testing.T) {
 	// Setup test files
 	os.WriteFile(
 		filepath.Join(tmpDir, "match1.go"),
-		[]byte("package tools\n\nfunc Search() {}"),
+		[]byte("package tool\n\nfunc Search() {}"),
 		0o644,
 	)
 	os.WriteFile(filepath.Join(tmpDir, "match2.txt"), []byte("useful search results here"), 0o644)
@@ -43,7 +43,7 @@ func TestSearchTools(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, ".git", "internal.go"), []byte("package git"), 0o644)
 
 	t.Run("Grep", func(t *testing.T) {
-		g := &Grep{SearchTool: *NewSearchTool(tmpDir)}
+		g := &Grep{fileSearchBase: *newFileSearchBase(tmpDir)}
 
 		// Search for pattern in multiple files
 		args := `{"pattern": "search"}`
@@ -169,7 +169,7 @@ func TestSearchTools(t *testing.T) {
 	})
 
 	t.Run("Find", func(t *testing.T) {
-		find := &Find{SearchTool: *NewSearchTool(tmpDir)}
+		find := &Find{fileSearchBase: *newFileSearchBase(tmpDir)}
 		if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(tmpDir, "broken-link")); err != nil {
 			t.Logf("symlink unavailable: %v", err)
 		}

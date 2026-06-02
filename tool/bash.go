@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/tool"
 )
 
 type Bash struct {
@@ -19,8 +18,8 @@ type Bash struct {
 }
 
 var (
-	_ tool.StreamingTool       = (*Bash)(nil)
-	_ tool.StreamingUpdateTool = (*Bash)(nil)
+	_ StreamingTool       = (*Bash)(nil)
+	_ StreamingUpdateTool = (*Bash)(nil)
 )
 
 func NewBash(cwd string) *Bash {
@@ -86,13 +85,13 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string) iter.Seq2[stri
 func (b *Bash) ExecuteStreamingUpdates(
 	ctx context.Context,
 	args string,
-) iter.Seq2[tool.StreamUpdate, error] {
-	return func(yield func(tool.StreamUpdate, error) bool) {
+) iter.Seq2[StreamUpdate, error] {
+	return func(yield func(StreamUpdate, error) bool) {
 		streamCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		type streamItem struct {
-			update tool.StreamUpdate
+			update StreamUpdate
 			err    error
 		}
 		ch := make(chan streamItem, 16)
@@ -100,7 +99,7 @@ func (b *Bash) ExecuteStreamingUpdates(
 		go func() {
 			_, err := b.execute(streamCtx, args, func(update localOutputUpdate) error {
 				select {
-				case ch <- streamItem{update: tool.StreamUpdate{
+				case ch <- streamItem{update: StreamUpdate{
 					Text:     update.Text,
 					Snapshot: update.Snapshot,
 				}}:

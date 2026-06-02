@@ -1,4 +1,4 @@
-package tools
+package tool_test
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 )
 
 func TestBash_Spec(t *testing.T) {
-	b := NewBash(".")
+	b := tool.NewBash(".")
 	spec := b.Spec()
 	if spec.Name != "bash" {
 		t.Errorf("expected name bash, got %s", spec.Name)
@@ -26,7 +26,7 @@ func TestBash_Spec(t *testing.T) {
 }
 
 func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
-	params := bashSpecParameters(t, NewBash("."))
+	params := bashSpecParameters(t, tool.NewBash("."))
 	properties := bashSpecProperties(t, params)
 	for _, key := range []string{"action", "background", "job_id", "tail_lines"} {
 		if _, ok := properties[key]; ok {
@@ -49,7 +49,7 @@ func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
 }
 
 func TestBashRejectsDeferredBackgroundJobArgs(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := tool.NewBash(t.TempDir())
 	for _, args := range []string{
 		`{"command":"sleep 10","background":true}`,
 		`{"action":"output","job_id":"bash-1"}`,
@@ -65,7 +65,7 @@ func TestBashRejectsDeferredBackgroundJobArgs(t *testing.T) {
 
 func TestBashCancellationKillsProcessGroup(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -81,7 +81,7 @@ func TestBashCancellationKillsProcessGroup(t *testing.T) {
 
 func TestBashExecuteDoesNotWaitForDetachedChildHoldingStdout(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 
 	start := time.Now()
 	res, err := b.Execute(t.Context(), `{"command":"printf done; (sleep 1; touch survived) &"}`)
@@ -102,7 +102,7 @@ func TestBashExecuteDoesNotWaitForDetachedChildHoldingStdout(t *testing.T) {
 
 func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 
 	start := time.Now()
 	_, err := b.Execute(t.Context(), `{"command":"sleep 10 & wait","timeout":0.1}`)
@@ -116,7 +116,7 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 
 func TestBash_Execute(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 
 	t.Run("echo command", func(t *testing.T) {
 		args := `{"command": "echo 'hello world'"}`
@@ -174,7 +174,7 @@ func TestBash_Execute(t *testing.T) {
 func TestBashExecuteStreamingStopsCommandWhenConsumerStops(t *testing.T) {
 	tmpDir := t.TempDir()
 	marker := filepath.Join(tmpDir, "survived")
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 
 	for chunk, err := range b.ExecuteStreaming(
 		t.Context(),
@@ -196,7 +196,7 @@ func TestBashExecuteStreamingStopsCommandWhenConsumerStops(t *testing.T) {
 }
 
 func TestBashExecuteStreamingEmitsTruncatedSnapshot(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := tool.NewBash(t.TempDir())
 	args := largeLineOutputCommandArgs(2105)
 
 	var chunks []string
@@ -214,12 +214,12 @@ func TestBashExecuteStreamingEmitsTruncatedSnapshot(t *testing.T) {
 }
 
 func TestBashExecuteStreamingUpdatesEmitTailSnapshotWhenTruncated(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := tool.NewBash(t.TempDir())
 	assertStreamingUpdateTailSnapshot(t, b)
 }
 
 func TestBashExecuteStreamingUpdatesThroughTracingEmitTailSnapshotWhenTruncated(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := tool.NewBash(t.TempDir())
 	wrapped, ok := tracing.WrapTool(b).(tool.StreamingUpdateTool)
 	if !ok {
 		t.Fatal("wrapped bash does not implement StreamingUpdateTool")
@@ -228,7 +228,7 @@ func TestBashExecuteStreamingUpdatesThroughTracingEmitTailSnapshotWhenTruncated(
 }
 
 func TestBashExecuteReturnsTailAndFullOutputPathWhenTruncated(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := tool.NewBash(t.TempDir())
 	args := largeLineOutputCommandArgs(2105)
 	got, err := b.Execute(t.Context(), args)
 	if err != nil {
@@ -289,7 +289,7 @@ func assertBashTailTruncation(t *testing.T, got string) {
 			tailForTest(string(fullOutput), 300),
 		)
 	}
-	if len(got) > maxToolOutputSize+512 {
+	if len(got) > tool.MaxToolOutputSize+512 {
 		t.Fatalf("output length = %d, want bounded output", len(got))
 	}
 }
@@ -320,9 +320,9 @@ func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("ION_TEST_VISIBLE", "visible")
 
-	b := NewBashWithEnvironment(
+	b := tool.NewBashWithEnvironment(
 		t.TempDir(),
-		NewEnvironmentPolicy("inherit_without_provider_keys", []string{"OPENAI_API_KEY"}),
+		tool.NewEnvironmentPolicy("inherit_without_provider_keys", []string{"OPENAI_API_KEY"}),
 	)
 	res, err := b.Execute(
 		context.Background(),
@@ -337,7 +337,7 @@ func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
 }
 
 func TestFilterEnvironmentPreservesNonCredentials(t *testing.T) {
-	got := filterEnvironment(
+	got := tool.FilterEnvironment(
 		[]string{"OPENAI_API_KEY=secret", "PATH=/bin", "BROKEN", "OPENAI_API_KEY_EXTRA=keep"},
 		map[string]struct{}{"OPENAI_API_KEY": {}},
 	)
@@ -352,7 +352,7 @@ func TestBash_WorkingDirectory(t *testing.T) {
 	subdir := "testdir"
 	os.Mkdir(tmpDir+"/"+subdir, 0o755)
 
-	b := NewBash(tmpDir)
+	b := tool.NewBash(tmpDir)
 	args := `{"command": "ls -d testdir"}`
 	res, err := b.Execute(context.Background(), args)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestBash_WorkingDirectory(t *testing.T) {
 	}
 }
 
-func bashSpecParameters(t *testing.T, b *Bash) map[string]any {
+func bashSpecParameters(t *testing.T, b *tool.Bash) map[string]any {
 	t.Helper()
 	params, ok := b.Spec().Parameters.(map[string]any)
 	if !ok {

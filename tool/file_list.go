@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -77,7 +77,7 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		return "(empty directory)", nil
 	}
 	output := strings.TrimRight(res.String(), "\n")
-	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	output, byteTruncated := truncateToolOutputHead(output, MaxToolOutputSize)
 	var notices []string
 	if limitReached {
 		notices = append(
@@ -88,7 +88,7 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 	if byteTruncated {
 		notices = append(
 			notices,
-			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(MaxToolOutputSize)),
 		)
 	}
 	if len(notices) > 0 {

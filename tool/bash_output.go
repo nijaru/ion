@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"bytes"
@@ -52,7 +52,7 @@ type bashOutputAccumulator struct {
 func newBashOutputAccumulator() *bashOutputAccumulator {
 	return &bashOutputAccumulator{
 		maxLines:                 bashMaxOutputLines,
-		maxBytes:                 maxToolOutputSize,
+		maxBytes:                 MaxToolOutputSize,
 		tailStartsAtLineBoundary: true,
 	}
 }

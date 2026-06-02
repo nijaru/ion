@@ -11,7 +11,6 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/internal/tools"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 )
@@ -128,7 +127,7 @@ func openRuntime(
 	if ab, ok := b.(*agent.Backend); ok {
 		ab.Workdir = cwd
 		registry := tool.NewRegistry()
-		if regErr := tools.RegisterCodingTools(registry, tools.CodingToolsConfig{
+		if regErr := tool.RegisterCodingTools(registry, tool.CodingToolsConfig{
 			Workdir: cwd,
 		}); regErr == nil {
 			ab.SetToolExecutor(toolExecutorFromRegistry(registry))

@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import "github.com/nijaru/ion/internal/apperrors"
 

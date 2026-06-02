@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -361,8 +361,8 @@ func TestFileTools(t *testing.T) {
 	t.Run("Read applies Pi-style byte continuation limits", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		filePath := "wide-read.txt"
-		content := strings.Repeat("a", maxToolOutputSize/2) + "\n" +
-			strings.Repeat("b", maxToolOutputSize/2)
+		content := strings.Repeat("a", MaxToolOutputSize/2) + "\n" +
+			strings.Repeat("b", MaxToolOutputSize/2)
 		if err := os.WriteFile(filepath.Join(tmpDir, filePath), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -374,7 +374,7 @@ func TestFileTools(t *testing.T) {
 		if strings.Contains(res, "\tb") {
 			t.Fatalf("wide read included line beyond byte limit: %q", res)
 		}
-		if !strings.Contains(res, fmt.Sprintf("(%d byte limit)", maxToolOutputSize)) {
+		if !strings.Contains(res, fmt.Sprintf("(%d byte limit)", MaxToolOutputSize)) {
 			t.Fatalf("wide read missing byte-limit continuation notice: %q", res)
 		}
 		if !strings.Contains(res, "Use offset=2 to continue.") {
@@ -387,7 +387,7 @@ func TestFileTools(t *testing.T) {
 		filePath := "huge-line.txt"
 		if err := os.WriteFile(
 			filepath.Join(tmpDir, filePath),
-			[]byte(strings.Repeat("x", maxToolOutputSize)),
+			[]byte(strings.Repeat("x", MaxToolOutputSize)),
 			0o644,
 		); err != nil {
 			t.Fatal(err)
@@ -397,7 +397,7 @@ func TestFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("huge line read failed: %v", err)
 		}
-		if !strings.Contains(res, fmt.Sprintf("Line 1 exceeds %d bytes", maxToolOutputSize)) {
+		if !strings.Contains(res, fmt.Sprintf("Line 1 exceeds %d bytes", MaxToolOutputSize)) {
 			t.Fatalf("huge line read missing oversized-line notice: %q", res)
 		}
 	})

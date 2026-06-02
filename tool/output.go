@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"fmt"
@@ -6,10 +6,10 @@ import (
 	"unicode/utf8"
 )
 
-const maxToolOutputSize = 50 * 1024
+const MaxToolOutputSize = 50 * 1024
 
 func limitToolOutput(output string) string {
-	return limitToolOutputBytes(output, maxToolOutputSize)
+	return limitToolOutputBytes(output, MaxToolOutputSize)
 }
 
 func limitToolOutputBytes(output string, limit int) string {

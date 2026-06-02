@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"slices"
@@ -7,7 +7,7 @@ import (
 
 func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 	fileTool := NewFileTool(t.TempDir())
-	searchTool := NewSearchTool(t.TempDir())
+	searchBase := newFileSearchBase(t.TempDir())
 	tests := []struct {
 		name       string
 		spec       map[string]any
@@ -39,7 +39,7 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 		},
 		{
 			name: "grep",
-			spec: (&Grep{SearchTool: *searchTool}).Spec().Parameters.(map[string]any),
+			spec: (&Grep{fileSearchBase: *searchBase}).Spec().Parameters.(map[string]any),
 			properties: []string{
 				"pattern",
 				"path",
@@ -53,7 +53,7 @@ func TestP1ToolSchemasUseTypedArgumentShapes(t *testing.T) {
 		},
 		{
 			name:       "find",
-			spec:       (&Find{SearchTool: *searchTool}).Spec().Parameters.(map[string]any),
+			spec:       (&Find{fileSearchBase: *searchBase}).Spec().Parameters.(map[string]any),
 			properties: []string{"pattern", "path", "limit"},
 			required:   []string{"pattern"},
 		},

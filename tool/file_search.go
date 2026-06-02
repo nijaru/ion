@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"bufio"
@@ -25,15 +25,15 @@ const (
 	grepMaxLineChars = 500
 )
 
-type SearchTool struct {
+type fileSearchBase struct {
 	cwd string
 }
 
-func NewSearchTool(cwd string) *SearchTool {
-	return &SearchTool{cwd: cwd}
+func newFileSearchBase(cwd string) *fileSearchBase {
+	return &fileSearchBase{cwd: cwd}
 }
 
-func (t *SearchTool) searchArg(target string) (string, error) {
+func (t *fileSearchBase) searchArg(target string) (string, error) {
 	target, err := normalizeToolPathInput(target)
 	if err != nil {
 		return "", err
@@ -64,7 +64,7 @@ func (t *SearchTool) searchArg(target string) (string, error) {
 	return absPath, nil
 }
 
-func (t *SearchTool) commandSearchPath(searchArg string) (string, error) {
+func (t *fileSearchBase) commandSearchPath(searchArg string) (string, error) {
 	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
 		return "", err
@@ -78,7 +78,7 @@ func (t *SearchTool) commandSearchPath(searchArg string) (string, error) {
 	return filepath.Clean(filepath.Join(absCwd, filepath.FromSlash(searchArg))), nil
 }
 
-func (t *SearchTool) globPatternArg(pattern string) (string, error) {
+func (t *fileSearchBase) globPatternArg(pattern string) (string, error) {
 	pattern, err := normalizeToolPathInput(pattern)
 	if err != nil {
 		return "", err
@@ -128,7 +128,7 @@ func validateGlobPattern(pattern string) error {
 
 // Grep tool
 type Grep struct {
-	SearchTool
+	fileSearchBase
 }
 
 type rgJSONEvent struct {
@@ -291,7 +291,7 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	output, linesTruncated := g.formatGrepMatches(matches, searchPath, isDirectory, input.Context)
-	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	output, byteTruncated := truncateToolOutputHead(output, MaxToolOutputSize)
 	var notices []string
 	if matchLimitReached {
 		notices = append(
@@ -306,7 +306,7 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if byteTruncated {
 		notices = append(
 			notices,
-			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(MaxToolOutputSize)),
 		)
 	}
 	if linesTruncated {
@@ -409,7 +409,7 @@ func truncateGrepLine(line string) (string, bool) {
 
 // Find tool
 type Find struct {
-	SearchTool
+	fileSearchBase
 }
 
 func (f *Find) Spec() llm.Spec {
@@ -559,7 +559,7 @@ func formatLimitedFindMatches(matches []string, limit int) string {
 		resultLimitReached = true
 	}
 	output := strings.Join(limited, "\n")
-	output, byteTruncated := truncateToolOutputHead(output, maxToolOutputSize)
+	output, byteTruncated := truncateToolOutputHead(output, MaxToolOutputSize)
 	var notices []string
 	if resultLimitReached {
 		notices = append(
@@ -574,7 +574,7 @@ func formatLimitedFindMatches(matches []string, limit int) string {
 	if byteTruncated {
 		notices = append(
 			notices,
-			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(maxToolOutputSize)),
+			fmt.Sprintf("%s limit reached", toolOutputLimitLabel(MaxToolOutputSize)),
 		)
 	}
 	if len(notices) > 0 {
