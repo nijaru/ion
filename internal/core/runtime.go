@@ -318,3 +318,19 @@ func SessionState(handles Handles) (string, bool) {
 	id := strings.TrimSpace(handles.Session.ID())
 	return id, id != ""
 }
+
+// SetupPromptKind identifies what kind of provider setup prompt is needed.
+type SetupPromptKind int
+
+const (
+	SetupPromptAPIKey SetupPromptKind = iota + 1
+	SetupPromptEndpoint
+)
+
+// ProviderSelection captures the resolved provider state for a transition.
+type ProviderSelection struct {
+	Config                  *config.Config
+	SupportsModelListing bool
+	Transition           Transition
+	Setup                SetupPromptKind
+}

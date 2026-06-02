@@ -209,7 +209,7 @@ func (m Model) handleProviderSelectionResolved(
 		return m, nil
 	}
 	if msg.err != nil {
-		if msg.selection.cfg == nil {
+		if msg.selection.Config == nil {
 			m.pickerReducer().closeOverlay()
 		}
 		return m.handleLocalError(msg.err)
@@ -223,23 +223,23 @@ func (m Model) applyProviderSelection(
 	preset Preset,
 ) (Model, tea.Cmd) {
 	m.clearProgressError()
-	if selection.setup != 0 {
-		switch selection.setup {
+	if selection.Setup != 0 {
+		switch selection.Setup {
 		case setupPromptAPIKey:
-			return m.openAPIKeyPrompt(selection.cfg, provider, preset)
+			return m.openAPIKeyPrompt(selection.Config, provider, preset)
 		case setupPromptEndpoint:
-			return m.openEndpointPrompt(selection.cfg, preset)
+			return m.openEndpointPrompt(selection.Config, preset)
 		}
 	}
 
 	m.pickerReducer().closeOverlay()
-	if !selection.supportsModelListing {
+	if !selection.SupportsModelListing {
 		return m.beginRuntimeTransitionCommit(
-			selection.transition,
-			systemEntry(providerModelEntryNotice(selection.cfg.Provider)),
+			selection.Transition,
+			systemEntry(providerModelEntryNotice(selection.Config.Provider)),
 		)
 	}
-	return m.openReadyModelPickerForPreset(selection.cfg, preset)
+	return m.openReadyModelPickerForPreset(selection.Config, preset)
 }
 
 func (m Model) openReadyModelPickerForPreset(

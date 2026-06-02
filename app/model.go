@@ -216,11 +216,11 @@ const (
 	pickerPurposeSettings
 )
 
-type setupPromptKind int
+type setupPromptKind = core.SetupPromptKind
 
 const (
-	setupPromptAPIKey setupPromptKind = iota + 1
-	setupPromptEndpoint
+	setupPromptAPIKey   = core.SetupPromptAPIKey
+	setupPromptEndpoint = core.SetupPromptEndpoint
 )
 
 type pickerItem struct {

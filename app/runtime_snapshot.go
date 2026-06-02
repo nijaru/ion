@@ -1,22 +1,18 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/llm"
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/core"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-type providerSelection struct {
-	cfg                  *config.Config
-	supportsModelListing bool
-	transition           Transition
-	setup                setupPromptKind
-}
+type providerSelection = core.ProviderSelection
 
 var saveRuntimeState = config.SaveRuntimeState
 
@@ -107,17 +103,17 @@ func providerSelectionForConfig(
 ) (providerSelection, error) {
 	setup, err := providerSetupPrompt(ctx, updated)
 	if err != nil {
-		return providerSelection{cfg: updated}, err
+		return providerSelection{Config: updated}, err
 	}
 	if setup != 0 {
-		return providerSelection{cfg: updated, setup: setup}, nil
+		return providerSelection{Config: updated, Setup: setup}, nil
 	}
 	selection := providerSelection{
-		cfg:                  updated,
-		supportsModelListing: llm.SupportsModelListing(updated),
+		Config:               updated,
+		SupportsModelListing: llm.SupportsModelListing(updated),
 	}
-	if !selection.supportsModelListing {
-		selection.transition = newRuntimeTransition(
+	if !selection.SupportsModelListing {
+		selection.Transition = newRuntimeTransition(
 			updated,
 			updated,
 			preset,
