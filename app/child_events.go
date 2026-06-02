@@ -7,7 +7,7 @@ import (
 )
 
 func (m Model) handleSubagentMessage(msg session.AgentMessageEvent) (Model, tea.Cmd) {
-	committed, ok := m.turnReducer().commitSubagentMessage(
+	committed, ok := m.turnReducer().CommitSubagentMessage(
 		msg.AgentID,
 		msg.Message,
 		msg.Timestamp,
@@ -19,7 +19,7 @@ func (m Model) handleSubagentMessage(msg session.AgentMessageEvent) (Model, tea.
 }
 
 func (m Model) handleChildRequested(msg session.ChildRequestedEvent) (Model, tea.Cmd) {
-	p := m.turnReducer().requestChild(msg.AgentName, msg.Query)
+	p := m.turnReducer().RequestChild(msg.AgentName, msg.Query)
 
 	entry, _ := session.EntrySubagent(p.Name, "Started: "+p.Intent, false, msg.Timestamp)
 	return m, batchCmds(
@@ -36,17 +36,17 @@ func (m Model) handleChildRequested(msg session.ChildRequestedEvent) (Model, tea
 }
 
 func (m Model) handleChildStarted(msg session.ChildStartedEvent) (Model, tea.Cmd) {
-	m.turnReducer().startChild(msg.AgentName)
+	m.turnReducer().StartChild(msg.AgentName)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleChildDelta(msg session.ChildDeltaEvent) (Model, tea.Cmd) {
-	m.turnReducer().appendChildDelta(msg.AgentName, msg.Delta)
+	m.turnReducer().AppendChildDelta(msg.AgentName, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleChildCompleted(msg session.ChildCompletedEvent) (Model, tea.Cmd) {
-	committed, ok := m.turnReducer().completeChild(msg.AgentName, msg.Result, msg.Timestamp)
+	committed, ok := m.turnReducer().CompleteChild(msg.AgentName, msg.Result, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}
@@ -65,12 +65,12 @@ func (m Model) handleChildCompleted(msg session.ChildCompletedEvent) (Model, tea
 }
 
 func (m Model) handleChildBlocked(msg session.ChildBlockedEvent) (Model, tea.Cmd) {
-	m.turnReducer().blockChild(msg.AgentName, msg.Reason)
+	m.turnReducer().BlockChild(msg.AgentName, msg.Reason)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleChildFailed(msg session.ChildFailedEvent) (Model, tea.Cmd) {
-	committed, ok := m.turnReducer().failChild(msg.AgentName, msg.Error, msg.Timestamp)
+	committed, ok := m.turnReducer().FailChild(msg.AgentName, msg.Error, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}
@@ -89,7 +89,7 @@ func (m Model) handleChildFailed(msg session.ChildFailedEvent) (Model, tea.Cmd) 
 }
 
 func (m Model) handleChildCanceled(msg session.ChildCanceledEvent) (Model, tea.Cmd) {
-	committed, ok := m.turnReducer().cancelChild(msg.AgentName, msg.Reason, msg.Timestamp)
+	committed, ok := m.turnReducer().CancelChild(msg.AgentName, msg.Reason, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}

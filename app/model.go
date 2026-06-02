@@ -1,14 +1,15 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
+	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
 )
 
@@ -284,25 +285,20 @@ type setupPromptState struct {
 	request      uint64
 }
 
-type progressMode int
+type progressMode = core.ProgressMode
 
 const (
-	stateReady progressMode = iota
-	stateIonizing
-	stateStreaming
-	stateWorking
-	stateComplete
-	stateCancelled
-	stateBlocked
-	stateError
+	stateReady      = core.StateReady
+	stateIonizing   = core.StateIonizing
+	stateStreaming  = core.StateStreaming
+	stateWorking    = core.StateWorking
+	stateComplete   = core.StateComplete
+	stateCancelled  = core.StateCancelled
+	stateBlocked    = core.StateBlocked
+	stateError      = core.StateError
 )
 
-type turnSummary struct {
-	Elapsed time.Duration
-	Input   int
-	Output  int
-	Cost    float64
-}
+type turnSummary = core.TurnSummary
 
 // AppState holds general application and workspace metadata.
 type AppState struct {
@@ -332,33 +328,12 @@ type ModelState struct {
 	SettingsRequest      uint64
 }
 
-// SubagentProgress tracks the ephemeral state of a background worker.
-type SubagentProgress struct {
-	ID        string
-	Name      string
-	Intent    string
-	Status    string
-	Output    string
-	Reasoning string
-}
+// SubagentProgress, InFlightState, ProgressState are aliases for core types.
+type SubagentProgress = core.SubagentProgress
 
-// InFlightState holds data for the currently active turn or streaming response.
-type InFlightState struct {
-	Pending                 *session.Entry               // streaming agent, active tool, or active subagent
-	PendingTools            map[string]*session.Entry    // active tool calls by backend tool ID
-	Subagents               map[string]*SubagentProgress // active child agents by ID
-	ReasonBuf               string                       // accumulates ThinkingDelta
-	StreamBuf               string                       // non-empty while AgentDelta content is active
-	StreamChunks            []string                     // full AgentDelta content without per-event string copies
-	QueuedSteering          []string                     // steering messages queued during agent work
-	QueuedTurns             []string                     // follow-up turns queued during agent work
-	QueuedTurnsBackendOwned bool
-	Thinking                bool
-	Canceling               bool
-	AgentCommitted          bool // true once AgentMessage owns the turn transcript
-	DrainUntilTurnStarted   bool
-	DrainStartedAt          time.Time
-}
+type InFlightState = core.InFlightState
+
+type ProgressState = core.ProgressState
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
@@ -372,29 +347,6 @@ type PickerState struct {
 	OverlayClosedAt          time.Time
 	PreStartupMode           bool
 	SelectedSessionID        string
-}
-
-// ProgressState holds turn-level metrics and overall progress status.
-type ProgressState struct {
-	Mode              progressMode
-	LastError         string
-	Status            string
-	StatusUpdatedAt   time.Time
-	LocalStatus       string
-	LocalStatusAt     time.Time
-	ReasoningEffort   string
-	TurnStartedAt     time.Time
-	CurrentTurnInput  int
-	CurrentTurnOutput int
-	CurrentTurnCost   float64
-	BudgetStopReason  string
-	Compacting        bool
-	LastTurnSummary   turnSummary
-	TokensSent        int
-	TokensReceived    int
-	ContextTokens     int
-	TotalCost         float64
-	LastToolUseID     string
 }
 
 // InputState holds state for the composer, history, and double-tap tracking.

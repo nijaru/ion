@@ -207,9 +207,6 @@ func isIdleStatus(status string) bool {
 	}
 }
 
-func isCompactingStatus(status string) bool {
-	return session.IsCompactingStatus(status)
-}
 
 func fitLine(line string, width int) string {
 	if width <= 0 {

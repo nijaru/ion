@@ -1,6 +1,10 @@
 package app
 
-import "time"
+import (
+	"time"
+
+	"github.com/nijaru/ion/internal/core"
+)
 
 type progressReducer struct {
 	progress *ProgressState
@@ -18,7 +22,7 @@ func (r progressReducer) clearLocalBusyStatus() {
 	if r.progress.LocalStatus != "" {
 		r.setLocalStatus("")
 	}
-	if isLocalBusyStatus(r.progress.Status) {
+	if core.IsLocalBusyStatus(r.progress.Status) {
 		r.setStatus("")
 	}
 }

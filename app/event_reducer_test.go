@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
 )
 
@@ -366,7 +367,7 @@ func TestAgentDeltaChunksRenderAndFinalize(t *testing.T) {
 		t.Fatalf("plane B = %q, want joined streamed content", view)
 	}
 
-	entry, _, print := model.turnReducer().finishPendingAssistant()
+	entry, _, print := model.turnReducer().FinishPendingAssistant()
 	if !print || entry.Content != "hello world" {
 		t.Fatalf("finished stream = %#v print=%v, want joined content", entry, print)
 	}
@@ -1311,7 +1312,7 @@ func TestLocalErrorClearsLocalBusyStatus(t *testing.T) {
 	} {
 		t.Run(status, func(t *testing.T) {
 			model := readyModel(t)
-			model.Progress.Compacting = isCompactingStatus(status)
+			model.Progress.Compacting = core.IsCompactingStatus(status)
 			model.Progress.Status = status
 
 			next, cmd := model.Update(localErrorMsg{err: errors.New("operation failed")})

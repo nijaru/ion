@@ -89,7 +89,7 @@ func (m Model) renderPlaneB() string {
 }
 
 func (m Model) agentStreamContent() string {
-	return m.turnReducer().agentStreamContent()
+	return m.turnReducer().AgentStreamContent()
 }
 
 // renderPendingEntry renders an in-flight entry for Plane B.

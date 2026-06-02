@@ -225,10 +225,10 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		meta := msg.runtime.Handles.Storage.Meta()
 		m.App.Branch = meta.Branch
 	}
-	m.turnReducer().clearActiveState(true)
+	m.turnReducer().ClearActiveState(true)
 	m.progressReducer().clearLocalBusyStatus()
 	m.progressReducer().markRuntimeReady()
-	m.turnReducer().resetFinishedTurnSummary()
+	m.turnReducer().ResetFinishedTurnSummary()
 	m.clearPendingAction()
 	m.progressReducer().resetSessionUsage()
 	m.resetHistoryCursor()
