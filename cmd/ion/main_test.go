@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/app"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -69,8 +68,8 @@ func (b providerBackend) ContextLimit() int {
 	return 0
 }
 
-func (b providerBackend) Bootstrap() backend.Bootstrap {
-	return backend.Bootstrap{}
+func (b providerBackend) Bootstrap() app.Bootstrap {
+	return app.Bootstrap{}
 }
 
 func (b providerBackend) Session() session.AgentSession {

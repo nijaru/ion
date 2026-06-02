@@ -11,9 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/nijaru/ion/internal/app"
-	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/app"
 )
 
 func startupBannerLines(version string) []string {
@@ -25,8 +23,8 @@ func startupBannerLines(version string) []string {
 	return []string{"ion " + version}
 }
 
-func startupToolLine(b backend.Backend) string {
-	summarizer, ok := b.(backend.ToolSummarizer)
+func startupToolLine(b app.Backend) string {
+	summarizer, ok := b.(app.ToolSummarizer)
 	if !ok {
 		return ""
 	}

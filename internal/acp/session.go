@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"bytes"
 	"context"
 	"errors"
@@ -15,9 +16,8 @@ import (
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/internal/apperrors"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/privacy"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/instructions"
 	"github.com/nijaru/ion/session"
 )
 
@@ -195,7 +195,7 @@ type ionSessionContext struct {
 
 func (s *Session) newSessionRequest() (acp.NewSessionRequest, error) {
 	cwd := cwdFromStorage(s.storage)
-	instructions, err := backend.BuildInstructions("", cwd)
+	instructions, err := instructions.BuildInstructions("", cwd)
 	if err != nil {
 		return acp.NewSessionRequest{}, err
 	}
@@ -444,7 +444,7 @@ type redactingWriter struct {
 }
 
 func (w redactingWriter) Write(p []byte) (int, error) {
-	if _, err := io.WriteString(w.dst, privacy.Redact(string(p))); err != nil {
+	if _, err := io.WriteString(w.dst, config.Redact(string(p))); err != nil {
 		return 0, err
 	}
 	return len(p), nil

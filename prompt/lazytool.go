@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/go-json-experiment/json"
-
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"

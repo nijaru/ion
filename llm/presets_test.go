@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 )
 
 func TestResolveFastPresetRequiresExplicitModel(t *testing.T) {

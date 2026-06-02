@@ -3,13 +3,13 @@ package acp
 import (
 	"context"
 
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/core"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-// Backend implements the backend.Backend interface for external agent processes
+// Backend implements the core.Backend interface for external agent processes
 // communicating via the Agent Connectivity Protocol (ACP).
 type Backend struct {
 	session *Session
@@ -58,7 +58,7 @@ func (b *Backend) ContextLimit() int {
 	return 0
 }
 
-func (b *Backend) Bootstrap() backend.Bootstrap {
+func (b *Backend) Bootstrap() core.Bootstrap {
 	status := "Ready"
 	if b.sess != nil {
 		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
@@ -67,7 +67,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 			status = "Connected via ACP"
 		}
 	}
-	return backend.Bootstrap{
+	return core.Bootstrap{
 		Entries: []session.Entry{},
 		Status:  status,
 	}

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,8 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nijaru/ion/internal/apperrors"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 )
 
 type providerModelsCache struct {

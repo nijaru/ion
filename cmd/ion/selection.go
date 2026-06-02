@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/internal/agent"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -158,7 +158,7 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func backendForProvider(provider string) (backend.Backend, error) {
+func backendForProvider(provider string) (app.Backend, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")

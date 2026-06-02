@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/apperrors"
 )
 
 const checkpointManifestName = "manifest.json"

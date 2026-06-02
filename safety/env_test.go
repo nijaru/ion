@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/go-json-experiment/json"
-
 	"github.com/nijaru/ion/audit"
 	"github.com/nijaru/ion/safety"
 )

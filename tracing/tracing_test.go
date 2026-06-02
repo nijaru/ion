@@ -9,7 +9,6 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-
 	xtest "github.com/nijaru/ion/cantotesting"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"

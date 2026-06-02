@@ -1,13 +1,12 @@
 package acp
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/nijaru/ion/internal/apperrors"
 )
 
 // Policy defines how a tool call should be handled.

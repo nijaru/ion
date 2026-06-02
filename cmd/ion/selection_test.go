@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 

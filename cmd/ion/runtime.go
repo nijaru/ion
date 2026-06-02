@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/nijaru/ion/internal/agent"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
@@ -99,10 +99,10 @@ func openRuntime(
 	cfg *config.Config,
 	sessionID string,
 	persistResumedSessionModel bool,
-) (backend.Backend, session.SessionHandle, error) {
+) (app.Backend, session.SessionHandle, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		b := backend.NewUnconfigured(&runtimeCfg, err)
+		b := app.NewUnconfigured(&runtimeCfg, err)
 		b.SetStore(store)
 		if sessionID == "" {
 			return b, nil, nil

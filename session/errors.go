@@ -3,7 +3,7 @@ package session
 import (
 	"strings"
 
-	"github.com/nijaru/ion/internal/privacy"
+	"github.com/nijaru/ion/config"
 )
 
 type ProviderLimitError struct {
@@ -115,5 +115,5 @@ func DisplayError(err error) string {
 	if strings.Contains(lower, "too many empty") || strings.Contains(lower, "empty messages") {
 		return "Provider sent too many empty responses. Try again or switch models with /model."
 	}
-	return privacy.Redact(raw)
+	return config.Redact(raw)
 }

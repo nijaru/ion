@@ -1,0 +1,901 @@
+package app
+
+import (
+	"github.com/nijaru/ion/config"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/session"
+)
+
+func TestComposerLayoutResetsAfterClear(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("one\ntwo\nthree")
+	model.layout()
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("expected composer to be cleared, got %q", got)
+	}
+	if got := model.Input.Composer.Height(); got != minComposerHeight {
+		t.Fatalf("expected composer height to reset to %d, got %d", minComposerHeight, got)
+	}
+}
+
+func TestHeaderShortenHomePathRequiresPathBoundary(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "nick")
+	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join(
+		"~",
+		"repo",
+	) {
+		t.Fatalf("shortened home path = %q, want ~/repo", got)
+	}
+	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
+	if got := shortenHomePath(sibling, home); got != sibling {
+		t.Fatalf("sibling path = %q, want unshortened %q", got, sibling)
+	}
+}
+
+func TestComposerAcceptsTypedText(t *testing.T) {
+	model := readyModel(t)
+
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "/", Code: '/'},
+		{Text: "h", Code: 'h'},
+		{Text: "e", Code: 'e'},
+		{Text: "l", Code: 'l'},
+		{Text: "p", Code: 'p'},
+	} {
+		updated, _ := model.Update(key)
+		model = testModel(t, updated)
+	}
+
+	if got := model.Input.Composer.Value(); got != "/help" {
+		t.Fatalf("composer = %q, want %q", got, "/help")
+	}
+}
+
+func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := session.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+	cwd := t.TempDir()
+	for _, input := range []string{"first prompt", "second prompt"} {
+		if err := store.AddInput(ctx, cwd, input); err != nil {
+			t.Fatalf("add input: %v", err)
+		}
+	}
+
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			provider: "fake",
+			model:    "model",
+		},
+		nil,
+		store,
+		cwd,
+		"main",
+		"dev",
+		nil,
+	)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	model = testModel(t, updated)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if got := model.Input.Composer.Value(); got != "second prompt" {
+		t.Fatalf("composer = %q, want latest persisted input", got)
+	}
+}
+
+func TestSubmitTextPersistsInputHistory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := session.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+	cwd := t.TempDir()
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			provider: "fake",
+			model:    "model",
+		},
+		nil,
+		store,
+		cwd,
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, cmd := model.submitText("/help")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected input history command")
+	}
+	runCommandTree(t, cmd)
+
+	inputs, err := store.GetInputs(ctx, cwd, 1)
+	if err != nil {
+		t.Fatalf("get inputs: %v", err)
+	}
+	if len(inputs) != 1 || inputs[0] != "/help" {
+		t.Fatalf("inputs = %#v, want persisted slash command", inputs)
+	}
+}
+
+type blockingInputStore struct {
+	resumeOnlyStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingInputStore) AddInput(ctx context.Context, cwd, content string) error {
+	close(s.started)
+	<-s.release
+	return nil
+}
+
+func TestPersistInputHistoryReturnsBeforeStoreWriteCompletes(t *testing.T) {
+	store := &blockingInputStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Store = store
+	model.App.Workdir = t.TempDir()
+
+	returned := make(chan tea.Cmd, 1)
+	go func() {
+		returned <- model.persistInputHistory(context.Background(), "hello")
+	}()
+
+	var cmd tea.Cmd
+	select {
+	case cmd = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("persistInputHistory blocked on store write")
+	}
+	if cmd == nil {
+		t.Fatal("persistInputHistory returned nil command")
+	}
+	select {
+	case <-store.started:
+		t.Fatal("input history write ran before Bubble Tea command execution")
+	default:
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("input history command did not write to store")
+	}
+	select {
+	case msg := <-done:
+		t.Fatalf("input history command returned before store write completed: %T", msg)
+	default:
+	}
+
+	close(store.release)
+	if msg := <-done; msg != nil {
+		t.Fatalf("input history command result = %T, want nil", msg)
+	}
+}
+
+func TestEnterSubmitsSlashCommandFromComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/help")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after submit", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected slash command print command")
+	}
+}
+
+func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/session")
+	model.holdEnterForLargePrint(40)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+
+	if !model.Input.DeferredEnter {
+		t.Fatal("expected Enter to be deferred while large print is flushing")
+	}
+	if got := model.Input.Composer.Value(); got != "/session" {
+		t.Fatalf("composer = %q, want deferred command to remain editable", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected deferred Enter timer command")
+	}
+}
+
+func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
+	sess := &stubSession{events: make(chan session.AgentEvent)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.RuntimeSwitchRequest = 1
+	model.Input.Composer.SetValue("run this after the switch")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, updated)
+
+	if cmd == nil {
+		t.Fatal("expected runtime-switch guard error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "runtime switch") {
+		t.Fatalf("error = %v, want runtime switch guard", err)
+	}
+	if got := model.Input.Composer.Value(); got != "run this after the switch" {
+		t.Fatalf("composer = %q, want draft preserved", got)
+	}
+	if len(sess.submits) != 0 {
+		t.Fatalf("old session submits = %#v, want none", sess.submits)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want none", model.InFlight.QueuedTurns)
+	}
+}
+
+func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/session")
+	model.Input.DeferredEnter = true
+	model.Input.PrintHoldUntil = time.Now().Add(-time.Millisecond)
+
+	updated, cmd := model.Update(deferredEnterMsg{})
+	model = testModel(t, updated)
+
+	if model.Input.DeferredEnter {
+		t.Fatal("expected deferred Enter state to clear after submit")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after deferred submit", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected deferred slash command print command")
+	}
+}
+
+func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("first ctrl+c should arm quit timeout")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatalf("pending action = %v, want ctrl+c quit", model.Input.Pending)
+	}
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(
+		line,
+		"Press Ctrl+C again to quit",
+	) {
+		t.Fatalf("status line = %q, want ctrl+c hint", line)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("second ctrl+c should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("second ctrl+c cmd = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatal("ctrl+c with text should clear, not quit")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("pending action should remain clear after clearing composer")
+	}
+}
+
+func TestCtrlCCancelsRunningTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.AgentEvent)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.InFlight.QueuedTurns = []string{"follow up"}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("ctrl+c while running should print durable cancellation")
+	}
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("pending action should remain clear while running")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
+	}
+	if !model.InFlight.Thinking || !model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel state = thinking %v canceling %v, want true/true",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
+	}
+	runCommandTree(t, cmd)
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
+	}
+}
+
+func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.AgentEvent)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft follow-up")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatal("ctrl+c with a draft should clear composer, not cancel")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+	if !model.InFlight.Thinking {
+		t.Fatal("turn should keep running after clearing draft")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	}
+}
+
+func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("first ctrl+d should arm quit timeout")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatalf("pending action = %v, want ctrl+d quit", model.Input.Pending)
+	}
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(
+		line,
+		"Press Ctrl+D again to quit",
+	) {
+		t.Fatalf("status line = %q, want ctrl+d hint", line)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("second ctrl+d should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("second ctrl+d cmd = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestQuitDoubleTapRequiresSameKey(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatal("first ctrl+c should arm ctrl+c quit")
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("ctrl+d after ctrl+c should arm ctrl+d quit")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatalf("pending action = %v, want ctrl+d quit", model.Input.Pending)
+	}
+
+	model = readyModel(t)
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil || model.Input.Pending != pendingActionQuitCtrlD {
+		t.Fatal("first ctrl+d should arm ctrl+d quit")
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("ctrl+c after ctrl+d should arm ctrl+c quit")
+	}
+	if model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatalf("pending action = %v, want ctrl+c quit", model.Input.Pending)
+	}
+}
+
+func TestCtrlDWithDraftEditsComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("abc")
+	model.Input.Composer.CursorStart()
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatalf("ctrl+d with draft returned cmd %T, want composer edit only", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "bc" {
+		t.Fatalf("composer = %q, want delete-forward result", got)
+	}
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("ctrl+d with draft should not arm quit")
+	}
+}
+
+func TestCtrlDIgnoredWhileRunning(t *testing.T) {
+	sess := &stubSession{events: make(chan session.AgentEvent)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatal("ctrl+d while running should not quit or print")
+	}
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("ctrl+d while running should not arm quit")
+	}
+	if !model.InFlight.Thinking {
+		t.Fatal("ctrl+d should not cancel running turn")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	}
+}
+
+func TestEscCancelsRunningTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.AgentEvent)}
+	stored := &stubStorageSession{}
+	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("esc while running should print durable cancellation")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
+	}
+	if !model.InFlight.Thinking || !model.InFlight.Canceling {
+		t.Fatalf(
+			"cancel state = thinking %v canceling %v, want true/true",
+			model.InFlight.Thinking,
+			model.InFlight.Canceling,
+		)
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged", got)
+	}
+	if len(stored.appends) != 0 {
+		t.Fatalf("appends before command execution = %#v, want none", stored.appends)
+	}
+	runCommandTree(t, cmd)
+	if len(stored.appends) != 1 {
+		t.Fatalf(
+			"appends after command execution = %#v, want one cancellation entry",
+			stored.appends,
+		)
+	}
+	system, ok := stored.appends[0].(session.StoreSystem)
+	if !ok || system.Content != "Canceled by user" {
+		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
+	}
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
+	}
+}
+
+func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected timeout cmd after first ctrl+c")
+	}
+
+	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
+	model = testModel(t, updated)
+	if model.Input.Pending != pendingActionNone {
+		t.Fatal("pending action should clear after timeout")
+	}
+	if line := ansi.Strip(model.statusLine()); strings.Contains(
+		line,
+		"Press Ctrl+C again to quit",
+	) {
+		t.Fatalf("status line should clear timeout hint, got %q", line)
+	}
+}
+
+func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"first\nsecond\nthird"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	model = testModel(t, updated)
+
+	if got := model.Input.Composer.Value(); got != "first\nsecond\nthird" {
+		t.Fatalf("expected recalled history entry, got %q", got)
+	}
+	if got := model.Input.Composer.Height(); got != 3 {
+		t.Fatalf("expected composer height to expand to 3, got %d", got)
+	}
+}
+
+func TestCtrlTOpensThinkingPicker(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected thinking picker to open")
+	}
+	if model.Picker.Overlay.purpose != pickerPurposeThinking {
+		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
+	}
+	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
+		t.Fatalf("picker title = %q", got)
+	}
+	var values []string
+	for _, item := range model.Picker.Overlay.items {
+		values = append(values, item.Value)
+	}
+	want := []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh"}
+	if !slices.Equal(values, want) {
+		t.Fatalf("thinking picker values = %#v, want %#v", values, want)
+	}
+}
+
+func TestExternalEditorFinishedUpdatesComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("[paste #1 +12 lines]")
+	model.PasteMarkers["[paste #1 +12 lines]"] = pasteMarker{
+		placeholder: "[paste #1 +12 lines]",
+		content:     "expanded paste",
+	}
+
+	updated, cmd := model.handleExternalEditorFinished(externalEditorFinishedMsg{
+		content: "edited\nmessage",
+	})
+
+	if cmd != nil {
+		t.Fatal("editor finish should not emit a command on success")
+	}
+	if got := updated.Input.Composer.Value(); got != "edited\nmessage" {
+		t.Fatalf("composer = %q, want edited content", got)
+	}
+	if len(updated.PasteMarkers) != 0 {
+		t.Fatalf("paste markers = %#v, want cleared", updated.PasteMarkers)
+	}
+	if got := updated.Input.Composer.Height(); got != 2 {
+		t.Fatalf("composer height = %d, want 2", got)
+	}
+}
+
+func TestExternalEditorReturnsBeforeBufferWriteCompletes(t *testing.T) {
+	previousWrite := writeExternalEditorBufferFile
+	previousEditor := externalEditorName
+	t.Cleanup(func() {
+		writeExternalEditorBufferFile = previousWrite
+		externalEditorName = previousEditor
+	})
+
+	writeStarted := make(chan string, 1)
+	releaseWrite := make(chan struct{})
+	writeExternalEditorBufferFile = func(content string) (string, error) {
+		writeStarted <- content
+		<-releaseWrite
+		return "", errors.New("write failed")
+	}
+	externalEditorName = func() string {
+		return "false"
+	}
+
+	model := readyModel(t)
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("external editor should return a command")
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged draft", got)
+	}
+	select {
+	case content := <-writeStarted:
+		t.Fatalf("buffer write ran before Bubble Tea command execution with content %q", content)
+	default:
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	select {
+	case content := <-writeStarted:
+		if content != "draft" {
+			t.Fatalf("buffer content = %q, want draft", content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external editor command did not start buffer write")
+	}
+	select {
+	case msg := <-done:
+		t.Fatalf("external editor command returned before buffer write completed: %T", msg)
+	default:
+	}
+
+	close(releaseWrite)
+	msg := <-done
+	finished, ok := msg.(externalEditorFinishedMsg)
+	if !ok {
+		t.Fatalf("command result = %T, want externalEditorFinishedMsg", msg)
+	}
+	if finished.err == nil || !strings.Contains(finished.err.Error(), "write failed") {
+		t.Fatalf("command err = %v, want write failed", finished.err)
+	}
+}
+
+func TestExternalEditorUsesVisualBeforeEditor(t *testing.T) {
+	t.Setenv("VISUAL", "code --wait")
+	t.Setenv("EDITOR", "vim")
+
+	if got := externalEditor(); got != "code --wait" {
+		t.Fatalf("external editor = %q, want VISUAL", got)
+	}
+}
+
+func TestWriteExternalEditorBuffer(t *testing.T) {
+	path, err := writeExternalEditorBuffer("draft")
+	if err != nil {
+		t.Fatalf("write editor buffer: %v", err)
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read editor buffer: %v", err)
+	}
+	if string(data) != "draft" {
+		t.Fatalf("buffer = %q, want draft", data)
+	}
+}
+
+func TestCtrlXControlTextDoesNotEnterComposerWhileBusy(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+
+	if cmd == nil {
+		t.Fatal("busy editor handoff should print a notice")
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want draft without control character", got)
+	}
+}
+
+func TestCtrlPRecallsHistory(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"first", "second"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if got := model.Input.Composer.Value(); got != "second" {
+		t.Fatalf("composer = %q, want latest history entry", got)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if got := model.Input.Composer.Value(); got != "first" {
+		t.Fatalf("composer = %q, want previous history entry", got)
+	}
+}
+
+func TestCtrlNTogglesForwardThroughHistory(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"first", "second"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if got := model.Input.Composer.Value(); got != "second" {
+		t.Fatalf("composer = %q, want next history entry", got)
+	}
+}
+
+func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(
+		"provider = \"openai\"\nmodel = \"gpt-4.1\"\nreasoning_effort = \"auto\"\nfast_model = \"gpt-4.1-mini\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
+
+	var observedModels []string
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+			observedModels = append(observedModels, cfg.Model)
+			resolved := *cfg
+			newBackend := testutil.New()
+			newBackend.SetConfig(&resolved)
+			newStorage := &stubStorageSession{
+				id:     sessionID,
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "main",
+			}
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected ctrl+m to return a switch command")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(switched)
+	model = testModel(t, next)
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("state active_preset = %#v, want fast", state.ActivePreset)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+		t.Fatalf("fast model = %q, want gpt-4.1-mini", got)
+	}
+	if got := model.Progress.ReasoningEffort; got != "low" {
+		t.Fatalf("fast reasoning = %q, want low", got)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected ctrl+m to switch back to primary")
+	}
+	msg = cmd()
+	switched, ok = msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ = model.Update(switched)
+	model = testModel(t, next)
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
+	}
+	state, err = config.LoadState()
+	if err != nil {
+		t.Fatalf("load state after primary switch: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "primary" {
+		t.Fatalf("state active_preset = %#v, want primary", state.ActivePreset)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("primary model = %q, want gpt-4.1", got)
+	}
+	if !slices.Equal(observedModels, []string{"gpt-4.1-mini", "gpt-4.1"}) {
+		t.Fatalf("switched models = %#v, want fast then primary", observedModels)
+	}
+}
+
+func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
+	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+			t.Fatal("busy preset toggle should not switch runtimes")
+			return nil, nil, nil, nil
+		},
+	).WithConfig(&config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		FastModel: "gpt-4.1-mini",
+	})
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected ctrl+m to return a busy-turn error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+		t.Fatalf("error = %v, want busy-turn guard", err)
+	}
+	if oldSession.cancels != 0 {
+		t.Fatalf("cancels = %d, want 0", oldSession.cancels)
+	}
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
+	}
+}

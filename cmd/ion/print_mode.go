@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/apperrors"
 	"github.com/nijaru/ion/session"
 )
 

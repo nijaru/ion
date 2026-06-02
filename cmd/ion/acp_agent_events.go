@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/internal/privacy"
+	"github.com/nijaru/ion/config"
 	session "github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -86,11 +86,11 @@ func (a *ionACPAgent) requestPermission(
 	if a.conn == nil {
 		return approvalSession.Approve(ctx, req.RequestID, false)
 	}
-	title := privacy.Redact(tool.Title(req.ToolName, req.Args, tool.Options{
+	title := config.Redact(tool.Title(req.ToolName, req.Args, tool.Options{
 		Workdir: sess.cwd,
 		Width:   100,
 	}))
-	redactedArgs := privacy.Redact(req.Args)
+	redactedArgs := config.Redact(req.Args)
 	kind := acpToolKind(req.ToolName)
 	status := acp.ToolCallStatusPending
 	resp, err := a.conn.RequestPermission(ctx, acp.RequestPermissionRequest{
@@ -145,11 +145,11 @@ func acpPromptText(blocks []acp.ContentBlock) (string, error) {
 }
 
 func acpToolCallStart(workdir string, e session.ToolCallStartedEvent) acp.SessionUpdate {
-	title := privacy.Redact(tool.Title(e.ToolName, e.Args, tool.Options{
+	title := config.Redact(tool.Title(e.ToolName, e.Args, tool.Options{
 		Workdir: workdir,
 		Width:   100,
 	}))
-	redactedArgs := privacy.Redact(e.Args)
+	redactedArgs := config.Redact(e.Args)
 	return acp.StartToolCall(
 		acp.ToolCallId(e.ToolUseID),
 		title,
@@ -161,7 +161,7 @@ func acpToolCallStart(workdir string, e session.ToolCallStartedEvent) acp.Sessio
 }
 
 func acpToolOutputDelta(e session.ToolOutputDeltaEvent) acp.SessionUpdate {
-	delta := privacy.Redact(e.Delta)
+	delta := config.Redact(e.Delta)
 	return acp.UpdateToolCall(
 		acp.ToolCallId(e.ToolUseID),
 		acp.WithUpdateStatus(acp.ToolCallStatusInProgress),
@@ -180,7 +180,7 @@ func acpToolCallResult(e session.ToolResultEvent) acp.SessionUpdate {
 			output = e.Error.Error()
 		}
 	}
-	output = privacy.Redact(output)
+	output = config.Redact(output)
 	return acp.UpdateToolCall(
 		acp.ToolCallId(e.ToolUseID),
 		acp.WithUpdateStatus(status),

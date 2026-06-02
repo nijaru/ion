@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 )
 
 func TestListModelsCachesProviderModels(t *testing.T) {

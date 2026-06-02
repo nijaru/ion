@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nijaru/ion/apperrors"
 	"context"
 	"errors"
 	"fmt"
@@ -11,8 +12,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	ionacp "github.com/nijaru/ion/internal/acp"
-	"github.com/nijaru/ion/internal/apperrors"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 

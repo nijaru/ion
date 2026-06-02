@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 )
 
 func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {

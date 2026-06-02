@@ -9,11 +9,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-
 	"github.com/charmbracelet/x/term"
-	"github.com/nijaru/ion/internal/app"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 
@@ -262,7 +260,7 @@ func main() {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, session.SessionHandle, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, session.AgentSession, session.SessionHandle, error) {
 		switchedBackend, switchedSession, err := openRuntime(
 			ctx,
 			store,
@@ -326,11 +324,11 @@ func main() {
 	}
 }
 
-func startupProviderMissing(b backend.Backend) bool {
+func startupProviderMissing(b app.Backend) bool {
 	return b != nil && strings.TrimSpace(b.Provider()) == ""
 }
 
-func startupModelMissing(b backend.Backend) bool {
+func startupModelMissing(b app.Backend) bool {
 	return b != nil &&
 		strings.TrimSpace(b.Provider()) != "" &&
 		strings.TrimSpace(b.Model()) == ""

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers/anthropic"
 	"github.com/nijaru/ion/llm/providers/gemini"

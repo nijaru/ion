@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
 )
 
@@ -83,8 +83,8 @@ func (b *Backend) ContextLimit() int {
 	return 0
 }
 
-func (b *Backend) Bootstrap() backend.Bootstrap {
-	return backend.Bootstrap{
+func (b *Backend) Bootstrap() core.Bootstrap {
+	return core.Bootstrap{
 		Entries: []session.Entry{
 			{Role: session.RoleSystem, Content: "ion test backend"},
 			{

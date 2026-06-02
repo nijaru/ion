@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 	ionskills "github.com/nijaru/ion/internal/skills"
 )
 

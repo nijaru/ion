@@ -11,10 +11,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/nijaru/ion/internal/app"
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	csession "github.com/nijaru/ion/session"
@@ -241,8 +239,8 @@ func (b *smokeBackend) Model() string {
 
 func (b *smokeBackend) ContextLimit() int { return 262144 }
 
-func (b *smokeBackend) Bootstrap() backend.Bootstrap {
-	return backend.Bootstrap{Status: "[smoke] ready"}
+func (b *smokeBackend) Bootstrap() app.Bootstrap {
+	return app.Bootstrap{Status: "[smoke] ready"}
 }
 
 func (b *smokeBackend) Session() session.AgentSession { return b }
@@ -261,8 +259,8 @@ func (b *smokeBackend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
 }
 
-func (b *smokeBackend) ToolSurface() backend.ToolSurface {
-	return backend.ToolSurface{
+func (b *smokeBackend) ToolSurface() app.ToolSurface {
+	return app.ToolSurface{
 		Count:       7,
 		Names:       []string{"bash", "edit", "find", "grep", "ls", "read", "write"},
 		Environment: "inherit_without_provider_keys",

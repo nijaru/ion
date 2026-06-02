@@ -6,15 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/core"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/instructions"
 	"github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/session"
 )
 
-// Backend implements backend.Backend using the agent loop.
+// Backend implements core.Backend using the agent loop.
 type Backend struct {
 	cfg      *config.Config
 	store    session.SessionStore
@@ -31,8 +32,8 @@ type Backend struct {
 	tools []AgentTool
 }
 
-var _ backend.Backend = (*Backend)(nil)
-var _ backend.ToolSummarizer = (*Backend)(nil)
+var _ core.Backend = (*Backend)(nil)
+var _ core.ToolSummarizer = (*Backend)(nil)
 
 // NewBackend creates a new agent backend.
 func NewBackend() *Backend {
@@ -92,8 +93,8 @@ func (b *Backend) ContextLimit() int {
 }
 
 // Bootstrap returns session bootstrap data.
-func (b *Backend) Bootstrap() backend.Bootstrap {
-	return backend.Bootstrap{
+func (b *Backend) Bootstrap() core.Bootstrap {
+	return core.Bootstrap{
 		Entries: nil,
 		Status:  "ready",
 	}
@@ -130,7 +131,7 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	b.session = nil
 }
 
-// createSession creates a new session adapter from the current config.
+// createSession creates a new session adapter from the current app.
 func (b *Backend) createSession() *SessionAdapter {
 	if b.cfg == nil {
 		return NewSessionAdapter(&SessionAdapterConfig{
@@ -170,7 +171,7 @@ func (b *Backend) createSession() *SessionAdapter {
 		}
 	}
 	if workdir != "" {
-		if insts, err := backend.BuildInstructions("", workdir); err == nil {
+		if insts, err := instructions.BuildInstructions("", workdir); err == nil {
 			systemPrompt = insts
 		}
 	}
@@ -228,7 +229,7 @@ func (b *Backend) sessionID() string {
 	return "default"
 }
 
-func (b *Backend) ToolSurface() backend.ToolSurface {
+func (b *Backend) ToolSurface() core.ToolSurface {
 	var names []string
 	for _, t := range b.tools {
 		names = append(names, t.Name)
@@ -255,7 +256,7 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 		envMode = b.cfg.ToolEnvMode()
 	}
 
-	return backend.ToolSurface{
+	return core.ToolSurface{
 		Count:       len(b.tools),
 		Names:       names,
 		ActiveNames: activeNames,

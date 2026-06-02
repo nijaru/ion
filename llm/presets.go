@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/config"
 )
 
 type Preset string

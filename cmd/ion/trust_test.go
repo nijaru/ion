@@ -4,20 +4,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/app"
 )
 
 type toolSummaryBackend struct {
-	backend.Backend
-	surface backend.ToolSurface
+	app.Backend
+	surface app.ToolSurface
 }
 
-func (b toolSummaryBackend) ToolSurface() backend.ToolSurface {
+func (b toolSummaryBackend) ToolSurface() app.ToolSurface {
 	return b.surface
 }
 
 func TestStartupToolLineReportsLazyTools(t *testing.T) {
-	line := startupToolLine(toolSummaryBackend{surface: backend.ToolSurface{
+	line := startupToolLine(toolSummaryBackend{surface: app.ToolSurface{
 		Count:       25,
 		LazyEnabled: true,
 		Sandbox:     "auto: bubblewrap",
@@ -38,7 +38,7 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 }
 
 func TestStartupToolLineOmitsDefaultToolCount(t *testing.T) {
-	line := startupToolLine(toolSummaryBackend{surface: backend.ToolSurface{
+	line := startupToolLine(toolSummaryBackend{surface: app.ToolSurface{
 		Count: 7,
 		Names: []string{"bash", "read", "write", "edit", "ls", "grep", "find"},
 	}})

@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-json-experiment/json"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/nijaru/ion/tool"
 )
 
