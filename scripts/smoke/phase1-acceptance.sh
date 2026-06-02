@@ -28,15 +28,15 @@ if [[ "${ION_PHASE1_RACE:-0}" == "1" ]]; then
   phase_note "race subset"
   run go test -race \
     ./cmd/ion \
+    ./internal/agent \
     ./internal/app \
-    ./internal/backend/canto \
+    ./internal/backend \
     ./internal/config \
-    ./internal/providers \
+    ./providers \
+    ./session \
     ./internal/storage \
     ./internal/tools \
     -count=1 -timeout 300s
-else
-  phase_note "race subset skipped; set ION_PHASE1_RACE=1 for the Phase 1 exit gate"
 fi
 
 if [[ "${ION_PHASE1_LIVE:-0}" == "1" ]]; then

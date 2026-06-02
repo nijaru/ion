@@ -452,6 +452,9 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		AwaitTerminal: awaitTerminal,
 	})
 	var cmds []tea.Cmd
+	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
+	cmds = append(cmds, m.terminalCommit().Entries(entry))
+
 	if decision.RoutingStop != nil {
 		cmds = append(
 			cmds,
@@ -466,9 +469,6 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		)
 	}
 	m.turnReducer().failTurn(decision.DisplayError, time.Now())
-	entry, _ := storage.EntrySystem(decision.EntryContent, time.Time{})
-	printErr := m.terminalCommit().Entries(entry)
-	cmds = append([]tea.Cmd{printErr}, cmds...)
 	if decision.PersistSystem {
 		cmds = append(cmds, m.persistEntryCmd("persist session error", storage.System{
 			Type:    "system",
@@ -476,11 +476,12 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 			TS:      now(),
 		}))
 	}
-	if !decision.AwaitNext {
-		return m, sequenceCmds(cmds...)
+
+	if decision.AwaitNext {
+		cmds = append(cmds, m.awaitSessionEvent())
 	}
-	cmds = append(cmds, m.awaitSessionEvent())
-	return m, sequenceCmds(cmds...)
+
+	return m, batchCmds(cmds...)
 }
 
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {

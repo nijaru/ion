@@ -469,6 +469,54 @@ func (a *Agent) executeToolCallsSequential(
 	return toolMessages(finalized)
 }
 
+type preparedToolCall struct {
+	toolCall AgentToolCall
+	args     any
+}
+
+func (a *Agent) finalizeImmediateToolCall(
+	assistantLLM llm.Message,
+	toolCall AgentToolCall,
+	result AgentToolResult,
+	isError bool,
+	config AgentLoopConfig,
+) finalizedToolCall {
+	if config.AfterToolCall != nil {
+		after := config.AfterToolCall(AfterToolCallContext{
+			AssistantMessage: assistantLLM,
+			ToolCall:         toolCall,
+			Args:             toolCall.Arguments,
+			Result:           result,
+			IsError:          isError,
+			Context:          a.buildContext(),
+		})
+		if after.Content != nil {
+			result.Content = after.Content
+		}
+		if after.Details != nil {
+			result.Details = after.Details
+		}
+		if after.IsError != nil {
+			result.IsError = *after.IsError
+			isError = *after.IsError
+		}
+		if after.Terminate != nil {
+			result.Terminate = *after.Terminate
+		}
+	}
+
+	message := toolResultMessage(toolCall, result)
+	llmMessage := agentMessageToLLM(message)
+	return finalizedToolCall{
+		toolCall:  toolCall,
+		result:    result,
+		message:   message,
+		llm:       llmMessage,
+		isError:   isError,
+		terminate: result.Terminate,
+	}
+}
+
 func (a *Agent) executeToolCallsParallel(
 	ctx context.Context,
 	assistantMsg AgentMessage,
@@ -477,27 +525,131 @@ func (a *Agent) executeToolCallsParallel(
 	config AgentLoopConfig,
 ) ([]AgentMessage, []llm.Message, bool, error) {
 	finalized := make([]finalizedToolCall, len(toolCalls))
-	var wg sync.WaitGroup
+	prepared := make([]*preparedToolCall, len(toolCalls))
+
+	// 1. Preflight/Preparation sequentially
 	for i, toolCall := range toolCalls {
 		if ctx.Err() != nil {
 			return nil, nil, false, ctx.Err()
 		}
 		a.emitToolCallStarted(toolCall)
+
+		// Check if tool exists
+		if _, ok := a.findTool(toolCall.Name); !ok {
+			res := errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name))
+			finalized[i] = a.finalizeImmediateToolCall(assistantLLM, toolCall, res, true, config)
+			continue
+		}
+
+		// Run BeforeToolCall hook sequentially
+		if config.BeforeToolCall != nil {
+			before := config.BeforeToolCall(BeforeToolCallContext{
+				AssistantMessage: assistantLLM,
+				ToolCall:         toolCall,
+				Args:             toolCall.Arguments,
+				Context:          a.buildContext(),
+			})
+			if before.Block {
+				reason := before.Reason
+				if strings.TrimSpace(reason) == "" {
+					reason = "Tool execution was blocked"
+				}
+				res := errorToolResult(reason)
+				finalized[i] = a.finalizeImmediateToolCall(assistantLLM, toolCall, res, true, config)
+				continue
+			}
+		}
+
+		// If not blocked, mark as prepared
+		prepared[i] = &preparedToolCall{
+			toolCall: toolCall,
+			args:     toolCall.Arguments,
+		}
+	}
+
+	// 2. Concurrent execution of prepared tools
+	var wg sync.WaitGroup
+	for i, prep := range prepared {
+		if prep == nil {
+			// Already finalized immediately as blocked or not found
+			continue
+		}
 		wg.Add(1)
-		go func() {
+		go func(idx int, p *preparedToolCall) {
 			defer wg.Done()
-			finalized[i] = a.finalizeToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
-		}()
+
+			var res AgentToolResult
+			var isError bool
+
+			if config.ToolExecutor == nil {
+				res = errorToolResult(fmt.Sprintf("Tool %s executed without a configured executor", p.toolCall.Name))
+				isError = true
+			} else {
+				var err error
+				res, err = config.ToolExecutor(ctx, p.toolCall)
+				if err != nil {
+					res = errorToolResult(fmt.Sprintf("Tool execution error: %v", err))
+					isError = true
+				} else {
+					if len(res.Content) == 0 {
+						res.Content = []llm.ContentPart{llm.TextPart("")}
+					}
+					isError = res.IsError
+				}
+			}
+
+			// Run AfterToolCall hook concurrently
+			if config.AfterToolCall != nil {
+				after := config.AfterToolCall(AfterToolCallContext{
+					AssistantMessage: assistantLLM,
+					ToolCall:         p.toolCall,
+					Args:             p.args,
+					Result:           res,
+					IsError:          isError,
+					Context:          a.buildContext(),
+				})
+				if after.Content != nil {
+					res.Content = after.Content
+				}
+				if after.Details != nil {
+					res.Details = after.Details
+				}
+				if after.IsError != nil {
+					res.IsError = *after.IsError
+					isError = *after.IsError
+				}
+				if after.Terminate != nil {
+					res.Terminate = *after.Terminate
+				}
+			}
+
+			message := toolResultMessage(p.toolCall, res)
+			llmMessage := agentMessageToLLM(message)
+
+			finalized[idx] = finalizedToolCall{
+				toolCall:  p.toolCall,
+				result:    res,
+				message:   message,
+				llm:       llmMessage,
+				isError:   isError,
+				terminate: res.Terminate,
+			}
+		}(i, prep)
 	}
 	wg.Wait()
+
 	if err := ctx.Err(); err != nil {
 		return nil, nil, false, err
 	}
+
+	// 3. Emit results in original source order
 	for _, result := range finalized {
 		a.emitToolResult(result)
 	}
+
 	return toolMessages(finalized)
 }
+
 
 type finalizedToolCall struct {
 	toolCall  AgentToolCall

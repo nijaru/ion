@@ -669,6 +669,108 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 	}
 }
 
+func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		preflight []string
+		finalized []string
+	)
+
+	releaseFirst := make(chan struct{})
+	secondRan := make(chan struct{})
+
+	agent := New(AgentLoopConfig{
+		Model:             llm.Model{ID: "model"},
+		ToolExecutionMode: ToolExecutionParallel,
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{
+					testCall("call-1", "first", `{}`),
+					testCall("call-2", "second", `{}`),
+				},
+			}}}, nil
+		},
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			switch toolCall.Name {
+			case "first":
+				// Block first tool execution until second ran
+				<-releaseFirst
+				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("first done")}}, nil
+			case "second":
+				close(secondRan)
+				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("second done")}}, nil
+			default:
+				return AgentToolResult{}, errors.New("unexpected tool")
+			}
+		},
+		BeforeToolCall: func(ctx BeforeToolCallContext) BeforeToolCallResult {
+			mu.Lock()
+			preflight = append(preflight, ctx.ToolCall.Name)
+			mu.Unlock()
+			return BeforeToolCallResult{}
+		},
+		AfterToolCall: func(ctx AfterToolCallContext) AfterToolCallResult {
+			mu.Lock()
+			finalized = append(finalized, ctx.ToolCall.Name)
+			mu.Unlock()
+			return AfterToolCallResult{}
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(ctx.ToolResults) == 2
+		},
+	})
+
+	agent.SetTools([]AgentTool{
+		{Name: "first", Parallel: true},
+		{Name: "second", Parallel: true},
+	})
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+		errc <- err
+	}()
+
+	select {
+	case <-secondRan:
+	case <-time.After(time.Second):
+		t.Fatal("second parallel tool did not run while first was blocked")
+	}
+
+	// Since AfterToolCall runs concurrently, second tool must have finished and appended to finalized
+	// before the first tool is released!
+	mu.Lock()
+	if len(finalized) != 1 || finalized[0] != "second" {
+		mu.Unlock()
+		t.Fatalf("expected only 'second' to be finalized, got %v", finalized)
+	}
+	mu.Unlock()
+
+	close(releaseFirst)
+
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent run did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Verify sequential preflight order
+	if len(preflight) != 2 || preflight[0] != "first" || preflight[1] != "second" {
+		t.Errorf("preflight hook order incorrect: %v", preflight)
+	}
+
+	// Verify concurrent/completion-order finalized order (second was faster than first)
+	if len(finalized) != 2 || finalized[0] != "second" || finalized[1] != "first" {
+		t.Errorf("finalized hook order incorrect (expected second, then first): %v", finalized)
+	}
+}
+
 func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
 	var events []session.Event
 	var committed []llm.Message

@@ -23,7 +23,7 @@ func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd)
 	p := m.turnReducer().requestChild(msg.AgentName, msg.Query)
 
 	entry, _ := storage.EntrySubagent(p.Name, "Started: "+p.Intent, false, msg.Timestamp)
-	return m, sequenceCmds(
+	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist subagent start", storage.Subagent{
 			Type:    "subagent",
@@ -52,7 +52,7 @@ func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd)
 		return m, m.awaitSessionEvent()
 	}
 
-	return m, sequenceCmds(
+	return m, batchCmds(
 		m.terminalCommit().Entries(committed),
 		m.persistEntryCmd("persist subagent completion", storage.Subagent{
 			Type:    "subagent",
@@ -76,7 +76,7 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 	}
 
-	return m, sequenceCmds(
+	return m, batchCmds(
 		m.terminalCommit().Entries(committed),
 		m.persistEntryCmd("persist subagent failure", storage.Subagent{
 			Type:    "subagent",
@@ -95,7 +95,7 @@ func (m Model) handleChildCanceled(msg session.ChildCanceled) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 	}
 
-	return m, sequenceCmds(
+	return m, batchCmds(
 		m.terminalCommit().Entries(committed),
 		m.persistEntryCmd("persist subagent cancellation", storage.Subagent{
 			Type:    "subagent",

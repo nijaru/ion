@@ -947,7 +947,7 @@ func TestChildFailurePersistenceFailureKeepsReducerArmed(t *testing.T) {
 	if model.InFlight.Subagents["worker-2"] != nil {
 		t.Fatalf("subagent progress = %#v, want cleared", model.InFlight.Subagents["worker-2"])
 	}
-	requireSequenceCmd(t, cmd)
+	requireBatchCmd(t, cmd)
 	msgs := runSequencePrefix(t, cmd, 2)
 	var foundPersistError bool
 	for _, msg := range msgs {
@@ -1069,7 +1069,7 @@ func TestSessionErrorPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want cleared", model.InFlight.QueuedTurns)
 	}
-	requireSequenceCmd(t, cmd)
+	requireBatchCmd(t, cmd)
 	msgs := runSequencePrefix(t, cmd, 2)
 	var foundPersistError bool
 	for _, msg := range msgs {

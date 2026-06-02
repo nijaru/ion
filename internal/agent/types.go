@@ -209,33 +209,6 @@ type AgentState struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
-// AgentEvent is an event emitted by the agent loop.
-type AgentEvent struct {
-	// Type is the event type.
-	Type AgentEventType `json:"type"`
-	// Data is the event-specific data.
-	Data any `json:"data,omitempty"`
-}
-
-// AgentEventType identifies the type of an agent event.
-type AgentEventType string
-
-const (
-	// AgentEventTurnStarted is emitted when a new turn starts.
-	AgentEventTurnStarted AgentEventType = "turn_started"
-	// AgentEventTurnCompleted is emitted when a turn completes.
-	AgentEventTurnCompleted AgentEventType = "turn_completed"
-	// AgentEventTextDelta is emitted for each text chunk during streaming.
-	AgentEventTextDelta AgentEventType = "text_delta"
-	// AgentEventThinkingDelta is emitted for each thinking chunk during streaming.
-	AgentEventThinkingDelta AgentEventType = "thinking_delta"
-	// AgentEventToolCallStarted is emitted when a tool call starts.
-	AgentEventToolCallStarted AgentEventType = "tool_call_started"
-	// AgentEventToolCallCompleted is emitted when a tool call completes.
-	AgentEventToolCallCompleted AgentEventType = "tool_call_completed"
-	// AgentEventError is emitted when an error occurs.
-	AgentEventError AgentEventType = "error"
-)
 
 // AgentLoopConfig is the configuration for the agent loop.
 type AgentLoopConfig struct {
