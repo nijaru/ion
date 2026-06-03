@@ -35,7 +35,7 @@ func (s *cantoSession) Append(ctx context.Context, event StoreEvent) error {
 	case StoreSubagent:
 		preview = sessionSummary(e.Content)
 		ev := newStoredEvent(s.id, ionSubagentEvent, e, e.TS)
-		err = s.store.canto.Save(ctx, ev)
+		err = s.store.sqlite.Save(ctx, ev)
 	case StoreStatus:
 		if !isDurableResumeStatus(e.Status) {
 			return nil
@@ -43,18 +43,18 @@ func (s *cantoSession) Append(ctx context.Context, event StoreEvent) error {
 		ev := newStoredEvent(s.id, EventType("status_changed"), map[string]any{
 			"status": e.Status,
 		}, e.TS)
-		err = s.store.canto.Save(ctx, ev)
+		err = s.store.sqlite.Save(ctx, ev)
 	case StoreSystem:
 		preview = ""
 		ev := newStoredEvent(s.id, ionSystemEvent, e, e.TS)
-		err = s.store.canto.Save(ctx, ev)
+		err = s.store.sqlite.Save(ctx, ev)
 	case StoreTokenUsage:
 		ev := newStoredEvent(s.id, EventType("token_usage"), map[string]any{
 			"input":  e.Input,
 			"output": e.Output,
 			"cost":   e.Cost,
 		}, e.TS)
-		err = s.store.canto.Save(ctx, ev)
+		err = s.store.sqlite.Save(ctx, ev)
 	case StoreRoutingDecision:
 		ev := newStoredEvent(s.id, EventType("routing_decision"), map[string]any{
 			"decision":         e.Decision,
@@ -69,7 +69,7 @@ func (s *cantoSession) Append(ctx context.Context, event StoreEvent) error {
 			"turn_cost":        e.TurnCost,
 			"stop_reason":      e.StopReason,
 		}, e.TS)
-		err = s.store.canto.Save(ctx, ev)
+		err = s.store.sqlite.Save(ctx, ev)
 	default:
 		return fmt.Errorf("canto storage cannot append unsupported %T events", event)
 	}
@@ -88,7 +88,7 @@ func (s *cantoSession) AppendModelMessage(ctx context.Context, message llm.Messa
 	if isEmptyModelMessage(message) {
 		return nil
 	}
-	if err := s.store.canto.Save(ctx, NewMessage(s.id, message)); err != nil {
+	if err := s.store.sqlite.Save(ctx, NewMessage(s.id, message)); err != nil {
 		return err
 	}
 	text := message.TextContent()
@@ -104,7 +104,7 @@ func (s *cantoSession) AppendModelMessage(ctx context.Context, message llm.Messa
 }
 
 func (s *cantoSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
+	sess, err := s.store.sqlite.Load(ctx, s.id)
 	if err != nil {
 		return nil, err
 	}

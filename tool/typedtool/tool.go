@@ -27,7 +27,7 @@ type Config[A, R any] struct {
 	Approval    ApprovalFunc[A]
 }
 
-// Tool adapts a typed Go handler to Canto's raw provider-facing tool contract.
+// Tool adapts a typed Go handler to Ion's raw provider-facing tool contract.
 // JSON decoding and encoding stay at this boundary.
 type Tool[A, R any] struct {
 	spec     llm.Spec

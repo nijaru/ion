@@ -22,7 +22,7 @@ func appendCantoMessage(
 	msg llm.Message,
 ) {
 	t.Helper()
-	if err := store.canto.Save(ctx, NewEvent(sessionID, MessageAdded, msg)); err != nil {
+	if err := store.sqlite.Save(ctx, NewEvent(sessionID, MessageAdded, msg)); err != nil {
 		t.Fatalf("append canto message: %v", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestCantoSessionUsagePrefersTurnCompletedUsage(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, NewTurnStartedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnStartedEvent(
 		sess.ID(),
 		TurnStartedData{AgentID: "ion"},
 	)); err != nil {
@@ -175,7 +175,7 @@ func TestCantoSessionUsagePrefersTurnCompletedUsage(t *testing.T) {
 	if err := sess.Append(ctx, StoreTokenUsage{Input: 10, Output: 2, Cost: 0.01}); err != nil {
 		t.Fatalf("append token usage: %v", err)
 	}
-	if err := store.canto.Save(ctx, NewTurnCompletedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnCompletedEvent(
 		sess.ID(),
 		TurnCompletedData{
 			AgentID: "ion",
@@ -212,7 +212,7 @@ func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testi
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, NewTurnStartedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnStartedEvent(
 		sess.ID(),
 		TurnStartedData{AgentID: "ion"},
 	)); err != nil {
@@ -221,7 +221,7 @@ func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testi
 	if err := sess.Append(ctx, StoreTokenUsage{Input: 5, Output: 1, Cost: 0.02}); err != nil {
 		t.Fatalf("append token usage: %v", err)
 	}
-	if err := store.canto.Save(ctx, NewTurnCompletedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnCompletedEvent(
 		sess.ID(),
 		TurnCompletedData{
 			AgentID: "ion",
@@ -485,7 +485,7 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 		}),
 		parentAt,
 	)
-	if err := store.canto.Save(ctx, parentEvent); err != nil {
+	if err := store.sqlite.Save(ctx, parentEvent); err != nil {
 		t.Fatalf("append parent message: %v", err)
 	}
 	if err := store.UpdateSession(ctx, SessionInfo{
@@ -521,7 +521,7 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 		t.Fatalf("child copied timestamp = %s, want %s", entries[0].Timestamp, parentAt)
 	}
 
-	children, err := store.canto.Children(ctx, parent.ID())
+	children, err := store.sqlite.Children(ctx, parent.ID())
 	if err != nil {
 		t.Fatalf("load Canto children: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		}),
 		parentAt,
 	)
-	if err := exportStore.canto.Save(ctx, parentEvent); err != nil {
+	if err := exportStore.sqlite.Save(ctx, parentEvent); err != nil {
 		t.Fatalf("append parent message: %v", err)
 	}
 	if err := exportStore.UpdateSession(ctx, SessionInfo{
@@ -614,7 +614,7 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		}),
 		childAt,
 	)
-	if err := exportStore.canto.Save(ctx, childEvent); err != nil {
+	if err := exportStore.sqlite.Save(ctx, childEvent); err != nil {
 		t.Fatalf("append child message: %v", err)
 	}
 
@@ -1207,7 +1207,7 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1377,7 +1377,7 @@ func TestCantoStoreEntriesApplyIncrementalContext(t *testing.T) {
 		t.Fatalf("seed entries: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1422,7 +1422,7 @@ func TestCantoStoreEntriesPreserveIncrementalToolLifecycleDisplay(t *testing.T) 
 		t.Fatalf("seed entries: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1490,7 +1490,7 @@ func TestCantoStoreEntriesRecoverIncrementalToolCompletion(t *testing.T) {
 		t.Fatalf("seed entries: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1554,7 +1554,7 @@ func TestCantoStoreEntriesDoNotDuplicateRecoveredToolMessage(t *testing.T) {
 		Content: "seed",
 	})
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1704,7 +1704,7 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1767,7 +1767,7 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1868,7 +1868,7 @@ func TestCantoStoreAppendSkipsEmptyModelMessages(t *testing.T) {
 		t.Fatalf("append empty model message: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -1940,7 +1940,7 @@ func TestCantoStoreEntriesDropEmptyAgentMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -2131,7 +2131,7 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 		Name:    "bash",
 		Content: "exit status 1",
 	})
-	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
+	if err := store.sqlite.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "bash",
 		ID:     "tool-err",
 		Output: "exit status 1",
@@ -2180,7 +2180,7 @@ func TestCantoStoreEntriesDoNotCompactRoutineToolErrors(t *testing.T) {
 		Name:    "list",
 		Content: fullError,
 	})
-	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
+	if err := store.sqlite.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "list",
 		ID:     "tool-list-error",
 		Output: fullError,
@@ -2218,13 +2218,13 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.canto.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
+	if err := store.sqlite.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:  llm.RoleAssistant,
 		Calls: []llm.Call{assistantToolCall("tool-err", "bash")},
 	})); err != nil {
 		t.Fatalf("save assistant tool call: %v", err)
 	}
-	if err := store.canto.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
+	if err := store.sqlite.Save(ctx, NewEvent(sess.ID(), MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-err",
 		Name:    "bash",
@@ -2232,7 +2232,7 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("save tool message: %v", err)
 	}
-	if err := store.canto.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
+	if err := store.sqlite.Save(ctx, NewToolCompletedEvent(sess.ID(), ToolCompletedData{
 		Tool:   "bash",
 		ID:     "tool-err",
 		Output: "exit status 1",
@@ -2270,7 +2270,7 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -2354,7 +2354,7 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 		t.Fatalf("open session: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}
@@ -2428,7 +2428,7 @@ func TestCantoStoreEntriesPreserveDisplayOnlyEventsAfterCompactionCutoff(t *test
 		t.Fatalf("open session: %v", err)
 	}
 
-	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	cantoSess, err := store.sqlite.Load(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("load canto session: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 
 type cantoStore struct {
 	dbPath string
-	canto  *SQLiteStore
+	sqlite  *SQLiteStore
 	db     *sql.DB // Direct access for inputs and index
 
 	mu sync.Mutex
@@ -84,7 +84,7 @@ func newCantoStore(dbPath, dsn string) (SessionStore, error) {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		if closeErr := cStore.Close(); closeErr != nil {
-			return nil, fmt.Errorf("open ion storage db: %w; close canto store: %v", err, closeErr)
+			return nil, fmt.Errorf("open ion storage db: %w; close sqlite store: %v", err, closeErr)
 		}
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func newCantoStore(dbPath, dsn string) (SessionStore, error) {
 
 	s := &cantoStore{
 		dbPath: dbPath,
-		canto:  cStore,
+		sqlite:  cStore,
 		db:     db,
 	}
 	if err := s.init(); err != nil {
@@ -118,7 +118,7 @@ func (s *cantoStore) Close() error {
 	defer s.mu.Unlock()
 
 	var errs []error
-	if err := s.canto.Close(); err != nil {
+	if err := s.sqlite.Close(); err != nil {
 		errs = append(errs, err)
 	}
 	if err := s.db.Close(); err != nil {
@@ -245,7 +245,7 @@ func (s *cantoStore) ForkSession(
 	now := time.Now()
 	storedNow := metadataTimestamp(now)
 	childID := fmt.Sprintf("%d-%s", now.Unix(), ShortID())
-	_, err = s.canto.ForkWithOptions(ctx, parentID, childID, ForkOptions{
+	_, err = s.sqlite.ForkWithOptions(ctx, parentID, childID, ForkOptions{
 		BranchLabel: strings.TrimSpace(opts.Label),
 		ForkReason:  strings.TrimSpace(opts.Reason),
 	})
@@ -323,11 +323,11 @@ func (s *cantoStore) SessionTree(ctx context.Context, sessionID string) (Session
 	if err != nil {
 		return SessionTree{}, err
 	}
-	lineageRecords, err := s.canto.Lineage(ctx, sessionID)
+	lineageRecords, err := s.sqlite.Lineage(ctx, sessionID)
 	if err != nil {
 		return SessionTree{}, err
 	}
-	childrenRecords, err := s.canto.Children(ctx, sessionID)
+	childrenRecords, err := s.sqlite.Children(ctx, sessionID)
 	if err != nil {
 		return SessionTree{}, err
 	}
@@ -440,7 +440,7 @@ func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]st
 }
 
 func (s *cantoStore) Canto() *SQLiteStore {
-	return s.canto
+	return s.sqlite
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {

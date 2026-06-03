@@ -1,4 +1,4 @@
-// Package workspace provides validated rooted filesystem access for
+// Package workvfs provides validated rooted filesystem access for
 // workspace-aware agents and hosts.
 //
 // Validator canonicalizes the workspace root and rejects malformed,

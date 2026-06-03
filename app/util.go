@@ -201,7 +201,7 @@ func isIdleStatus(status string) bool {
 		return true
 	}
 	switch strings.ToLower(trimmed) {
-	case "ready", "connected via canto", "connected via acp":
+	case "ready", "connected via ion", "connected via acp":
 		return true
 	default:
 		return false

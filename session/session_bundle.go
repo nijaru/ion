@@ -46,9 +46,9 @@ func (s *cantoStore) ExportSessionBundle(
 		if err != nil {
 			return SessionBundle{}, fmt.Errorf("load session info %s: %w", ancestry.SessionID, err)
 		}
-		sess, err := s.canto.Load(ctx, ancestry.SessionID)
+		sess, err := s.sqlite.Load(ctx, ancestry.SessionID)
 		if err != nil {
-			return SessionBundle{}, fmt.Errorf("load canto session %s: %w", ancestry.SessionID, err)
+			return SessionBundle{}, fmt.Errorf("load session %s: %w", ancestry.SessionID, err)
 		}
 		events := sess.Events()
 		rawEvents := make([]json.RawMessage, 0, len(events))
@@ -96,24 +96,24 @@ func (s *cantoStore) ImportSessionBundle(
 			return nil, fmt.Errorf("%w: session %s already exists in ion index",
 				ErrSessionBundleConflict, item.record.Info.ID)
 		}
-		if exists, err := s.cantoBundleSessionExists(ctx, item.record.Info.ID); err != nil {
+		if exists, err := s.bundleSessionExists(ctx, item.record.Info.ID); err != nil {
 			return nil, err
 		} else if exists {
-			return nil, fmt.Errorf("%w: session %s already exists in canto store",
+			return nil, fmt.Errorf("%w: session %s already exists in store",
 				ErrSessionBundleConflict, item.record.Info.ID)
 		}
 	}
 
 	imported := make([]SessionInfo, 0, len(prepared))
 	for _, item := range prepared {
-		if err := s.canto.SaveAncestry(ctx, item.ancestry); err != nil {
+		if err := s.sqlite.SaveAncestry(ctx, item.ancestry); err != nil {
 			return nil, fmt.Errorf("import ancestry %s: %w", item.ancestry.SessionID, err)
 		}
 		if err := s.insertBundleSessionMeta(ctx, item.record.Info); err != nil {
 			return nil, fmt.Errorf("import session meta %s: %w", item.record.Info.ID, err)
 		}
 		for _, event := range item.events {
-			if err := s.canto.Save(ctx, event); err != nil {
+			if err := s.sqlite.Save(ctx, event); err != nil {
 				return nil, fmt.Errorf("import event %s: %w", event.ID, err)
 			}
 		}
@@ -130,12 +130,12 @@ func (s *cantoStore) exportBundleLineage(
 	if err != nil {
 		return nil, err
 	}
-	lineage, err := s.canto.Lineage(ctx, sessionID)
+	lineage, err := s.sqlite.Lineage(ctx, sessionID)
 	if err == nil {
 		return sessionAncestryInfos(lineage), nil
 	}
 
-	sess, loadErr := s.canto.Load(ctx, sessionID)
+	sess, loadErr := s.sqlite.Load(ctx, sessionID)
 	if loadErr != nil {
 		return nil, fmt.Errorf("load session %s after lineage error: %w", sessionID, loadErr)
 	}
@@ -162,13 +162,13 @@ func (s *cantoStore) sessionBundleMetaExists(ctx context.Context, id string) (bo
 	}
 }
 
-func (s *cantoStore) cantoBundleSessionExists(ctx context.Context, id string) (bool, error) {
-	if _, err := s.canto.Lineage(ctx, id); err == nil {
+func (s *cantoStore) bundleSessionExists(ctx context.Context, id string) (bool, error) {
+	if _, err := s.sqlite.Lineage(ctx, id); err == nil {
 		return true, nil
 	} else if !strings.Contains(err.Error(), "not found") {
 		return false, err
 	}
-	sess, err := s.canto.Load(ctx, id)
+	sess, err := s.sqlite.Load(ctx, id)
 	if err != nil {
 		return false, err
 	}
@@ -251,7 +251,7 @@ func prepareSessionBundle(bundle SessionBundle) ([]preparedBundleRecord, error) 
 		}
 		prepared = append(prepared, preparedBundleRecord{
 			record:   record,
-			ancestry: cantoAncestry(record.Ancestry),
+			ancestry: convertAncestry(record.Ancestry),
 			events:   events,
 		})
 	}
@@ -335,7 +335,7 @@ func sessionAncestryInfos(records []SessionAncestry) []SessionAncestryInfo {
 	return infos
 }
 
-func cantoAncestry(info SessionAncestryInfo) SessionAncestry {
+func convertAncestry(info SessionAncestryInfo) SessionAncestry {
 	return SessionAncestry{
 		SessionID:        info.SessionID,
 		ParentSessionID:  info.ParentSessionID,

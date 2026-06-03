@@ -162,7 +162,7 @@ func RecordUsage(ctx context.Context, providerID, modelID string, usage Usage) {
 
 	attrsList := []attribute.KeyValue{attribute.String("gen_ai.request.model", modelID)}
 	if providerID != "" {
-		attrsList = append(attrsList, attribute.String("canto.provider_id", providerID))
+		attrsList = append(attrsList, attribute.String("ion.provider_id", providerID))
 	}
 	attrs := metric.WithAttributes(attrsList...)
 

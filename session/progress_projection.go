@@ -33,7 +33,7 @@ func (s *cantoSession) progressProjection(ctx context.Context) (progressProjecti
 		return projection, nil
 	}
 
-	events, err := s.store.canto.EventsAfter(ctx, s.id, projection.cutoffSeq)
+	events, err := s.store.sqlite.EventsAfter(ctx, s.id, projection.cutoffSeq)
 	if err != nil {
 		return progressProjection{}, err
 	}
@@ -48,7 +48,7 @@ func (s *cantoSession) progressProjection(ctx context.Context) (progressProjecti
 }
 
 func (s *cantoSession) buildProgressProjection(ctx context.Context) (progressProjection, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
+	sess, err := s.store.sqlite.Load(ctx, s.id)
 	if err != nil {
 		return progressProjection{}, err
 	}

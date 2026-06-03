@@ -184,7 +184,7 @@ type Request struct {
 	Temperature    float64         `json:"temperature"`
 	MaxTokens      int             `json:"max_tokens,omitzero"`
 	ResponseFormat *ResponseFormat `json:"response_format,omitzero"`
-	// CachePrefixMessages is the number of leading messages Canto expects to
+	// CachePrefixMessages is the number of leading messages Ion expects to
 	// stay stable across ordinary turn growth. Use Request's message insertion
 	// methods when changing Messages so this boundary stays aligned. Provider
 	// adapters ignore it; prompt cache helpers use it to place provider-neutral
@@ -227,7 +227,7 @@ type Model struct {
 }
 
 // ProviderConfig captures the shared endpoint/auth/model metadata used by
-// Canto's built-in provider adapters.
+// Ion's built-in provider adapters.
 type ProviderConfig struct {
 	ID             string
 	APIKey         string

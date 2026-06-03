@@ -19,7 +19,7 @@ type clientSession interface {
 	Tools(context.Context, *sdkmcp.ListToolsParams) iter.Seq2[*sdkmcp.Tool, error]
 }
 
-// Client represents an MCP client session wrapped with Canto validation and
+// Client represents an MCP client session wrapped with Ion validation and
 // tool-registry adaptation.
 type Client struct {
 	session    clientSession
@@ -34,7 +34,7 @@ func NewClient(
 	version string,
 ) (*Client, error) {
 	if name == "" {
-		name = "canto"
+		name = "ion"
 	}
 	if version == "" {
 		version = "0.0.1"
@@ -53,7 +53,7 @@ func NewStdioClient(ctx context.Context, command string, args ...string) (*Clien
 	return NewClient(
 		ctx,
 		&sdkmcp.CommandTransport{Command: exec.CommandContext(ctx, command, args...)},
-		"canto",
+		"ion",
 		"0.0.1",
 	)
 }

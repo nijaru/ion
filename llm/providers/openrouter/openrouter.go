@@ -153,7 +153,7 @@ func (p *Provider) setHeaders(req *http.Request) {
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
-	req.Header.Set("User-Agent", "canto/0.0.0")
+	req.Header.Set("User-Agent", "ion/0.0.0")
 	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}

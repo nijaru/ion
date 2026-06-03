@@ -207,7 +207,7 @@ func syncSessionMetadata(
 }
 
 // toolExecutorFromRegistry creates an agent.ToolExecutor that dispatches
-// tool calls to a Canto tool.Registry.
+// tool calls to an Ion tool.Registry.
 func toolExecutorFromRegistry(registry *tool.Registry) agent.ToolExecutor {
 	return func(ctx context.Context, tc agent.AgentToolCall) (agent.AgentToolResult, error) {
 		t, ok := registry.Get(tc.Name)

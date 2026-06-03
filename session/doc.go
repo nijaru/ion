@@ -1,4 +1,4 @@
-// Package session provides Canto's durable append-only conversation log.
+// Package session provides Ion's durable append-only conversation log.
 //
 // A Session stores events as immutable facts and derives higher-level views
 // from that log:

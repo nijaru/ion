@@ -1830,10 +1830,10 @@ func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
 		model:       "z-ai/glm-5",
 		modelSet:    true,
 	}
-	model.Progress.Status = "Connected via Canto"
+	model.Progress.Status = "Connected via Ion"
 
 	line := ansi.Strip(model.progressLine())
-	if strings.Contains(line, "Connected via Canto") {
+	if strings.Contains(line, "Connected via Ion") {
 		t.Fatalf("progress line should suppress bootstrap connection notice: %q", line)
 	}
 	if !strings.Contains(line, "Ready") {

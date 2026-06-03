@@ -6,7 +6,7 @@ import (
 )
 
 func (s *cantoSession) Entries(ctx context.Context) ([]Entry, error) {
-	sess, err := s.store.canto.Load(ctx, s.id)
+	sess, err := s.store.sqlite.Load(ctx, s.id)
 	if err != nil {
 		return nil, err
 	}

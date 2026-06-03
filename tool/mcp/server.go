@@ -13,7 +13,7 @@ import (
 )
 
 // Server exposes a tool.Registry through the official MCP Go SDK while
-// preserving Canto-owned registry and validation semantics.
+// preserving Ion-owned registry and validation semantics.
 type Server struct {
 	reg     *tool.Registry
 	name    string
