@@ -96,7 +96,43 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the loop.
+// Always emits TurnFinishedEvent when done (matching Pi's agent_end contract).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
+	newMessages, err := a.acceptPrompts(ctx, prompts)
+	if err != nil {
+		a.mu.Lock()
+		a.state.ErrorMessage = err.Error()
+		a.mu.Unlock()
+		return newMessages, err
+	}
+
+	newMessages, runErr := a.execute(ctx, &newMessages)
+	a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	return newMessages, runErr
+}
+
+// Continue continues the agent loop without adding new messages.
+// Used for retries - context already has user message or tool results.
+// Does NOT emit TurnFinishedEvent (the caller owns lifecycle events).
+func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
+	a.mu.RLock()
+	if len(a.state.Messages) == 0 {
+		a.mu.RUnlock()
+		return nil, fmt.Errorf("cannot continue: no messages in context")
+	}
+	lastMsg := a.state.Messages[len(a.state.Messages)-1]
+	a.mu.RUnlock()
+
+	if lastMsg.Role == "assistant" {
+		return nil, fmt.Errorf("cannot continue from message role: assistant")
+	}
+
+	return a.execute(ctx, new([]AgentMessage))
+}
+
+// execute runs the main loop with streaming state management.
+// Shared by Run and Continue.
+func (a *Agent) execute(ctx context.Context, newMessages *[]AgentMessage) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true
 	a.state.ErrorMessage = ""
@@ -108,25 +144,13 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		a.mu.Unlock()
 	}()
 
-	newMessages, err := a.acceptPrompts(ctx, prompts)
-	if err != nil {
-		a.mu.Lock()
-		a.state.ErrorMessage = err.Error()
-		a.mu.Unlock()
-		return newMessages, err
-	}
-
-	// Run the main loop. Emit TurnFinishedEvent when done — the public
-	// Run the main loop. Always emit TurnFinishedEvent when done,
-	// matching Pi's agent_end contract: fires unconditionally.
-	runErr := a.runLoop(ctx, &newMessages)
-	a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	runErr := a.runLoop(ctx, newMessages)
 	if runErr != nil {
 		a.mu.Lock()
 		a.state.ErrorMessage = runErr.Error()
 		a.mu.Unlock()
 	}
-	return newMessages, runErr
+	return *newMessages, runErr
 }
 
 func (a *Agent) acceptPrompts(
@@ -145,45 +169,6 @@ func (a *Agent) acceptPrompts(
 	newMessages := make([]AgentMessage, len(prompts))
 	copy(newMessages, prompts)
 	return newMessages, nil
-}
-
-// Continue continues the agent loop from the current context without adding new messages.
-// Used for retries - context already has user message or tool results.
-func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
-	a.mu.RLock()
-	if len(a.state.Messages) == 0 {
-		a.mu.RUnlock()
-		return nil, fmt.Errorf("cannot continue: no messages in context")
-	}
-	lastMsg := a.state.Messages[len(a.state.Messages)-1]
-	a.mu.RUnlock()
-
-	if lastMsg.Role == "assistant" {
-		return nil, fmt.Errorf("cannot continue from message role: assistant")
-	}
-
-	a.mu.Lock()
-	a.state.IsStreaming = true
-	a.state.ErrorMessage = ""
-	a.mu.Unlock()
-
-	defer func() {
-		a.mu.Lock()
-		a.state.IsStreaming = false
-		a.mu.Unlock()
-	}()
-
-	newMessages := make([]AgentMessage, 0)
-
-	// Run the main loop. The session adapter owns TurnFinishedEvent.
-	// Direct callers of Run/Continue handle errors from the return value.
-	runErr := a.runLoop(ctx, &newMessages)
-	if runErr != nil {
-		a.mu.Lock()
-		a.state.ErrorMessage = runErr.Error()
-		a.mu.Unlock()
-	}
-	return newMessages, runErr
 }
 
 // runLoop is the main agent loop logic.
