@@ -80,9 +80,8 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		ToolExecutor:  config.ToolExecutor,
 		OnEvent: func(ev session.AgentEvent) {
 			s.mu.Lock()
-			closed := s.closed
-			s.mu.Unlock()
-			if closed {
+			defer s.mu.Unlock()
+			if s.closed {
 				return
 			}
 			s.events <- ev
@@ -234,13 +233,13 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		_, err := s.agent.Continue(turnCtx)
 		if err != nil {
 			s.mu.Lock()
-			closed := s.closed
-			s.mu.Unlock()
-			if !closed {
-				if errors.Is(err, context.Canceled) {
-					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-					return
-				}
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+			} else {
 				s.events <- session.ErrorEvent{
 					Base:  session.BaseNow(),
 					Err:   err,
@@ -248,6 +247,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 				}
 				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 			}
+			s.mu.Unlock()
 			return
 		}
 	}()
