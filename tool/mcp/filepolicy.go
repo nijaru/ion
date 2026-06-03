@@ -8,7 +8,7 @@ import (
 	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/safety"
-	"github.com/nijaru/ion/workspace"
+	"github.com/nijaru/ion/internal/workvfs"
 )
 
 // FilePolicy applies workspace validation and sensitive-path detection to MCP
