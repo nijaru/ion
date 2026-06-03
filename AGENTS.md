@@ -1,191 +1,124 @@
-# ion Agent Instructions
+# Agent Instructions
 
-Ion is a terminal coding agent built on the Canto framework. Keep this file
-durable: it should explain how agents work in this repo, not what happened in
-the latest session.
+Ion is an early-stage terminal coding agent. This file is stable operating
+policy — not a changelog.
 
-## Source Of Truth
+## Session Start
 
-- Start every non-trivial session by reading `ai/README.md`, `ai/STATUS.md`,
-  `ai/PLAN.md`, and `tk ready`.
-- Treat `AGENTS.md` as stable operating policy.
-- Treat `ai/STATUS.md` as current phase/focus/blockers.
-- Treat `ai/PLAN.md` as the active work sequence.
-- Treat `ai/DESIGN.md` and `ai/design/*` as architecture and contract detail.
-- Treat `tk` as the ledger for exact work items, bug reports, root causes, and
-  verification evidence.
-- Keep `ai/` and `.tasks/` local-only operating context. Do not commit them
-  unless the user explicitly changes that policy.
-- Do not put session-specific task ids, bug transcripts, command output, or
-  completion claims in this file. Put those in `tk` and, when they affect the
-  project state, summarize them in `ai/STATUS.md` or `ai/PLAN.md`.
+Read `ai/README.md`, `ai/STATUS.md`, `ai/PLAN.md`, run `tk ready`, then
+start the selected task. Before investigating, check `tk show <id>`, relevant
+`ai/` files, and git history.
 
-## Project Boundary
+## Project
 
-- Ion is the product: CLI/TUI UX, slash commands, provider/model selection,
-  settings/state, display projection, workspace policy, and coding-tool UX.
-- Ion's product roadmap is Pi -> Pi+: stabilize a Pi-level core first, then
-  add extra capabilities only when they make the coding workflow better without
-  destabilizing the core loop.
-- Canto is the framework: agent loop, ordered runtime events, durable session
-  history, provider-visible context, tool lifecycle, retry/cancel settlement,
-  provider transforms, compaction, and harness primitives.
-- Keep the Canto/Ion split as the target architecture, but Phase 1 is
-  Ion-first. Ion owns the Pi-level acceptance bar; Canto is an unstable
-  pre-release kernel until Ion's core loop is boring under tests and tmux.
-- If a Canto abstraction blocks Ion P1, reduce it, rewrite it, or move the
-  behavior into Ion temporarily. Re-extract to Canto only after the behavior is
-  proven by Ion's acceptance matrix. Do not preserve Canto API stability before
-  Canto release at the cost of Ion reliability.
-- When `ai/PLAN.md` selects an optimal-core redesign lane, treat scratch-design
-  gaps as proactive implementation work. Do not wait for each weak ownership
-  boundary to appear as a dogfood bug before replacing it.
-- During reopened P1, do not optimize for the smallest patch when a larger
-  design issue is visible. If the current shape differs materially from the
-  clean-sheet Pi-like target, rewrite or reorganize the relevant modules now
-  and make the task/tests prove the new ownership boundary.
-- P1 remains Pi-level: use Pi as the primary core control; use Codex app/CLI
-  and Claude Code for P1 performance and UX lessons; keep AX, DSPy, GEPA,
-  Slate, Droid, and richer multi-agent/workflow systems in Phase 2/Pi+ unless
-  they expose a primitive needed for P1 correctness.
-- The native Canto path is the primary path. ACP, subscription bridges,
-  subagents, background agents, sandbox modes, branch views, workflows, and
-  other Pi+ features stay parked unless `ai/PLAN.md` and `tk` explicitly
-  promote one.
-- Ion is `v0.0.0`. Clean breaks are allowed; do not add compatibility shims,
-  fallback branches, or migration scaffolding unless the user asks for them.
-
-## Core Product Bar
-
-Phase 1 targets a stable Pi-level core, not a visual clone of Pi:
-
-```text
-submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
-```
-
-- Use Pi as the primary internal reference for session history,
-  provider-visible context, event ordering, tool lifecycle, cancel/error
-  settlement, persistence/replay, and runtime state ownership.
-- Ion's executable P1 scenario matrix is the acceptance source of truth. Static
-  review, passing narrow unit tests, or green framework tests are insufficient
-  if normal first-minutes TUI use still fails.
-- Use Codex app, Codex CLI, Claude Code, Amp, Droid, OpenCode, Cursor, Zed,
-  and similar tools only as references for specific tradeoffs. Do not widen the
-  core surface because another agent has a feature.
-- Keep the default native path small and trusted until the core loop and TUI are
-  boring under deterministic tests, tmux, and live-provider dogfood.
+- Ion is the product: CLI/TUI UX, session management, provider integration,
+  settings, and coding tools.
+- Product roadmap: Pi-level core first, then Pi+ extras that improve the
+  coding workflow without destabilizing the core loop.
+- P1 bar: `submit → stream → tool call/result → cancel/error → persist →
+  replay/resume`. This must work under tmux, race detector, and live providers.
+- Ion is `v0.0.0`. Clean breaks are allowed. No compatibility shims, fallback
+  branches, or migration scaffolding unless explicitly asked.
+- The native Go path is primary. ACP, subagents, background agents, sandbox
+  modes, workflows, and other Pi+ features stay parked until `ai/PLAN.md` and
+  `tk` promote them.
 
 ## Work Method
 
-- Ion is early, unstable development. Always refactor and rewrite towards the
-  optimal solution. Never leave legacy cruft, half-baked workarounds, or
-  "good enough" patches. Every piece of debt compounds. If you notice code
-  that could be cleaner, simpler, or more correct — fix it now, not later.
-- Read before changing: target file, immediate callers, shared utilities,
-  relevant Canto boundary code, `ai/` context, and the active `tk` task.
-- Use the `go-expert` skill for non-trivial Go changes.
-- Reproduce user-reported behavior before fixing when reproduction is possible.
-- Prefer contract-first fixes over patch-first fixes in the core loop:
-  1. identify the owner, Canto or Ion;
-  2. add or update focused tests for the invariant;
-  3. fix Canto first when the failing behavior is a reusable primitive and the
-     Canto change is the fastest reliable path;
-  4. make a clean Ion-local implementation when the Canto boundary is slowing
-     P1, then log the re-extraction target in Canto;
-  5. simplify duplicate adapters/reducers after the acceptance matrix passes.
-- For Pi-parity features and fixes:
-  1. **Understand Pi's invariant** — read the relevant source in the pi-agent-core
-     package (`node_modules/@earendil-works/pi-agent-core/dist/`). Focus on the
-     contract (what must always be true), not the implementation mechanism.
-  2. **Find the Go idiom** — Pi's patterns often don't translate directly (JS
-     exceptions vs Go error returns, EventStream vs channels, try/finally vs
-     defer). Identify the Go-native way to express the same invariant.
-  3. **Implement with clear ownership** — one layer owns each guarantee. Document
-     it in comments where the ownership is non-obvious. Verify with tests and
-     race detector.
-- Make aggressive targeted rewrites of broken modules when they remove
-  duplicate ownership, hidden state, or architecture that has repeatedly let
-  first-minutes bugs through. The boundary is relevance to P1 correctness, not
-  line-count minimization.
-- Use `tk` for all multi-step work. Log concrete findings while they are fresh:
-  files reviewed, root cause, fix, commands run, residual risk.
-- Short prompts like `proceed`, `what's next`, or `hows it look` mean: verify
-  repo truth first, select the next clear slice from `ai/`/`tk`, and execute it.
+**Always refactor towards the optimal solution.** Early-stage development means
+every piece of debt compounds. Never leave cruft, half-baked workarounds, or
+"good enough" patches. If code could be cleaner, simpler, or more correct —
+fix it now.
+
+**Read before changing.** Target file, immediate callers, shared utilities,
+`ai/` context, and the active `tk` task.
+
+**Contract-first fixes over patch-first.** When fixing core loop bugs:
+1. Identify the owner (which layer owns the guarantee).
+2. Add or update focused tests for the invariant.
+3. Fix at the right layer; simplify duplicates after.
+
+**Pi-parity work** (features or fixes that match Pi's behavior):
+1. **Understand the invariant** — read Pi's source in `pi-agent-core`
+   (`node_modules/@earendil-works/pi-agent-core/dist/`). Focus on the contract
+   (what must always be true), not the mechanism.
+2. **Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
+   channels, try/finally vs defer. Same invariant, different mechanism.
+3. **Implement with clear ownership** — one layer owns each guarantee. Document
+   it in comments where non-obvious. Verify with tests and race detector.
+
+**Aggressive rewrites.** When a module has duplicate ownership, hidden state,
+or architecture that has repeatedly let bugs through — rewrite it. The boundary
+is relevance to correctness, not line-count.
+
+**Short prompts** like `proceed`, `what's next`, or `hows it look` mean: verify
+repo truth first, select the next clear slice from `ai/`/`tk`, and execute it.
+
+**Use `tk` for all multi-step work.** Log concrete findings while they are
+fresh: files reviewed, root cause, fix, commands run, residual risk.
 
 ## Dogfood Regressions
 
-User-reported Ion behavior bugs are dogfood regressions until proven otherwise.
-Handle them with evidence, not memory.
+User-reported behavior bugs are regressions until proven otherwise. Handle with
+evidence, not memory.
 
-- Before answering "do you remember", "is this fixed", "what was the last
-  issue", or "how close are we", search `tk`, `.tasks/`, `ai/STATUS.md`,
-  `ai/PLAN.md`, and recent commits for the exact symptom, error text,
-  provider/model, command, session id, or file path.
-- If no record exists, say so and create a focused `tk` task instead of
-  guessing.
-- Each regression task should capture: exact transcript/error snippet,
-  provider/model/endpoint/command/session when known, expected versus actual
-  behavior, owner area, likely files, repro, root cause, fix summary,
-  deterministic/tmux/live evidence, and remaining caveats.
-- Broad audit tasks are not substitutes for focused regression tasks. Close a
-  regression only after the focused task records the fix, code/test paths,
-  exact verification commands, and any scenario-matrix update.
+- Before answering "is this fixed" or "what was the last issue", search `tk`,
+  `ai/STATUS.md`, `ai/PLAN.md`, and recent commits for the exact symptom.
+- If no record exists, create a focused `tk` task. Don't guess.
+- Each regression task captures: exact error snippet, provider/model/session,
+  expected vs actual, root cause, fix, verification commands, remaining caveats.
 
-## TUI Work
+## TUI
 
-- Ion uses Bubble Tea v2. Use the `bubbletea` skill for non-trivial TUI
-  changes.
-- Keep the TUI as projection/control over runtime events. It must not own a
-  second provider-visible transcript, second agent loop, or hidden session
-  materializer.
-- For TUI behavior, use tmux or another PTY text capture to test the real
-  inline terminal path: launch header, composer, multiline input, transcript
-  commits, separators, status/footer, pickers, cancel, resume, and resize.
-- Unit tests are still required for reducer/state-machine behavior; tmux smoke
-  catches terminal integration bugs those tests cannot see.
+- Uses Bubble Tea v2. Use the `bubbletea` skill for non-trivial changes.
+- The TUI is projection/control over runtime events. It must not own a second
+  agent loop, second transcript, or hidden session materializer.
+- Test TUI behavior in tmux or another PTY capture. Unit tests for reducers;
+  tmux smoke for terminal integration.
 
 ## Config And State
 
-- Keep Ion global files under `~/.ion/`.
-- Stable user-editable settings belong in `~/.ion/config.toml`.
-- Mutable runtime choices belong in `~/.ion/state.toml`.
-- Provider API keys entered through Ion belong in `~/.ion/credentials.toml`
-  with private file permissions.
-- Do not persist provider/model automatically at startup. Only explicit user
-  edits or TUI actions should write settings/state.
-- Prefer hardcoded defaults for Ion-owned behavior. Add persistent state only
-  when the value is machine-owned and genuinely needs to survive sessions.
+- Global files under `~/.ion/`: `config.toml` (user settings), `state.toml`
+  (runtime state), `credentials.toml` (API keys, private permissions).
+- Don't persist provider/model at startup. Only explicit user edits or TUI
+  actions should write settings/state.
+- Hardcode defaults. Add persistent state only when it genuinely needs to
+  survive sessions.
 
 ## Verification
 
-- Run focused tests for the changed owner first.
-- For normal Go changes, run `go test ./... -count=1 -timeout 300s`,
-  `go vet ./...`, and `git diff --check`.
-- Run race subsets for state-machine, cancellation, streaming, storage, or TUI
-  concurrency changes.
-- Run tmux smoke for TUI behavior changes.
-- Run live provider smoke last for provider/tool-loop changes. Use the live
-  provider named by `ai/STATUS.md`, the active task, or the user.
-- Report exact commands. If a gate is skipped, say why.
-
-## Commands
-
 ```bash
+# Standard gates (always run)
 go test ./... -count=1 -timeout 300s
 go vet ./...
 git diff --check
 
-tk ready
-tk show <id>
-tk log <id> "finding"
-tk done <id>
+# Concurrency-sensitive changes (streaming, state-machine, TUI, storage)
+go test -race ./internal/agent/ ./session/ ./app/ -count=1 -timeout 120s
+
+# TUI behavior changes
+tmux smoke scripts
+
+# Provider/tool-loop changes
+# Use live provider from ai/STATUS.md or user
+```
+
+Report exact commands. If a gate is skipped, say why.
+
+## Commands
+
+```bash
+tk ready          # what's next
+tk show <id>      # task detail
+tk log <id> "msg" # record finding
+tk done <id>      # mark complete
 ```
 
 ## References
 
-- `ai/README.md` - index of active context files.
-- `ai/STATUS.md` - current phase, focus, blockers, and latest evidence.
-- `ai/PLAN.md` - active work sequence and deferred work.
-- `ai/DESIGN.md` - current architecture.
-- `ai/DECISIONS.md` - durable decisions and recent decision log.
-- `/Users/nick/github/earendil-works/pi` - primary phase-1 internal reference.
+- `ai/README.md` — index of active context files
+- `ai/STATUS.md` — current phase, focus, blockers
+- `ai/PLAN.md` — active work sequence
+- `ai/DESIGN.md` — architecture
+- `ai/DECISIONS.md` — durable decisions and decision log
+- `/Users/nick/github/earendil-works/pi` — primary Pi reference
