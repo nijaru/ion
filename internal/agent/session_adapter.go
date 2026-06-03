@@ -246,6 +246,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 					Err:   err,
 					Fatal: true,
 				}
+				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 			}
 			return
 		}
