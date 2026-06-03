@@ -77,6 +77,10 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
 
 ## Work Method
 
+- Ion is early, unstable development. Always refactor and rewrite towards the
+  optimal solution. Never leave legacy cruft, half-baked workarounds, or
+  "good enough" patches. Every piece of debt compounds. If you notice code
+  that could be cleaner, simpler, or more correct — fix it now, not later.
 - Read before changing: target file, immediate callers, shared utilities,
   relevant Canto boundary code, `ai/` context, and the active `tk` task.
 - Use the `go-expert` skill for non-trivial Go changes.
