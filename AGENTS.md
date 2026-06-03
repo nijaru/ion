@@ -89,6 +89,15 @@ submit -> stream -> tool call/result -> cancel/error -> persist -> replay/resume
   4. make a clean Ion-local implementation when the Canto boundary is slowing
      P1, then log the re-extraction target in Canto;
   5. simplify duplicate adapters/reducers after the acceptance matrix passes.
+- For core loop and event lifecycle bugs, follow this sequence:
+  1. **Check Pi's implementation** — read the relevant source in the pi-agent-core
+     package (`node_modules/@earendil-works/pi-agent-core/dist/`). Understand
+     who owns the event, what the contract says, and how errors are handled.
+  2. **Determine the correct Go approach** — Pi's patterns don't always translate
+     directly (e.g., JS throws vs Go errors, EventStream vs channels). Identify
+     the Go idiom that preserves the same invariant.
+  3. **Implement with clear ownership** — document who owns what (e.g., "Run
+     owns TurnFinishedEvent, not runLoop"). Verify with tests and race detector.
 - Make aggressive targeted rewrites of broken modules when they remove
   duplicate ownership, hidden state, or architecture that has repeatedly let
   first-minutes bugs through. The boundary is relevance to P1 correctness, not

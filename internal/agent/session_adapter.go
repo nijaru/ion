@@ -231,25 +231,18 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			s.mu.Unlock()
 		}()
 		_, err := s.agent.Continue(turnCtx)
-		if err != nil {
-			s.mu.Lock()
-			if s.closed {
-				s.mu.Unlock()
-				return
-			}
-			if errors.Is(err, context.Canceled) {
-				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-			} else {
+		s.mu.Lock()
+		if !s.closed {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				s.events <- session.ErrorEvent{
 					Base:  session.BaseNow(),
 					Err:   err,
 					Fatal: true,
 				}
-				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 			}
-			s.mu.Unlock()
-			return
+			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 		}
+		s.mu.Unlock()
 	}()
 
 	return nil

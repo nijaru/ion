@@ -867,9 +867,6 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 		if _, ok := ev.(session.AgentMessageEvent); ok {
 			t.Fatalf("unexpected assistant message event after stream error: %#v", ev)
 		}
-		if _, ok := ev.(session.TurnFinishedEvent); ok {
-			t.Fatalf("unexpected turn-finished event after stream error: %#v", ev)
-		}
 	}
 }
 

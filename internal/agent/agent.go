@@ -116,16 +116,17 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		return newMessages, err
 	}
 
-	// Run the main loop
-	err = a.runLoop(ctx, &newMessages)
-	if err != nil {
+	// Run the main loop. Emit TurnFinishedEvent when done — the public
+	// Run the main loop. Always emit TurnFinishedEvent when done,
+	// matching Pi's agent_end contract: fires unconditionally.
+	runErr := a.runLoop(ctx, &newMessages)
+	a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	if runErr != nil {
 		a.mu.Lock()
-		a.state.ErrorMessage = err.Error()
+		a.state.ErrorMessage = runErr.Error()
 		a.mu.Unlock()
-		return newMessages, err
 	}
-
-	return newMessages, nil
+	return newMessages, runErr
 }
 
 func (a *Agent) acceptPrompts(
@@ -174,16 +175,15 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 
 	newMessages := make([]AgentMessage, 0)
 
-	// Run the main loop
-	err := a.runLoop(ctx, &newMessages)
-	if err != nil {
+	// Run the main loop. The session adapter owns TurnFinishedEvent.
+	// Direct callers of Run/Continue handle errors from the return value.
+	runErr := a.runLoop(ctx, &newMessages)
+	if runErr != nil {
 		a.mu.Lock()
-		a.state.ErrorMessage = err.Error()
+		a.state.ErrorMessage = runErr.Error()
 		a.mu.Unlock()
-		return newMessages, err
 	}
-
-	return newMessages, nil
+	return newMessages, runErr
 }
 
 // runLoop is the main agent loop logic.
@@ -252,7 +252,6 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 
 			// Check for error/abort
 			if message.IsError {
-				a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 				return nil
 			}
 
@@ -302,7 +301,6 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			// Check if we should stop after this turn
 			if a.config.ShouldStopAfterTurn != nil {
 				if a.config.ShouldStopAfterTurn(turnContext) {
-					a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 					return nil
 				}
 			}
@@ -319,7 +317,6 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 		}
 
 		// No more messages, exit
-		a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
 		return nil
 	}
 }
