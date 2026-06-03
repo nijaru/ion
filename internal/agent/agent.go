@@ -173,7 +173,6 @@ func (a *Agent) acceptPrompts(
 
 // runLoop is the main agent loop logic.
 func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error {
-	firstTurn := true
 	var pendingMessages []AgentMessage
 
 	// Outer loop: continues when queued follow-up messages arrive
@@ -192,12 +191,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				return ctx.Err()
 			}
 
-			if !firstTurn {
-				a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
-			} else {
-				a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
-				firstTurn = false
-			}
+			a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
 
 			// Process pending messages (inject before next assistant response)
 			if len(pendingMessages) > 0 {
