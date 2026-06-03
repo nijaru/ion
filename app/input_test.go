@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestComposerLayoutResetsAfterClear(t *testing.T) {
@@ -789,7 +790,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := testutil.New()
@@ -872,7 +873,7 @@ func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

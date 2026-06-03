@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 var (
@@ -46,7 +47,7 @@ func BenchmarkP1EventToViewActiveTool(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		model := base
-		model.InFlight.Subagents = make(map[string]*SubagentProgress)
+		model.InFlight.Subagents = make(map[string]*core.SubagentProgress)
 		for _, ev := range events {
 			updated, _ := model.Update(ev)
 			model = (*updated.(*Model))
@@ -63,7 +64,7 @@ func BenchmarkP1BurstAgentDeltaReduction(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		model := base
-		model.InFlight.Subagents = make(map[string]*SubagentProgress)
+		model.InFlight.Subagents = make(map[string]*core.SubagentProgress)
 		updated, _ := model.Update(session.TurnStartedEvent{})
 		model = (*updated.(*Model))
 		for _, ev := range deltas {

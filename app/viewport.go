@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 // renderPlaneB renders all ephemeral in-flight content.
@@ -407,7 +408,7 @@ func (m Model) renderUserEntry(content string) string {
 }
 
 // renderSubagentRow formats a single background worker's status for Plane B.
-func (m Model) renderSubagentRow(p *SubagentProgress) string {
+func (m Model) renderSubagentRow(p *core.SubagentProgress) string {
 	intent := p.Intent
 	if ansi.StringWidth(intent) > 24 {
 		intent = ansi.Truncate(intent, 24, "...")

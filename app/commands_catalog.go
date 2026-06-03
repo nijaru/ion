@@ -6,28 +6,18 @@ import (
 	"github.com/nijaru/ion/internal/core"
 )
 
-// Type aliases for backward compatibility within app/.
-type slashCommandInfo = core.SlashCommandInfo
-type slashCommandIdlePolicy = core.SlashCommandIdlePolicy
-
-const (
-	slashCommandIdleNever     = core.SlashCommandIdleNever
-	slashCommandIdleAlways    = core.SlashCommandIdleAlways
-	slashCommandIdleWithArgs  = core.SlashCommandIdleWithArgs
-)
-
-func helpText() string                          { return core.HelpText() }
-func slashCommands() []string                   { return core.SlashCommands() }
-func deferredFeatureMessage(f string) string    { return core.DeferredFeatureMessage(f) }
-func slashCommandDefinitions() []slashCommandInfo { return core.SlashCommandDefinitions() }
-func slashCommandDefinition(name string) (slashCommandInfo, bool) {
+func helpText() string                                 { return core.HelpText() }
+func slashCommands() []string                          { return core.SlashCommands() }
+func deferredFeatureMessage(f string) string           { return core.DeferredFeatureMessage(f) }
+func slashCommandDefinitions() []core.SlashCommandInfo { return core.SlashCommandDefinitions() }
+func slashCommandDefinition(name string) (core.SlashCommandInfo, bool) {
 	return core.SlashCommandDefinition(name)
 }
-func resolveSlashCommand(name string) (slashCommandInfo, bool) {
+func resolveSlashCommand(name string) (core.SlashCommandInfo, bool) {
 	return core.ResolveSlashCommand(name)
 }
-func slashCommandCatalog() []slashCommandInfo { return core.SlashCommandCatalog() }
-func slashCommandHelpLines() []string         { return core.SlashCommandHelpLines() }
+func slashCommandCatalog() []core.SlashCommandInfo { return core.SlashCommandCatalog() }
+func slashCommandHelpLines() []string              { return core.SlashCommandHelpLines() }
 
 // slashCommandItems stays in app/ because it uses pickerItem (TUI type).
 func slashCommandItems() []pickerItem {

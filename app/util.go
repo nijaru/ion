@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func ifthen[T any](cond bool, a, b T) T {
@@ -128,7 +129,7 @@ func noModelConfiguredStatus() string {
 	return session.NoModelConfiguredStatus()
 }
 
-func toolSurfaceSummary(surface ToolSurface) string {
+func toolSurfaceSummary(surface core.ToolSurface) string {
 	if surface.Count == 0 {
 		return "No tools registered"
 	}
@@ -172,7 +173,7 @@ func runtimeStatusSummary(m Model) string {
 	if model := m.runtimeModel(); model != "" {
 		lines = append(lines, "Model: "+model)
 	}
-	if summarizer, ok := m.Model.Backend.(ToolSummarizer); ok {
+	if summarizer, ok := m.Model.Backend.(core.ToolSummarizer); ok {
 		surface := summarizer.ToolSurface()
 		lines = append(lines, toolSurfaceSummary(surface))
 	}

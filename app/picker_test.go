@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
@@ -424,7 +425,7 @@ func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
 		release: make(chan struct{}),
 		sessions: []session.SessionInfo{{
 			ID:          "sess-1",
-			Title:       "Resume task",
+			Title:       "core.Resume task",
 			LastPreview: "continue work",
 			Model:       "openai/model-a",
 		}},
@@ -503,7 +504,7 @@ func TestStartupPickerCmdLoadsInitialSessionPicker(t *testing.T) {
 		release: make(chan struct{}),
 		sessions: []session.SessionInfo{{
 			ID:          "sess-startup",
-			Title:       "Resume startup picker",
+			Title:       "core.Resume startup picker",
 			LastPreview: "continue after launch",
 			Model:       "openai/model-a",
 		}},
@@ -570,7 +571,7 @@ func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
 	items := []sessionPickerItem{
 		{info: session.SessionInfo{
 			ID:          "sess-1",
-			Title:       "Fix Resume Flow",
+			Title:       "Fix core.Resume Flow",
 			Summary:     "Workspace history",
 			LastPreview: "Recovered stalled session",
 		}},
@@ -2316,7 +2317,7 @@ func TestProviderSelectionMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("provider setup returned unexpected command %T", cmd)
 	}
-	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != core.SetupPromptAPIKey {
 		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
 	}
 	for _, r := range "sk-ant-test" {
@@ -2683,7 +2684,7 @@ func TestProviderSelectionFailedOpenAICompatibleEndpointPromptsForEdit(t *testin
 	if cmd != nil {
 		t.Fatalf("provider setup returned unexpected command %T", cmd)
 	}
-	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != core.SetupPromptEndpoint {
 		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)
 	}
 	if model.Picker.Setup.value != "http://127.0.0.1:1/v1" {

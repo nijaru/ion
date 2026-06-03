@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/core"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -20,7 +21,7 @@ var (
 func (m Model) openAPIKeyPrompt(
 	cfg *config.Config,
 	provider string,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	def, ok := llm.Lookup(provider)
 	if !ok {
@@ -35,7 +36,7 @@ func (m Model) openAPIKeyPrompt(
 	cfgCopy := *cfg
 	cfgCopy.Provider = def.ID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         setupPromptAPIKey,
+		kind:         core.SetupPromptAPIKey,
 		provider:     def.ID,
 		providerName: def.DisplayName,
 		preset:       preset,
@@ -53,14 +54,14 @@ func providerSupportsAPIKeyPrompt(def llm.Definition) bool {
 	}
 }
 
-func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea.Cmd) {
+func (m Model) openEndpointPrompt(cfg *config.Config, preset core.Preset) (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 	cfgCopy := *cfg
 	cfgCopy.Provider = llm.OpenAICompatibleID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         setupPromptEndpoint,
+		kind:         core.SetupPromptEndpoint,
 		provider:     llm.OpenAICompatibleID,
 		providerName: llm.DisplayName(llm.OpenAICompatibleID),
 		value:        strings.TrimSpace(cfgCopy.Endpoint),
@@ -120,7 +121,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m, cmdError(message)
 	}
 	switch prompt.kind {
-	case setupPromptAPIKey:
+	case core.SetupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
 		if key == "" {
 			m.pickerReducer().setSetupError("API key cannot be empty")
@@ -143,7 +144,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 				err:       err,
 			}
 		}
-	case setupPromptEndpoint:
+	case core.SetupPromptEndpoint:
 		endpoint, err := normalizeOpenAICompatibleEndpoint(prompt.value)
 		if err != nil {
 			m.pickerReducer().setSetupError(err.Error())

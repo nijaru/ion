@@ -488,7 +488,7 @@ func p1MatrixPickerOverlaysKeepShellFrame(t *testing.T) {
 		filtered: []sessionPickerItem{item},
 	}
 	view = assertP1ShellFrame(t, model)
-	assertP1ViewContains(t, view, "Resume a session")
+	assertP1ViewContains(t, view, "core.Resume a session")
 	assertP1ViewContains(t, view, "inspect workspace")
 }
 

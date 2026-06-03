@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestLayoutClampsComposerHeight(t *testing.T) {
@@ -774,7 +775,7 @@ func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 	model := New(
 		stubBackend{
 			sess: &stubSession{events: make(chan session.AgentEvent)},
-			surface: ToolSurface{
+			surface: core.ToolSurface{
 				Count:   2,
 				Names:   []string{"bash", "read"},
 				Sandbox: "auto: seatbelt",

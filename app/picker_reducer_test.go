@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
@@ -252,7 +253,7 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
-	model.Picker.Setup = &setupPromptState{kind: setupPromptAPIKey}
+	model.Picker.Setup = &setupPromptState{kind: core.SetupPromptAPIKey}
 
 	model.pickerReducer().closeAll()
 
@@ -300,7 +301,7 @@ func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
 	model := readyModel(t)
 	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
 	model.pickerReducer().openSetup(setupPromptState{
-		kind:  setupPromptEndpoint,
+		kind:  core.SetupPromptEndpoint,
 		value: "fedora",
 		err:   "old error",
 	})

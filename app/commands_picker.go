@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/core"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -47,7 +48,7 @@ func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd)
 
 func (m Model) openProviderPickerForPreset(
 	cfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
@@ -83,7 +84,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 
 func (m Model) openModelPickerForPreset(
 	cfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
@@ -105,9 +106,9 @@ func (m Model) openModelPickerForPreset(
 		return m, cmdError(err.Error())
 	}
 	switch setup {
-	case setupPromptAPIKey:
+	case core.SetupPromptAPIKey:
 		return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
-	case setupPromptEndpoint:
+	case core.SetupPromptEndpoint:
 		return m.openEndpointPrompt(cfg, preset)
 	}
 	return m.openReadyModelPickerForPreset(cfg, preset)
@@ -115,7 +116,7 @@ func (m Model) openModelPickerForPreset(
 
 func (m Model) beginModelPickerSetupCheck(
 	cfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -138,7 +139,7 @@ func (m Model) beginModelPickerSetupCheck(
 	return m, checkModelPickerSetup(requestID, cfg, preset)
 }
 
-func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
+func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset core.Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -167,9 +168,9 @@ func (m Model) handleModelPickerSetupResolved(
 	}
 	cfg := msg.cfg
 	switch msg.setup {
-	case setupPromptAPIKey:
+	case core.SetupPromptAPIKey:
 		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
-	case setupPromptEndpoint:
+	case core.SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
 	default:
 		return m.openReadyModelPickerForPreset(&cfg, msg.preset)
@@ -179,7 +180,7 @@ func (m Model) handleModelPickerSetupResolved(
 func (m Model) beginProviderSelection(
 	cfg *config.Config,
 	provider string,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	updated, err := updateProviderSelection(cfg, provider)
 	if err != nil {
@@ -218,16 +219,16 @@ func (m Model) handleProviderSelectionResolved(
 }
 
 func (m Model) applyProviderSelection(
-	selection providerSelection,
+	selection core.ProviderSelection,
 	provider string,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	m.clearProgressError()
 	if selection.Setup != 0 {
 		switch selection.Setup {
-		case setupPromptAPIKey:
+		case core.SetupPromptAPIKey:
 			return m.openAPIKeyPrompt(selection.Config, provider, preset)
-		case setupPromptEndpoint:
+		case core.SetupPromptEndpoint:
 			return m.openEndpointPrompt(selection.Config, preset)
 		}
 	}
@@ -244,7 +245,7 @@ func (m Model) applyProviderSelection(
 
 func (m Model) openReadyModelPickerForPreset(
 	cfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 ) (Model, tea.Cmd) {
 	cached, fresh, ok := cachedModelItemsForProvider(cfg)
 	items := m.modelPickerItemsForCatalog(cfg, cached)
@@ -423,7 +424,7 @@ func modelPickerProviderTitle(provider string) string {
 	return provider
 }
 
-func loadModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
+func loadModelPickerItems(requestID uint64, cfg *config.Config, preset core.Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -492,7 +493,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 	return m, nil
 }
 
-func togglePreset(p Preset) Preset {
+func togglePreset(p core.Preset) core.Preset {
 	if p == presetFast {
 		return presetPrimary
 	}
@@ -698,7 +699,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 }
 
-func (p *pickerOverlayState) Preset() Preset {
+func (p *pickerOverlayState) Preset() core.Preset {
 	if p == nil {
 		return presetPrimary
 	}

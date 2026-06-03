@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/core"
 )
 
 const composerPrompt = "› "
@@ -320,10 +321,10 @@ func (m Model) renderSetupPrompt() string {
 	help := "Enter save • Esc cancel"
 	value := prompt.value
 	switch prompt.kind {
-	case setupPromptAPIKey:
+	case core.SetupPromptAPIKey:
 		title = "Enter API key for " + prompt.providerName
 		value = strings.Repeat("•", len([]rune(prompt.value)))
-	case setupPromptEndpoint:
+	case core.SetupPromptEndpoint:
 		title = "OpenAI-compatible endpoint"
 		help = "Enter save • Esc cancel"
 	default:
@@ -334,7 +335,7 @@ func (m Model) renderSetupPrompt() string {
 	b.WriteString("\n")
 	b.WriteString(m.cardTopBorder(title))
 	b.WriteString("\n")
-	if prompt.kind == setupPromptEndpoint {
+	if prompt.kind == core.SetupPromptEndpoint {
 		b.WriteString(m.cardPaddedLine(m.st.dim, "  Example: http://127.0.0.1:11434/v1"))
 		b.WriteString("\n")
 	}

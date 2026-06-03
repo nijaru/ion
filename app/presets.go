@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/core"
 )
 
-func (m Model) activePreset() Preset {
+func (m Model) activePreset() core.Preset {
 	switch m.App.ActivePreset {
 	case presetFast:
 		return presetFast
@@ -22,7 +23,7 @@ func (m Model) activePresetTitle() string {
 	return presetTitle(m.activePreset())
 }
 
-func presetTitle(preset Preset) string {
+func presetTitle(preset core.Preset) string {
 	switch preset {
 	case presetFast:
 		return "fast"
@@ -33,7 +34,7 @@ func presetTitle(preset Preset) string {
 
 func (m Model) runtimeConfigForPreset(
 	cfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 ) (*config.Config, error) {
 	return llm.ResolveRuntimeConfig(context.Background(), cfg, llm.Preset(preset))
 }
@@ -110,7 +111,7 @@ func (m Model) updateModelForActivePreset(cfg *config.Config, model string) *con
 func updateModelForPreset(
 	cfg *config.Config,
 	model string,
-	preset Preset,
+	preset core.Preset,
 ) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -133,7 +134,7 @@ func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) 
 func updateThinkingForPreset(
 	cfg *config.Config,
 	effort string,
-	preset Preset,
+	preset core.Preset,
 ) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -153,7 +154,7 @@ func (m Model) configuredModelForActivePreset(cfg *config.Config) string {
 	return configuredModelForPreset(cfg, m.activePreset())
 }
 
-func configuredModelForPreset(cfg *config.Config, preset Preset) string {
+func configuredModelForPreset(cfg *config.Config, preset core.Preset) string {
 	if cfg == nil {
 		return ""
 	}

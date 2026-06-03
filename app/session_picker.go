@@ -101,7 +101,7 @@ func (m Model) renderSessionPicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.cardTopBorder("Resume a session"))
+	b.WriteString(m.cardTopBorder("core.Resume a session"))
 	b.WriteString("\n")
 
 	if m.App.Workdir != "" {

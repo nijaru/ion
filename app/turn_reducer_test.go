@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
@@ -13,7 +14,7 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.InFlight.Pending = tool
 	model.InFlight.PendingTools = map[string]*session.Entry{"tool-a": tool}
-	model.InFlight.Subagents = map[string]*SubagentProgress{"child": {ID: "child"}}
+	model.InFlight.Subagents = map[string]*core.SubagentProgress{"child": {ID: "child"}}
 	model.InFlight.QueuedTurns = []string{"follow up"}
 	model.InFlight.StreamBuf = "stream"
 	model.InFlight.ReasonBuf = "reason"

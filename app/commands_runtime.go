@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
@@ -78,7 +79,7 @@ func (m Model) configForStoredSession(provider, model string) (*config.Config, e
 	return updateModelForPreset(cfg, model, presetPrimary), nil
 }
 
-func (m Model) switchPresetCommand(preset Preset) (Model, tea.Cmd) {
+func (m Model) switchPresetCommand(preset core.Preset) (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, cmdError(m.localCommandBusyMessage("changing presets"))
 	}
@@ -121,7 +122,7 @@ func (m Model) ResumeSessionID() string {
 }
 
 func (m Model) switchRuntimeCommand(
-	transition Transition,
+	transition core.Transition,
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
@@ -137,7 +138,7 @@ func (m Model) switchRuntimeCommand(
 	requestID := m.runtimeRequest().begin("Switching runtime...")
 
 	return m, func() tea.Msg {
-		result, err := Switch(context.Background(), SwitchInput{
+		result, err := core.Switch(context.Background(), core.SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
 			Current:         current,
@@ -172,7 +173,7 @@ func (m Model) resumeRuntimeCommand(
 	current := m.Handles()
 	switchID := m.runtimeRequest().begin("Switching runtime...")
 	return m, func() tea.Msg {
-		result, err := Resume(context.Background(), ResumeInput{
+		result, err := core.Resume(context.Background(), core.ResumeInput{
 			Switcher:   switcher,
 			Transition: transition,
 			Current:    current,
@@ -264,8 +265,8 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 	return m.handleLocalError(msg.err)
 }
 
-func closeRuntimeHandles(handles Handles) {
-	CloseHandles(handles)
+func closeRuntimeHandles(handles core.Handles) {
+	core.CloseHandles(handles)
 }
 
 func currentBranchName(defaultBranch string, sess session.SessionHandle) string {

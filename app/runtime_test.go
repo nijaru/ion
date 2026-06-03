@@ -17,6 +17,7 @@ import (
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestNewRestoresActivePresetFromState(t *testing.T) {
@@ -138,16 +139,16 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 func runtimeSwitchMsgForTest(
 	appCfg *config.Config,
 	runtimeCfg *config.Config,
-	preset Preset,
+	preset core.Preset,
 	status string,
-	backend Backend,
+	backend core.Backend,
 	sess session.AgentSession,
 	storageSess session.SessionHandle,
 ) runtimeSwitchedMsg {
 	return runtimeSwitchedMsg{
 		runtime: newAcceptedRuntime(
 			newRuntimeTransition(appCfg, runtimeCfg, preset, status),
-			Handles{
+			core.Handles{
 				Backend: backend,
 				Session: sess,
 				Storage: storageSess,
@@ -406,7 +407,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			switched = true
 			observedSessionID = sessionID
 
@@ -728,7 +729,7 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			resolved := *cfg
 			newBackend := testutil.New()
 			newBackend.SetConfig(&resolved)
@@ -762,7 +763,7 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
 	model.Progress.LastError = "old error"
-	model.Progress.LastTurnSummary = turnSummary{Elapsed: time.Second, Input: 1, Output: 2, Cost: 3}
+	model.Progress.LastTurnSummary = core.TurnSummary{Elapsed: time.Second, Input: 1, Output: 2, Cost: 3}
 
 	next, _ := model.Update(runtimeSwitchMsgForTest(
 		nil,
@@ -781,7 +782,7 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 	if model.Progress.LastError != "" {
 		t.Fatalf("last error = %q, want cleared on runtime switch", model.Progress.LastError)
 	}
-	if model.Progress.LastTurnSummary != (turnSummary{}) {
+	if model.Progress.LastTurnSummary != (core.TurnSummary{}) {
 		t.Fatalf(
 			"last turn summary = %#v, want cleared on runtime switch",
 			model.Progress.LastTurnSummary,
@@ -854,7 +855,7 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			sess := &stubSession{events: make(chan session.AgentEvent)}
 			storageSess := &stubStorageSession{id: cfg.Model, model: cfg.Provider + "/" + cfg.Model}
 			opened[cfg.Model] = openedRuntime{session: sess, storage: storageSess}
@@ -952,7 +953,7 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -1048,7 +1049,7 @@ func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -1112,7 +1113,7 @@ func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -1198,7 +1199,7 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)
@@ -1276,7 +1277,7 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			copied := *cfg
 			observed = &copied
 			newBackend := testutil.New()
@@ -1538,7 +1539,7 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			newBackend := testutil.New()
 			opened := &stubStorageSession{
 				id:     sessionID,
@@ -1596,7 +1597,7 @@ func TestResumeStoredSessionPreservesOpenAICompatibleEndpoint(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			captured = *cfg
 			newSession := &stubSession{events: make(chan session.AgentEvent)}
 			opened := &stubStorageSession{
@@ -1679,7 +1680,7 @@ func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)
@@ -1730,7 +1731,7 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)

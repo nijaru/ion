@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func applySubmitResult(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
@@ -836,7 +837,7 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	model.InFlight.PendingTools = map[string]*session.Entry{
 		"tool-1": {Role: session.RoleTool, Content: "partial tool"},
 	}
-	model.InFlight.Subagents = map[string]*SubagentProgress{
+	model.InFlight.Subagents = map[string]*core.SubagentProgress{
 		"child-1": {ID: "child-1", Name: "child"},
 	}
 	model.InFlight.QueuedTurns = []string{"follow up"}

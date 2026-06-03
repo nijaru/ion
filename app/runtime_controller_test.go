@@ -8,6 +8,7 @@ import (
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
@@ -17,12 +18,12 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 	newStorage := &fakeStorage{id: "session-1", branch: "feature/runtime"}
 	var targetSessionID string
 
-	result, err := Switch(t.Context(), SwitchInput{
+	result, err := core.Switch(t.Context(), core.SwitchInput{
 		Switcher: func(
 			ctx context.Context,
 			cfg *config.Config,
 			sessionID string,
-		) (Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			targetSessionID = sessionID
 			return fakeBackend{
 				provider: cfg.Provider,
@@ -31,13 +32,13 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 				session:  newSession,
 			}, newSession, newStorage, nil
 		},
-		Transition: NewTransition(
+		Transition: core.NewTransition(
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
-			PresetPrimary,
+			core.PresetPrimary,
 			"",
 		).WithActivePresetPersistence(),
-		Current:         Handles{Session: oldSession, Storage: oldStorage},
+		Current:         core.Handles{Session: oldSession, Storage: oldStorage},
 		PreserveSession: true,
 		SaveState:       func(config.RuntimeStateUpdate) error { return nil },
 	})
@@ -75,21 +76,21 @@ func TestSwitchLeavesCurrentRuntimeUntouchedWhenOpenFails(t *testing.T) {
 	oldSession := &fakeSession{id: "old"}
 	oldStorage := &fakeStorage{id: "old"}
 
-	_, err := Switch(t.Context(), SwitchInput{
+	_, err := core.Switch(t.Context(), core.SwitchInput{
 		Switcher: func(
 			context.Context,
 			*config.Config,
 			string,
-		) (Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return nil, nil, nil, openErr
 		},
-		Transition: NewTransition(
+		Transition: core.NewTransition(
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
-			PresetPrimary,
+			core.PresetPrimary,
 			"",
 		).WithStatePersistence(),
-		Current:   Handles{Session: oldSession, Storage: oldStorage},
+		Current:   core.Handles{Session: oldSession, Storage: oldStorage},
 		SaveState: func(config.RuntimeStateUpdate) error { return nil },
 	})
 	if !errors.Is(err, openErr) {
@@ -113,21 +114,21 @@ func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 	newSession := &fakeSession{id: "new"}
 	newStorage := &fakeStorage{id: "new"}
 
-	_, err := Switch(t.Context(), SwitchInput{
+	_, err := core.Switch(t.Context(), core.SwitchInput{
 		Switcher: func(
 			context.Context,
 			*config.Config,
 			string,
-		) (Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
-		Transition: NewTransition(
+		Transition: core.NewTransition(
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
-			PresetPrimary,
+			core.PresetPrimary,
 			"",
 		).WithStatePersistence(),
-		Current:   Handles{Session: oldSession, Storage: oldStorage},
+		Current:   core.Handles{Session: oldSession, Storage: oldStorage},
 		SaveState: func(config.RuntimeStateUpdate) error { return persistErr },
 	})
 	if !errors.Is(err, persistErr) {
@@ -158,21 +159,21 @@ func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T
 	newStorage := &fakeStorage{id: "resumed", entriesErr: replayErr}
 	saveCalled := false
 
-	_, err := Resume(t.Context(), ResumeInput{
+	_, err := core.Resume(t.Context(), core.ResumeInput{
 		Switcher: func(
 			context.Context,
 			*config.Config,
 			string,
-		) (Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
-		Transition: NewTransition(
+		Transition: core.NewTransition(
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
 			&config.Config{Provider: "openai", Model: "gpt-4.1"},
-			PresetPrimary,
+			core.PresetPrimary,
 			"",
 		).WithActivePresetPersistence(),
-		Current:   Handles{Session: oldSession, Storage: oldStorage},
+		Current:   core.Handles{Session: oldSession, Storage: oldStorage},
 		SessionID: "resumed",
 		SaveState: func(config.RuntimeStateUpdate) error {
 			saveCalled = true
@@ -217,8 +218,8 @@ func (b fakeBackend) Model() string { return b.model }
 
 func (b fakeBackend) ContextLimit() int { return 0 }
 
-func (b fakeBackend) Bootstrap() Bootstrap {
-	return Bootstrap{Status: b.status}
+func (b fakeBackend) Bootstrap() core.Bootstrap {
+	return core.Bootstrap{Status: b.status}
 }
 
 func (b fakeBackend) Session() session.AgentSession { return b.session }

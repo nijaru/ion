@@ -15,6 +15,7 @@ import (
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
@@ -326,7 +327,7 @@ func TestWithModelPickerMissingAPIKeyOpensSetupPrompt(t *testing.T) {
 	model := readyModel(t).
 		WithConfig(&config.Config{Provider: "anthropic", Model: "claude-test"}).
 		WithModelPicker()
-	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != core.SetupPromptAPIKey {
 		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
 	}
 	if got := model.Picker.Setup.provider; got != "anthropic" {
@@ -351,7 +352,7 @@ func TestWithModelPickerDownOpenAICompatibleEndpointOpensSetupPrompt(t *testing.
 	if cmd != nil {
 		t.Fatalf("setup prompt returned unexpected command %T", cmd)
 	}
-	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptEndpoint {
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != core.SetupPromptEndpoint {
 		t.Fatalf("setup prompt = %#v, want endpoint prompt", model.Picker.Setup)
 	}
 	if got := model.Picker.Setup.value; got != "http://127.0.0.1:1/v1" {
@@ -403,7 +404,7 @@ func TestLoginCommandOpensAPIKeyPrompt(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("unexpected login command %T", cmd)
 	}
-	if model.Picker.Setup == nil || model.Picker.Setup.kind != setupPromptAPIKey {
+	if model.Picker.Setup == nil || model.Picker.Setup.kind != core.SetupPromptAPIKey {
 		t.Fatalf("setup prompt = %#v, want API key prompt", model.Picker.Setup)
 	}
 	if got := model.Picker.Setup.provider; got != "anthropic" {
@@ -502,7 +503,7 @@ func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			return nil, nil, nil, errors.New("switch failed")
 		},
 	)
@@ -792,7 +793,7 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 				"/tmp/test",
 				"main",
 				"dev",
-				func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+				func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 					observedSessionID = sessionID
 					newStorage := &stubStorageSession{
 						id:     "fresh-session",
@@ -853,7 +854,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
@@ -1928,7 +1929,7 @@ func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 }
 
 func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
-	got := toolSurfaceSummary(ToolSurface{
+	got := toolSurfaceSummary(core.ToolSurface{
 		Count:       2,
 		Names:       []string{"bash", "read"},
 		Environment: "inherit",
@@ -1945,7 +1946,7 @@ func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
 }
 
 func TestToolSurfaceSummaryReportsLazyWhenEnabled(t *testing.T) {
-	got := toolSurfaceSummary(ToolSurface{
+	got := toolSurfaceSummary(core.ToolSurface{
 		Count:         25,
 		Names:         []string{"bash", "read"},
 		LazyEnabled:   true,
@@ -1957,7 +1958,7 @@ func TestToolSurfaceSummaryReportsLazyWhenEnabled(t *testing.T) {
 }
 
 func TestToolSurfaceSummaryReportsActiveMode(t *testing.T) {
-	got := toolSurfaceSummary(ToolSurface{
+	got := toolSurfaceSummary(core.ToolSurface{
 		Count:       7,
 		Names:       []string{"bash", "edit", "find", "grep", "ls", "read", "write"},
 		ActiveNames: []string{"find", "grep", "ls", "read"},

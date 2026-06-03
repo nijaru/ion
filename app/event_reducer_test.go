@@ -806,7 +806,7 @@ func TestChildCompletionPersistenceReturnsBeforeStorageAppendCompletes(t *testin
 	}
 	model := readyModel(t)
 	model.Model.Storage = storageSess
-	model.InFlight.Subagents["worker-1"] = &SubagentProgress{
+	model.InFlight.Subagents["worker-1"] = &core.SubagentProgress{
 		ID:     "worker-1",
 		Name:   "worker-1",
 		Status: "Started",
@@ -868,7 +868,7 @@ func TestChildCancellationDoesNotMarkParentFailed(t *testing.T) {
 	model.Model.Storage = storageSess
 	model.InFlight.Thinking = true
 	model.Progress.Mode = stateWorking
-	model.InFlight.Subagents["worker-2"] = &SubagentProgress{
+	model.InFlight.Subagents["worker-2"] = &core.SubagentProgress{
 		ID:     "worker-2",
 		Name:   "worker-2",
 		Status: "Started",
@@ -925,7 +925,7 @@ func TestChildFailurePersistenceFailureKeepsReducerArmed(t *testing.T) {
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
 	model.Model.Storage = storageSess
-	model.InFlight.Subagents["worker-2"] = &SubagentProgress{
+	model.InFlight.Subagents["worker-2"] = &core.SubagentProgress{
 		ID:     "worker-2",
 		Name:   "worker-2",
 		Status: "Started",
@@ -965,7 +965,7 @@ func TestChildCompletedDuringTurnDoesNotMarkParentComplete(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.Progress.Mode = stateWorking
 	model.Progress.Status = "Running subagent..."
-	model.InFlight.Subagents["worker-1"] = &SubagentProgress{
+	model.InFlight.Subagents["worker-1"] = &core.SubagentProgress{
 		ID:     "worker-1",
 		Name:   "worker-1",
 		Intent: "inspect the repo",

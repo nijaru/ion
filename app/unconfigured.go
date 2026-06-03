@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 type UnconfiguredBackend struct {
@@ -45,12 +46,12 @@ func (b *UnconfiguredBackend) ContextLimit() int {
 	return b.cfg.ContextLimit
 }
 
-func (b *UnconfiguredBackend) Bootstrap() Bootstrap {
+func (b *UnconfiguredBackend) Bootstrap() core.Bootstrap {
 	status := "Provider and model are required. Use /provider, then /model."
 	if b.session.reason != nil {
 		status = b.session.reason.Error()
 	}
-	return Bootstrap{
+	return core.Bootstrap{
 		Entries: []session.Entry{},
 		Status:  status,
 	}

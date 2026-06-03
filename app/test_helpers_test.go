@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 type stubBackend struct {
@@ -21,7 +22,7 @@ type stubBackend struct {
 	providerSet  bool
 	modelSet     bool
 	contextLimit int
-	surface      ToolSurface
+	surface      core.ToolSurface
 }
 
 type compactBackend struct {
@@ -58,22 +59,22 @@ func (b stubBackend) ContextLimit() int {
 	return 0
 }
 
-func (b stubBackend) ToolSurface() ToolSurface {
+func (b stubBackend) ToolSurface() core.ToolSurface {
 	if b.surface.Count != 0 ||
 		b.surface.Sandbox != "" ||
 		b.surface.Environment != "" ||
 		len(b.surface.Names) > 0 {
 		return b.surface
 	}
-	return ToolSurface{
+	return core.ToolSurface{
 		Count:         2,
 		LazyThreshold: 20,
 		Names:         []string{"read", "write"},
 	}
 }
 
-func (b stubBackend) Bootstrap() Bootstrap {
-	return Bootstrap{
+func (b stubBackend) Bootstrap() core.Bootstrap {
+	return core.Bootstrap{
 		Entries: []session.Entry{{Role: session.RoleSystem, Content: "boot"}},
 		Status:  "ready",
 	}

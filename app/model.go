@@ -53,14 +53,14 @@ const (
 const pendingActionTimeout = 1500 * time.Millisecond
 
 const (
-	presetPrimary = PresetPrimary
-	presetFast    = PresetFast
+	presetPrimary = core.PresetPrimary
+	presetFast    = core.PresetFast
 )
 
 type runtimeSwitchedMsg struct {
 	switchID      uint64
-	runtime       Accepted
-	previous      Handles
+	runtime       core.Accepted
+	previous      core.Handles
 	printLines    []string
 	replayEntries []session.Entry
 	notice        string
@@ -69,7 +69,7 @@ type runtimeSwitchedMsg struct {
 
 type TransitionCommittedMsg struct {
 	switchID   uint64
-	transition Transition
+	transition core.Transition
 	notice     session.Entry
 	err        error
 }
@@ -88,15 +88,15 @@ type resumeSessionSelectedMsg struct {
 type providerSelectionResolvedMsg struct {
 	requestID uint64
 	provider  string
-	preset    Preset
-	selection providerSelection
+	preset    core.Preset
+	selection core.ProviderSelection
 	err       error
 }
 
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    Preset
+	preset    core.Preset
 	items     []pickerItem
 	err       error
 }
@@ -104,21 +104,21 @@ type modelPickerLoadedMsg struct {
 type modelPickerSetupResolvedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    Preset
-	setup     setupPromptKind
+	preset    core.Preset
+	setup     core.SetupPromptKind
 	err       error
 }
 
 type setupPromptSavedMsg struct {
 	requestID uint64
 	cfg       config.Config
-	preset    Preset
+	preset    core.Preset
 	err       error
 }
 
 type settingsCommandMsg struct {
 	requestID     uint64
-	transition    Transition
+	transition    core.Transition
 	hasTransition bool
 	notice        string
 	err           error
@@ -216,12 +216,7 @@ const (
 	pickerPurposeSettings
 )
 
-type setupPromptKind = core.SetupPromptKind
 
-const (
-	setupPromptAPIKey   = core.SetupPromptAPIKey
-	setupPromptEndpoint = core.SetupPromptEndpoint
-)
 
 type pickerItem struct {
 	Label       string
@@ -256,7 +251,7 @@ type pickerOverlayState struct {
 	index    int
 	query    string
 	purpose  pickerPurpose
-	preset   Preset
+	preset   core.Preset
 	cfg      *config.Config
 	loading  bool
 	err      string
@@ -274,18 +269,17 @@ type completionItem struct {
 }
 
 type setupPromptState struct {
-	kind         setupPromptKind
+	kind         core.SetupPromptKind
 	provider     string
 	providerName string
 	value        string
-	preset       Preset
+	preset       core.Preset
 	cfg          config.Config
 	err          string
 	saving       bool
 	request      uint64
 }
 
-type progressMode = core.ProgressMode
 
 const (
 	stateReady      = core.StateReady
@@ -298,7 +292,6 @@ const (
 	stateError      = core.StateError
 )
 
-type turnSummary = core.TurnSummary
 
 // AppState holds general application and workspace metadata.
 type AppState struct {
@@ -309,31 +302,28 @@ type AppState struct {
 	Branch            string
 	GitDiff           string
 	Version           string
-	ActivePreset      Preset
+	ActivePreset      core.Preset
 	PrintedTranscript bool
 }
 
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
-	Backend              Backend
+	Backend              core.Backend
 	Session              session.AgentSession
 	Storage              session.SessionHandle
 	Store                session.SessionStore
-	Switcher             Switcher
+	Switcher             core.Switcher
 	Config               *config.Config
-	Runtime              Snapshot
+	Runtime              core.Snapshot
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
 }
 
-// SubagentProgress, InFlightState, ProgressState are aliases for core types.
-type SubagentProgress = core.SubagentProgress
+// core.SubagentProgress, core.InFlightState, core.ProgressState are aliases for core types.
 
-type InFlightState = core.InFlightState
 
-type ProgressState = core.ProgressState
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
@@ -375,9 +365,9 @@ type pasteMarker struct {
 type Model struct {
 	App      AppState
 	Model    ModelState
-	InFlight InFlightState
+	InFlight core.InFlightState
 	Picker   PickerState
-	Progress ProgressState
+	Progress core.ProgressState
 	Input    InputState
 
 	// PasteMarkers stores original content for collapsed large pastes.
@@ -390,11 +380,11 @@ type Model struct {
 }
 
 func New(
-	b Backend,
+	b core.Backend,
 	s session.SessionHandle,
 	store session.SessionStore,
 	workdir, branch, version string,
-	switcher Switcher,
+	switcher core.Switcher,
 ) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
@@ -417,7 +407,7 @@ func New(
 	spt.Spinner = spinner.MiniDot
 	spt.Style = st.cyan
 
-	var boot Bootstrap
+	var boot core.Bootstrap
 	var sess session.AgentSession
 	if b != nil {
 		boot = b.Bootstrap()
@@ -443,10 +433,10 @@ func New(
 			Switcher:    switcher,
 			Checkpoints: checkpoints,
 		},
-		InFlight: InFlightState{
-			Subagents: make(map[string]*SubagentProgress),
+		InFlight: core.InFlightState{
+			Subagents: make(map[string]*core.SubagentProgress),
 		},
-		Progress: ProgressState{
+		Progress: core.ProgressState{
 			Status: boot.Status,
 		},
 		Input: InputState{
@@ -459,7 +449,7 @@ func New(
 	}
 
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
-		m.App.ActivePreset = PresetFromString(*state.ActivePreset)
+		m.App.ActivePreset = core.PresetFromString(*state.ActivePreset)
 	}
 
 	if cfg, err := config.Load(); err == nil {

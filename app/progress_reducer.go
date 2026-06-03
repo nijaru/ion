@@ -7,7 +7,7 @@ import (
 )
 
 type progressReducer struct {
-	progress *ProgressState
+	progress *core.ProgressState
 }
 
 func (m *Model) progressReducer() progressReducer {
@@ -50,7 +50,7 @@ func (r progressReducer) setReasoningEffort(value string) {
 	r.progress.ReasoningEffort = value
 }
 
-func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
+func (r progressReducer) applyRuntimeSnapshot(snapshot core.Snapshot) {
 	r.setReasoningEffort(snapshot.Reasoning)
 	if snapshot.Status != "" {
 		r.setStatus(snapshot.Status)

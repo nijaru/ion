@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/core"
 )
 
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
@@ -156,7 +157,7 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 			Content: strings.Repeat("tool-output ", 12),
 		},
 	}
-	model.InFlight.Subagents = map[string]*SubagentProgress{
+	model.InFlight.Subagents = map[string]*core.SubagentProgress{
 		"worker": {
 			Name:   "worker-with-long-name",
 			Intent: strings.Repeat("explore unicode paths ", 4),

@@ -10,6 +10,7 @@ import (
 	"github.com/nijaru/ion/session"
 	tea "charm.land/bubbletea/v2"
 	ionskills "github.com/nijaru/ion/internal/skills"
+	"github.com/nijaru/ion/internal/core"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -167,7 +168,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if len(fields) != 1 {
 			return m, cmdError("usage: /tools")
 		}
-		summarizer, ok := m.Model.Backend.(ToolSummarizer)
+		summarizer, ok := m.Model.Backend.(core.ToolSummarizer)
 		if !ok {
 			return m, cmdError("tool summary unavailable for this backend")
 		}
@@ -248,7 +249,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if m.Model.Storage != nil && !session.IsMaterialized(m.Model.Storage) {
 			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
 		}
-		compactor, ok := m.Model.Backend.(Compactor)
+		compactor, ok := m.Model.Backend.(core.Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
 		}
@@ -319,11 +320,11 @@ func (m Model) localCommandBusyMessage(action string) string {
 	return "Finish or cancel the current turn before " + action + "."
 }
 
-func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bool {
+func (m Model) commandRequiresIdle(command core.SlashCommandInfo, fields []string) bool {
 	switch command.Idle {
-	case slashCommandIdleAlways:
+	case core.SlashCommandIdleAlways:
 		return true
-	case slashCommandIdleWithArgs:
+	case core.SlashCommandIdleWithArgs:
 		return len(fields) > 1
 	default:
 		return false
