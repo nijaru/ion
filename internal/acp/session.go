@@ -1,7 +1,7 @@
 package acp
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"bytes"
 	"context"
 	"errors"
@@ -588,7 +588,7 @@ func (s *Session) RequestPermission(
 		return denyResponse(p), nil
 	case <-ctx.Done():
 		s.removePendingApproval(requestID, ch)
-		return acp.RequestPermissionResponse{}, apperrors.WrapContext("wait for ACP permission response", ctx.Err())
+		return acp.RequestPermissionResponse{}, ctxerr.WrapContext("wait for ACP permission response", ctx.Err())
 	}
 }
 
@@ -771,7 +771,7 @@ func (s *Session) WaitForTerminalExit(
 		t.mu.Unlock()
 		return acp.WaitForTerminalExitResponse{ExitCode: code}, nil
 	case <-ctx.Done():
-		return acp.WaitForTerminalExitResponse{}, apperrors.WrapContext("wait for ACP terminal exit", ctx.Err())
+		return acp.WaitForTerminalExitResponse{}, ctxerr.WrapContext("wait for ACP terminal exit", ctx.Err())
 	}
 }
 

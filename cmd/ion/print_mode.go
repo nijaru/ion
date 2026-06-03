@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,7 +136,7 @@ func runPromptTurn(
 			}
 		case <-ctx.Done():
 			cancelPrintTurn(agent)
-			return printResult{}, apperrors.WrapContext("print turn", ctx.Err())
+			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
 		}
 	}
 }
@@ -192,7 +192,7 @@ func runPrintModeWithTimeout(
 
 	err := runPrintModeWithWriter(ctx, w, agent, prompt, output)
 	if err != nil && errors.Is(err, context.DeadlineExceeded) {
-		return apperrors.Timeout("print mode", timeout, err)
+		return ctxerr.Timeout("print mode", timeout, err)
 	}
 	return err
 }

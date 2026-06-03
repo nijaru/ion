@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,9 +124,9 @@ func wrapModelListError(cfg *config.Config, timeout time.Duration, err error) er
 		operation = fmt.Sprintf("list models for %s", ResolveID(cfg.Provider))
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return apperrors.Timeout(operation, timeout, err)
+		return ctxerr.Timeout(operation, timeout, err)
 	}
-	return apperrors.WrapContext(operation, err)
+	return ctxerr.WrapContext(operation, err)
 }
 
 func initProviderModelsCache() {

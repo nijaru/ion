@@ -1,7 +1,7 @@
 package acp
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"fmt"
 	"strings"
@@ -261,7 +261,7 @@ func (pe *PolicyEngine) classifyOrAsk(
 		Category: category,
 	})
 	if err != nil {
-		err = apperrors.WrapContext("classify ACP policy", err)
+		err = ctxerr.WrapContext("classify ACP policy", err)
 		reason := defaultReason + " Classifier unavailable: " + err.Error()
 		auditPolicyDecision(
 			auditSink,

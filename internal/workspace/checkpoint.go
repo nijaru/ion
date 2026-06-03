@@ -1,7 +1,7 @@
 package workspace
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -95,7 +95,7 @@ func (s *CheckpointStore) Create(
 	paths []string,
 ) (Checkpoint, error) {
 	if err := ctx.Err(); err != nil {
-		return Checkpoint{}, apperrors.WrapContext("create checkpoint", err)
+		return Checkpoint{}, ctxerr.WrapContext("create checkpoint", err)
 	}
 	if strings.TrimSpace(s.path) == "" {
 		return Checkpoint{}, fmt.Errorf("checkpoint store path is required")
@@ -166,7 +166,7 @@ func (s *CheckpointStore) Load(id string) (Checkpoint, error) {
 
 func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (RestorePlan, error) {
 	if err := ctx.Err(); err != nil {
-		return RestorePlan{}, apperrors.WrapContext("analyze checkpoint restore", err)
+		return RestorePlan{}, ctxerr.WrapContext("analyze checkpoint restore", err)
 	}
 	if strings.TrimSpace(cp.ID) == "" {
 		return RestorePlan{}, fmt.Errorf("checkpoint id is required")
@@ -184,7 +184,7 @@ func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (Re
 	plan := RestorePlan{CheckpointID: cp.ID}
 	for _, entry := range cp.Entries {
 		if err := ctx.Err(); err != nil {
-			return plan, apperrors.WrapContext("analyze checkpoint restore", err)
+			return plan, ctxerr.WrapContext("analyze checkpoint restore", err)
 		}
 		path, err := normalizeCheckpointPath(entry.Path)
 		if err != nil {
@@ -247,7 +247,7 @@ func (s *CheckpointStore) Restore(
 	report := RestoreReport{}
 	for _, entry := range cp.Entries {
 		if err := ctx.Err(); err != nil {
-			return report, apperrors.WrapContext("restore checkpoint", err)
+			return report, ctxerr.WrapContext("restore checkpoint", err)
 		}
 		path, err := normalizeCheckpointPath(entry.Path)
 		if err != nil {
@@ -328,7 +328,7 @@ func snapshotPath(
 	path, blobPath string,
 ) (CheckpointEntry, error) {
 	if err := ctx.Err(); err != nil {
-		return CheckpointEntry{}, apperrors.WrapContext("snapshot checkpoint path", err)
+		return CheckpointEntry{}, ctxerr.WrapContext("snapshot checkpoint path", err)
 	}
 	info, err := root.Stat(path)
 	if err != nil {

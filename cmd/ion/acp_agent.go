@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/nijaru/ion/apperrors"
+	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"errors"
 	"fmt"
@@ -123,7 +123,7 @@ func runACPAgent(
 	case <-conn.Done():
 		return agent.Close()
 	case <-ctx.Done():
-		return errors.Join(agent.Close(), apperrors.WrapContext("run ACP agent", ctx.Err()))
+		return errors.Join(agent.Close(), ctxerr.WrapContext("run ACP agent", ctx.Err()))
 	}
 }
 
