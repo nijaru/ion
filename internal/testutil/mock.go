@@ -1,5 +1,5 @@
 // Package testing provides test utilities for agents built with canto.
-package testing
+package testutil
 
 import (
 	"context"

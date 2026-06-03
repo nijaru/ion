@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	xtest "github.com/nijaru/ion/internal/cantotesting"
+	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 	"github.com/nijaru/ion/internal/tracing"
@@ -101,7 +101,7 @@ func TestStartContext(t *testing.T) {
 func TestWrapProvider_RecordsGenAIChatSpan(t *testing.T) {
 	rec := setupTracer(t)
 
-	mock := xtest.NewFauxProvider("test", xtest.Step{Content: "hello"})
+	mock := testutil.NewFauxProvider("test", testutil.Step{Content: "hello"})
 	p := tracing.WrapProvider(mock)
 
 	ctx, sessionSpan := tracing.StartSession(t.Context(), "a", "s", "m")
@@ -171,7 +171,7 @@ func TestWrapTool_RecordsToolSpan(t *testing.T) {
 func TestWrapProviderIdempotent(t *testing.T) {
 	rec := setupTracer(t)
 
-	mock := xtest.NewFauxProvider("test", xtest.Step{Content: "hello"})
+	mock := testutil.NewFauxProvider("test", testutil.Step{Content: "hello"})
 	p := tracing.WrapProvider(tracing.WrapProvider(mock))
 
 	ctx, sessionSpan := tracing.StartSession(t.Context(), "a", "s", "m")

@@ -1,4 +1,4 @@
-package testing
+package testutil
 
 import "github.com/go-json-experiment/json"
 
