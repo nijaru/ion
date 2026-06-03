@@ -30,7 +30,7 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ion-p1-perf.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 SMOKE_BIN="$TMP_DIR/ion-tui-smoke"
 SMOKE_STORE="$TMP_DIR/startup-store"
-run go build -o "$SMOKE_BIN" ./cmd/ion-tui-smoke
+run go build -o "$SMOKE_BIN" ./internal/smoke
 if command -v hyperfine >/dev/null 2>&1; then
   run hyperfine --warmup 3 --runs "$HYPERFINE_RUNS" --shell=none \
     --prepare "rm -rf '$SMOKE_STORE' && mkdir -p '$SMOKE_STORE'" \

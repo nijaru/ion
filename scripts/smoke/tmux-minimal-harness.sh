@@ -214,7 +214,7 @@ start_smoke_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$SMOKE_HOME\" go run ./cmd/ion-tui-smoke --mode \"$mode\" --store \"$store\" $args"
+    "cd \"$ROOT\" && HOME=\"$SMOKE_HOME\" go run ./internal/smoke --mode \"$mode\" --store \"$store\" $args"
   wait_contains "Type a message" 60
 }
 
