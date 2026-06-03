@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/llm"
-	prompt "github.com/nijaru/ion/prompt"
+	prompt "github.com/nijaru/ion/internal/prompt"
 	"github.com/nijaru/ion/session"
 )
 

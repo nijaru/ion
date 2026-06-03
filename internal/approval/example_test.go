@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/approval"
+	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/session"
 )
 

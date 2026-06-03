@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/nijaru/ion/audit"
+	"github.com/nijaru/ion/internal/audit"
 )
 
 // EnvSanitizer scrubs sensitive environment variables before subprocess

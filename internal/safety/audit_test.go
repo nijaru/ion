@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/ion/approval"
-	"github.com/nijaru/ion/audit"
-	"github.com/nijaru/ion/safety"
+	"github.com/nijaru/ion/internal/approval"
+	"github.com/nijaru/ion/internal/audit"
+	"github.com/nijaru/ion/internal/safety"
 	"github.com/nijaru/ion/session"
 )
 

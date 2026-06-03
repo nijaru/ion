@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"github.com/nijaru/ion/approval"
+	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 )

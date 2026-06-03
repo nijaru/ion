@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nijaru/ion/approval"
-	"github.com/nijaru/ion/safety"
+	"github.com/nijaru/ion/internal/approval"
+	"github.com/nijaru/ion/internal/safety"
 	"github.com/nijaru/ion/session"
 )
 

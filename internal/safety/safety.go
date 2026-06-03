@@ -3,8 +3,8 @@ package safety
 import (
 	"context"
 
-	"github.com/nijaru/ion/approval"
-	"github.com/nijaru/ion/audit"
+	"github.com/nijaru/ion/internal/approval"
+	"github.com/nijaru/ion/internal/audit"
 	"github.com/nijaru/ion/session"
 )
 

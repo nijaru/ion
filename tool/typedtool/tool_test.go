@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/approval"
+	"github.com/nijaru/ion/internal/approval"
 	basetool "github.com/nijaru/ion/tool"
 )
 

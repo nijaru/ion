@@ -9,7 +9,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/safety"
+	"github.com/nijaru/ion/internal/safety"
 	"github.com/nijaru/ion/workspace"
 )
 

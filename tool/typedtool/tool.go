@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/ion/approval"
+	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	basetool "github.com/nijaru/ion/tool"
 )
