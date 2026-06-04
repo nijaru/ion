@@ -29,16 +29,9 @@ func (m Model) renderPlaneB() string {
 	if m.InFlight.ReasonBuf != "" {
 		b.WriteString(m.planeBLine(m.st.dim, 0, "• Thinking..."))
 		b.WriteString("\n")
-		thinkingVerbosity := m.verbosity("thinking")
-		switch thinkingVerbosity {
-		case "full":
+		if m.verbosity("thinking") == "full" {
 			for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
 				b.WriteString(m.planeBLine(m.st.dim, 4, line))
-				b.WriteString("\n")
-			}
-		default:
-			if thinkingVerbosity != "hidden" {
-				b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
 				b.WriteString("\n")
 			}
 		}

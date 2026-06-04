@@ -68,10 +68,12 @@ func (m Model) View() tea.View {
 func (m Model) renderShell() string {
 	var b strings.Builder
 
-	// Progress line
-	if progress := m.progressLine(); progress != "" {
-		b.WriteString(progress)
-		b.WriteString("\n")
+	// Progress line — suppress when Plane B already shows thinking content
+	if m.InFlight.ReasonBuf == "" {
+		if progress := m.progressLine(); progress != "" {
+			b.WriteString(progress)
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString(m.st.sep.Render(m.shellSeparator()))
