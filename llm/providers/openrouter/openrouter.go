@@ -63,7 +63,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		return nil, err
 	}
 
-	body, err := p.buildRequestJSON(prepared)
+	body, err := p.buildRequestJSON(prepared, false)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -120,7 +120,7 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		return nil, err
 	}
 
-	body, err := p.buildRequestJSON(prepared)
+	body, err := p.buildRequestJSON(prepared, true)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -171,7 +171,8 @@ type openRouterReasoning struct {
 }
 
 // buildRequestJSON converts an llm.Request into an OpenRouter-compatible JSON body.
-func (p *Provider) buildRequestJSON(req *llm.Request) ([]byte, error) {
+// The stream parameter controls whether the request asks for SSE streaming.
+func (p *Provider) buildRequestJSON(req *llm.Request, stream bool) ([]byte, error) {
 	base := p.Base.ConvertRequest(req)
 
 	effort := req.ReasoningEffort
@@ -180,7 +181,7 @@ func (p *Provider) buildRequestJSON(req *llm.Request) ([]byte, error) {
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
 	}
-	orReq.Stream = true
+	orReq.Stream = stream
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.
 	orReq.ReasoningEffort = ""

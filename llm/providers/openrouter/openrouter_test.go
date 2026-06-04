@@ -64,7 +64,7 @@ func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
 		ReasoningEffort: "medium",
 	}
 
-	body, err := p.buildRequestJSON(req)
+	body, err := p.buildRequestJSON(req, false)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBuildRequestJSON_NoReasoningWhenNotSpecified(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
 	}
 
-	body, err := p.buildRequestJSON(req)
+	body, err := p.buildRequestJSON(req, false)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
 	}
 
-	body, err := p.buildRequestJSON(req)
+	body, err := p.buildRequestJSON(req, false)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestBuildRequestJSON_StripsTopLevelReasoningEffort(t *testing.T) {
 		ReasoningEffort: "high",
 	}
 
-	body, err := p.buildRequestJSON(req)
+	body, err := p.buildRequestJSON(req, false)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestStreamRequestSetsStreamTrue(t *testing.T) {
 		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 	}
 
-	body, err := p.buildRequestJSON(req)
+	body, err := p.buildRequestJSON(req, true)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -321,5 +321,37 @@ func TestStreamRequestSetsStreamTrue(t *testing.T) {
 	stream, ok := parsed["stream"]
 	if !ok || stream != true {
 		t.Fatalf("stream = %v (present=%v), want true", stream, ok)
+	}
+}
+
+func TestGenerateRequestDoesNotSetStreamTrue(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{
+		APIKey: "test-key",
+		Models: []llm.Model{{
+			ID: "test/model",
+			Capabilities: &llm.Capabilities{
+				Streaming: true,
+			},
+		}},
+	})
+
+	req := &llm.Request{
+		Model:    "test/model",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}
+
+	body, err := p.buildRequestJSON(req, false)
+	if err != nil {
+		t.Fatalf("buildRequestJSON: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	stream, exists := parsed["stream"]
+	if exists && stream == true {
+		t.Fatal("Generate request should not set stream: true")
 	}
 }
