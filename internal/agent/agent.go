@@ -433,7 +433,7 @@ func (a *Agent) executeToolCallsSequential(
 	for _, toolCall := range toolCalls {
 		// Check for context cancellation
 		if ctx.Err() != nil {
-			return toolMessages(finalized)
+			return nil, nil, false, ctx.Err()
 		}
 
 		a.emitToolCallStarted(toolCall)
