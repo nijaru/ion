@@ -180,6 +180,7 @@ func (p *Provider) buildRequestJSON(req *llm.Request) ([]byte, error) {
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
 	}
+	orReq.Stream = true
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.
 	orReq.ReasoningEffort = ""
