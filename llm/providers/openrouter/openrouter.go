@@ -63,7 +63,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		return nil, err
 	}
 
-	body, err := p.buildRequestJSON(prepared, false)
+	body, err := p.buildAndMarshalRequest(prepared)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -120,7 +120,7 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		return nil, err
 	}
 
-	body, err := p.buildRequestJSON(prepared, true)
+	body, err := p.buildAndMarshalRequestStream(prepared)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -170,9 +170,9 @@ type openRouterReasoning struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// buildRequestJSON converts an llm.Request into an OpenRouter-compatible JSON body.
-// The stream parameter controls whether the request asks for SSE streaming.
-func (p *Provider) buildRequestJSON(req *llm.Request, stream bool) ([]byte, error) {
+// buildRequest builds an OpenRouter-compatible request struct with nested
+// reasoning format. The caller owns Stream and other provider-agnostic fields.
+func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 	base := p.Base.ConvertRequest(req)
 
 	effort := req.ReasoningEffort
@@ -181,7 +181,6 @@ func (p *Provider) buildRequestJSON(req *llm.Request, stream bool) ([]byte, erro
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
 	}
-	orReq.Stream = stream
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.
 	orReq.ReasoningEffort = ""
@@ -189,7 +188,6 @@ func (p *Provider) buildRequestJSON(req *llm.Request, stream bool) ([]byte, erro
 	// Build the nested reasoning object.
 	if effort != "" {
 		if IsReasoningOff(effort) {
-			// Only send the "off" effort if the model supports disabling reasoning.
 			if caps.ReasoningCaps().CanDisable {
 				orReq.Reasoning = &openRouterReasoning{Effort: "none"}
 			}
@@ -197,11 +195,21 @@ func (p *Provider) buildRequestJSON(req *llm.Request, stream bool) ([]byte, erro
 			orReq.Reasoning = &openRouterReasoning{Effort: effort}
 		}
 	} else if caps.ReasoningCaps().Kind != "" && caps.ReasoningCaps().CanDisable {
-		// Model supports reasoning but no effort specified: default to "none" to
-		// avoid unwanted reasoning charges on non-reasoning requests.
 		orReq.Reasoning = &openRouterReasoning{Effort: "none"}
 	}
 
+	return orReq
+}
+
+// buildAndMarshalRequest builds a non-streaming request and marshals it.
+func (p *Provider) buildAndMarshalRequest(req *llm.Request) ([]byte, error) {
+	return json.Marshal(p.buildRequest(req))
+}
+
+// buildAndMarshalRequestStream builds a streaming request and marshals it.
+func (p *Provider) buildAndMarshalRequestStream(req *llm.Request) ([]byte, error) {
+	orReq := p.buildRequest(req)
+	orReq.Stream = true
 	return json.Marshal(orReq)
 }
 

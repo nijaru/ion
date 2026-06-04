@@ -64,7 +64,7 @@ func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
 		ReasoningEffort: "medium",
 	}
 
-	body, err := p.buildRequestJSON(req, false)
+	body, err := p.buildAndMarshalRequest(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBuildRequestJSON_NoReasoningWhenNotSpecified(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
 	}
 
-	body, err := p.buildRequestJSON(req, false)
+	body, err := p.buildAndMarshalRequest(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
 	}
 
-	body, err := p.buildRequestJSON(req, false)
+	body, err := p.buildAndMarshalRequest(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestBuildRequestJSON_StripsTopLevelReasoningEffort(t *testing.T) {
 		ReasoningEffort: "high",
 	}
 
-	body, err := p.buildRequestJSON(req, false)
+	body, err := p.buildAndMarshalRequest(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestStreamRequestSetsStreamTrue(t *testing.T) {
 		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 	}
 
-	body, err := p.buildRequestJSON(req, true)
+	body, err := p.buildAndMarshalRequestStream(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestGenerateRequestDoesNotSetStreamTrue(t *testing.T) {
 		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 	}
 
-	body, err := p.buildRequestJSON(req, false)
+	body, err := p.buildAndMarshalRequest(req)
 	if err != nil {
 		t.Fatalf("buildRequestJSON: %v", err)
 	}
