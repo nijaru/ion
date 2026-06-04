@@ -291,3 +291,35 @@ func TestOpenRouterProviderUsesBaseCapabilities(t *testing.T) {
 		t.Fatal("mimo should support reasoning effort high")
 	}
 }
+
+func TestStreamRequestSetsStreamTrue(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{
+		APIKey: "test-key",
+		Models: []llm.Model{{
+			ID: "test/model",
+			Capabilities: &llm.Capabilities{
+				Streaming: true,
+			},
+		}},
+	})
+
+	req := &llm.Request{
+		Model:    "test/model",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}
+
+	body, err := p.buildRequestJSON(req)
+	if err != nil {
+		t.Fatalf("buildRequestJSON: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	stream, ok := parsed["stream"]
+	if !ok || stream != true {
+		t.Fatalf("stream = %v (present=%v), want true", stream, ok)
+	}
+}
