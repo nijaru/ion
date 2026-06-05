@@ -285,13 +285,10 @@ func (m Model) renderEntry(e session.Entry) string {
 
 	case session.RoleAgent:
 		var b strings.Builder
-		if e.Reasoning != "" && thinkingVerbosity != "hidden" {
-			if thinkingVerbosity == "collapsed" {
-				b.WriteString(m.st.system.Render("• Thinking..."))
-				b.WriteString("\n")
-			} else {
-				b.WriteString(m.st.system.Render("• Thinking..."))
-				b.WriteString("\n")
+		if e.Reasoning != "" {
+			b.WriteString(m.st.system.Render("• Thinking..."))
+			b.WriteString("\n")
+			if thinkingVerbosity == "full" {
 				b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 				b.WriteString("\n")
 			}
