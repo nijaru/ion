@@ -71,11 +71,11 @@ func TestRenderEntry(t *testing.T) {
 		Content:   "Reply 1",
 	}
 	rendered = m.renderEntry(entry)
-	if strings.Contains(ansi.Strip(rendered), "Thinking") {
-		t.Error("reasoning marker should be hidden by default")
+	if !strings.Contains(ansi.Strip(rendered), "Thinking") {
+		t.Error("reasoning marker should be shown by default (collapsed)")
 	}
 	if strings.Contains(ansi.Strip(rendered), "Thought 1") {
-		t.Error("reasoning should be hidden by default")
+		t.Error("reasoning content should be hidden in collapsed mode")
 	}
 	if !strings.Contains(ansi.Strip(rendered), "Reply 1") {
 		t.Error("expected 'Reply 1' in output")

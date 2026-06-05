@@ -336,7 +336,7 @@ func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 	}
 }
 
-func TestRenderThinkingEntryHidesReasoningByDefault(t *testing.T) {
+func TestRenderThinkingEntryShowsLabelByDefault(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
 		Role:      session.RoleAgent,
@@ -345,8 +345,8 @@ func TestRenderThinkingEntryHidesReasoningByDefault(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if strings.Contains(got, "Thinking") || strings.Contains(got, "...") {
-		t.Fatalf("thinking render = %q, want answer without thinking marker", got)
+	if !strings.Contains(got, "Thinking") {
+		t.Fatalf("thinking render = %q, want thinking marker in collapsed mode", got)
 	}
 	if strings.Contains(got, "private chain of thought") {
 		t.Fatalf("thinking render leaked reasoning: %q", got)
