@@ -27,6 +27,11 @@ type SessionAdapter struct {
 	followUpQueue []string
 	turnCtx       context.Context
 	cancel        context.CancelFunc
+
+	// overflowAttempted tracks if we've already tried overflow recovery.
+	// Only one retry attempt is allowed per turn (matching Pi's
+	// _overflowRecoveryAttempted guard).
+	overflowAttempted bool
 }
 
 // SessionAdapterConfig holds configuration for the session adapter.
@@ -228,19 +233,49 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			s.mu.Lock()
 			s.cancel = nil
 			s.turnCtx = nil
+			s.overflowAttempted = false
 			s.mu.Unlock()
 		}()
 		_, err := s.agent.Continue(turnCtx)
 		s.mu.Lock()
 		if !s.closed {
 			if err != nil && !errors.Is(err, context.Canceled) {
-				s.events <- session.ErrorEvent{
-					Base:  session.BaseNow(),
-					Err:   err,
-					Fatal: true,
+				// Check if this is a context overflow error
+				if IsContextOverflow(err.Error()) && !s.overflowAttempted {
+					s.overflowAttempted = true
+					// Emit compaction triggered event
+					s.events <- session.CompactionTriggeredEvent{
+						Base:  session.BaseNow(),
+						Reason: "overflow",
+					}
+					// Remove last assistant message (the error) from agent state
+					s.trimLastAssistantMessage()
+					s.mu.Unlock()
+					// TODO: Run actual compaction here
+					// For now, just retry the turn
+					_, retryErr := s.agent.Continue(turnCtx)
+					s.mu.Lock()
+					if !s.closed {
+						if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
+							s.events <- session.ErrorEvent{
+								Base:  session.BaseNow(),
+								Err:   retryErr,
+								Fatal: true,
+							}
+						}
+						s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+					}
+				} else {
+					s.events <- session.ErrorEvent{
+						Base:  session.BaseNow(),
+						Err:   err,
+						Fatal: true,
+					}
+					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 				}
+			} else {
+				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 			}
-			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 		}
 		s.mu.Unlock()
 	}()
@@ -400,4 +435,14 @@ func (s *SessionAdapter) SetSession(sess session.SessionHandle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sess = sess
+}
+
+// trimLastAssistantMessage removes the last assistant message from agent state.
+// Used during overflow recovery to remove the error message before retrying.
+// Caller must hold s.mu.
+func (s *SessionAdapter) trimLastAssistantMessage() {
+	msgs := s.agent.state.Messages
+	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "assistant" {
+		s.agent.state.Messages = msgs[:len(msgs)-1]
+	}
 }

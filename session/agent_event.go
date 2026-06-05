@@ -246,6 +246,15 @@ type TokenUsageEvent struct {
 
 func (e TokenUsageEvent) isAgentEvent() {}
 
+// CompactionTriggeredEvent fires when context overflow is detected and
+// auto-compaction is triggered.
+type CompactionTriggeredEvent struct {
+	Base
+	Reason string `json:"reason"` // "overflow" or "threshold"
+}
+
+func (e CompactionTriggeredEvent) isAgentEvent() {}
+
 type QueuedInputUpdatedEvent struct {
 	Base
 	Snapshot QueuedInputSnapshot `json:"snapshot"`
