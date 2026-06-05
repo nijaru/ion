@@ -72,6 +72,10 @@ type SessionAdapterConfig struct {
 	// RetryBaseDelayMs is the base delay in ms for exponential backoff.
 	// Default: 1000
 	RetryBaseDelayMs int
+
+	// CompactFunc is the function to call for compaction.
+	// If nil, compaction is skipped.
+	CompactFunc func(ctx context.Context) (bool, error)
 }
 
 const (
@@ -260,16 +264,24 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 	s.cancel = cancel
 
 	// Check if auto-compaction is needed before submitting
-	if s.needsCompaction() {
+	if s.needsCompaction() && s.config.CompactFunc != nil {
 		s.events <- session.CompactionTriggeredEvent{
 			Base:   session.BaseNow(),
 			Reason: "threshold",
 		}
 		s.mu.Unlock()
-		// TODO: Run actual compaction here
-		// For now, just reset the token counter
+		compacted, err := s.config.CompactFunc(ctx)
 		s.mu.Lock()
-		s.resetContextTokens()
+		if err != nil {
+			// Log compaction error but continue with the turn
+			s.events <- session.AutoRetryEndEvent{
+				Base:       session.BaseNow(),
+				Success:    false,
+				FinalError: fmt.Sprintf("compaction failed: %v", err),
+			}
+		} else if compacted {
+			s.resetContextTokens()
+		}
 	}
 	s.mu.Unlock()
 
@@ -332,7 +344,29 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 		}
 		s.trimLastAssistantMessage()
 		s.mu.Unlock()
-		// TODO: Run actual compaction here
+
+		// Run compaction if available
+		if s.config.CompactFunc != nil {
+			compacted, compactionErr := s.config.CompactFunc(ctx)
+			if compactionErr != nil {
+				s.mu.Lock()
+				if !s.closed {
+					s.events <- session.AutoRetryEndEvent{
+						Base:       session.BaseNow(),
+						Success:    false,
+						FinalError: fmt.Sprintf("compaction failed: %v", compactionErr),
+					}
+					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+				}
+				return
+			}
+			if compacted {
+				s.mu.Lock()
+				s.resetContextTokens()
+				s.mu.Unlock()
+			}
+		}
+
 		_, retryErr := s.agent.Continue(ctx)
 		s.mu.Lock()
 		if !s.closed {

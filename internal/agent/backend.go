@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,77 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	b.session = nil
 }
 
+// Compact implements core.Compactor.
+// It generates a summary of the conversation and creates a CompactionSnapshot.
+func (b *Backend) Compact(ctx context.Context) (bool, error) {
+	if b.session == nil {
+		return false, nil
+	}
+
+	b.session.mu.Lock()
+	if b.session.contextTokens == 0 {
+		b.session.mu.Unlock()
+		return false, nil
+	}
+
+	// Get current messages from agent state
+	messages := b.session.agent.state.Messages
+	if len(messages) == 0 {
+		b.session.mu.Unlock()
+		return false, nil
+	}
+
+	// Generate summary using LLM
+	summary, err := b.generateSummary(ctx, messages)
+	if err != nil {
+		b.session.mu.Unlock()
+		return false, fmt.Errorf("generate summary: %w", err)
+	}
+
+	// Update agent state with compacted messages
+	b.session.agent.state.Messages = []AgentMessage{
+		{Role: "assistant", Content: summary},
+	}
+	b.session.resetContextTokens()
+	b.session.mu.Unlock()
+
+	return true, nil
+}
+
+// generateSummary generates a summary of the conversation using the LLM.
+func (b *Backend) generateSummary(ctx context.Context, messages []AgentMessage) (string, error) {
+	if b.provider == nil {
+		return "", fmt.Errorf("no provider configured")
+	}
+
+	// Build summary prompt
+	prompt := "Summarize the conversation so far. Include key decisions, file changes, and current state. Be concise but comprehensive."
+
+	// Convert messages to LLM format
+	llmMessages := make([]llm.Message, 0, len(messages)+1)
+	llmMessages = append(llmMessages, llm.Message{
+		Role:    llm.RoleSystem,
+		Content: prompt,
+	})
+	for _, msg := range messages {
+		llmMessages = append(llmMessages, llm.Message{
+			Role:    llm.Role(msg.Role),
+			Content: msg.Content,
+		})
+	}
+
+	// Generate summary
+	resp, err := b.provider.Generate(ctx, &llm.Request{
+		Model:    b.Model(),
+		Messages: llmMessages,
+	})
+	if err != nil {
+		return "", fmt.Errorf("generate: %w", err)
+	}
+
+	return resp.Content, nil
+}
+
 // createSession creates a new session adapter from the current app.
 func (b *Backend) createSession() *SessionAdapter {
 	if b.cfg == nil {
@@ -209,6 +281,7 @@ func (b *Backend) createSession() *SessionAdapter {
 		ToolExecutor: b.toolExecutor,
 		Tools:        b.tools,
 		SystemPrompt: systemPrompt,
+		CompactFunc:  b.Compact,
 	}
 
 	adapter := NewSessionAdapter(sessionCfg)
