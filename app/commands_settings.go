@@ -14,7 +14,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
-			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|tool_mode coding|read|all|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden|busy queue|steer]",
+			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|tool_mode coding|read|all|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking on|off|busy queue|steer]",
 		)
 	}
 
@@ -168,14 +168,23 @@ func settingsConfigUpdate(
 		updated.BashOutput = output
 		notice = "Bash output: " + displayBashOutput(output)
 	case "thinking":
-		verbosity := config.NormalizeVerbosity(value)
-		if verbosity == "" {
+		if value == "" {
 			return config.Config{}, "", fmt.Errorf(
-				"usage: /settings thinking full|collapsed|hidden",
+				"usage: /settings thinking on|off",
 			)
 		}
-		updated.ThinkingVerbosity = verbosity
-		notice = "Thinking display: " + verbosity
+		switch strings.ToLower(value) {
+		case "on", "full", "show":
+			updated.ThinkingVerbosity = "full"
+			notice = "Thinking content: visible"
+		case "off", "hidden", "collapse", "collapsed":
+			updated.ThinkingVerbosity = ""
+			notice = "Thinking content: hidden"
+		default:
+			return config.Config{}, "", fmt.Errorf(
+				"usage: /settings thinking on|off",
+			)
+		}
 	case "reasoning", "reasoning_effort", "thinking_level":
 		level := config.NormalizeReasoningEffort(value)
 		if level == "" {
@@ -280,10 +289,10 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			"Tool call/result visibility",
 		),
 		settingsPickerItem(
-			"Thinking output",
+			"Thinking content",
 			"thinking",
 			thinkingOutput,
-			nextSettingValue(thinkingOutput, []string{"hidden", "collapsed", "full"}),
+			nextSettingValue(thinkingOutput, []string{"off", "on"}),
 			"Display",
 			"Reasoning transcript detail",
 		),
@@ -395,10 +404,10 @@ func displayBashOutput(value string) string {
 }
 
 func displayThinkingVerbosity(value string) string {
-	if normalized := config.NormalizeVerbosity(value); normalized != "" {
-		return normalized
+	if value == "full" {
+		return "on"
 	}
-	return "hidden"
+	return "off"
 }
 
 func displayReasoningEffort(value string) string {

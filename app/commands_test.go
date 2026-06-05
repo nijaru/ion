@@ -1493,7 +1493,7 @@ func TestSettingsCommandOpensCommonSettingsPicker(t *testing.T) {
 	for _, want := range []string{
 		"Retry network errors: off",
 		"Tool display: collapsed",
-		"Thinking output: hidden",
+		"Thinking content: off",
 		"Active turn input: queue",
 		"retry on",
 		"busy steer",
@@ -1536,7 +1536,7 @@ func TestSettingsCommandPickerShowsDisplayDefaults(t *testing.T) {
 	text := got.String()
 	for _, want := range []string{
 		"Tool display: collapsed",
-		"Thinking output: hidden",
+		"Thinking content: off",
 		"Active turn input: steer",
 		"Enter: steer -> queue",
 		"Enter: collapsed -> full",
@@ -1672,7 +1672,7 @@ func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 		t.Fatal("expected bash setting command")
 	}
 	model, _ = resolveSettingsCommand(t, model, cmd)
-	model, cmd = model.handleCommand("/settings thinking collapsed")
+	model, cmd = model.handleCommand("/settings thinking off")
 	if cmd == nil {
 		t.Fatal("expected thinking setting command")
 	}
@@ -1687,7 +1687,6 @@ func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 		"read_output = 'full'",
 		"write_output = 'summary'",
 		"bash_output = 'summary'",
-		"thinking_verbosity = 'collapsed'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config missing %q:\n%s", want, got)
@@ -1696,7 +1695,7 @@ func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 	if model.Model.Config.ReadOutput != "full" ||
 		model.Model.Config.WriteOutput != "summary" ||
 		model.Model.Config.BashOutput != "summary" ||
-		model.Model.Config.ThinkingVerbosity != "collapsed" {
+		model.Model.Config.ThinkingVerbosity != "" {
 		t.Fatalf(
 			"runtime config read/write/bash/thinking output = %q/%q/%q/%q, want full/summary/summary/collapsed",
 			model.Model.Config.ReadOutput,

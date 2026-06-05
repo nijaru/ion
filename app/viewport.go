@@ -256,7 +256,7 @@ func (m Model) wrapCompletedAgentLines(rendered string) []string {
 func (m Model) verbosity(kind string) string {
 	if m.Model.Config == nil {
 		if kind == "thinking" {
-			return "collapsed"
+			return ""
 		}
 		return "full"
 	}
@@ -266,10 +266,10 @@ func (m Model) verbosity(kind string) string {
 			return v
 		}
 	case "thinking":
-		if v := m.Model.Config.ThinkingVerbosity; v != "" {
-			return v
+		if m.Model.Config.ThinkingVerbosity == "full" {
+			return "full"
 		}
-		return "collapsed"
+		return ""
 	}
 	return "full"
 }
