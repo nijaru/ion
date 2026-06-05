@@ -37,6 +37,10 @@ type SessionAdapter struct {
 	// retryAttempt tracks the current retry attempt for transient errors.
 	// Reset to 0 after successful completion or max retries exceeded.
 	retryAttempt int
+
+	// contextTokens tracks the estimated context token count.
+	// Updated from TokenUsage events.
+	contextTokens int
 }
 
 // SessionAdapterConfig holds configuration for the session adapter.
@@ -127,6 +131,10 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 			defer s.mu.Unlock()
 			if s.closed {
 				return
+			}
+			// Track token usage for compaction threshold
+			if usage, ok := ev.(session.TokenUsageEvent); ok {
+				s.updateContextTokens(usage.Input, usage.Output)
 			}
 			s.events <- ev
 		},
@@ -250,6 +258,19 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 	turnCtx, cancel := context.WithCancel(ctx)
 	s.turnCtx = turnCtx
 	s.cancel = cancel
+
+	// Check if auto-compaction is needed before submitting
+	if s.needsCompaction() {
+		s.events <- session.CompactionTriggeredEvent{
+			Base:   session.BaseNow(),
+			Reason: "threshold",
+		}
+		s.mu.Unlock()
+		// TODO: Run actual compaction here
+		// For now, just reset the token counter
+		s.mu.Lock()
+		s.resetContextTokens()
+	}
 	s.mu.Unlock()
 
 	// Create user message
@@ -563,4 +584,34 @@ func (s *SessionAdapter) trimLastAssistantMessage() {
 	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "assistant" {
 		s.agent.state.Messages = msgs[:len(msgs)-1]
 	}
+}
+
+// updateContextTokens updates the estimated context token count.
+// Called from TokenUsage events.
+// Caller must hold s.mu.
+func (s *SessionAdapter) updateContextTokens(input, output int) {
+	s.contextTokens += input + output
+}
+
+// needsCompaction checks if context tokens exceed the threshold.
+// Returns true if compaction should be triggered.
+// Caller must hold s.mu.
+func (s *SessionAdapter) needsCompaction() bool {
+	if s.config == nil {
+		return false
+	}
+	contextWindow := s.config.Model.ContextWindow
+	if contextWindow <= 0 {
+		return false
+	}
+	// Use 80% threshold (matching Pi's default)
+	threshold := int(float64(contextWindow) * 0.8)
+	return s.contextTokens > threshold
+}
+
+// resetContextTokens resets the context token counter.
+// Called after successful compaction.
+// Caller must hold s.mu.
+func (s *SessionAdapter) resetContextTokens() {
+	s.contextTokens = 0
 }
