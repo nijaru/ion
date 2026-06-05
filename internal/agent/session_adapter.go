@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -32,6 +33,10 @@ type SessionAdapter struct {
 	// Only one retry attempt is allowed per turn (matching Pi's
 	// _overflowRecoveryAttempted guard).
 	overflowAttempted bool
+
+	// retryAttempt tracks the current retry attempt for transient errors.
+	// Reset to 0 after successful completion or max retries exceeded.
+	retryAttempt int
 }
 
 // SessionAdapterConfig holds configuration for the session adapter.
@@ -56,6 +61,40 @@ type SessionAdapterConfig struct {
 	ToolExecutor ToolExecutor
 	// QueueMode controls how many queued inputs are consumed at a loop boundary.
 	QueueMode QueueMode
+
+	// MaxRetries is the max number of retry attempts for transient errors.
+	// Default: 3
+	MaxRetries int
+	// RetryBaseDelayMs is the base delay in ms for exponential backoff.
+	// Default: 1000
+	RetryBaseDelayMs int
+}
+
+const (
+	defaultMaxRetries       = 3
+	defaultRetryBaseDelayMs = 1000
+)
+
+// GetMaxRetries returns the max retry attempts (default 3).
+func (c *SessionAdapterConfig) GetMaxRetries() int {
+	if c == nil || c.MaxRetries <= 0 {
+		return defaultMaxRetries
+	}
+	if c.MaxRetries > 10 {
+		return 10
+	}
+	return c.MaxRetries
+}
+
+// GetRetryBaseDelayMs returns the base delay in ms for exponential backoff (default 1000).
+func (c *SessionAdapterConfig) GetRetryBaseDelayMs() int {
+	if c == nil || c.RetryBaseDelayMs <= 0 {
+		return defaultRetryBaseDelayMs
+	}
+	if c.RetryBaseDelayMs > 60000 {
+		return 60000
+	}
+	return c.RetryBaseDelayMs
 }
 
 // NewSessionAdapter creates a new session adapter.
@@ -234,53 +273,132 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			s.cancel = nil
 			s.turnCtx = nil
 			s.overflowAttempted = false
+			s.retryAttempt = 0
 			s.mu.Unlock()
 		}()
 		_, err := s.agent.Continue(turnCtx)
-		s.mu.Lock()
-		if !s.closed {
-			if err != nil && !errors.Is(err, context.Canceled) {
-				// Check if this is a context overflow error
-				if IsContextOverflow(err.Error()) && !s.overflowAttempted {
-					s.overflowAttempted = true
-					// Emit compaction triggered event
-					s.events <- session.CompactionTriggeredEvent{
-						Base:  session.BaseNow(),
-						Reason: "overflow",
-					}
-					// Remove last assistant message (the error) from agent state
-					s.trimLastAssistantMessage()
-					s.mu.Unlock()
-					// TODO: Run actual compaction here
-					// For now, just retry the turn
-					_, retryErr := s.agent.Continue(turnCtx)
-					s.mu.Lock()
-					if !s.closed {
-						if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-							s.events <- session.ErrorEvent{
-								Base:  session.BaseNow(),
-								Err:   retryErr,
-								Fatal: true,
-							}
-						}
-						s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-					}
-				} else {
-					s.events <- session.ErrorEvent{
-						Base:  session.BaseNow(),
-						Err:   err,
-						Fatal: true,
-					}
-					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-				}
-			} else {
-				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-			}
-		}
-		s.mu.Unlock()
+		s.handlePostAgentRun(turnCtx, err)
 	}()
 
 	return nil
+}
+
+// handlePostAgentRun handles post-agent-run logic including overflow
+// recovery and auto-retry with exponential backoff.
+func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+
+	// Success or cancellation - just emit turn finished
+	if err == nil || errors.Is(err, context.Canceled) {
+		s.retryAttempt = 0
+		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		return
+	}
+
+	errMsg := err.Error()
+
+	// Check for context overflow first (handled by compaction, not retry)
+	if IsContextOverflow(errMsg) && !s.overflowAttempted {
+		s.overflowAttempted = true
+		s.events <- session.CompactionTriggeredEvent{
+			Base:   session.BaseNow(),
+			Reason: "overflow",
+		}
+		s.trimLastAssistantMessage()
+		s.mu.Unlock()
+		// TODO: Run actual compaction here
+		_, retryErr := s.agent.Continue(ctx)
+		s.mu.Lock()
+		if !s.closed {
+			if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
+				s.events <- session.ErrorEvent{
+					Base:  session.BaseNow(),
+					Err:   retryErr,
+					Fatal: true,
+				}
+			}
+			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		}
+		return
+	}
+
+	// Check for retryable transient errors
+	if IsRetryableError(errMsg) {
+		maxRetries := s.config.GetMaxRetries()
+		if s.retryAttempt < maxRetries {
+			s.retryAttempt++
+			delayMs := s.config.GetRetryBaseDelayMs() * (1 << (s.retryAttempt - 1))
+
+			s.events <- session.AutoRetryStartEvent{
+				Base:       session.BaseNow(),
+				Attempt:    s.retryAttempt,
+				MaxAttempt: maxRetries,
+				DelayMs:    delayMs,
+				Error:      errMsg,
+			}
+
+			// Remove error message from agent state
+			s.trimLastAssistantMessage()
+
+			// Wait with exponential backoff (abortable)
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				s.mu.Lock()
+				if !s.closed {
+					s.events <- session.AutoRetryEndEvent{
+						Base:       session.BaseNow(),
+						Success:    false,
+						Attempt:    s.retryAttempt,
+						FinalError: "Retry cancelled",
+					}
+					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+				}
+				return
+			case <-time.After(time.Duration(delayMs) * time.Millisecond):
+			}
+			s.mu.Lock()
+
+			// Retry the turn
+			s.mu.Unlock()
+			_, retryErr := s.agent.Continue(ctx)
+			s.mu.Lock()
+
+			if s.closed {
+				return
+			}
+
+			if retryErr == nil || errors.Is(retryErr, context.Canceled) {
+				// Success!
+				s.events <- session.AutoRetryEndEvent{
+					Base:    session.BaseNow(),
+					Success: true,
+					Attempt: s.retryAttempt,
+				}
+				s.retryAttempt = 0
+				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+				return
+			}
+
+			// Retry failed - check if we should try again
+			// Recursively handle the new error (will check retryable again)
+			s.handlePostAgentRun(ctx, retryErr)
+			return
+		}
+	}
+
+	// Non-retryable error - emit error and turn finished
+	s.events <- session.ErrorEvent{
+		Base:  session.BaseNow(),
+		Err:   err,
+		Fatal: true,
+	}
+	s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
 }
 
 func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Message) error {

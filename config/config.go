@@ -30,6 +30,8 @@ type Config struct {
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
 	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
 	RetryUntilCancelled    *bool             `toml:"retry_until_cancelled,omitempty"`
+	MaxRetries             int               `toml:"max_retries,omitempty"`
+	RetryBaseDelayMs       int               `toml:"retry_base_delay_ms,omitempty"`
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
@@ -189,6 +191,18 @@ func normalizeConfig(cfg *Config) {
 	}
 	if cfg.MaxTurnCost < 0 {
 		cfg.MaxTurnCost = 0
+	}
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
+	if cfg.MaxRetries > 10 {
+		cfg.MaxRetries = 10
+	}
+	if cfg.RetryBaseDelayMs < 0 {
+		cfg.RetryBaseDelayMs = 0
+	}
+	if cfg.RetryBaseDelayMs > 60000 {
+		cfg.RetryBaseDelayMs = 60000
 	}
 	if cfg.SessionRetentionDays <= 0 {
 		cfg.SessionRetentionDays = DefaultSessionRetentionDays
@@ -562,6 +576,33 @@ func defaultConfig() *Config {
 
 func (c *Config) RetryUntilCancelledEnabled() bool {
 	return c == nil || c.RetryUntilCancelled == nil || *c.RetryUntilCancelled
+}
+
+const (
+	DefaultMaxRetries       = 3
+	DefaultRetryBaseDelayMs = 1000
+)
+
+// GetMaxRetries returns the max retry attempts (default 3).
+func (c *Config) GetMaxRetries() int {
+	if c == nil || c.MaxRetries <= 0 {
+		return DefaultMaxRetries
+	}
+	if c.MaxRetries > 10 {
+		return 10
+	}
+	return c.MaxRetries
+}
+
+// GetRetryBaseDelayMs returns the base delay in ms for exponential backoff (default 1000).
+func (c *Config) GetRetryBaseDelayMs() int {
+	if c == nil || c.RetryBaseDelayMs <= 0 {
+		return DefaultRetryBaseDelayMs
+	}
+	if c.RetryBaseDelayMs > 60000 {
+		return 60000
+	}
+	return c.RetryBaseDelayMs
 }
 
 func (c *Config) BusyInputMode() string {

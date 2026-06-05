@@ -255,6 +255,27 @@ type CompactionTriggeredEvent struct {
 
 func (e CompactionTriggeredEvent) isAgentEvent() {}
 
+// AutoRetryStartEvent fires when auto-retry begins for a transient error.
+type AutoRetryStartEvent struct {
+	Base
+	Attempt    int    `json:"attempt"`
+	MaxAttempt int    `json:"max_attempt"`
+	DelayMs    int    `json:"delay_ms"`
+	Error      string `json:"error"`
+}
+
+func (e AutoRetryStartEvent) isAgentEvent() {}
+
+// AutoRetryEndEvent fires when auto-retry completes (success or failure).
+type AutoRetryEndEvent struct {
+	Base
+	Success     bool   `json:"success"`
+	Attempt     int    `json:"attempt"`
+	FinalError  string `json:"final_error,omitempty"`
+}
+
+func (e AutoRetryEndEvent) isAgentEvent() {}
+
 type QueuedInputUpdatedEvent struct {
 	Base
 	Snapshot QueuedInputSnapshot `json:"snapshot"`
