@@ -401,7 +401,6 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 	close(releaseFirstStream)
 
 	var users []string
-	var turnEnds int
 	for {
 		select {
 		case ev := <-adapter.Events():
@@ -409,17 +408,14 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 			case session.UserMessageEvent:
 				users = append(users, msg.Message)
 			case session.TurnFinishedEvent:
-				turnEnds++
-				if turnEnds >= 3 {
-					want := []string{"initial", "follow one", "follow two"}
-					if strings.Join(users, ",") != strings.Join(want, ",") {
-						t.Fatalf("user events = %v, want %v", users, want)
-					}
-					return
+				want := []string{"initial", "follow one", "follow two"}
+				if strings.Join(users, ",") != strings.Join(want, ",") {
+					t.Fatalf("user events = %v, want %v", users, want)
 				}
+				return
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for terminal event; users = %v, turnEnds = %d", users, turnEnds)
+			t.Fatalf("timed out waiting for terminal event; users = %v", users)
 		}
 	}
 }
