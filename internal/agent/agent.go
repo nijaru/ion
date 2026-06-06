@@ -723,6 +723,9 @@ func (a *Agent) prepareAndExecuteTool(
 	if _, ok := a.findTool(toolCall.Name); !ok {
 		return errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name)), true
 	}
+	if err := a.validateToolArgs(toolCall); err != nil {
+		return errorToolResult(fmt.Sprintf("Tool %s: invalid arguments: %v", toolCall.Name, err)), true
+	}
 	if config.BeforeToolCall != nil {
 		before := config.BeforeToolCall(BeforeToolCallContext{
 			AssistantMessage: assistantLLM,
@@ -1140,4 +1143,45 @@ func serializeArguments(args map[string]any) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// validateToolArgs validates tool arguments against the tool's parameter schema.
+// Returns nil if validation passes or the tool has no schema.
+func (a *Agent) validateToolArgs(toolCall AgentToolCall) error {
+	tool, ok := a.findTool(toolCall.Name)
+	if !ok {
+		return nil // tool not found is handled separately
+	}
+	schema := tool.Parameters
+	if schema == nil {
+		return nil // no schema means no validation
+	}
+
+	// Extract required fields from schema
+	schemaMap, ok := schema.(map[string]any)
+	if !ok {
+		return nil // non-map schemas are not validated
+	}
+
+	required, ok := schemaMap["required"]
+	if !ok {
+		return nil
+	}
+	requiredList, ok := required.([]any)
+	if !ok {
+		return nil
+	}
+
+	// Check required fields
+	for _, field := range requiredList {
+		fieldName, ok := field.(string)
+		if !ok {
+			continue
+		}
+		if _, exists := toolCall.Arguments[fieldName]; !exists {
+			return fmt.Errorf("missing required field: %s", fieldName)
+		}
+	}
+
+	return nil
 }
