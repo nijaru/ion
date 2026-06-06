@@ -480,6 +480,65 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 	}
 }
 
+func TestAgentToolsIncludedInRequest(t *testing.T) {
+	var observedReq *llm.Request
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		observedReq = req
+		return &mockStream{chunks: []*llm.Chunk{{Content: "no tools needed"}}}, nil
+	}
+
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "test-model"},
+		StreamFn: streamFn,
+	})
+	agent.SetTools([]AgentTool{
+		{Name: "read", Description: "Read a file", Parameters: map[string]any{"type": "object"}},
+		{Name: "bash", Description: "Run a command", Parameters: map[string]any{"type": "object"}},
+	})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if observedReq == nil {
+		t.Fatal("stream function not called")
+	}
+	if len(observedReq.Tools) != 2 {
+		t.Fatalf("tools in request = %d, want 2", len(observedReq.Tools))
+	}
+	if observedReq.Tools[0].Name != "read" {
+		t.Errorf("tools[0].name = %q, want read", observedReq.Tools[0].Name)
+	}
+	if observedReq.Tools[1].Name != "bash" {
+		t.Errorf("tools[1].name = %q, want bash", observedReq.Tools[1].Name)
+	}
+	if observedReq.Tools[0].Description != "Read a file" {
+		t.Errorf("tools[0].description = %q", observedReq.Tools[0].Description)
+	}
+}
+
+func TestAgentNoToolsOmitsToolsField(t *testing.T) {
+	var observedReq *llm.Request
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		observedReq = req
+		return &mockStream{chunks: []*llm.Chunk{{Content: "ok"}}}, nil
+	}
+
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "test-model"},
+		StreamFn: streamFn,
+	})
+
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "hello"}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if observedReq == nil {
+		t.Fatal("stream function not called")
+	}
+	if len(observedReq.Tools) != 0 {
+		t.Fatalf("tools in request = %d, want 0 (no tools registered)", len(observedReq.Tools))
+	}
+}
+
 func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 	var requests []string
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {

@@ -321,10 +321,25 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 		llmMessages = a.defaultConvertToLlm(messages)
 	}
 
+	// Convert agent tools to LLM specs
+	var toolSpecs []*llm.Spec
+	if len(state.Tools) > 0 {
+		toolSpecs = make([]*llm.Spec, 0, len(state.Tools))
+		for _, t := range state.Tools {
+			spec := &llm.Spec{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			}
+			toolSpecs = append(toolSpecs, spec)
+		}
+	}
+
 	// Build LLM request
 	req := &llm.Request{
 		Model:           config.Model.ID,
 		Messages:        llmMessages,
+		Tools:           toolSpecs,
 		MaxTokens:       config.MaxTokens,
 		Temperature:     config.Temperature,
 		ReasoningEffort: string(config.ThinkingLevel),
