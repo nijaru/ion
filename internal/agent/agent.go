@@ -17,6 +17,9 @@ type Agent struct {
 	config AgentLoopConfig
 	state  AgentState
 	mu     sync.RWMutex
+	// turnFinishedEmitted tracks if TurnFinishedEvent was emitted inside
+	// the loop, so Run() doesn't double-emit.
+	turnFinishedEmitted bool
 }
 
 // New creates a new Agent with the given configuration.
@@ -98,6 +101,7 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 // It returns the new messages added during the loop.
 // Always emits TurnFinishedEvent when done (matching Pi's agent_end contract).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
+	a.turnFinishedEmitted = false
 	newMessages, err := a.acceptPrompts(ctx, prompts)
 	if err != nil {
 		a.mu.Lock()
@@ -107,7 +111,9 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	}
 
 	newMessages, runErr := a.execute(ctx, &newMessages)
-	a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	if !a.turnFinishedEmitted {
+		a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	}
 	return newMessages, runErr
 }
 
@@ -266,7 +272,11 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				}
 			}
 
-			turnContext := ShouldStopAfterTurnContext{
+		// Emit turn boundary after each tool batch (Pi parity: turn_end per batch)
+		a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+		a.turnFinishedEmitted = true
+
+		turnContext := ShouldStopAfterTurnContext{
 				Message:     llmMessage,
 				ToolResults: agentMessagesToLLM(toolResults),
 				Context:     a.buildContext(),
