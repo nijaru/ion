@@ -303,8 +303,12 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer func() {
 			s.mu.Lock()
-			s.cancel = nil
-			s.turnCtx = nil
+			// Only clear if we still own the turn context.
+			// A newer SubmitTurn may have replaced it.
+			if s.turnCtx == turnCtx {
+				s.cancel = nil
+				s.turnCtx = nil
+			}
 			s.overflowAttempted = false
 			s.retryAttempt = 0
 			s.mu.Unlock()
