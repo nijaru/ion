@@ -804,32 +804,7 @@ func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 	}
 
 	for _, msg := range messages {
-		llmMsg := llm.Message{
-			Role:    llm.Role(msg.Role),
-			Content: msg.Content,
-			Name:    msg.Name,
-			ToolID:  msg.ToolID,
-		}
-
-		// Convert parts
-		if len(msg.Parts) > 0 {
-			llmMsg.Parts = msg.Parts
-		}
-
-		// Convert tool calls
-		if len(msg.Calls) > 0 {
-			llmMsg.Calls = make([]llm.Call, len(msg.Calls))
-			for i, call := range msg.Calls {
-				llmMsg.Calls[i] = llm.Call{
-					ID:   call.ID,
-					Type: "function",
-				}
-				llmMsg.Calls[i].Function.Name = call.Name
-				llmMsg.Calls[i].Function.Arguments = serializeArguments(call.Arguments)
-			}
-		}
-
-		result = append(result, llmMsg)
+		result = append(result, agentMessageToLLM(msg))
 	}
 	return result
 }
