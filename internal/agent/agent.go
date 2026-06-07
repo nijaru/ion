@@ -443,7 +443,7 @@ func (a *Agent) executeToolCallsSequential(
 	toolCalls []AgentToolCall,
 	config AgentLoopConfig,
 ) ([]AgentMessage, []llm.Message, bool, error) {
-	finalized := make([]finalizedToolCall, 0, len(toolCalls))
+	finalized := make([]toolCallResult, 0, len(toolCalls))
 
 	for _, toolCall := range toolCalls {
 		// Check for context cancellation
@@ -452,7 +452,7 @@ func (a *Agent) executeToolCallsSequential(
 		}
 
 		a.emitToolCallStarted(toolCall)
-		result := a.finalizeToolCall(ctx, assistantMsg, assistantLLM, toolCall, config)
+		result := a.executeAndFinalizeTool(ctx, assistantMsg, assistantLLM, toolCall, config)
 		a.emitToolResult(result)
 		finalized = append(finalized, result)
 	}
@@ -473,7 +473,7 @@ func (a *Agent) executeToolCallsParallel(
 	toolCalls []AgentToolCall,
 	config AgentLoopConfig,
 ) ([]AgentMessage, []llm.Message, bool, error) {
-	finalized := make([]finalizedToolCall, len(toolCalls))
+	finalized := make([]toolCallResult, len(toolCalls))
 	prepared := make([]*preparedToolCall, len(toolCalls))
 
 	// 1. Preflight/Preparation sequentially
@@ -486,7 +486,7 @@ func (a *Agent) executeToolCallsParallel(
 		// Check if tool exists
 		if _, ok := a.findTool(toolCall.Name); !ok {
 			res := errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name))
-			finalized[i] = a.buildFinalizedToolCall(assistantLLM, toolCall, res, true, config)
+			finalized[i] = a.finalizeToolResult(assistantLLM, toolCall, res, true, config)
 			continue
 		}
 
@@ -504,7 +504,7 @@ func (a *Agent) executeToolCallsParallel(
 					reason = "Tool execution was blocked"
 				}
 				res := errorToolResult(reason)
-				finalized[i] = a.buildFinalizedToolCall(assistantLLM, toolCall, res, true, config)
+				finalized[i] = a.finalizeToolResult(assistantLLM, toolCall, res, true, config)
 				continue
 			}
 		}
@@ -547,7 +547,7 @@ func (a *Agent) executeToolCallsParallel(
 				}
 			}
 
-			finalized[idx] = a.buildFinalizedToolCall(assistantLLM, p.toolCall, res, isError, config)
+			finalized[idx] = a.finalizeToolResult(assistantLLM, p.toolCall, res, isError, config)
 		}(i, prep)
 	}
 	wg.Wait()
@@ -564,7 +564,7 @@ func (a *Agent) executeToolCallsParallel(
 	return toolMessages(finalized)
 }
 
-type finalizedToolCall struct {
+type toolCallResult struct {
 	toolCall  AgentToolCall
 	result    AgentToolResult
 	message   AgentMessage
@@ -582,7 +582,7 @@ func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
 	})
 }
 
-func (a *Agent) emitToolResult(result finalizedToolCall) {
+func (a *Agent) emitToolResult(result toolCallResult) {
 	a.emit(session.ToolResultEvent{
 		Base:      session.BaseNow(),
 		ToolUseID: result.toolCall.ID,
@@ -592,26 +592,26 @@ func (a *Agent) emitToolResult(result finalizedToolCall) {
 	})
 }
 
-func (a *Agent) finalizeToolCall(
+func (a *Agent) executeAndFinalizeTool(
 	ctx context.Context,
 	assistantMsg AgentMessage,
 	assistantLLM llm.Message,
 	toolCall AgentToolCall,
 	config AgentLoopConfig,
-) finalizedToolCall {
+) toolCallResult {
 	result, isError := a.prepareAndExecuteTool(ctx, assistantMsg, assistantLLM, toolCall, config)
-	return a.buildFinalizedToolCall(assistantLLM, toolCall, result, isError, config)
+	return a.finalizeToolResult(assistantLLM, toolCall, result, isError, config)
 }
 
-// buildFinalizedToolCall applies the AfterToolCall hook and creates a finalizedToolCall.
+// finalizeToolResult applies the AfterToolCall hook and creates a toolCallResult.
 // Used by both sequential and parallel execution paths.
-func (a *Agent) buildFinalizedToolCall(
+func (a *Agent) finalizeToolResult(
 	assistantLLM llm.Message,
 	toolCall AgentToolCall,
 	result AgentToolResult,
 	isError bool,
 	config AgentLoopConfig,
-) finalizedToolCall {
+) toolCallResult {
 	if config.AfterToolCall != nil {
 		after := config.AfterToolCall(AfterToolCallContext{
 			AssistantMessage: assistantLLM,
@@ -638,7 +638,7 @@ func (a *Agent) buildFinalizedToolCall(
 
 	message := toolResultMessage(toolCall, result)
 	llmMessage := agentMessageToLLM(message)
-	return finalizedToolCall{
+	return toolCallResult{
 		toolCall:  toolCall,
 		result:    result,
 		message:   message,
@@ -837,7 +837,7 @@ func (a *Agent) findTool(name string) (AgentTool, bool) {
 	return AgentTool{}, false
 }
 
-func toolMessages(finalized []finalizedToolCall) ([]AgentMessage, []llm.Message, bool, error) {
+func toolMessages(finalized []toolCallResult) ([]AgentMessage, []llm.Message, bool, error) {
 	messages := make([]AgentMessage, 0, len(finalized))
 	llmMessages := make([]llm.Message, 0, len(finalized))
 	terminate := len(finalized) > 0
