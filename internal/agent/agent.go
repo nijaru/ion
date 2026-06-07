@@ -465,48 +465,6 @@ type preparedToolCall struct {
 	args     any
 }
 
-func (a *Agent) finalizeImmediateToolCall(
-	assistantLLM llm.Message,
-	toolCall AgentToolCall,
-	result AgentToolResult,
-	isError bool,
-	config AgentLoopConfig,
-) finalizedToolCall {
-	if config.AfterToolCall != nil {
-		after := config.AfterToolCall(AfterToolCallContext{
-			AssistantMessage: assistantLLM,
-			ToolCall:         toolCall,
-			Args:             toolCall.Arguments,
-			Result:           result,
-			IsError:          isError,
-			Context:          a.buildContext(),
-		})
-		if after.Content != nil {
-			result.Content = after.Content
-		}
-		if after.Details != nil {
-			result.Details = after.Details
-		}
-		if after.IsError != nil {
-			result.IsError = *after.IsError
-			isError = *after.IsError
-		}
-		if after.Terminate != nil {
-			result.Terminate = *after.Terminate
-		}
-	}
-
-	message := toolResultMessage(toolCall, result)
-	llmMessage := agentMessageToLLM(message)
-	return finalizedToolCall{
-		toolCall:  toolCall,
-		result:    result,
-		message:   message,
-		llm:       llmMessage,
-		isError:   isError,
-		terminate: result.Terminate,
-	}
-}
 
 func (a *Agent) executeToolCallsParallel(
 	ctx context.Context,
@@ -528,7 +486,7 @@ func (a *Agent) executeToolCallsParallel(
 		// Check if tool exists
 		if _, ok := a.findTool(toolCall.Name); !ok {
 			res := errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name))
-			finalized[i] = a.finalizeImmediateToolCall(assistantLLM, toolCall, res, true, config)
+			finalized[i] = a.buildFinalizedToolCall(assistantLLM, toolCall, res, true, config)
 			continue
 		}
 
@@ -546,7 +504,7 @@ func (a *Agent) executeToolCallsParallel(
 					reason = "Tool execution was blocked"
 				}
 				res := errorToolResult(reason)
-				finalized[i] = a.finalizeImmediateToolCall(assistantLLM, toolCall, res, true, config)
+				finalized[i] = a.buildFinalizedToolCall(assistantLLM, toolCall, res, true, config)
 				continue
 			}
 		}
@@ -589,42 +547,7 @@ func (a *Agent) executeToolCallsParallel(
 				}
 			}
 
-			// Run AfterToolCall hook concurrently
-			if config.AfterToolCall != nil {
-				after := config.AfterToolCall(AfterToolCallContext{
-					AssistantMessage: assistantLLM,
-					ToolCall:         p.toolCall,
-					Args:             p.args,
-					Result:           res,
-					IsError:          isError,
-					Context:          a.buildContext(),
-				})
-				if after.Content != nil {
-					res.Content = after.Content
-				}
-				if after.Details != nil {
-					res.Details = after.Details
-				}
-				if after.IsError != nil {
-					res.IsError = *after.IsError
-					isError = *after.IsError
-				}
-				if after.Terminate != nil {
-					res.Terminate = *after.Terminate
-				}
-			}
-
-			message := toolResultMessage(p.toolCall, res)
-			llmMessage := agentMessageToLLM(message)
-
-			finalized[idx] = finalizedToolCall{
-				toolCall:  p.toolCall,
-				result:    res,
-				message:   message,
-				llm:       llmMessage,
-				isError:   isError,
-				terminate: res.Terminate,
-			}
+			finalized[idx] = a.buildFinalizedToolCall(assistantLLM, p.toolCall, res, isError, config)
 		}(i, prep)
 	}
 	wg.Wait()
@@ -677,6 +600,18 @@ func (a *Agent) finalizeToolCall(
 	config AgentLoopConfig,
 ) finalizedToolCall {
 	result, isError := a.prepareAndExecuteTool(ctx, assistantMsg, assistantLLM, toolCall, config)
+	return a.buildFinalizedToolCall(assistantLLM, toolCall, result, isError, config)
+}
+
+// buildFinalizedToolCall applies the AfterToolCall hook and creates a finalizedToolCall.
+// Used by both sequential and parallel execution paths.
+func (a *Agent) buildFinalizedToolCall(
+	assistantLLM llm.Message,
+	toolCall AgentToolCall,
+	result AgentToolResult,
+	isError bool,
+	config AgentLoopConfig,
+) finalizedToolCall {
 	if config.AfterToolCall != nil {
 		after := config.AfterToolCall(AfterToolCallContext{
 			AssistantMessage: assistantLLM,

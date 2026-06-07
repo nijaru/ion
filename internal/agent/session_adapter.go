@@ -330,7 +330,7 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 		return
 	}
 
-	// Success or cancellation - just emit turn finished
+	// Success or cancellation
 	if err == nil || errors.Is(err, context.Canceled) {
 		s.retryAttempt = 0
 		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
@@ -339,119 +339,134 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 
 	errMsg := err.Error()
 
-	// Check for context overflow first (handled by compaction, not retry)
+	// Overflow recovery: compact and retry once
 	if IsContextOverflow(errMsg) && !s.overflowAttempted {
 		s.overflowAttempted = true
-		s.events <- session.CompactionTriggeredEvent{
-			Base:   session.BaseNow(),
-			Reason: "overflow",
-		}
-		s.trimLastAssistantMessage()
-		s.mu.Unlock()
-
-		// Run compaction if available
-		if s.config.CompactFunc != nil {
-			compacted, compactionErr := s.config.CompactFunc(ctx)
-			if compactionErr != nil {
-				s.mu.Lock()
-				if !s.closed {
-					s.events <- session.AutoRetryEndEvent{
-						Base:       session.BaseNow(),
-						Success:    false,
-						FinalError: fmt.Sprintf("compaction failed: %v", compactionErr),
-					}
-					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-				}
-				return
-			}
-			if compacted {
-				s.mu.Lock()
-				s.resetContextTokens()
-				s.mu.Unlock()
-			}
-		}
-
-		_, retryErr := s.agent.Continue(ctx)
-		s.mu.Lock()
-		if !s.closed {
-			if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-				s.events <- session.ErrorEvent{
-					Base:  session.BaseNow(),
-					Err:   retryErr,
-					Fatal: true,
-				}
-			}
-			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-		}
-		return
-	}
-
-	// Check for retryable transient errors
-	if IsRetryableError(errMsg) {
-		maxRetries := s.config.GetMaxRetries()
-		if s.retryAttempt < maxRetries {
-			s.retryAttempt++
-			delayMs := s.config.GetRetryBaseDelayMs() * (1 << (s.retryAttempt - 1))
-
-			s.events <- session.AutoRetryStartEvent{
-				Base:       session.BaseNow(),
-				Attempt:    s.retryAttempt,
-				MaxAttempt: maxRetries,
-				DelayMs:    delayMs,
-				Error:      errMsg,
-			}
-
-			// Remove error message from agent state
-			s.trimLastAssistantMessage()
-
-			// Wait with exponential backoff (abortable)
-			s.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				s.mu.Lock()
-				if !s.closed {
-					s.events <- session.AutoRetryEndEvent{
-						Base:       session.BaseNow(),
-						Success:    false,
-						Attempt:    s.retryAttempt,
-						FinalError: "Retry cancelled",
-					}
-					s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-				}
-				return
-			case <-time.After(time.Duration(delayMs) * time.Millisecond):
-			}
-			s.mu.Lock()
-
-			// Retry the turn
-			s.mu.Unlock()
-			_, retryErr := s.agent.Continue(ctx)
-			s.mu.Lock()
-
-			if s.closed {
-				return
-			}
-
-			if retryErr == nil || errors.Is(retryErr, context.Canceled) {
-				// Success!
-				s.events <- session.AutoRetryEndEvent{
-					Base:    session.BaseNow(),
-					Success: true,
-					Attempt: s.retryAttempt,
-				}
-				s.retryAttempt = 0
-				s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
-				return
-			}
-
-			// Retry failed - check if we should try again
-			// Recursively handle the new error (will check retryable again)
-			s.handlePostAgentRun(ctx, retryErr)
+		if s.recoverFromOverflow(ctx) {
 			return
 		}
 	}
 
-	// Non-retryable error - emit error and turn finished
+	// Transient error retry with exponential backoff
+	if IsRetryableError(errMsg) && s.retryAttempt < s.config.GetMaxRetries() {
+		if s.retryWithBackoff(ctx, errMsg) {
+			return
+		}
+	}
+
+	// Non-retryable error
+	s.emitErrorAndFinished(err)
+}
+
+// recoverFromOverflow handles context overflow by compacting and retrying.
+// Returns true if recovery succeeded or was attempted. Caller must hold s.mu.
+func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
+	s.events <- session.CompactionTriggeredEvent{
+		Base:   session.BaseNow(),
+		Reason: "overflow",
+	}
+	s.trimLastAssistantMessage()
+
+	// Unlock for blocking compaction call
+	s.mu.Unlock()
+	defer s.mu.Lock()
+
+	compacted, err := s.runCompaction(ctx)
+	if err != nil {
+		if !s.closed {
+			s.events <- session.AutoRetryEndEvent{
+				Base:       session.BaseNow(),
+				Success:    false,
+				FinalError: fmt.Sprintf("compaction failed: %v", err),
+			}
+			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		}
+		return true
+	}
+	if compacted {
+		s.resetContextTokens()
+	}
+
+	_, retryErr := s.agent.Continue(ctx)
+	if !s.closed {
+		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
+			s.events <- session.ErrorEvent{
+				Base:  session.BaseNow(),
+				Err:   retryErr,
+				Fatal: true,
+			}
+		}
+		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+	}
+	return true
+}
+
+// retryWithBackoff retries a failed turn with exponential backoff.
+// Returns true if retry was attempted. Caller must hold s.mu.
+func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bool {
+	s.retryAttempt++
+	delayMs := s.config.GetRetryBaseDelayMs() * (1 << (s.retryAttempt - 1))
+
+	s.events <- session.AutoRetryStartEvent{
+		Base:       session.BaseNow(),
+		Attempt:    s.retryAttempt,
+		MaxAttempt: s.config.GetMaxRetries(),
+		DelayMs:    delayMs,
+		Error:      errMsg,
+	}
+	s.trimLastAssistantMessage()
+
+	// Unlock for blocking delay
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		s.mu.Lock()
+		if !s.closed {
+			s.events <- session.AutoRetryEndEvent{
+				Base:       session.BaseNow(),
+				Success:    false,
+				Attempt:    s.retryAttempt,
+				FinalError: "Retry cancelled",
+			}
+			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		}
+		return true
+	case <-time.After(time.Duration(delayMs) * time.Millisecond):
+	}
+	s.mu.Lock()
+
+	if s.closed {
+		return true
+	}
+
+	// Retry the turn (unlock for blocking call)
+	s.mu.Unlock()
+	_, retryErr := s.agent.Continue(ctx)
+	s.mu.Lock()
+
+	if s.closed {
+		return true
+	}
+
+	if retryErr == nil || errors.Is(retryErr, context.Canceled) {
+		s.events <- session.AutoRetryEndEvent{
+			Base:    session.BaseNow(),
+			Success: true,
+			Attempt: s.retryAttempt,
+		}
+		s.retryAttempt = 0
+		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		return true
+	}
+
+	// Retry failed — handle the new error (may retry again)
+	s.handlePostAgentRun(ctx, retryErr)
+	return true
+}
+
+// emitErrorAndFinished emits an error event and turn finished event.
+// Caller must hold s.mu.
+func (s *SessionAdapter) emitErrorAndFinished(err error) {
 	s.events <- session.ErrorEvent{
 		Base:  session.BaseNow(),
 		Err:   err,
@@ -652,4 +667,21 @@ func (s *SessionAdapter) needsCompaction() bool {
 // Caller must hold s.mu.
 func (s *SessionAdapter) resetContextTokens() {
 	s.contextTokens = 0
+}
+
+// runCompaction runs the compaction function if available.
+// Caller must NOT hold s.mu (blocking call).
+func (s *SessionAdapter) runCompaction(ctx context.Context) (bool, error) {
+	s.mu.Lock()
+	compactFn := s.config.CompactFunc
+	closed := s.closed
+	s.mu.Unlock()
+
+	if closed {
+		return false, fmt.Errorf("session is closed")
+	}
+	if compactFn == nil {
+		return false, nil
+	}
+	return compactFn(ctx)
 }
