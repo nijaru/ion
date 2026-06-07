@@ -52,6 +52,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.activePreset() == presetFast {
 			return m.switchPresetCommand(presetPrimary)
 		}
+		// If no fast model is configured, open the model picker for fast preset
+		cfg, _ := m.commandConfig()
+		if cfg != nil && strings.TrimSpace(cfg.FastModel) == "" {
+			return m.openModelPickerForPreset(cfg, presetFast)
+		}
 		return m.switchPresetCommand(presetFast)
 
 	case "ctrl+t":
