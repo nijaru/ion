@@ -838,9 +838,6 @@ func (a *Agent) shouldExecuteSequentially(config AgentLoopConfig, calls []AgentT
 	if config.ToolExecutionMode == ToolExecutionSequential {
 		return true
 	}
-	if config.ToolExecutionMode == ToolExecutionParallel {
-		return !a.allToolsParallel(calls)
-	}
 	return !a.allToolsParallel(calls)
 }
 
