@@ -366,6 +366,12 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.TurnEnd:
 		return m.handleTurnFinished()
 
+	case session.AgentStart:
+		return m, m.awaitSessionEvent()
+
+	case session.AgentEnd:
+		return m, m.awaitSessionEvent()
+
 	case session.ThinkingDelta:
 		return m.handleThinkingDelta(msg)
 

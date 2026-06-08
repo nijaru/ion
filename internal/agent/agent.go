@@ -95,43 +95,53 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 }
 
 // Run starts the agent loop with the given prompt messages.
-// It returns the new messages added during the loop.
-// Always emits TurnEnd when done (matching Pi's agent_end contract).
+// It returns the new messages added during the run.
+// Emits AgentStart at the beginning and AgentEnd when done (Pi parity).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
+	a.emit(session.AgentStart{Base: session.BaseNow()})
+
 	newMessages, err := a.acceptPrompts(ctx, prompts)
 	if err != nil {
 		a.mu.Lock()
 		a.state.ErrorMessage = err.Error()
 		a.mu.Unlock()
+		a.emit(session.AgentEnd{Base: session.BaseNow()})
 		return newMessages, err
 	}
 
 	newMessages, runErr := a.execute(ctx, &newMessages)
-	a.emit(session.TurnEnd{Base: session.BaseNow()})
+	a.emit(session.AgentEnd{Base: session.BaseNow()})
 	return newMessages, runErr
 }
 
 // Continue continues the agent loop without adding new messages.
-// Used for retries - context already has user message or tool results.
-// Does NOT emit TurnEnd (the caller owns lifecycle events).
+// Used for retries — context already has user message or tool results.
+// Emits AgentStart at the beginning and AgentEnd when done (Pi parity).
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
+	a.emit(session.AgentStart{Base: session.BaseNow()})
+
 	a.mu.RLock()
 	if len(a.state.Messages) == 0 {
 		a.mu.RUnlock()
+		a.emit(session.AgentEnd{Base: session.BaseNow()})
 		return nil, fmt.Errorf("cannot continue: no messages in context")
 	}
 	lastMsg := a.state.Messages[len(a.state.Messages)-1]
 	a.mu.RUnlock()
 
 	if lastMsg.Role == "assistant" {
+		a.emit(session.AgentEnd{Base: session.BaseNow()})
 		return nil, fmt.Errorf("cannot continue from message role: assistant")
 	}
 
-	return a.execute(ctx, new([]AgentMessage))
+	newMessages, runErr := a.execute(ctx, new([]AgentMessage))
+	a.emit(session.AgentEnd{Base: session.BaseNow()})
+	return newMessages, runErr
 }
 
 // execute runs the main loop with streaming state management.
-// Shared by Run and Continue.
+// Shared by Run and Continue. Does NOT emit lifecycle events (AgentStart/AgentEnd)
+// — callers own those. Emits per-batch TurnEnd inside runLoop.
 func (a *Agent) execute(ctx context.Context, newMessages *[]AgentMessage) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true

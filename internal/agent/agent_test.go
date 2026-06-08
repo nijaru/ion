@@ -109,10 +109,12 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	}
 
 	// Verify event sequence
-	var gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnFinished bool
+	var gotAgentStart, gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotAgentEnd bool
 
 	for _, ev := range events {
 		switch msg := ev.(type) {
+		case session.AgentStart:
+			gotAgentStart = true
 		case session.UserMessage:
 			if msg.Message == "run test" {
 				gotUserMessage = true
@@ -129,11 +131,14 @@ func TestAgentEventsAndLoop(t *testing.T) {
 			gotToolCallStarted = true
 		case session.ToolCallEnd:
 			gotToolResult = true
-		case session.TurnEnd:
-			gotTurnFinished = true
+		case session.AgentEnd:
+			gotAgentEnd = true
 		}
 	}
 
+	if !gotAgentStart {
+		t.Error("missing AgentStart event")
+	}
 	if !gotUserMessage {
 		t.Error("missing UserMessage event")
 	}
@@ -155,8 +160,8 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	if !gotToolResult {
 		t.Error("missing ToolResult event")
 	}
-	if !gotTurnFinished {
-		t.Error("missing TurnFinished event")
+	if !gotAgentEnd {
+		t.Error("missing AgentEnd event")
 	}
 }
 
@@ -178,12 +183,12 @@ func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if len(events) == 0 {
-		t.Fatal("missing events")
+	if len(events) < 2 {
+		t.Fatalf("too few events: %d", len(events))
 	}
-	msg, ok := events[0].(session.UserMessage)
+	msg, ok := events[1].(session.UserMessage)
 	if !ok || msg.Message != "project me" {
-		t.Fatalf("first event = %#v, want prompt UserMessage", events[0])
+		t.Fatalf("second event = %#v, want prompt UserMessage after AgentStart", events[1])
 	}
 }
 

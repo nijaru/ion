@@ -44,6 +44,22 @@ type StatusChange struct {
 
 func (e StatusChange) isAgentEvent() {}
 
+// AgentStart fires when the agent loop begins processing (Run or Continue).
+// Pi equivalent: agent_start.
+type AgentStart struct {
+	Base
+}
+
+func (e AgentStart) isAgentEvent() {}
+
+// AgentEnd fires when the agent loop terminates (shouldStopAfterTurn, error,
+// abort, or natural completion). Pi equivalent: agent_end.
+type AgentEnd struct {
+	Base
+}
+
+func (e AgentEnd) isAgentEvent() {}
+
 // AgentDelta is an incremental chunk of agent output text.
 type AgentDelta struct {
 	Base
