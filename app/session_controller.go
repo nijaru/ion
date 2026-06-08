@@ -363,9 +363,6 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.TurnStart:
 		return m.handleTurnStarted(msg)
 
-	case session.TurnSavePoint:
-		return m, m.awaitSessionEvent()
-
 	case session.TurnEnd:
 		return m.handleTurnFinished()
 
@@ -389,9 +386,6 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 
 	case session.ToolCallEnd:
 		return m.handleToolResult(msg)
-
-	case session.VerificationResult:
-		return m, m.awaitSessionEvent()
 
 	case session.ChildRequest:
 		return m.handleChildRequested(msg)

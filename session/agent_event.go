@@ -44,14 +44,6 @@ type StatusChange struct {
 
 func (e StatusChange) isAgentEvent() {}
 
-// PlanUpdated fires when the agent's internal plan of execution changes.
-type PlanUpdate struct {
-	Base
-	Plan string `json:"plan"`
-}
-
-func (e PlanUpdate) isAgentEvent() {}
-
 // AgentDelta is an incremental chunk of agent output text.
 type AgentDelta struct {
 	Base
@@ -116,18 +108,6 @@ type ToolOutputDelta struct {
 
 func (e ToolOutputDelta) isAgentEvent() {}
 
-// VerificationResult fires when an objective function (test, benchmark,
-// compile check) completes. Essential for RLM loops.
-type VerificationResult struct {
-	Base
-	Command string `json:"command"`
-	Passed  bool   `json:"passed"`
-	Metric  string `json:"metric,omitempty"`
-	Output  string `json:"output,omitempty"`
-}
-
-func (e VerificationResult) isAgentEvent() {}
-
 // ApprovalRequest is emitted by optional compatibility backends that support
 // host-mediated permission prompts. The native Ion path does not emit it.
 type ApprovalRequest struct {
@@ -154,14 +134,6 @@ type TurnEnd struct {
 }
 
 func (e TurnEnd) isAgentEvent() {}
-
-// TurnSavePoint fires when the backend has flushed durable writes for a turn.
-type TurnSavePoint struct {
-	Base
-	HadPendingMutations bool `json:"had_pending_mutations,omitempty"`
-}
-
-func (e TurnSavePoint) isAgentEvent() {}
 
 // Error represents a recoverable or fatal error in the session.
 type TurnError struct {
