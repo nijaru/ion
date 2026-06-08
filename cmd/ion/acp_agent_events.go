@@ -49,11 +49,6 @@ func (a *ionACPAgent) forwardEvent(
 			return false, "", err
 		}
 		return false, "", nil
-	case session.TurnError:
-		if e.Err != nil {
-			return false, "", e.Err
-		}
-		return false, "", fmt.Errorf("session error")
 	default:
 		return false, "", nil
 	}

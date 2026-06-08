@@ -56,6 +56,7 @@ func (e AgentStart) isAgentEvent() {}
 // abort, or natural completion). Pi equivalent: agent_end.
 type AgentEnd struct {
 	Base
+	Error error `json:"error,omitempty"`
 }
 
 func (e AgentEnd) isAgentEvent() {}
@@ -149,21 +150,14 @@ type TurnStart struct {
 
 func (e TurnStart) isAgentEvent() {}
 
-// TurnFinished fires when the backend has finished its generation cycle for a turn.
+// TurnEnd fires when the backend has finished its generation cycle for a turn.
+// If Error is set, the turn ended due to an error (Pi: turn_end with errorMessage).
 type TurnEnd struct {
 	Base
+	Error error `json:"error,omitempty"`
 }
 
 func (e TurnEnd) isAgentEvent() {}
-
-// Error represents a recoverable or fatal error in the session.
-type TurnError struct {
-	Base
-	Err   error `json:"err"`
-	Fatal bool  `json:"fatal"`
-}
-
-func (e TurnError) isAgentEvent() {}
 
 // ChildRequested fires when the main agent requests a child execution.
 type ChildRequest struct {

@@ -448,7 +448,7 @@ func TestPrintModeReturnsSubmitError(t *testing.T) {
 
 func TestPrintModeReturnsSessionError(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 1)}
-	sess.events <- session.TurnError{Err: errors.New("rate limited")}
+	sess.events <- session.TurnEnd{Error: errors.New("rate limited")}
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
@@ -461,10 +461,10 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 
 func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 1)}
-	sess.events <- session.TurnError{}
+	sess.events <- session.TurnEnd{Error: errors.New("session error")}
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
-	if err == nil || err.Error() != "session error" {
+	if err == nil || !strings.Contains(err.Error(), "session error") {
 		t.Fatalf("runPromptTurn error = %v, want fallback session error", err)
 	}
 	if sess.cancelled != 1 {

@@ -1036,7 +1036,7 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
 	model.Progress.LastError = "old error"
 
-	next, _ := model.Update(session.TurnError{Err: errors.New("backend failed")})
+	next, _ := model.Update(session.TurnEnd{Error: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if len(model.InFlight.QueuedTurns) != 0 {
@@ -1056,7 +1056,7 @@ func TestSessionErrorPersistenceFailureKeepsReducerArmed(t *testing.T) {
 	model.Model.Storage = storageSess
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
 
-	next, cmd := model.Update(session.TurnError{Err: errors.New("backend failed")})
+	next, cmd := model.Update(session.TurnEnd{Error: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError {
@@ -1090,7 +1090,7 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.TurnError{Err: errors.New("backend failed")})
+	next, cmd := model.Update(session.TurnEnd{Error: errors.New("backend failed")})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError || model.Progress.LastError != "backend failed" {
@@ -1136,7 +1136,7 @@ func TestSessionErrorPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T
 func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
 	model := readyModel(t)
 
-	next, _ := model.Update(session.TurnError{})
+	next, _ := model.Update(session.TurnEnd{Error: errors.New("session error")})
 	model = testModel(t, next)
 
 	if model.Progress.Mode != stateError {
@@ -1152,8 +1152,8 @@ func TestSessionErrorSoftensEmptyAssistantResponse(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.TurnError{
-		Err: errors.New(
+	next, cmd := model.Update(session.TurnEnd{
+		Error: errors.New(
 			"assistant response has no content, reasoning, thinking blocks, or tool calls",
 		),
 	})
@@ -1340,7 +1340,7 @@ func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("error, status code: 429 Too Many Requests: rate limit exceeded")
-	next, cmd := model.Update(session.TurnError{Err: err})
+	next, cmd := model.Update(session.TurnEnd{Error: err})
 	model = testModel(t, next)
 	runSequencePrefix(t, cmd, 3)
 
@@ -1377,7 +1377,7 @@ func TestSessionErrorClassifiesProviderQuotaLimit(t *testing.T) {
 	model.Model.Storage = storageSess
 
 	err := errors.New("insufficient_quota: billing hard limit has been reached")
-	next, cmd := model.Update(session.TurnError{Err: err})
+	next, cmd := model.Update(session.TurnEnd{Error: err})
 	model = testModel(t, next)
 	runSequencePrefix(t, cmd, 2)
 

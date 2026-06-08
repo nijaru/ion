@@ -117,13 +117,11 @@ func runPromptTurn(
 				result.InputTokens += msg.InputTokens
 				result.OutputTokens += msg.OutputTokens
 				result.Cost += msg.Cost
-			case session.TurnError:
-				cancelPrintTurn(agent)
-				if msg.Err == nil {
-					return printResult{}, fmt.Errorf("session error")
-				}
-				return printResult{}, fmt.Errorf("session error: %w", msg.Err)
 			case session.TurnEnd:
+				if msg.Error != nil {
+					cancelPrintTurn(agent)
+					return printResult{}, fmt.Errorf("session error: %w", msg.Error)
+				}
 				seenTurnFinished = true
 			}
 			if seenTurnFinished {

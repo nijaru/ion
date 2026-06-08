@@ -105,12 +105,12 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		a.mu.Lock()
 		a.state.ErrorMessage = err.Error()
 		a.mu.Unlock()
-		a.emit(session.AgentEnd{Base: session.BaseNow()})
+		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
 		return newMessages, err
 	}
 
 	newMessages, runErr := a.execute(ctx, &newMessages)
-	a.emit(session.AgentEnd{Base: session.BaseNow()})
+	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: runErr})
 	return newMessages, runErr
 }
 
@@ -123,19 +123,21 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	a.mu.RLock()
 	if len(a.state.Messages) == 0 {
 		a.mu.RUnlock()
-		a.emit(session.AgentEnd{Base: session.BaseNow()})
-		return nil, fmt.Errorf("cannot continue: no messages in context")
+		err := fmt.Errorf("cannot continue: no messages in context")
+		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
+		return nil, err
 	}
 	lastMsg := a.state.Messages[len(a.state.Messages)-1]
 	a.mu.RUnlock()
 
 	if lastMsg.Role == "assistant" {
-		a.emit(session.AgentEnd{Base: session.BaseNow()})
-		return nil, fmt.Errorf("cannot continue from message role: assistant")
+		err := fmt.Errorf("cannot continue from message role: assistant")
+		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
+		return nil, err
 	}
 
 	newMessages, runErr := a.execute(ctx, new([]AgentMessage))
-	a.emit(session.AgentEnd{Base: session.BaseNow()})
+	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: runErr})
 	return newMessages, runErr
 }
 

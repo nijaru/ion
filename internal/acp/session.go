@@ -336,10 +336,10 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 			Prompt:    []acp.ContentBlock{acp.TextBlock(input)},
 		})
 		if err != nil && !isPromptCancellation(err) {
-			base := session.BaseNow()
-			s.emit(session.TurnError{Base: base, Err: fmt.Errorf("prompt: %w", err)})
+			s.emit(session.TurnEnd{Base: session.BaseNow(), Error: fmt.Errorf("prompt: %w", err)})
+		} else {
+			s.emit(session.TurnEnd{Base: session.BaseNow()})
 		}
-		s.emit(session.TurnEnd{Base: session.BaseNow()})
 	})
 
 	return nil

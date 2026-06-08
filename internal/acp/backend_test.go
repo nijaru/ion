@@ -382,9 +382,10 @@ func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
 		select {
 		case ev := <-client.events:
 			switch msg := ev.(type) {
-			case session.TurnError:
-				t.Fatalf("cancel emitted prompt error: %v", msg.Err)
 			case session.TurnEnd:
+				if msg.Error != nil {
+					t.Fatalf("cancel emitted prompt error: %v", msg.Error)
+				}
 				return
 			}
 		case <-deadline:

@@ -173,15 +173,12 @@ func TestAwaitSessionEventReportsMissingSession(t *testing.T) {
 	if !ok {
 		t.Fatalf("await message = %T, want sessionEventMsg", msg)
 	}
-	errEvent, ok := eventMsg.event.(session.TurnError)
+	turnEnd, ok := eventMsg.event.(session.TurnEnd)
 	if !ok {
-		t.Fatalf("session event = %T, want session.TurnError", eventMsg.event)
+		t.Fatalf("session event = %T, want session.TurnEnd", eventMsg.event)
 	}
-	if errEvent.Err == nil || !strings.Contains(errEvent.Err.Error(), "session unavailable") {
-		t.Fatalf("session error = %v, want missing-session error", errEvent.Err)
-	}
-	if !errEvent.Fatal {
-		t.Fatal("missing session error should be fatal")
+	if turnEnd.Error == nil || !strings.Contains(turnEnd.Error.Error(), "session unavailable") {
+		t.Fatalf("session error = %v, want missing-session error", turnEnd.Error)
 	}
 }
 
@@ -194,16 +191,13 @@ func TestAwaitSessionEventReportsMissingEventStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("await message = %T, want sessionEventMsg", msg)
 	}
-	errEvent, ok := eventMsg.event.(session.TurnError)
+	turnEnd, ok := eventMsg.event.(session.TurnEnd)
 	if !ok {
-		t.Fatalf("session event = %T, want session.TurnError", eventMsg.event)
+		t.Fatalf("session event = %T, want session.TurnEnd", eventMsg.event)
 	}
-	if errEvent.Err == nil ||
-		!strings.Contains(errEvent.Err.Error(), "session event stream unavailable") {
-		t.Fatalf("session error = %v, want missing-stream error", errEvent.Err)
-	}
-	if !errEvent.Fatal {
-		t.Fatal("missing event stream error should be fatal")
+	if turnEnd.Error == nil ||
+		!strings.Contains(turnEnd.Error.Error(), "session event stream unavailable") {
+		t.Fatalf("session error = %v, want missing-stream error", turnEnd.Error)
 	}
 }
 

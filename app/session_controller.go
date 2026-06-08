@@ -303,10 +303,9 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.TurnError{
+				event: session.TurnEnd{
 					Base:  session.BaseNow(),
-					Err:   errors.New("session unavailable"),
-					Fatal: true,
+					Error: errors.New("session unavailable"),
 				},
 			}
 		}
@@ -316,10 +315,9 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.TurnError{
+				event: session.TurnEnd{
 					Base:  session.BaseNow(),
-					Err:   errors.New("session event stream unavailable"),
-					Fatal: true,
+					Error: errors.New("session event stream unavailable"),
 				},
 			}
 		}
@@ -361,6 +359,9 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 		return m.handleTurnStarted(msg)
 
 	case session.TurnEnd:
+		if msg.Error != nil {
+			return m.handleSessionError(msg.Error, true)
+		}
 		return m.handleTurnFinished()
 
 	case session.AgentStart:
@@ -410,9 +411,6 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 
 	case session.ChildCancel:
 		return m.handleChildCanceled(msg)
-
-	case session.TurnError:
-		return m.handleSessionError(msg.Err, true)
 	}
 
 	return m, m.awaitSessionEvent()

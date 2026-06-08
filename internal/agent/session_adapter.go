@@ -390,13 +390,13 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	_, retryErr := s.agent.Continue(ctx)
 	if !s.closed {
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			s.events <- session.TurnError{
+			s.events <- session.TurnEnd{
 				Base:  session.BaseNow(),
-				Err:   retryErr,
-				Fatal: true,
+				Error: retryErr,
 			}
+		} else {
+			s.events <- session.TurnEnd{Base: session.BaseNow()}
 		}
-		s.events <- session.TurnEnd{Base: session.BaseNow()}
 	}
 	return true
 }
@@ -464,15 +464,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	return true
 }
 
-// emitErrorAndFinished emits an error event and turn finished event.
+// emitErrorAndFinished emits a TurnEnd event with an error.
 // Caller must hold s.mu.
 func (s *SessionAdapter) emitErrorAndFinished(err error) {
-	s.events <- session.TurnError{
+	s.events <- session.TurnEnd{
 		Base:  session.BaseNow(),
-		Err:   err,
-		Fatal: true,
+		Error: err,
 	}
-	s.events <- session.TurnEnd{Base: session.BaseNow()}
 }
 
 func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Message) error {

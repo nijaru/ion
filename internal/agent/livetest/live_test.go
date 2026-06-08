@@ -183,7 +183,7 @@ func newLiveAdapter(t *testing.T) (*agent.SessionAdapter, session.SessionStore, 
 	return adapter, store, sess
 }
 
-// collectEvents drains the event channel until TurnEnd, TurnError
+// collectEvents drains the event channel until TurnEnd
 // (if fatal), or timeout. Returns all collected events.
 func collectEvents(t *testing.T, ch <-chan session.AgentEvent, timeout time.Duration) []session.AgentEvent {
 	t.Helper()
@@ -200,8 +200,6 @@ func collectEvents(t *testing.T, ch <-chan session.AgentEvent, timeout time.Dura
 			switch ev.(type) {
 			case session.TurnEnd:
 				return events
-			case session.TurnError:
-				// Keep collecting — TurnEnd follows
 			}
 		case <-timer.C:
 			t.Fatalf("timed out after %s waiting for terminal event; got %d events", timeout, len(events))
@@ -257,8 +255,8 @@ func TestLiveStreaming(t *testing.T) {
 
 	// No fatal errors
 	for _, ev := range events {
-		if err, ok := ev.(session.TurnError); ok && err.Fatal {
-			t.Fatalf("fatal error during streaming: %v", err.Err)
+		if err, ok := ev.(session.TurnEnd); ok && err.Error != nil {
+			t.Fatalf("fatal error during streaming: %v", err.Error)
 		}
 	}
 
@@ -320,8 +318,8 @@ func TestLiveToolCalls(t *testing.T) {
 
 	// No fatal errors
 	for _, ev := range events {
-		if err, ok := ev.(session.TurnError); ok && err.Fatal {
-			t.Fatalf("fatal error during tool call: %v", err.Err)
+		if err, ok := ev.(session.TurnEnd); ok && (err.Error != nil) {
+			t.Fatalf("fatal error during tool call: %v", err.Error)
 		}
 	}
 
@@ -343,12 +341,14 @@ func TestLiveCancel(t *testing.T) {
 	for !started {
 		select {
 		case ev := <-adapter.Events():
-			switch ev.(type) {
+			switch e := ev.(type) {
 			case session.TurnStart, session.AgentDelta:
 				started = true
-			case session.TurnError:
-				// Provider error before we could cancel — skip
-				t.Skipf("provider error before cancel: %v", ev.(session.TurnError).Err)
+			case session.TurnEnd:
+				if e.Error != nil {
+					// Provider error before we could cancel — skip
+					t.Skipf("provider error before cancel: %v", e.Error)
+				}
 			}
 		case <-timeout.C:
 			t.Skip("stream never started within 15s")
@@ -368,8 +368,8 @@ func TestLiveCancel(t *testing.T) {
 
 	// Cancel should not produce a fatal error
 	for _, ev := range events {
-		if err, ok := ev.(session.TurnError); ok && err.Fatal {
-			t.Fatalf("fatal error after cancel: %v", err.Err)
+		if err, ok := ev.(session.TurnEnd); ok && (err.Error != nil) {
+			t.Fatalf("fatal error after cancel: %v", err.Error)
 		}
 	}
 
@@ -502,14 +502,17 @@ func TestLiveProviderErrors(t *testing.T) {
 	events := collectEvents(t, adapter.Events(), 30*time.Second)
 
 	// Should get an error event
-	if !hasEvent[session.TurnError](events) {
-		t.Fatal("expected TurnError for bad model, got none")
+	if !hasEvent[session.TurnEnd](events) {
+		t.Fatal("expected TurnEnd with error for bad model, got none")
 	}
 
 	// Error should be user-friendly (not raw HTTP dump)
-	errEvents := findEvents[session.TurnError](events)
+	errEvents := findEvents[session.TurnEnd](events)
 	for _, ev := range errEvents {
-		errMsg := ev.Err.Error()
+		if ev.Error == nil {
+			continue
+		}
+		errMsg := ev.Error.Error()
 		// Should not be empty
 		if errMsg == "" {
 			t.Error("empty error message")

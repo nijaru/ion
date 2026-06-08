@@ -313,10 +313,11 @@ func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 	for !sawFinished {
 		select {
 		case ev := <-adapter.Events():
-			switch ev.(type) {
-			case session.TurnError:
-				t.Fatalf("cancel emitted session error: %#v", ev)
+			switch e := ev.(type) {
 			case session.TurnEnd:
+				if e.Error != nil {
+					t.Fatalf("cancel emitted session error: %#v", ev)
+				}
 				sawFinished = true
 			}
 		case <-time.After(time.Second):

@@ -418,7 +418,7 @@ func p1MatrixProviderError(t *testing.T) {
 	model = applyP1Events(
 		t, model,
 		session.TurnStart{},
-		session.TurnError{Err: errors.New("provider failed while streaming")},
+		session.TurnEnd{Error: errors.New("provider failed while streaming")},
 	)
 
 	if model.Progress.Mode != stateError {

@@ -334,7 +334,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.TurnError{Err: fmt.Errorf("smoke provider failure")})
+		b.emit(ctx, session.TurnEnd{Base: session.BaseNow(), Error: fmt.Errorf("smoke provider failure")})
 	case "controls":
 		b.runActiveControlsScript(ctx, input)
 	case "files":
@@ -499,7 +499,7 @@ func (b *smokeBackend) emit(ctx context.Context, event session.AgentEvent) bool 
 	if err := b.persistEvent(ctx, event); err != nil {
 		select {
 		case <-ctx.Done():
-		case b.events <- session.TurnError{Err: fmt.Errorf("persist smoke event: %w", err)}:
+		case b.events <- session.TurnEnd{Base: session.BaseNow(), Error: fmt.Errorf("persist smoke event: %w", err)}:
 		}
 		return false
 	}

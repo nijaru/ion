@@ -251,7 +251,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.TurnError{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd := model.Update(session.TurnEnd{Error: errors.New("status 429: rate limit exceeded")})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 2)
 
@@ -282,7 +282,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 	updated, cmd := model.Update(session.AgentMessage{InputTokens: 20, OutputTokens: 3, Cost: 0.02})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
-	updated, cmd = model.Update(session.TurnError{Err: errors.New("status 429: rate limit exceeded")})
+	updated, cmd = model.Update(session.TurnEnd{Error: errors.New("status 429: rate limit exceeded")})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 3)
 
