@@ -42,20 +42,20 @@ func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
 	backend.SetCantoEventStore(eventStore)
 
 	for _, event := range []session.AgentEvent{
-		session.UserMessageEvent{Message: "build deterministic resume transcript"},
-		session.TurnStartedEvent{},
-		session.ToolCallStartedEvent{
+		session.UserMessage{Message: "build deterministic resume transcript"},
+		session.TurnStart{},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
 		},
-		session.ToolResultEvent{
+		session.ToolCallEnd{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Result:    "ion-tmux-smoke\n",
 		},
-		session.AgentMessageEvent{Message: "done"},
-		session.TurnFinishedEvent{},
+		session.AgentMessage{Message: "done"},
+		session.TurnEnd{},
 	} {
 		if !backend.emit(ctx, event) {
 			t.Fatalf("emit failed for %T", event)

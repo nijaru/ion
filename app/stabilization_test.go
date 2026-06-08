@@ -15,7 +15,7 @@ func TestToolStreaming(t *testing.T) {
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
 	// 1. Tool started
-	updated, _ := m.Update(session.ToolCallStartedEvent{
+	updated, _ := m.Update(session.ToolCallStart{
 		ToolName: "bash",
 		Args:     "ls",
 	})
@@ -26,7 +26,7 @@ func TestToolStreaming(t *testing.T) {
 	}
 
 	// 2. Output delta
-	updated, _ = m.Update(session.ToolOutputDeltaEvent{Delta: "file1.txt\n"})
+	updated, _ = m.Update(session.ToolOutputDelta{Delta: "file1.txt\n"})
 	m = testModel(t, updated)
 
 	if m.InFlight.Pending.Content != "file1.txt\n" {
@@ -34,7 +34,7 @@ func TestToolStreaming(t *testing.T) {
 	}
 
 	// 3. Tool result
-	updated, cmd := m.Update(session.ToolResultEvent{
+	updated, cmd := m.Update(session.ToolCallEnd{
 		ToolName: "bash",
 		Result:   "file1.txt\nfile2.txt\n",
 	})
@@ -88,14 +88,14 @@ func TestAsyncSubagents(t *testing.T) {
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
 	// 1. Worker 1 requested
-	updated, _ := m.Update(session.ChildRequestedEvent{
+	updated, _ := m.Update(session.ChildRequest{
 		AgentName: "worker-1",
 		Query:     "task 1",
 	})
 	m = testModel(t, updated)
 
 	// 2. Worker 2 requested
-	updated, _ = m.Update(session.ChildRequestedEvent{
+	updated, _ = m.Update(session.ChildRequest{
 		AgentName: "worker-2",
 		Query:     "task 2",
 	})
@@ -106,14 +106,14 @@ func TestAsyncSubagents(t *testing.T) {
 	}
 
 	// 3. Worker 1 progresses
-	updated, _ = m.Update(session.ChildDeltaEvent{
+	updated, _ = m.Update(session.ChildDelta{
 		AgentName: "worker-1",
 		Delta:     "working on 1...",
 	})
 	m = testModel(t, updated)
 
 	// 4. Worker 2 progresses
-	updated, _ = m.Update(session.ChildDeltaEvent{
+	updated, _ = m.Update(session.ChildDelta{
 		AgentName: "worker-2",
 		Delta:     "working on 2...",
 	})
@@ -127,7 +127,7 @@ func TestAsyncSubagents(t *testing.T) {
 	}
 
 	// 5. Worker 1 completes
-	updated, _ = m.Update(session.ChildCompletedEvent{
+	updated, _ = m.Update(session.ChildComplete{
 		AgentName: "worker-1",
 		Result:    "result 1",
 	})
@@ -149,7 +149,7 @@ func TestSubagentCollapseRule(t *testing.T) {
 	// 1. Request 5 workers
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("worker-%d", i)
-		updated, _ := m.Update(session.ChildRequestedEvent{
+		updated, _ := m.Update(session.ChildRequest{
 			AgentName: name,
 			Query:     "task",
 		})

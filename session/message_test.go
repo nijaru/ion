@@ -12,9 +12,9 @@ func TestMessageHelpers(t *testing.T) {
 		msg  llm.Message
 		role llm.Role
 	}{
-		{name: "user", msg: UserMessage("hi"), role: llm.RoleUser},
-		{name: "system", msg: SystemMessage("rules"), role: llm.RoleSystem},
-		{name: "assistant", msg: AssistantMessage("ok"), role: llm.RoleAssistant},
+		{name: "user", msg: userMessage("hi"), role: llm.RoleUser},
+		{name: "system", msg: systemMessage("rules"), role: llm.RoleSystem},
+		{name: "assistant", msg: assistantMessage("ok"), role: llm.RoleAssistant},
 	}
 
 	for _, tt := range tests {
@@ -36,7 +36,7 @@ func TestMessageHelpers(t *testing.T) {
 }
 
 func TestToolMessage(t *testing.T) {
-	msg := ToolMessage("bash", "call-1", "done")
+	msg := toolMessage("bash", "call-1", "done")
 	if msg.Role != llm.RoleTool {
 		t.Fatalf("role = %q, want %q", msg.Role, llm.RoleTool)
 	}

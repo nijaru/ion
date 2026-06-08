@@ -137,7 +137,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 				return
 			}
 			// Track token usage for compaction threshold
-			if usage, ok := ev.(session.TokenUsageEvent); ok {
+			if usage, ok := ev.(session.TokenUsage); ok {
 				s.updateContextTokens(usage.Input, usage.Output)
 			}
 			s.events <- ev
@@ -198,7 +198,7 @@ func (s *SessionAdapter) emitQueueUpdatedLocked() {
 		Steering: append([]string(nil), s.steeringQueue...),
 		FollowUp: append([]string(nil), s.followUpQueue...),
 	}
-	s.events <- session.QueuedInputUpdatedEvent{
+	s.events <- session.QueuedInputUpdate{
 		Base:     session.BaseNow(),
 		Snapshot: snapshot,
 	}
@@ -214,7 +214,7 @@ func (s *SessionAdapter) Open(ctx context.Context) error {
 	}
 
 	// Emit metadata loaded event
-	s.events <- session.MetadataLoadedEvent{
+	s.events <- session.MetadataLoad{
 		Base:      session.BaseNow(),
 		SessionID: s.id,
 	}
@@ -240,7 +240,7 @@ func (s *SessionAdapter) Resume(ctx context.Context, sessionID string) error {
 	}
 
 	// Emit metadata loaded event
-	s.events <- session.MetadataLoadedEvent{
+	s.events <- session.MetadataLoad{
 		Base:      session.BaseNow(),
 		SessionID: s.id,
 	}
@@ -265,7 +265,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 
 	// Check if auto-compaction is needed before submitting
 	if s.needsCompaction() && s.config.CompactFunc != nil {
-		s.events <- session.CompactionTriggeredEvent{
+		s.events <- session.CompactionTrigger{
 			Base:   session.BaseNow(),
 			Reason: "threshold",
 		}
@@ -274,7 +274,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 		s.mu.Lock()
 		if err != nil {
 			// Log compaction error but continue with the turn
-			s.events <- session.AutoRetryEndEvent{
+			s.events <- session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
@@ -333,7 +333,7 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 	// Success or cancellation
 	if err == nil || errors.Is(err, context.Canceled) {
 		s.retryAttempt = 0
-		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		s.events <- session.TurnEnd{Base: session.BaseNow()}
 		return
 	}
 
@@ -361,7 +361,7 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 // recoverFromOverflow handles context overflow by compacting and retrying.
 // Returns true if recovery succeeded or was attempted. Caller must hold s.mu.
 func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
-	s.events <- session.CompactionTriggeredEvent{
+	s.events <- session.CompactionTrigger{
 		Base:   session.BaseNow(),
 		Reason: "overflow",
 	}
@@ -374,12 +374,12 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	compacted, err := s.runCompaction(ctx)
 	if err != nil {
 		if !s.closed {
-			s.events <- session.AutoRetryEndEvent{
+			s.events <- session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
 			}
-			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+			s.events <- session.TurnEnd{Base: session.BaseNow()}
 		}
 		return true
 	}
@@ -390,13 +390,13 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	_, retryErr := s.agent.Continue(ctx)
 	if !s.closed {
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			s.events <- session.ErrorEvent{
+			s.events <- session.TurnError{
 				Base:  session.BaseNow(),
 				Err:   retryErr,
 				Fatal: true,
 			}
 		}
-		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		s.events <- session.TurnEnd{Base: session.BaseNow()}
 	}
 	return true
 }
@@ -407,7 +407,7 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	s.retryAttempt++
 	delayMs := s.config.GetRetryBaseDelayMs() * (1 << (s.retryAttempt - 1))
 
-	s.events <- session.AutoRetryStartEvent{
+	s.events <- session.AutoRetryStart{
 		Base:       session.BaseNow(),
 		Attempt:    s.retryAttempt,
 		MaxAttempt: s.config.GetMaxRetries(),
@@ -422,13 +422,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	case <-ctx.Done():
 		s.mu.Lock()
 		if !s.closed {
-			s.events <- session.AutoRetryEndEvent{
+			s.events <- session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				Attempt:    s.retryAttempt,
 				FinalError: "Retry cancelled",
 			}
-			s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+			s.events <- session.TurnEnd{Base: session.BaseNow()}
 		}
 		return true
 	case <-time.After(time.Duration(delayMs) * time.Millisecond):
@@ -449,13 +449,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	}
 
 	if retryErr == nil || errors.Is(retryErr, context.Canceled) {
-		s.events <- session.AutoRetryEndEvent{
+		s.events <- session.AutoRetryEnd{
 			Base:    session.BaseNow(),
 			Success: true,
 			Attempt: s.retryAttempt,
 		}
 		s.retryAttempt = 0
-		s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+		s.events <- session.TurnEnd{Base: session.BaseNow()}
 		return true
 	}
 
@@ -467,12 +467,12 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 // emitErrorAndFinished emits an error event and turn finished event.
 // Caller must hold s.mu.
 func (s *SessionAdapter) emitErrorAndFinished(err error) {
-	s.events <- session.ErrorEvent{
+	s.events <- session.TurnError{
 		Base:  session.BaseNow(),
 		Err:   err,
 		Fatal: true,
 	}
-	s.events <- session.TurnFinishedEvent{Base: session.BaseNow()}
+	s.events <- session.TurnEnd{Base: session.BaseNow()}
 }
 
 func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Message) error {

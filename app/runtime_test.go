@@ -808,7 +808,7 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 	))
 	model = testModel(t, next)
 
-	oldSession.events <- session.AgentDeltaEvent{Delta: "stale output"}
+	oldSession.events <- session.AgentDelta{Delta: "stale output"}
 	next, cmd := model.Update(waitOld())
 	model = testModel(t, next)
 
@@ -826,7 +826,7 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 		t.Fatalf("mode = %v, want ready after stale event", model.Progress.Mode)
 	}
 
-	newSession.events <- session.TurnStartedEvent{}
+	newSession.events <- session.TurnStart{}
 	next, _ = model.Update(model.awaitSessionEvent()())
 	model = testModel(t, next)
 

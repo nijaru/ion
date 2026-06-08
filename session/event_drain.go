@@ -25,17 +25,17 @@ func DecideEventDrain(input EventDrainInput) EventDrainDecision {
 		return EventDrainDecision{Action: EventDrainProcess}
 	}
 	switch ev := input.Event.(type) {
-	case UserMessageEvent:
+	case UserMessage:
 		if eventAtOrBefore(ev.Timestamp, input.DrainStartedAt) {
 			return EventDrainDecision{Action: EventDrainAwait}
 		}
 		return EventDrainDecision{Action: EventDrainProcess, FinishDrain: true}
-	case TurnStartedEvent:
+	case TurnStart:
 		if eventAtOrBefore(ev.Timestamp, input.DrainStartedAt) {
 			return EventDrainDecision{Action: EventDrainAwait}
 		}
 		return EventDrainDecision{Action: EventDrainProcess, FinishDrain: true}
-	case TurnFinishedEvent:
+	case TurnEnd:
 		return EventDrainDecision{Action: EventDrainProcess, FinishDrain: true}
 	default:
 		return EventDrainDecision{Action: EventDrainAwait}

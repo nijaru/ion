@@ -6,7 +6,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-func (m Model) handleSubagentMessage(msg session.AgentMessageEvent) (Model, tea.Cmd) {
+func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 	committed, ok := m.turnReducer().CommitSubagentMessage(
 		msg.AgentID,
 		msg.Message,
@@ -18,7 +18,7 @@ func (m Model) handleSubagentMessage(msg session.AgentMessageEvent) (Model, tea.
 	return m, tea.Sequence(m.terminalCommit().Entries(committed), m.awaitSessionEvent())
 }
 
-func (m Model) handleChildRequested(msg session.ChildRequestedEvent) (Model, tea.Cmd) {
+func (m Model) handleChildRequested(msg session.ChildRequest) (Model, tea.Cmd) {
 	p := m.turnReducer().RequestChild(msg.AgentName, msg.Query)
 
 	entry, _ := session.EntrySubagent(p.Name, "Started: "+p.Intent, false, msg.Timestamp)
@@ -35,17 +35,17 @@ func (m Model) handleChildRequested(msg session.ChildRequestedEvent) (Model, tea
 	)
 }
 
-func (m Model) handleChildStarted(msg session.ChildStartedEvent) (Model, tea.Cmd) {
+func (m Model) handleChildStarted(msg session.ChildStart) (Model, tea.Cmd) {
 	m.turnReducer().StartChild(msg.AgentName)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleChildDelta(msg session.ChildDeltaEvent) (Model, tea.Cmd) {
+func (m Model) handleChildDelta(msg session.ChildDelta) (Model, tea.Cmd) {
 	m.turnReducer().AppendChildDelta(msg.AgentName, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleChildCompleted(msg session.ChildCompletedEvent) (Model, tea.Cmd) {
+func (m Model) handleChildCompleted(msg session.ChildComplete) (Model, tea.Cmd) {
 	committed, ok := m.turnReducer().CompleteChild(msg.AgentName, msg.Result, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
@@ -64,12 +64,12 @@ func (m Model) handleChildCompleted(msg session.ChildCompletedEvent) (Model, tea
 	)
 }
 
-func (m Model) handleChildBlocked(msg session.ChildBlockedEvent) (Model, tea.Cmd) {
+func (m Model) handleChildBlocked(msg session.ChildBlock) (Model, tea.Cmd) {
 	m.turnReducer().BlockChild(msg.AgentName, msg.Reason)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleChildFailed(msg session.ChildFailedEvent) (Model, tea.Cmd) {
+func (m Model) handleChildFailed(msg session.ChildFail) (Model, tea.Cmd) {
 	committed, ok := m.turnReducer().FailChild(msg.AgentName, msg.Error, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
@@ -88,7 +88,7 @@ func (m Model) handleChildFailed(msg session.ChildFailedEvent) (Model, tea.Cmd) 
 	)
 }
 
-func (m Model) handleChildCanceled(msg session.ChildCanceledEvent) (Model, tea.Cmd) {
+func (m Model) handleChildCanceled(msg session.ChildCancel) (Model, tea.Cmd) {
 	committed, ok := m.turnReducer().CancelChild(msg.AgentName, msg.Reason, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()

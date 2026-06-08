@@ -303,7 +303,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.ErrorEvent{
+				event: session.TurnError{
 					Base:  session.BaseNow(),
 					Err:   errors.New("session unavailable"),
 					Fatal: true,
@@ -316,7 +316,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			return sessionEventMsg{
 				generation: generation,
-				event: session.ErrorEvent{
+				event: session.TurnError{
 					Base:  session.BaseNow(),
 					Err:   errors.New("session event stream unavailable"),
 					Fatal: true,
@@ -351,77 +351,77 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	}
 
 	switch msg := ev.(type) {
-	case session.StatusChangedEvent:
+	case session.StatusChange:
 		return m.handleStatusChanged(msg)
 
-	case session.TokenUsageEvent:
+	case session.TokenUsage:
 		return m.handleTokenUsage(msg)
 
-	case session.QueuedInputUpdatedEvent:
+	case session.QueuedInputUpdate:
 		return m.handleQueuedInputUpdated(msg)
 
-	case session.TurnStartedEvent:
+	case session.TurnStart:
 		return m.handleTurnStarted(msg)
 
-	case session.TurnSavePointEvent:
+	case session.TurnSavePoint:
 		return m, m.awaitSessionEvent()
 
-	case session.TurnFinishedEvent:
+	case session.TurnEnd:
 		return m.handleTurnFinished()
 
-	case session.ThinkingDeltaEvent:
+	case session.ThinkingDelta:
 		return m.handleThinkingDelta(msg)
 
-	case session.UserMessageEvent:
+	case session.UserMessage:
 		return m.handleUserMessage(msg)
 
-	case session.AgentDeltaEvent:
+	case session.AgentDelta:
 		return m.handleAgentDelta(msg)
 
-	case session.AgentMessageEvent:
+	case session.AgentMessage:
 		return m.handleAgentMessage(msg)
 
-	case session.ToolCallStartedEvent:
+	case session.ToolCallStart:
 		return m.handleToolCallStarted(msg)
 
-	case session.ToolOutputDeltaEvent:
+	case session.ToolOutputDelta:
 		return m.handleToolOutputDelta(msg)
 
-	case session.ToolResultEvent:
+	case session.ToolCallEnd:
 		return m.handleToolResult(msg)
 
-	case session.VerificationResultEvent:
+	case session.VerificationResult:
 		return m, m.awaitSessionEvent()
 
-	case session.ChildRequestedEvent:
+	case session.ChildRequest:
 		return m.handleChildRequested(msg)
 
-	case session.ChildStartedEvent:
+	case session.ChildStart:
 		return m.handleChildStarted(msg)
 
-	case session.ChildDeltaEvent:
+	case session.ChildDelta:
 		return m.handleChildDelta(msg)
 
-	case session.ChildCompletedEvent:
+	case session.ChildComplete:
 		return m.handleChildCompleted(msg)
 
-	case session.ChildBlockedEvent:
+	case session.ChildBlock:
 		return m.handleChildBlocked(msg)
 
-	case session.ChildFailedEvent:
+	case session.ChildFail:
 		return m.handleChildFailed(msg)
 
-	case session.ChildCanceledEvent:
+	case session.ChildCancel:
 		return m.handleChildCanceled(msg)
 
-	case session.ErrorEvent:
+	case session.TurnError:
 		return m.handleSessionError(msg.Err, true)
 	}
 
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleUserMessage(msg session.UserMessageEvent) (Model, tea.Cmd) {
+func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
 	entry, ok := session.EntryUser(msg.Message, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
@@ -491,7 +491,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(entry)
 }
 
-func (m Model) handleStatusChanged(msg session.StatusChangedEvent) (Model, tea.Cmd) {
+func (m Model) handleStatusChanged(msg session.StatusChange) (Model, tea.Cmd) {
 	decision := m.turnReducer().ApplyStatusChanged(msg)
 	persistTimestamp := msg.Timestamp
 	if decision.Root {
@@ -504,12 +504,12 @@ func (m Model) handleStatusChanged(msg session.StatusChangedEvent) (Model, tea.C
 	}), m.awaitSessionEvent())
 }
 
-func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdatedEvent) (Model, tea.Cmd) {
+func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdate) (Model, tea.Cmd) {
 	m.turnReducer().SetBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleTokenUsage(msg session.TokenUsageEvent) (Model, tea.Cmd) {
+func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 	m.turnReducer().ApplyTokenUsage(msg)
 	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
 		Type:   "token_usage",
@@ -548,7 +548,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsageEvent) (Model, tea.Cmd) {
 	return m, batchCmds(cmds...)
 }
 
-func (m Model) handleTurnStarted(msg session.TurnStartedEvent) (Model, tea.Cmd) {
+func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
 	m.turnReducer().StartTurn(msg.Timestamp, time.Now())
 	return m, m.awaitSessionEvent()
 }
@@ -585,17 +585,17 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	return m, tea.Sequence(cmds...)
 }
 
-func (m Model) handleThinkingDelta(msg session.ThinkingDeltaEvent) (Model, tea.Cmd) {
+func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
 	m.turnReducer().AppendThinkingDelta(msg.AgentID, msg.Delta)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleAgentDelta(msg session.AgentDeltaEvent) (Model, tea.Cmd) {
+func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
 	m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleAgentMessage(msg session.AgentMessageEvent) (Model, tea.Cmd) {
+func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
 		return m.handleSubagentMessage(msg)
 	}
@@ -605,7 +605,7 @@ func (m Model) handleAgentMessage(msg session.AgentMessageEvent) (Model, tea.Cmd
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolCallStarted(msg session.ToolCallStartedEvent) (Model, tea.Cmd) {
+func (m Model) handleToolCallStarted(msg session.ToolCallStart) (Model, tea.Cmd) {
 	m.turnReducer().StartToolCall(
 		msg.ToolUseID,
 		msg.Timestamp,
@@ -614,12 +614,12 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStartedEvent) (Model, t
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolOutputDelta(msg session.ToolOutputDeltaEvent) (Model, tea.Cmd) {
+func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
 	m.turnReducer().AppendToolOutput(msg.ToolUseID, msg.Delta, msg.Snapshot)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolResult(msg session.ToolResultEvent) (Model, tea.Cmd) {
+func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
 	toolUseID := msg.ToolUseID
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID

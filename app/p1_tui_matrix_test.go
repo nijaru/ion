@@ -56,23 +56,23 @@ func p1MatrixSubmitStreamToolCommit(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.UserMessageEvent{Message: "inspect workspace"},
-		session.TurnStartedEvent{},
-		session.TokenUsageEvent{Input: 12, Output: 4, Cost: 0.001},
-		session.AgentDeltaEvent{Delta: "streaming answer"},
-		session.ToolCallStartedEvent{
+		session.UserMessage{Message: "inspect workspace"},
+		session.TurnStart{},
+		session.TokenUsage{Input: 12, Output: 4, Cost: 0.001},
+		session.AgentDelta{Delta: "streaming answer"},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"README.md"}`,
 		},
-		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "# ion\n"},
-		session.ToolResultEvent{
+		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.ToolCallEnd{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Result:    "# ion\n",
 		},
-		session.AgentMessageEvent{Message: "done"},
-		session.TurnFinishedEvent{},
+		session.AgentMessage{Message: "done"},
+		session.TurnEnd{},
 	)
 
 	if model.Progress.Mode != stateComplete {
@@ -91,33 +91,33 @@ func p1MatrixFileToolRowsKeepShellFrame(t *testing.T) {
 	model = applyP1Events(
 		t,
 		model,
-		session.TurnStartedEvent{},
-		session.ToolCallStartedEvent{
+		session.TurnStart{},
+		session.ToolCallStart{
 			ToolUseID: "read-1",
 			ToolName:  "read",
 			Args:      `{"path":"ai/STATUS.md"}`,
 		},
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "find-1",
 			ToolName:  "find",
 			Args:      `{"pattern":"ai/*.md"}`,
 		},
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "grep-1",
 			ToolName:  "grep",
 			Args:      `{"pattern":"needle","path":"ai"}`,
 		},
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "ls-1",
 			ToolName:  "ls",
 			Args:      `{"path":"ai"}`,
 		},
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "write-1",
 			ToolName:  "write",
 			Args:      `{"path":"notes/todo.md"}`,
 		},
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "edit-1",
 			ToolName:  "edit",
 			Args:      `{"path":"src/main.go"}`,
@@ -143,16 +143,16 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.TurnStartedEvent{},
-		session.StatusChangedEvent{Status: "Running tool..."},
-		session.TokenUsageEvent{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
-		session.AgentDeltaEvent{Delta: "working"},
-		session.ToolCallStartedEvent{
+		session.TurnStart{},
+		session.StatusChange{Status: "Running tool..."},
+		session.TokenUsage{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
+		session.AgentDelta{Delta: "working"},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
 		},
-		session.ToolOutputDeltaEvent{ToolUseID: "tool-1", Delta: "ion-tmux-"},
+		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "ion-tmux-"},
 	)
 
 	view := assertP1ShellFrame(t, model)
@@ -165,7 +165,7 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 
 func p1MatrixQueuedInputVisible(t *testing.T) {
 	model := readyModel(t)
-	model = applyP1Events(t, model, session.TurnStartedEvent{})
+	model = applyP1Events(t, model, session.TurnStart{})
 	model.Input.Composer.SetValue("follow up after this")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -185,7 +185,7 @@ func p1MatrixQueuedInputVisible(t *testing.T) {
 
 func p1MatrixSettingsCommandLocalWhileActive(t *testing.T) {
 	model := readyModel(t)
-	model = applyP1Events(t, model, session.TurnStartedEvent{})
+	model = applyP1Events(t, model, session.TurnStart{})
 	model.Input.Composer.SetValue("/settings")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -218,8 +218,8 @@ func p1MatrixSettingsSelectionLocalWhileActive(t *testing.T) {
 	model = applyP1Events(
 		t,
 		model,
-		session.TurnStartedEvent{},
-		session.StatusChangedEvent{Status: "Running bash..."},
+		session.TurnStart{},
+		session.StatusChange{Status: "Running bash..."},
 	)
 
 	updated, cmd := model.handleCommand("/settings")
@@ -298,7 +298,7 @@ func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
 		t.Run(tt.command, func(t *testing.T) {
 			model := readyModel(t)
 			model.Model.Config = &config.Config{}
-			model = applyP1Events(t, model, session.TurnStartedEvent{})
+			model = applyP1Events(t, model, session.TurnStart{})
 			model.Input.Composer.SetValue(tt.command)
 
 			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -337,8 +337,8 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 			model = applyP1Events(
 				t,
 				model,
-				session.TurnStartedEvent{},
-				session.AgentDeltaEvent{Delta: "still running"},
+				session.TurnStart{},
+				session.AgentDelta{Delta: "still running"},
 			)
 			model.Input.Composer.SetValue(command)
 
@@ -392,8 +392,8 @@ func p1MatrixCancelActiveTool(t *testing.T) {
 	model.Model.Session = sess
 	model = applyP1Events(
 		t, model,
-		session.TurnStartedEvent{},
-		session.ToolCallStartedEvent{
+		session.TurnStart{},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 60"}`,
@@ -417,8 +417,8 @@ func p1MatrixProviderError(t *testing.T) {
 	model := readyModel(t)
 	model = applyP1Events(
 		t, model,
-		session.TurnStartedEvent{},
-		session.ErrorEvent{Err: errors.New("provider failed while streaming")},
+		session.TurnStart{},
+		session.TurnError{Err: errors.New("provider failed while streaming")},
 	)
 
 	if model.Progress.Mode != stateError {
@@ -436,10 +436,10 @@ func p1MatrixResizeWrapSafe(t *testing.T) {
 	model = testModel(t, updated)
 	model = applyP1Events(
 		t, model,
-		session.TurnStartedEvent{},
-		session.StatusChangedEvent{Status: strings.Repeat("streaming very long status ", 4)},
-		session.AgentDeltaEvent{Delta: strings.Repeat("long streamed output ", 8)},
-		session.ToolCallStartedEvent{
+		session.TurnStart{},
+		session.StatusChange{Status: strings.Repeat("streaming very long status ", 4)},
+		session.AgentDelta{Delta: strings.Repeat("long streamed output ", 8)},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "grep",
 			Args:      `{"pattern":"very long search pattern that wraps"}`,

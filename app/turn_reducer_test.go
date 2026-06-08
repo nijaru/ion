@@ -119,7 +119,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 		"tool-b": toolB,
 	}
 
-	entry, ok := model.turnReducer().CompleteToolResult("tool-a", session.ToolResultEvent{
+	entry, ok := model.turnReducer().CompleteToolResult("tool-a", session.ToolCallEnd{
 		ToolUseID: "tool-a",
 		Result:    "a done",
 	})
@@ -141,7 +141,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 		t.Fatalf("progress changed before final tool finished: %#v", model.Progress)
 	}
 
-	entry, ok = model.turnReducer().CompleteToolResult("tool-b", session.ToolResultEvent{
+	entry, ok = model.turnReducer().CompleteToolResult("tool-b", session.ToolCallEnd{
 		ToolUseID: "tool-b",
 		Result:    "b done",
 	})

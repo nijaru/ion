@@ -173,9 +173,9 @@ func TestAwaitSessionEventReportsMissingSession(t *testing.T) {
 	if !ok {
 		t.Fatalf("await message = %T, want sessionEventMsg", msg)
 	}
-	errEvent, ok := eventMsg.event.(session.ErrorEvent)
+	errEvent, ok := eventMsg.event.(session.TurnError)
 	if !ok {
-		t.Fatalf("session event = %T, want session.ErrorEvent", eventMsg.event)
+		t.Fatalf("session event = %T, want session.TurnError", eventMsg.event)
 	}
 	if errEvent.Err == nil || !strings.Contains(errEvent.Err.Error(), "session unavailable") {
 		t.Fatalf("session error = %v, want missing-session error", errEvent.Err)
@@ -194,9 +194,9 @@ func TestAwaitSessionEventReportsMissingEventStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("await message = %T, want sessionEventMsg", msg)
 	}
-	errEvent, ok := eventMsg.event.(session.ErrorEvent)
+	errEvent, ok := eventMsg.event.(session.TurnError)
 	if !ok {
-		t.Fatalf("session event = %T, want session.ErrorEvent", eventMsg.event)
+		t.Fatalf("session event = %T, want session.TurnError", eventMsg.event)
 	}
 	if errEvent.Err == nil ||
 		!strings.Contains(errEvent.Err.Error(), "session event stream unavailable") {
@@ -278,7 +278,7 @@ func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 
 func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
-	sess.events <- session.UserMessageEvent{Message: "route this"}
+	sess.events <- session.UserMessage{Message: "route this"}
 	storageSess := &stubStorageSession{}
 	model := New(
 		stubBackend{
@@ -311,7 +311,7 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 		t.Fatalf("appends before command execution = %#v, want none", storageSess.appends)
 	}
 	messages := runCommandTree(t, cmd)
-	if !containsSessionEvent[session.UserMessageEvent](messages) {
+	if !containsSessionEvent[session.UserMessage](messages) {
 		t.Fatalf("messages = %#v, want submitted user session event", messages)
 	}
 	var decision session.StoreRoutingDecision
@@ -465,12 +465,12 @@ func TestSubmitResultArmsEventReader(t *testing.T) {
 	if !ok || result.err != nil {
 		t.Fatalf("submit result = %#v, want success", submitMsg)
 	}
-	sess.events <- session.UserMessageEvent{Message: "hello"}
+	sess.events <- session.UserMessage{Message: "hello"}
 
 	updatedModel, cmd := model.Update(result)
 	model = testModel(t, updatedModel)
 	messages := runCommandTree(t, cmd)
-	if !containsSessionEvent[session.UserMessageEvent](messages) {
+	if !containsSessionEvent[session.UserMessage](messages) {
 		t.Fatalf("messages = %#v, want initial submit to arm session event reader", messages)
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "hello" {
@@ -530,7 +530,7 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 		t.Fatal("routing persistence command did not start append")
 	}
 	close(storageSess.release)
-	sess.events <- session.UserMessageEvent{Message: "route this"}
+	sess.events <- session.UserMessage{Message: "route this"}
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -543,7 +543,7 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 
 func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
-	sess.events <- session.UserMessageEvent{Message: "keep going"}
+	sess.events <- session.UserMessage{Message: "keep going"}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -783,7 +783,7 @@ func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 		nil,
 	)
 
-	updated, _ := model.handleSessionEvent(session.StatusChangedEvent{Status: "Thinking..."})
+	updated, _ := model.handleSessionEvent(session.StatusChange{Status: "Thinking..."})
 	model = updated
 
 	if session.IsMaterialized(lazy) {
@@ -845,7 +845,7 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	model.InFlight.ReasonBuf = "reasoning"
 	model.InFlight.AgentCommitted = true
 
-	updated, cmd := model.handleSessionEvent(session.TokenUsageEvent{
+	updated, cmd := model.handleSessionEvent(session.TokenUsage{
 		Input:  1000,
 		Output: 100,
 		Cost:   0.011,
@@ -915,7 +915,7 @@ func TestTokenUsagePersistenceErrorStillCancelsOverBudgetTurn(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.Progress.Mode = stateStreaming
 
-	updated, cmd := model.handleSessionEvent(session.TokenUsageEvent{Cost: 0.011})
+	updated, cmd := model.handleSessionEvent(session.TokenUsage{Cost: 0.011})
 	model = updated
 
 	if sess.cancels != 0 {
@@ -948,7 +948,7 @@ func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {
 	model.Progress.BudgetStopReason = "turn cost limit reached ($0.011000 / $0.010000)"
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
-	updated, _ := model.Update(session.TurnFinishedEvent{})
+	updated, _ := model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateCancelled {
@@ -964,7 +964,7 @@ func TestTurnFinishedPreservesUserCancellation(t *testing.T) {
 	model.Progress.Mode = stateCancelled
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
-	updated, _ := model.Update(session.TurnFinishedEvent{})
+	updated, _ := model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateCancelled {
@@ -1061,7 +1061,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	}
 
 	model.App.PrintedTranscript = false
-	updated, _ := model.Update(session.UserMessageEvent{
+	updated, _ := model.Update(session.UserMessage{
 		Base:    session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
 		Message: "stale canceled prompt",
 	})
@@ -1070,7 +1070,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("late canceled-turn user message printed transcript output")
 	}
 
-	updated, _ = model.Update(session.TurnStartedEvent{
+	updated, _ = model.Update(session.TurnStart{
 		Base: session.BaseAt(drainStartedAt.Add(-time.Millisecond)),
 	})
 	model = testModel(t, updated)
@@ -1081,12 +1081,12 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("late turn start cleared drain fence")
 	}
 	for _, ev := range []session.AgentEvent{
-		session.AgentDeltaEvent{Delta: "stale"},
-		session.ThinkingDeltaEvent{Delta: "stale reasoning"},
-		session.AgentMessageEvent{Message: "stale final"},
-		session.ToolCallStartedEvent{ToolUseID: "tool-1", ToolName: "bash", Args: "echo stale"},
-		session.ToolResultEvent{ToolUseID: "tool-1", ToolName: "bash", Result: "stale"},
-		session.StatusChangedEvent{Status: "Ready"},
+		session.AgentDelta{Delta: "stale"},
+		session.ThinkingDelta{Delta: "stale reasoning"},
+		session.AgentMessage{Message: "stale final"},
+		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "bash", Args: "echo stale"},
+		session.ToolCallEnd{ToolUseID: "tool-1", ToolName: "bash", Result: "stale"},
+		session.StatusChange{Status: "Ready"},
 	} {
 		updated, _ := model.Update(ev)
 		model = testModel(t, updated)
@@ -1119,7 +1119,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("expected queued follow-up notice while cancel is settling")
 	}
 
-	updated, cmd = model.Update(session.TurnFinishedEvent{})
+	updated, cmd = model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 	if model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("cancel terminal did not clear drain fence")
@@ -1143,7 +1143,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatalf("queued message = %#v, want rearmed after cancel", queued)
 	}
 
-	updated, cmd = model.Update(session.UserMessageEvent{
+	updated, cmd = model.Update(session.UserMessage{
 		Base:    session.BaseAt(drainStartedAt.Add(time.Millisecond)),
 		Message: "fresh prompt",
 	})
@@ -1152,7 +1152,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("fresh user message after cancel did not print")
 	}
 
-	updated, _ = model.Update(session.TurnStartedEvent{
+	updated, _ = model.Update(session.TurnStart{
 		Base: session.BaseAt(drainStartedAt.Add(time.Millisecond)),
 	})
 	model = testModel(t, updated)
@@ -1167,7 +1167,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.Update(session.AgentDeltaEvent{Delta: "fresh"})
+	updated, _ = model.Update(session.AgentDelta{Delta: "fresh"})
 	model = testModel(t, updated)
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "fresh" {
 		t.Fatalf("fresh turn delta not accepted: %#v", model.InFlight.Pending)
@@ -1321,7 +1321,7 @@ func TestTurnFinishedPreservesSessionError(t *testing.T) {
 	model.Progress.LastError = "prompt failed"
 	model.InFlight.QueuedTurns = []string{"next turn"}
 
-	updated, _ := model.Update(session.TurnFinishedEvent{})
+	updated, _ := model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 
 	if model.Progress.Mode != stateError {
@@ -1417,7 +1417,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 
 	model.InFlight.AgentCommitted = true
-	updated, cmd = model.Update(session.TurnFinishedEvent{})
+	updated, cmd = model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("expected queued turn command after finish")
@@ -1445,7 +1445,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	go func() {
 		eventResult <- runCommandTree(t, nextCmd)
 	}()
-	sess.events <- session.UserMessageEvent{Message: "follow up"}
+	sess.events <- session.UserMessage{Message: "follow up"}
 	var eventMsg sessionEventMsg
 	for _, msg := range <-eventResult {
 		if ev, ok := msg.(sessionEventMsg); ok {
@@ -1459,7 +1459,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
 	}
-	if _, ok := eventMsg.event.(session.UserMessageEvent); !ok {
+	if _, ok := eventMsg.event.(session.UserMessage); !ok {
 		t.Fatalf("queued follow-up event = %T, want UserMessage", eventMsg.event)
 	}
 	next, nextCmd = model.Update(eventMsg)
@@ -1511,7 +1511,7 @@ func TestBusyInputUsesBackendFollowUpQueueWhenAvailable(t *testing.T) {
 		t.Fatal("expected queue notice cmd")
 	}
 
-	updated, cmd = model.Update(session.TurnFinishedEvent{})
+	updated, cmd = model.Update(session.TurnEnd{})
 	model = testModel(t, updated)
 	if len(sess.submits) != 0 {
 		t.Fatalf("submits = %#v, want no local resubmit for backend-owned queue", sess.submits)
@@ -1559,7 +1559,7 @@ func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"local stale"}
 	model.InFlight.QueuedTurnsBackendOwned = true
 
-	updated, _ := model.Update(session.QueuedInputUpdatedEvent{
+	updated, _ := model.Update(session.QueuedInputUpdate{
 		Snapshot: session.QueuedInputSnapshot{
 			Steering: []string{"backend steering"},
 			FollowUp: []string{"backend follow-up"},
@@ -1580,7 +1580,7 @@ func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.Update(session.QueuedInputUpdatedEvent{})
+	updated, _ = model.Update(session.QueuedInputUpdate{})
 	model = testModel(t, updated)
 	if len(model.InFlight.QueuedSteering) != 0 ||
 		len(model.InFlight.QueuedTurns) != 0 ||

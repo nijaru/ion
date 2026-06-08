@@ -609,7 +609,7 @@ func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
 	model := readyModel(t)
 	model.App.Workdir = workdir
 
-	updated, _ := model.Update(session.ToolCallStartedEvent{
+	updated, _ := model.Update(session.ToolCallStart{
 		ToolUseID: "tool-read",
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
@@ -628,7 +628,7 @@ func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
 	model.App.Workdir = workdir
 	path := filepath.Join(workdir, "internal", "app", "model_test.go")
 
-	updated, _ := model.Update(session.ToolCallStartedEvent{
+	updated, _ := model.Update(session.ToolCallStart{
 		ToolUseID: "tool-read",
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
@@ -651,7 +651,7 @@ func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
 	model.App.Width = 28
 	path := filepath.Join(workdir, "internal", "app", "model_test.go")
 
-	updated, _ := model.Update(session.ToolCallStartedEvent{
+	updated, _ := model.Update(session.ToolCallStart{
 		ToolUseID: "tool-read",
 		ToolName:  "read",
 		Args:      `{"file_path":` + strconv.Quote(path) + `}`,

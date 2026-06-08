@@ -65,7 +65,7 @@ func BenchmarkP1BurstAgentDeltaReduction(b *testing.B) {
 	for b.Loop() {
 		model := base
 		model.InFlight.Subagents = make(map[string]*core.SubagentProgress)
-		updated, _ := model.Update(session.TurnStartedEvent{})
+		updated, _ := model.Update(session.TurnStart{})
 		model = (*updated.(*Model))
 		for _, ev := range deltas {
 			updated, _ := model.Update(ev)
@@ -266,23 +266,23 @@ func benchmarkReplayEntries(count int) []session.Entry {
 
 func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
 	events := []session.AgentEvent{
-		session.UserMessageEvent{Message: "inspect the workspace"},
-		session.TurnStartedEvent{},
-		session.StatusChangedEvent{Status: "Thinking..."},
+		session.UserMessage{Message: "inspect the workspace"},
+		session.TurnStart{},
+		session.StatusChange{Status: "Thinking..."},
 	}
 	for i := range deltaCount {
-		events = append(events, session.AgentDeltaEvent{
+		events = append(events, session.AgentDelta{
 			Delta: fmt.Sprintf("stream chunk %02d with enough text to render ", i),
 		})
 	}
 	events = append(
 		events,
-		session.ToolCallStartedEvent{
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"ai/STATUS.md"}`,
 		},
-		session.ToolOutputDeltaEvent{
+		session.ToolOutputDelta{
 			ToolUseID: "tool-1",
 			Delta:     strings.Repeat("status line\n", 24),
 		},
@@ -293,7 +293,7 @@ func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
 func benchmarkAgentDeltas(count int) []session.AgentEvent {
 	events := make([]session.AgentEvent, 0, count)
 	for i := range count {
-		events = append(events, session.AgentDeltaEvent{
+		events = append(events, session.AgentDelta{
 			Delta: fmt.Sprintf("delta-%03d ", i),
 		})
 	}

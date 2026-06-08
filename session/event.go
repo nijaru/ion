@@ -51,7 +51,7 @@ const (
 	ArtifactRecorded      EventType = "artifact_recorded"
 
 	// Framework Extensions
-	ToolOutputDelta EventType = "tool_output_delta"
+	ToolOutputDeltaType EventType = "tool_output_delta"
 )
 
 // Event is a single append-only fact in a session.

@@ -217,16 +217,16 @@ func TestIonACPAgentStreamsSessionUpdates(t *testing.T) {
 	readPath := workdir + "/README.md"
 	fakeSession := newFakeACPAgentSession(
 		"session-1",
-		session.TurnStartedEvent{},
-		session.AgentDeltaEvent{Delta: "hello"},
-		session.ThinkingDeltaEvent{Delta: "thinking"},
-		session.ToolCallStartedEvent{
+		session.TurnStart{},
+		session.AgentDelta{Delta: "hello"},
+		session.ThinkingDelta{Delta: "thinking"},
+		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"` + readPath + `"}`,
 		},
-		session.ToolResultEvent{ToolUseID: "tool-1", Result: "file contents"},
-		session.TurnFinishedEvent{},
+		session.ToolCallEnd{ToolUseID: "tool-1", Result: "file contents"},
+		session.TurnEnd{},
 	)
 	factory := &fakeACPRuntimeFactory{session: fakeSession}
 	agent := newIonACPAgent(factory, "test-version", ionacp.ModeEdit)
@@ -387,7 +387,7 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 		t.Fatal("timed out waiting for first prompt submission")
 	}
 
-	fakeSession.events <- session.TurnFinishedEvent{}
+	fakeSession.events <- session.TurnEnd{}
 	done := make(chan error, 1)
 	go func() {
 		_, err := agent.Prompt(t.Context(), acp.PromptRequest{
@@ -408,7 +408,7 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 		t.Fatal("timed out waiting for second prompt submission")
 	}
 
-	fakeSession.events <- session.TurnFinishedEvent{}
+	fakeSession.events <- session.TurnEnd{}
 	select {
 	case err := <-done:
 		if err != nil {
@@ -420,20 +420,20 @@ func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
 }
 
 func TestACPToolUpdatesRedactSensitivePayloads(t *testing.T) {
-	start := acpToolCallStart(t.TempDir(), session.ToolCallStartedEvent{
+	start := acpToolCallStart(t.TempDir(), session.ToolCallStart{
 		ToolUseID: "tool-1",
 		ToolName:  "bash",
 		Args:      `{"command":"curl -H 'Authorization: Bearer abc.def-123' https://jane.doe@example.com"}`,
 	})
 	assertACPUpdateRedacted(t, start, []string{"abc.def-123", "jane.doe@example.com"})
 
-	delta := acpToolOutputDelta(session.ToolOutputDeltaEvent{
+	delta := acpToolOutputDelta(session.ToolOutputDelta{
 		ToolUseID: "tool-1",
 		Delta:     "token=sk-test1234567890",
 	})
 	assertACPUpdateRedacted(t, delta, []string{"sk-test1234567890"})
 
-	result := acpToolCallResult(session.ToolResultEvent{
+	result := acpToolCallResult(session.ToolCallEnd{
 		ToolUseID: "tool-1",
 		Result:    "email jane.doe@example.com token=sk-test1234567890",
 	})

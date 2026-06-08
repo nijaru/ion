@@ -28,75 +28,75 @@ func BaseNow() Base {
 }
 
 // MetadataLoaded fires when a session's metadata is loaded or created.
-type MetadataLoadedEvent struct {
+type MetadataLoad struct {
 	Base
 	SessionID string `json:"session_id"`
 }
 
-func (e MetadataLoadedEvent) isAgentEvent() {}
+func (e MetadataLoad) isAgentEvent() {}
 
 // StatusChanged fires when the agent updates its internal status
 // or progresses on a long-running step.
-type StatusChangedEvent struct {
+type StatusChange struct {
 	Base
 	Status string `json:"status"`
 }
 
-func (e StatusChangedEvent) isAgentEvent() {}
+func (e StatusChange) isAgentEvent() {}
 
 // PlanUpdated fires when the agent's internal plan of execution changes.
-type PlanUpdatedEvent struct {
+type PlanUpdate struct {
 	Base
 	Plan string `json:"plan"`
 }
 
-func (e PlanUpdatedEvent) isAgentEvent() {}
+func (e PlanUpdate) isAgentEvent() {}
 
 // AgentDelta is an incremental chunk of agent output text.
-type AgentDeltaEvent struct {
+type AgentDelta struct {
 	Base
 	Delta string `json:"delta"`
 }
 
-func (e AgentDeltaEvent) isAgentEvent() {}
+func (e AgentDelta) isAgentEvent() {}
 
 // ThinkingDelta is an incremental chunk of agent reasoning/thinking text.
-type ThinkingDeltaEvent struct {
+type ThinkingDelta struct {
 	Base
 	Delta string `json:"delta"`
 }
 
-func (e ThinkingDeltaEvent) isAgentEvent() {}
+func (e ThinkingDelta) isAgentEvent() {}
 
 // UserMessage fires when a user message is committed to the durable session.
-type UserMessageEvent struct {
+type UserMessage struct {
 	Base
 	Message string `json:"message"`
 }
 
-func (e UserMessageEvent) isAgentEvent() {}
+func (e UserMessage) isAgentEvent() {}
 
 // AgentMessage fires when a complete agent message is committed.
-type AgentMessageEvent struct {
+type AgentMessage struct {
 	Base
 	Message   string `json:"message"`
 	Reasoning string `json:"reasoning,omitempty"`
 }
 
-func (e AgentMessageEvent) isAgentEvent() {}
+func (e AgentMessage) isAgentEvent() {}
 
 // ToolCallStarted fires when the agent starts executing a tool.
-type ToolCallStartedEvent struct {
+type ToolCallStart struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name"`
 	Args      string `json:"args"`
 }
 
-func (e ToolCallStartedEvent) isAgentEvent() {}
+func (e ToolCallStart) isAgentEvent() {}
 
 // ToolResult fires when the agent finishes executing a tool.
-type ToolResultEvent struct {
+type ToolCallEnd struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name"`
@@ -104,21 +104,21 @@ type ToolResultEvent struct {
 	Error     error  `json:"error,omitempty"`
 }
 
-func (e ToolResultEvent) isAgentEvent() {}
+func (e ToolCallEnd) isAgentEvent() {}
 
 // ToolOutputDelta is an incremental chunk of tool output text.
-type ToolOutputDeltaEvent struct {
+type ToolOutputDelta struct {
 	Base
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Delta     string `json:"delta"`
 	Snapshot  bool   `json:"snapshot,omitempty"`
 }
 
-func (e ToolOutputDeltaEvent) isAgentEvent() {}
+func (e ToolOutputDelta) isAgentEvent() {}
 
 // VerificationResult fires when an objective function (test, benchmark,
 // compile check) completes. Essential for RLM loops.
-type VerificationResultEvent struct {
+type VerificationResult struct {
 	Base
 	Command string `json:"command"`
 	Passed  bool   `json:"passed"`
@@ -126,11 +126,11 @@ type VerificationResultEvent struct {
 	Output  string `json:"output,omitempty"`
 }
 
-func (e VerificationResultEvent) isAgentEvent() {}
+func (e VerificationResult) isAgentEvent() {}
 
 // ApprovalRequest is emitted by optional compatibility backends that support
 // host-mediated permission prompts. The native Ion path does not emit it.
-type ApprovalRequestEvent struct {
+type ApprovalRequest struct {
 	Base
 	RequestID   string `json:"request_id"`
 	Description string `json:"description"`
@@ -139,104 +139,104 @@ type ApprovalRequestEvent struct {
 	Environment string `json:"environment,omitzero"`
 }
 
-func (e ApprovalRequestEvent) isAgentEvent() {}
+func (e ApprovalRequest) isAgentEvent() {}
 
 // TurnStarted fires when the backend begins processing a turn.
-type TurnStartedEvent struct {
+type TurnStart struct {
 	Base
 }
 
-func (e TurnStartedEvent) isAgentEvent() {}
+func (e TurnStart) isAgentEvent() {}
 
 // TurnFinished fires when the backend has finished its generation cycle for a turn.
-type TurnFinishedEvent struct {
+type TurnEnd struct {
 	Base
 }
 
-func (e TurnFinishedEvent) isAgentEvent() {}
+func (e TurnEnd) isAgentEvent() {}
 
 // TurnSavePoint fires when the backend has flushed durable writes for a turn.
-type TurnSavePointEvent struct {
+type TurnSavePoint struct {
 	Base
 	HadPendingMutations bool `json:"had_pending_mutations,omitempty"`
 }
 
-func (e TurnSavePointEvent) isAgentEvent() {}
+func (e TurnSavePoint) isAgentEvent() {}
 
 // Error represents a recoverable or fatal error in the session.
-type ErrorEvent struct {
+type TurnError struct {
 	Base
 	Err   error `json:"err"`
 	Fatal bool  `json:"fatal"`
 }
 
-func (e ErrorEvent) isAgentEvent() {}
+func (e TurnError) isAgentEvent() {}
 
 // ChildRequested fires when the main agent requests a child execution.
-type ChildRequestedEvent struct {
+type ChildRequest struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Query     string `json:"query"`
 }
 
-func (e ChildRequestedEvent) isAgentEvent() {}
+func (e ChildRequest) isAgentEvent() {}
 
 // ChildStarted fires when the child execution begins.
-type ChildStartedEvent struct {
+type ChildStart struct {
 	Base
 	AgentName string `json:"agent_name"`
 	SessionID string `json:"session_id"`
 }
 
-func (e ChildStartedEvent) isAgentEvent() {}
+func (e ChildStart) isAgentEvent() {}
 
 // ChildDelta is an incremental chunk of child subagent output.
-type ChildDeltaEvent struct {
+type ChildDelta struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Delta     string `json:"delta"`
 }
 
-func (e ChildDeltaEvent) isAgentEvent() {}
+func (e ChildDelta) isAgentEvent() {}
 
 // ChildCompleted fires when the child execution finishes successfully.
-type ChildCompletedEvent struct {
+type ChildComplete struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Result    string `json:"result"`
 }
 
-func (e ChildCompletedEvent) isAgentEvent() {}
+func (e ChildComplete) isAgentEvent() {}
 
 // ChildBlocked fires when the child execution cannot continue without input.
-type ChildBlockedEvent struct {
+type ChildBlock struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Reason    string `json:"reason"`
 }
 
-func (e ChildBlockedEvent) isAgentEvent() {}
+func (e ChildBlock) isAgentEvent() {}
 
 // ChildFailed fires when the child execution fails.
-type ChildFailedEvent struct {
+type ChildFail struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Error     string `json:"error"`
 }
 
-func (e ChildFailedEvent) isAgentEvent() {}
+func (e ChildFail) isAgentEvent() {}
 
 // ChildCanceled fires when the child execution is canceled.
-type ChildCanceledEvent struct {
+type ChildCancel struct {
 	Base
 	AgentName string `json:"agent_name"`
 	Reason    string `json:"reason"`
 }
 
-func (e ChildCanceledEvent) isAgentEvent() {}
+func (e ChildCancel) isAgentEvent() {}
 
 // TokenUsage fires when the agent reports its token consumption.
-type TokenUsageEvent struct {
+type TokenUsage struct {
 	Base
 	Input  int     `json:"input"`
 	Output int     `json:"output"`
@@ -244,19 +244,19 @@ type TokenUsageEvent struct {
 	Cost   float64 `json:"cost,omitempty"`
 }
 
-func (e TokenUsageEvent) isAgentEvent() {}
+func (e TokenUsage) isAgentEvent() {}
 
-// CompactionTriggeredEvent fires when context overflow is detected and
+// CompactionTrigger fires when context overflow is detected and
 // auto-compaction is triggered.
-type CompactionTriggeredEvent struct {
+type CompactionTrigger struct {
 	Base
 	Reason string `json:"reason"` // "overflow" or "threshold"
 }
 
-func (e CompactionTriggeredEvent) isAgentEvent() {}
+func (e CompactionTrigger) isAgentEvent() {}
 
-// AutoRetryStartEvent fires when auto-retry begins for a transient error.
-type AutoRetryStartEvent struct {
+// AutoRetryStart fires when auto-retry begins for a transient error.
+type AutoRetryStart struct {
 	Base
 	Attempt    int    `json:"attempt"`
 	MaxAttempt int    `json:"max_attempt"`
@@ -264,21 +264,21 @@ type AutoRetryStartEvent struct {
 	Error      string `json:"error"`
 }
 
-func (e AutoRetryStartEvent) isAgentEvent() {}
+func (e AutoRetryStart) isAgentEvent() {}
 
-// AutoRetryEndEvent fires when auto-retry completes (success or failure).
-type AutoRetryEndEvent struct {
+// AutoRetryEnd fires when auto-retry completes (success or failure).
+type AutoRetryEnd struct {
 	Base
 	Success     bool   `json:"success"`
 	Attempt     int    `json:"attempt"`
 	FinalError  string `json:"final_error,omitempty"`
 }
 
-func (e AutoRetryEndEvent) isAgentEvent() {}
+func (e AutoRetryEnd) isAgentEvent() {}
 
-type QueuedInputUpdatedEvent struct {
+type QueuedInputUpdate struct {
 	Base
 	Snapshot QueuedInputSnapshot `json:"snapshot"`
 }
 
-func (e QueuedInputUpdatedEvent) isAgentEvent() {}
+func (e QueuedInputUpdate) isAgentEvent() {}

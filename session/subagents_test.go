@@ -6,8 +6,8 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
-func TestChildRequestedEventRoundTrip(t *testing.T) {
-	event := NewChildRequestedEvent("parent", ChildRequestedData{
+func TestChildRequestRoundTrip(t *testing.T) {
+	event := NewChildRequest("parent", ChildRequestedData{
 		ChildID:        "child-1",
 		ChildSessionID: "sess-child-1",
 		ParentEventID:  "evt-parent-1",
@@ -29,8 +29,8 @@ func TestChildRequestedEventRoundTrip(t *testing.T) {
 	}
 }
 
-func TestChildCompletedEventRoundTrip(t *testing.T) {
-	event := NewChildCompletedEvent("parent", ChildCompletedData{
+func TestChildCompleteRoundTrip(t *testing.T) {
+	event := NewChildComplete("parent", ChildCompletedData{
 		ChildID:        "child-1",
 		ChildSessionID: "sess-child-1",
 		Summary:        "Reviewed 3 files",

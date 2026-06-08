@@ -211,7 +211,7 @@ func TestExportRunTreeIncludesChildRuns(t *testing.T) {
 		t.Fatalf("append child assistant: %v", err)
 	}
 
-	if err := parent.Append(t.Context(), NewChildRequestedEvent(parent.ID(), ChildRequestedData{
+	if err := parent.Append(t.Context(), NewChildRequest(parent.ID(), ChildRequestedData{
 		ChildID:        "child-1",
 		ChildSessionID: child.ID(),
 		AgentID:        "worker",
@@ -240,7 +240,7 @@ func TestExportRunTreeIncludesChildRuns(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("append artifact recorded: %v", err)
 	}
-	if err := parent.Append(t.Context(), NewChildCompletedEvent(parent.ID(), ChildCompletedData{
+	if err := parent.Append(t.Context(), NewChildComplete(parent.ID(), ChildCompletedData{
 		ChildID:        "child-1",
 		ChildSessionID: child.ID(),
 		Summary:        "Child finished successfully",

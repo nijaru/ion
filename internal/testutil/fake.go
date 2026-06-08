@@ -122,32 +122,32 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 
 	go func() {
-		b.events <- session.UserMessageEvent{Message: input}
-		b.events <- session.TurnStartedEvent{}
-		b.events <- session.StatusChangedEvent{Status: "[fake] planning reply"}
+		b.events <- session.UserMessage{Message: input}
+		b.events <- session.TurnStart{}
+		b.events <- session.StatusChange{Status: "[fake] planning reply"}
 
 		time.Sleep(120 * time.Millisecond)
-		b.events <- session.AgentDeltaEvent{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		b.events <- session.AgentDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDeltaEvent{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		b.events <- session.AgentDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
 
 		time.Sleep(140 * time.Millisecond)
-		b.events <- session.ToolCallStartedEvent{ToolName: "bash", Args: "git status --short"}
+		b.events <- session.ToolCallStart{ToolName: "bash", Args: "git status --short"}
 
 		time.Sleep(100 * time.Millisecond)
-		b.events <- session.ToolResultEvent{
+		b.events <- session.ToolCallEnd{
 			ToolName: "bash",
 			Result:   "test tool result: working tree checked",
 		}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDeltaEvent{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		b.events <- session.AgentDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentMessageEvent{Message: ""} // Signal end of message
-		b.events <- session.StatusChangedEvent{Status: "[fake] turn complete"}
-		b.events <- session.TurnFinishedEvent{}
+		b.events <- session.AgentMessage{Message: ""} // Signal end of message
+		b.events <- session.StatusChange{Status: "[fake] turn complete"}
+		b.events <- session.TurnEnd{}
 	}()
 	return nil
 }

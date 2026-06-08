@@ -153,7 +153,7 @@ func TestACPSessionUpdateTextChunk(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	delta, ok := ev.(session.AgentDeltaEvent)
+	delta, ok := ev.(session.AgentDelta)
 	if !ok {
 		t.Fatalf("expected AgentDelta, got %T", ev)
 	}
@@ -174,7 +174,7 @@ func TestACPSessionUpdateThought(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	delta, ok := ev.(session.ThinkingDeltaEvent)
+	delta, ok := ev.(session.ThinkingDelta)
 	if !ok {
 		t.Fatalf("expected ThinkingDelta, got %T", ev)
 	}
@@ -195,7 +195,7 @@ func TestACPSessionUpdateToolCall(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	tc, ok := ev.(session.ToolCallStartedEvent)
+	tc, ok := ev.(session.ToolCallStart)
 	if !ok {
 		t.Fatalf("expected ToolCallStarted, got %T", ev)
 	}
@@ -228,7 +228,7 @@ func TestACPSessionUpdateToolCompletion(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	result, ok := ev.(session.ToolResultEvent)
+	result, ok := ev.(session.ToolCallEnd)
 	if !ok {
 		t.Fatalf("expected ToolResult, got %T", ev)
 	}
@@ -254,7 +254,7 @@ func TestACPSessionUpdateTokenUsageFromNotificationMeta(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	usage, ok := ev.(session.TokenUsageEvent)
+	usage, ok := ev.(session.TokenUsage)
 	if !ok {
 		t.Fatalf("expected TokenUsage, got %T", ev)
 	}
@@ -282,11 +282,11 @@ func TestACPSessionUpdateTokenUsageFromUpdateMeta(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev.(session.AgentDeltaEvent); !ok {
+	if _, ok := ev.(session.AgentDelta); !ok {
 		t.Fatalf("expected AgentDelta first, got %T", ev)
 	}
 	ev = drainOne(t, client.events, 500*time.Millisecond)
-	usage, ok := ev.(session.TokenUsageEvent)
+	usage, ok := ev.(session.TokenUsage)
 	if !ok {
 		t.Fatalf("expected TokenUsage, got %T", ev)
 	}
@@ -324,7 +324,7 @@ func TestACPApprovalBridge(t *testing.T) {
 
 	// Wait for ApprovalRequest to arrive
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	req, ok := ev.(session.ApprovalRequestEvent)
+	req, ok := ev.(session.ApprovalRequest)
 	if !ok {
 		t.Fatalf("expected ApprovalRequest, got %T", ev)
 	}
@@ -364,7 +364,7 @@ func TestACPFullTurn(t *testing.T) {
 	}
 
 	ev1 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev1.(session.TurnStartedEvent); !ok {
+	if _, ok := ev1.(session.TurnStart); !ok {
 		t.Fatalf("expected TurnStarted, got %T", ev1)
 	}
 
@@ -372,7 +372,7 @@ func TestACPFullTurn(t *testing.T) {
 	for {
 		select {
 		case ev := <-client.events:
-			if _, ok := ev.(session.TurnFinishedEvent); ok {
+			if _, ok := ev.(session.TurnEnd); ok {
 				return
 			}
 		case <-deadline:
@@ -399,7 +399,7 @@ func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
 	if err := client.SubmitTurn(t.Context(), "hello"); err != nil {
 		t.Fatalf("SubmitTurn: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStart); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	select {
@@ -416,9 +416,9 @@ func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
 		select {
 		case ev := <-client.events:
 			switch msg := ev.(type) {
-			case session.ErrorEvent:
+			case session.TurnError:
 				t.Fatalf("cancel emitted prompt error: %v", msg.Err)
-			case session.TurnFinishedEvent:
+			case session.TurnEnd:
 				return
 			}
 		case <-deadline:
@@ -439,7 +439,7 @@ func TestACPCloseDuringPromptClosesEventsWithoutLateSend(t *testing.T) {
 	if err := client.SubmitTurn(context.Background(), "hello"); err != nil {
 		t.Fatalf("SubmitTurn: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStart); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	select {
@@ -480,7 +480,7 @@ func TestACPRejectsConcurrentSubmit(t *testing.T) {
 	if err := client.SubmitTurn(t.Context(), "first"); err != nil {
 		t.Fatalf("SubmitTurn first: %v", err)
 	}
-	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStartedEvent); !ok {
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStart); !ok {
 		t.Fatal("expected TurnStarted")
 	}
 	if err := client.SubmitTurn(t.Context(), "second"); err == nil ||
@@ -506,7 +506,7 @@ func TestACPRequestPermissionCancelRemovesPendingApproval(t *testing.T) {
 	}()
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev.(session.ApprovalRequestEvent); !ok {
+	if _, ok := ev.(session.ApprovalRequest); !ok {
 		t.Fatalf("expected ApprovalRequest, got %T", ev)
 	}
 	client.mu.Lock()

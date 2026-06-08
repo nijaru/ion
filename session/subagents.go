@@ -109,11 +109,11 @@ type ArtifactRecordedData struct {
 	SessionID string      `json:"session_id,omitzero"`
 }
 
-func NewChildRequestedEvent(sessionID string, data ChildRequestedData) Event {
+func NewChildRequest(sessionID string, data ChildRequestedData) Event {
 	return NewEvent(sessionID, ChildRequested, data)
 }
 
-func NewChildStartedEvent(sessionID string, data ChildStartedData) Event {
+func NewChildStart(sessionID string, data ChildStartedData) Event {
 	return NewEvent(sessionID, ChildStarted, data)
 }
 
@@ -121,19 +121,19 @@ func NewChildProgressedEvent(sessionID string, data ChildProgressedData) Event {
 	return NewEvent(sessionID, ChildProgressed, data)
 }
 
-func NewChildBlockedEvent(sessionID string, data ChildBlockedData) Event {
+func NewChildBlock(sessionID string, data ChildBlockedData) Event {
 	return NewEvent(sessionID, ChildBlocked, data)
 }
 
-func NewChildCompletedEvent(sessionID string, data ChildCompletedData) Event {
+func NewChildComplete(sessionID string, data ChildCompletedData) Event {
 	return NewEvent(sessionID, ChildCompleted, data)
 }
 
-func NewChildFailedEvent(sessionID string, data ChildFailedData) Event {
+func NewChildFail(sessionID string, data ChildFailedData) Event {
 	return NewEvent(sessionID, ChildFailed, data)
 }
 
-func NewChildCanceledEvent(sessionID string, data ChildCanceledData) Event {
+func NewChildCancel(sessionID string, data ChildCanceledData) Event {
 	return NewEvent(sessionID, ChildCanceled, data)
 }
 

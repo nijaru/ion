@@ -44,7 +44,7 @@ func (a *Agent) emitInputMessage(message AgentMessage) {
 	if message.Role != "user" {
 		return
 	}
-	a.emit(session.UserMessageEvent{
+	a.emit(session.UserMessage{
 		Base:    session.BaseNow(),
 		Message: message.Content,
 	})
@@ -96,7 +96,7 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the loop.
-// Always emits TurnFinishedEvent when done (matching Pi's agent_end contract).
+// Always emits TurnEnd when done (matching Pi's agent_end contract).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
 	newMessages, err := a.acceptPrompts(ctx, prompts)
 	if err != nil {
@@ -107,13 +107,13 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	}
 
 	newMessages, runErr := a.execute(ctx, &newMessages)
-	a.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+	a.emit(session.TurnEnd{Base: session.BaseNow()})
 	return newMessages, runErr
 }
 
 // Continue continues the agent loop without adding new messages.
 // Used for retries - context already has user message or tool results.
-// Does NOT emit TurnFinishedEvent (the caller owns lifecycle events).
+// Does NOT emit TurnEnd (the caller owns lifecycle events).
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	a.mu.RLock()
 	if len(a.state.Messages) == 0 {
@@ -191,7 +191,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				return ctx.Err()
 			}
 
-			a.emit(session.TurnStartedEvent{Base: session.BaseNow()})
+			a.emit(session.TurnStart{Base: session.BaseNow()})
 
 			// Process pending messages (inject before next assistant response)
 			if len(pendingMessages) > 0 {
@@ -220,7 +220,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			*newMessages = append(*newMessages, message)
 
 			// Emit complete assistant message event
-			a.emit(session.AgentMessageEvent{
+			a.emit(session.AgentMessage{
 				Base:      session.BaseNow(),
 				Message:   message.Content,
 				Reasoning: message.Reasoning,
@@ -367,14 +367,14 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 
 		if chunk.Content != "" {
 			content += chunk.Content
-			a.emit(session.AgentDeltaEvent{
+			a.emit(session.AgentDelta{
 				Base:  session.BaseNow(),
 				Delta: chunk.Content,
 			})
 		}
 		if chunk.Reasoning != "" {
 			reasoning += chunk.Reasoning
-			a.emit(session.ThinkingDeltaEvent{
+			a.emit(session.ThinkingDelta{
 				Base:  session.BaseNow(),
 				Delta: chunk.Reasoning,
 			})
@@ -383,7 +383,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 			thinkingBlocks = append(thinkingBlocks, chunk.ThinkingBlocks...)
 		}
 		if chunk.Usage != nil {
-			a.emit(session.TokenUsageEvent{
+			a.emit(session.TokenUsage{
 				Base:   session.BaseNow(),
 				Input:  chunk.Usage.InputTokens,
 				Output: chunk.Usage.OutputTokens,
@@ -567,7 +567,7 @@ type toolCallResult struct {
 }
 
 func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
-	a.emit(session.ToolCallStartedEvent{
+	a.emit(session.ToolCallStart{
 		Base:      session.BaseNow(),
 		ToolUseID: toolCall.ID,
 		ToolName:  toolCall.Name,
@@ -576,7 +576,7 @@ func (a *Agent) emitToolCallStarted(toolCall AgentToolCall) {
 }
 
 func (a *Agent) emitToolResult(result toolCallResult) {
-	a.emit(session.ToolResultEvent{
+	a.emit(session.ToolCallEnd{
 		Base:      session.BaseNow(),
 		ToolUseID: result.toolCall.ID,
 		ToolName:  result.toolCall.Name,

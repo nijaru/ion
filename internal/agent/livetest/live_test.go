@@ -183,7 +183,7 @@ func newLiveAdapter(t *testing.T) (*agent.SessionAdapter, session.SessionStore, 
 	return adapter, store, sess
 }
 
-// collectEvents drains the event channel until TurnFinishedEvent, ErrorEvent
+// collectEvents drains the event channel until TurnEnd, TurnError
 // (if fatal), or timeout. Returns all collected events.
 func collectEvents(t *testing.T, ch <-chan session.AgentEvent, timeout time.Duration) []session.AgentEvent {
 	t.Helper()
@@ -198,10 +198,10 @@ func collectEvents(t *testing.T, ch <-chan session.AgentEvent, timeout time.Dura
 			}
 			events = append(events, ev)
 			switch ev.(type) {
-			case session.TurnFinishedEvent:
+			case session.TurnEnd:
 				return events
-			case session.ErrorEvent:
-				// Keep collecting — TurnFinishedEvent follows
+			case session.TurnError:
+				// Keep collecting — TurnEnd follows
 			}
 		case <-timer.C:
 			t.Fatalf("timed out after %s waiting for terminal event; got %d events", timeout, len(events))
@@ -241,23 +241,23 @@ func TestLiveStreaming(t *testing.T) {
 
 	events := collectEvents(t, adapter.Events(), 30*time.Second)
 
-	if !hasEvent[session.TurnStartedEvent](events) {
-		t.Error("missing TurnStartedEvent")
+	if !hasEvent[session.TurnStart](events) {
+		t.Error("missing TurnStart")
 	}
-	if !hasEvent[session.TurnFinishedEvent](events) {
-		t.Error("missing TurnFinishedEvent")
+	if !hasEvent[session.TurnEnd](events) {
+		t.Error("missing TurnEnd")
 	}
 
 	// Should have at least one content delta or final message
-	deltas := findEvents[session.AgentDeltaEvent](events)
-	messages := findEvents[session.AgentMessageEvent](events)
+	deltas := findEvents[session.AgentDelta](events)
+	messages := findEvents[session.AgentMessage](events)
 	if len(deltas) == 0 && len(messages) == 0 {
-		t.Error("no content delivered: expected AgentDeltaEvent or AgentMessageEvent")
+		t.Error("no content delivered: expected AgentDelta or AgentMessage")
 	}
 
 	// No fatal errors
 	for _, ev := range events {
-		if err, ok := ev.(session.ErrorEvent); ok && err.Fatal {
+		if err, ok := ev.(session.TurnError); ok && err.Fatal {
 			t.Fatalf("fatal error during streaming: %v", err.Err)
 		}
 	}
@@ -275,23 +275,23 @@ func TestLiveToolCalls(t *testing.T) {
 
 	events := collectEvents(t, adapter.Events(), 60*time.Second)
 
-	if !hasEvent[session.TurnStartedEvent](events) {
-		t.Error("missing TurnStartedEvent")
+	if !hasEvent[session.TurnStart](events) {
+		t.Error("missing TurnStart")
 	}
-	if !hasEvent[session.TurnFinishedEvent](events) {
-		t.Error("missing TurnFinishedEvent")
+	if !hasEvent[session.TurnEnd](events) {
+		t.Error("missing TurnEnd")
 	}
 
 	// Must have triggered at least one tool call
-	toolCalls := findEvents[session.ToolCallStartedEvent](events)
+	toolCalls := findEvents[session.ToolCallStart](events)
 	if len(toolCalls) == 0 {
-		t.Fatal("no tool calls: expected at least one ToolCallStartedEvent")
+		t.Fatal("no tool calls: expected at least one ToolCallStart")
 	}
 
 	// Each tool call must have a corresponding result
-	toolResults := findEvents[session.ToolResultEvent](events)
+	toolResults := findEvents[session.ToolCallEnd](events)
 	if len(toolResults) == 0 {
-		t.Fatal("no tool results: expected at least one ToolResultEvent")
+		t.Fatal("no tool results: expected at least one ToolCallEnd")
 	}
 
 	// Verify the read tool was called
@@ -320,7 +320,7 @@ func TestLiveToolCalls(t *testing.T) {
 
 	// No fatal errors
 	for _, ev := range events {
-		if err, ok := ev.(session.ErrorEvent); ok && err.Fatal {
+		if err, ok := ev.(session.TurnError); ok && err.Fatal {
 			t.Fatalf("fatal error during tool call: %v", err.Err)
 		}
 	}
@@ -344,11 +344,11 @@ func TestLiveCancel(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch ev.(type) {
-			case session.TurnStartedEvent, session.AgentDeltaEvent:
+			case session.TurnStart, session.AgentDelta:
 				started = true
-			case session.ErrorEvent:
+			case session.TurnError:
 				// Provider error before we could cancel — skip
-				t.Skipf("provider error before cancel: %v", ev.(session.ErrorEvent).Err)
+				t.Skipf("provider error before cancel: %v", ev.(session.TurnError).Err)
 			}
 		case <-timeout.C:
 			t.Skip("stream never started within 15s")
@@ -362,13 +362,13 @@ func TestLiveCancel(t *testing.T) {
 	// Drain remaining events — should end with TurnFinished, no crash
 	events := collectEvents(t, adapter.Events(), 15*time.Second)
 
-	if !hasEvent[session.TurnFinishedEvent](events) {
-		t.Error("missing TurnFinishedEvent after cancel")
+	if !hasEvent[session.TurnEnd](events) {
+		t.Error("missing TurnEnd after cancel")
 	}
 
 	// Cancel should not produce a fatal error
 	for _, ev := range events {
-		if err, ok := ev.(session.ErrorEvent); ok && err.Fatal {
+		if err, ok := ev.(session.TurnError); ok && err.Fatal {
 			t.Fatalf("fatal error after cancel: %v", err.Err)
 		}
 	}
@@ -385,7 +385,7 @@ func TestLiveSessionPersistence(t *testing.T) {
 	}
 
 	events := collectEvents(t, adapter.Events(), 30*time.Second)
-	if !hasEvent[session.TurnFinishedEvent](events) {
+	if !hasEvent[session.TurnEnd](events) {
 		t.Fatal("turn did not finish")
 	}
 
@@ -502,12 +502,12 @@ func TestLiveProviderErrors(t *testing.T) {
 	events := collectEvents(t, adapter.Events(), 30*time.Second)
 
 	// Should get an error event
-	if !hasEvent[session.ErrorEvent](events) {
-		t.Fatal("expected ErrorEvent for bad model, got none")
+	if !hasEvent[session.TurnError](events) {
+		t.Fatal("expected TurnError for bad model, got none")
 	}
 
 	// Error should be user-friendly (not raw HTTP dump)
-	errEvents := findEvents[session.ErrorEvent](events)
+	errEvents := findEvents[session.TurnError](events)
 	for _, ev := range errEvents {
 		errMsg := ev.Err.Error()
 		// Should not be empty
@@ -522,13 +522,13 @@ func TestLiveProviderErrors(t *testing.T) {
 	}
 
 	// Should still get TurnFinished
-	if !hasEvent[session.TurnFinishedEvent](events) {
-		t.Error("missing TurnFinishedEvent after error")
+	if !hasEvent[session.TurnEnd](events) {
+		t.Error("missing TurnEnd after error")
 	}
 }
 
-// toolNames extracts tool names from ToolCallStartedEvents for error messages.
-func toolNames(calls []session.ToolCallStartedEvent) []string {
+// toolNames extracts tool names from ToolCallStarts for error messages.
+func toolNames(calls []session.ToolCallStart) []string {
 	names := make([]string, len(calls))
 	for i, c := range calls {
 		names[i] = c.ToolName

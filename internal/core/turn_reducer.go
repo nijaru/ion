@@ -73,7 +73,7 @@ func (r TurnReducer) RejectSubmit() {
 	r.Progress.TurnStartedAt = time.Time{}
 }
 
-func (r TurnReducer) ApplyTokenUsage(msg session.TokenUsageEvent) {
+func (r TurnReducer) ApplyTokenUsage(msg session.TokenUsage) {
 	total := msg.Total
 	if total == 0 {
 		total = msg.Input + msg.Output
@@ -130,7 +130,7 @@ func (r TurnReducer) ClearLocalErrorIfIdle() {
 	r.Progress.LastError = ""
 }
 
-func (r TurnReducer) ApplyStatusChanged(msg session.StatusChangedEvent) session.StatusChangeDecision {
+func (r TurnReducer) ApplyStatusChanged(msg session.StatusChange) session.StatusChangeDecision {
 	decision := session.DecideStatusChange(session.StatusChangeInput{
 		AgentID:   msg.AgentID,
 		Status:    msg.Status,
@@ -536,7 +536,7 @@ func (r TurnReducer) AppendAgentDelta(agentID, delta string, timestamp time.Time
 	}
 }
 
-func (r TurnReducer) CommitAgentMessage(msg session.AgentMessageEvent) (session.Entry, bool) {
+func (r TurnReducer) CommitAgentMessage(msg session.AgentMessage) (session.Entry, bool) {
 	if msg.AgentID != "" {
 		return session.Entry{}, false
 	}
@@ -630,7 +630,7 @@ func (r TurnReducer) StartToolCall(
 
 func (r TurnReducer) CompleteToolResult(
 	toolUseID string,
-	msg session.ToolResultEvent,
+	msg session.ToolCallEnd,
 ) (session.Entry, bool) {
 	pending := r.PendingToolEntry(toolUseID)
 	if pending == nil {

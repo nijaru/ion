@@ -113,23 +113,23 @@ func TestAgentEventsAndLoop(t *testing.T) {
 
 	for _, ev := range events {
 		switch msg := ev.(type) {
-		case session.UserMessageEvent:
+		case session.UserMessage:
 			if msg.Message == "run test" {
 				gotUserMessage = true
 			}
-		case session.TurnStartedEvent:
+		case session.TurnStart:
 			gotTurnStarted = true
-		case session.ThinkingDeltaEvent:
+		case session.ThinkingDelta:
 			gotThinkingDelta = true
-		case session.AgentDeltaEvent:
+		case session.AgentDelta:
 			gotAgentDelta = true
-		case session.AgentMessageEvent:
+		case session.AgentMessage:
 			gotAgentMessage = true
-		case session.ToolCallStartedEvent:
+		case session.ToolCallStart:
 			gotToolCallStarted = true
-		case session.ToolResultEvent:
+		case session.ToolCallEnd:
 			gotToolResult = true
-		case session.TurnFinishedEvent:
+		case session.TurnEnd:
 			gotTurnFinished = true
 		}
 	}
@@ -181,7 +181,7 @@ func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("missing events")
 	}
-	msg, ok := events[0].(session.UserMessageEvent)
+	msg, ok := events[0].(session.UserMessage)
 	if !ok || msg.Message != "project me" {
 		t.Fatalf("first event = %#v, want prompt UserMessage", events[0])
 	}
@@ -309,9 +309,9 @@ func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch ev.(type) {
-			case session.ErrorEvent:
+			case session.TurnError:
 				t.Fatalf("cancel emitted session error: %#v", ev)
-			case session.TurnFinishedEvent:
+			case session.TurnEnd:
 				sawFinished = true
 			}
 		case <-time.After(time.Second):
@@ -405,9 +405,9 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch msg := ev.(type) {
-			case session.UserMessageEvent:
+			case session.UserMessage:
 				users = append(users, msg.Message)
-			case session.TurnFinishedEvent:
+			case session.TurnEnd:
 				want := []string{"initial", "follow one", "follow two"}
 				if strings.Join(users, ",") != strings.Join(want, ",") {
 					t.Fatalf("user events = %v, want %v", users, want)
@@ -748,9 +748,9 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch msg := ev.(type) {
-			case session.ToolCallStartedEvent:
+			case session.ToolCallStart:
 				lifecycle = append(lifecycle, "start:"+msg.ToolName)
-			case session.ToolResultEvent:
+			case session.ToolCallEnd:
 				lifecycle = append(lifecycle, "result:"+msg.ToolName)
 			}
 		},
@@ -894,7 +894,7 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	}
 }
 
-func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
+func TestAgentConsumedFollowUpEmitsUserMessage(t *testing.T) {
 	var events []session.AgentEvent
 	var committed []llm.Message
 	requests := 0
@@ -929,7 +929,7 @@ func TestAgentConsumedFollowUpEmitsUserMessageEvent(t *testing.T) {
 	}
 	var sawFollowUpEvent bool
 	for _, ev := range events {
-		msg, ok := ev.(session.UserMessageEvent)
+		msg, ok := ev.(session.UserMessage)
 		if ok && msg.Message == "queued follow-up" {
 			sawFollowUpEvent = true
 			break
@@ -988,7 +988,7 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 		t.Fatalf("committed messages = %#v, want only user prompt", committed)
 	}
 	for _, ev := range events {
-		if _, ok := ev.(session.AgentMessageEvent); ok {
+		if _, ok := ev.(session.AgentMessage); ok {
 			t.Fatalf("unexpected assistant message event after stream error: %#v", ev)
 		}
 	}

@@ -102,29 +102,29 @@ func runPromptTurn(
 				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
-			case session.ApprovalRequestEvent:
+			case session.ApprovalRequest:
 				cancelPrintTurn(agent)
 				return printResult{}, fmt.Errorf("unexpected approval request for %s", msg.ToolName)
-			case session.ToolCallStartedEvent:
+			case session.ToolCallStart:
 				result.ToolCalls = append(result.ToolCalls, msg.ToolName)
-			case session.AgentDeltaEvent:
+			case session.AgentDelta:
 				agentText.WriteString(msg.Delta)
-			case session.AgentMessageEvent:
+			case session.AgentMessage:
 				if msg.Message != "" {
 					agentText.Reset()
 					agentText.WriteString(msg.Message)
 				}
-			case session.TokenUsageEvent:
+			case session.TokenUsage:
 				result.InputTokens += msg.Input
 				result.OutputTokens += msg.Output
 				result.Cost += msg.Cost
-			case session.ErrorEvent:
+			case session.TurnError:
 				cancelPrintTurn(agent)
 				if msg.Err == nil {
 					return printResult{}, fmt.Errorf("session error")
 				}
 				return printResult{}, fmt.Errorf("session error: %w", msg.Err)
-			case session.TurnFinishedEvent:
+			case session.TurnEnd:
 				seenTurnFinished = true
 			}
 			if seenTurnFinished {

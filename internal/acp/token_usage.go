@@ -10,7 +10,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsageEvent, bool) {
+func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsage, bool) {
 	metas := []any{n.Meta}
 	update := n.Update
 	switch {
@@ -38,17 +38,17 @@ func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsageEv
 			return usage, true
 		}
 	}
-	return session.TokenUsageEvent{}, false
+	return session.TokenUsage{}, false
 }
 
-func tokenUsageFromMeta(meta any) (session.TokenUsageEvent, bool) {
+func tokenUsageFromMeta(meta any) (session.TokenUsage, bool) {
 	root, ok := metaMap(meta)
 	if !ok {
-		return session.TokenUsageEvent{}, false
+		return session.TokenUsage{}, false
 	}
 
 	for _, candidate := range usageCandidates(root) {
-		usage := session.TokenUsageEvent{
+		usage := session.TokenUsage{
 			Input: fieldInt(
 				candidate,
 				"input", "inputTokens", "input_tokens", "promptTokens", "prompt_tokens",
@@ -63,7 +63,7 @@ func tokenUsageFromMeta(meta any) (session.TokenUsageEvent, bool) {
 			return usage, true
 		}
 	}
-	return session.TokenUsageEvent{}, false
+	return session.TokenUsage{}, false
 }
 
 func usageCandidates(root map[string]any) []map[string]any {

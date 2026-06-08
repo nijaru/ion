@@ -166,7 +166,7 @@ func TestCantoSessionUsagePrefersTurnCompletedUsage(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.sqlite.Save(ctx, NewTurnStartedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnStart(
 		sess.ID(),
 		TurnStartedData{AgentID: "ion"},
 	)); err != nil {
@@ -212,7 +212,7 @@ func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testi
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := store.sqlite.Save(ctx, NewTurnStartedEvent(
+	if err := store.sqlite.Save(ctx, NewTurnStart(
 		sess.ID(),
 		TurnStartedData{AgentID: "ion"},
 	)); err != nil {

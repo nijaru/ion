@@ -6,24 +6,23 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
-// UserMessage creates a plain user message.
-func UserMessage(content string) llm.Message {
+// userMessage creates a plain user message.
+func userMessage(content string) llm.Message {
 	return llm.TextMessage(llm.RoleUser, content)
 }
 
-// SystemMessage creates a provider-style system message. Durable session
-// context should use ContextEntry via NewContext or AppendContext instead.
-func SystemMessage(content string) llm.Message {
+// systemMessage creates a provider-style system message.
+func systemMessage(content string) llm.Message {
 	return llm.TextMessage(llm.RoleSystem, content)
 }
 
-// AssistantMessage creates a plain assistant message without tool calls.
-func AssistantMessage(content string) llm.Message {
+// assistantMessage creates a plain assistant message without tool calls.
+func assistantMessage(content string) llm.Message {
 	return llm.TextMessage(llm.RoleAssistant, content)
 }
 
-// ToolMessage creates a tool result message.
-func ToolMessage(name, toolID, content string) llm.Message {
+// toolMessage creates a tool result message.
+func toolMessage(name, toolID, content string) llm.Message {
 	msg := llm.TextMessage(llm.RoleTool, content)
 	msg.Name = name
 	msg.ToolID = toolID
@@ -42,7 +41,7 @@ func NewPromptMessages(sessionID string, prompt llm.Prompt) []Event {
 
 // NewUserMessage creates a message-added event for a plain user message.
 func NewUserMessage(sessionID string, content string) Event {
-	return NewMessage(sessionID, UserMessage(content))
+	return NewMessage(sessionID, userMessage(content))
 }
 
 // AppendUser appends a plain user message to the session.

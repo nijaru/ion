@@ -321,7 +321,7 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	if !s.emit(session.TurnStartedEvent{Base: session.BaseNow()}) {
+	if !s.emit(session.TurnStart{Base: session.BaseNow()}) {
 		s.finishTurn()
 		turnCancel()
 		return fmt.Errorf("session closed")
@@ -337,9 +337,9 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		})
 		if err != nil && !isPromptCancellation(err) {
 			base := session.BaseNow()
-			s.emit(session.ErrorEvent{Base: base, Err: fmt.Errorf("prompt: %w", err)})
+			s.emit(session.TurnError{Base: base, Err: fmt.Errorf("prompt: %w", err)})
 		}
-		s.emit(session.TurnFinishedEvent{Base: session.BaseNow()})
+		s.emit(session.TurnEnd{Base: session.BaseNow()})
 	})
 
 	return nil
@@ -458,7 +458,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 	switch {
 	case update.AgentMessageChunk != nil:
 		if update.AgentMessageChunk.Content.Text != nil {
-			s.emit(session.AgentDeltaEvent{
+			s.emit(session.AgentDelta{
 				Base:  session.BaseNow(),
 				Delta: update.AgentMessageChunk.Content.Text.Text,
 			})
@@ -466,7 +466,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 	case update.AgentThoughtChunk != nil:
 		if update.AgentThoughtChunk.Content.Text != nil {
-			s.emit(session.ThinkingDeltaEvent{
+			s.emit(session.ThinkingDelta{
 				Base:  session.BaseNow(),
 				Delta: update.AgentThoughtChunk.Content.Text.Text,
 			})
@@ -482,7 +482,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		if tc.RawInput != nil {
 			args = fmt.Sprintf("%v", tc.RawInput)
 		}
-		s.emit(session.ToolCallStartedEvent{
+		s.emit(session.ToolCallStart{
 			Base:      session.BaseNow(),
 			ToolUseID: string(tc.ToolCallId),
 			ToolName:  toolName,
@@ -497,7 +497,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			if output == "" && tcu.RawOutput != nil {
 				output = fmt.Sprintf("%v", tcu.RawOutput)
 			}
-			s.emit(session.ToolResultEvent{
+			s.emit(session.ToolCallEnd{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
@@ -505,7 +505,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 		case tcu.Status != nil && *tcu.Status == acp.ToolCallStatusFailed:
 			output := toolContentText(tcu.Content)
-			s.emit(session.ToolResultEvent{
+			s.emit(session.ToolCallEnd{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
@@ -514,7 +514,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 		default:
 			if delta := toolContentText(tcu.Content); delta != "" {
-				s.emit(session.ToolOutputDeltaEvent{
+				s.emit(session.ToolOutputDelta{
 					Base:      session.BaseNow(),
 					ToolUseID: string(tcu.ToolCallId),
 					Delta:     delta,
@@ -524,7 +524,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 	case update.Plan != nil:
 		if len(update.Plan.Entries) > 0 {
-			s.emit(session.StatusChangedEvent{
+			s.emit(session.StatusChange{
 				Base:   session.BaseNow(),
 				Status: update.Plan.Entries[0].Content,
 			})
@@ -570,7 +570,7 @@ func (s *Session) RequestPermission(
 	s.pendingApprovals[requestID] = ch
 	s.mu.Unlock()
 
-	if !s.emit(session.ApprovalRequestEvent{
+	if !s.emit(session.ApprovalRequest{
 		Base:        session.BaseNow(),
 		RequestID:   requestID,
 		ToolName:    toolName,

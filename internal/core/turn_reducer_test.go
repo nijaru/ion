@@ -148,7 +148,7 @@ func TestCommitAgentMessage(t *testing.T) {
 	inFlight.Pending = &session.Entry{Role: session.RoleAgent}
 	inFlight.ReasonBuf = "reasoning"
 
-	entry, ok := r.CommitAgentMessage(session.AgentMessageEvent{
+	entry, ok := r.CommitAgentMessage(session.AgentMessage{
 		Base:    session.Base{Timestamp: time.Now()},
 		Message: "hello",
 	})
@@ -172,7 +172,7 @@ func TestCommitAgentMessageEmptyFails(t *testing.T) {
 
 	inFlight.Pending = &session.Entry{Role: session.RoleAgent}
 
-	_, ok := r.CommitAgentMessage(session.AgentMessageEvent{
+	_, ok := r.CommitAgentMessage(session.AgentMessage{
 		Base:    session.Base{Timestamp: time.Now()},
 		Message: "",
 	})
@@ -407,7 +407,7 @@ func TestCompleteToolResult(t *testing.T) {
 
 	id := r.StartToolCall("call-1", time.Now(), "grep")
 
-	entry, ok := r.CompleteToolResult(id, session.ToolResultEvent{
+	entry, ok := r.CompleteToolResult(id, session.ToolCallEnd{
 		Base:   session.Base{Timestamp: time.Now()},
 		Result: "file.go:10",
 	})
@@ -423,7 +423,7 @@ func TestCompleteToolResultUnknown(t *testing.T) {
 	inFlight, progress := newTestState()
 	r := NewTurnReducer(inFlight, progress)
 
-	_, ok := r.CompleteToolResult("unknown", session.ToolResultEvent{
+	_, ok := r.CompleteToolResult("unknown", session.ToolCallEnd{
 		Base:   session.Base{Timestamp: time.Now()},
 		Result: "output",
 	})
@@ -559,7 +559,7 @@ func TestApplyTokenUsage(t *testing.T) {
 	inFlight, progress := newTestState()
 	r := NewTurnReducer(inFlight, progress)
 
-	r.ApplyTokenUsage(session.TokenUsageEvent{
+	r.ApplyTokenUsage(session.TokenUsage{
 		Base:   session.Base{Timestamp: time.Now()},
 		Input:  100,
 		Output: 50,

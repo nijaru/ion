@@ -323,18 +323,18 @@ func (b *smokeBackend) Meta() map[string]string {
 func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	switch b.mode {
 	case "cancel":
-		b.emit(ctx, session.UserMessageEvent{Message: input})
-		b.emit(ctx, session.TurnStartedEvent{})
-		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] waiting for cancel"})
+		b.emit(ctx, session.UserMessage{Message: input})
+		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, session.StatusChange{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
-		b.emit(ctx, session.UserMessageEvent{Message: input})
-		b.emit(ctx, session.TurnStartedEvent{})
-		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active before error"})
+		b.emit(ctx, session.UserMessage{Message: input})
+		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, session.StatusChange{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ErrorEvent{Err: fmt.Errorf("smoke provider failure")})
+		b.emit(ctx, session.TurnError{Err: fmt.Errorf("smoke provider failure")})
 	case "controls":
 		b.runActiveControlsScript(ctx, input)
 	case "files":
@@ -342,17 +342,17 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "markdown":
 		b.runMarkdownScript(ctx, input)
 	default:
-		b.emit(ctx, session.UserMessageEvent{Message: input})
-		b.emit(ctx, session.TurnStartedEvent{})
-		b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active progress"})
+		b.emit(ctx, session.UserMessage{Message: input})
+		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, session.StatusChange{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentDeltaEvent{Delta: "streaming from deterministic smoke backend"})
+		b.emit(ctx, session.AgentDelta{Delta: "streaming from deterministic smoke backend"})
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolCallStartedEvent{
+		b.emit(ctx, session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
@@ -360,14 +360,14 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 1200*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolOutputDeltaEvent{
+		b.emit(ctx, session.ToolOutputDelta{
 			ToolUseID: "tool-1",
 			Delta:     "ion-tmux-",
 		})
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolResultEvent{
+		b.emit(ctx, session.ToolCallEnd{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Result:    "ion-tmux-smoke\n",
@@ -375,19 +375,19 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentMessageEvent{Message: "done"})
-		b.emit(ctx, session.TurnFinishedEvent{})
+		b.emit(ctx, session.AgentMessage{Message: "done"})
+		b.emit(ctx, session.TurnEnd{})
 	}
 }
 
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessageEvent{Message: input})
-	b.emit(ctx, session.TurnStartedEvent{})
-	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] markdown stream"})
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, session.StatusChange{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentDeltaEvent{Delta: strings.Join([]string{
+	b.emit(ctx, session.AgentDelta{Delta: strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -397,7 +397,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentMessageEvent{Message: strings.Join([]string{
+	b.emit(ctx, session.AgentMessage{Message: strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -409,24 +409,24 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 		"",
 		"Bottom line: formatted final output should be the only committed assistant entry.",
 	}, "\n")})
-	b.emit(ctx, session.TurnFinishedEvent{})
+	b.emit(ctx, session.TurnEnd{})
 }
 
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessageEvent{Message: input})
-	b.emit(ctx, session.TurnStartedEvent{})
-	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] active controls"})
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, session.StatusChange{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
-	b.emit(ctx, session.AgentMessageEvent{Message: "controls done"})
-	b.emit(ctx, session.TurnFinishedEvent{})
+	b.emit(ctx, session.AgentMessage{Message: "controls done"})
+	b.emit(ctx, session.TurnEnd{})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessageEvent{Message: input})
-	b.emit(ctx, session.TurnStartedEvent{})
-	b.emit(ctx, session.StatusChangedEvent{Status: "[smoke] file tool rows"})
+	b.emit(ctx, session.UserMessage{Message: input})
+	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, session.StatusChange{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -474,7 +474,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		},
 	}
 	for _, tool := range tools {
-		b.emit(ctx, session.ToolCallStartedEvent{
+		b.emit(ctx, session.ToolCallStart{
 			ToolUseID: tool.id,
 			ToolName:  tool.name,
 			Args:      tool.args,
@@ -482,7 +482,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 150*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolResultEvent{
+		b.emit(ctx, session.ToolCallEnd{
 			ToolUseID: tool.id,
 			ToolName:  tool.name,
 			Result:    tool.result,
@@ -491,15 +491,15 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 			return
 		}
 	}
-	b.emit(ctx, session.AgentMessageEvent{Message: "file tools done"})
-	b.emit(ctx, session.TurnFinishedEvent{})
+	b.emit(ctx, session.AgentMessage{Message: "file tools done"})
+	b.emit(ctx, session.TurnEnd{})
 }
 
 func (b *smokeBackend) emit(ctx context.Context, event session.AgentEvent) bool {
 	if err := b.persistEvent(ctx, event); err != nil {
 		select {
 		case <-ctx.Done():
-		case b.events <- session.ErrorEvent{Err: fmt.Errorf("persist smoke event: %w", err)}:
+		case b.events <- session.TurnError{Err: fmt.Errorf("persist smoke event: %w", err)}:
 		}
 		return false
 	}
@@ -518,7 +518,7 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEven
 
 	sessionID := b.storage.ID()
 	switch msg := event.(type) {
-	case session.UserMessageEvent:
+	case session.UserMessage:
 		if strings.TrimSpace(msg.Message) == "" {
 			return nil
 		}
@@ -527,13 +527,13 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEven
 			msg.Timestamp,
 			csession.NewMessage(sessionID, llm.TextMessage(llm.RoleUser, msg.Message)),
 		)
-	case session.TurnStartedEvent:
+	case session.TurnStart:
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,
-			csession.NewTurnStartedEvent(sessionID, csession.TurnStartedData{}),
+			csession.NewTurnStart(sessionID, csession.TurnStartedData{}),
 		)
-	case session.ToolCallStartedEvent:
+	case session.ToolCallStart:
 		call := llm.Call{ID: msg.ToolUseID, Type: "function"}
 		call.Function.Name = msg.ToolName
 		call.Function.Arguments = msg.Args
@@ -556,7 +556,7 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEven
 				Arguments: msg.Args,
 			}),
 		)
-	case session.ToolResultEvent:
+	case session.ToolCallEnd:
 		completed := csession.ToolCompletedData{
 			Tool:   msg.ToolName,
 			ID:     msg.ToolUseID,
@@ -570,14 +570,14 @@ func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEven
 			msg.Timestamp,
 			csession.NewEvent(sessionID, csession.ToolCompleted, completed),
 		)
-	case session.AgentMessageEvent:
+	case session.AgentMessage:
 		if strings.TrimSpace(msg.Message) == "" && strings.TrimSpace(msg.Reasoning) == "" {
 			return nil
 		}
 		agent := llm.TextMessage(llm.RoleAssistant, msg.Message)
 		agent.Reasoning = msg.Reasoning
 		return b.saveCantoEvent(ctx, msg.Timestamp, csession.NewMessage(sessionID, agent))
-	case session.TurnFinishedEvent:
+	case session.TurnEnd:
 		return b.saveCantoEvent(
 			ctx,
 			msg.Timestamp,

@@ -76,8 +76,8 @@ func NewStepCompletedEvent(sessionID string, data StepCompletedData) Event {
 	return NewEvent(sessionID, StepCompleted, data)
 }
 
-// NewTurnStartedEvent records the durable start of a turn.
-func NewTurnStartedEvent(sessionID string, data TurnStartedData) Event {
+// NewTurnStart records the durable start of a turn.
+func NewTurnStart(sessionID string, data TurnStartedData) Event {
 	return NewEvent(sessionID, TurnStarted, data)
 }
 

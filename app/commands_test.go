@@ -643,7 +643,7 @@ func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 func TestCompactingStatusShowsProgressLine(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.StatusChangedEvent{Status: "Compacting context..."})
+	updated, _ := model.Update(session.StatusChange{Status: "Compacting context..."})
 	model = testModel(t, updated)
 
 	if !model.Progress.Compacting {
@@ -654,7 +654,7 @@ func TestCompactingStatusShowsProgressLine(t *testing.T) {
 		t.Fatalf("progress line = %q, want compaction status", line)
 	}
 
-	updated, _ = model.Update(session.StatusChangedEvent{Status: "Ready"})
+	updated, _ = model.Update(session.StatusChange{Status: "Ready"})
 	model = testModel(t, updated)
 	if model.Progress.Compacting {
 		t.Fatal("expected ready status to clear compaction progress")

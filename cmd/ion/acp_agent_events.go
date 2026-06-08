@@ -23,33 +23,33 @@ func (a *ionACPAgent) forwardEvent(
 	event session.AgentEvent,
 ) (bool, acp.StopReason, error) {
 	switch e := event.(type) {
-	case session.TurnStartedEvent:
+	case session.TurnStart:
 		return false, "", nil
-	case session.TurnFinishedEvent:
+	case session.TurnEnd:
 		return true, acp.StopReasonEndTurn, nil
-	case session.AgentDeltaEvent:
+	case session.AgentDelta:
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentMessageText(e.Delta))
-	case session.ThinkingDeltaEvent:
+	case session.ThinkingDelta:
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentThoughtText(e.Delta))
-	case session.AgentMessageEvent:
+	case session.AgentMessage:
 		if e.Reasoning != "" {
 			if err := a.sessionUpdate(ctx, sessionID, acp.UpdateAgentThoughtText(e.Reasoning)); err != nil {
 				return false, "", err
 			}
 		}
 		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateAgentMessageText(e.Message))
-	case session.ToolCallStartedEvent:
+	case session.ToolCallStart:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallStart(sess.cwd, e))
-	case session.ToolOutputDeltaEvent:
+	case session.ToolOutputDelta:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolOutputDelta(e))
-	case session.ToolResultEvent:
+	case session.ToolCallEnd:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallResult(e))
-	case session.ApprovalRequestEvent:
+	case session.ApprovalRequest:
 		if err := a.requestPermission(ctx, sessionID, sess, e); err != nil {
 			return false, "", err
 		}
 		return false, "", nil
-	case session.ErrorEvent:
+	case session.TurnError:
 		if e.Err != nil {
 			return false, "", e.Err
 		}
@@ -77,7 +77,7 @@ func (a *ionACPAgent) requestPermission(
 	ctx context.Context,
 	sessionID string,
 	sess *ionACPHeadlessSession,
-	req session.ApprovalRequestEvent,
+	req session.ApprovalRequest,
 ) error {
 	approvalSession, ok := sess.agent.(acpApprovalSession)
 	if !ok {
@@ -144,7 +144,7 @@ func acpPromptText(blocks []acp.ContentBlock) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
-func acpToolCallStart(workdir string, e session.ToolCallStartedEvent) acp.SessionUpdate {
+func acpToolCallStart(workdir string, e session.ToolCallStart) acp.SessionUpdate {
 	title := config.Redact(tool.Title(e.ToolName, e.Args, tool.Options{
 		Workdir: workdir,
 		Width:   100,
@@ -160,7 +160,7 @@ func acpToolCallStart(workdir string, e session.ToolCallStartedEvent) acp.Sessio
 	)
 }
 
-func acpToolOutputDelta(e session.ToolOutputDeltaEvent) acp.SessionUpdate {
+func acpToolOutputDelta(e session.ToolOutputDelta) acp.SessionUpdate {
 	delta := config.Redact(e.Delta)
 	return acp.UpdateToolCall(
 		acp.ToolCallId(e.ToolUseID),
@@ -171,7 +171,7 @@ func acpToolOutputDelta(e session.ToolOutputDeltaEvent) acp.SessionUpdate {
 	)
 }
 
-func acpToolCallResult(e session.ToolResultEvent) acp.SessionUpdate {
+func acpToolCallResult(e session.ToolCallEnd) acp.SessionUpdate {
 	status := acp.ToolCallStatusCompleted
 	output := e.Result
 	if e.Error != nil {

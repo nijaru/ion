@@ -31,11 +31,11 @@ func TestIntegrationFullLoop(t *testing.T) {
 	b := testutil.New()
 	b.SetStore(store)
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStartedEvent{}, Delay: 0},
-		{Event: session.AgentDeltaEvent{Delta: "Hello "}, Delay: 10 * time.Millisecond},
-		{Event: session.AgentDeltaEvent{Delta: "world"}, Delay: 10 * time.Millisecond},
-		{Event: session.AgentMessageEvent{Message: "Hello world"}, Delay: 10 * time.Millisecond},
-		{Event: session.TurnFinishedEvent{}, Delay: 0},
+		{Event: session.TurnStart{}, Delay: 0},
+		{Event: session.AgentDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnEnd{}, Delay: 0},
 	})
 
 	// 3. Setup Model
@@ -56,7 +56,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ = model.Update(ev)
 			model = testModel(t, updated)
-			if _, ok := ev.(session.TurnFinishedEvent); ok {
+			if _, ok := ev.(session.TurnEnd); ok {
 				done = true
 			}
 		case <-timeout:
@@ -97,27 +97,27 @@ func TestMultiplexedSwarms(t *testing.T) {
 	// Setup script with two sub-agents
 	b := testutil.New()
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStartedEvent{}, Delay: 0},
+		{Event: session.TurnStart{}, Delay: 0},
 		{
-			Event: session.StatusChangedEvent{
+			Event: session.StatusChange{
 				Base:   session.Base{AgentID: "Explorer"},
 				Status: "Mapping codebase...",
 			},
 			Delay: 10 * time.Millisecond,
 		},
-		{Event: session.ToolCallStartedEvent{
+		{Event: session.ToolCallStart{
 			Base:     session.Base{AgentID: "Tester"},
 			ToolName: "bash",
 			Args:     "go test ./...",
 		}, Delay: 10 * time.Millisecond},
-		{Event: session.ToolResultEvent{
+		{Event: session.ToolCallEnd{
 			Base:      session.Base{AgentID: "Tester"},
 			ToolName:  "bash",
 			ToolUseID: "bash-1",
 			Result:    "OK",
 		}, Delay: 20 * time.Millisecond},
-		{Event: session.AgentMessageEvent{Message: "All good."}, Delay: 10 * time.Millisecond},
-		{Event: session.TurnFinishedEvent{}, Delay: 0},
+		{Event: session.AgentMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnEnd{}, Delay: 0},
 	})
 
 	model := New(b, sess, store, "/tmp/test", "main", "dev", nil)
@@ -133,7 +133,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ := model.Update(ev)
 			model = testModel(t, updated)
-			if _, ok := ev.(session.TurnFinishedEvent); ok {
+			if _, ok := ev.(session.TurnEnd); ok {
 				done = true
 			}
 		case <-timeout:
@@ -164,16 +164,16 @@ func TestIntegrationSubagentDurability(t *testing.T) {
 	b.SetStore(store)
 
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.TurnStartedEvent{}, Delay: 0},
+		{Event: session.TurnStart{}, Delay: 0},
 		{
-			Event: session.ChildRequestedEvent{AgentName: "worker-1", Query: "task 1"},
+			Event: session.ChildRequest{AgentName: "worker-1", Query: "task 1"},
 			Delay: 10 * time.Millisecond,
 		},
 		{
-			Event: session.ChildCompletedEvent{AgentName: "worker-1", Result: "result 1"},
+			Event: session.ChildComplete{AgentName: "worker-1", Result: "result 1"},
 			Delay: 10 * time.Millisecond,
 		},
-		{Event: session.TurnFinishedEvent{}, Delay: 0},
+		{Event: session.TurnEnd{}, Delay: 0},
 	})
 
 	// 3. Setup Model
@@ -191,10 +191,10 @@ loop:
 			updated, cmd := model.Update(ev)
 			model = testModel(t, updated)
 			switch ev.(type) {
-			case session.ChildRequestedEvent, session.ChildCompletedEvent, session.ChildFailedEvent:
+			case session.ChildRequest, session.ChildComplete, session.ChildFail:
 				runSequencePrefix(t, cmd, 2)
 			}
-			if _, ok := ev.(session.TurnFinishedEvent); ok {
+			if _, ok := ev.(session.TurnEnd); ok {
 				break loop
 			}
 		case <-timeout:
