@@ -58,7 +58,7 @@ func p1MatrixSubmitStreamToolCommit(t *testing.T) {
 		t, model,
 		session.UserMessage{Message: "inspect workspace"},
 		session.TurnStart{},
-		session.TokenUsage{Input: 12, Output: 4, Cost: 0.001},
+		session.AgentMessage{InputTokens: 12, OutputTokens: 4, Cost: 0.001},
 		session.AgentDelta{Delta: "streaming answer"},
 		session.ToolCallStart{
 			ToolUseID: "tool-1",
@@ -145,7 +145,7 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 		t, model,
 		session.TurnStart{},
 		session.StatusChange{Status: "Running tool..."},
-		session.TokenUsage{Input: 12000, Output: 6000, Total: 18000, Cost: 0.002},
+		session.AgentMessage{InputTokens: 12000, OutputTokens: 6000, TotalTokens: 18000, Cost: 0.002},
 		session.AgentDelta{Delta: "working"},
 		session.ToolCallStart{
 			ToolUseID: "tool-1",

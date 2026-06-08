@@ -453,7 +453,6 @@ func (w redactingWriter) Write(p []byte) (int, error) {
 // SessionUpdate implements acp.Client — translates ACP notifications to session.AgentEvent.
 func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
 	update := n.Update
-	usage, hasUsage := tokenUsageFromNotification(n)
 
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -529,11 +528,6 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 				Status: update.Plan.Entries[0].Content,
 			})
 		}
-	}
-
-	if hasUsage {
-		usage.Base = session.BaseNow()
-		s.emit(usage)
 	}
 
 	return nil

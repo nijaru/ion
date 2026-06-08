@@ -29,7 +29,7 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 
 	for _, ev := range []session.AgentEvent{
 		session.TurnStart{},
-		session.TokenUsage{Input: 12, Output: 4, Cost: 0.0012},
+		session.AgentMessage{InputTokens: 12, OutputTokens: 4, Cost: 0.0012},
 		session.AgentDelta{Delta: "working"},
 		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "bash", Args: "echo smoke"},
 		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "sm"},
@@ -41,7 +41,7 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
 		model = testModel(t, updated)
-		if _, ok := ev.(session.TokenUsage); ok {
+		if msg, ok := ev.(session.AgentMessage); ok && msg.InputTokens > 0 {
 			runSequencePrefix(t, cmd, 1)
 		}
 	}
@@ -104,7 +104,7 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 
 	for _, ev := range []session.AgentEvent{
 		session.TurnStart{},
-		session.TokenUsage{Input: 20, Output: 8, Cost: 0.003},
+		session.AgentMessage{InputTokens: 20, OutputTokens: 8, Cost: 0.003},
 		session.AgentDelta{Delta: "\n\nReading before tool"},
 		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "read", Args: "README.md"},
 		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
@@ -116,7 +116,7 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 		var cmd tea.Cmd
 		updated, cmd = model.Update(ev)
 		model = testModel(t, updated)
-		if _, ok := ev.(session.TokenUsage); ok {
+		if msg, ok := ev.(session.AgentMessage); ok && msg.InputTokens > 0 {
 			runSequencePrefix(t, cmd, 1)
 		}
 	}
@@ -279,7 +279,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	updated, cmd := model.Update(session.AgentMessage{InputTokens: 20, OutputTokens: 3, Cost: 0.02})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 1)
 	updated, cmd = model.Update(session.TurnError{Err: errors.New("status 429: rate limit exceeded")})
@@ -315,7 +315,7 @@ func TestCoreLoopSmokeBudgetCancellationPersistsForResume(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, cmd := model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	updated, cmd := model.Update(session.AgentMessage{InputTokens: 20, OutputTokens: 3, Cost: 0.02})
 	model = testModel(t, updated)
 	runSequencePrefix(t, cmd, 4)
 

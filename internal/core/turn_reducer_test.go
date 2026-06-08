@@ -559,11 +559,11 @@ func TestApplyTokenUsage(t *testing.T) {
 	inFlight, progress := newTestState()
 	r := NewTurnReducer(inFlight, progress)
 
-	r.ApplyTokenUsage(session.TokenUsage{
-		Base:   session.Base{Timestamp: time.Now()},
-		Input:  100,
-		Output: 50,
-		Cost:   0.005,
+	r.ApplyTokenUsage(session.AgentMessage{
+		Base:         session.Base{Timestamp: time.Now()},
+		InputTokens:  100,
+		OutputTokens: 50,
+		Cost:         0.005,
 	})
 
 	if progress.TokensSent != 100 {

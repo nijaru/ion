@@ -114,9 +114,8 @@ func runPromptTurn(
 					agentText.Reset()
 					agentText.WriteString(msg.Message)
 				}
-			case session.TokenUsage:
-				result.InputTokens += msg.Input
-				result.OutputTokens += msg.Output
+				result.InputTokens += msg.InputTokens
+				result.OutputTokens += msg.OutputTokens
 				result.Cost += msg.Cost
 			case session.TurnError:
 				cancelPrintTurn(agent)

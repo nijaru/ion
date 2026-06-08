@@ -347,7 +347,7 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 func TestPrintModeWritesJSONOutput(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 4)}
 	sess.events <- session.ToolCallStart{ToolName: "read"}
-	sess.events <- session.TokenUsage{Input: 12, Output: 3, Cost: 0.25}
+	sess.events <- session.AgentMessage{InputTokens: 12, OutputTokens: 3, Cost: 0.25}
 	sess.events <- session.AgentMessage{Message: "done"}
 	sess.events <- session.TurnEnd{}
 
@@ -372,7 +372,7 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 	sess.events <- session.TurnStart{}
 	sess.events <- session.ToolCallStart{ToolName: "bash"}
 	sess.events <- session.AgentDelta{Delta: "do"}
-	sess.events <- session.TokenUsage{Input: 10, Output: 2, Cost: 0.01}
+	sess.events <- session.AgentMessage{InputTokens: 10, OutputTokens: 2, Cost: 0.01}
 	sess.events <- session.AgentDelta{Delta: "ne"}
 	sess.events <- session.TurnEnd{}
 

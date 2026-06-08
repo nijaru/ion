@@ -147,6 +147,11 @@ type AgentMessage struct {
 	Name string `json:"name,omitempty"`
 	// IsError indicates whether this is an error result.
 	IsError bool `json:"is_error,omitempty"`
+	// Usage is the LLM's reported token usage for this message.
+	InputTokens  int     `json:"input_tokens,omitzero"`
+	OutputTokens int     `json:"output_tokens,omitzero"`
+	TotalTokens  int     `json:"total_tokens,omitzero"`
+	Cost         float64 `json:"cost,omitzero"`
 	// Timestamp is when the message was created.
 	Timestamp int64 `json:"timestamp,omitempty"`
 }

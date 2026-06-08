@@ -192,7 +192,6 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		return next, cmd, true
 
 	case session.StatusChange,
-		session.TokenUsage,
 		session.QueuedInputUpdate,
 		session.TurnStart,
 		session.TurnEnd,

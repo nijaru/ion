@@ -207,9 +207,9 @@ func TestTokenUsageSeparatesSessionTotalsFromContextEstimate(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10, Cost: 0.01})
+	updated, _ = model.Update(session.AgentMessage{InputTokens: 100, OutputTokens: 10, Cost: 0.01})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 20, Output: 5, Cost: 0.02})
+	updated, _ = model.Update(session.AgentMessage{InputTokens: 20, OutputTokens: 5, Cost: 0.02})
 	model = testModel(t, updated)
 
 	if model.Progress.TokensSent != 120 || model.Progress.TokensReceived != 15 {
@@ -239,7 +239,7 @@ func TestTokenUsagePersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) 
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	next, cmd := model.Update(session.TokenUsage{Input: 10, Output: 2, Cost: 0.01})
+	next, cmd := model.Update(session.AgentMessage{InputTokens: 10, OutputTokens: 2, Cost: 0.01})
 	model = testModel(t, next)
 
 	if model.Progress.TokensSent != 10 || model.Progress.TokensReceived != 2 {
@@ -287,7 +287,7 @@ func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.TokenUsage{Input: 100, Output: 10})
+	updated, _ = model.Update(session.AgentMessage{InputTokens: 100, OutputTokens: 10})
 	model = testModel(t, updated)
 	updated, _ = model.Update(session.ToolCallStart{
 		ToolUseID: "tool-call-1",
@@ -306,7 +306,7 @@ func TestToolResultStartsFreshContextEstimateForNextProviderCall(t *testing.T) {
 		t.Fatalf("context tokens after tool = %d, want reset", model.Progress.ContextTokens)
 	}
 
-	updated, _ = model.Update(session.TokenUsage{Input: 140, Output: 20})
+	updated, _ = model.Update(session.AgentMessage{InputTokens: 140, OutputTokens: 20})
 	model = testModel(t, updated)
 
 	if model.Progress.TokensSent != 240 || model.Progress.TokensReceived != 30 {

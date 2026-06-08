@@ -85,10 +85,15 @@ type UserMessage struct {
 func (e UserMessage) isAgentEvent() {}
 
 // AgentMessage fires when a complete agent message is committed.
+// Carries token usage (Pi: usage data lives in message_end).
 type AgentMessage struct {
 	Base
-	Message   string `json:"message"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Message      string `json:"message"`
+	Reasoning    string `json:"reasoning,omitempty"`
+	InputTokens  int    `json:"input_tokens,omitzero"`
+	OutputTokens int    `json:"output_tokens,omitzero"`
+	TotalTokens  int    `json:"total_tokens,omitzero"`
+	Cost         float64 `json:"cost,omitzero"`
 }
 
 func (e AgentMessage) isAgentEvent() {}
@@ -222,17 +227,6 @@ type ChildCancel struct {
 }
 
 func (e ChildCancel) isAgentEvent() {}
-
-// TokenUsage fires when the agent reports its token consumption.
-type TokenUsage struct {
-	Base
-	Input  int     `json:"input"`
-	Output int     `json:"output"`
-	Total  int     `json:"total"`
-	Cost   float64 `json:"cost,omitempty"`
-}
-
-func (e TokenUsage) isAgentEvent() {}
 
 // CompactionTrigger fires when context overflow is detected and
 // auto-compaction is triggered.

@@ -136,9 +136,9 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 			if s.closed {
 				return
 			}
-			// Track token usage for compaction threshold
-			if usage, ok := ev.(session.TokenUsage); ok {
-				s.updateContextTokens(usage.Input, usage.Output)
+			// Track token usage for compaction threshold (Pi: usage lives in AgentMessage)
+			if msg, ok := ev.(session.AgentMessage); ok && (msg.InputTokens > 0 || msg.OutputTokens > 0) {
+				s.updateContextTokens(msg.InputTokens, msg.OutputTokens)
 			}
 			s.events <- ev
 		},

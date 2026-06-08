@@ -229,11 +229,15 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			a.mu.Unlock()
 			*newMessages = append(*newMessages, message)
 
-			// Emit complete assistant message event
+			// Emit complete assistant message event with usage (Pi: usage in message_end)
 			a.emit(session.AgentMessage{
-				Base:      session.BaseNow(),
-				Message:   message.Content,
-				Reasoning: message.Reasoning,
+				Base:         session.BaseNow(),
+				Message:      message.Content,
+				Reasoning:    message.Reasoning,
+				InputTokens:  message.InputTokens,
+				OutputTokens: message.OutputTokens,
+				TotalTokens:  message.TotalTokens,
+				Cost:         message.Cost,
 			})
 			if err := a.writeModelMessage(ctx, llmMessage); err != nil {
 				return err
@@ -368,6 +372,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 	var thinkingBlocks []llm.ThinkingBlock
 	var calls []AgentToolCall
 	var llmCalls []llm.Call
+	var lastUsage *llm.Usage
 
 	for {
 		chunk, ok := stream.Next()
@@ -393,13 +398,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 			thinkingBlocks = append(thinkingBlocks, chunk.ThinkingBlocks...)
 		}
 		if chunk.Usage != nil {
-			a.emit(session.TokenUsage{
-				Base:   session.BaseNow(),
-				Input:  chunk.Usage.InputTokens,
-				Output: chunk.Usage.OutputTokens,
-				Total:  chunk.Usage.TotalTokens,
-				Cost:   chunk.Usage.Cost,
-			})
+			lastUsage = chunk.Usage
 		}
 		if len(chunk.Calls) > 0 {
 			for _, call := range chunk.Calls {
@@ -418,10 +417,14 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 	}
 
 	message := AgentMessage{
-		Role:      "assistant",
-		Content:   content,
-		Reasoning: reasoning,
-		Calls:     calls,
+		Role:         "assistant",
+		Content:      content,
+		Reasoning:    reasoning,
+		Calls:        calls,
+		InputTokens:  usageValue(lastUsage, "input"),
+		OutputTokens: usageValue(lastUsage, "output"),
+		TotalTokens:  usageValue(lastUsage, "total"),
+		Cost:         usageValueF(lastUsage),
 	}
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.ThinkingBlocks = thinkingBlocks
@@ -1074,6 +1077,28 @@ func parseArguments(args string) map[string]any {
 }
 
 // serializeArguments serializes a map into a JSON string.
+func usageValue(u *llm.Usage, field string) int {
+	if u == nil {
+		return 0
+	}
+	switch field {
+	case "input":
+		return u.InputTokens
+	case "output":
+		return u.OutputTokens
+	case "total":
+		return u.TotalTokens
+	}
+	return 0
+}
+
+func usageValueF(u *llm.Usage) float64 {
+	if u == nil {
+		return 0
+	}
+	return u.Cost
+}
+
 func serializeArguments(args map[string]any) string {
 	if args == nil {
 		return "{}"

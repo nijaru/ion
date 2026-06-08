@@ -845,9 +845,9 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	model.InFlight.ReasonBuf = "reasoning"
 	model.InFlight.AgentCommitted = true
 
-	updated, cmd := model.handleSessionEvent(session.TokenUsage{
-		Input:  1000,
-		Output: 100,
+	updated, cmd := model.handleSessionEvent(session.AgentMessage{
+		InputTokens:  1000,
+		OutputTokens: 100,
 		Cost:   0.011,
 	})
 	model = updated
@@ -915,7 +915,7 @@ func TestTokenUsagePersistenceErrorStillCancelsOverBudgetTurn(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.Progress.Mode = stateStreaming
 
-	updated, cmd := model.handleSessionEvent(session.TokenUsage{Cost: 0.011})
+	updated, cmd := model.handleSessionEvent(session.AgentMessage{Cost: 0.011})
 	model = updated
 
 	if sess.cancels != 0 {

@@ -7,10 +7,9 @@ import (
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
-	"github.com/nijaru/ion/session"
 )
 
-func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsage, bool) {
+func tokenUsageFromNotification(n acp.SessionNotification) (input, output int, cost float64, ok bool) {
 	metas := []any{n.Meta}
 	update := n.Update
 	switch {
@@ -33,37 +32,35 @@ func tokenUsageFromNotification(n acp.SessionNotification) (session.TokenUsage, 
 	}
 
 	for _, meta := range metas {
-		usage, ok := tokenUsageFromMeta(meta)
+		input, output, cost, ok := tokenUsageFromMeta(meta)
 		if ok {
-			return usage, true
+			return input, output, cost, true
 		}
 	}
-	return session.TokenUsage{}, false
+	return 0, 0, 0, false
 }
 
-func tokenUsageFromMeta(meta any) (session.TokenUsage, bool) {
+func tokenUsageFromMeta(meta any) (input, output int, cost float64, ok bool) {
 	root, ok := metaMap(meta)
 	if !ok {
-		return session.TokenUsage{}, false
+		return 0, 0, 0, false
 	}
 
 	for _, candidate := range usageCandidates(root) {
-		usage := session.TokenUsage{
-			Input: fieldInt(
-				candidate,
-				"input", "inputTokens", "input_tokens", "promptTokens", "prompt_tokens",
-			),
-			Output: fieldInt(
-				candidate,
-				"output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens",
-			),
-			Cost: fieldFloat(candidate, "cost", "costUSD", "cost_usd"),
-		}
-		if usage.Input != 0 || usage.Output != 0 || usage.Cost != 0 {
-			return usage, true
+		input = fieldInt(
+			candidate,
+			"input", "inputTokens", "input_tokens", "promptTokens", "prompt_tokens",
+		)
+		output = fieldInt(
+			candidate,
+			"output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens",
+		)
+		cost = fieldFloat(candidate, "cost", "costUSD", "cost_usd")
+		if input != 0 || output != 0 || cost != 0 {
+			return input, output, cost, true
 		}
 	}
-	return session.TokenUsage{}, false
+	return 0, 0, 0, false
 }
 
 func usageCandidates(root map[string]any) []map[string]any {

@@ -354,9 +354,6 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.StatusChange:
 		return m.handleStatusChanged(msg)
 
-	case session.TokenUsage:
-		return m.handleTokenUsage(msg)
-
 	case session.QueuedInputUpdate:
 		return m.handleQueuedInputUpdated(msg)
 
@@ -509,45 +506,6 @@ func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdate) (Model, t
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
-	m.turnReducer().ApplyTokenUsage(msg)
-	cmds := []tea.Cmd{m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
-		Type:   "token_usage",
-		Input:  msg.Input,
-		Output: msg.Output,
-		Cost:   msg.Cost,
-		TS:     entryUnix(msg.Timestamp),
-	})}
-	if reason := m.configuredBudgetStopReason(); reason != "" &&
-		reason != m.Progress.BudgetStopReason {
-		entry, _ := m.turnReducer().ApplyBudgetStop(reason, msg.Timestamp)
-		cmds = append(
-			cmds,
-			m.persistEntryCmd(
-				"persist routing stop",
-				m.routingDecision("stop", "budget_limit", reason),
-			),
-		)
-		if entry.Content != "" {
-			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
-				Type:    "system",
-				Content: entry.Content,
-				TS:      entryUnix(msg.Timestamp),
-			}))
-			cmds = append([]tea.Cmd{
-				tea.Batch(
-					m.terminalCommit().Entries(entry),
-					cancelTurnCmd(m.Model.Session),
-				),
-			}, cmds...)
-			cmds = append(cmds, m.awaitSessionEvent())
-			return m, batchCmds(cmds...)
-		}
-	}
-	cmds = append(cmds, m.awaitSessionEvent())
-	return m, batchCmds(cmds...)
-}
-
 func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
 	m.turnReducer().StartTurn(msg.Timestamp, time.Now())
 	return m, m.awaitSessionEvent()
@@ -599,10 +557,51 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
 		return m.handleSubagentMessage(msg)
 	}
+
+	// Token usage tracking (was separate TokenUsage event, Pi: usage in message_end)
+	m.turnReducer().ApplyTokenUsage(msg)
+	var cmds []tea.Cmd
+	if msg.InputTokens > 0 || msg.OutputTokens > 0 || msg.Cost > 0 {
+		cmds = append(cmds, m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
+			Type:   "token_usage",
+			Input:  msg.InputTokens,
+			Output: msg.OutputTokens,
+			Cost:   msg.Cost,
+			TS:     entryUnix(msg.Timestamp),
+		}))
+	}
+	if reason := m.configuredBudgetStopReason(); reason != "" &&
+		reason != m.Progress.BudgetStopReason {
+		entry, _ := m.turnReducer().ApplyBudgetStop(reason, msg.Timestamp)
+		cmds = append(
+			cmds,
+			m.persistEntryCmd(
+				"persist routing stop",
+				m.routingDecision("stop", "budget_limit", reason),
+			),
+		)
+		if entry.Content != "" {
+			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
+				Type:    "system",
+				Content: entry.Content,
+				TS:      entryUnix(msg.Timestamp),
+			}))
+			cmds = append([]tea.Cmd{
+				tea.Batch(
+					m.terminalCommit().Entries(entry),
+					cancelTurnCmd(m.Model.Session),
+				),
+			}, cmds...)
+			return m, batchCmds(append(cmds, m.awaitSessionEvent())...)
+		}
+	}
+
+	// Commit the message to the turn reducer
 	if entry, ok := m.turnReducer().CommitAgentMessage(msg); ok {
 		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 	}
-	return m, m.awaitSessionEvent()
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, batchCmds(cmds...)
 }
 
 func (m Model) handleToolCallStarted(msg session.ToolCallStart) (Model, tea.Cmd) {

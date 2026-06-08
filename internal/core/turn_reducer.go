@@ -73,17 +73,17 @@ func (r TurnReducer) RejectSubmit() {
 	r.Progress.TurnStartedAt = time.Time{}
 }
 
-func (r TurnReducer) ApplyTokenUsage(msg session.TokenUsage) {
-	total := msg.Total
+func (r TurnReducer) ApplyTokenUsage(msg session.AgentMessage) {
+	total := msg.TotalTokens
 	if total == 0 {
-		total = msg.Input + msg.Output
+		total = msg.InputTokens + msg.OutputTokens
 	}
-	r.Progress.TokensSent += msg.Input
-	r.Progress.TokensReceived += msg.Output
+	r.Progress.TokensSent += msg.InputTokens
+	r.Progress.TokensReceived += msg.OutputTokens
 	r.Progress.ContextTokens += total
 	r.Progress.TotalCost += msg.Cost
-	r.Progress.CurrentTurnInput += msg.Input
-	r.Progress.CurrentTurnOutput += msg.Output
+	r.Progress.CurrentTurnInput += msg.InputTokens
+	r.Progress.CurrentTurnOutput += msg.OutputTokens
 	r.Progress.CurrentTurnCost += msg.Cost
 }
 
