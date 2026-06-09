@@ -38,6 +38,9 @@ type Chunk struct {
 	Reasoning      string          `json:"reasoning,omitempty"`
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 	Calls          []Call          `json:"tool_calls,omitempty"`
+	// Block, when set, is the structured content for this chunk.
+	// Providers may set Block instead of the flat fields.
+	Block ContentBlock `json:"block,omitempty"`
 	// Usage is cumulative when present. Providers may emit multiple usage chunks;
 	// consumers should keep the latest value rather than summing chunks.
 	Usage *Usage `json:"usage,omitempty"`
@@ -57,13 +60,17 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 	if chunk == nil {
 		return
 	}
-	a.resp.Content += chunk.Content
-	a.resp.Reasoning += chunk.Reasoning
-	for _, block := range chunk.ThinkingBlocks {
-		a.addThinkingBlock(block)
-	}
-	for _, call := range chunk.Calls {
-		a.addCall(call)
+	if chunk.Block != nil {
+		a.addBlock(chunk.Block)
+	} else {
+		a.resp.Content += chunk.Content
+		a.resp.Reasoning += chunk.Reasoning
+		for _, block := range chunk.ThinkingBlocks {
+			a.addThinkingBlock(block)
+		}
+		for _, call := range chunk.Calls {
+			a.addCall(call)
+		}
 	}
 	if chunk.Usage != nil {
 		a.resp.Usage = *chunk.Usage
@@ -71,7 +78,68 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 }
 
 func (a *StreamAccumulator) Response() Response {
-	return a.resp
+	resp := a.resp
+	if len(resp.Blocks) > 0 {
+		resp.Content = ""
+		resp.Reasoning = ""
+		resp.ThinkingBlocks = nil
+		resp.Calls = nil
+		for _, b := range resp.Blocks {
+			switch v := b.(type) {
+			case TextBlock:
+				resp.Content += v.Text
+			case ThinkingBlock:
+				resp.Reasoning += v.Thinking
+				resp.ThinkingBlocks = append(resp.ThinkingBlocks, v)
+			case ToolCallBlock:
+				resp.Calls = append(resp.Calls, Call{
+					ID:   v.ID,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: v.Name, Arguments: v.Arguments},
+				})
+			}
+		}
+	}
+	return resp
+}
+
+// addBlock accumulates a typed content block into resp.Blocks.
+func (a *StreamAccumulator) addBlock(block ContentBlock) {
+	switch b := block.(type) {
+	case TextBlock:
+		if lastIdx := len(a.resp.Blocks) - 1; lastIdx >= 0 {
+			if last, ok := a.resp.Blocks[lastIdx].(TextBlock); ok {
+				a.resp.Blocks[lastIdx] = TextBlock{Text: last.Text + b.Text}
+				return
+			}
+		}
+		a.resp.Blocks = append(a.resp.Blocks, b)
+	case ThinkingBlock:
+		if lastIdx := len(a.resp.Blocks) - 1; lastIdx >= 0 {
+			if last, ok := a.resp.Blocks[lastIdx].(ThinkingBlock); ok {
+				if b.Signature == "" && b.Redacted == last.Redacted {
+					a.resp.Blocks[lastIdx] = ThinkingBlock{
+						Thinking:  last.Thinking + b.Thinking,
+						Signature: last.Signature,
+						Redacted:  last.Redacted,
+					}
+					return
+				}
+			}
+		}
+		a.resp.Blocks = append(a.resp.Blocks, b)
+	case ToolCallBlock:
+		for i, existing := range a.resp.Blocks {
+			if cb, ok := existing.(ToolCallBlock); ok && cb.ID == b.ID {
+				a.resp.Blocks[i] = b
+				return
+			}
+		}
+		a.resp.Blocks = append(a.resp.Blocks, b)
+	}
 }
 
 func (a *StreamAccumulator) addThinkingBlock(block ThinkingBlock) {
