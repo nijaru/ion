@@ -383,13 +383,9 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 	}
 	defer stream.Close()
 
-	// Collect the response
-	var content string
-	var reasoning string
-	var thinkingBlocks []llm.ThinkingBlock
-	var calls []AgentToolCall
-	var llmCalls []llm.Call
-	var lastUsage *llm.Usage
+	// Collect the response using StreamAccumulator.
+	// Events are emitted for streaming; accumulation handles blocks + flat fields.
+	var acc llm.StreamAccumulator
 
 	for {
 		chunk, ok := stream.Next()
@@ -398,54 +394,48 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 		}
 
 		if chunk.Content != "" {
-			content += chunk.Content
 			a.emit(session.AgentDelta{
 				Base:  session.BaseNow(),
 				Delta: chunk.Content,
 			})
 		}
 		if chunk.Reasoning != "" {
-			reasoning += chunk.Reasoning
 			a.emit(session.ThinkingDelta{
 				Base:  session.BaseNow(),
 				Delta: chunk.Reasoning,
 			})
 		}
-		if len(chunk.ThinkingBlocks) > 0 {
-			thinkingBlocks = append(thinkingBlocks, chunk.ThinkingBlocks...)
-		}
-		if chunk.Usage != nil {
-			lastUsage = chunk.Usage
-		}
-		if len(chunk.Calls) > 0 {
-			for _, call := range chunk.Calls {
-				llmCalls = upsertLLMCall(llmCalls, call)
-				calls = upsertAgentToolCall(calls, AgentToolCall{
-					ID:        call.ID,
-					Name:      call.Function.Name,
-					Arguments: parseArguments(call.Function.Arguments),
-				})
-			}
-		}
+		acc.Add(chunk)
 	}
 
 	if err := stream.Err(); err != nil {
 		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
 	}
 
+	resp := acc.Response()
+	var calls []AgentToolCall
+	for _, call := range resp.Calls {
+		calls = append(calls, AgentToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: parseArguments(call.Function.Arguments),
+		})
+	}
+
 	message := AgentMessage{
 		Role:         "assistant",
-		Content:      content,
-		Reasoning:    reasoning,
+		Content:      resp.Content,
+		Reasoning:    resp.Reasoning,
 		Calls:        calls,
-		InputTokens:  usageValue(lastUsage, "input"),
-		OutputTokens: usageValue(lastUsage, "output"),
-		TotalTokens:  usageValue(lastUsage, "total"),
-		Cost:         usageValueF(lastUsage),
+		InputTokens:  usageValue(&resp.Usage, "input"),
+		OutputTokens: usageValue(&resp.Usage, "output"),
+		TotalTokens:  usageValue(&resp.Usage, "total"),
+		Cost:         usageValueF(&resp.Usage),
 	}
 	llmMessage := agentMessageToLLM(message)
-	llmMessage.ThinkingBlocks = thinkingBlocks
-	llmMessage.Calls = llmCalls
+	llmMessage.ThinkingBlocks = resp.ThinkingBlocks
+	llmMessage.Blocks = resp.Blocks
+	llmMessage.Calls = resp.Calls
 	return message, llmMessage, nil
 }
 
@@ -1062,32 +1052,6 @@ func cloneAgentMessages(messages []AgentMessage) []AgentMessage {
 		result[i].Calls = append([]AgentToolCall(nil), result[i].Calls...)
 	}
 	return result
-}
-
-func upsertLLMCall(calls []llm.Call, call llm.Call) []llm.Call {
-	if call.ID == "" {
-		return calls
-	}
-	for i := range calls {
-		if calls[i].ID == call.ID {
-			calls[i] = call
-			return calls
-		}
-	}
-	return append(calls, call)
-}
-
-func upsertAgentToolCall(calls []AgentToolCall, call AgentToolCall) []AgentToolCall {
-	if call.ID == "" {
-		return calls
-	}
-	for i := range calls {
-		if calls[i].ID == call.ID {
-			calls[i] = call
-			return calls
-		}
-	}
-	return append(calls, call)
 }
 
 // parseArguments parses a JSON string into a map.
