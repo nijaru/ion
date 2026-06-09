@@ -631,12 +631,12 @@ func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
 			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("contents")}}, nil
 		},
-		BeforeToolCall: func(ctx BeforeToolCallContext) BeforeToolCallResult {
-			before = ctx
+		BeforeToolCall: func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult {
+			before = hookCtx
 			return BeforeToolCallResult{}
 		},
-		AfterToolCall: func(ctx AfterToolCallContext) AfterToolCallResult {
-			after = ctx
+		AfterToolCall: func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult {
+			after = hookCtx
 			return AfterToolCallResult{}
 		},
 		PrepareNextTurn: func(ctx PrepareNextTurnContext) *AgentLoopTurnUpdate {
@@ -832,15 +832,15 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 				return AgentToolResult{}, errors.New("unexpected tool")
 			}
 		},
-		BeforeToolCall: func(ctx BeforeToolCallContext) BeforeToolCallResult {
+		BeforeToolCall: func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult {
 			mu.Lock()
-			preflight = append(preflight, ctx.ToolCall.Name)
+			preflight = append(preflight, hookCtx.ToolCall.Name)
 			mu.Unlock()
 			return BeforeToolCallResult{}
 		},
-		AfterToolCall: func(ctx AfterToolCallContext) AfterToolCallResult {
+		AfterToolCall: func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult {
 			mu.Lock()
-			finalized = append(finalized, ctx.ToolCall.Name)
+			finalized = append(finalized, hookCtx.ToolCall.Name)
 			mu.Unlock()
 			return AfterToolCallResult{}
 		},

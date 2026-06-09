@@ -341,7 +341,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 	// Apply context transform if configured
 	messages := state.Messages
 	if config.TransformContext != nil {
-		messages = config.TransformContext(messages)
+		messages = config.TransformContext(ctx, messages)
 	}
 
 	// Convert to LLM-compatible messages
@@ -482,14 +482,14 @@ func (a *Agent) executeToolCallsSequential(
 		}
 
 		a.emitToolCallStarted(toolCall)
-		prepared := a.prepareToolCall(assistantLLM, toolCall, config)
+		prepared := a.prepareToolCall(ctx, assistantLLM, toolCall, config)
 		var result AgentToolResult
 		var isError bool
 		if prepared.Kind == "immediate" {
 			result, isError = prepared.Result, prepared.IsError
 		} else {
 			result, isError = a.executePreparedToolCall(ctx, prepared, config)
-			result, isError = a.finalizeExecutedToolCall(assistantLLM, prepared, result, isError, config)
+			result, isError = a.finalizeExecutedToolCall(ctx, assistantLLM, prepared, result, isError, config)
 		}
 		message := createToolResultMessage(toolCall, result, isError)
 		res := toolCallResult{
@@ -523,7 +523,7 @@ func (a *Agent) executeToolCallsParallel(
 			return nil, nil, false, ctx.Err()
 		}
 		a.emitToolCallStarted(toolCall)
-		prepared[i] = a.prepareToolCall(assistantLLM, toolCall, config)
+		prepared[i] = a.prepareToolCall(ctx, assistantLLM, toolCall, config)
 
 		if prepared[i].Kind == "immediate" {
 			// Already resolved (not found, blocked, error)
@@ -555,7 +555,7 @@ func (a *Agent) executeToolCallsParallel(
 		go func(idx int, p toolPreparation) {
 			defer wg.Done()
 			result, isError := a.executePreparedToolCall(ctx, p, config)
-			result, isError = a.finalizeExecutedToolCall(assistantLLM, p, result, isError, config)
+			result, isError = a.finalizeExecutedToolCall(ctx, assistantLLM, p, result, isError, config)
 			results <- execResult{idx, result, isError}
 		}(i, prep)
 	}
@@ -632,6 +632,7 @@ type toolPreparation struct {
 // Returns either an immediate result (tool not found, blocked, error) or a prepared call.
 // Matches Pi's prepareToolCall.
 func (a *Agent) prepareToolCall(
+	ctx context.Context,
 	assistantLLM llm.Message,
 	toolCall AgentToolCall,
 	config AgentLoopConfig,
@@ -651,7 +652,7 @@ func (a *Agent) prepareToolCall(
 		}
 	}
 	if config.BeforeToolCall != nil {
-		before := config.BeforeToolCall(BeforeToolCallContext{
+		before := config.BeforeToolCall(ctx, BeforeToolCallContext{
 			AssistantMessage: assistantLLM,
 			ToolCall:         toolCall,
 			Args:             toolCall.Arguments,
@@ -699,6 +700,7 @@ func (a *Agent) executePreparedToolCall(
 // finalizeExecutedToolCall applies the afterToolCall hook.
 // Matches Pi's finalizeExecutedToolCall.
 func (a *Agent) finalizeExecutedToolCall(
+	ctx context.Context,
 	assistantLLM llm.Message,
 	prepared toolPreparation,
 	result AgentToolResult,
@@ -706,7 +708,7 @@ func (a *Agent) finalizeExecutedToolCall(
 	config AgentLoopConfig,
 ) (AgentToolResult, bool) {
 	if config.AfterToolCall != nil {
-		after := config.AfterToolCall(AfterToolCallContext{
+		after := config.AfterToolCall(ctx, AfterToolCallContext{
 			AssistantMessage: assistantLLM,
 			ToolCall:         prepared.ToolCall,
 			Args:             prepared.Args,
@@ -754,12 +756,12 @@ func (a *Agent) prepareAndExecuteTool(
 	toolCall AgentToolCall,
 	config AgentLoopConfig,
 ) (AgentToolResult, bool) {
-	prepared := a.prepareToolCall(assistantLLM, toolCall, config)
+	prepared := a.prepareToolCall(ctx, assistantLLM, toolCall, config)
 	if prepared.Kind == "immediate" {
 		return prepared.Result, prepared.IsError
 	}
 	result, isError := a.executePreparedToolCall(ctx, prepared, config)
-	return a.finalizeExecutedToolCall(assistantLLM, prepared, result, isError, config)
+	return a.finalizeExecutedToolCall(ctx, assistantLLM, prepared, result, isError, config)
 }
 
 // getSteeringMessages returns steering messages from the config hook.

@@ -242,7 +242,7 @@ type AgentLoopConfig struct {
 	// ConvertToLlm converts AgentMessages to LLM Messages before each call.
 	ConvertToLlm func(messages []AgentMessage) []llm.Message `json:"-"`
 	// TransformContext transforms the context before each LLM call.
-	TransformContext func(messages []AgentMessage) []AgentMessage `json:"-"`
+	TransformContext func(ctx context.Context, messages []AgentMessage) []AgentMessage `json:"-"`
 	// ShouldStopAfterTurn is called after each turn to decide whether to stop.
 	ShouldStopAfterTurn func(ctx ShouldStopAfterTurnContext) bool `json:"-"`
 	// PrepareNextTurn is called before starting another provider request.
@@ -252,7 +252,7 @@ type AgentLoopConfig struct {
 	// GetFollowUpMessages returns follow-up messages after the agent stops.
 	GetFollowUpMessages func() []AgentMessage `json:"-"`
 	// BeforeToolCall is called before each tool execution.
-	BeforeToolCall func(ctx BeforeToolCallContext) BeforeToolCallResult `json:"-"`
+	BeforeToolCall func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult `json:"-"`
 	// AfterToolCall is called after each tool execution.
-	AfterToolCall func(ctx AfterToolCallContext) AfterToolCallResult `json:"-"`
+	AfterToolCall func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult `json:"-"`
 }
