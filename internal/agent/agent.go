@@ -919,20 +919,20 @@ func (a *Agent) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 }
 
 func (a *Agent) shouldExecuteSequentially(config AgentLoopConfig, calls []AgentToolCall) bool {
-	if config.ToolExecutionMode == ToolExecutionSequential {
-		return true
-	}
-	return !a.allToolsParallel(calls)
-}
-
-func (a *Agent) allToolsParallel(calls []AgentToolCall) bool {
 	for _, call := range calls {
 		tool, ok := a.findTool(call.Name)
-		if !ok || !tool.Parallel {
-			return false
+		if !ok {
+			return true // unknown tool: sequential for safety
+		}
+		mode := tool.ExecutionMode
+		if mode == "" {
+			mode = config.ToolExecutionMode
+		}
+		if mode == ToolExecutionSequential {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (a *Agent) findTool(name string) (AgentTool, bool) {

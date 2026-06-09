@@ -192,9 +192,9 @@ type AgentTool struct {
 	Parameters any `json:"parameters"`
 	// ReadOnly indicates whether the tool only reads data.
 	ReadOnly bool `json:"read_only"`
-	// Parallel indicates whether the tool can be executed in parallel with other tools.
-	// Deprecated: Use ExecutionMode instead.
-	Parallel bool `json:"parallel"`
+	// ExecutionMode controls how this tool's calls are executed (sequential or parallel).
+	// If empty, uses the global ToolExecutionMode from AgentLoopConfig.
+	ExecutionMode ToolExecutionMode `json:"execution_mode,omitempty"`
 	// Label is a human-readable label for the tool (shown in TUI).
 	Label string `json:"label,omitzero"`
 	// PrepareArguments transforms tool arguments before validation and execution.

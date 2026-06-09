@@ -765,8 +765,8 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 		},
 	})
 	agent.SetTools([]AgentTool{
-		{Name: "first", Parallel: true},
-		{Name: "second", Parallel: true},
+		{Name: "first", ExecutionMode: ToolExecutionParallel},
+		{Name: "second", ExecutionMode: ToolExecutionParallel},
 	})
 
 	go func() {
@@ -850,8 +850,8 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	})
 
 	agent.SetTools([]AgentTool{
-		{Name: "first", Parallel: true},
-		{Name: "second", Parallel: true},
+		{Name: "first", ExecutionMode: ToolExecutionParallel},
+		{Name: "second", ExecutionMode: ToolExecutionParallel},
 	})
 
 	errc := make(chan error, 1)
@@ -897,6 +897,52 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	// Verify concurrent/completion-order finalized order (second was faster than first)
 	if len(finalized) != 2 || finalized[0] != "second" || finalized[1] != "first" {
 		t.Errorf("finalized hook order incorrect (expected second, then first): %v", finalized)
+	}
+}
+
+func TestAgentPerToolExecutionModeOverridesGlobal(t *testing.T) {
+	// Global config is Parallel, but one tool has ExecutionMode=Sequential.
+	// The sequential tool should force sequential execution.
+	toolOrder := make(chan string, 10)
+
+	agent := New(AgentLoopConfig{
+		Model:             llm.Model{ID: "model"},
+		ToolExecutionMode: ToolExecutionParallel,
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{
+					testCall("call-1", "fast", `{}`),
+					testCall("call-2", "slow", `{}`),
+				},
+			}}}, nil
+		},
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			toolOrder <- toolCall.Name
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart(toolCall.Name + " done")}}, nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(ctx.ToolResults) == 2
+		},
+	})
+	// slow tool overrides to Sequential
+	agent.SetTools([]AgentTool{
+		{Name: "fast", ExecutionMode: ToolExecutionParallel},
+		{Name: "slow", ExecutionMode: ToolExecutionSequential},
+	})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Both tools should have executed
+	close(toolOrder)
+	var order []string
+	for name := range toolOrder {
+		order = append(order, name)
+	}
+	if len(order) != 2 {
+		t.Fatalf("expected 2 tool executions, got %d: %v", len(order), order)
 	}
 }
 

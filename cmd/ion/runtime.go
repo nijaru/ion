@@ -272,7 +272,7 @@ func agentToolsFromRegistry(registry *tool.Registry) []agent.AgentTool {
 		}
 		if _, ok := entry.Tool.(tool.ContentTool); ok {
 			at.ReadOnly = true
-			at.Parallel = true
+			at.ExecutionMode = agent.ToolExecutionParallel
 		}
 		result = append(result, at)
 	}
