@@ -109,7 +109,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	}
 
 	// Verify event sequence
-	var gotAgentStart, gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotAgentEnd bool
+	var gotAgentStart, gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnEnd bool
 
 	for _, ev := range events {
 		switch msg := ev.(type) {
@@ -131,8 +131,8 @@ func TestAgentEventsAndLoop(t *testing.T) {
 			gotToolCallStarted = true
 		case session.ToolCallEnd:
 			gotToolResult = true
-		case session.AgentEnd:
-			gotAgentEnd = true
+		case session.TurnEnd:
+			gotTurnEnd = true
 		}
 	}
 
@@ -160,8 +160,8 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	if !gotToolResult {
 		t.Error("missing ToolResult event")
 	}
-	if !gotAgentEnd {
-		t.Error("missing AgentEnd event")
+	if !gotTurnEnd {
+		t.Error("missing TurnEnd event")
 	}
 }
 
@@ -413,7 +413,7 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 			switch msg := ev.(type) {
 			case session.UserMessage:
 				users = append(users, msg.Message)
-			case session.TurnEnd:
+			case session.AgentEnd:
 				want := []string{"initial", "follow one", "follow two"}
 				if strings.Join(users, ",") != strings.Join(want, ",") {
 					t.Fatalf("user events = %v, want %v", users, want)

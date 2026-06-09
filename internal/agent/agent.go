@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -96,7 +97,8 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the run.
-// Emits AgentStart at the beginning and AgentEnd when done (Pi parity).
+// Emits AgentStart at the beginning. Caller owns AgentEnd.
+// Emits TurnEnd per-turn inside runLoop (Pi parity).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
 	a.emit(session.AgentStart{Base: session.BaseNow()})
 
@@ -105,18 +107,19 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		a.mu.Lock()
 		a.state.ErrorMessage = err.Error()
 		a.mu.Unlock()
-		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
+		// acceptPrompts error means the turn never started in runLoop.
+		// Emit TurnEnd so the TUI knows the turn is over.
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 		return newMessages, err
 	}
 
 	newMessages, runErr := a.execute(ctx, &newMessages)
-	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: runErr})
 	return newMessages, runErr
 }
 
 // Continue continues the agent loop without adding new messages.
 // Used for retries — context already has user message or tool results.
-// Emits AgentStart at the beginning and AgentEnd when done (Pi parity).
+// Emits AgentStart at the beginning. Caller owns AgentEnd.
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	a.emit(session.AgentStart{Base: session.BaseNow()})
 
@@ -124,7 +127,7 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	if len(a.state.Messages) == 0 {
 		a.mu.RUnlock()
 		err := fmt.Errorf("cannot continue: no messages in context")
-		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 		return nil, err
 	}
 	lastMsg := a.state.Messages[len(a.state.Messages)-1]
@@ -132,18 +135,17 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 
 	if lastMsg.Role == "assistant" {
 		err := fmt.Errorf("cannot continue from message role: assistant")
-		a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err})
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 		return nil, err
 	}
 
 	newMessages, runErr := a.execute(ctx, new([]AgentMessage))
-	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: runErr})
 	return newMessages, runErr
 }
 
 // execute runs the main loop with streaming state management.
 // Shared by Run and Continue. Does NOT emit lifecycle events (AgentStart/AgentEnd)
-// — callers own those. Emits per-batch TurnEnd inside runLoop.
+// — callers own those. Emits TurnEnd per-turn inside runLoop.
 func (a *Agent) execute(ctx context.Context, newMessages *[]AgentMessage) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true
@@ -200,6 +202,8 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
 			// Check for context cancellation
 			if ctx.Err() != nil {
+				// Cancellation is normal control flow, not an error.
+				a.emit(session.TurnEnd{Base: session.BaseNow()})
 				return ctx.Err()
 			}
 
@@ -223,6 +227,12 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			// Stream assistant response
 			message, llmMessage, err := a.streamAssistantResponse(ctx)
 			if err != nil {
+				// Cancellation is normal control flow, not an error.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					a.emit(session.TurnEnd{Base: session.BaseNow()})
+				} else {
+					a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+				}
 				return fmt.Errorf("stream assistant response: %w", err)
 			}
 
@@ -247,6 +257,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 
 			// Check for error/abort
 			if message.IsError {
+				a.emit(session.TurnEnd{Base: session.BaseNow()})
 				return nil
 			}
 
@@ -265,6 +276,7 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 					toolCalls,
 				)
 				if err != nil {
+					a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 					return fmt.Errorf("execute tool calls: %w", err)
 				}
 
@@ -281,6 +293,9 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 					}
 				}
 			}
+
+			// Emit TurnEnd per-turn (Pi parity: turn_end inside the loop)
+			a.emit(session.TurnEnd{Base: session.BaseNow()})
 
 			turnContext := ShouldStopAfterTurnContext{
 				Message:     llmMessage,

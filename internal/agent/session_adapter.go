@@ -322,6 +322,7 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 
 // handlePostAgentRun handles post-agent-run logic including overflow
 // recovery and auto-retry with exponential backoff.
+// Emits AgentEnd when all recovery is exhausted (Pi parity).
 func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -330,10 +331,10 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 		return
 	}
 
-	// Success or cancellation
+	// Success or cancellation — agent already emitted TurnEnd
 	if err == nil || errors.Is(err, context.Canceled) {
 		s.retryAttempt = 0
-		s.events <- session.TurnEnd{Base: session.BaseNow()}
+		s.events <- session.AgentEnd{Base: session.BaseNow()}
 		return
 	}
 
@@ -354,8 +355,8 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error) {
 		}
 	}
 
-	// Non-retryable error
-	s.emitErrorAndFinished(err)
+	// Non-retryable error — agent already emitted TurnEnd{Error}
+	s.events <- session.AgentEnd{Base: session.BaseNow(), Error: err}
 }
 
 // recoverFromOverflow handles context overflow by compacting and retrying.
@@ -379,7 +380,7 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
 			}
-			s.events <- session.TurnEnd{Base: session.BaseNow()}
+			s.events <- session.AgentEnd{Base: session.BaseNow()}
 		}
 		return true
 	}
@@ -390,12 +391,9 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	_, retryErr := s.agent.Continue(ctx)
 	if !s.closed {
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			s.events <- session.TurnEnd{
-				Base:  session.BaseNow(),
-				Error: retryErr,
-			}
+			s.events <- session.AgentEnd{Base: session.BaseNow(), Error: retryErr}
 		} else {
-			s.events <- session.TurnEnd{Base: session.BaseNow()}
+			s.events <- session.AgentEnd{Base: session.BaseNow()}
 		}
 	}
 	return true
@@ -428,7 +426,7 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 				Attempt:    s.retryAttempt,
 				FinalError: "Retry cancelled",
 			}
-			s.events <- session.TurnEnd{Base: session.BaseNow()}
+			s.events <- session.AgentEnd{Base: session.BaseNow()}
 		}
 		return true
 	case <-time.After(time.Duration(delayMs) * time.Millisecond):
@@ -455,23 +453,20 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 			Attempt: s.retryAttempt,
 		}
 		s.retryAttempt = 0
-		s.events <- session.TurnEnd{Base: session.BaseNow()}
+		s.events <- session.AgentEnd{Base: session.BaseNow()}
 		return true
 	}
 
 	// Retry failed — handle the new error (may retry again)
+	handlePostAgentRunErr := retryErr
+	_ = handlePostAgentRunErr // handled below after mu is re-acquired
+	// Note: handlePostAgentRun acquires mu, so we must release first
+	s.mu.Unlock()
 	s.handlePostAgentRun(ctx, retryErr)
+	s.mu.Lock()
 	return true
 }
 
-// emitErrorAndFinished emits a TurnEnd event with an error.
-// Caller must hold s.mu.
-func (s *SessionAdapter) emitErrorAndFinished(err error) {
-	s.events <- session.TurnEnd{
-		Base:  session.BaseNow(),
-		Error: err,
-	}
-}
 
 func (s *SessionAdapter) appendModelMessage(ctx context.Context, message llm.Message) error {
 	s.mu.Lock()
