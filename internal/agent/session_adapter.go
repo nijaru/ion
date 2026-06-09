@@ -213,12 +213,6 @@ func (s *SessionAdapter) Open(ctx context.Context) error {
 		return fmt.Errorf("session is closed")
 	}
 
-	// Emit metadata loaded event
-	s.events <- session.MetadataLoad{
-		Base:      session.BaseNow(),
-		SessionID: s.id,
-	}
-
 	return nil
 }
 
@@ -237,12 +231,6 @@ func (s *SessionAdapter) Resume(ctx context.Context, sessionID string) error {
 		return err
 	} else if history != nil {
 		s.agent.SetMessages(history)
-	}
-
-	// Emit metadata loaded event
-	s.events <- session.MetadataLoad{
-		Base:      session.BaseNow(),
-		SessionID: s.id,
 	}
 
 	return nil

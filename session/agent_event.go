@@ -27,13 +27,6 @@ func BaseNow() Base {
 	return BaseAt(time.Now())
 }
 
-// MetadataLoaded fires when a session's metadata is loaded or created.
-type MetadataLoad struct {
-	Base
-	SessionID string `json:"session_id"`
-}
-
-func (e MetadataLoad) isAgentEvent() {}
 
 // StatusChanged fires when the agent updates its internal status
 // or progresses on a long-running step.
