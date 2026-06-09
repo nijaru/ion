@@ -130,3 +130,54 @@ func TestStreamAccumulatorFlatBackwardCompat(t *testing.T) {
 		t.Errorf("Blocks should be empty for flat accumulation, got %d", len(resp.Blocks))
 	}
 }
+
+func TestStreamAccumulatorMixedBlockAndFlatToolCalls(t *testing.T) {
+	// Text/reasoning use Chunk.Block, tool calls use flat Calls.
+	// Response() must merge both into a complete Blocks list.
+	var acc llm.StreamAccumulator
+	acc.Add(&llm.Chunk{Content: "Hello", Block: llm.TextBlock{Text: "Hello"}})
+	acc.Add(&llm.Chunk{
+		Reasoning:      "thinking...",
+		ThinkingBlocks: []llm.ThinkingBlock{{Thinking: "thinking..."}},
+		Block:          llm.ThinkingBlock{Thinking: "thinking..."},
+	})
+	acc.Add(&llm.Chunk{
+		Calls: []llm.Call{{
+			ID:       "call-1",
+			Type:     "function",
+			Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "bash", Arguments: "{\"cmd\":\"ls\"}"},
+		}},
+	})
+
+	resp := acc.Response()
+
+	// Flat fields should be populated.
+	if resp.Content != "Hello" {
+		t.Errorf("Content = %q, want %q", resp.Content, "Hello")
+	}
+	if resp.Reasoning != "thinking..." {
+		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "thinking...")
+	}
+	if len(resp.Calls) != 1 || resp.Calls[0].ID != "call-1" {
+		t.Errorf("Calls = %v, want 1 call with ID call-1", resp.Calls)
+	}
+
+	// Blocks should contain all three: text, thinking, tool call.
+	if len(resp.Blocks) != 3 {
+		t.Fatalf("Blocks = %d, want 3", len(resp.Blocks))
+	}
+	if _, ok := resp.Blocks[0].(llm.TextBlock); !ok {
+		t.Errorf("Blocks[0] = %T, want TextBlock", resp.Blocks[0])
+	}
+	if _, ok := resp.Blocks[1].(llm.ThinkingBlock); !ok {
+		t.Errorf("Blocks[1] = %T, want ThinkingBlock", resp.Blocks[1])
+	}
+	if tcb, ok := resp.Blocks[2].(llm.ToolCallBlock); !ok {
+		t.Errorf("Blocks[2] = %T, want ToolCallBlock", resp.Blocks[2])
+	} else if tcb.ID != "call-1" || tcb.Name != "bash" {
+		t.Errorf("Blocks[2] = %+v, want ID=call-1 Name=bash", tcb)
+	}
+}
