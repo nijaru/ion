@@ -68,10 +68,7 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 			Type: "function",
 		}
 		s.activeCall.Function.Name = start.ContentBlock.Name
-		return &llm.Chunk{
-			Calls: []llm.Call{*s.activeCall},
-			Block: llm.ToolCallBlock{ID: start.ContentBlock.ID, Name: start.ContentBlock.Name},
-		}
+		return &llm.Chunk{Calls: []llm.Call{*s.activeCall}}
 	case "thinking":
 		block := llm.ThinkingBlock{
 			Thinking:  start.ContentBlock.Thinking,
@@ -117,14 +114,7 @@ func (s *Stream) contentBlockDelta(delta sdk.ContentBlockDeltaEvent) *llm.Chunk 
 			return nil
 		}
 		s.activeCall.Function.Arguments += delta.Delta.PartialJSON
-		chunk := &llm.Chunk{
-			Calls: []llm.Call{*s.activeCall},
-			Block: llm.ToolCallBlock{
-				ID:        s.activeCall.ID,
-				Name:      s.activeCall.Function.Name,
-				Arguments: s.activeCall.Function.Arguments,
-			},
-		}
+		chunk := &llm.Chunk{Calls: []llm.Call{*s.activeCall}}
 		if s.activeCall.Function.Name == s.targetName {
 			chunk.Content = delta.Delta.PartialJSON
 		}

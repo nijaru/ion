@@ -47,7 +47,9 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 			Reasoning: choice.Delta.ReasoningContent,
 		}
 
-		// Set typed block alongside flat fields.
+		// Set typed block for text/reasoning (one block per chunk).
+		// Tool calls use the flat Calls path — they need one block per call,
+		// which the accumulator handles via addCall/upsert in Response().
 		if choice.Delta.ReasoningContent != "" {
 			chunk.Block = llm.ThinkingBlock{Thinking: choice.Delta.ReasoningContent}
 		} else if choice.Delta.Content != "" {
@@ -83,11 +85,6 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 
 				s.activeCalls[*index] = call
 				chunk.Calls[i] = call
-				chunk.Block = llm.ToolCallBlock{
-					ID:        call.ID,
-					Name:      call.Function.Name,
-					Arguments: call.Function.Arguments,
-				}
 			}
 		}
 

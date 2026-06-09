@@ -102,6 +102,26 @@ func (a *StreamAccumulator) Response() Response {
 				})
 			}
 		}
+		// Merge flat tool calls into Blocks and Calls if not already present.
+		// Providers that don't set Chunk.Block for tool calls accumulate them
+		// in flat Calls only. This ensures Response.Blocks is complete.
+		if len(a.resp.Calls) > 0 {
+			existingIDs := make(map[string]bool, len(resp.Calls))
+			for _, c := range resp.Calls {
+				existingIDs[c.ID] = true
+			}
+			for _, call := range a.resp.Calls {
+				if existingIDs[call.ID] {
+					continue
+				}
+				resp.Blocks = append(resp.Blocks, ToolCallBlock{
+					ID:        call.ID,
+					Name:      call.Function.Name,
+					Arguments: call.Function.Arguments,
+				})
+				resp.Calls = append(resp.Calls, call)
+			}
+		}
 	}
 	return resp
 }
