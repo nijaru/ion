@@ -68,22 +68,29 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 			Type: "function",
 		}
 		s.activeCall.Function.Name = start.ContentBlock.Name
-		return &llm.Chunk{Calls: []llm.Call{*s.activeCall}}
-	case "thinking":
 		return &llm.Chunk{
-			Reasoning: start.ContentBlock.Thinking,
-			ThinkingBlocks: []llm.ThinkingBlock{{
-				Thinking:  start.ContentBlock.Thinking,
-				Signature: start.ContentBlock.Signature,
-			}},
+			Calls: []llm.Call{*s.activeCall},
+			Block: llm.ToolCallBlock{ID: start.ContentBlock.ID, Name: start.ContentBlock.Name},
+		}
+	case "thinking":
+		block := llm.ThinkingBlock{
+			Thinking:  start.ContentBlock.Thinking,
+			Signature: start.ContentBlock.Signature,
+		}
+		return &llm.Chunk{
+			Reasoning:      start.ContentBlock.Thinking,
+			ThinkingBlocks: []llm.ThinkingBlock{block},
+			Block:          block,
 		}
 	case "redacted_thinking":
+		block := llm.ThinkingBlock{
+			Redacted:  true,
+			Signature: start.ContentBlock.Signature,
+		}
 		return &llm.Chunk{
-			Reasoning: "<redacted_thinking />",
-			ThinkingBlocks: []llm.ThinkingBlock{{
-				Redacted:  true,
-				Signature: start.ContentBlock.Signature,
-			}},
+			Reasoning:      "<redacted_thinking />",
+			ThinkingBlocks: []llm.ThinkingBlock{block},
+			Block:          block,
 		}
 	default:
 		return nil
@@ -93,20 +100,31 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 func (s *Stream) contentBlockDelta(delta sdk.ContentBlockDeltaEvent) *llm.Chunk {
 	switch delta.Delta.Type {
 	case "text_delta":
-		return &llm.Chunk{Content: delta.Delta.Text}
+		return &llm.Chunk{
+			Content: delta.Delta.Text,
+			Block:   llm.TextBlock{Text: delta.Delta.Text},
+		}
 	case "thinking_delta":
 		return &llm.Chunk{
 			Reasoning: delta.Delta.Thinking,
 			ThinkingBlocks: []llm.ThinkingBlock{{
 				Thinking: delta.Delta.Thinking,
 			}},
+			Block: llm.ThinkingBlock{Thinking: delta.Delta.Thinking},
 		}
 	case "input_json_delta":
 		if s.activeCall == nil {
 			return nil
 		}
 		s.activeCall.Function.Arguments += delta.Delta.PartialJSON
-		chunk := &llm.Chunk{Calls: []llm.Call{*s.activeCall}}
+		chunk := &llm.Chunk{
+			Calls: []llm.Call{*s.activeCall},
+			Block: llm.ToolCallBlock{
+				ID:        s.activeCall.ID,
+				Name:      s.activeCall.Function.Name,
+				Arguments: s.activeCall.Function.Arguments,
+			},
+		}
 		if s.activeCall.Function.Name == s.targetName {
 			chunk.Content = delta.Delta.PartialJSON
 		}

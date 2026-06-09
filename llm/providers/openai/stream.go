@@ -47,6 +47,13 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 			Reasoning: choice.Delta.ReasoningContent,
 		}
 
+		// Set typed block alongside flat fields.
+		if choice.Delta.ReasoningContent != "" {
+			chunk.Block = llm.ThinkingBlock{Thinking: choice.Delta.ReasoningContent}
+		} else if choice.Delta.Content != "" {
+			chunk.Block = llm.TextBlock{Text: choice.Delta.Content}
+		}
+
 		if len(choice.Delta.ToolCalls) > 0 {
 			chunk.Calls = make([]llm.Call, len(choice.Delta.ToolCalls))
 			for i, delta := range choice.Delta.ToolCalls {
@@ -76,6 +83,11 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 
 				s.activeCalls[*index] = call
 				chunk.Calls[i] = call
+				chunk.Block = llm.ToolCallBlock{
+					ID:        call.ID,
+					Name:      call.Function.Name,
+					Arguments: call.Function.Arguments,
+				}
 			}
 		}
 

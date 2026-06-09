@@ -82,18 +82,17 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		switch block.Type {
 		case "text":
 			res.Content += block.Text
+			res.Blocks = append(res.Blocks, llm.TextBlock{Text: block.Text})
 		case "thinking":
+			tb := llm.ThinkingBlock{Thinking: block.Thinking, Signature: block.Signature}
 			res.Reasoning += block.Thinking
-			res.ThinkingBlocks = append(res.ThinkingBlocks, llm.ThinkingBlock{
-				Thinking:  block.Thinking,
-				Signature: block.Signature,
-			})
+			res.ThinkingBlocks = append(res.ThinkingBlocks, tb)
+			res.Blocks = append(res.Blocks, tb)
 		case "redacted_thinking":
+			tb := llm.ThinkingBlock{Redacted: true, Signature: block.Signature}
 			res.Reasoning += "<redacted_thinking />"
-			res.ThinkingBlocks = append(res.ThinkingBlocks, llm.ThinkingBlock{
-				Redacted:  true,
-				Signature: block.Signature,
-			})
+			res.ThinkingBlocks = append(res.ThinkingBlocks, tb)
+			res.Blocks = append(res.Blocks, tb)
 		case "tool_use":
 			call := llm.Call{
 				ID:   block.ID,
@@ -107,6 +106,11 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 				},
 			}
 			res.Calls = append(res.Calls, call)
+			res.Blocks = append(res.Blocks, llm.ToolCallBlock{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: string(block.Input),
+			})
 
 			// If this was a forced structured output, promote its input to Content.
 			if rf := prepared.ResponseFormat; rf != nil && rf.Type == llm.ResponseFormatJSONSchema {
@@ -118,8 +122,6 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 					res.Content = string(block.Input)
 				}
 			}
-			// "thinking" and "redacted_thinking" are internal reasoning blocks.
-			// They are not exposed in Response to keep the API uniform.
 		}
 	}
 

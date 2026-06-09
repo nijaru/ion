@@ -96,6 +96,7 @@ func (b *Base) Generate(ctx context.Context, req *llm.Request) (*llm.Response, e
 		Reasoning: choice.Message.ReasoningContent,
 		Calls:     b.ConvertToolCalls(choice.Message.ToolCalls),
 		Usage:     usage,
+		Blocks:    buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
 	}, nil
 }
 

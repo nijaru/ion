@@ -256,6 +256,28 @@ func (s schemaMarshaler) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any(s))
 }
 
+// buildBlocks constructs ContentBlocks from flat OpenAI message fields.
+func buildBlocks(content string, reasoning string, toolCalls []openai.ToolCall) []llm.ContentBlock {
+	var blocks []llm.ContentBlock
+	if reasoning != "" {
+		blocks = append(blocks, llm.ThinkingBlock{Thinking: reasoning})
+	}
+	if content != "" {
+		blocks = append(blocks, llm.TextBlock{Text: content})
+	}
+	for _, tc := range toolCalls {
+		blocks = append(blocks, llm.ToolCallBlock{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
+}
+
 // ConvertToolCalls transforms OpenAI tool calls into the unified format.
 func (b *Base) ConvertToolCalls(calls []openai.ToolCall) []llm.Call {
 	if len(calls) == 0 {
