@@ -79,6 +79,10 @@ type Message struct {
 	ToolID         string          `json:"tool_id,omitzero"`
 	Calls          []Call          `json:"tool_calls,omitzero"`
 	CacheControl   *CacheControl   `json:"cache_control,omitzero"`
+	// Blocks holds structured content when available. When empty, the flat
+	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
+	// Call GetContentBlocks() to get a unified view.
+	Blocks []ContentBlock `json:"blocks,omitzero"`
 }
 
 // TextMessage creates a message whose text is also represented as a structured
@@ -118,6 +122,58 @@ func (m Message) HasAssistantPayload() bool {
 		strings.TrimSpace(m.Reasoning) != "" ||
 		len(m.ThinkingBlocks) > 0 ||
 		len(m.Calls) > 0
+}
+
+// GetContentBlocks returns the structured content blocks for this message.
+// If Blocks is populated, it returns Blocks directly. Otherwise it converts
+// from the flat fields (Content, Reasoning, ThinkingBlocks, Calls).
+func (m Message) GetContentBlocks() []ContentBlock {
+	if len(m.Blocks) > 0 {
+		return m.Blocks
+	}
+	var blocks []ContentBlock
+	for _, tb := range m.ThinkingBlocks {
+		blocks = append(blocks, tb)
+	}
+	if text := m.TextContent(); text != "" {
+		blocks = append(blocks, TextBlock{Text: text})
+	}
+	for _, call := range m.Calls {
+		blocks = append(blocks, ToolCallBlock{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		})
+	}
+	return blocks
+}
+
+// SetContentBlocks populates Blocks and syncs the flat fields for backward
+// compatibility. Call this when building a Message from structured content.
+func (m *Message) SetContentBlocks(blocks []ContentBlock) {
+	m.Blocks = blocks
+	m.Content = ""
+	m.Reasoning = ""
+	m.ThinkingBlocks = nil
+	m.Calls = nil
+	for _, b := range blocks {
+		switch v := b.(type) {
+		case TextBlock:
+			m.Content += v.Text
+		case ThinkingBlock:
+			m.Reasoning += v.Thinking
+			m.ThinkingBlocks = append(m.ThinkingBlocks, v)
+		case ToolCallBlock:
+			m.Calls = append(m.Calls, Call{
+				ID:   v.ID,
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Name: v.Name, Arguments: v.Arguments},
+			})
+		}
+	}
 }
 
 // Prompt is typed host input for one model turn.
@@ -210,6 +266,33 @@ type Response struct {
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitzero"`
 	Calls          []Call          `json:"tool_calls,omitzero"`
 	Usage          Usage           `json:"usage"`
+	// Blocks holds structured content when available. When empty, the flat
+	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
+	Blocks     []ContentBlock `json:"blocks,omitzero"`
+	StopReason StopReason     `json:"stop_reason,omitzero"`
+}
+
+// GetContentBlocks returns structured content blocks, converting from flat
+// fields if Blocks is not populated.
+func (r Response) GetContentBlocks() []ContentBlock {
+	if len(r.Blocks) > 0 {
+		return r.Blocks
+	}
+	var blocks []ContentBlock
+	for _, tb := range r.ThinkingBlocks {
+		blocks = append(blocks, tb)
+	}
+	if r.Content != "" {
+		blocks = append(blocks, TextBlock{Text: r.Content})
+	}
+	for _, call := range r.Calls {
+		blocks = append(blocks, ToolCallBlock{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		})
+	}
+	return blocks
 }
 
 // Usage tracks token consumption and cost.
