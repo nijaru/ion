@@ -51,6 +51,26 @@ func (a *Agent) emitInputMessage(message AgentMessage) {
 	})
 }
 
+// toSessionAgentMessages converts domain AgentMessages to session AgentMessages
+// for event payloads (TurnEnd, AgentEnd).
+func toSessionAgentMessages(msgs []AgentMessage) []session.AgentMessage {
+	if len(msgs) == 0 {
+		return nil
+	}
+	sm := make([]session.AgentMessage, len(msgs))
+	for i, m := range msgs {
+		sm[i] = session.AgentMessage{
+			Message:      m.Content,
+			Reasoning:    m.Reasoning,
+			InputTokens:  m.InputTokens,
+			OutputTokens: m.OutputTokens,
+			TotalTokens:  m.TotalTokens,
+			Cost:         m.Cost,
+		}
+	}
+	return sm
+}
+
 // State returns a copy of the current agent state.
 func (a *Agent) State() AgentState {
 	a.mu.RLock()
@@ -282,6 +302,16 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 
 				hasMoreToolCalls = !terminate
 
+				// Emit MessageStart/MessageEnd for tool results (Pi: message lifecycle)
+				for _, result := range toolResults {
+					a.emit(session.MessageStart{Base: session.BaseNow(), Message: session.AgentMessage{
+						Message: result.Content,
+					}})
+					a.emit(session.MessageEnd{Base: session.BaseNow(), Message: session.AgentMessage{
+						Message: result.Content,
+					}})
+				}
+
 				// Add tool results to context
 				a.mu.Lock()
 				a.state.Messages = append(a.state.Messages, toolResults...)
@@ -295,7 +325,18 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 			}
 
 			// Emit TurnEnd per-turn (Pi parity: turn_end inside the loop)
-			a.emit(session.TurnEnd{Base: session.BaseNow()})
+			a.emit(session.TurnEnd{
+				Base: session.BaseNow(),
+				Message: session.AgentMessage{
+					Message:      message.Content,
+					Reasoning:    message.Reasoning,
+					InputTokens:  message.InputTokens,
+					OutputTokens: message.OutputTokens,
+					TotalTokens:  message.TotalTokens,
+					Cost:         message.Cost,
+				},
+				ToolResults: toSessionAgentMessages(toolResults),
+			})
 
 			turnContext := ShouldStopAfterTurnContext{
 				Message:     llmMessage,
@@ -395,8 +436,9 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 
 		if chunk.Content != "" {
 			a.emit(session.AgentDelta{
-				Base:  session.BaseNow(),
-				Delta: chunk.Content,
+				Base:      session.BaseNow(),
+				Delta:     chunk.Content,
+				BlockType: "text",
 			})
 		}
 		if chunk.Reasoning != "" {

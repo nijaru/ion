@@ -49,15 +49,18 @@ func (e AgentStart) isAgentEvent() {}
 // abort, or natural completion). Pi equivalent: agent_end.
 type AgentEnd struct {
 	Base
-	Error error `json:"error,omitempty"`
+	Messages []AgentMessage `json:"messages,omitempty"` // all new messages from the run
+	Error    error           `json:"error,omitempty"`
 }
 
 func (e AgentEnd) isAgentEvent() {}
 
 // AgentDelta is an incremental chunk of agent output text.
+// BlockType identifies the content type: "text", "thinking", "tool_call".
 type AgentDelta struct {
 	Base
-	Delta string `json:"delta"`
+	Delta     string `json:"delta"`
+	BlockType string `json:"block_type"` // matches Pi's block type for TUI routing
 }
 
 func (e AgentDelta) isAgentEvent() {}
@@ -77,6 +80,24 @@ type UserMessage struct {
 }
 
 func (e UserMessage) isAgentEvent() {}
+
+// MessageStart fires when a message begins streaming.
+// Pi equivalent: message_start.
+type MessageStart struct {
+	Base
+	Message AgentMessage `json:"message"`
+}
+
+func (e MessageStart) isAgentEvent() {}
+
+// MessageEnd fires when a message is complete.
+// Pi equivalent: message_end.
+type MessageEnd struct {
+	Base
+	Message AgentMessage `json:"message"`
+}
+
+func (e MessageEnd) isAgentEvent() {}
 
 // AgentMessage fires when a complete agent message is committed.
 // Carries token usage (Pi: usage data lives in message_end).
@@ -144,10 +165,12 @@ type TurnStart struct {
 func (e TurnStart) isAgentEvent() {}
 
 // TurnEnd fires when the backend has finished its generation cycle for a turn.
-// If Error is set, the turn ended due to an error (Pi: turn_end with errorMessage).
+// Pi equivalent: turn_end (carries message, toolResults, errorMessage).
 type TurnEnd struct {
 	Base
-	Error error `json:"error,omitempty"`
+	Message     AgentMessage   `json:"message,omitzero"`     // assistant message from this turn
+	ToolResults []AgentMessage `json:"tool_results,omitzero"` // tool result messages from this turn
+	Error       error          `json:"error,omitempty"`
 }
 
 func (e TurnEnd) isAgentEvent() {}
