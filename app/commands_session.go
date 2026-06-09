@@ -137,14 +137,14 @@ func (m Model) sessionInfoNotice() (string, error) {
 	if m.Model.Storage != nil {
 		input, output, cost, err := m.Model.Storage.Usage(context.Background())
 		if err != nil {
-			return "", fmt.Errorf("failed to load session usage: %v", err)
+			return "", fmt.Errorf("failed to load session usage: %w", err)
 		}
 		inputTokens = input
 		outputTokens = output
 		totalCost = cost
 		loaded, err := m.Model.Storage.Entries(context.Background())
 		if err != nil {
-			return "", fmt.Errorf("failed to load session entries: %v", err)
+			return "", fmt.Errorf("failed to load session entries: %w", err)
 		}
 		entries = loaded
 	}
