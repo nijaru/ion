@@ -637,12 +637,16 @@ func (a *Agent) prepareToolCall(
 	toolCall AgentToolCall,
 	config AgentLoopConfig,
 ) toolPreparation {
-	if _, ok := a.findTool(toolCall.Name); !ok {
+	tool, ok := a.findTool(toolCall.Name)
+	if !ok {
 		return toolPreparation{
 			Kind:    "immediate",
 			Result:  errorToolResult(fmt.Sprintf("Tool %s not found", toolCall.Name)),
 			IsError: true,
 		}
+	}
+	if tool.PrepareArguments != nil {
+		toolCall.Arguments = tool.PrepareArguments(toolCall.Arguments)
 	}
 	if err := a.validateToolArgs(toolCall); err != nil {
 		return toolPreparation{

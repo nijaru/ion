@@ -193,7 +193,14 @@ type AgentTool struct {
 	// ReadOnly indicates whether the tool only reads data.
 	ReadOnly bool `json:"read_only"`
 	// Parallel indicates whether the tool can be executed in parallel with other tools.
+	// Deprecated: Use ExecutionMode instead.
 	Parallel bool `json:"parallel"`
+	// Label is a human-readable label for the tool (shown in TUI).
+	Label string `json:"label,omitzero"`
+	// PrepareArguments transforms tool arguments before validation and execution.
+	// Called after the LLM produces arguments but before validateToolArgs.
+	// Use for type coercion, default injection, or argument normalization.
+	PrepareArguments func(args map[string]any) map[string]any `json:"-"`
 }
 
 // AgentState is the current state of the agent.

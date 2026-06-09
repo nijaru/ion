@@ -1049,3 +1049,47 @@ func testCall(id, name, args string) llm.Call {
 	call.Function.Arguments = args
 	return call
 }
+
+func TestAgentPrepareArguments(t *testing.T) {
+	var capturedArgs map[string]any
+
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "test_tool", `{"path": "relative.txt"}`)},
+		}}}, nil
+	}
+
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
+			capturedArgs = tc.Arguments
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("ok")}}, nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return true
+		},
+	})
+	agent.SetTools([]AgentTool{{
+		Name:       "test_tool",
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+		PrepareArguments: func(args map[string]any) map[string]any {
+			if p, ok := args["path"].(string); ok {
+				args["path"] = "/workspace/" + p
+			}
+			return args
+		},
+	}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "test"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if capturedArgs == nil {
+		t.Fatal("tool was not called")
+	}
+	if p, ok := capturedArgs["path"].(string); !ok || p != "/workspace/relative.txt" {
+		t.Errorf("path = %v, want /workspace/relative.txt", capturedArgs["path"])
+	}
+}
