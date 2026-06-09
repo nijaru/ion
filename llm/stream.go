@@ -76,7 +76,7 @@ func (a *StreamAccumulator) Response() Response {
 
 func (a *StreamAccumulator) addThinkingBlock(block ThinkingBlock) {
 	if len(a.resp.ThinkingBlocks) == 0 || block.Signature != "" ||
-		block.Type != a.resp.ThinkingBlocks[len(a.resp.ThinkingBlocks)-1].Type {
+		block.Redacted != a.resp.ThinkingBlocks[len(a.resp.ThinkingBlocks)-1].Redacted {
 		a.resp.ThinkingBlocks = append(a.resp.ThinkingBlocks, block)
 		return
 	}

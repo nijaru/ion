@@ -89,7 +89,7 @@ func TestSessionAppendPreservesAssistantPayloadKinds(t *testing.T) {
 	for _, msg := range []llm.Message{
 		{Role: llm.RoleAssistant, Content: "content"},
 		{Role: llm.RoleAssistant, Reasoning: "reasoning"},
-		{Role: llm.RoleAssistant, ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "step"}}},
+		{Role: llm.RoleAssistant, ThinkingBlocks: []llm.ThinkingBlock{{Thinking: "step"}}},
 		{Role: llm.RoleAssistant, Calls: []llm.Call{call}},
 	} {
 		if err := sess.Append(t.Context(), NewMessage(sess.ID(), msg)); err != nil {

@@ -73,7 +73,6 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 		return &llm.Chunk{
 			Reasoning: start.ContentBlock.Thinking,
 			ThinkingBlocks: []llm.ThinkingBlock{{
-				Type:      "thinking",
 				Thinking:  start.ContentBlock.Thinking,
 				Signature: start.ContentBlock.Signature,
 			}},
@@ -82,7 +81,7 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 		return &llm.Chunk{
 			Reasoning: "<redacted_thinking />",
 			ThinkingBlocks: []llm.ThinkingBlock{{
-				Type:      "redacted_thinking",
+				Redacted:  true,
 				Signature: start.ContentBlock.Signature,
 			}},
 		}
@@ -99,7 +98,6 @@ func (s *Stream) contentBlockDelta(delta sdk.ContentBlockDeltaEvent) *llm.Chunk 
 		return &llm.Chunk{
 			Reasoning: delta.Delta.Thinking,
 			ThinkingBlocks: []llm.ThinkingBlock{{
-				Type:     "thinking",
 				Thinking: delta.Delta.Thinking,
 			}},
 		}

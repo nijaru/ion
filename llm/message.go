@@ -21,12 +21,17 @@ type CacheControl struct {
 	Type string `json:"type"` // e.g. "ephemeral"
 }
 
-// ThinkingBlock represents a reasoning block from a provider like Anthropic.
+// ThinkingBlock represents model reasoning content.
+// Thinking carries the visible reasoning text. Signature enables multi-turn
+// thinking continuity (providers that support it verify the signature on the
+// next turn). Redacted indicates safety-filtered reasoning.
 type ThinkingBlock struct {
-	Type      string `json:"type"` // "thinking" or "redacted_thinking"
 	Thinking  string `json:"thinking,omitzero"`
 	Signature string `json:"signature,omitzero"`
+	Redacted  bool   `json:"redacted,omitzero"`
 }
+
+func (ThinkingBlock) contentBlock() {}
 
 // ContentPartType identifies one typed part of a model-visible message.
 type ContentPartType string

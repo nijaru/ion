@@ -92,7 +92,7 @@ func TestRebuilderPreservesAssistantPayloadKinds(t *testing.T) {
 	sess := New("assistant-payload-kinds")
 	for _, msg := range []llm.Message{
 		{Role: llm.RoleAssistant, Reasoning: "reasoning only"},
-		{Role: llm.RoleAssistant, ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "thinking only"}}},
+		{Role: llm.RoleAssistant, ThinkingBlocks: []llm.ThinkingBlock{{Thinking: "thinking only"}}},
 		{Role: llm.RoleAssistant, Calls: []llm.Call{call}},
 		{Role: llm.RoleTool, ToolID: "call-1", Name: "read", Content: "result"},
 	} {

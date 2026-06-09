@@ -85,14 +85,13 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		case "thinking":
 			res.Reasoning += block.Thinking
 			res.ThinkingBlocks = append(res.ThinkingBlocks, llm.ThinkingBlock{
-				Type:      "thinking",
 				Thinking:  block.Thinking,
 				Signature: block.Signature,
 			})
 		case "redacted_thinking":
 			res.Reasoning += "<redacted_thinking />"
 			res.ThinkingBlocks = append(res.ThinkingBlocks, llm.ThinkingBlock{
-				Type:      "redacted_thinking",
+				Redacted:  true,
 				Signature: block.Signature,
 			})
 		case "tool_use":

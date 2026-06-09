@@ -20,14 +20,13 @@ func appendThinkingText(content, reasoning string, blocks []ThinkingBlock) strin
 		parts = append(parts, "<thinking>\n"+reasoning+"\n</thinking>")
 	}
 	for _, block := range blocks {
-		switch block.Type {
-		case "thinking":
-			if block.Thinking != "" {
-				parts = append(parts, "<thinking>\n"+block.Thinking+"\n</thinking>")
-			}
-		case "redacted_thinking":
+		if block.Redacted {
 			// Redacted content is intentionally omitted when replaying across
 			// providers that do not support native thinking blocks.
+			continue
+		}
+		if block.Thinking != "" {
+			parts = append(parts, "<thinking>\n"+block.Thinking+"\n</thinking>")
 		}
 	}
 	if len(parts) == 0 {

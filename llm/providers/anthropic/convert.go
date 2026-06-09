@@ -92,11 +92,10 @@ func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
 func (p *Provider) convertContentBlocks(m llm.Message) []sdk.ContentBlockParamUnion {
 	var blocks []sdk.ContentBlockParamUnion
 	for _, tb := range m.ThinkingBlocks {
-		switch tb.Type {
-		case "thinking":
-			blocks = append(blocks, sdk.NewThinkingBlock(tb.Thinking, tb.Signature))
-		case "redacted_thinking":
+		if tb.Redacted {
 			blocks = append(blocks, sdk.NewRedactedThinkingBlock(tb.Signature))
+		} else {
+			blocks = append(blocks, sdk.NewThinkingBlock(tb.Thinking, tb.Signature))
 		}
 	}
 	if hasImageParts(m.Parts) {
