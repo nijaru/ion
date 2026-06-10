@@ -103,6 +103,9 @@ func cloneMessage(msg Message) Message {
 	if len(msg.Calls) > 0 {
 		msg.Calls = append([]Call(nil), msg.Calls...)
 	}
+	if len(msg.Blocks) > 0 {
+		msg.Blocks = append([]ContentBlock(nil), msg.Blocks...)
+	}
 	if msg.CacheControl != nil {
 		cacheControl := *msg.CacheControl
 		msg.CacheControl = &cacheControl
