@@ -36,6 +36,7 @@ type StatusChange struct {
 }
 
 func (e StatusChange) isAgentEvent() {}
+func (e StatusChange) EventType() EventType { return StatusChanged }
 
 // AgentStart fires when the agent loop begins processing (Run or Continue).
 // Pi equivalent: agent_start.
@@ -44,6 +45,7 @@ type AgentStart struct {
 }
 
 func (e AgentStart) isAgentEvent() {}
+func (e AgentStart) EventType() EventType { return AgentStarted }
 
 // AgentEnd fires when the agent loop terminates (shouldStopAfterTurn, error,
 // abort, or natural completion). Pi equivalent: agent_end.
@@ -54,6 +56,7 @@ type AgentEnd struct {
 }
 
 func (e AgentEnd) isAgentEvent() {}
+func (e AgentEnd) EventType() EventType { return AgentCompleted }
 
 // AgentDelta is an incremental chunk of agent output text.
 // BlockType identifies the content type: "text", "thinking", "tool_call".
@@ -64,6 +67,7 @@ type AgentDelta struct {
 }
 
 func (e AgentDelta) isAgentEvent() {}
+func (e AgentDelta) EventType() EventType { return ToolOutputDeltaType }
 
 // ThinkingDelta is an incremental chunk of agent reasoning/thinking text.
 type ThinkingDelta struct {
@@ -72,6 +76,7 @@ type ThinkingDelta struct {
 }
 
 func (e ThinkingDelta) isAgentEvent() {}
+func (e ThinkingDelta) EventType() EventType { return ToolOutputDeltaType }
 
 // UserMessage fires when a user message is committed to the durable session.
 type UserMessage struct {
@@ -80,6 +85,7 @@ type UserMessage struct {
 }
 
 func (e UserMessage) isAgentEvent() {}
+func (e UserMessage) EventType() EventType { return MessageAdded }
 
 // MessageStart fires when a message begins streaming.
 // Pi equivalent: message_start.
@@ -89,6 +95,7 @@ type MessageStart struct {
 }
 
 func (e MessageStart) isAgentEvent() {}
+func (e MessageStart) EventType() EventType { return MessageAdded }
 
 // MessageEnd fires when a message is complete.
 // Pi equivalent: message_end.
@@ -98,6 +105,7 @@ type MessageEnd struct {
 }
 
 func (e MessageEnd) isAgentEvent() {}
+func (e MessageEnd) EventType() EventType { return MessageAdded }
 
 // AgentMessage fires when a complete agent message is committed.
 // Carries token usage (Pi: usage data lives in message_end).
@@ -112,6 +120,7 @@ type AgentMessage struct {
 }
 
 func (e AgentMessage) isAgentEvent() {}
+func (e AgentMessage) EventType() EventType { return MessageAdded }
 
 // ToolCallStarted fires when the agent starts executing a tool.
 type ToolCallStart struct {
@@ -122,6 +131,7 @@ type ToolCallStart struct {
 }
 
 func (e ToolCallStart) isAgentEvent() {}
+func (e ToolCallStart) EventType() EventType { return ToolStarted }
 
 // ToolResult fires when the agent finishes executing a tool.
 type ToolCallEnd struct {
@@ -133,6 +143,7 @@ type ToolCallEnd struct {
 }
 
 func (e ToolCallEnd) isAgentEvent() {}
+func (e ToolCallEnd) EventType() EventType { return ToolCompleted }
 
 // ToolOutputDelta is an incremental chunk of tool output text.
 type ToolOutputDelta struct {
@@ -143,6 +154,7 @@ type ToolOutputDelta struct {
 }
 
 func (e ToolOutputDelta) isAgentEvent() {}
+func (e ToolOutputDelta) EventType() EventType { return ToolOutputDeltaType }
 
 // ApprovalRequest is emitted by optional compatibility backends that support
 // host-mediated permission prompts. The native Ion path does not emit it.
@@ -156,6 +168,7 @@ type ApprovalRequest struct {
 }
 
 func (e ApprovalRequest) isAgentEvent() {}
+func (e ApprovalRequest) EventType() EventType { return ApprovalRequested }
 
 // TurnStarted fires when the backend begins processing a turn.
 type TurnStart struct {
@@ -163,6 +176,7 @@ type TurnStart struct {
 }
 
 func (e TurnStart) isAgentEvent() {}
+func (e TurnStart) EventType() EventType { return TurnStarted }
 
 // TurnEnd fires when the backend has finished its generation cycle for a turn.
 // Pi equivalent: turn_end (carries message, toolResults, errorMessage).
@@ -174,6 +188,7 @@ type TurnEnd struct {
 }
 
 func (e TurnEnd) isAgentEvent() {}
+func (e TurnEnd) EventType() EventType { return TurnCompleted }
 
 // ChildRequested fires when the main agent requests a child execution.
 type ChildRequest struct {
@@ -183,6 +198,7 @@ type ChildRequest struct {
 }
 
 func (e ChildRequest) isAgentEvent() {}
+func (e ChildRequest) EventType() EventType { return ChildRequested }
 
 // ChildStarted fires when the child execution begins.
 type ChildStart struct {
@@ -192,6 +208,7 @@ type ChildStart struct {
 }
 
 func (e ChildStart) isAgentEvent() {}
+func (e ChildStart) EventType() EventType { return ChildStarted }
 
 // ChildDelta is an incremental chunk of child subagent output.
 type ChildDelta struct {
@@ -201,6 +218,7 @@ type ChildDelta struct {
 }
 
 func (e ChildDelta) isAgentEvent() {}
+func (e ChildDelta) EventType() EventType { return ChildProgressed }
 
 // ChildCompleted fires when the child execution finishes successfully.
 type ChildComplete struct {
@@ -210,6 +228,7 @@ type ChildComplete struct {
 }
 
 func (e ChildComplete) isAgentEvent() {}
+func (e ChildComplete) EventType() EventType { return ChildCompleted }
 
 // ChildBlocked fires when the child execution cannot continue without input.
 type ChildBlock struct {
@@ -219,6 +238,7 @@ type ChildBlock struct {
 }
 
 func (e ChildBlock) isAgentEvent() {}
+func (e ChildBlock) EventType() EventType { return ChildBlocked }
 
 // ChildFailed fires when the child execution fails.
 type ChildFail struct {
@@ -228,6 +248,7 @@ type ChildFail struct {
 }
 
 func (e ChildFail) isAgentEvent() {}
+func (e ChildFail) EventType() EventType { return ChildFailed }
 
 // ChildCanceled fires when the child execution is canceled.
 type ChildCancel struct {
@@ -237,6 +258,7 @@ type ChildCancel struct {
 }
 
 func (e ChildCancel) isAgentEvent() {}
+func (e ChildCancel) EventType() EventType { return ChildCanceled }
 
 // CompactionTrigger fires when context overflow is detected and
 // auto-compaction is triggered.
@@ -246,6 +268,7 @@ type CompactionTrigger struct {
 }
 
 func (e CompactionTrigger) isAgentEvent() {}
+func (e CompactionTrigger) EventType() EventType { return CompactionTriggered }
 
 // AutoRetryStart fires when auto-retry begins for a transient error.
 type AutoRetryStart struct {
@@ -257,6 +280,7 @@ type AutoRetryStart struct {
 }
 
 func (e AutoRetryStart) isAgentEvent() {}
+func (e AutoRetryStart) EventType() EventType { return EscalationRetried }
 
 // AutoRetryEnd fires when auto-retry completes (success or failure).
 type AutoRetryEnd struct {
@@ -267,6 +291,7 @@ type AutoRetryEnd struct {
 }
 
 func (e AutoRetryEnd) isAgentEvent() {}
+func (e AutoRetryEnd) EventType() EventType { return EscalationRetried }
 
 type QueuedInputUpdate struct {
 	Base
@@ -274,3 +299,4 @@ type QueuedInputUpdate struct {
 }
 
 func (e QueuedInputUpdate) isAgentEvent() {}
+func (e QueuedInputUpdate) EventType() EventType { return ExternalInput }

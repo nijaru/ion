@@ -23,6 +23,9 @@ const (
 	ModelChanged    EventType = "model_changed"
 	ThinkingChanged EventType = "thinking_changed"
 	ToolsChanged    EventType = "tools_changed"
+	StatusChanged   EventType = "status_changed"
+	AgentStarted    EventType = "agent_started"
+	AgentCompleted  EventType = "agent_completed"
 
 	// Observability / Lifecycle
 	TurnStarted           EventType = "turn_started"
