@@ -52,8 +52,7 @@ type Chunk struct {
 // cumulative chunks. Tool calls with the same ID replace the previous call state,
 // and Usage keeps the latest cumulative value.
 type StreamAccumulator struct {
-	resp            Response
-	toolCallIndices map[string]int
+	resp Response
 }
 
 func (a *StreamAccumulator) Add(chunk *Chunk) {
@@ -63,13 +62,22 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 	if chunk.Block != nil {
 		a.addBlock(chunk.Block)
 	} else {
-		a.resp.Content += chunk.Content
-		a.resp.Reasoning += chunk.Reasoning
+		// Write to Blocks instead of flat fields.
+		if chunk.Content != "" {
+			a.addBlock(TextBlock{Text: chunk.Content})
+		}
+		if chunk.Reasoning != "" {
+			a.addBlock(ThinkingBlock{Thinking: chunk.Reasoning})
+		}
 		for _, block := range chunk.ThinkingBlocks {
-			a.addThinkingBlock(block)
+			a.addBlock(block)
 		}
 		for _, call := range chunk.Calls {
-			a.addCall(call)
+			a.addBlock(ToolCallBlock{
+				ID:        call.ID,
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
+			})
 		}
 	}
 	if chunk.Usage != nil {
@@ -79,11 +87,9 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 
 func (a *StreamAccumulator) Response() Response {
 	resp := a.resp
+	// Populate flat fields from Blocks for backward compatibility.
+	// This ensures consumers that haven't migrated to accessors still work.
 	if len(resp.Blocks) > 0 {
-		resp.Content = ""
-		resp.Reasoning = ""
-		resp.ThinkingBlocks = nil
-		resp.Calls = nil
 		for _, b := range resp.Blocks {
 			switch v := b.(type) {
 			case TextBlock:
@@ -100,26 +106,6 @@ func (a *StreamAccumulator) Response() Response {
 						Arguments string `json:"arguments"`
 					}{Name: v.Name, Arguments: v.Arguments},
 				})
-			}
-		}
-		// Merge flat tool calls into Blocks and Calls if not already present.
-		// Providers that don't set Chunk.Block for tool calls accumulate them
-		// in flat Calls only. This ensures Response.Blocks is complete.
-		if len(a.resp.Calls) > 0 {
-			existingIDs := make(map[string]bool, len(resp.Calls))
-			for _, c := range resp.Calls {
-				existingIDs[c.ID] = true
-			}
-			for _, call := range a.resp.Calls {
-				if existingIDs[call.ID] {
-					continue
-				}
-				resp.Blocks = append(resp.Blocks, ToolCallBlock{
-					ID:        call.ID,
-					Name:      call.Function.Name,
-					Arguments: call.Function.Arguments,
-				})
-				resp.Calls = append(resp.Calls, call)
 			}
 		}
 	}
@@ -162,31 +148,5 @@ func (a *StreamAccumulator) addBlock(block ContentBlock) {
 	}
 }
 
-func (a *StreamAccumulator) addThinkingBlock(block ThinkingBlock) {
-	if len(a.resp.ThinkingBlocks) == 0 || block.Signature != "" ||
-		block.Redacted != a.resp.ThinkingBlocks[len(a.resp.ThinkingBlocks)-1].Redacted {
-		a.resp.ThinkingBlocks = append(a.resp.ThinkingBlocks, block)
-		return
-	}
 
-	last := &a.resp.ThinkingBlocks[len(a.resp.ThinkingBlocks)-1]
-	last.Thinking += block.Thinking
-	if block.Signature != "" {
-		last.Signature = block.Signature
-	}
-}
 
-func (a *StreamAccumulator) addCall(call Call) {
-	if call.ID == "" {
-		return
-	}
-	if a.toolCallIndices == nil {
-		a.toolCallIndices = make(map[string]int)
-	}
-	if idx, ok := a.toolCallIndices[call.ID]; ok {
-		a.resp.Calls[idx] = call
-		return
-	}
-	a.toolCallIndices[call.ID] = len(a.resp.Calls)
-	a.resp.Calls = append(a.resp.Calls, call)
-}

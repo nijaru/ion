@@ -114,6 +114,7 @@ func TestStreamAccumulatorBlockMixed(t *testing.T) {
 
 func TestStreamAccumulatorFlatBackwardCompat(t *testing.T) {
 	// Providers that still emit flat fields continue to work.
+	// Flat fields now write to Blocks (Phase 6b).
 	var acc llm.StreamAccumulator
 	acc.Add(&llm.Chunk{Content: "hel"})
 	acc.Add(&llm.Chunk{Content: "lo"})
@@ -126,8 +127,8 @@ func TestStreamAccumulatorFlatBackwardCompat(t *testing.T) {
 	if resp.Reasoning != "think" {
 		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "think")
 	}
-	if len(resp.Blocks) != 0 {
-		t.Errorf("Blocks should be empty for flat accumulation, got %d", len(resp.Blocks))
+	if len(resp.Blocks) != 2 {
+		t.Errorf("Blocks should have 2 entries (text + thinking), got %d", len(resp.Blocks))
 	}
 }
 

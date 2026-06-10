@@ -82,7 +82,7 @@ type Message struct {
 	// Blocks holds structured content when available. When empty, the flat
 	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
 	// Call GetContentBlocks() to get a unified view.
-	Blocks []ContentBlock `json:"blocks,omitzero"`
+	Blocks ContentBlocks `json:"blocks,omitzero"`
 }
 
 // TextMessage creates a message whose text is also represented as a structured
@@ -322,7 +322,7 @@ type Response struct {
 	Usage          Usage           `json:"usage"`
 	// Blocks holds structured content when available. When empty, the flat
 	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
-	Blocks     []ContentBlock `json:"blocks,omitzero"`
+	Blocks     ContentBlocks `json:"blocks,omitzero"`
 	StopReason StopReason     `json:"stop_reason,omitzero"`
 }
 
