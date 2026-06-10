@@ -313,21 +313,6 @@ func createToolResultMessage(toolCall AgentToolCall, result AgentToolResult, isE
 	}
 }
 
-// prepareAndExecuteTool runs the full tool lifecycle: prepare → execute → finalize.
-// Used by sequential execution. For parallel, use prepareToolCall + executePreparedToolCall + finalizeExecutedToolCall.
-func (a *Agent) prepareAndExecuteTool(
-	ctx context.Context,
-	assistantLLM llm.Message,
-	toolCall AgentToolCall,
-	config AgentLoopConfig,
-) (AgentToolResult, bool) {
-	prepared := a.prepareToolCall(ctx, assistantLLM, toolCall, config)
-	if prepared.Kind == "immediate" {
-		return prepared.Result, prepared.IsError
-	}
-	result, isError := a.executePreparedToolCall(ctx, prepared, config)
-	return a.finalizeExecutedToolCall(ctx, assistantLLM, prepared, result, isError, config)
-}
 
 func (a *Agent) shouldExecuteSequentially(config AgentLoopConfig, calls []AgentToolCall) bool {
 	for _, call := range calls {

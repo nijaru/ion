@@ -321,7 +321,9 @@ func (s *SessionAdapter) Events() <-chan session.AgentEvent {
 
 // emitEvent sends an event to the events channel without blocking.
 // If the channel is full, the event is dropped to prevent deadlock.
+// If the channel is closed (session shut down), the send is silently skipped.
 func (s *SessionAdapter) emitEvent(ev session.AgentEvent) {
+	defer func() { recover() }()
 	select {
 	case s.events <- ev:
 	default:
