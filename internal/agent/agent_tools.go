@@ -398,12 +398,21 @@ func (a *Agent) validateToolArgs(toolCall AgentToolCall) error {
 		return nil // no schema means no validation
 	}
 
-	// Extract required fields from schema
 	schemaMap, ok := schema.(map[string]any)
 	if !ok {
 		return nil // non-map schemas are not validated
 	}
 
+	// Validate required fields
+	if err := validateRequired(toolCall.Arguments, schemaMap); err != nil {
+		return err
+	}
+
+	// Validate property types
+	return validatePropertyTypes(toolCall.Arguments, schemaMap)
+}
+
+func validateRequired(args map[string]any, schemaMap map[string]any) error {
 	required, ok := schemaMap["required"]
 	if !ok {
 		return nil
@@ -413,16 +422,72 @@ func (a *Agent) validateToolArgs(toolCall AgentToolCall) error {
 		return nil
 	}
 
-	// Check required fields
 	for _, field := range requiredList {
 		fieldName, ok := field.(string)
 		if !ok {
 			continue
 		}
-		if _, exists := toolCall.Arguments[fieldName]; !exists {
+		if _, exists := args[fieldName]; !exists {
 			return fmt.Errorf("missing required field: %s", fieldName)
 		}
 	}
 
+	return nil
+}
+
+func validatePropertyTypes(args map[string]any, schemaMap map[string]any) error {
+	properties, ok := schemaMap["properties"]
+	if !ok {
+		return nil
+	}
+	propMap, ok := properties.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	for key, value := range args {
+		propSchema, exists := propMap[key]
+		if !exists {
+			continue // unknown properties are allowed
+		}
+		pSchema, ok := propSchema.(map[string]any)
+		if !ok {
+			continue
+		}
+		expectedType, ok := pSchema["type"].(string)
+		if !ok {
+			continue
+		}
+		if err := checkValueType(value, expectedType); err != nil {
+			return fmt.Errorf("field %s: %w", key, err)
+		}
+	}
+
+	return nil
+}
+
+func checkValueType(value any, expectedType string) error {
+	switch expectedType {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("expected string, got %T", value)
+		}
+	case "number", "integer":
+		if _, ok := value.(float64); !ok {
+			return fmt.Errorf("expected number, got %T", value)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("expected boolean, got %T", value)
+		}
+	case "array":
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("expected array, got %T", value)
+		}
+	case "object":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("expected object, got %T", value)
+		}
+	}
 	return nil
 }

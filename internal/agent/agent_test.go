@@ -610,6 +610,39 @@ func TestAgentAllowsToolCallWithAllRequiredArgs(t *testing.T) {
 	}
 }
 
+func TestAgentValidatesPropertyTypes(t *testing.T) {
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "read", `{"path":123}`)},
+		}}}, nil
+	}
+
+	var toolCalled bool
+	agent := New(AgentLoopConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
+			toolCalled = true
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("ok")}}, nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return true
+		},
+	})
+	agent.SetTools([]AgentTool{{
+		Name:       "read",
+		Parameters: map[string]any{"required": []any{"path"}, "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+	}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read"}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if toolCalled {
+		t.Fatal("tool was called despite wrong type for 'path' (number instead of string)")
+	}
+}
+
 func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 	var requests []string
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
