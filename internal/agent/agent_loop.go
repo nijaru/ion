@@ -42,7 +42,8 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				for _, message := range pendingMessages {
 					a.emitInputMessage(message)
 					if err := a.writeModelMessage(ctx, agentMessageToLLM(message)); err != nil {
-						return err
+						a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+						return fmt.Errorf("write pending message: %w", err)
 					}
 				}
 				pendingMessages = nil
@@ -76,7 +77,8 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				Cost:         message.Cost,
 			})
 			if err := a.writeModelMessage(ctx, llmMessage); err != nil {
-				return err
+				a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+				return fmt.Errorf("write assistant message: %w", err)
 			}
 
 			// Check for error/abort
@@ -123,7 +125,8 @@ func (a *Agent) runLoop(ctx context.Context, newMessages *[]AgentMessage) error 
 				*newMessages = append(*newMessages, toolResults...)
 				for _, result := range llmToolResults {
 					if err := a.writeModelMessage(ctx, result); err != nil {
-						return err
+						a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+						return fmt.Errorf("write tool result: %w", err)
 					}
 				}
 			}

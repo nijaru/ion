@@ -91,8 +91,8 @@ func (s *SessionAdapter) emitQueueUpdatedLocked() {
 		Steering: append([]string(nil), s.steeringQueue...),
 		FollowUp: append([]string(nil), s.followUpQueue...),
 	}
-	s.events <- session.QueuedInputUpdate{
+	s.emitEvent(session.QueuedInputUpdate{
 		Base:     session.BaseNow(),
 		Snapshot: snapshot,
-	}
+	})
 }

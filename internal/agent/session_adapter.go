@@ -130,15 +130,21 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		ToolExecutor:  config.ToolExecutor,
 		OnEvent: func(ev session.AgentEvent) {
 			s.mu.Lock()
-			defer s.mu.Unlock()
 			if s.closed {
+				s.mu.Unlock()
 				return
 			}
 			// Track token usage for compaction threshold (Pi: usage lives in AgentMessage)
 			if msg, ok := ev.(session.AgentMessage); ok && (msg.InputTokens > 0 || msg.OutputTokens > 0) {
 				s.updateContextTokens(msg.InputTokens, msg.OutputTokens)
 			}
-			s.events <- ev
+			s.mu.Unlock()
+			// Send without holding lock to avoid deadlock when channel is full.
+			select {
+			case s.events <- ev:
+			default:
+				// Channel full — drop event to prevent deadlock.
+			}
 		},
 		OnModelMessage: s.appendModelMessage,
 		GetSteeringMessages: func() []AgentMessage {
@@ -224,20 +230,20 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 
 	// Check if auto-compaction is needed before submitting
 	if s.needsCompaction() && s.config.CompactFunc != nil {
-		s.events <- session.CompactionTrigger{
+		s.emitEvent(session.CompactionTrigger{
 			Base:   session.BaseNow(),
 			Reason: "threshold",
-		}
+		})
 		s.mu.Unlock()
 		compacted, err := s.config.CompactFunc(ctx)
 		s.mu.Lock()
 		if err != nil {
 			// Log compaction error but continue with the turn
-			s.events <- session.AutoRetryEnd{
+			s.emitEvent(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
-			}
+			})
 		} else if compacted {
 			s.resetContextTokens()
 		}
@@ -267,9 +273,9 @@ func (s *SessionAdapter) SubmitTurn(ctx context.Context, input string) error {
 			if s.turnCtx == turnCtx {
 				s.cancel = nil
 				s.turnCtx = nil
+				s.overflowAttempted = false
+				s.retryAttempt = 0
 			}
-			s.overflowAttempted = false
-			s.retryAttempt = 0
 			s.mu.Unlock()
 		}()
 		newMessages, err := s.agent.Continue(turnCtx)
@@ -311,6 +317,16 @@ func (s *SessionAdapter) Close() error {
 // Events returns a read-only channel of typed events emitted by the session.
 func (s *SessionAdapter) Events() <-chan session.AgentEvent {
 	return s.events
+}
+
+// emitEvent sends an event to the events channel without blocking.
+// If the channel is full, the event is dropped to prevent deadlock.
+func (s *SessionAdapter) emitEvent(ev session.AgentEvent) {
+	select {
+	case s.events <- ev:
+	default:
+		// Channel full — drop event to prevent deadlock.
+	}
 }
 
 // ID returns the session identifier.

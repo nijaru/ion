@@ -360,11 +360,13 @@ func (a *Agent) findTool(name string) (AgentTool, bool) {
 func toolMessages(finalized []toolCallResult) ([]AgentMessage, []llm.Message, bool, error) {
 	messages := make([]AgentMessage, 0, len(finalized))
 	llmMessages := make([]llm.Message, 0, len(finalized))
-	terminate := len(finalized) > 0
+	terminate := false
 	for _, result := range finalized {
 		messages = append(messages, result.message)
 		llmMessages = append(llmMessages, result.llm)
-		terminate = terminate && result.terminate
+		if result.terminate {
+			terminate = true
+		}
 	}
 	return messages, llmMessages, terminate, nil
 }

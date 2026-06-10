@@ -26,7 +26,7 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error, newM
 	// Success or cancellation — agent already emitted TurnEnd
 	if err == nil || errors.Is(err, context.Canceled) {
 		s.retryAttempt = 0
-		s.events <- session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs}
+		s.emitEvent(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		return
 	}
 
@@ -49,16 +49,16 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error, newM
 	}
 
 	// Non-retryable error — agent already emitted TurnEnd{Error}
-	s.events <- session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs}
+	s.emitEvent(session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs})
 }
 
 // recoverFromOverflow handles context overflow by compacting and retrying.
 // Returns true if recovery succeeded or was attempted. Caller must hold s.mu.
 func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
-	s.events <- session.CompactionTrigger{
+	s.emitEvent(session.CompactionTrigger{
 		Base:   session.BaseNow(),
 		Reason: "overflow",
-	}
+	})
 	s.trimLastAssistantMessage()
 
 	// Unlock for blocking compaction call
@@ -68,12 +68,12 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	compacted, err := s.runCompaction(ctx)
 	if err != nil {
 		if !s.closed {
-			s.events <- session.AutoRetryEnd{
+			s.emitEvent(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
-			}
-			s.events <- session.AgentEnd{Base: session.BaseNow()}
+			})
+			s.emitEvent(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	}
@@ -85,9 +85,9 @@ func (s *SessionAdapter) recoverFromOverflow(ctx context.Context) bool {
 	if !s.closed {
 		sessionMsgs := toSessionAgentMessages(newMessages)
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			s.events <- session.AgentEnd{Base: session.BaseNow(), Error: retryErr, Messages: sessionMsgs}
+			s.emitEvent(session.AgentEnd{Base: session.BaseNow(), Error: retryErr, Messages: sessionMsgs})
 		} else {
-			s.events <- session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs}
+			s.emitEvent(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		}
 	}
 	return true
@@ -99,13 +99,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	s.retryAttempt++
 	delayMs := s.config.GetRetryBaseDelayMs() * (1 << (s.retryAttempt - 1))
 
-	s.events <- session.AutoRetryStart{
+	s.emitEvent(session.AutoRetryStart{
 		Base:       session.BaseNow(),
 		Attempt:    s.retryAttempt,
 		MaxAttempt: s.config.GetMaxRetries(),
 		DelayMs:    delayMs,
 		Error:      errMsg,
-	}
+	})
 	s.trimLastAssistantMessage()
 
 	// Unlock for blocking delay
@@ -114,13 +114,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 	case <-ctx.Done():
 		s.mu.Lock()
 		if !s.closed {
-			s.events <- session.AutoRetryEnd{
+			s.emitEvent(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				Attempt:    s.retryAttempt,
 				FinalError: "Retry cancelled",
-			}
-			s.events <- session.AgentEnd{Base: session.BaseNow()}
+			})
+			s.emitEvent(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	case <-time.After(time.Duration(delayMs) * time.Millisecond):
@@ -142,13 +142,13 @@ func (s *SessionAdapter) retryWithBackoff(ctx context.Context, errMsg string) bo
 
 	sessionMsgs := toSessionAgentMessages(newMessages)
 	if retryErr == nil || errors.Is(retryErr, context.Canceled) {
-		s.events <- session.AutoRetryEnd{
+		s.emitEvent(session.AutoRetryEnd{
 			Base:    session.BaseNow(),
 			Success: true,
 			Attempt: s.retryAttempt,
-		}
+		})
 		s.retryAttempt = 0
-		s.events <- session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs}
+		s.emitEvent(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		return true
 	}
 
