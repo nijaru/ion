@@ -115,6 +115,60 @@ func (m Message) HasTextContent() bool {
 	return strings.TrimSpace(m.TextContent()) != ""
 }
 
+// BlocksTextContent returns the text content from Blocks if available.
+// Falls back to flat Content field.
+func (m Message) BlocksTextContent() string {
+	if len(m.Blocks) > 0 {
+		var sb strings.Builder
+		for _, b := range m.Blocks {
+			if tb, ok := b.(TextBlock); ok {
+				sb.WriteString(tb.Text)
+			}
+		}
+		return sb.String()
+	}
+	return m.Content
+}
+
+// BlocksReasoning returns the reasoning text from Blocks if available.
+// Falls back to flat Reasoning field.
+func (m Message) BlocksReasoning() string {
+	if len(m.Blocks) > 0 {
+		var sb strings.Builder
+		for _, b := range m.Blocks {
+			if tb, ok := b.(ThinkingBlock); ok {
+				if !tb.Redacted {
+					sb.WriteString(tb.Thinking)
+				}
+			}
+		}
+		return sb.String()
+	}
+	return m.Reasoning
+}
+
+// BlocksToolCalls returns the tool calls from Blocks if available.
+// Falls back to flat Calls field.
+func (m Message) BlocksToolCalls() []Call {
+	if len(m.Blocks) > 0 {
+		var calls []Call
+		for _, b := range m.Blocks {
+			if tb, ok := b.(ToolCallBlock); ok {
+				calls = append(calls, Call{
+					ID:   tb.ID,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: tb.Name, Arguments: tb.Arguments},
+				})
+			}
+		}
+		return calls
+	}
+	return m.Calls
+}
+
 // HasAssistantPayload reports whether an assistant message carries useful
 // model-visible payload.
 func (m Message) HasAssistantPayload() bool {
