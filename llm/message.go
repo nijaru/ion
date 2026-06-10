@@ -349,6 +349,16 @@ func (r Response) GetContentBlocks() []ContentBlock {
 	return blocks
 }
 
+// TextContent returns the text content from the response.// Reads from Blocks if populated, falls back to flat Content field.
+func (r Response) TextContent() string {
+	for _, b := range r.Blocks {
+		if t, ok := b.(TextBlock); ok {
+			return t.Text
+		}
+	}
+	return r.Content
+}
+
 // Usage tracks token consumption and cost.
 type Usage struct {
 	InputTokens         int     `json:"input_tokens"`

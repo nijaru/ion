@@ -107,7 +107,8 @@ func (p *Provider) convertContentBlocks(m llm.Message) []sdk.ContentBlockParamUn
 		}
 		blocks = append(blocks, block)
 	}
-	for _, call := range m.Calls {
+	calls := m.BlocksToolCalls()
+	for _, call := range calls {
 		block := sdk.NewToolUseBlock(call.ID, call.Function.Arguments, call.Function.Name)
 		if m.CacheControl != nil {
 			block.OfToolUse.CacheControl = sdk.NewCacheControlEphemeralParam()

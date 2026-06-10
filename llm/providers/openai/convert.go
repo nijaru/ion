@@ -19,9 +19,10 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 			MultiContent: multiContent,
 			Name:         m.Name,
 		}
-		if len(m.Calls) > 0 {
-			msg.ToolCalls = make([]openai.ToolCall, len(m.Calls))
-			for j, call := range m.Calls {
+		calls := m.BlocksToolCalls()
+		if len(calls) > 0 {
+			msg.ToolCalls = make([]openai.ToolCall, len(calls))
+			for j, call := range calls {
 				msg.ToolCalls[j] = openai.ToolCall{
 					ID:   call.ID,
 					Type: openai.ToolType(call.Type),

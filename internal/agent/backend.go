@@ -200,7 +200,7 @@ func (b *Backend) generateSummary(ctx context.Context, messages []AgentMessage) 
 		return "", fmt.Errorf("generate: %w", err)
 	}
 
-	return resp.Content, nil
+	return resp.TextContent(), nil
 }
 
 // createSession creates a new session adapter from the current app.

@@ -71,12 +71,13 @@ func (c *StandardClassifier) Classify(
 		Label  string `json:"label"`
 		Reason string `json:"reason"`
 	}
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
+	content := resp.TextContent()
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		// Fallback for providers that ignore the schema or return malformed JSON.
 		return nil, fmt.Errorf(
 			"classifier: failed to parse response: %w (content: %q)",
 			err,
-			resp.Content,
+			content,
 		)
 	}
 

@@ -7,7 +7,7 @@ func rewriteSystemMessages(req *Request, targetRole Role) {
 		if m.Role != RoleSystem {
 			continue
 		}
-		content := m.Content
+		content := m.TextContent()
 		if targetRole == RoleUser {
 			content = fmt.Sprintf("Instructions:\n%s", content)
 		}

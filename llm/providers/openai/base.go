@@ -49,7 +49,7 @@ func (b *Base) CountTokens(_ context.Context, _ string, messages []llm.Message) 
 	for _, m := range messages {
 		total += 4 // per-message overhead
 		total += (len(m.TextContent()) + 3) / 4
-		for _, call := range m.Calls {
+		for _, call := range m.BlocksToolCalls() {
 			total += (len(call.Function.Name) + 3) / 4
 			total += (len(call.Function.Arguments) + 3) / 4
 		}
