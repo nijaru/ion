@@ -69,8 +69,22 @@ func agentMessageToLLM(message AgentMessage) llm.Message {
 	}
 	if len(message.Calls) > 0 {
 		llmMessage.Calls = make([]llm.Call, len(message.Calls))
+		llmMessage.Blocks = make(llm.ContentBlocks, 0, len(message.Calls))
 		for i, call := range message.Calls {
 			llmMessage.Calls[i] = agentToolCallToLLM(call)
+			llmMessage.Blocks = append(llmMessage.Blocks, llm.ToolCallBlock{
+				ID:        call.ID,
+				Name:      call.Name,
+				Arguments: serializeArguments(call.Arguments),
+			})
+		}
+	} else if message.Content != "" || message.Reasoning != "" {
+		llmMessage.Blocks = make(llm.ContentBlocks, 0, 2)
+		if message.Reasoning != "" {
+			llmMessage.Blocks = append(llmMessage.Blocks, llm.ThinkingBlock{Thinking: message.Reasoning})
+		}
+		if message.Content != "" {
+			llmMessage.Blocks = append(llmMessage.Blocks, llm.TextBlock{Text: message.Content})
 		}
 	}
 	return llmMessage
@@ -94,13 +108,14 @@ func agentMessageFromLLM(message llm.Message) AgentMessage {
 		Role:      role,
 		Content:   message.TextContent(),
 		Parts:     normalizeContentParts(message.Parts),
-		Reasoning: message.Reasoning,
+		Reasoning: message.BlocksReasoning(),
 		Name:      message.Name,
 		ToolID:    message.ToolID,
 	}
-	if len(message.Calls) > 0 {
-		result.Calls = make([]AgentToolCall, len(message.Calls))
-		for i, call := range message.Calls {
+	calls := message.BlocksToolCalls()
+	if len(calls) > 0 {
+		result.Calls = make([]AgentToolCall, len(calls))
+		for i, call := range calls {
 			result.Calls[i] = AgentToolCall{
 				ID:        call.ID,
 				Name:      call.Function.Name,
@@ -147,6 +162,9 @@ func contentPartsText(parts []llm.ContentPart) string {
 }
 
 func isEmptyModelMessage(message llm.Message) bool {
+	if len(message.Blocks) > 0 {
+		return false
+	}
 	return strings.TrimSpace(message.TextContent()) == "" &&
 		strings.TrimSpace(message.Reasoning) == "" &&
 		len(message.ThinkingBlocks) == 0 &&

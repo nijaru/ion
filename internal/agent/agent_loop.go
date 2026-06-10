@@ -273,7 +273,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 
 	message := AgentMessage{
 		Role:         "assistant",
-		Content:      resp.Content,
+		Content:      resp.TextContent(),
 		Reasoning:    resp.Reasoning,
 		Calls:        calls,
 		InputTokens:  usageValue(&resp.Usage, "input"),
@@ -282,8 +282,6 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 		Cost:         usageValueF(&resp.Usage),
 	}
 	llmMessage := agentMessageToLLM(message)
-	llmMessage.ThinkingBlocks = resp.ThinkingBlocks
-	llmMessage.Blocks = resp.Blocks
-	llmMessage.Calls = resp.Calls
+	llmMessage.Blocks = resp.GetContentBlocks()
 	return message, llmMessage, nil
 }

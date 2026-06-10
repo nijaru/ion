@@ -91,11 +91,13 @@ func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
 
 func (p *Provider) convertContentBlocks(m llm.Message) []sdk.ContentBlockParamUnion {
 	var blocks []sdk.ContentBlockParamUnion
-	for _, tb := range m.ThinkingBlocks {
-		if tb.Redacted {
-			blocks = append(blocks, sdk.NewRedactedThinkingBlock(tb.Signature))
-		} else {
-			blocks = append(blocks, sdk.NewThinkingBlock(tb.Thinking, tb.Signature))
+	for _, tb := range m.GetContentBlocks() {
+		if think, ok := tb.(llm.ThinkingBlock); ok {
+			if think.Redacted {
+				blocks = append(blocks, sdk.NewRedactedThinkingBlock(think.Signature))
+			} else {
+				blocks = append(blocks, sdk.NewThinkingBlock(think.Thinking, think.Signature))
+			}
 		}
 	}
 	if hasImageParts(m.Parts) {
@@ -144,12 +146,14 @@ func (p *Provider) convertContentParts(m llm.Message) []sdk.ContentBlockParamUni
 			blocks = append(blocks, block)
 		}
 	}
-	if !sawText && m.Content != "" {
-		block := sdk.NewTextBlock(m.Content)
-		if m.CacheControl != nil {
-			block.OfText.CacheControl = sdk.NewCacheControlEphemeralParam()
+	if !sawText {
+		if text := m.TextContent(); text != "" {
+			block := sdk.NewTextBlock(text)
+			if m.CacheControl != nil {
+				block.OfText.CacheControl = sdk.NewCacheControlEphemeralParam()
+			}
+			blocks = append([]sdk.ContentBlockParamUnion{block}, blocks...)
 		}
-		blocks = append([]sdk.ContentBlockParamUnion{block}, blocks...)
 	}
 	return blocks
 }
@@ -178,10 +182,12 @@ func (p *Provider) convertToolResultBlock(m llm.Message) sdk.ContentBlockParamUn
 			content = append(content, sdk.ToolResultBlockParamContentUnion{OfImage: &image})
 		}
 	}
-	if !sawText && m.Content != "" {
-		content = append([]sdk.ToolResultBlockParamContentUnion{{
-			OfText: &sdk.TextBlockParam{Text: m.Content},
-		}}, content...)
+	if !sawText {
+		if text := m.TextContent(); text != "" {
+			content = append([]sdk.ToolResultBlockParamContentUnion{{
+				OfText: &sdk.TextBlockParam{Text: text},
+			}}, content...)
+		}
 	}
 	if len(content) == 0 {
 		return sdk.NewToolResultBlock(m.ToolID, m.TextContent(), false)

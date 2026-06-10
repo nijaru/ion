@@ -205,11 +205,13 @@ func (b *Base) convertMessageContent(m llm.Message) (string, []openai.ChatMessag
 			})
 		}
 	}
-	if !sawText && m.Content != "" {
-		parts = append([]openai.ChatMessagePart{{
-			Type: openai.ChatMessagePartTypeText,
-			Text: m.Content,
-		}}, parts...)
+	if !sawText {
+		if text := m.TextContent(); text != "" {
+			parts = append([]openai.ChatMessagePart{{
+				Type: openai.ChatMessagePartTypeText,
+				Text: text,
+			}}, parts...)
+		}
 	}
 	if len(parts) == 0 {
 		return m.TextContent(), nil
