@@ -300,3 +300,14 @@ type QueuedInputUpdate struct {
 
 func (e QueuedInputUpdate) isAgentEvent() {}
 func (e QueuedInputUpdate) EventType() EventType { return ExternalInput }
+
+// TypedEventToEvent converts a typed AgentEvent to a storage Event.
+// This bridges the typed event bus and the storage layer.
+func TypedEventToEvent(ev AgentEvent, sessionID string) Event {
+	type eventTyper interface { EventType() EventType }
+	if et, ok := ev.(eventTyper); ok {
+		return NewEvent(sessionID, et.EventType(), ev)
+	}
+	// Fallback for events without EventType()
+	return NewEvent(sessionID, MessageAdded, ev)
+}
