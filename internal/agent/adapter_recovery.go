@@ -31,9 +31,10 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error, newM
 	}
 
 	errMsg := err.Error()
+	agentErr := NewAgentError(errMsg, err)
 
 	// Overflow recovery: compact and retry once
-	if IsContextOverflow(errMsg) && !s.overflowAttempted {
+	if agentErr.Code == ErrCodeOverflow && !s.overflowAttempted {
 		s.overflowAttempted = true
 		if s.recoverFromOverflow(ctx) {
 			return
@@ -41,7 +42,7 @@ func (s *SessionAdapter) handlePostAgentRun(ctx context.Context, err error, newM
 	}
 
 	// Transient error retry with exponential backoff
-	if IsRetryableError(errMsg) && s.retryAttempt < s.config.GetMaxRetries() {
+	if agentErr.IsRetryable && s.retryAttempt < s.config.GetMaxRetries() {
 		if s.retryWithBackoff(ctx, errMsg) {
 			return
 		}
