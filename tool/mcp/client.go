@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-json-experiment/json"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 )
@@ -169,13 +168,13 @@ func (w *wrapper) Execute(ctx context.Context, args string) (string, error) {
 	return w.client.CallTool(ctx, w.spec.Name, parsedArgs)
 }
 
-func (w *wrapper) ApprovalRequirement(args string) (approval.Requirement, bool, error) {
+func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if w == nil || w.client == nil || w.client.filePolicy == nil {
-		return approval.Requirement{}, false, nil
+		return Requirement{}, false, nil
 	}
 	var parsedArgs map[string]any
 	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
-		return approval.Requirement{}, false, fmt.Errorf("failed to parse arguments: %w", err)
+		return Requirement{}, false, fmt.Errorf("failed to parse arguments: %w", err)
 	}
 	return w.client.filePolicy.approvalRequirement(w.spec, parsedArgs)
 }

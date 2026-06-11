@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/go-json-experiment/json"
-	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	basetool "github.com/nijaru/ion/tool"
 )
@@ -15,7 +14,7 @@ import (
 type Handler[A, R any] func(context.Context, A) (R, error)
 
 // ApprovalFunc maps typed tool arguments to an optional approval requirement.
-type ApprovalFunc[A any] func(A) (approval.Requirement, bool, error)
+type ApprovalFunc[A any] func(A) (basetool.Requirement, bool, error)
 
 // Config describes one typed Go-authored tool.
 type Config[A, R any] struct {
@@ -39,7 +38,7 @@ type Tool[A, R any] struct {
 var (
 	_ basetool.Tool                = (*Tool[struct{}, struct{}])(nil)
 	_ basetool.MetadataTool        = (*Tool[struct{}, struct{}])(nil)
-	_ approval.RequirementProvider = (*Tool[struct{}, struct{}])(nil)
+	_ basetool.RequirementProvider = (*Tool[struct{}, struct{}])(nil)
 )
 
 // New constructs a tool from a typed Go handler.
@@ -118,13 +117,13 @@ func (t *Tool[A, R]) Execute(ctx context.Context, args string) (string, error) {
 	return string(out), nil
 }
 
-func (t *Tool[A, R]) ApprovalRequirement(args string) (approval.Requirement, bool, error) {
+func (t *Tool[A, R]) ApprovalRequirement(args string) (basetool.Requirement, bool, error) {
 	if t.approval == nil {
-		return approval.Requirement{}, false, nil
+		return basetool.Requirement{}, false, nil
 	}
 	var input A
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return approval.Requirement{}, false, fmt.Errorf(
+		return basetool.Requirement{}, false, fmt.Errorf(
 			"typed tool %s: decode approval args: %w",
 			t.spec.Name,
 			err,

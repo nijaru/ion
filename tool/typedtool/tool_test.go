@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/internal/approval"
 	basetool "github.com/nijaru/ion/tool"
 )
 
@@ -31,8 +30,8 @@ func TestNewExecutesTypedHandler(t *testing.T) {
 			}
 			return typedWeatherResult{Forecast: "clear"}, nil
 		},
-		Approval: func(args typedWeatherArgs) (approval.Requirement, bool, error) {
-			return approval.Requirement{
+		Approval: func(args typedWeatherArgs) (basetool.Requirement, bool, error) {
+			return basetool.Requirement{
 				Category:  "service",
 				Operation: "lookup",
 				Resource:  args.City,

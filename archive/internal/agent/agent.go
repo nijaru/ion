@@ -11,16 +11,8 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// Agent is the high-level agent session wrapper.
-//
-// It composes:
-//   - AgentLoop (pure turn sequencing)
-//   - Recovery (overflow/retry)
-//   - Persistence (session store)
-//   - Queue management (steering/follow-up)
-//   - Lifecycle (Open/Resume/Close)
-//
-// The Agent struct is the public API. The AgentLoop is the internal implementation.
+// Agent is the core agent loop primitive. It manages the lifecycle of an
+// agent session: submit → stream → tool calls → results → done.
 type Agent struct {
 	config    AgentConfig
 	state     AgentState
@@ -215,60 +207,61 @@ func (a *Agent) setMessagesLocked(messages []AgentMessage) {
 	a.state.Messages = cloneAgentMessages(messages)
 }
 
-// newLoop creates a new AgentLoop with the current agent state.
-// Caller must hold a.mu (read lock is sufficient).
-func (a *Agent) newLoop() *AgentLoop {
-	return NewAgentLoop(a.config, a.state, a.emit)
-}
-
-// syncLoopState copies the loop state back to the agent state.
-// Caller must hold a.mu.
-func (a *Agent) syncLoopState(loop *AgentLoop) {
-	loopState := loop.State()
-	a.state.Messages = loopState.Messages
-	a.state.Model = loopState.Model
-	a.state.ThinkingLevel = loopState.ThinkingLevel
-	a.state.Tools = loopState.Tools
-	a.state.SystemPrompt = loopState.SystemPrompt
-}
-
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the run.
 // Emits AgentStart at the beginning. Caller owns AgentEnd.
-// Emits TurnEnd per-turn inside the loop (Pi parity).
+// Emits TurnEnd per-turn inside runLoop (Pi parity).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
-	a.mu.Lock()
-	a.state.IsStreaming = true
-	a.state.ErrorMessage = ""
-	loop := a.newLoop()
-	a.mu.Unlock()
+	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
 
-	defer func() {
-		a.mu.Lock()
-		a.state.IsStreaming = false
-		a.mu.Unlock()
-	}()
-
-	newMessages, err := loop.Run(ctx, prompts)
-
-	a.mu.Lock()
-	a.syncLoopState(loop)
+	newMessages, err := a.acceptPrompts(ctx, prompts)
 	if err != nil {
+		a.mu.Lock()
 		a.state.ErrorMessage = err.Error()
+		a.mu.Unlock()
+		// acceptPrompts error means the turn never started in runLoop.
+		// Emit TurnEnd so the TUI knows the turn is over.
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		return newMessages, err
 	}
-	a.mu.Unlock()
 
-	return newMessages, err
+	newMessages, runErr := a.execute(ctx, &newMessages)
+	return newMessages, runErr
 }
 
 // Continue continues the agent loop without adding new messages.
 // Used for retries — context already has user message or tool results.
 // Emits AgentStart at the beginning. Caller owns AgentEnd.
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
+	a.emit(session.AgentStart{Base: session.BaseNow()})
+
+	a.mu.RLock()
+	if len(a.state.Messages) == 0 {
+		a.mu.RUnlock()
+		err := fmt.Errorf("cannot continue: no messages in context")
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		return nil, err
+	}
+	lastMsg := a.state.Messages[len(a.state.Messages)-1]
+	a.mu.RUnlock()
+
+	if lastMsg.Role == "assistant" {
+		err := fmt.Errorf("cannot continue from message role: assistant")
+		a.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		return nil, err
+	}
+
+	newMessages, runErr := a.execute(ctx, new([]AgentMessage))
+	return newMessages, runErr
+}
+
+// execute runs the main loop with streaming state management.
+// Shared by Run and Continue. Does NOT emit lifecycle events (AgentStart/AgentEnd)
+// — callers own those. Emits TurnEnd per-turn inside runLoop.
+func (a *Agent) execute(ctx context.Context, newMessages *[]AgentMessage) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true
 	a.state.ErrorMessage = ""
-	loop := a.newLoop()
 	a.mu.Unlock()
 
 	defer func() {
@@ -277,16 +270,110 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 		a.mu.Unlock()
 	}()
 
-	newMessages, err := loop.Continue(ctx)
-
-	a.mu.Lock()
-	a.syncLoopState(loop)
-	if err != nil {
-		a.state.ErrorMessage = err.Error()
+	runErr := a.runLoop(ctx, newMessages)
+	if runErr != nil {
+		a.mu.Lock()
+		a.state.ErrorMessage = runErr.Error()
+		a.mu.Unlock()
 	}
-	a.mu.Unlock()
+	return *newMessages, runErr
+}
 
-	return newMessages, err
+func (a *Agent) acceptPrompts(
+	ctx context.Context,
+	prompts []AgentMessage,
+) ([]AgentMessage, error) {
+	a.mu.Lock()
+	a.state.Messages = append(a.state.Messages, prompts...)
+	a.mu.Unlock()
+	for _, prompt := range prompts {
+		a.emitInputMessage(prompt)
+		if err := a.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
+			return nil, err
+		}
+	}
+	newMessages := make([]AgentMessage, len(prompts))
+	copy(newMessages, prompts)
+	return newMessages, nil
+}
+
+// getSteeringMessages returns steering messages from the config hook.
+func (a *Agent) getSteeringMessages() []AgentMessage {
+	a.mu.RLock()
+	config := a.config
+	a.mu.RUnlock()
+
+	if config.GetSteeringMessages != nil {
+		return config.GetSteeringMessages()
+	}
+	return nil
+}
+
+// getFollowUpMessages returns follow-up messages from the config hook.
+func (a *Agent) getFollowUpMessages() []AgentMessage {
+	a.mu.RLock()
+	config := a.config
+	a.mu.RUnlock()
+
+	if config.GetFollowUpMessages != nil {
+		return config.GetFollowUpMessages()
+	}
+	return nil
+}
+
+// buildContext builds the current AgentContext from the agent state.
+func (a *Agent) buildContext() AgentContext {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	return AgentContext{
+		Messages:      a.state.Messages,
+		SystemPrompt:  a.state.SystemPrompt,
+		Tools:         a.state.Tools,
+		Model:         a.state.Model,
+		ThinkingLevel: a.state.ThinkingLevel,
+	}
+}
+
+func (a *Agent) applyTurnUpdate(update *AgentLoopTurnUpdate) {
+	if update == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if update.Context != nil {
+		a.state.Messages = cloneAgentMessages(update.Context.Messages)
+		a.state.SystemPrompt = update.Context.SystemPrompt
+		a.state.Tools = append([]AgentTool(nil), update.Context.Tools...)
+		a.state.Model = update.Context.Model
+		a.state.ThinkingLevel = update.Context.ThinkingLevel
+		a.config.Model = update.Context.Model
+		a.config.ThinkingLevel = update.Context.ThinkingLevel
+	}
+	if update.Model != nil {
+		a.state.Model = *update.Model
+		a.config.Model = *update.Model
+	}
+	if update.ThinkingLevel != nil {
+		a.state.ThinkingLevel = *update.ThinkingLevel
+		a.config.ThinkingLevel = *update.ThinkingLevel
+	}
+}
+
+func (a *Agent) writeModelMessage(ctx context.Context, message llm.Message) error {
+	a.mu.RLock()
+	write := a.config.OnModelMessage
+	a.mu.RUnlock()
+	if write == nil {
+		return nil
+	}
+	if isEmptyModelMessage(message) {
+		return nil
+	}
+	if err := write(ctx, message); err != nil {
+		return fmt.Errorf("persist model message: %w", err)
+	}
+	return nil
 }
 
 // Open initializes or creates a new session.
@@ -611,21 +698,13 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 	}
 
 	// Retry failed — handle the new error (may retry again)
+	handlePostAgentRunErr := retryErr
+	_ = handlePostAgentRunErr // handled below after mu is re-acquired
+	// Note: handlePostAgentRun acquires mu, so we must release first
 	a.mu.Unlock()
 	a.handlePostAgentRun(ctx, retryErr, newMessages)
 	a.mu.Lock()
 	return true
-}
-
-// writeModelMessage persists a message through the config callback.
-func (a *Agent) writeModelMessage(ctx context.Context, message llm.Message) error {
-	if a.config.OnModelMessage == nil {
-		return nil
-	}
-	if isEmptyModelMessage(message) {
-		return nil
-	}
-	return a.config.OnModelMessage(ctx, message)
 }
 
 func (a *Agent) appendModelMessage(ctx context.Context, message llm.Message) error {
@@ -741,30 +820,20 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 			a.resetContextTokens()
 		}
 	}
+	a.mu.Unlock()
 
 	// Create user message
 	userMsg := AgentMessage{
 		Role:    "user",
 		Content: input,
 	}
-
-	// Commit the user message to state synchronously.
-	a.state.Messages = append(a.state.Messages, userMsg)
-	a.emitLocked(session.UserMessage{
-		Base:    session.BaseNow(),
-		Message: userMsg.Content,
-	})
-	a.mu.Unlock()
-
-	// Persist the user message (must happen outside lock to avoid deadlock
-	// with appendModelMessage which acquires the lock).
-	if err := a.writeModelMessage(turnCtx, agentMessageToLLM(userMsg)); err != nil {
+	if _, err := a.acceptPrompts(turnCtx, []AgentMessage{userMsg}); err != nil {
 		a.mu.Lock()
 		a.cancel = nil
 		a.turnCtx = nil
 		a.mu.Unlock()
 		cancel()
-		return fmt.Errorf("write user message: %w", err)
+		return err
 	}
 
 	// Run the agent loop in a goroutine
@@ -787,6 +856,7 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 	return nil
 }
+
 
 // WaitForIdle blocks until the agent is idle (no active turn).
 func (a *Agent) WaitForIdle(ctx context.Context) error {

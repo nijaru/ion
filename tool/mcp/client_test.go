@@ -9,7 +9,6 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/internal/safety"
 	"github.com/nijaru/ion/internal/workvfs"
 )
 
@@ -21,6 +20,11 @@ type fakeClientSession struct {
 	tools      []*sdkmcp.Tool
 	toolsErr   error
 	lastCall   *sdkmcp.CallToolParams
+}
+
+// defaultProtectedPaths returns a list of commonly protected paths for testing.
+func defaultProtectedPaths() []string {
+	return []string{"~/.ssh", "~/.gnupg", "~/.aws", "~/.config/gcloud"}
 }
 
 func (s *fakeClientSession) Close() error {
@@ -234,7 +238,7 @@ func TestWrapperApprovalRequirementUsesProtectedMCPPath(t *testing.T) {
 	w := &wrapper{
 		client: (&Client{session: &fakeClientSession{}}).WithFilePolicy(&FilePolicy{
 			Validator:      validator,
-			ProtectedPaths: safety.DefaultProtectedPaths(),
+			ProtectedPaths: defaultProtectedPaths(),
 		}),
 		spec: llm.Spec{
 			Name:        "write_file",
@@ -249,8 +253,8 @@ func TestWrapperApprovalRequirementUsesProtectedMCPPath(t *testing.T) {
 	if !ok {
 		t.Fatal("expected approval requirement")
 	}
-	if req.Category != string(safety.CategoryWrite) {
-		t.Fatalf("Category = %q, want %q", req.Category, safety.CategoryWrite)
+	if req.Category != string(categoryWrite) {
+		t.Fatalf("Category = %q, want %q", req.Category, categoryWrite)
 	}
 	if req.Resource != ".env" {
 		t.Fatalf("Resource = %q, want .env", req.Resource)

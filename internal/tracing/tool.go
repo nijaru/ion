@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
 )
@@ -50,11 +49,11 @@ func (w *wrappedTool) Metadata() tool.Metadata {
 	return tool.Metadata{}
 }
 
-func (w *wrappedTool) ApprovalRequirement(args string) (approval.Requirement, bool, error) {
-	if at, ok := w.inner.(approval.RequirementProvider); ok {
+func (w *wrappedTool) ApprovalRequirement(args string) (tool.Requirement, bool, error) {
+	if at, ok := w.inner.(tool.RequirementProvider); ok {
 		return at.ApprovalRequirement(args)
 	}
-	return approval.Requirement{}, false, nil
+	return tool.Requirement{}, false, nil
 }
 
 func (w *wrappedTool) Execute(ctx context.Context, args string) (string, error) {

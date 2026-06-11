@@ -5,9 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nijaru/ion/internal/approval"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/internal/safety"
+	"github.com/nijaru/ion/tool"
 	"github.com/nijaru/ion/internal/workvfs"
 )
 
@@ -18,8 +17,20 @@ type FilePolicy struct {
 	ProtectedPaths []string
 }
 
+// category is the type of file operation.
+type category string
+
+const (
+	categoryRead    category = "read"
+	categoryWrite   category = "write"
+	categoryExecute category = "execute"
+)
+
+// Requirement describes an approval requirement for a tool call.
+type Requirement = tool.Requirement
+
 type fileIntent struct {
-	category safety.Category
+	category category
 	paths    []string
 }
 
@@ -60,26 +71,26 @@ func (p *FilePolicy) normalizeArguments(
 func (p *FilePolicy) approvalRequirement(
 	spec llm.Spec,
 	arguments map[string]any,
-) (approval.Requirement, bool, error) {
+) (Requirement, bool, error) {
 	normalized, intent, err := p.normalizeArguments(spec, arguments)
 	if err != nil {
-		return approval.Requirement{}, false, err
+		return Requirement{}, false, err
 	}
 	if intent == nil || len(intent.paths) == 0 {
-		return approval.Requirement{}, false, nil
+		return Requirement{}, false, nil
 	}
 	intent.paths = extractPathLikeValues(normalized)
 
 	resource := intent.paths[0]
 	if p != nil && len(p.ProtectedPaths) > 0 {
 		for _, path := range intent.paths {
-			if safety.IsProtectedPath(path, p.ProtectedPaths) {
+			if isProtectedPath(path, p.ProtectedPaths) {
 				resource = path
 				break
 			}
 		}
 	}
-	return approval.Requirement{
+	return Requirement{
 		Category:  string(intent.category),
 		Operation: spec.Name,
 		Resource:  resource,
@@ -94,9 +105,9 @@ func classifyFileIntent(spec llm.Spec, arguments map[string]any) *fileIntent {
 	descriptor := strings.ToLower(spec.Name + " " + spec.Description)
 	switch {
 	case containsAny(descriptor, "write", "edit", "create", "update", "delete", "remove", "rename", "move", "mkdir"):
-		return &fileIntent{category: safety.CategoryWrite, paths: paths}
+		return &fileIntent{category: categoryWrite, paths: paths}
 	case containsAny(descriptor, "read", "list", "glob", "find", "search", "stat", "cat"):
-		return &fileIntent{category: safety.CategoryRead, paths: paths}
+		return &fileIntent{category: categoryRead, paths: paths}
 	default:
 		return nil
 	}
@@ -138,6 +149,16 @@ func isPathKey(key string) bool {
 func containsAny(text string, needles ...string) bool {
 	for _, needle := range needles {
 		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// isProtectedPath checks if a path matches any of the protected paths.
+func isProtectedPath(path string, protectedPaths []string) bool {
+	for _, protected := range protectedPaths {
+		if strings.HasPrefix(path, protected) || path == protected {
 			return true
 		}
 	}
