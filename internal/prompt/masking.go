@@ -82,7 +82,7 @@ func (m *ObservationMasker) MaskEntries(
 		if !m.shouldMaskEntry(entry) {
 			continue
 		}
-		contentTokens := EstimateTokens(entry.Message.Content)
+		contentTokens := EstimateTokens(entry.Message.TextContent())
 		entry.Message.Content = m.placeholder(entry, contentTokens)
 		masked[i] = entry
 
@@ -99,7 +99,7 @@ func (m *ObservationMasker) shouldMaskEntry(entry session.HistoryEntry) bool {
 	if entry.Message.Role != llm.RoleTool {
 		return false
 	}
-	return EstimateTokens(entry.Message.Content) >= m.maxContentTokens()
+	return EstimateTokens(entry.Message.TextContent()) >= m.maxContentTokens()
 }
 
 func (m *ObservationMasker) placeholder(entry session.HistoryEntry, contentTokens int) string {

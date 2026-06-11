@@ -78,7 +78,7 @@ func isDurableContextEntry(entry HistoryEntry) bool {
 
 	// Older snapshots did not persist HistoryEntry.EventType. Keep recognizing
 	// the built-in context blocks so those snapshots rebuild in the same order.
-	content := entry.Message.Content
+	content := entry.Message.TextContent()
 	return strings.Contains(content, "<conversation_summary>") ||
 		strings.Contains(content, "<working_set>")
 }

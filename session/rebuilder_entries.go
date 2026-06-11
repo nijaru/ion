@@ -92,11 +92,11 @@ func assistantMessageHasPayload(msg llm.Message) bool {
 
 func inferLegacyContextMarkers(entry *HistoryEntry) {
 	switch {
-	case strings.Contains(entry.Message.Content, "<conversation_summary>"):
+	case strings.Contains(entry.Message.TextContent(), "<conversation_summary>"):
 		entry.EventType = ContextAdded
 		entry.ContextKind = ContextKindSummary
 		entry.ContextPlacement = ContextPlacementPrefix
-	case strings.Contains(entry.Message.Content, "<working_set>"):
+	case strings.Contains(entry.Message.TextContent(), "<working_set>"):
 		entry.EventType = ContextAdded
 		entry.ContextKind = ContextKindWorkingSet
 		entry.ContextPlacement = ContextPlacementPrefix

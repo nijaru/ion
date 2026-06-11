@@ -126,7 +126,7 @@ func (p Projector) ContextEntry(entry HistoryEntry) (Entry, bool) {
 	}
 	switch entry.ContextKind {
 	case ContextKindSummary, ContextKindWorkingSet, ContextKindBootstrap:
-		return EntrySystem(entry.Message.Content, time.Time{})
+		return EntrySystem(entry.Message.TextContent(), time.Time{})
 	default:
 		return Entry{}, false
 	}
