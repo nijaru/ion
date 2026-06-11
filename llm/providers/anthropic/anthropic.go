@@ -81,31 +81,16 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
-			res.Content += block.Text
 			res.Blocks = append(res.Blocks, llm.TextBlock{Text: block.Text})
 		case "thinking":
 			tb := llm.ThinkingBlock{Thinking: block.Thinking, Signature: block.Signature}
-			res.Reasoning += block.Thinking
 			res.ThinkingBlocks = append(res.ThinkingBlocks, tb)
 			res.Blocks = append(res.Blocks, tb)
 		case "redacted_thinking":
 			tb := llm.ThinkingBlock{Redacted: true, Signature: block.Signature}
-			res.Reasoning += "<redacted_thinking />"
 			res.ThinkingBlocks = append(res.ThinkingBlocks, tb)
 			res.Blocks = append(res.Blocks, tb)
 		case "tool_use":
-			call := llm.Call{
-				ID:   block.ID,
-				Type: "function",
-				Function: struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				}{
-					Name:      block.Name,
-					Arguments: string(block.Input),
-				},
-			}
-			res.Calls = append(res.Calls, call)
 			res.Blocks = append(res.Blocks, llm.ToolCallBlock{
 				ID:        block.ID,
 				Name:      block.Name,
@@ -119,7 +104,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 					name = "json_response"
 				}
 				if block.Name == name {
-					res.Content = string(block.Input)
+					res.Blocks = append(res.Blocks, llm.TextBlock{Text: string(block.Input)})
 				}
 			}
 		}

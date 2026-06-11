@@ -220,11 +220,11 @@ func TestGeneratePreservesReasoningContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if resp.Content != "done" {
-		t.Fatalf("content = %q, want done", resp.Content)
+	if resp.TextContent() != "done" {
+		t.Fatalf("content = %q, want done", resp.TextContent())
 	}
-	if resp.Reasoning != "thinking through it" {
-		t.Fatalf("reasoning = %q, want thinking through it", resp.Reasoning)
+	if resp.ReasoningContent() != "thinking through it" {
+		t.Fatalf("reasoning = %q, want thinking through it", resp.ReasoningContent())
 	}
 }
 
@@ -272,11 +272,11 @@ data: [DONE]
 	if err != nil {
 		t.Fatalf("GenerateFromStream: %v", err)
 	}
-	if resp.Content != "done" {
-		t.Fatalf("content = %q, want done", resp.Content)
+	if resp.TextContent() != "done" {
+		t.Fatalf("content = %q, want done", resp.TextContent())
 	}
-	if resp.Reasoning != "thinking through it" {
-		t.Fatalf("reasoning = %q, want thinking through it", resp.Reasoning)
+	if resp.ReasoningContent() != "thinking through it" {
+		t.Fatalf("reasoning = %q, want thinking through it", resp.ReasoningContent())
 	}
 	if resp.Usage.TotalTokens != 7 {
 		t.Fatalf("total tokens = %d, want 7", resp.Usage.TotalTokens)

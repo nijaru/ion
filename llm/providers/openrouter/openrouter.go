@@ -107,11 +107,8 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	usage.Cost = p.Base.Cost(ctx, prepared.Model, usage)
 
 	return &llm.Response{
-		Content:   choice.Message.Content,
-		Reasoning: choice.Message.ReasoningContent,
-		Calls:     p.Base.ConvertToolCalls(choice.Message.ToolCalls),
-		Blocks:    p.buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
-		Usage:     usage,
+		Blocks: p.buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
+		Usage:  usage,
 	}, nil
 }
 
