@@ -183,7 +183,7 @@ func (l *AgentLoop) emitToolResult(result toolCallResult) {
 		Base:      session.BaseNow(),
 		ToolUseID: result.toolCall.ID,
 		ToolName:  result.toolCall.Name,
-		Result:    result.message.Content,
+		Result:    result.message.TextContent(),
 		Error:     toolEventError(result.message),
 	})
 }
@@ -294,13 +294,11 @@ func (l *AgentLoop) finalizeExecutedToolCall(
 // createToolResultMessage creates the tool result message.
 func createToolResultMessage(toolCall AgentToolCall, result AgentToolResult, isError bool) AgentMessage {
 	parts := normalizeContentParts(result.Content)
-	text := contentPartsText(parts)
 	return AgentMessage{
-		Role:    "tool",
-		Content: text,
-		Parts:   parts,
-		ToolID:  toolCall.ID,
-		Name:    toolCall.Name,
+		Role:   "tool",
+		Parts:  parts,
+		ToolID: toolCall.ID,
+		Name:   toolCall.Name,
 		IsError: isError,
 	}
 }
@@ -356,10 +354,10 @@ func toolEventError(message AgentMessage) error {
 	if !message.IsError {
 		return nil
 	}
-	if strings.TrimSpace(message.Content) == "" {
+	if strings.TrimSpace(message.TextContent()) == "" {
 		return fmt.Errorf("tool execution failed")
 	}
-	return fmt.Errorf("%s", message.Content)
+	return fmt.Errorf("%s", message.TextContent())
 }
 
 // validateToolArgs validates tool arguments against the tool's parameter schema.

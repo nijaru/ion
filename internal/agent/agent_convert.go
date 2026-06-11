@@ -60,13 +60,12 @@ func agentMessageToLLM(message AgentMessage) llm.Message {
 		role = llm.RoleTool
 	}
 	llmMessage := llm.Message{
-		Role:      role,
-		Content:   message.Content,
-		Parts:     normalizeContentParts(message.Parts),
-		Reasoning: message.Reasoning,
-		Name:      message.Name,
-		ToolID:    message.ToolID,
+		Role:  role,
+		Parts: normalizeContentParts(message.Parts),
+		Name:  message.Name,
+		ToolID: message.ToolID,
 	}
+	// Build Blocks from Parts and Calls.
 	if len(message.Calls) > 0 {
 		llmMessage.Calls = make([]llm.Call, len(message.Calls))
 		llmMessage.Blocks = make(llm.ContentBlocks, 0, len(message.Calls))
@@ -78,15 +77,19 @@ func agentMessageToLLM(message AgentMessage) llm.Message {
 				Arguments: serializeArguments(call.Arguments),
 			})
 		}
-	} else if message.Content != "" || message.Reasoning != "" {
-		llmMessage.Blocks = make(llm.ContentBlocks, 0, 2)
-		if message.Reasoning != "" {
-			llmMessage.Blocks = append(llmMessage.Blocks, llm.ThinkingBlock{Thinking: message.Reasoning})
-		}
-		if message.Content != "" {
-			llmMessage.Blocks = append(llmMessage.Blocks, llm.TextBlock{Text: message.Content})
+	} else if len(message.Parts) > 0 {
+		llmMessage.Blocks = make(llm.ContentBlocks, 0, len(message.Parts))
+		for _, part := range message.Parts {
+			if part.Type == "reasoning" {
+				llmMessage.Blocks = append(llmMessage.Blocks, llm.ThinkingBlock{Thinking: part.Text})
+			} else {
+				llmMessage.Blocks = append(llmMessage.Blocks, llm.TextBlock{Text: part.Text})
+			}
 		}
 	}
+	// Populate flat fields from Blocks for backward compatibility.
+	llmMessage.Content = llmMessage.TextContent()
+	llmMessage.Reasoning = llmMessage.BlocksReasoning()
 	return llmMessage
 }
 
@@ -105,12 +108,21 @@ func agentMessageFromLLM(message llm.Message) AgentMessage {
 		role = "tool"
 	}
 	result := AgentMessage{
-		Role:      role,
-		Content:   message.TextContent(),
-		Parts:     normalizeContentParts(message.Parts),
-		Reasoning: message.BlocksReasoning(),
-		Name:      message.Name,
-		ToolID:    message.ToolID,
+		Role:   role,
+		Parts:  normalizeContentParts(message.Parts),
+		Name:   message.Name,
+		ToolID: message.ToolID,
+	}
+	// Build Parts from Blocks if Parts is empty.
+	if len(result.Parts) == 0 && len(message.Blocks) > 0 {
+		for _, block := range message.Blocks {
+			switch v := block.(type) {
+			case llm.TextBlock:
+				result.Parts = append(result.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: v.Text})
+			case llm.ThinkingBlock:
+				result.Parts = append(result.Parts, llm.ContentPart{Type: "reasoning", Text: v.Thinking})
+			}
+		}
 	}
 	calls := message.BlocksToolCalls()
 	if len(calls) > 0 {
@@ -166,7 +178,7 @@ func isEmptyModelMessage(message llm.Message) bool {
 		return false
 	}
 	return strings.TrimSpace(message.TextContent()) == "" &&
-		strings.TrimSpace(message.Reasoning) == "" &&
+		strings.TrimSpace(message.BlocksReasoning()) == "" &&
 		len(message.ThinkingBlocks) == 0 &&
 		len(message.Calls) == 0 &&
 		len(message.Parts) == 0

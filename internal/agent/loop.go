@@ -64,7 +64,7 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 		if prompt.Role == "user" {
 			l.emit(session.UserMessage{
 				Base:    session.BaseNow(),
-				Message: prompt.Content,
+				Message: prompt.TextContent(),
 			})
 		}
 		if err := l.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
@@ -152,7 +152,7 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 					if msg.Role == "user" {
 						l.emit(session.UserMessage{
 							Base:    session.BaseNow(),
-							Message: msg.Content,
+							Message: msg.TextContent(),
 						})
 					}
 					if err := l.writeModelMessage(ctx, agentMessageToLLM(msg)); err != nil {
@@ -181,8 +181,8 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			// Emit complete assistant message with usage
 			l.emit(session.AgentMessage{
 				Base:         session.BaseNow(),
-				Message:      message.Content,
-				Reasoning:    message.Reasoning,
+				Message:      message.TextContent(),
+				Reasoning:    message.ReasoningContent(),
 				InputTokens:  message.InputTokens,
 				OutputTokens: message.OutputTokens,
 				TotalTokens:  message.TotalTokens,
@@ -220,10 +220,10 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				// Emit message events for tool results
 				for _, result := range toolResults {
 					l.emit(session.MessageStart{Base: session.BaseNow(), Message: session.AgentMessage{
-						Message: result.Content,
+						Message: result.TextContent(),
 					}})
 					l.emit(session.MessageEnd{Base: session.BaseNow(), Message: session.AgentMessage{
-						Message: result.Content,
+						Message: result.TextContent(),
 					}})
 				}
 
@@ -242,8 +242,8 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			l.emit(session.TurnEnd{
 				Base: session.BaseNow(),
 				Message: session.AgentMessage{
-					Message:      message.Content,
-					Reasoning:    message.Reasoning,
+					Message:      message.TextContent(),
+					Reasoning:    message.ReasoningContent(),
 					InputTokens:  message.InputTokens,
 					OutputTokens: message.OutputTokens,
 					TotalTokens:  message.TotalTokens,

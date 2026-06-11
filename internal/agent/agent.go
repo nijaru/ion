@@ -141,7 +141,7 @@ func (a *Agent) emitInputMessage(message AgentMessage) {
 	}
 	a.emit(session.UserMessage{
 		Base:    session.BaseNow(),
-		Message: message.Content,
+		Message: message.TextContent(),
 	})
 }
 
@@ -154,8 +154,8 @@ func toSessionAgentMessages(msgs []AgentMessage) []session.AgentMessage {
 	sm := make([]session.AgentMessage, len(msgs))
 	for i, m := range msgs {
 		sm[i] = session.AgentMessage{
-			Message:      m.Content,
-			Reasoning:    m.Reasoning,
+			Message:      m.TextContent(),
+			Reasoning:    m.ReasoningContent(),
 			InputTokens:  m.InputTokens,
 			OutputTokens: m.OutputTokens,
 			TotalTokens:  m.TotalTokens,
@@ -720,15 +720,15 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 	// Create user message
 	userMsg := AgentMessage{
-		Role:    "user",
-		Content: input,
+		Role:  "user",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: input}},
 	}
 
 	// Commit the user message to state synchronously.
 	a.state.Messages = append(a.state.Messages, userMsg)
 	a.emitLocked(session.UserMessage{
 		Base:    session.BaseNow(),
-		Message: userMsg.Content,
+		Message: userMsg.TextContent(),
 	})
 	a.mu.Unlock()
 
@@ -859,7 +859,7 @@ func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
 	}
 	msgs := make([]AgentMessage, count)
 	for i, text := range (*queue)[:count] {
-		msgs[i] = AgentMessage{Role: "user", Content: text}
+		msgs[i] = AgentMessage{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}}
 	}
 	*queue = (*queue)[count:]
 	return msgs

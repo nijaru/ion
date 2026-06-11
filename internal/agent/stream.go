@@ -107,8 +107,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 
 	message := AgentMessage{
 		Role:         "assistant",
-		Content:      resp.TextContent(),
-		Reasoning:    resp.Reasoning,
+		Parts:        respParts(resp),
 		Calls:        calls,
 		InputTokens:  usageValue(&resp.Usage, "input"),
 		OutputTokens: usageValue(&resp.Usage, "output"),
@@ -154,4 +153,18 @@ func (l *AgentLoop) defaultConvertToLlm(messages []AgentMessage) []llm.Message {
 		result = append(result, agentMessageToLLM(msg))
 	}
 	return result
+}
+
+// respParts converts an llm.Response to ContentParts for AgentMessage.
+func respParts(resp llm.Response) []llm.ContentPart {
+	var parts []llm.ContentPart
+	for _, block := range resp.GetContentBlocks() {
+		switch v := block.(type) {
+		case llm.TextBlock:
+			parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: v.Text})
+		case llm.ThinkingBlock:
+			parts = append(parts, llm.ContentPart{Type: "reasoning", Text: v.Thinking})
+		}
+	}
+	return parts
 }

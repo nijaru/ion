@@ -109,7 +109,7 @@ func TestLoopEventSequence(t *testing.T) {
 		OnEvent:  rec.record,
 	})
 	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "hi"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hi"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestLoopEventSequenceWithTool(t *testing.T) {
 	})
 	agent.SetTools([]AgentTool{{Name: "read"}})
 	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read file"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestLoopEventSequenceWithSteering(t *testing.T) {
 		OnEvent:  rec.record,
 		GetSteeringMessages: func() []AgentMessage {
 			if callCount == 1 {
-				return []AgentMessage{{Role: "user", Content: "steer"}}
+				return []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "steer"}}}}
 			}
 			return nil
 		},
@@ -203,7 +203,7 @@ func TestLoopEventSequenceWithSteering(t *testing.T) {
 		},
 	})
 	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "start"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "start"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestLoopEventSequenceWithFollowUp(t *testing.T) {
 		OnEvent:  rec.record,
 		GetFollowUpMessages: func() []AgentMessage {
 			if callCount == 1 {
-				return []AgentMessage{{Role: "user", Content: "follow-up"}}
+				return []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "follow-up"}}}}
 			}
 			return nil
 		},
@@ -253,7 +253,7 @@ func TestLoopEventSequenceWithFollowUp(t *testing.T) {
 		},
 	})
 	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "start"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "start"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestLoopEventSequenceCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 	
-	_, err := agent.Run(ctx, []AgentMessage{{Role: "user", Content: "go"}})
+	_, err := agent.Run(ctx, []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -321,7 +321,7 @@ func TestLoopEventSequenceWithThinking(t *testing.T) {
 		OnEvent:  rec.record,
 	})
 	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "think"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "think"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

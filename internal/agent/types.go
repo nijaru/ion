@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nijaru/ion/llm"
 )
@@ -128,16 +129,13 @@ const (
 )
 
 // AgentMessage is a message in the agent's conversation.
-// It can be a standard LLM message or a custom message type.
+// It uses Parts as the single source of truth for structured content.
 type AgentMessage struct {
 	// Role of the message (user, assistant, tool, system).
 	Role string `json:"role"`
-	// Content is the text content of the message.
-	Content string `json:"content"`
 	// Parts are structured content parts (text, images, etc.).
+	// This is the single source of truth for message content.
 	Parts []llm.ContentPart `json:"parts,omitempty"`
-	// Reasoning is the model's internal reasoning (for reasoning models).
-	Reasoning string `json:"reasoning,omitempty"`
 	// Calls are tool calls made by the assistant.
 	Calls []AgentToolCall `json:"calls,omitempty"`
 	// ToolID is the ID of the tool call this message is a result for.
@@ -153,6 +151,33 @@ type AgentMessage struct {
 	Cost         float64 `json:"cost,omitzero"`
 	// Timestamp is when the message was created.
 	Timestamp int64 `json:"timestamp,omitempty"`
+}
+
+// TextContent returns the concatenated text from all text parts.
+func (m AgentMessage) TextContent() string {
+	var sb strings.Builder
+	for _, part := range m.Parts {
+		if part.Type == "" || part.Type == llm.ContentPartText {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
+}
+
+// ReasoningContent returns the concatenated reasoning from all thinking parts.
+func (m AgentMessage) ReasoningContent() string {
+	var sb strings.Builder
+	for _, part := range m.Parts {
+		if part.Type == "reasoning" {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
+}
+
+// ToolCalls returns the tool calls from this message.
+func (m AgentMessage) ToolCalls() []AgentToolCall {
+	return m.Calls
 }
 
 // AgentToolResult is the result of executing a tool.

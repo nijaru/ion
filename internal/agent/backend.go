@@ -161,7 +161,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 
 	// Update agent state with compacted messages
 	b.session.state.Messages = []AgentMessage{
-		{Role: "assistant", Content: summary},
+		{Role: "assistant", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: summary}}},
 	}
 	b.session.resetContextTokens()
 	b.session.mu.Unlock()
@@ -187,7 +187,7 @@ func (b *Backend) generateSummary(ctx context.Context, messages []AgentMessage) 
 	for _, msg := range messages {
 		llmMessages = append(llmMessages, llm.Message{
 			Role:    llm.Role(msg.Role),
-			Content: msg.Content,
+			Content: msg.TextContent(),
 		})
 	}
 

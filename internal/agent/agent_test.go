@@ -95,7 +95,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 
 	userMsg := AgentMessage{
 		Role:    "user",
-		Content: "run test",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "run test"}},
 	}
 
 	newMsgs, err := agent.Run(context.Background(), []AgentMessage{userMsg})
@@ -179,7 +179,7 @@ func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
 
 	if _, err := agent.Run(context.Background(), []AgentMessage{{
 		Role:    "user",
-		Content: "project me",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "project me"}},
 	}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
 		t.Fatalf("model messages: %v", err)
 	}
 	if len(messages) != 1 || messages[0].Role != llm.RoleUser ||
-		messages[0].Content != "commit first" {
+		messages[0].TextContent() != "commit first" {
 		t.Fatalf("messages = %#v, want committed user prompt", messages)
 	}
 	select {
@@ -450,7 +450,7 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 
 	userMsg := AgentMessage{
 		Role:    "user",
-		Content: "hello",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hello"}},
 	}
 
 	_, err := agent.Run(context.Background(), []AgentMessage{userMsg})
@@ -470,10 +470,10 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 	if sysMsg.Role != "developer" {
 		t.Errorf("expected system message role to be 'developer', got %q", sysMsg.Role)
 	}
-	if sysMsg.Content != "durable instruction set" {
+	if sysMsg.TextContent() != "durable instruction set" {
 		t.Errorf(
 			"expected system message content to be 'durable instruction set', got %q",
-			sysMsg.Content,
+			sysMsg.TextContent(),
 		)
 	}
 
@@ -481,8 +481,8 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 	if userMsgOut.Role != "user" {
 		t.Errorf("expected second message role to be 'user', got %q", userMsgOut.Role)
 	}
-	if userMsgOut.Content != "hello" {
-		t.Errorf("expected second message content to be 'hello', got %q", userMsgOut.Content)
+	if userMsgOut.TextContent() != "hello" {
+		t.Errorf("expected second message content to be 'hello', got %q", userMsgOut.TextContent())
 	}
 }
 
@@ -502,7 +502,7 @@ func TestAgentToolsIncludedInRequest(t *testing.T) {
 		{Name: "bash", Description: "Run a command", Parameters: map[string]any{"type": "object"}},
 	})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "hello"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hello"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if observedReq == nil {
@@ -534,7 +534,7 @@ func TestAgentNoToolsOmitsToolsField(t *testing.T) {
 		StreamFn: streamFn,
 	})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "hello"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hello"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if observedReq == nil {
@@ -568,7 +568,7 @@ func TestAgentValidatesRequiredToolArgs(t *testing.T) {
 		Parameters: map[string]any{"required": []any{"path"}},
 	}})
 
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestAgentAllowsToolCallWithAllRequiredArgs(t *testing.T) {
 		Parameters: map[string]any{"required": []any{"path"}},
 	}})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !toolCalled {
@@ -634,7 +634,7 @@ func TestAgentValidatesPropertyTypes(t *testing.T) {
 		Parameters: map[string]any{"required": []any{"path"}, "properties": map[string]any{"path": map[string]any{"type": "string"}}},
 	}})
 
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read"}}}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -685,13 +685,13 @@ func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 	})
 	agent.SetTools([]AgentTool{{Name: "read"}})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got, want := strings.Join(requests, ","), "first,second"; got != want {
 		t.Fatalf("request models = %s, want %s", got, want)
 	}
-	if before.AssistantMessage.Content != "need tool" {
+	if before.AssistantMessage.TextContent() != "need tool" {
 		t.Fatalf("before assistant = %#v", before.AssistantMessage)
 	}
 	if before.Args == nil || before.ToolCall.Arguments["path"] != "README.md" {
@@ -731,7 +731,7 @@ func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 	})
 	agent.SetTools([]AgentTool{{Name: "read"}})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "read image"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read image"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var toolMsg *llm.Message
@@ -747,8 +747,8 @@ func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 	if len(toolMsg.Parts) != 2 || toolMsg.Parts[1].Type != llm.ContentPartImage {
 		t.Fatalf("tool parts = %#v", toolMsg.Parts)
 	}
-	if !strings.Contains(toolMsg.Content, "Image: image/png") {
-		t.Fatalf("tool content = %q, want image notice", toolMsg.Content)
+	if !strings.Contains(toolMsg.TextContent(), "image result") {
+		t.Fatalf("tool content = %q, want image result", toolMsg.TextContent())
 	}
 }
 
@@ -803,7 +803,7 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 	})
 
 	go func() {
-		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}})
 		errc <- err
 	}()
 
@@ -889,7 +889,7 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+		_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}})
 		errc <- err
 	}()
 
@@ -963,7 +963,7 @@ func TestAgentPerToolExecutionModeOverridesGlobal(t *testing.T) {
 		{Name: "slow", ExecutionMode: ToolExecutionSequential},
 	})
 
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "go"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}})
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestAgentConsumedFollowUpEmitsUserMessage(t *testing.T) {
 				return nil
 			}
 			followUpSent = true
-			return []AgentMessage{{Role: "user", Content: "queued follow-up"}}
+			return []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "queued follow-up"}}}}
 		},
 		OnEvent: func(ev session.AgentEvent) {
 			events = append(events, ev)
@@ -1009,7 +1009,7 @@ func TestAgentConsumedFollowUpEmitsUserMessage(t *testing.T) {
 		},
 	})
 
-	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "initial"}}); err != nil {
+	if _, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "initial"}}}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var sawFollowUpEvent bool
@@ -1025,7 +1025,7 @@ func TestAgentConsumedFollowUpEmitsUserMessage(t *testing.T) {
 	}
 	var sawFollowUpCommit bool
 	for _, message := range committed {
-		if message.Role == llm.RoleUser && message.Content == "queued follow-up" {
+		if message.Role == llm.RoleUser && message.TextContent() == "queued follow-up" {
 			sawFollowUpCommit = true
 			break
 		}
@@ -1058,7 +1058,7 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 
 	messages, err := agent.Run(context.Background(), []AgentMessage{{
 		Role:    "user",
-		Content: "hello",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hello"}},
 	}})
 	if err == nil {
 		t.Fatal("run succeeded after stream error")
@@ -1115,7 +1115,7 @@ func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("messages = %#v", messages)
 	}
-	if messages[0].Content != "prior" || messages[1].Content != "answer" {
+	if messages[0].TextContent() != "prior" || messages[1].TextContent() != "answer" {
 		t.Fatalf("hydrated messages = %#v", messages)
 	}
 }
@@ -1160,7 +1160,7 @@ func TestAgentPrepareArguments(t *testing.T) {
 		},
 	}})
 
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Content: "test"}})
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
