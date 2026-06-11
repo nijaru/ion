@@ -12,13 +12,13 @@ import (
 // Agent is the core agent loop primitive. It manages the lifecycle of an
 // agent session: submit → stream → tool calls → results → done.
 type Agent struct {
-	config AgentLoopConfig
+	config AgentConfig
 	state  AgentState
 	mu     sync.RWMutex
 }
 
 // New creates a new Agent with the given configuration.
-func New(config AgentLoopConfig) *Agent {
+func New(config AgentConfig) *Agent {
 	return &Agent{
 		config: config,
 		state: AgentState{

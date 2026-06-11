@@ -7,7 +7,6 @@ import (
 	"context"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/session"
 )
 
 // StreamFn is the function signature for streaming LLM completions.
@@ -193,7 +192,7 @@ type AgentTool struct {
 	// ReadOnly indicates whether the tool only reads data.
 	ReadOnly bool `json:"read_only"`
 	// ExecutionMode controls how this tool's calls are executed (sequential or parallel).
-	// If empty, uses the global ToolExecutionMode from AgentLoopConfig.
+	// If empty, uses the global ToolExecutionMode from AgentConfig.
 	ExecutionMode ToolExecutionMode `json:"execution_mode,omitempty"`
 	// Label is a human-readable label for the tool (shown in TUI).
 	Label string `json:"label,omitzero"`
@@ -221,45 +220,4 @@ type AgentState struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
-// AgentLoopConfig is the configuration for the agent loop.
-type AgentLoopConfig struct {
-	// Model is the model to use for completions.
-	Model llm.Model `json:"model"`
-	// ThinkingLevel is the initial thinking level.
-	ThinkingLevel ThinkingLevel `json:"thinking_level"`
-	// StreamFn is the function to use for streaming completions.
-	StreamFn StreamFn `json:"-"`
-	// ToolExecutionMode controls how tool calls are executed.
-	ToolExecutionMode ToolExecutionMode `json:"tool_execution_mode"`
-	// QueueMode controls how queued messages are injected.
-	QueueMode QueueMode `json:"queue_mode"`
-	// MaxTokens is the maximum number of tokens to generate.
-	MaxTokens int `json:"max_tokens"`
-	// Temperature is the sampling temperature.
-	Temperature float64 `json:"temperature"`
-	// ToolExecutor executes tool calls.
-	ToolExecutor ToolExecutor `json:"-"`
-	// OnEvent is called when a session event is emitted.
-	OnEvent func(event session.AgentEvent) `json:"-"`
-	// OnModelMessage is called when a provider-visible message is committed.
-	OnModelMessage ModelMessageWriter `json:"-"`
 
-	// Hooks (optional)
-
-	// ConvertToLlm converts AgentMessages to LLM Messages before each call.
-	ConvertToLlm func(messages []AgentMessage) []llm.Message `json:"-"`
-	// TransformContext transforms the context before each LLM call.
-	TransformContext func(ctx context.Context, messages []AgentMessage) []AgentMessage `json:"-"`
-	// ShouldStopAfterTurn is called after each turn to decide whether to stop.
-	ShouldStopAfterTurn func(ctx ShouldStopAfterTurnContext) bool `json:"-"`
-	// PrepareNextTurn is called before starting another provider request.
-	PrepareNextTurn func(ctx PrepareNextTurnContext) *AgentLoopTurnUpdate `json:"-"`
-	// GetSteeringMessages returns steering messages to inject mid-run.
-	GetSteeringMessages func() []AgentMessage `json:"-"`
-	// GetFollowUpMessages returns follow-up messages after the agent stops.
-	GetFollowUpMessages func() []AgentMessage `json:"-"`
-	// BeforeToolCall is called before each tool execution.
-	BeforeToolCall func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult `json:"-"`
-	// AfterToolCall is called after each tool execution.
-	AfterToolCall func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult `json:"-"`
-}

@@ -120,7 +120,7 @@ func NewSessionAdapter(config *SessionAdapterConfig) *SessionAdapter {
 		queueMode = QueueModeOneAtATime
 	}
 
-	agentConfig := AgentLoopConfig{
+	agentConfig := AgentConfig{
 		Model:         config.Model,
 		ThinkingLevel: config.ThinkingLevel,
 		QueueMode:     queueMode,

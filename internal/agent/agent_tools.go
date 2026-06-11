@@ -32,7 +32,7 @@ func (a *Agent) executeToolCallsSequential(
 	assistantMsg AgentMessage,
 	assistantLLM llm.Message,
 	toolCalls []AgentToolCall,
-	config AgentLoopConfig,
+	config AgentConfig,
 ) ([]AgentMessage, []llm.Message, bool, error) {
 	finalized := make([]toolCallResult, 0, len(toolCalls))
 
@@ -73,7 +73,7 @@ func (a *Agent) executeToolCallsParallel(
 	assistantMsg AgentMessage,
 	assistantLLM llm.Message,
 	toolCalls []AgentToolCall,
-	config AgentLoopConfig,
+	config AgentConfig,
 ) ([]AgentMessage, []llm.Message, bool, error) {
 	finalized := make([]toolCallResult, len(toolCalls))
 	prepared := make([]toolPreparation, len(toolCalls))
@@ -196,7 +196,7 @@ func (a *Agent) prepareToolCall(
 	ctx context.Context,
 	assistantLLM llm.Message,
 	toolCall AgentToolCall,
-	config AgentLoopConfig,
+	config AgentConfig,
 ) toolPreparation {
 	tool, ok := a.findTool(toolCall.Name)
 	if !ok {
@@ -247,7 +247,7 @@ func (a *Agent) prepareToolCall(
 func (a *Agent) executePreparedToolCall(
 	ctx context.Context,
 	prepared toolPreparation,
-	config AgentLoopConfig,
+	config AgentConfig,
 ) (AgentToolResult, bool) {
 	if config.ToolExecutor == nil {
 		return errorToolResult(fmt.Sprintf("Tool %s executed without a configured executor", prepared.ToolCall.Name)), true
@@ -270,7 +270,7 @@ func (a *Agent) finalizeExecutedToolCall(
 	prepared toolPreparation,
 	result AgentToolResult,
 	isError bool,
-	config AgentLoopConfig,
+	config AgentConfig,
 ) (AgentToolResult, bool) {
 	if config.AfterToolCall != nil {
 		after := config.AfterToolCall(ctx, AfterToolCallContext{
@@ -314,7 +314,7 @@ func createToolResultMessage(toolCall AgentToolCall, result AgentToolResult, isE
 }
 
 
-func (a *Agent) shouldExecuteSequentially(config AgentLoopConfig, calls []AgentToolCall) bool {
+func (a *Agent) shouldExecuteSequentially(config AgentConfig, calls []AgentToolCall) bool {
 	for _, call := range calls {
 		tool, ok := a.findTool(call.Name)
 		if !ok {

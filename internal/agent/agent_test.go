@@ -70,7 +70,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 		}, nil
 	}
 
-	cfg := AgentLoopConfig{
+	cfg := AgentConfig{
 		Model:         llm.Model{ID: "test-model"},
 		ThinkingLevel: ThinkingLevelMedium,
 		StreamFn:      streamFn,
@@ -167,7 +167,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 
 func TestAgentRunOwnsPromptUserMessageProjection(t *testing.T) {
 	var events []session.AgentEvent
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model: llm.Model{ID: "test-model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
@@ -437,7 +437,7 @@ func TestAgentSystemPromptPropagation(t *testing.T) {
 		SystemRole: "developer",
 	}
 
-	cfg := AgentLoopConfig{
+	cfg := AgentConfig{
 		Model: llm.Model{
 			ID:           "test-reasoning-model",
 			Capabilities: modelCaps,
@@ -493,7 +493,7 @@ func TestAgentToolsIncludedInRequest(t *testing.T) {
 		return &mockStream{chunks: []*llm.Chunk{{Content: "no tools needed"}}}, nil
 	}
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "test-model"},
 		StreamFn: streamFn,
 	})
@@ -529,7 +529,7 @@ func TestAgentNoToolsOmitsToolsField(t *testing.T) {
 		return &mockStream{chunks: []*llm.Chunk{{Content: "ok"}}}, nil
 	}
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "test-model"},
 		StreamFn: streamFn,
 	})
@@ -553,7 +553,7 @@ func TestAgentValidatesRequiredToolArgs(t *testing.T) {
 	}
 
 	var toolError string
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "model"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
@@ -586,7 +586,7 @@ func TestAgentAllowsToolCallWithAllRequiredArgs(t *testing.T) {
 		}}}, nil
 	}
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "model"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
@@ -618,7 +618,7 @@ func TestAgentValidatesPropertyTypes(t *testing.T) {
 	}
 
 	var toolCalled bool
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "model"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
@@ -658,7 +658,7 @@ func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 
 	var before BeforeToolCallContext
 	var after AfterToolCallContext
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "first"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
@@ -712,7 +712,7 @@ func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 		}
 		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
 	}
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "model"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
@@ -760,7 +760,7 @@ func TestAgentParallelToolsEmitLifecycleInSourceOrder(t *testing.T) {
 		mu        sync.Mutex
 		lifecycle []string
 	)
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:             llm.Model{ID: "model"},
 		ToolExecutionMode: ToolExecutionParallel,
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -841,7 +841,7 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	secondRan := make(chan struct{})
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:             llm.Model{ID: "model"},
 		ToolExecutionMode: ToolExecutionParallel,
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -938,7 +938,7 @@ func TestAgentPerToolExecutionModeOverridesGlobal(t *testing.T) {
 	// The sequential tool should force sequential execution.
 	toolOrder := make(chan string, 10)
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:             llm.Model{ID: "model"},
 		ToolExecutionMode: ToolExecutionParallel,
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -984,7 +984,7 @@ func TestAgentConsumedFollowUpEmitsUserMessage(t *testing.T) {
 	var committed []llm.Message
 	requests := 0
 	followUpSent := false
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model: llm.Model{ID: "model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			requests++
@@ -1039,7 +1039,7 @@ func TestAgentStreamErrorDoesNotCommitAssistantMessage(t *testing.T) {
 	var events []session.AgentEvent
 	var committed []llm.Message
 	streamErr := errors.New("provider stream failed")
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model: llm.Model{ID: "model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			return &mockStream{
@@ -1138,7 +1138,7 @@ func TestAgentPrepareArguments(t *testing.T) {
 		}}}, nil
 	}
 
-	agent := New(AgentLoopConfig{
+	agent := New(AgentConfig{
 		Model:    llm.Model{ID: "model"},
 		StreamFn: streamFn,
 		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
