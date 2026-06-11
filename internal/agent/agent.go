@@ -45,7 +45,7 @@ func New(config AgentConfig) *Agent {
 	if id == "" {
 		id = "default"
 	}
-	return &Agent{
+	a := &Agent{
 		config: config,
 		state: AgentState{
 			Model:         config.Model,
@@ -56,12 +56,72 @@ func New(config AgentConfig) *Agent {
 		id:     id,
 		events: make(chan session.AgentEvent, 100),
 	}
+	// Wire OnEvent to send to events channel if not already set.
+	if a.config.OnEvent == nil {
+		a.config.OnEvent = func(ev session.AgentEvent) {
+			defer func() { recover() }()
+			select {
+			case a.events <- ev:
+			default:
+			}
+		}
+	}
+	// Wire OnModelMessage to appendModelMessage if not already set.
+	if a.config.OnModelMessage == nil {
+		a.config.OnModelMessage = a.appendModelMessage
+	}
+	// Wire queue callbacks if not already set.
+	queueMode := a.config.QueueMode
+	if queueMode == "" {
+		queueMode = QueueModeOneAtATime
+	}
+	if a.config.GetSteeringMessages == nil {
+		a.config.GetSteeringMessages = func() []AgentMessage {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if len(a.steeringQueue) == 0 {
+				return nil
+			}
+			msgs := drainQueuedMessagesLocked(&a.steeringQueue, queueMode)
+			a.emitQueueUpdatedLocked()
+			return msgs
+		}
+	}
+	if a.config.GetFollowUpMessages == nil {
+		a.config.GetFollowUpMessages = func() []AgentMessage {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if len(a.followUpQueue) == 0 {
+				return nil
+			}
+			msgs := drainQueuedMessagesLocked(&a.followUpQueue, queueMode)
+			a.emitQueueUpdatedLocked()
+			return msgs
+		}
+	}
+	return a
 }
 
 func (a *Agent) emit(ev session.AgentEvent) {
 	a.mu.RLock()
+	closed := a.closed
 	onEvent := a.config.OnEvent
 	a.mu.RUnlock()
+	if closed {
+		return
+	}
+	if onEvent != nil {
+		onEvent(ev)
+	}
+}
+
+// emitLocked sends an event without acquiring the lock.
+// Caller must hold a.mu.
+func (a *Agent) emitLocked(ev session.AgentEvent) {
+	if a.closed {
+		return
+	}
+	onEvent := a.config.OnEvent
 	if onEvent != nil {
 		onEvent(ev)
 	}
@@ -138,6 +198,12 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 func (a *Agent) SetMessages(messages []AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.setMessagesLocked(messages)
+}
+
+// setMessagesLocked replaces messages without acquiring the lock.
+// Caller must hold a.mu.
+func (a *Agent) setMessagesLocked(messages []AgentMessage) {
 	a.state.Messages = cloneAgentMessages(messages)
 }
 
@@ -146,7 +212,7 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 // Emits AgentStart at the beginning. Caller owns AgentEnd.
 // Emits TurnEnd per-turn inside runLoop (Pi parity).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
-	a.emit(session.AgentStart{Base: session.BaseNow()})
+	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
 
 	newMessages, err := a.acceptPrompts(ctx, prompts)
 	if err != nil {
@@ -167,7 +233,7 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 // Used for retries — context already has user message or tool results.
 // Emits AgentStart at the beginning. Caller owns AgentEnd.
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
-	a.emit(session.AgentStart{Base: session.BaseNow()})
+	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
 
 	a.mu.RLock()
 	if len(a.state.Messages) == 0 {
@@ -336,7 +402,7 @@ func (a *Agent) Resume(ctx context.Context, sessionID string) error {
 	if history, err := a.loadModelHistoryLocked(ctx); err != nil {
 		return err
 	} else if history != nil {
-		a.SetMessages(history)
+		a.setMessagesLocked(history)
 	}
 
 	return nil
@@ -366,7 +432,8 @@ func (a *Agent) Close() error {
 			a.cancel()
 		}
 		a.mu.Unlock()
-		close(a.events)
+		// Do not close a.events — emit guards with a.closed under lock.
+		// Closing would race with concurrent emit calls.
 	})
 	return nil
 }
@@ -476,7 +543,7 @@ func (a *Agent) emitQueueUpdatedLocked() {
 		Steering: append([]string(nil), a.steeringQueue...),
 		FollowUp: append([]string(nil), a.followUpQueue...),
 	}
-	a.emit(session.QueuedInputUpdate{
+	a.emitLocked(session.QueuedInputUpdate{
 		Base:     session.BaseNow(),
 		Snapshot: snapshot,
 	})
@@ -499,7 +566,7 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 	// Success or cancellation — agent already emitted TurnEnd
 	if err == nil || errors.Is(err, context.Canceled) {
 		a.retryAttempt = 0
-		a.emit(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
+		a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		return
 	}
 
@@ -522,7 +589,7 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 	}
 
 	// Non-retryable error — agent already emitted TurnEnd{Error}
-	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs})
+	a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs})
 
 	// Call HandleRunFailure if configured
 	if a.config.HandleRunFailure != nil {
@@ -533,7 +600,7 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 // recoverFromOverflow handles context overflow by compacting and retrying.
 // Returns true if recovery succeeded or was attempted. Caller must hold a.mu.
 func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
-	a.emit(session.CompactionTrigger{
+	a.emitLocked(session.CompactionTrigger{
 		Base:   session.BaseNow(),
 		Reason: "overflow",
 	})
@@ -546,12 +613,12 @@ func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
 	compacted, err := a.runCompaction(ctx)
 	if err != nil {
 		if !a.closed {
-			a.emit(session.AutoRetryEnd{
+			a.emitLocked(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
 			})
-			a.emit(session.AgentEnd{Base: session.BaseNow()})
+			a.emitLocked(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	}
@@ -563,9 +630,9 @@ func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
 	if !a.closed {
 		sessionMsgs := toSessionAgentMessages(newMessages)
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			a.emit(session.AgentEnd{Base: session.BaseNow(), Error: retryErr, Messages: sessionMsgs})
+			a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Error: retryErr, Messages: sessionMsgs})
 		} else {
-			a.emit(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
+			a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		}
 	}
 	return true
@@ -577,7 +644,7 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 	a.retryAttempt++
 	delayMs := a.config.GetRetryBaseDelayMs() * (1 << (a.retryAttempt - 1))
 
-	a.emit(session.AutoRetryStart{
+	a.emitLocked(session.AutoRetryStart{
 		Base:       session.BaseNow(),
 		Attempt:    a.retryAttempt,
 		MaxAttempt: a.config.GetMaxRetries(),
@@ -592,13 +659,13 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 	case <-ctx.Done():
 		a.mu.Lock()
 		if !a.closed {
-			a.emit(session.AutoRetryEnd{
+			a.emitLocked(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				Attempt:    a.retryAttempt,
 				FinalError: "Retry cancelled",
 			})
-			a.emit(session.AgentEnd{Base: session.BaseNow()})
+			a.emitLocked(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	case <-time.After(time.Duration(delayMs) * time.Millisecond):
@@ -620,13 +687,13 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 
 	sessionMsgs := toSessionAgentMessages(newMessages)
 	if retryErr == nil || errors.Is(retryErr, context.Canceled) {
-		a.emit(session.AutoRetryEnd{
+		a.emitLocked(session.AutoRetryEnd{
 			Base:    session.BaseNow(),
 			Success: true,
 			Attempt: a.retryAttempt,
 		})
 		a.retryAttempt = 0
-		a.emit(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
+		a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		return true
 	}
 
@@ -735,7 +802,7 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 	// Check if auto-compaction is needed before submitting
 	if a.needsCompaction() && a.config.CompactFunc != nil {
-		a.emit(session.CompactionTrigger{
+		a.emitLocked(session.CompactionTrigger{
 			Base:   session.BaseNow(),
 			Reason: "threshold",
 		})
@@ -744,7 +811,7 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 		a.mu.Lock()
 		if err != nil {
 			// Log compaction error but continue with the turn
-			a.emit(session.AutoRetryEnd{
+			a.emitLocked(session.AutoRetryEnd{
 				Base:       session.BaseNow(),
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
@@ -850,7 +917,7 @@ func (a *Agent) Reset() {
 	a.followUpQueue = nil
 
 	// Emit fresh start
-	a.emit(session.AgentStart{Base: session.BaseNow()})
+	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
 }
 
 // Subscribe registers a listener for agent events.

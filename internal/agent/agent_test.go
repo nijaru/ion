@@ -221,7 +221,7 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 		return &mockStream{chunks: []*llm.Chunk{{Content: "response"}}}, nil
 	}
 
-	adapter := NewSessionAdapter(&SessionAdapterConfig{
+	adapter := New(AgentConfig{
 		ID:       "test-session",
 		Model:    llm.Model{ID: "test-model"},
 		StreamFn: streamFn,
@@ -284,7 +284,7 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 
 func TestSessionAdapterCancelSettlesWithTurnFinished(t *testing.T) {
 	streamEntered := make(chan struct{})
-	adapter := NewSessionAdapter(&SessionAdapterConfig{
+	adapter := New(AgentConfig{
 		ID:    "test-session",
 		Model: llm.Model{ID: "test-model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -335,7 +335,7 @@ func TestSessionAdapterSubmitTurnCommitsUserBeforeReturn(t *testing.T) {
 
 	lazy := session.NewLazySession(store, "/tmp/ion", "model", "main")
 	streamEntered := make(chan struct{})
-	adapter := NewSessionAdapter(&SessionAdapterConfig{
+	adapter := New(AgentConfig{
 		ID:    lazy.ID(),
 		Model: llm.Model{ID: "model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -374,7 +374,7 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 	firstStreamEntered := make(chan struct{})
 	releaseFirstStream := make(chan struct{})
 	var closeFirstOnce sync.Once
-	adapter := NewSessionAdapter(&SessionAdapterConfig{
+	adapter := New(AgentConfig{
 		ID:    "test-session",
 		Model: llm.Model{ID: "model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -1100,7 +1100,7 @@ func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
 		t.Fatalf("append assistant: %v", err)
 	}
 
-	adapter := NewSessionAdapter(&SessionAdapterConfig{
+	adapter := New(AgentConfig{
 		ID:    "placeholder",
 		Model: llm.Model{ID: "model"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -1111,7 +1111,7 @@ func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
 	if err := adapter.Resume(context.Background(), sess.ID()); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	messages := adapter.agent.State().Messages
+	messages := adapter.State().Messages
 	if len(messages) != 2 {
 		t.Fatalf("messages = %#v", messages)
 	}
