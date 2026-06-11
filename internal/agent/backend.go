@@ -22,7 +22,7 @@ type Backend struct {
 	store    session.SessionStore
 	sess     session.SessionHandle
 	provider llm.Provider
-	session  *SessionAdapter
+	session  *Agent
 
 	// Workdir is the current workspace directory.
 	Workdir string
@@ -146,7 +146,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Get current messages from agent state
-	messages := b.session.agent.state.Messages
+	messages := b.session.state.Messages
 	if len(messages) == 0 {
 		b.session.mu.Unlock()
 		return false, nil
@@ -160,7 +160,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Update agent state with compacted messages
-	b.session.agent.state.Messages = []AgentMessage{
+	b.session.state.Messages = []AgentMessage{
 		{Role: "assistant", Content: summary},
 	}
 	b.session.resetContextTokens()
@@ -204,9 +204,9 @@ func (b *Backend) generateSummary(ctx context.Context, messages []AgentMessage) 
 }
 
 // createSession creates a new session adapter from the current app.
-func (b *Backend) createSession() *SessionAdapter {
+func (b *Backend) createSession() *Agent {
 	if b.cfg == nil {
-		return NewSessionAdapter(&SessionAdapterConfig{
+		return New(AgentConfig{
 			ID: "default",
 		})
 	}
@@ -215,7 +215,7 @@ func (b *Backend) createSession() *SessionAdapter {
 	provider, err := providers.NewProviderFromConfig(b.cfg)
 	if err != nil {
 		// Return a basic session without streaming
-		return NewSessionAdapter(&SessionAdapterConfig{
+		return New(AgentConfig{
 			ID: b.sessionID(),
 		})
 	}
@@ -274,7 +274,7 @@ func (b *Backend) createSession() *SessionAdapter {
 	}
 
 	// Create session adapter
-	sessionCfg := &SessionAdapterConfig{
+	sessionCfg := AgentConfig{
 		ID:           b.sessionID(),
 		Model:        model,
 		StreamFn:     streamFn,
@@ -284,7 +284,7 @@ func (b *Backend) createSession() *SessionAdapter {
 		CompactFunc:  b.Compact,
 	}
 
-	adapter := NewSessionAdapter(sessionCfg)
+	adapter := New(sessionCfg)
 
 	// Set store and session if available
 	if b.store != nil {

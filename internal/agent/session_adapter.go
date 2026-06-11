@@ -76,10 +76,7 @@ type SessionAdapterConfig struct {
 	CompactFunc func(ctx context.Context) (bool, error)
 }
 
-const (
-	defaultMaxRetries       = 3
-	defaultRetryBaseDelayMs = 1000
-)
+
 
 // GetMaxRetries returns the max retry attempts (default 3).
 func (c *SessionAdapterConfig) GetMaxRetries() int {

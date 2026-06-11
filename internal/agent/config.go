@@ -11,9 +11,14 @@ import (
 // AgentConfig is the configuration for an Agent instance.
 // It defines the agent's behavior, callbacks, and hooks.
 type AgentConfig struct {
+	// ID is the session identifier.
+	ID string `json:"id,omitempty"`
+
 	// Core settings
 	Model         llm.Model       `json:"model"`
 	ThinkingLevel ThinkingLevel   `json:"thinking_level"`
+	SystemPrompt  string          `json:"system_prompt,omitempty"`
+	Tools         []AgentTool     `json:"tools,omitempty"`
 	StreamFn      StreamFn        `json:"-"`
 	ToolExecutor  ToolExecutor    `json:"-"`
 	OnEvent       func(event session.AgentEvent) `json:"-"`
@@ -24,6 +29,14 @@ type AgentConfig struct {
 	QueueMode         QueueMode         `json:"queue_mode"`
 	MaxTokens         int               `json:"max_tokens"`
 	Temperature       float64           `json:"temperature"`
+
+	// Retry settings
+	// MaxRetries is the max number of retry attempts for transient errors.
+	// Default: 3
+	MaxRetries int `json:"max_retries,omitempty"`
+	// RetryBaseDelayMs is the base delay in ms for exponential backoff.
+	// Default: 1000
+	RetryBaseDelayMs int `json:"retry_base_delay_ms,omitempty"`
 
 	// Callbacks (Pi parity)
 	// ConvertToLlm converts AgentMessages to LLM Messages before each call.
@@ -50,6 +63,11 @@ type AgentConfig struct {
 	// GetFollowUpMessages returns follow-up messages after the agent stops.
 	// Default: nil (no follow-up).
 	GetFollowUpMessages func() []AgentMessage `json:"-"`
+
+	// Compaction
+	// CompactFunc is the function to call for compaction.
+	// If nil, compaction is skipped.
+	CompactFunc func(ctx context.Context) (bool, error) `json:"-"`
 
 	// Tool hooks
 	// BeforeToolCall is called before each tool execution.
@@ -92,3 +110,30 @@ func (c AgentConfig) WithDefaults() AgentConfig {
 	}
 	return c
 }
+
+// GetMaxRetries returns the max retry attempts (default 3).
+func (c *AgentConfig) GetMaxRetries() int {
+	if c == nil || c.MaxRetries <= 0 {
+		return defaultMaxRetries
+	}
+	if c.MaxRetries > 10 {
+		return 10
+	}
+	return c.MaxRetries
+}
+
+// GetRetryBaseDelayMs returns the base delay in ms for exponential backoff (default 1000).
+func (c *AgentConfig) GetRetryBaseDelayMs() int {
+	if c == nil || c.RetryBaseDelayMs <= 0 {
+		return defaultRetryBaseDelayMs
+	}
+	if c.RetryBaseDelayMs > 60000 {
+		return 60000
+	}
+	return c.RetryBaseDelayMs
+}
+
+const (
+	defaultMaxRetries       = 3
+	defaultRetryBaseDelayMs = 1000
+)
