@@ -118,6 +118,14 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 	var newMessages []AgentMessage
 	var pendingMessages []AgentMessage
 
+	// Emit AgentEnd when the loop exits (Pi parity: single ownership).
+	defer func() {
+		l.emit(session.AgentEnd{
+			Base:     session.BaseNow(),
+			Messages: toSessionAgentMessages(newMessages),
+		})
+	}()
+
 	for {
 		hasMoreToolCalls := true
 

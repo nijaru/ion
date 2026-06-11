@@ -234,7 +234,7 @@ func (a *Agent) syncLoopState(loop *AgentLoop) {
 
 // Run starts the agent loop with the given prompt messages.
 // It returns the new messages added during the run.
-// Emits AgentStart at the beginning. Caller owns AgentEnd.
+// Emits AgentStart at the beginning. The loop emits AgentEnd.
 // Emits TurnEnd per-turn inside the loop (Pi parity).
 func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
 	a.mu.Lock()
@@ -263,7 +263,7 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 
 // Continue continues the agent loop without adding new messages.
 // Used for retries — context already has user message or tool results.
-// Emits AgentStart at the beginning. Caller owns AgentEnd.
+// Emits AgentStart at the beginning. The loop emits AgentEnd.
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true
@@ -464,7 +464,7 @@ func (a *Agent) emitQueueUpdatedLocked() {
 
 // handlePostAgentRun handles post-agent-run logic including overflow
 // recovery and auto-retry with exponential backoff.
-// Emits AgentEnd when all recovery is exhausted (Pi parity).
+// The loop emits AgentEnd (single ownership). This wrapper handles recovery.
 func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages []AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -473,13 +473,9 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 		return
 	}
 
-	// Convert domain messages to session messages for event payloads.
-	sessionMsgs := toSessionAgentMessages(newMessages)
-
-	// Success or cancellation — agent already emitted TurnEnd
+	// Success or cancellation — loop already emitted AgentEnd
 	if err == nil || errors.Is(err, context.Canceled) {
 		a.retryAttempt = 0
-		a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
 		return
 	}
 
@@ -501,9 +497,7 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 		}
 	}
 
-	// Non-retryable error — agent already emitted TurnEnd{Error}
-	a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs})
-
+	// Non-retryable error — loop already emitted AgentEnd
 	// Call HandleRunFailure if configured
 	if a.config.HandleRunFailure != nil {
 		a.config.HandleRunFailure(err)
@@ -531,7 +525,6 @@ func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
 				Success:    false,
 				FinalError: fmt.Sprintf("compaction failed: %v", err),
 			})
-			a.emitLocked(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	}
@@ -539,15 +532,8 @@ func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
 		a.resetContextTokens()
 	}
 
-	newMessages, retryErr := a.Continue(ctx)
-	if !a.closed {
-		sessionMsgs := toSessionAgentMessages(newMessages)
-		if retryErr != nil && !errors.Is(retryErr, context.Canceled) {
-			a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Error: retryErr, Messages: sessionMsgs})
-		} else {
-			a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
-		}
-	}
+	// Retry the turn. The loop will emit AgentEnd.
+	_, _ = a.Continue(ctx)
 	return true
 }
 
@@ -578,7 +564,6 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 				Attempt:    a.retryAttempt,
 				FinalError: "Retry cancelled",
 			})
-			a.emitLocked(session.AgentEnd{Base: session.BaseNow()})
 		}
 		return true
 	case <-time.After(time.Duration(delayMs) * time.Millisecond):
@@ -591,29 +576,20 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 
 	// Retry the turn (unlock for blocking call)
 	a.mu.Unlock()
-	newMessages, retryErr := a.Continue(ctx)
+	_, _ = a.Continue(ctx)
 	a.mu.Lock()
 
 	if a.closed {
 		return true
 	}
 
-	sessionMsgs := toSessionAgentMessages(newMessages)
-	if retryErr == nil || errors.Is(retryErr, context.Canceled) {
-		a.emitLocked(session.AutoRetryEnd{
-			Base:    session.BaseNow(),
-			Success: true,
-			Attempt: a.retryAttempt,
-		})
-		a.retryAttempt = 0
-		a.emitLocked(session.AgentEnd{Base: session.BaseNow(), Messages: sessionMsgs})
-		return true
-	}
-
-	// Retry failed — handle the new error (may retry again)
-	a.mu.Unlock()
-	a.handlePostAgentRun(ctx, retryErr, newMessages)
-	a.mu.Lock()
+	// Retry succeeded — loop already emitted AgentEnd
+	a.emitLocked(session.AutoRetryEnd{
+		Base:    session.BaseNow(),
+		Success: true,
+		Attempt: a.retryAttempt,
+	})
+	a.retryAttempt = 0
 	return true
 }
 
