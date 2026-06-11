@@ -51,29 +51,4 @@ func BenchmarkEffectiveEntriesFromEvents(b *testing.B) {
 	}
 }
 
-func BenchmarkExportRun(b *testing.B) {
-	sess := New("bench-export")
-	for i := range 128 {
-		_ = sess.Append(b.Context(), NewMessage(sess.ID(), llm.Message{
-			Role:    llm.RoleUser,
-			Content: "user message",
-		}))
-		_ = sess.Append(b.Context(), NewMessage(sess.ID(), llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: "assistant message",
-		}))
-		if i%4 == 0 {
-			_ = sess.Append(b.Context(), NewMessage(sess.ID(), llm.Message{
-				Role:    llm.RoleTool,
-				Content: "tool output",
-				ToolID:  "tool-call",
-			}))
-		}
-	}
 
-	for b.Loop() {
-		if _, err := ExportRun(sess); err != nil {
-			b.Fatalf("export run: %v", err)
-		}
-	}
-}
