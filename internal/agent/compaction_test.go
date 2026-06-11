@@ -7,7 +7,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-func TestSessionAdapterNeedsCompaction(t *testing.T) {
+func TestAgentNeedsCompaction(t *testing.T) {
 	tests := []struct {
 		name           string
 		contextWindow  int
@@ -24,15 +24,15 @@ func TestSessionAdapterNeedsCompaction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			adapter := &SessionAdapter{
-				config: &SessionAdapterConfig{
+			a := &Agent{
+				config: AgentConfig{
 					Model: llm.Model{
 						ContextWindow: tt.contextWindow,
 					},
 				},
 				contextTokens: tt.contextTokens,
 			}
-			got := adapter.needsCompaction()
+			got := a.needsCompaction()
 			if got != tt.expected {
 				t.Fatalf("needsCompaction() = %v, want %v (window=%d, tokens=%d)",
 					got, tt.expected, tt.contextWindow, tt.contextTokens)
@@ -41,45 +41,45 @@ func TestSessionAdapterNeedsCompaction(t *testing.T) {
 	}
 }
 
-func TestSessionAdapterUpdateContextTokens(t *testing.T) {
-	adapter := &SessionAdapter{}
+func TestAgentUpdateContextTokens(t *testing.T) {
+	a := &Agent{}
 
-	adapter.updateContextTokens(1000, 500)
-	if adapter.contextTokens != 1500 {
-		t.Fatalf("contextTokens = %d, want 1500", adapter.contextTokens)
+	a.updateContextTokens(1000, 500)
+	if a.contextTokens != 1500 {
+		t.Fatalf("contextTokens = %d, want 1500", a.contextTokens)
 	}
 
-	adapter.updateContextTokens(2000, 1000)
-	if adapter.contextTokens != 4500 {
-		t.Fatalf("contextTokens = %d, want 4500", adapter.contextTokens)
+	a.updateContextTokens(2000, 1000)
+	if a.contextTokens != 4500 {
+		t.Fatalf("contextTokens = %d, want 4500", a.contextTokens)
 	}
 }
 
-func TestSessionAdapterResetContextTokens(t *testing.T) {
-	adapter := &SessionAdapter{
+func TestAgentResetContextTokens(t *testing.T) {
+	a := &Agent{
 		contextTokens: 50000,
 	}
 
-	adapter.resetContextTokens()
-	if adapter.contextTokens != 0 {
-		t.Fatalf("contextTokens = %d, want 0", adapter.contextTokens)
+	a.resetContextTokens()
+	if a.contextTokens != 0 {
+		t.Fatalf("contextTokens = %d, want 0", a.contextTokens)
 	}
 }
 
-func TestSessionAdapterTracksTokenUsage(t *testing.T) {
-	adapter := &SessionAdapter{
-		config: &SessionAdapterConfig{
+func TestAgentTracksTokenUsage(t *testing.T) {
+	a := &Agent{
+		config: AgentConfig{
 			ID: "test",
 		},
 		events: make(chan session.AgentEvent, 100),
 	}
 
 	// Simulate token usage event
-	adapter.mu.Lock()
-	adapter.updateContextTokens(10000, 5000)
-	adapter.mu.Unlock()
+	a.mu.Lock()
+	a.updateContextTokens(10000, 5000)
+	a.mu.Unlock()
 
-	if adapter.contextTokens != 15000 {
-		t.Fatalf("contextTokens = %d, want 15000", adapter.contextTokens)
+	if a.contextTokens != 15000 {
+		t.Fatalf("contextTokens = %d, want 15000", a.contextTokens)
 	}
 }

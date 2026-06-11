@@ -89,8 +89,8 @@ func liveConfig(t *testing.T) (provider, model, apiKey string) {
 	return "", "", ""
 }
 
-// newLiveAdapter creates a SessionAdapter wired to a real provider with real tools.
-func newLiveAdapter(t *testing.T) (*agent.SessionAdapter, session.SessionStore, session.SessionHandle) {
+// newLiveAdapter creates an Agent wired to a real provider with real tools.
+func newLiveAdapter(t *testing.T) (*agent.Agent, session.SessionStore, session.SessionHandle) {
 	t.Helper()
 	providerName, modelName, _ := liveConfig(t)
 
@@ -164,7 +164,7 @@ func newLiveAdapter(t *testing.T) (*agent.SessionAdapter, session.SessionStore, 
 		model.ContextWindow = meta.ContextLimit
 	}
 
-	adapter := agent.NewSessionAdapter(&agent.SessionAdapterConfig{
+	adapter := agent.New(agent.AgentConfig{
 		ID:           sess.ID(),
 		Model:        model,
 		StreamFn:     provider.Stream,
@@ -481,7 +481,7 @@ func TestLiveProviderErrors(t *testing.T) {
 	}
 	defer sess.Close()
 
-	adapter := agent.NewSessionAdapter(&agent.SessionAdapterConfig{
+	adapter := agent.New(agent.AgentConfig{
 		ID:       sess.ID(),
 		Model:    llm.Model{ID: "nonexistent-model-xyz"},
 		StreamFn: provider.Stream,

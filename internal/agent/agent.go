@@ -19,7 +19,7 @@ type Agent struct {
 	listeners []func(session.AgentEvent)
 	mu        sync.RWMutex
 
-	// Session state (from SessionAdapter)
+	// Session state
 	id            string
 	events        chan session.AgentEvent
 	closed        bool
@@ -233,7 +233,7 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 // Used for retries — context already has user message or tool results.
 // Emits AgentStart at the beginning. Caller owns AgentEnd.
 func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
-	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
+	a.emit(session.AgentStart{Base: session.BaseNow()})
 
 	a.mu.RLock()
 	if len(a.state.Messages) == 0 {
@@ -857,17 +857,6 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 	return nil
 }
 
-// emitEvent sends an event to the events channel without blocking.
-// If the channel is full, the event is dropped to prevent deadlock.
-// If the channel is closed (session shut down), the send is silently skipped.
-func (a *Agent) emitEvent(ev session.AgentEvent) {
-	defer func() { recover() }()
-	select {
-	case a.events <- ev:
-	default:
-		// Channel full — drop event to prevent deadlock.
-	}
-}
 
 // WaitForIdle blocks until the agent is idle (no active turn).
 func (a *Agent) WaitForIdle(ctx context.Context) error {
@@ -950,4 +939,22 @@ func (a *Agent) UpdateConfig(config AgentConfig) {
 	a.state.ThinkingLevel = config.ThinkingLevel
 	a.state.Tools = config.Tools
 	a.state.SystemPrompt = config.SystemPrompt
+}
+
+// drainQueuedMessagesLocked drains messages from a queue based on the queue mode.
+// Caller must hold a.mu.
+func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
+	if len(*queue) == 0 {
+		return nil
+	}
+	count := 1
+	if mode == QueueModeAll {
+		count = len(*queue)
+	}
+	msgs := make([]AgentMessage, count)
+	for i, text := range (*queue)[:count] {
+		msgs[i] = AgentMessage{Role: "user", Content: text}
+	}
+	*queue = (*queue)[count:]
+	return msgs
 }
