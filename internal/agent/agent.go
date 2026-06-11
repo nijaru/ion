@@ -523,6 +523,11 @@ func (a *Agent) handlePostAgentRun(ctx context.Context, err error, newMessages [
 
 	// Non-retryable error — agent already emitted TurnEnd{Error}
 	a.emit(session.AgentEnd{Base: session.BaseNow(), Error: err, Messages: sessionMsgs})
+
+	// Call HandleRunFailure if configured
+	if a.config.HandleRunFailure != nil {
+		a.config.HandleRunFailure(err)
+	}
 }
 
 // recoverFromOverflow handles context overflow by compacting and retrying.
