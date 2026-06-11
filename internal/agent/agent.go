@@ -14,9 +14,10 @@ import (
 // Agent is the core agent loop primitive. It manages the lifecycle of an
 // agent session: submit → stream → tool calls → results → done.
 type Agent struct {
-	config AgentConfig
-	state  AgentState
-	mu     sync.RWMutex
+	config    AgentConfig
+	state     AgentState
+	listeners []func(session.AgentEvent)
+	mu        sync.RWMutex
 
 	// Session state (from SessionAdapter)
 	id            string
@@ -794,4 +795,87 @@ func (a *Agent) emitEvent(ev session.AgentEvent) {
 	default:
 		// Channel full — drop event to prevent deadlock.
 	}
+}
+
+// WaitForIdle blocks until the agent is idle (no active turn).
+func (a *Agent) WaitForIdle(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// If already idle, return immediately
+	if a.turnCtx == nil {
+		return nil
+	}
+
+	// Wait for turn to complete
+	for a.turnCtx != nil {
+		a.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			a.mu.Lock()
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+			a.mu.Lock()
+		}
+	}
+
+	return nil
+}
+
+// Reset clears the agent state and emits a fresh start.
+func (a *Agent) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Cancel any active turn
+	if a.cancel != nil {
+		a.cancel()
+	}
+
+	// Clear state
+	a.state.Messages = nil
+	a.state.IsStreaming = false
+	a.state.ErrorMessage = ""
+	a.overflowAttempted = false
+	a.retryAttempt = 0
+	a.contextTokens = 0
+
+	// Clear queues
+	a.steeringQueue = nil
+	a.followUpQueue = nil
+
+	// Emit fresh start
+	a.emit(session.AgentStart{Base: session.BaseNow()})
+}
+
+// Subscribe registers a listener for agent events.
+// Returns an unsubscribe function.
+func (a *Agent) Subscribe(listener func(session.AgentEvent)) func() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.listeners = append(a.listeners, listener)
+
+	return func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for i, l := range a.listeners {
+			if fmt.Sprintf("%p", l) == fmt.Sprintf("%p", listener) {
+				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// UpdateConfig updates the agent configuration.
+func (a *Agent) UpdateConfig(config AgentConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.config = config
+	a.state.Model = config.Model
+	a.state.ThinkingLevel = config.ThinkingLevel
+	a.state.Tools = config.Tools
+	a.state.SystemPrompt = config.SystemPrompt
 }
