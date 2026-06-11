@@ -110,6 +110,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		Content:   choice.Message.Content,
 		Reasoning: choice.Message.ReasoningContent,
 		Calls:     p.Base.ConvertToolCalls(choice.Message.ToolCalls),
+		Blocks:    p.buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
 		Usage:     usage,
 	}, nil
 }
@@ -220,4 +221,26 @@ func IsReasoningOff(effort string) bool {
 		return true
 	}
 	return false
+}
+
+// buildBlocks constructs ContentBlocks from flat OpenRouter message fields.
+func (p *Provider) buildBlocks(content string, reasoning string, toolCalls []sashaoai.ToolCall) []llm.ContentBlock {
+	var blocks []llm.ContentBlock
+	if reasoning != "" {
+		blocks = append(blocks, llm.ThinkingBlock{Thinking: reasoning})
+	}
+	if content != "" {
+		blocks = append(blocks, llm.TextBlock{Text: content})
+	}
+	for _, tc := range toolCalls {
+		blocks = append(blocks, llm.ToolCallBlock{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
 }
