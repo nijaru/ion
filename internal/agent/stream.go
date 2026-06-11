@@ -97,7 +97,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 
 	resp := acc.Response()
 	var calls []AgentToolCall
-	for _, call := range resp.Calls {
+	for _, call := range resp.ToolCalls() {
 		calls = append(calls, AgentToolCall{
 			ID:        call.ID,
 			Name:      call.Function.Name,

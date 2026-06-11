@@ -86,7 +86,7 @@ func (w *wrappedProvider) Generate(
 		attribute.Int("gen_ai.usage.output_tokens", resp.Usage.OutputTokens),
 		attribute.Int("gen_ai.usage.cache_read.input_tokens", resp.Usage.CacheReadTokens),
 		attribute.Int("gen_ai.usage.cache_creation.input_tokens", resp.Usage.CacheCreationTokens),
-		attribute.Int("gen_ai.response.tool_call_count", len(resp.Calls)),
+		attribute.Int("gen_ai.response.tool_call_count", len(resp.ToolCalls())),
 	}
 	if w.recordMessages {
 		if b, err := json.Marshal(resp); err == nil {

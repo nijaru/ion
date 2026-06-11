@@ -350,6 +350,28 @@ func (r Response) GetContentBlocks() []ContentBlock {
 }
 
 // TextContent returns the text content from the response.// Reads from Blocks if populated, falls back to flat Content field.
+// ToolCalls returns tool calls from Blocks if available, otherwise from flat Calls field.
+func (r Response) ToolCalls() []Call {
+	if len(r.Blocks) > 0 {
+		var calls []Call
+		for _, b := range r.Blocks {
+			if t, ok := b.(ToolCallBlock); ok {
+				calls = append(calls, Call{
+					ID:   t.ID,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: t.Name, Arguments: t.Arguments},
+				})
+			}
+		}
+		return calls
+	}
+	return r.Calls
+}
+
+// TextContent returns text content from Blocks if available, otherwise from flat Content field.
 func (r Response) TextContent() string {
 	for _, b := range r.Blocks {
 		if t, ok := b.(TextBlock); ok {
@@ -357,6 +379,16 @@ func (r Response) TextContent() string {
 		}
 	}
 	return r.Content
+}
+
+// ReasoningContent returns reasoning content from Blocks if available, otherwise from flat Reasoning field.
+func (r Response) ReasoningContent() string {
+	for _, b := range r.Blocks {
+		if t, ok := b.(ThinkingBlock); ok {
+			return t.Thinking
+		}
+	}
+	return r.Reasoning
 }
 
 // Usage tracks token consumption and cost.
