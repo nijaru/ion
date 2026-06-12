@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/nijaru/ion/llm"
@@ -333,4 +334,72 @@ func TestLoopEventSequenceWithThinking(t *testing.T) {
 		"agent_message",
 		"turn_end",
 	})
+}
+
+func TestMessageUpdateDeltaAndBlockType(t *testing.T) {
+	// Use a custom recorder that stores actual events
+	type recordedEvent struct {
+		Type string
+		Ev   session.AgentEvent
+	}
+	var events []recordedEvent
+	var mu sync.Mutex
+	record := func(ev session.AgentEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, recordedEvent{Type: eventTypeName(ev), Ev: ev})
+	}
+	
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{Reasoning: "let me think..."},
+			{Content: "here's my answer"},
+		}}, nil
+	}
+	
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		OnEvent:  record,
+	})
+	
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "think"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	
+	// Find MessageUpdate events
+	var updates []session.MessageUpdate
+	mu.Lock()
+	for _, rec := range events {
+		if u, ok := rec.Ev.(session.MessageUpdate); ok {
+			updates = append(updates, u)
+		}
+	}
+	mu.Unlock()
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 MessageUpdate events, got %d", len(updates))
+	}
+	
+	// First should be thinking
+	if updates[0].BlockType != "thinking" {
+		t.Fatalf("first update BlockType = %q, want thinking", updates[0].BlockType)
+	}
+	if updates[0].Delta != "let me think..." {
+		t.Fatalf("first update Delta = %q, want 'let me think...'", updates[0].Delta)
+	}
+	if updates[0].Message.Reasoning != "let me think..." {
+		t.Fatalf("first update Message.Reasoning = %q, want 'let me think...'", updates[0].Message.Reasoning)
+	}
+	
+	// Second should be text
+	if updates[1].BlockType != "text" {
+		t.Fatalf("second update BlockType = %q, want text", updates[1].BlockType)
+	}
+	if updates[1].Delta != "here's my answer" {
+		t.Fatalf("second update Delta = %q, want 'here's my answer'", updates[1].Delta)
+	}
+	if updates[1].Message.Message != "here's my answer" {
+		t.Fatalf("second update Message.Message = %q, want 'here's my answer'", updates[1].Message.Message)
+	}
 }

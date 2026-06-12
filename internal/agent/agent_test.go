@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -704,6 +705,155 @@ func TestAgentPrepareNextTurnAndToolHookContext(t *testing.T) {
 	}
 }
 
+func TestBeforeToolCallBlocksExecution(t *testing.T) {
+	var toolExecuted bool
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "read", `{"path": "README.md"}`)},
+		}}}, nil
+	}
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			toolExecuted = true
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("contents")}}, nil
+		},
+		BeforeToolCall: func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult {
+			return BeforeToolCallResult{Block: true, Reason: "blocked by policy"}
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return true
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if toolExecuted {
+		t.Fatal("tool should not have executed when blocked by BeforeToolCall")
+	}
+}
+
+func TestBeforeToolCallBlockDefaultReason(t *testing.T) {
+	var blockedReason string
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "read", `{"path": "README.md"}`)},
+		}}}, nil
+	}
+	committed := make([]llm.Message, 0)
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("contents")}}, nil
+		},
+		BeforeToolCall: func(ctx context.Context, hookCtx BeforeToolCallContext) BeforeToolCallResult {
+			return BeforeToolCallResult{Block: true}
+		},
+		OnModelMessage: func(ctx context.Context, message llm.Message) error {
+			committed = append(committed, message)
+			return nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(committed) >= 2
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Find the tool result message
+	for _, msg := range committed {
+		if msg.Role == llm.RoleTool {
+			blockedReason = msg.TextContent()
+			break
+		}
+	}
+	if !strings.Contains(blockedReason, "Tool execution was blocked") {
+		t.Fatalf("expected default block reason, got: %q", blockedReason)
+	}
+}
+
+func TestAfterToolCallMutatesResult(t *testing.T) {
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "read", `{"path": "README.md"}`)},
+		}}}, nil
+	}
+	committed := make([]llm.Message, 0)
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("original")}}, nil
+		},
+		AfterToolCall: func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult {
+			return AfterToolCallResult{
+				Content: []llm.ContentPart{llm.TextPart("mutated")},
+			}
+		},
+		OnModelMessage: func(ctx context.Context, message llm.Message) error {
+			committed = append(committed, message)
+			return nil
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(committed) >= 2
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Find the tool result message
+	for _, msg := range committed {
+		if msg.Role == llm.RoleTool {
+			if !strings.Contains(msg.TextContent(), "mutated") {
+				t.Fatalf("expected mutated content, got: %q", msg.TextContent())
+			}
+			return
+		}
+	}
+	t.Fatal("missing tool result message")
+}
+
+func TestAfterToolCallSetsTerminate(t *testing.T) {
+	var toolCalls int
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		toolCalls++
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls: []llm.Call{testCall("call-1", "read", `{"path": "README.md"}`)},
+		}}}, nil
+	}
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		ToolExecutor: func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error) {
+			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("contents")}}, nil
+		},
+		AfterToolCall: func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult {
+			terminate := true
+			return AfterToolCallResult{Terminate: &terminate}
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "read"}})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if toolCalls != 1 {
+		t.Fatalf("expected 1 tool call (terminate after first), got: %d", toolCalls)
+	}
+}
+
 func TestAgentPreservesStructuredToolResultParts(t *testing.T) {
 	var committed []llm.Message
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -1172,5 +1322,91 @@ func TestAgentPrepareArguments(t *testing.T) {
 	}
 	if p, ok := capturedArgs["path"].(string); !ok || p != "/workspace/relative.txt" {
 		t.Errorf("path = %v, want /workspace/relative.txt", capturedArgs["path"])
+	}
+}
+
+func TestTransformContextModifiesMessages(t *testing.T) {
+	var capturedRequest *llm.Request
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		capturedRequest = req
+		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+	}
+
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		TransformContext: func(ctx context.Context, messages []AgentMessage) []AgentMessage {
+			// Add a system message
+			return append([]AgentMessage{{Role: "system", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "transformed"}}}}, messages...)
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return true
+		},
+	})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if capturedRequest == nil {
+		t.Fatal("no request captured")
+	}
+	if len(capturedRequest.Messages) == 0 {
+		t.Fatal("empty messages")
+	}
+	// Check that the first message is the transformed system message
+	if capturedRequest.Messages[0].Role != "system" {
+		t.Fatalf("first message role = %q, want system", capturedRequest.Messages[0].Role)
+	}
+}
+
+func TestHandleRunFailureCalledOnError(t *testing.T) {
+	var failureErr error
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return nil, fmt.Errorf("stream error")
+	}
+
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		HandleRunFailure: func(err error) {
+			failureErr = err
+		},
+	})
+
+	// Direct Run doesn't call HandleRunFailure (only background turns do)
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if failureErr != nil {
+		t.Fatal("HandleRunFailure should not be called on direct Run")
+	}
+}
+
+func TestHandleRunFailureNotCalledOnSuccess(t *testing.T) {
+	var called bool
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+	}
+
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "model"},
+		StreamFn: streamFn,
+		HandleRunFailure: func(err error) {
+			called = true
+		},
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return true
+		},
+	})
+
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called {
+		t.Fatal("HandleRunFailure should not be called on success")
 	}
 }
