@@ -22,9 +22,9 @@ func TestStreamAccumulatorBlockText(t *testing.T) {
 	if tb.Text != "hello" {
 		t.Errorf("text = %q, want %q", tb.Text, "hello")
 	}
-	// Flat fields should also be populated
-	if resp.Content != "hello" {
-		t.Errorf("Content = %q, want %q", resp.Content, "hello")
+	// Accessor methods should work
+	if resp.TextContent() != "hello" {
+		t.Errorf("TextContent() = %q, want %q", resp.TextContent(), "hello")
 	}
 }
 
@@ -97,18 +97,18 @@ func TestStreamAccumulatorBlockMixed(t *testing.T) {
 		t.Fatalf("got %d blocks, want 3", len(resp.Blocks))
 	}
 
-	// Flat fields should be populated from blocks
-	if resp.Content != "answer" {
-		t.Errorf("Content = %q, want %q", resp.Content, "answer")
+	// Accessor methods should work
+	if resp.TextContent() != "answer" {
+		t.Errorf("TextContent() = %q, want %q", resp.TextContent(), "answer")
 	}
-	if resp.Reasoning != "reasoning" {
-		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "reasoning")
+	if resp.ReasoningContent() != "reasoning" {
+		t.Errorf("ReasoningContent() = %q, want %q", resp.ReasoningContent(), "reasoning")
 	}
-	if len(resp.Calls) != 1 {
-		t.Fatalf("Calls len = %d, want 1", len(resp.Calls))
+	if len(resp.ToolCalls()) != 1 {
+		t.Fatalf("ToolCalls() len = %d, want 1", len(resp.ToolCalls()))
 	}
-	if resp.Calls[0].Function.Name != "grep" {
-		t.Errorf("Calls[0].Name = %q, want %q", resp.Calls[0].Function.Name, "grep")
+	if resp.ToolCalls()[0].Function.Name != "grep" {
+		t.Errorf("ToolCalls()[0].Name = %q, want %q", resp.ToolCalls()[0].Function.Name, "grep")
 	}
 }
 
@@ -121,11 +121,11 @@ func TestStreamAccumulatorFlatBackwardCompat(t *testing.T) {
 	acc.Add(&llm.Chunk{Reasoning: "think"})
 
 	resp := acc.Response()
-	if resp.Content != "hello" {
-		t.Errorf("Content = %q, want %q", resp.Content, "hello")
+	if resp.TextContent() != "hello" {
+		t.Errorf("TextContent() = %q, want %q", resp.TextContent(), "hello")
 	}
-	if resp.Reasoning != "think" {
-		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "think")
+	if resp.ReasoningContent() != "think" {
+		t.Errorf("ReasoningContent() = %q, want %q", resp.ReasoningContent(), "think")
 	}
 	if len(resp.Blocks) != 2 {
 		t.Errorf("Blocks should have 2 entries (text + thinking), got %d", len(resp.Blocks))
@@ -155,15 +155,15 @@ func TestStreamAccumulatorMixedBlockAndFlatToolCalls(t *testing.T) {
 
 	resp := acc.Response()
 
-	// Flat fields should be populated.
-	if resp.Content != "Hello" {
-		t.Errorf("Content = %q, want %q", resp.Content, "Hello")
+	// Accessor methods should work.
+	if resp.TextContent() != "Hello" {
+		t.Errorf("TextContent() = %q, want %q", resp.TextContent(), "Hello")
 	}
-	if resp.Reasoning != "thinking..." {
-		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "thinking...")
+	if resp.ReasoningContent() != "thinking..." {
+		t.Errorf("ReasoningContent() = %q, want %q", resp.ReasoningContent(), "thinking...")
 	}
-	if len(resp.Calls) != 1 || resp.Calls[0].ID != "call-1" {
-		t.Errorf("Calls = %v, want 1 call with ID call-1", resp.Calls)
+	if len(resp.ToolCalls()) != 1 || resp.ToolCalls()[0].ID != "call-1" {
+		t.Errorf("ToolCalls() = %v, want 1 call with ID call-1", resp.ToolCalls())
 	}
 
 	// Blocks should contain all three: text, thinking, tool call.

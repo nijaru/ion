@@ -391,6 +391,20 @@ func (r Response) ReasoningContent() string {
 	return r.Reasoning
 }
 
+// GetThinkingBlocks returns thinking blocks from Blocks if available, otherwise from flat ThinkingBlocks field.
+func (r Response) GetThinkingBlocks() []ThinkingBlock {
+	if len(r.Blocks) > 0 {
+		var blocks []ThinkingBlock
+		for _, b := range r.Blocks {
+			if t, ok := b.(ThinkingBlock); ok {
+				blocks = append(blocks, t)
+			}
+		}
+		return blocks
+	}
+	return r.ThinkingBlocks
+}
+
 // Usage tracks token consumption and cost.
 type Usage struct {
 	InputTokens         int     `json:"input_tokens"`

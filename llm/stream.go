@@ -86,30 +86,7 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 }
 
 func (a *StreamAccumulator) Response() Response {
-	resp := a.resp
-	// Populate flat fields from Blocks for backward compatibility.
-	// This ensures consumers that haven't migrated to accessors still work.
-	if len(resp.Blocks) > 0 {
-		for _, b := range resp.Blocks {
-			switch v := b.(type) {
-			case TextBlock:
-				resp.Content += v.Text
-			case ThinkingBlock:
-				resp.Reasoning += v.Thinking
-				resp.ThinkingBlocks = append(resp.ThinkingBlocks, v)
-			case ToolCallBlock:
-				resp.Calls = append(resp.Calls, Call{
-					ID:   v.ID,
-					Type: "function",
-					Function: struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					}{Name: v.Name, Arguments: v.Arguments},
-				})
-			}
-		}
-	}
-	return resp
+	return a.resp
 }
 
 // addBlock accumulates a typed content block into resp.Blocks.
