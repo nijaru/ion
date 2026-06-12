@@ -128,7 +128,7 @@ func (l *AgentLoop) executeToolCallsParallel(
 		return nil, nil, false, err
 	}
 
-	// 3. Create messages and emit results in source order
+	// 3. Create messages and emit results in completion order
 	for r := range results {
 		prep := prepared[r.idx]
 		message := createToolResultMessage(prep.ToolCall, r.result, r.isError)
@@ -140,10 +140,8 @@ func (l *AgentLoop) executeToolCallsParallel(
 			isError:   r.isError,
 			terminate: r.result.Terminate,
 		}
-	}
-
-	for _, result := range finalized {
-		l.emitToolResult(result)
+		// Emit tool result as it completes (Pi parity: tool_execution_end in completion order)
+		l.emitToolResult(finalized[r.idx])
 	}
 
 	return toolMessages(finalized)

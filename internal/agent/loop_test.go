@@ -118,8 +118,9 @@ func TestLoopEventSequence(t *testing.T) {
 		"agent_start",
 		"user_message",
 		"turn_start",
+		"message_start",
 		"message_update",
-		"agent_message",
+		"message_end",
 		"turn_end",
 	})
 }
@@ -161,15 +162,17 @@ func TestLoopEventSequenceWithTool(t *testing.T) {
 	}
 	
 	// Verify the event sequence (agent_end is emitted by wrapper after loop returns)
-	// Note: agent_message is emitted before tool calls execute
 	assertEventOrder(t, rec.events, []string{
 		"agent_start",
 		"user_message",
 		"turn_start",
+		"message_start",
 		"message_update",       // "using tool"
-		"agent_message",     // complete assistant message (before tool execution)
+		"message_end",
 		"tool_call_start",
 		"tool_call_end",
+		"message_start",
+		"message_end",
 		"turn_end",
 	})
 }
@@ -213,13 +216,15 @@ func TestLoopEventSequenceWithSteering(t *testing.T) {
 		"agent_start",
 		"user_message",    // initial prompt
 		"turn_start",
+		"message_start",
 		"message_update",     // first response
-		"agent_message",
+		"message_end",
 		"turn_end",
 		"turn_start",      // second turn starts
 		"user_message",    // steering message injected
+		"message_start",
 		"message_update",     // second response
-		"agent_message",
+		"message_end",
 		"turn_end",
 	})
 }
@@ -263,13 +268,15 @@ func TestLoopEventSequenceWithFollowUp(t *testing.T) {
 		"agent_start",
 		"user_message",    // initial prompt
 		"turn_start",
+		"message_start",
 		"message_update",     // first response
-		"agent_message",
+		"message_end",
 		"turn_end",
 		"turn_start",      // second turn starts
 		"user_message",    // follow-up message injected
+		"message_start",
 		"message_update",     // follow-up response
-		"agent_message",
+		"message_end",
 		"turn_end",
 	})
 }
@@ -329,9 +336,10 @@ func TestLoopEventSequenceWithThinking(t *testing.T) {
 	assertEventOrder(t, rec.events, []string{
 		"agent_start",
 		"turn_start",
+		"message_start",
 		"message_update",
 		"message_update",
-		"agent_message",
+		"message_end",
 		"turn_end",
 	})
 }

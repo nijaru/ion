@@ -164,8 +164,16 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			}
 
 			// Stream assistant response
+			l.emit(session.MessageStart{Base: session.BaseNow()})
 			message, llmMessage, err := l.streamAssistantResponse(ctx)
 			if err != nil {
+				// Create error message for event emission
+				l.emit(session.MessageEnd{
+					Base: session.BaseNow(),
+					Message: session.AgentMessage{
+						Message: err.Error(),
+					},
+				})
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					l.emit(session.TurnEnd{Base: session.BaseNow()})
 				} else {
@@ -173,21 +181,22 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				}
 				return newMessages, fmt.Errorf("stream assistant response: %w", err)
 			}
+			l.emit(session.MessageEnd{
+				Base: session.BaseNow(),
+				Message: session.AgentMessage{
+					Message:      message.TextContent(),
+					Reasoning:    message.ReasoningContent(),
+					InputTokens:  message.InputTokens,
+					OutputTokens: message.OutputTokens,
+					TotalTokens:  message.TotalTokens,
+					Cost:         message.Cost,
+				},
+			})
 
 			// Add assistant message to state
 			l.state.Messages = append(l.state.Messages, message)
 			newMessages = append(newMessages, message)
 
-			// Emit complete assistant message with usage
-			l.emit(session.AgentMessage{
-				Base:         session.BaseNow(),
-				Message:      message.TextContent(),
-				Reasoning:    message.ReasoningContent(),
-				InputTokens:  message.InputTokens,
-				OutputTokens: message.OutputTokens,
-				TotalTokens:  message.TotalTokens,
-				Cost:         message.Cost,
-			})
 			if err := l.writeModelMessage(ctx, llmMessage); err != nil {
 				l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 				return newMessages, fmt.Errorf("write assistant message: %w", err)
