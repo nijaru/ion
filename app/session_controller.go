@@ -370,14 +370,11 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.AgentEnd:
 		return m, m.awaitSessionEvent()
 
-	case session.ThinkingDelta:
-		return m.handleThinkingDelta(msg)
+	case session.MessageUpdate:
+		return m.handleMessageUpdate(msg)
 
 	case session.UserMessage:
 		return m.handleUserMessage(msg)
-
-	case session.AgentDelta:
-		return m.handleAgentDelta(msg)
 
 	case session.AgentMessage:
 		return m.handleAgentMessage(msg)
@@ -385,8 +382,8 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.ToolCallStart:
 		return m.handleToolCallStarted(msg)
 
-	case session.ToolOutputDelta:
-		return m.handleToolOutputDelta(msg)
+	case session.ToolExecutionUpdate:
+		return m.handleToolExecutionUpdate(msg)
 
 	case session.ToolCallEnd:
 		return m.handleToolResult(msg)
@@ -541,13 +538,14 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	return m, tea.Sequence(cmds...)
 }
 
-func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
-	m.turnReducer().AppendThinkingDelta(msg.AgentID, msg.Delta)
-	return m, m.awaitSessionEvent()
-}
-
-func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
-	m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
+func (m Model) handleMessageUpdate(msg session.MessageUpdate) (Model, tea.Cmd) {
+	// Route based on block_type (Pi model: single message_update event)
+	switch msg.BlockType {
+	case "thinking":
+		m.turnReducer().AppendThinkingDelta(msg.AgentID, msg.Delta)
+	default:
+		m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
+	}
 	return m, m.awaitSessionEvent()
 }
 
@@ -611,8 +609,8 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStart) (Model, tea.Cmd)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
-	m.turnReducer().AppendToolOutput(msg.ToolUseID, msg.Delta, msg.Snapshot)
+func (m Model) handleToolExecutionUpdate(msg session.ToolExecutionUpdate) (Model, tea.Cmd) {
+	m.turnReducer().AppendToolOutput(msg.ToolUseID, msg.PartialResult, false)
 	return m, m.awaitSessionEvent()
 }
 

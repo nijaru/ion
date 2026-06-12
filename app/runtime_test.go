@@ -808,7 +808,7 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 	))
 	model = testModel(t, next)
 
-	oldSession.events <- session.AgentDelta{Delta: "stale output"}
+	oldSession.events <- session.NewTextUpdate("stale output", session.AgentMessage{})
 	next, cmd := model.Update(waitOld())
 	model = testModel(t, next)
 

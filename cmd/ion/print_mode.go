@@ -107,8 +107,10 @@ func runPromptTurn(
 				return printResult{}, fmt.Errorf("unexpected approval request for %s", msg.ToolName)
 			case session.ToolCallStart:
 				result.ToolCalls = append(result.ToolCalls, msg.ToolName)
-			case session.AgentDelta:
-				agentText.WriteString(msg.Delta)
+			case session.MessageUpdate:
+				if msg.BlockType == "text" {
+					agentText.WriteString(msg.Delta)
+				}
 			case session.AgentMessage:
 				if msg.Message != "" {
 					agentText.Reset()

@@ -32,8 +32,8 @@ func TestIntegrationFullLoop(t *testing.T) {
 	b.SetStore(store)
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStart{}, Delay: 0},
-		{Event: session.AgentDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
-		{Event: session.AgentDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
+		{Event: session.NewTextUpdate("Hello ", session.AgentMessage{}), Delay: 10 * time.Millisecond},
+		{Event: session.NewTextUpdate("world", session.AgentMessage{}), Delay: 10 * time.Millisecond},
 		{Event: session.AgentMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
 		{Event: session.TurnEnd{}, Delay: 0},
 	})

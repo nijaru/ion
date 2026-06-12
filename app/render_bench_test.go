@@ -58,7 +58,7 @@ func BenchmarkP1EventToViewActiveTool(b *testing.B) {
 
 func BenchmarkP1BurstAgentDeltaReduction(b *testing.B) {
 	base := benchmarkRenderModel()
-	deltas := benchmarkAgentDeltas(128)
+	deltas := benchmarkMessageUpdates(128)
 	b.ReportMetric(float64(len(deltas)+1), "events/op")
 
 	b.ReportAllocs()
@@ -271,9 +271,7 @@ func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
 		session.StatusChange{Status: "Thinking..."},
 	}
 	for i := range deltaCount {
-		events = append(events, session.AgentDelta{
-			Delta: fmt.Sprintf("stream chunk %02d with enough text to render ", i),
-		})
+		events = append(events, session.NewTextUpdate(fmt.Sprintf("stream chunk %02d with enough text to render ", i), session.AgentMessage{}))
 	}
 	events = append(
 		events,
@@ -282,20 +280,15 @@ func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
 			ToolName:  "read",
 			Args:      `{"file_path":"ai/STATUS.md"}`,
 		},
-		session.ToolOutputDelta{
-			ToolUseID: "tool-1",
-			Delta:     strings.Repeat("status line\n", 24),
-		},
+		session.NewToolExecutionUpdate("tool-1", "read", strings.Repeat("status line\n", 24)),
 	)
 	return events
 }
 
-func benchmarkAgentDeltas(count int) []session.AgentEvent {
+func benchmarkMessageUpdates(count int) []session.AgentEvent {
 	events := make([]session.AgentEvent, 0, count)
 	for i := range count {
-		events = append(events, session.AgentDelta{
-			Delta: fmt.Sprintf("delta-%03d ", i),
-		})
+		events = append(events, session.NewTextUpdate(fmt.Sprintf("delta-%03d ", i), session.AgentMessage{}))
 	}
 	return events
 }

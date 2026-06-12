@@ -348,7 +348,15 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentDelta{Delta: "streaming from deterministic smoke backend"})
+		// Maintain partial message state (Pi model)
+		partialMessage := session.AgentMessage{}
+		delta1 := "streaming from deterministic smoke backend"
+		partialMessage.Message = delta1
+		b.emit(ctx, session.MessageUpdate{
+			Message:   partialMessage,
+			Delta:     delta1,
+			BlockType: "text",
+		})
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
@@ -360,9 +368,10 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 1200*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolOutputDelta{
-			ToolUseID: "tool-1",
-			Delta:     "ion-tmux-",
+		b.emit(ctx, session.ToolExecutionUpdate{
+			ToolUseID:     "tool-1",
+			ToolName:      "bash",
+			PartialResult: "ion-tmux-",
 		})
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
@@ -387,13 +396,21 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentDelta{Delta: strings.Join([]string{
+	// Maintain partial message state (Pi model)
+	partialMessage := session.AgentMessage{}
+	delta1 := strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
 		"",
 		"**Key facts:**",
-	}, "\n")})
+	}, "\n")
+	partialMessage.Message = delta1
+	b.emit(ctx, session.MessageUpdate{
+		Message:   partialMessage,
+		Delta:     delta1,
+		BlockType: "text",
+	})
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}

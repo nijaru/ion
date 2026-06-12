@@ -1075,8 +1075,8 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		t.Fatal("late turn start cleared drain fence")
 	}
 	for _, ev := range []session.AgentEvent{
-		session.AgentDelta{Delta: "stale"},
-		session.ThinkingDelta{Delta: "stale reasoning"},
+		session.NewTextUpdate("stale", session.AgentMessage{}),
+		session.NewThinkingUpdate("stale reasoning", session.AgentMessage{}),
 		session.AgentMessage{Message: "stale final"},
 		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "bash", Args: "echo stale"},
 		session.ToolCallEnd{ToolUseID: "tool-1", ToolName: "bash", Result: "stale"},
@@ -1161,7 +1161,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.Update(session.AgentDelta{Delta: "fresh"})
+	updated, _ = model.Update(session.NewTextUpdate("fresh", session.AgentMessage{}))
 	model = testModel(t, updated)
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "fresh" {
 		t.Fatalf("fresh turn delta not accepted: %#v", model.InFlight.Pending)

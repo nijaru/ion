@@ -126,11 +126,26 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		b.events <- session.TurnStart{}
 		b.events <- session.StatusChange{Status: "[fake] planning reply"}
 
+		// Maintain partial message state (Pi model: message_update carries full state)
+		partialMessage := session.AgentMessage{}
+
 		time.Sleep(120 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		delta1 := fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)
+		partialMessage.Message = delta1
+		b.events <- session.MessageUpdate{
+			Message:   partialMessage,
+			Delta:     delta1,
+			BlockType: "text",
+		}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		delta2 := "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."
+		partialMessage.Message += delta2
+		b.events <- session.MessageUpdate{
+			Message:   partialMessage,
+			Delta:     delta2,
+			BlockType: "text",
+		}
 
 		time.Sleep(140 * time.Millisecond)
 		b.events <- session.ToolCallStart{ToolName: "bash", Args: "git status --short"}
@@ -142,7 +157,13 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AgentDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		delta3 := "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."
+		partialMessage.Message += delta3
+		b.events <- session.MessageUpdate{
+			Message:   partialMessage,
+			Delta:     delta3,
+			BlockType: "text",
+		}
 
 		time.Sleep(160 * time.Millisecond)
 		b.events <- session.AgentMessage{Message: ""} // Signal end of message

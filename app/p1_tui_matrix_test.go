@@ -59,13 +59,13 @@ func p1MatrixSubmitStreamToolCommit(t *testing.T) {
 		session.UserMessage{Message: "inspect workspace"},
 		session.TurnStart{},
 		session.AgentMessage{InputTokens: 12, OutputTokens: 4, Cost: 0.001},
-		session.AgentDelta{Delta: "streaming answer"},
+		session.NewTextUpdate("streaming answer", session.AgentMessage{}),
 		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
 			Args:      `{"file_path":"README.md"}`,
 		},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.NewToolExecutionUpdate("tool-1", "", "# ion\n"),
 		session.ToolCallEnd{
 			ToolUseID: "tool-1",
 			ToolName:  "read",
@@ -146,13 +146,13 @@ func p1MatrixActiveProgressKeepsShellFrame(t *testing.T) {
 		session.TurnStart{},
 		session.StatusChange{Status: "Running tool..."},
 		session.AgentMessage{InputTokens: 12000, OutputTokens: 6000, TotalTokens: 18000, Cost: 0.002},
-		session.AgentDelta{Delta: "working"},
+		session.NewTextUpdate("working", session.AgentMessage{}),
 		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "bash",
 			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
 		},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "ion-tmux-"},
+		session.NewToolExecutionUpdate("tool-1", "", "ion-tmux-"),
 	)
 
 	view := assertP1ShellFrame(t, model)
@@ -338,7 +338,7 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 				t,
 				model,
 				session.TurnStart{},
-				session.AgentDelta{Delta: "still running"},
+				session.NewTextUpdate("still running", session.AgentMessage{}),
 			)
 			model.Input.Composer.SetValue(command)
 
@@ -438,7 +438,7 @@ func p1MatrixResizeWrapSafe(t *testing.T) {
 		t, model,
 		session.TurnStart{},
 		session.StatusChange{Status: strings.Repeat("streaming very long status ", 4)},
-		session.AgentDelta{Delta: strings.Repeat("long streamed output ", 8)},
+		session.NewTextUpdate(strings.Repeat("long streamed output ", 8), session.AgentMessage{}),
 		session.ToolCallStart{
 			ToolUseID: "tool-1",
 			ToolName:  "grep",

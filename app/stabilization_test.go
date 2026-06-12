@@ -26,7 +26,7 @@ func TestToolStreaming(t *testing.T) {
 	}
 
 	// 2. Output delta
-	updated, _ = m.Update(session.ToolOutputDelta{Delta: "file1.txt\n"})
+	updated, _ = m.Update(session.NewToolExecutionUpdate("", "", "file1.txt\n"))
 	m = testModel(t, updated)
 
 	if m.InFlight.Pending.Content != "file1.txt\n" {

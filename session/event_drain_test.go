@@ -81,7 +81,7 @@ func TestDecideEventDrain(t *testing.T) {
 			input: EventDrainInput{
 				Active:         true,
 				DrainStartedAt: drainStartedAt,
-				Event:          AgentDelta{Base: BaseAt(afterDrain), Delta: "ignored"},
+				Event:          MessageUpdate{Base: BaseAt(afterDrain), Delta: "ignored", BlockType: "text"},
 			},
 			want: EventDrainDecision{Action: EventDrainAwait},
 		},

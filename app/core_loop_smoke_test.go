@@ -30,10 +30,10 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	for _, ev := range []session.AgentEvent{
 		session.TurnStart{},
 		session.AgentMessage{InputTokens: 12, OutputTokens: 4, Cost: 0.0012},
-		session.AgentDelta{Delta: "working"},
+		session.NewTextUpdate("working", session.AgentMessage{}),
 		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "bash", Args: "echo smoke"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "sm"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "oke\n"},
+		session.NewToolExecutionUpdate("tool-1", "bash", "sm"),
+		session.NewToolExecutionUpdate("tool-1", "bash", "oke\n"),
 		session.ToolCallEnd{ToolUseID: "tool-1", ToolName: "bash", Result: "smoke\n"},
 		session.AgentMessage{Message: "done"},
 		session.TurnEnd{},
@@ -105,11 +105,11 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 	for _, ev := range []session.AgentEvent{
 		session.TurnStart{},
 		session.AgentMessage{InputTokens: 20, OutputTokens: 8, Cost: 0.003},
-		session.AgentDelta{Delta: "\n\nReading before tool"},
+		session.NewTextUpdate("\n\nReading before tool", session.AgentMessage{}),
 		session.ToolCallStart{ToolUseID: "tool-1", ToolName: "read", Args: "README.md"},
-		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.NewToolExecutionUpdate("tool-1", "read", "# ion\n"),
 		session.ToolCallEnd{ToolUseID: "tool-1", ToolName: "read", Result: "# ion\n"},
-		session.AgentDelta{Delta: " composing final"},
+		session.NewTextUpdate(" composing final", session.AgentMessage{}),
 		session.AgentMessage{Message: "Done with `README.md`."},
 		session.TurnEnd{},
 	} {

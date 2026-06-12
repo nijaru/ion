@@ -58,25 +58,18 @@ type AgentEnd struct {
 func (e AgentEnd) isAgentEvent() {}
 func (e AgentEnd) EventType() EventType { return AgentCompleted }
 
-// AgentDelta is an incremental chunk of agent output text.
-// BlockType identifies the content type: "text", "thinking", "tool_call".
-type AgentDelta struct {
+// MessageUpdate fires during streaming with partial message state.
+// Pi equivalent: message_update.
+// Carries the full partial AgentMessage plus the raw delta for efficient TUI rendering.
+type MessageUpdate struct {
 	Base
-	Delta     string `json:"delta"`
-	BlockType string `json:"block_type"` // matches Pi's block type for TUI routing
+	Message   AgentMessage `json:"message"`            // full partial message state
+	Delta     string       `json:"delta"`              // raw text delta for this update
+	BlockType string       `json:"block_type"`         // "text", "thinking", "tool_call"
 }
 
-func (e AgentDelta) isAgentEvent() {}
-func (e AgentDelta) EventType() EventType { return ToolOutputDeltaType }
-
-// ThinkingDelta is an incremental chunk of agent reasoning/thinking text.
-type ThinkingDelta struct {
-	Base
-	Delta string `json:"delta"`
-}
-
-func (e ThinkingDelta) isAgentEvent() {}
-func (e ThinkingDelta) EventType() EventType { return ToolOutputDeltaType }
+func (e MessageUpdate) isAgentEvent() {}
+func (e MessageUpdate) EventType() EventType { return MessageUpdated }
 
 // UserMessage fires when a user message is committed to the durable session.
 type UserMessage struct {
@@ -95,7 +88,7 @@ type MessageStart struct {
 }
 
 func (e MessageStart) isAgentEvent() {}
-func (e MessageStart) EventType() EventType { return MessageAdded }
+func (e MessageStart) EventType() EventType { return MessageStarted }
 
 // MessageEnd fires when a message is complete.
 // Pi equivalent: message_end.
@@ -105,7 +98,7 @@ type MessageEnd struct {
 }
 
 func (e MessageEnd) isAgentEvent() {}
-func (e MessageEnd) EventType() EventType { return MessageAdded }
+func (e MessageEnd) EventType() EventType { return MessageCompleted }
 
 // AgentMessage fires when a complete agent message is committed.
 // Carries token usage (Pi: usage data lives in message_end).
@@ -145,16 +138,18 @@ type ToolCallEnd struct {
 func (e ToolCallEnd) isAgentEvent() {}
 func (e ToolCallEnd) EventType() EventType { return ToolCompleted }
 
-// ToolOutputDelta is an incremental chunk of tool output text.
-type ToolOutputDelta struct {
+// ToolExecutionUpdate fires during tool execution with partial results.
+// Pi equivalent: tool_execution_update.
+type ToolExecutionUpdate struct {
 	Base
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Delta     string `json:"delta"`
-	Snapshot  bool   `json:"snapshot,omitempty"`
+	ToolUseID     string `json:"tool_use_id,omitempty"`
+	ToolName      string `json:"tool_name"`
+	Args          string `json:"args"`
+	PartialResult string `json:"partial_result"`
 }
 
-func (e ToolOutputDelta) isAgentEvent() {}
-func (e ToolOutputDelta) EventType() EventType { return ToolOutputDeltaType }
+func (e ToolExecutionUpdate) isAgentEvent() {}
+func (e ToolExecutionUpdate) EventType() EventType { return ToolUpdated }
 
 // ApprovalRequest is emitted by optional compatibility backends that support
 // host-mediated permission prompts. The native Ion path does not emit it.
@@ -310,4 +305,39 @@ func TypedEventToEvent(ev AgentEvent, sessionID string) Event {
 	}
 	// Fallback for events without EventType()
 	return NewEvent(sessionID, MessageAdded, ev)
+}
+
+// NewTextUpdate creates a MessageUpdate for a text delta.
+// Helper for tests and simple streaming code.
+func NewTextUpdate(delta string, partialMessage AgentMessage) MessageUpdate {
+	partialMessage.Message += delta
+	return MessageUpdate{
+		Base:      BaseNow(),
+		Message:   partialMessage,
+		Delta:     delta,
+		BlockType: "text",
+	}
+}
+
+// NewThinkingUpdate creates a MessageUpdate for a thinking/reasoning delta.
+// Helper for tests and simple streaming code.
+func NewThinkingUpdate(delta string, partialMessage AgentMessage) MessageUpdate {
+	partialMessage.Reasoning += delta
+	return MessageUpdate{
+		Base:      BaseNow(),
+		Message:   partialMessage,
+		Delta:     delta,
+		BlockType: "thinking",
+	}
+}
+
+// NewToolExecutionUpdate creates a ToolExecutionUpdate for a partial tool result.
+// Helper for tests and simple streaming code.
+func NewToolExecutionUpdate(toolUseID, toolName, partialResult string) ToolExecutionUpdate {
+	return ToolExecutionUpdate{
+		Base:          BaseNow(),
+		ToolUseID:     toolUseID,
+		ToolName:      toolName,
+		PartialResult: partialResult,
+	}
 }

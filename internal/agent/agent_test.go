@@ -121,10 +121,12 @@ func TestAgentEventsAndLoop(t *testing.T) {
 			}
 		case session.TurnStart:
 			gotTurnStarted = true
-		case session.ThinkingDelta:
-			gotThinkingDelta = true
-		case session.AgentDelta:
-			gotAgentDelta = true
+		case session.MessageUpdate:
+			if msg.BlockType == "thinking" {
+				gotThinkingDelta = true
+			} else {
+				gotAgentDelta = true
+			}
 		case session.AgentMessage:
 			gotAgentMessage = true
 		case session.ToolCallStart:

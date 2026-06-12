@@ -247,10 +247,10 @@ func TestLiveStreaming(t *testing.T) {
 	}
 
 	// Should have at least one content delta or final message
-	deltas := findEvents[session.AgentDelta](events)
+	deltas := findEvents[session.MessageUpdate](events)
 	messages := findEvents[session.AgentMessage](events)
 	if len(deltas) == 0 && len(messages) == 0 {
-		t.Error("no content delivered: expected AgentDelta or AgentMessage")
+		t.Error("no content delivered: expected MessageUpdate or AgentMessage")
 	}
 
 	// No fatal errors
@@ -342,7 +342,7 @@ func TestLiveCancel(t *testing.T) {
 		select {
 		case ev := <-adapter.Events():
 			switch e := ev.(type) {
-			case session.TurnStart, session.AgentDelta:
+			case session.TurnStart, session.MessageUpdate:
 				started = true
 			case session.TurnEnd:
 				if e.Error != nil {

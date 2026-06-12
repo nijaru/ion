@@ -31,10 +31,8 @@ func eventTypeName(ev session.AgentEvent) string {
 		return "user_message"
 	case session.AgentMessage:
 		return "agent_message"
-	case session.AgentDelta:
-		return "agent_delta"
-	case session.ThinkingDelta:
-		return "thinking_delta"
+	case session.MessageUpdate:
+		return "message_update"
 	case session.ToolCallStart:
 		return "tool_call_start"
 	case session.ToolCallEnd:
@@ -119,7 +117,7 @@ func TestLoopEventSequence(t *testing.T) {
 		"agent_start",
 		"user_message",
 		"turn_start",
-		"agent_delta",
+		"message_update",
 		"agent_message",
 		"turn_end",
 	})
@@ -167,7 +165,7 @@ func TestLoopEventSequenceWithTool(t *testing.T) {
 		"agent_start",
 		"user_message",
 		"turn_start",
-		"agent_delta",       // "using tool"
+		"message_update",       // "using tool"
 		"agent_message",     // complete assistant message (before tool execution)
 		"tool_call_start",
 		"tool_call_end",
@@ -214,12 +212,12 @@ func TestLoopEventSequenceWithSteering(t *testing.T) {
 		"agent_start",
 		"user_message",    // initial prompt
 		"turn_start",
-		"agent_delta",     // first response
+		"message_update",     // first response
 		"agent_message",
 		"turn_end",
 		"turn_start",      // second turn starts
 		"user_message",    // steering message injected
-		"agent_delta",     // second response
+		"message_update",     // second response
 		"agent_message",
 		"turn_end",
 	})
@@ -264,12 +262,12 @@ func TestLoopEventSequenceWithFollowUp(t *testing.T) {
 		"agent_start",
 		"user_message",    // initial prompt
 		"turn_start",
-		"agent_delta",     // first response
+		"message_update",     // first response
 		"agent_message",
 		"turn_end",
 		"turn_start",      // second turn starts
 		"user_message",    // follow-up message injected
-		"agent_delta",     // follow-up response
+		"message_update",     // follow-up response
 		"agent_message",
 		"turn_end",
 	})
@@ -330,8 +328,8 @@ func TestLoopEventSequenceWithThinking(t *testing.T) {
 	assertEventOrder(t, rec.events, []string{
 		"agent_start",
 		"turn_start",
-		"thinking_delta",
-		"agent_delta",
+		"message_update",
+		"message_update",
 		"agent_message",
 		"turn_end",
 	})

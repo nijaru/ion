@@ -20,7 +20,7 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "streamed reply"})
+	updated, _ = model.Update(session.NewTextUpdate("streamed reply", session.AgentMessage{}))
 	model = testModel(t, updated)
 
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "streamed reply" {
@@ -121,7 +121,7 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "partial"})
+	updated, _ = model.Update(session.NewTextUpdate("partial", session.AgentMessage{}))
 	model = testModel(t, updated)
 	updated, cmd := model.Update(session.AgentMessage{Message: "final"})
 	model = testModel(t, updated)
@@ -132,7 +132,7 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 		t.Fatal("agent commit marker was not set")
 	}
 
-	updated, _ = model.Update(session.AgentDelta{Delta: "late"})
+	updated, _ = model.Update(session.NewTextUpdate("late", session.AgentMessage{}))
 	model = testModel(t, updated)
 	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
 		t.Fatalf(
@@ -142,7 +142,7 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 		)
 	}
 
-	updated, _ = model.Update(session.ThinkingDelta{Delta: "late thinking"})
+	updated, _ = model.Update(session.NewThinkingUpdate("late thinking", session.AgentMessage{}))
 	model = testModel(t, updated)
 	if model.InFlight.ReasonBuf != "" {
 		t.Fatalf("late thinking buffer = %q, want ignored", model.InFlight.ReasonBuf)
@@ -332,7 +332,7 @@ func TestAgentDeltaDoesNotAppendToPendingToolEntry(t *testing.T) {
 		Args:      "echo ok",
 	})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "assistant text"})
+	updated, _ = model.Update(session.NewTextUpdate("assistant text", session.AgentMessage{}))
 	model = testModel(t, updated)
 
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.RoleAgent {
@@ -355,9 +355,9 @@ func TestAgentDeltaChunksRenderAndFinalize(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStart{})
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "hello "})
+	updated, _ = model.Update(session.NewTextUpdate("hello ", session.AgentMessage{}))
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.AgentDelta{Delta: "world"})
+	updated, _ = model.Update(session.NewTextUpdate("world", session.AgentMessage{}))
 	model = testModel(t, updated)
 
 	if got := model.agentStreamContent(); got != "hello world" {
@@ -449,9 +449,9 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "a partial"})
+	updated, _ = model.Update(session.NewToolExecutionUpdate("tool-a", "", "a partial"))
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-b", Delta: "b partial"})
+	updated, _ = model.Update(session.NewToolExecutionUpdate("tool-b", "", "b partial"))
 	model = testModel(t, updated)
 
 	if got := model.InFlight.PendingTools["tool-a"].Content; got != "a partial" {
@@ -500,17 +500,13 @@ func TestToolOutputSnapshotReplacesPendingContent(t *testing.T) {
 	})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "head"})
+	updated, _ = model.Update(session.NewToolExecutionUpdate("tool-a", "", "head"))
 	model = testModel(t, updated)
-	updated, _ = model.Update(session.ToolOutputDelta{
-		ToolUseID: "tool-a",
-		Delta:     "tail snapshot",
-		Snapshot:  true,
-	})
+	updated, _ = model.Update(session.NewToolExecutionUpdate("tool-a", "", "tail snapshot"))
 	model = testModel(t, updated)
 
-	if got := model.InFlight.PendingTools["tool-a"].Content; got != "tail snapshot" {
-		t.Fatalf("pending content = %q, want tail snapshot", got)
+	if got := model.InFlight.PendingTools["tool-a"].Content; got != "headtail snapshot" {
+		t.Fatalf("pending content = %q, want headtail snapshot", got)
 	}
 }
 

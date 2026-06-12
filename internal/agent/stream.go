@@ -68,6 +68,8 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	// Collect the response using StreamAccumulator.
 	// Events are emitted for streaming; accumulation handles blocks + flat fields.
 	var acc llm.StreamAccumulator
+	// Maintain partial message state (Pi model: message_update carries full state)
+	partialMessage := session.AgentMessage{}
 
 	for {
 		chunk, ok := stream.Next()
@@ -75,17 +77,23 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 			break
 		}
 
+		// Maintain partial message state (Pi model: message_update carries full state)
 		if chunk.Content != "" {
-			l.emit(session.AgentDelta{
+			partialMessage.Message += chunk.Content
+			l.emit(session.MessageUpdate{
 				Base:      session.BaseNow(),
+				Message:   partialMessage,
 				Delta:     chunk.Content,
 				BlockType: "text",
 			})
 		}
 		if chunk.Reasoning != "" {
-			l.emit(session.ThinkingDelta{
-				Base:  session.BaseNow(),
-				Delta: chunk.Reasoning,
+			partialMessage.Reasoning += chunk.Reasoning
+			l.emit(session.MessageUpdate{
+				Base:      session.BaseNow(),
+				Message:   partialMessage,
+				Delta:     chunk.Reasoning,
+				BlockType: "thinking",
 			})
 		}
 		acc.Add(chunk)

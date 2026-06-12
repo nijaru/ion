@@ -331,8 +331,8 @@ func TestPrintModeRejectsUnexpectedApprovalRequest(t *testing.T) {
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 3)}
-	sess.events <- session.AgentDelta{Delta: "hello"}
-	sess.events <- session.AgentDelta{Delta: " world"}
+	sess.events <- session.NewTextUpdate("hello", session.AgentMessage{})
+	sess.events <- session.NewTextUpdate(" world", session.AgentMessage{})
 	sess.events <- session.TurnEnd{}
 
 	var out bytes.Buffer
@@ -371,9 +371,9 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 6)}
 	sess.events <- session.TurnStart{}
 	sess.events <- session.ToolCallStart{ToolName: "bash"}
-	sess.events <- session.AgentDelta{Delta: "do"}
+	sess.events <- session.NewTextUpdate("do", session.AgentMessage{})
 	sess.events <- session.AgentMessage{InputTokens: 10, OutputTokens: 2, Cost: 0.01}
-	sess.events <- session.AgentDelta{Delta: "ne"}
+	sess.events <- session.NewTextUpdate("ne", session.AgentMessage{})
 	sess.events <- session.TurnEnd{}
 
 	var out bytes.Buffer
@@ -474,7 +474,7 @@ func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
 
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	sess := &printSession{events: make(chan session.AgentEvent, 1)}
-	sess.events <- session.AgentDelta{Delta: "partial"}
+	sess.events <- session.NewTextUpdate("partial", session.AgentMessage{})
 	close(sess.events)
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
