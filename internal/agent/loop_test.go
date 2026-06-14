@@ -38,6 +38,8 @@ func eventTypeName(ev session.AgentEvent) string {
 		return "tool_call_start"
 	case session.ToolCallEnd:
 		return "tool_call_end"
+	case session.ToolExecutionUpdate:
+		return "tool_execution_update"
 	case session.MessageStart:
 		return "message_start"
 	case session.MessageEnd:
@@ -410,4 +412,50 @@ func TestMessageUpdateDeltaAndBlockType(t *testing.T) {
 	if updates[1].Message.Message != "here's my answer" {
 		t.Fatalf("second update Message.Message = %q, want 'here's my answer'", updates[1].Message.Message)
 	}
+}
+func TestToolExecutionUpdateEventsEmittedDuringStreaming(t *testing.T) {
+	rec := &eventRecorder{}
+	
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{
+			Content: "using tool",
+			Calls:  []llm.Call{testCall("call-1", "slow_tool", `{"query": "test"}`)},
+		}}}, nil
+	}
+	
+	agent := New(AgentConfig{
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		StreamingToolExecutor: func(ctx context.Context, tc AgentToolCall, onProgress func(any)) (AgentToolResult, error) {
+			// Simulate streaming progress
+			onProgress("partial result 1")
+			onProgress("partial result 2")
+			onProgress("partial result 3")
+			return AgentToolResult{
+				Content: []llm.ContentPart{llm.TextPart("final result")},
+			}, nil
+		},
+		OnEvent: rec.record,
+		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
+			return len(ctx.ToolResults) > 0
+		},
+	})
+	agent.SetTools([]AgentTool{{Name: "slow_tool"}})
+	
+	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	
+	// Should have tool_execution_update events
+	updateCount := 0
+	for _, ev := range rec.events {
+		if ev == "tool_execution_update" {
+			updateCount++
+		}
+	}
+	
+	if updateCount != 3 {
+		t.Errorf("expected 3 tool_execution_update events, got %d (events: %v)", updateCount, rec.events)
+}
 }

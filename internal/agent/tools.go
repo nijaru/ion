@@ -242,10 +242,33 @@ func (l *AgentLoop) executePreparedToolCall(
 	ctx context.Context,
 	prepared toolPreparation,
 ) (AgentToolResult, bool) {
+	if l.config.StreamingToolExecutor != nil {
+		return l.executePreparedToolCallStreaming(ctx, prepared)
+	}
 	if l.config.ToolExecutor == nil {
 		return errorToolResult(fmt.Sprintf("Tool %s executed without a configured executor", prepared.ToolCall.Name)), true
 	}
 	result, err := l.config.ToolExecutor(ctx, prepared.ToolCall)
+	if err != nil {
+		return errorToolResult(fmt.Sprintf("Tool execution error: %v", err)), true
+	}
+	if len(result.Content) == 0 {
+		result.Content = []llm.ContentPart{llm.TextPart("")}
+	}
+	return result, result.IsError
+}
+
+// executePreparedToolCallStreaming runs a prepared tool call with progress updates.
+func (l *AgentLoop) executePreparedToolCallStreaming(
+	ctx context.Context,
+	prepared toolPreparation,
+) (AgentToolResult, bool) {
+	result, err := l.config.StreamingToolExecutor(ctx, prepared.ToolCall, func(partialResult any) {
+		if l.config.OnToolProgress != nil {
+			l.config.OnToolProgress(ctx, prepared.ToolCall.ID, prepared.ToolCall.Name, partialResult)
+		}
+		l.emit(session.NewToolExecutionUpdate(prepared.ToolCall.ID, prepared.ToolCall.Name, fmt.Sprintf("%v", partialResult)))
+	})
 	if err != nil {
 		return errorToolResult(fmt.Sprintf("Tool execution error: %v", err)), true
 	}

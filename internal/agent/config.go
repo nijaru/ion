@@ -21,6 +21,9 @@ type AgentConfig struct {
 	Tools         []AgentTool     `json:"tools,omitempty"`
 	StreamFn      StreamFn        `json:"-"`
 	ToolExecutor  ToolExecutor    `json:"-"`
+	// StreamingToolExecutor is an optional tool executor that supports progress updates.
+	// If set, it is used instead of ToolExecutor for tools that support streaming.
+	StreamingToolExecutor StreamingToolExecutor `json:"-"`
 	OnEvent       func(event session.AgentEvent) `json:"-"`
 	OnModelMessage ModelMessageWriter `json:"-"`
 
@@ -76,6 +79,10 @@ type AgentConfig struct {
 	// AfterToolCall is called after each tool execution.
 	// Default: nil (no modifications).
 	AfterToolCall func(ctx context.Context, hookCtx AfterToolCallContext) AfterToolCallResult `json:"-"`
+	// OnToolProgress is called during tool execution with partial results.
+	// This enables streaming tool output to the TUI in real-time.
+	// Default: nil (no streaming).
+	OnToolProgress func(ctx context.Context, toolUseID, toolName string, partialResult any) `json:"-"`
 }
 
 // DefaultConvertToLlm filters AgentMessages to standard LLM roles.

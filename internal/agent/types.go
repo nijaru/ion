@@ -17,6 +17,10 @@ type StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 // ToolExecutor executes a tool call and returns the result.
 type ToolExecutor func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error)
 
+// StreamingToolExecutor executes a tool call with progress updates.
+// The onProgress callback is called with partial results during execution.
+type StreamingToolExecutor func(ctx context.Context, toolCall AgentToolCall, onProgress func(partialResult any)) (AgentToolResult, error)
+
 // ModelMessageWriter persists one provider-visible message.
 type ModelMessageWriter func(ctx context.Context, message llm.Message) error
 
