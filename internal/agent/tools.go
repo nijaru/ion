@@ -66,6 +66,14 @@ func (l *AgentLoop) executeToolCallsSequential(
 		}
 		l.emitToolResult(res)
 		finalized = append(finalized, res)
+
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, nil, false, err
 	}
 
 	return toolMessages(finalized)
