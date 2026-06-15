@@ -20,35 +20,40 @@ import (
 //
 // Returns: AgentMessage (agent's representation), llm.Message (LLM's representation), error.
 func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
-	// Get messages from tree store
+	// Get messages from tree store and apply context transforms.
+	// Tree stores llm.Message; callbacks expect []AgentMessage.
 	llmMessages := l.tree.Messages()
-	if l.config.TransformContext != nil {
-		// Convert to AgentMessage for transform
+	if l.config.TransformContext != nil || l.config.ConvertToLlm != nil {
+		// Convert to AgentMessage for transform/converter
 		agentMessages := make([]AgentMessage, 0, len(llmMessages))
 		for _, msg := range llmMessages {
 			agentMessages = append(agentMessages, llmMessageToAgent(msg))
 		}
-		agentMessages = l.config.TransformContext(ctx, agentMessages)
-		// Convert back to llm.Message
-		llmMessages = make([]llm.Message, 0, len(agentMessages))
-		for _, msg := range agentMessages {
-			llmMessages = append(llmMessages, agentMessageToLLM(msg))
+		if l.config.TransformContext != nil {
+			agentMessages = l.config.TransformContext(ctx, agentMessages)
 		}
-	} else if l.config.ConvertToLlm != nil {
-		// Convert to AgentMessage for custom converter
-		agentMessages := make([]AgentMessage, 0, len(llmMessages))
-		for _, msg := range llmMessages {
-			agentMessages = append(agentMessages, llmMessageToAgent(msg))
+		if l.config.ConvertToLlm != nil {
+			llmMessages = l.config.ConvertToLlm(agentMessages)
+		} else {
+			llmMessages = make([]llm.Message, 0, len(agentMessages))
+			for _, msg := range agentMessages {
+				llmMessages = append(llmMessages, agentMessageToLLM(msg))
+			}
 		}
-		llmMessages = l.config.ConvertToLlm(agentMessages)
-	} else {
-		// Use default conversion
-		agentMessages := make([]AgentMessage, 0, len(llmMessages))
-		for _, msg := range llmMessages {
-			agentMessages = append(agentMessages, llmMessageToAgent(msg))
+	} else if l.state.SystemPrompt != "" {
+		// Common case: prepend system prompt if not already present
+		hasSystem := len(llmMessages) > 0 && (llmMessages[0].Role == llm.RoleSystem || llmMessages[0].Role == llm.RoleDeveloper)
+		if !hasSystem {
+			role := llm.RoleSystem
+			if l.config.Model.Capabilities != nil && l.config.Model.Capabilities.SystemRole != "" {
+				role = llm.Role(l.config.Model.Capabilities.SystemRole)
+			}
+			prepend := make([]llm.Message, 0, len(llmMessages)+1)
+			prepend = append(prepend, llm.Message{Role: role, Content: l.state.SystemPrompt})
+			llmMessages = append(prepend, llmMessages...)
 		}
-		llmMessages = l.defaultConvertToLlm(agentMessages)
 	}
+	// else: no transforms, no system prompt, llmMessages is already in the right format
 
 	// Convert agent tools to LLM specs
 	var toolSpecs []*llm.Spec
