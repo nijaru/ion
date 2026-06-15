@@ -26,6 +26,8 @@ type Agent struct {
 	state     AgentState
 	listeners []func(session.AgentEvent)
 	mu        sync.RWMutex
+	tree      *session.TreeStore
+	treeMu    sync.RWMutex
 
 	// Session state
 	id            string
@@ -64,6 +66,7 @@ func New(config AgentConfig) *Agent {
 		},
 		id:     id,
 		events: make(chan session.AgentEvent, 100),
+		tree:   session.NewTreeStore(),
 	}
 	// Wire OnEvent to send to events channel if not already set.
 	if a.config.OnEvent == nil {
@@ -302,23 +305,37 @@ func (a *Agent) ClearAllQueues() {
 	a.emitQueueUpdatedLocked()
 }
 
-// setMessagesLocked replaces messages without acquiring the lock.
+// setMessagesLocked replaces messages in the tree store without acquiring the lock.
 // Caller must hold a.mu.
 func (a *Agent) setMessagesLocked(messages []AgentMessage) {
-	a.state.Messages = cloneAgentMessages(messages)
+	a.treeMu.Lock()
+	a.tree = session.NewTreeStore()
+	var parentID *string
+	for _, msg := range messages {
+		llmMsg := agentMessageToLLM(msg)
+		entryID := fmt.Sprintf("%d", a.tree.Len()+1)
+		entry := session.NewMessageEntry(entryID, parentID, llmMsg)
+		if err := a.tree.Add(entry); err == nil {
+			a.tree.SetLeaf(entryID)
+			id := entryID
+			parentID = &id
+		}
+	}
+	a.treeMu.Unlock()
 }
 
 // newLoop creates a new AgentLoop with the current agent state.
 // Caller must hold a.mu (read lock is sufficient).
 func (a *Agent) newLoop() *AgentLoop {
-	return NewAgentLoop(a.config, a.state, a.emit)
+	loop := NewAgentLoop(a.config, a.state, a.emit)
+	loop.tree = a.tree
+	return loop
 }
 
 // syncLoopState copies the loop state back to the agent state.
 // Caller must hold a.mu.
 func (a *Agent) syncLoopState(loop *AgentLoop) {
 	loopState := loop.State()
-	a.state.Messages = loopState.Messages
 	a.state.Model = loopState.Model
 	a.state.ThinkingLevel = loopState.ThinkingLevel
 	a.state.Tools = loopState.Tools
@@ -748,10 +765,7 @@ func (a *Agent) loadModelHistoryLocked(ctx context.Context) ([]AgentMessage, err
 // Used during overflow recovery to remove the error message before retrying.
 // Caller must hold a.mu.
 func (a *Agent) trimLastAssistantMessage() {
-	msgs := a.state.Messages
-	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "assistant" {
-		a.state.Messages = msgs[:len(msgs)-1]
-	}
+	// This is handled by the loop's tree store now
 }
 
 // updateContextTokens updates the estimated context token count.
@@ -839,8 +853,20 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: input}},
 	}
 
-	// Commit the user message to state synchronously.
-	a.state.Messages = append(a.state.Messages, userMsg)
+	// Commit the user message to tree store synchronously.
+	llmMsg := agentMessageToLLM(userMsg)
+	a.treeMu.Lock()
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+			parentID = &id
+		}
+		entryID := fmt.Sprintf("%d", a.tree.Len()+1)
+		entry := session.NewMessageEntry(entryID, parentID, llmMsg)
+		if err := a.tree.Add(entry); err == nil {
+			a.tree.SetLeaf(entryID)
+		}
+	a.treeMu.Unlock()
 	a.emitLocked(session.UserMessage{
 		Base:    session.BaseNow(),
 		Message: userMsg.TextContent(),
@@ -915,7 +941,6 @@ func (a *Agent) Reset() {
 	}
 
 	// Clear state
-	a.state.Messages = nil
 	a.state.IsStreaming = false
 	a.state.StreamingMessage = nil
 	a.state.PendingToolCalls = make(map[string]bool)
@@ -923,6 +948,9 @@ func (a *Agent) Reset() {
 	a.overflowAttempted = false
 	a.retryAttempt = 0
 	a.contextTokens = 0
+
+	// Clear tree store
+	a.tree = session.NewTreeStore()
 
 	// Clear queues
 	a.steeringQueue = nil

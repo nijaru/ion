@@ -93,6 +93,41 @@ func agentMessageToLLM(message AgentMessage) llm.Message {
 	return llmMessage
 }
 
+// llmMessageToAgent converts an llm.Message to an AgentMessage.
+func llmMessageToAgent(message llm.Message) AgentMessage {
+	msg := AgentMessage{
+		Role:  string(message.Role),
+		Name:  message.Name,
+		ToolID: message.ToolID,
+	}
+	// Convert Parts from ContentBlocks
+	if len(message.Blocks) > 0 {
+		msg.Parts = make([]llm.ContentPart, 0, len(message.Blocks))
+		for _, block := range message.Blocks {
+			switch b := block.(type) {
+			case llm.TextBlock:
+				msg.Parts = append(msg.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: b.Text})
+			case llm.ThinkingBlock:
+				msg.Parts = append(msg.Parts, llm.ContentPart{Type: "reasoning", Text: b.Thinking})
+			}
+		}
+	} else if message.Content != "" {
+		msg.Parts = []llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}}
+	}
+	// Convert Calls
+	if len(message.Calls) > 0 {
+		msg.Calls = make([]AgentToolCall, len(message.Calls))
+		for i, call := range message.Calls {
+			msg.Calls[i] = AgentToolCall{
+				ID:        call.ID,
+				Name:      call.Function.Name,
+				Arguments: parseArguments(call.Function.Arguments),
+			}
+		}
+	}
+	return msg
+}
+
 func agentToolCallToLLM(call AgentToolCall) llm.Call {
 	var llmCall llm.Call
 	llmCall.ID = call.ID

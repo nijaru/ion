@@ -311,8 +311,6 @@ type AgentTool struct {
 
 // AgentState is the current state of the agent.
 type AgentState struct {
-	// Messages is the current conversation history.
-	Messages []AgentMessage `json:"messages"`
 	// Model is the current model being used.
 	Model llm.Model `json:"model"`
 	// ThinkingLevel is the current thinking level.

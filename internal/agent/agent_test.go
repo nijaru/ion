@@ -1252,12 +1252,13 @@ func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
 	if err := adapter.Resume(context.Background(), sess.ID()); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	messages := adapter.State().Messages
-	if len(messages) != 2 {
-		t.Fatalf("messages = %#v", messages)
+	// Get messages from tree store
+	llmMessages := adapter.tree.Messages()
+	if len(llmMessages) != 2 {
+		t.Fatalf("messages = %#v", llmMessages)
 	}
-	if messages[0].TextContent() != "prior" || messages[1].TextContent() != "answer" {
-		t.Fatalf("hydrated messages = %#v", messages)
+	if llmMessages[0].Content != "prior" || llmMessages[1].Content != "answer" {
+		t.Fatalf("hydrated messages = %#v", llmMessages)
 	}
 }
 

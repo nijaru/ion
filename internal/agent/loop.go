@@ -77,9 +77,6 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 		}
 	}
 
-	// Append prompts to state
-	l.state.Messages = append(l.state.Messages, prompts...)
-
 	// Add prompts to tree store
 	l.treeMu.Lock()
 	var parentID *string
@@ -136,13 +133,14 @@ func (l *AgentLoop) addToTreeLocked(parentID *string, msg *llm.Message) *string 
 func (l *AgentLoop) Continue(ctx context.Context) ([]AgentMessage, error) {
 	l.emit(session.AgentStart{Base: session.BaseNow()})
 
-	if len(l.state.Messages) == 0 {
+	messages := l.tree.Messages()
+	if len(messages) == 0 {
 		err := fmt.Errorf("cannot continue: no messages in context")
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
 		return nil, err
 	}
 
-	lastMsg := l.state.Messages[len(l.state.Messages)-1]
+	lastMsg := messages[len(messages)-1]
 	if lastMsg.Role == "assistant" {
 		err := fmt.Errorf("cannot continue from message role: assistant")
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
@@ -195,7 +193,18 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 
 			// Inject pending messages
 			if len(pendingMessages) > 0 {
-				l.state.Messages = append(l.state.Messages, pendingMessages...)
+				// Add to tree store
+				l.treeMu.Lock()
+				var parentID *string
+				if leaf := l.tree.Leaf(); leaf != nil {
+					id := leaf.ID
+						parentID = &id
+					}
+				for _, msg := range pendingMessages {
+					llmMsg := agentMessageToLLM(msg)
+					parentID = l.addToTreeLocked(parentID, &llmMsg)
+				}
+				l.treeMu.Unlock()
 				newMessages = append(newMessages, pendingMessages...)
 				for _, msg := range pendingMessages {
 					if msg.Role == "user" {
@@ -284,8 +293,18 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 					}})
 				}
 
-				// Add tool results to context and persist
-				l.state.Messages = append(l.state.Messages, toolResults...)
+				// Add tool results to tree store
+				l.treeMu.Lock()
+				var parentID *string
+				if leaf := l.tree.Leaf(); leaf != nil {
+					id := leaf.ID
+						parentID = &id
+					}
+				for _, result := range toolResults {
+					llmMsg := agentMessageToLLM(result)
+					parentID = l.addToTreeLocked(parentID, &llmMsg)
+				}
+				l.treeMu.Unlock()
 				newMessages = append(newMessages, toolResults...)
 				for _, result := range llmToolResults {
 					if err := l.writeModelMessage(ctx, result); err != nil {
@@ -362,8 +381,14 @@ func (l *AgentLoop) getFollowUpMessages() []AgentMessage {
 
 // buildContext builds the current AgentContext from the loop state.
 func (l *AgentLoop) buildContext() AgentContext {
+	// Convert llm.Message to AgentMessage
+	llmMessages := l.tree.Messages()
+	messages := make([]AgentMessage, 0, len(llmMessages))
+	for _, msg := range llmMessages {
+		messages = append(messages, llmMessageToAgent(msg))
+	}
 	return AgentContext{
-		Messages:      l.state.Messages,
+		Messages:      messages,
 		SystemPrompt:  l.state.SystemPrompt,
 		Tools:         l.state.Tools,
 		Model:         l.state.Model,
@@ -377,7 +402,15 @@ func (l *AgentLoop) applyTurnUpdate(update *AgentLoopTurnUpdate) {
 		return
 	}
 	if update.Context != nil {
-		l.state.Messages = cloneAgentMessages(update.Context.Messages)
+		// Update tree store with new messages
+		l.treeMu.Lock()
+		l.tree = session.NewTreeStore()
+		var parentID *string
+		for _, msg := range update.Context.Messages {
+			llmMsg := agentMessageToLLM(msg)
+			parentID = l.addToTreeLocked(parentID, &llmMsg)
+		}
+		l.treeMu.Unlock()
 		l.state.SystemPrompt = update.Context.SystemPrompt
 		l.state.Tools = append([]AgentTool(nil), update.Context.Tools...)
 		l.state.Model = update.Context.Model
@@ -402,9 +435,15 @@ func (l *AgentLoop) writeModelMessage(ctx context.Context, message llm.Message) 
 	return l.config.OnModelMessage(ctx, message)
 }
 
-// Messages returns the current message history.
+// Messages returns the current message history from the tree store.
 func (l *AgentLoop) Messages() []AgentMessage {
-	return l.state.Messages
+	// Convert llm.Message to AgentMessage
+	llmMessages := l.tree.Messages()
+	result := make([]AgentMessage, 0, len(llmMessages))
+	for _, msg := range llmMessages {
+		result = append(result, llmMessageToAgent(msg))
+	}
+	return result
 }
 
 // State returns the current loop state.

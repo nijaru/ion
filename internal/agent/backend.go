@@ -145,11 +145,17 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	// Get current messages from agent state
-	messages := b.session.state.Messages
-	if len(messages) == 0 {
+	// Get current messages from tree store
+	llmMessages := b.session.tree.Messages()
+	if len(llmMessages) == 0 {
 		b.session.mu.Unlock()
 		return false, nil
+	}
+
+	// Convert to AgentMessage for summary generation
+	messages := make([]AgentMessage, 0, len(llmMessages))
+	for _, msg := range llmMessages {
+		messages = append(messages, llmMessageToAgent(msg))
 	}
 
 	// Generate summary using LLM
@@ -159,10 +165,15 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("generate summary: %w", err)
 	}
 
-	// Update agent state with compacted messages
-	b.session.state.Messages = []AgentMessage{
-		{Role: "assistant", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: summary}}},
-	}
+	// Update tree store with compacted messages
+	b.session.treeMu.Lock()
+	b.session.tree = session.NewTreeStore()
+	summaryMsg := llm.Message{Role: "assistant", Content: summary}
+	entryID := "1"
+	entry := session.NewMessageEntry(entryID, nil, summaryMsg)
+	b.session.tree.Add(entry)
+	b.session.tree.SetLeaf(entryID)
+	b.session.treeMu.Unlock()
 	b.session.resetContextTokens()
 	b.session.mu.Unlock()
 

@@ -20,18 +20,34 @@ import (
 //
 // Returns: AgentMessage (agent's representation), llm.Message (LLM's representation), error.
 func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
-	// Apply context transform if configured
-	messages := l.state.Messages
+	// Get messages from tree store
+	llmMessages := l.tree.Messages()
 	if l.config.TransformContext != nil {
-		messages = l.config.TransformContext(ctx, messages)
-	}
-
-	// Convert to LLM-compatible messages
-	var llmMessages []llm.Message
-	if l.config.ConvertToLlm != nil {
-		llmMessages = l.config.ConvertToLlm(messages)
+		// Convert to AgentMessage for transform
+		agentMessages := make([]AgentMessage, 0, len(llmMessages))
+		for _, msg := range llmMessages {
+			agentMessages = append(agentMessages, llmMessageToAgent(msg))
+		}
+		agentMessages = l.config.TransformContext(ctx, agentMessages)
+		// Convert back to llm.Message
+		llmMessages = make([]llm.Message, 0, len(agentMessages))
+		for _, msg := range agentMessages {
+			llmMessages = append(llmMessages, agentMessageToLLM(msg))
+		}
+	} else if l.config.ConvertToLlm != nil {
+		// Convert to AgentMessage for custom converter
+		agentMessages := make([]AgentMessage, 0, len(llmMessages))
+		for _, msg := range llmMessages {
+			agentMessages = append(agentMessages, llmMessageToAgent(msg))
+		}
+		llmMessages = l.config.ConvertToLlm(agentMessages)
 	} else {
-		llmMessages = l.defaultConvertToLlm(messages)
+		// Use default conversion
+		agentMessages := make([]AgentMessage, 0, len(llmMessages))
+		for _, msg := range llmMessages {
+			agentMessages = append(agentMessages, llmMessageToAgent(msg))
+		}
+		llmMessages = l.defaultConvertToLlm(agentMessages)
 	}
 
 	// Convert agent tools to LLM specs
@@ -91,11 +107,20 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	// Events are emitted for streaming; accumulation handles blocks + flat fields.
 	var acc llm.StreamAccumulator
 
-	// Pi parity: push a partial assistant message to context.messages at stream start,
-	// then update it in-place for each chunk. This makes the partial message visible
-	// to hooks that read context.messages during streaming.
-	partialIdx := len(l.state.Messages)
-	l.state.Messages = append(l.state.Messages, AgentMessage{Role: "assistant"})
+	// Pi parity: push a partial assistant message to tree store at stream start.
+	// This makes the partial message visible to hooks that read context.messages during streaming.
+	l.treeMu.Lock()
+	var partialParentID *string
+	if leaf := l.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+			partialParentID = &id
+		}
+		partialEntryID := fmt.Sprintf("%d", l.tree.Len()+1)
+		partialEntry := session.NewMessageEntry(partialEntryID, partialParentID, llm.Message{Role: "assistant"})
+		if err := l.tree.Add(partialEntry); err == nil {
+			l.tree.SetLeaf(partialEntryID)
+		}
+	l.treeMu.Unlock()
 	partialSessionMsg := session.AgentMessage{}
 
 	// Track content block state for structured events (Pi parity)
@@ -208,16 +233,20 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		}
 		acc.Add(chunk)
 
-		// Update the partial message in-place in context.messages (Pi parity)
+		// Update the partial message in tree store (Pi parity)
 		resp := acc.Response()
-		l.state.Messages[partialIdx] = AgentMessage{
-			Role:         "assistant",
-			Parts:        respParts(resp),
-			InputTokens:  usageValue(&resp.Usage, "input"),
-			OutputTokens: usageValue(&resp.Usage, "output"),
-			TotalTokens:  usageValue(&resp.Usage, "total"),
-			Cost:         usageValueF(&resp.Usage),
+		l.treeMu.Lock()
+		if entry, ok := l.tree.Get(partialEntryID); ok {
+			llmMsg := llm.Message{
+				Role:    "assistant",
+				Content: resp.Content,
+			}
+			updatedEntry := session.NewMessageEntry(partialEntryID, entry.ParentID, llmMsg)
+			l.tree.Remove(partialEntryID)
+			l.tree.Add(updatedEntry)
+			l.tree.SetLeaf(partialEntryID)
 		}
+		l.treeMu.Unlock()
 	}
 
 	// Emit final block end
@@ -226,8 +255,10 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	}
 
 	if err := stream.Err(); err != nil {
-		// Remove the partial message on error
-		l.state.Messages = l.state.Messages[:partialIdx]
+		// Remove the partial message from tree store on error
+		l.treeMu.Lock()
+		l.tree.Remove(partialEntryID)
+		l.treeMu.Unlock()
 		// Call afterProviderResponse hook on error (Pi parity)
 		if l.config.AfterProviderResponse != nil {
 			l.config.AfterProviderResponse(ctx, AfterProviderResponseContext{
@@ -265,18 +296,16 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		TotalTokens:  usageValue(&resp.Usage, "total"),
 		Cost:         usageValueF(&resp.Usage),
 	}
-	// Replace the partial message with the final message
-	l.state.Messages[partialIdx] = message
 
-	// Add assistant message to tree store
+	// Update the partial message in tree store with final message
 	l.treeMu.Lock()
-	var parentID *string
-	if leaf := l.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-			parentID = &id
-		}
+	if entry, ok := l.tree.Get(partialEntryID); ok {
 		llmMsg := agentMessageToLLM(message)
-		l.addToTreeLocked(parentID, &llmMsg)
+		updatedEntry := session.NewMessageEntry(partialEntryID, entry.ParentID, llmMsg)
+		l.tree.Remove(partialEntryID)
+		l.tree.Add(updatedEntry)
+		l.tree.SetLeaf(partialEntryID)
+	}
 	l.treeMu.Unlock()
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.Blocks = resp.GetContentBlocks()
