@@ -111,8 +111,8 @@ func cloneMetadata(src map[string]any) map[string]any {
 func remapForkedEventData(e Event, idMap map[string]string) Event {
 	leaf, ok, err := e.LeafMovedData()
 	if err == nil && ok {
-		if newID, ok := idMap[leaf.TargetEventID]; ok {
-			leaf.TargetEventID = newID
+		if newID, ok := idMap[leaf.TargetID]; ok {
+			leaf.TargetID = newID
 			if rewritten, marshalErr := json.Marshal(leaf); marshalErr == nil {
 				e.Data = rewritten
 			}

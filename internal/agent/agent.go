@@ -56,10 +56,11 @@ func New(config AgentConfig) *Agent {
 	a := &Agent{
 		config: config,
 		state: AgentState{
-			Model:         config.Model,
-			ThinkingLevel: config.ThinkingLevel,
-			SystemPrompt:  config.SystemPrompt,
-			Tools:         config.Tools,
+			Model:           config.Model,
+			ThinkingLevel:   config.ThinkingLevel,
+			SystemPrompt:    config.SystemPrompt,
+			Tools:           config.Tools,
+			PendingToolCalls: make(map[string]bool),
 		},
 		id:     id,
 		events: make(chan session.AgentEvent, 100),
@@ -118,8 +119,51 @@ func (a *Agent) emit(ev session.AgentEvent) {
 	if closed {
 		return
 	}
+
+	// Track streaming state (Pi parity)
+	a.trackEventState(ev)
+
 	if onEvent != nil {
 		onEvent(ev)
+	}
+}
+
+// trackEventState updates agent state based on events.
+// Pi parity: track streamingMessage and pendingToolCalls.
+func (a *Agent) trackEventState(ev session.AgentEvent) {
+	switch e := ev.(type) {
+	case session.MessageStart:
+		a.mu.Lock()
+		msg := AgentMessage{
+			Role:      "assistant",
+			Timestamp: time.Now().UnixMilli(),
+		}
+		a.state.StreamingMessage = &msg
+		a.mu.Unlock()
+	case session.MessageUpdate:
+		a.mu.Lock()
+		if a.state.StreamingMessage != nil {
+			a.state.StreamingMessage = &AgentMessage{
+				Role:         "assistant",
+				InputTokens:  e.Message.InputTokens,
+				OutputTokens: e.Message.OutputTokens,
+				TotalTokens:  e.Message.TotalTokens,
+				Cost:         e.Message.Cost,
+			}
+		}
+		a.mu.Unlock()
+	case session.MessageEnd:
+		a.mu.Lock()
+		a.state.StreamingMessage = nil
+		a.mu.Unlock()
+	case session.ToolCallStart:
+		a.mu.Lock()
+		a.state.PendingToolCalls[e.ToolUseID] = true
+		a.mu.Unlock()
+	case session.ToolCallEnd:
+		a.mu.Lock()
+		delete(a.state.PendingToolCalls, e.ToolUseID)
+		a.mu.Unlock()
 	}
 }
 
@@ -209,6 +253,55 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 	a.setMessagesLocked(messages)
 }
 
+// Signal returns the active abort signal for the current run, if any.
+// Returns nil if no run is active.
+func (a *Agent) Signal() context.Context {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.turnCtx
+}
+
+// Abort aborts the current run, if one is active.
+func (a *Agent) Abort() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel != nil {
+		a.cancel()
+	}
+}
+
+// HasQueuedMessages returns true if either queue contains pending messages.
+func (a *Agent) HasQueuedMessages() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.steeringQueue) > 0 || len(a.followUpQueue) > 0
+}
+
+// ClearSteeringQueue removes all queued steering messages.
+func (a *Agent) ClearSteeringQueue() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQueue = nil
+	a.emitQueueUpdatedLocked()
+}
+
+// ClearFollowUpQueue removes all queued follow-up messages.
+func (a *Agent) ClearFollowUpQueue() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.followUpQueue = nil
+	a.emitQueueUpdatedLocked()
+}
+
+// ClearAllQueues removes all queued steering and follow-up messages.
+func (a *Agent) ClearAllQueues() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQueue = nil
+	a.followUpQueue = nil
+	a.emitQueueUpdatedLocked()
+}
+
 // setMessagesLocked replaces messages without acquiring the lock.
 // Caller must hold a.mu.
 func (a *Agent) setMessagesLocked(messages []AgentMessage) {
@@ -240,12 +333,14 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	a.mu.Lock()
 	a.state.IsStreaming = true
 	a.state.ErrorMessage = ""
+	a.state.StreamingMessage = nil
 	loop := a.newLoop()
 	a.mu.Unlock()
 
 	defer func() {
 		a.mu.Lock()
 		a.state.IsStreaming = false
+		a.state.StreamingMessage = nil
 		a.mu.Unlock()
 	}()
 
@@ -268,12 +363,14 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	a.mu.Lock()
 	a.state.IsStreaming = true
 	a.state.ErrorMessage = ""
+	a.state.StreamingMessage = nil
 	loop := a.newLoop()
 	a.mu.Unlock()
 
 	defer func() {
 		a.mu.Lock()
 		a.state.IsStreaming = false
+		a.state.StreamingMessage = nil
 		a.mu.Unlock()
 	}()
 
@@ -533,7 +630,13 @@ func (a *Agent) recoverFromOverflow(ctx context.Context) bool {
 	}
 
 	// Retry the turn. The loop will emit AgentEnd.
-	_, _ = a.Continue(ctx)
+	if _, err := a.Continue(ctx); err != nil {
+		a.emitLocked(session.AutoRetryEnd{
+			Base:       session.BaseNow(),
+			Success:    false,
+			FinalError: fmt.Sprintf("retry after compaction failed: %v", err),
+		})
+	}
 	return true
 }
 
@@ -576,7 +679,19 @@ func (a *Agent) retryWithBackoff(ctx context.Context, errMsg string) bool {
 
 	// Retry the turn (unlock for blocking call)
 	a.mu.Unlock()
-	_, _ = a.Continue(ctx)
+	if _, retryErr := a.Continue(ctx); retryErr != nil {
+		a.mu.Lock()
+		if !a.closed {
+			a.emitLocked(session.AutoRetryEnd{
+				Base:       session.BaseNow(),
+				Success:    false,
+				Attempt:    a.retryAttempt,
+				FinalError: fmt.Sprintf("retry failed: %v", retryErr),
+			})
+		}
+		a.retryAttempt = 0
+		return true
+	}
 	a.mu.Lock()
 
 	if a.closed {
@@ -802,6 +917,8 @@ func (a *Agent) Reset() {
 	// Clear state
 	a.state.Messages = nil
 	a.state.IsStreaming = false
+	a.state.StreamingMessage = nil
+	a.state.PendingToolCalls = make(map[string]bool)
 	a.state.ErrorMessage = ""
 	a.overflowAttempted = false
 	a.retryAttempt = 0

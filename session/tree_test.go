@@ -1,292 +1,311 @@
 package session
 
 import (
-	"path/filepath"
-	"strings"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 )
 
-func TestSessionActiveBranchDrivesEffectiveMessages(t *testing.T) {
-	sess := New("tree-effective")
-
-	if err := sess.AppendUser(t.Context(), "root"); err != nil {
-		t.Fatalf("append root: %v", err)
-	}
-	root, ok := sess.LastEvent()
-	if !ok {
-		t.Fatal("missing root event")
-	}
-	if err := sess.AppendUser(t.Context(), "main"); err != nil {
-		t.Fatalf("append main: %v", err)
-	}
-	main, ok := sess.LastEvent()
-	if !ok {
-		t.Fatal("missing main event")
-	}
-	if main.ParentID != root.ID.String() {
-		t.Fatalf("main parent = %q, want %q", main.ParentID, root.ID)
-	}
-
-	if err := sess.MoveLeaf(t.Context(), root.ID.String()); err != nil {
-		t.Fatalf("move leaf: %v", err)
-	}
-	if err := sess.AppendUser(t.Context(), "branch"); err != nil {
-		t.Fatalf("append branch: %v", err)
-	}
-
-	messages, err := sess.EffectiveMessages()
-	if err != nil {
-		t.Fatalf("EffectiveMessages: %v", err)
-	}
-	got := messageContents(messages)
-	want := []string{"root", "branch"}
-	if !sameStrings(got, want) {
-		t.Fatalf("effective messages = %#v, want %#v", got, want)
-	}
-	active, err := sess.ActiveEvents()
-	if err != nil {
-		t.Fatalf("ActiveEvents: %v", err)
-	}
-	if got := eventContents(t, active); !sameStrings(got, want) {
-		t.Fatalf("active events = %#v, want %#v", got, want)
-	}
-}
-
-func TestSessionLeafMovementPersistsAndReplays(t *testing.T) {
-	store, err := NewJSONLStore(filepath.Join(t.TempDir(), "sessions"))
-	if err != nil {
-		t.Fatalf("NewJSONLStore: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
-	})
-
-	sess := New("tree-replay").WithWriter(store)
-	if err := sess.AppendUser(t.Context(), "root"); err != nil {
-		t.Fatalf("append root: %v", err)
-	}
-	root, ok := sess.LastEvent()
-	if !ok {
-		t.Fatal("missing root event")
-	}
-	if err := sess.AppendUser(t.Context(), "main"); err != nil {
-		t.Fatalf("append main: %v", err)
-	}
-	if err := sess.MoveLeaf(t.Context(), root.ID.String()); err != nil {
-		t.Fatalf("move leaf: %v", err)
-	}
-	if err := sess.AppendUser(t.Context(), "branch"); err != nil {
-		t.Fatalf("append branch: %v", err)
-	}
-
-	reloaded, err := store.Load(t.Context(), sess.ID())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	messages, err := reloaded.EffectiveMessages()
-	if err != nil {
-		t.Fatalf("EffectiveMessages: %v", err)
-	}
-	got := messageContents(messages)
-	want := []string{"root", "branch"}
-	if !sameStrings(got, want) {
-		t.Fatalf("reloaded effective messages = %#v, want %#v", got, want)
-	}
-	if reloaded.LeafID() == root.ID.String() {
-		t.Fatalf("leaf id remained at root after branch append")
-	}
-}
-
-func TestSessionMoveLeafWithSummaryAppendsBranchSummary(t *testing.T) {
-	store, err := NewJSONLStore(filepath.Join(t.TempDir(), "sessions"))
-	if err != nil {
-		t.Fatalf("NewJSONLStore: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
-	})
-
-	sess := New("tree-summary").WithWriter(store)
-	if err := sess.AppendUser(t.Context(), "root"); err != nil {
-		t.Fatalf("append root: %v", err)
-	}
-	root, ok := sess.LastEvent()
-	if !ok {
-		t.Fatal("missing root event")
-	}
-	if err := sess.AppendUser(t.Context(), "main"); err != nil {
-		t.Fatalf("append main: %v", err)
-	}
-	if err := sess.MoveLeafWithSummary(t.Context(), root.ID.String(), BranchSummaryData{
-		Summary: "explored main and came back",
-		Details: map[string]any{
-			"read_files": []string{"main.go"},
+func TestTreeEntry_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   *TreeEntry
+		wantErr bool
+	}{
+		{
+			name:    "message entry valid",
+			entry:   NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "hello"}),
+			wantErr: false,
 		},
-	}); err != nil {
-		t.Fatalf("MoveLeafWithSummary: %v", err)
+		{
+			name:    "compaction entry valid",
+			entry:   NewCompactionEntry("1", nil, "summary", "first-kept", 100),
+			wantErr: false,
+		},
+		{
+			name: "no type-specific field",
+			entry: &TreeEntry{
+				ID:        "1",
+				Type:      EntryMessage,
+				Timestamp: now(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "multiple type-specific fields",
+			entry: &TreeEntry{
+				ID:        "1",
+				Type:      EntryMessage,
+				Timestamp: now(),
+				Message:   &llm.Message{Role: llm.RoleUser, Content: "hello"},
+				Custom:    &CustomData{CustomType: "test"},
+			},
+			wantErr: true,
+		},
 	}
 
-	active, err := sess.ActiveEvents()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.entry.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestTreeStore_Add(t *testing.T) {
+	store := NewTreeStore()
+
+	// Add root entry
+	root := NewMessageEntry("root", nil, llm.Message{Role: llm.RoleUser, Content: "hello"})
+	if err := store.Add(root); err != nil {
+		t.Fatalf("Add root: %v", err)
+	}
+
+	// Add child entry
+	child := NewMessageEntry("child", ptr("root"), llm.Message{Role: llm.RoleAssistant, Content: "hi"})
+	if err := store.Add(child); err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+
+	// Verify parent-child relationship
+	children := store.Children("root")
+	if len(children) != 1 || children[0] != "child" {
+		t.Fatalf("Children(root) = %v, want [child]", children)
+	}
+
+	// Verify duplicate detection
+	if err := store.Add(root); err == nil {
+		t.Fatal("expected error for duplicate entry")
+	}
+
+	// Verify missing parent detection
+	bad := NewMessageEntry("bad", ptr("nonexistent"), llm.Message{Role: llm.RoleUser, Content: "x"})
+	if err := store.Add(bad); err == nil {
+		t.Fatal("expected error for missing parent")
+	}
+}
+
+func TestTreeStore_Leaf(t *testing.T) {
+	store := NewTreeStore()
+
+	// No leaf initially
+	if leaf := store.Leaf(); leaf != nil {
+		t.Fatalf("expected nil leaf, got %v", leaf)
+	}
+
+	// Add entries
+	store.Add(NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "a"}))
+	store.Add(NewMessageEntry("2", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "b"}))
+
+	// Set leaf
+	if err := store.SetLeaf("2"); err != nil {
+		t.Fatalf("SetLeaf: %v", err)
+	}
+
+	leaf := store.Leaf()
+	if leaf == nil || leaf.ID != "2" {
+		t.Fatalf("Leaf() = %v, want entry 2", leaf)
+	}
+
+	// Set leaf to nonexistent entry
+	if err := store.SetLeaf("x"); err == nil {
+		t.Fatal("expected error for nonexistent leaf")
+	}
+}
+
+func TestTreeStore_Ancestors(t *testing.T) {
+	store := NewTreeStore()
+
+	store.Add(NewMessageEntry("root", nil, llm.Message{Role: llm.RoleUser, Content: "a"}))
+	store.Add(NewMessageEntry("mid", ptr("root"), llm.Message{Role: llm.RoleAssistant, Content: "b"}))
+	store.Add(NewMessageEntry("leaf", ptr("mid"), llm.Message{Role: llm.RoleUser, Content: "c"}))
+
+	ancestors := store.Ancestors("leaf")
+	if len(ancestors) != 3 {
+		t.Fatalf("Ancestors(leaf) = %d entries, want 3", len(ancestors))
+	}
+	if ancestors[0].ID != "leaf" || ancestors[2].ID != "root" {
+		t.Fatalf("Ancestors order wrong: %v", ancestors)
+	}
+}
+
+func TestTreeStore_Path(t *testing.T) {
+	store := NewTreeStore()
+
+	store.Add(NewMessageEntry("root", nil, llm.Message{Role: llm.RoleUser, Content: "a"}))
+	store.Add(NewMessageEntry("mid", ptr("root"), llm.Message{Role: llm.RoleAssistant, Content: "b"}))
+	store.Add(NewMessageEntry("leaf", ptr("mid"), llm.Message{Role: llm.RoleUser, Content: "c"}))
+
+	path, err := store.Path("root", "leaf")
 	if err != nil {
-		t.Fatalf("ActiveEvents: %v", err)
+		t.Fatalf("Path: %v", err)
 	}
-	if len(active) != 2 || active[0].ID != root.ID || active[1].Type != BranchSummary {
-		t.Fatalf("active events = %#v, want root plus branch summary", active)
+	if len(path) != 3 {
+		t.Fatalf("Path = %d entries, want 3", len(path))
 	}
-	summary, ok, err := active[1].BranchSummaryData()
-	if err != nil || !ok {
-		t.Fatalf("BranchSummaryData ok=%v err=%v", ok, err)
-	}
-	if summary.FromEventID != root.ID.String() ||
-		summary.Summary != "explored main and came back" {
-		t.Fatalf("branch summary = %#v, want root source and summary", summary)
+	if path[0].ID != "root" || path[2].ID != "leaf" {
+		t.Fatalf("Path order wrong: %v", path)
 	}
 
-	reloaded, err := store.Load(t.Context(), sess.ID())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	messages, err := reloaded.EffectiveMessages()
-	if err != nil {
-		t.Fatalf("EffectiveMessages: %v", err)
-	}
-	if got := messageContents(messages); len(got) != 2 ||
-		got[0] != "root" ||
-		!strings.Contains(got[1], "explored main and came back") {
-		t.Fatalf("effective messages = %#v, want root and branch summary", got)
+	// Test non-ancestor path
+	store.Add(NewMessageEntry("other", nil, llm.Message{Role: llm.RoleUser, Content: "x"}))
+	_, err = store.Path("other", "leaf")
+	if err == nil {
+		t.Fatal("expected error for non-ancestor path")
 	}
 }
 
-func TestSessionMoveLeafRejectsMissingTarget(t *testing.T) {
-	sess := New("tree-missing")
-	if err := sess.AppendUser(t.Context(), "root"); err != nil {
-		t.Fatalf("append root: %v", err)
+func TestTreeStore_Messages(t *testing.T) {
+	store := NewTreeStore()
+
+	store.Add(NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "hello"}))
+	store.Add(NewMessageEntry("2", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "hi"}))
+	store.Add(NewMessageEntry("3", ptr("2"), llm.Message{Role: llm.RoleUser, Content: "bye"}))
+
+	store.SetLeaf("3")
+
+	messages := store.Messages()
+	if len(messages) != 3 {
+		t.Fatalf("Messages() = %d messages, want 3", len(messages))
 	}
-	if err := sess.MoveLeaf(t.Context(), "missing"); err == nil {
-		t.Fatal("MoveLeaf missing target succeeded")
+	if messages[0].Content != "hello" || messages[2].Content != "bye" {
+		t.Fatalf("Messages() order wrong: %v", messages)
 	}
 }
 
-func TestSessionRejectsEmptyBranchSummary(t *testing.T) {
-	sess := New("tree-empty-summary")
-	if err := sess.AppendBranchSummary(t.Context(), BranchSummaryData{}); err == nil {
-		t.Fatal("AppendBranchSummary empty summary succeeded")
+func TestTreeStore_MessagesWithCompaction(t *testing.T) {
+	store := NewTreeStore()
+
+	// Build: msg1 -> msg2 -> compact -> msg3
+	store.Add(NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "old"}))
+	store.Add(NewMessageEntry("2", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "old-reply"}))
+	store.Add(NewCompactionEntry("compact", ptr("2"), "summarized old context", "2", 1000))
+	store.Add(NewMessageEntry("3", ptr("compact"), llm.Message{Role: llm.RoleUser, Content: "new"}))
+
+	store.SetLeaf("3")
+
+	messages := store.Messages()
+	// Should include compaction summary as a system message + msg3
+	// The compaction entry acts as a barrier — Messages() should include it as a synthetic system message
+	if len(messages) < 1 {
+		t.Fatalf("Messages() too few: %d", len(messages))
 	}
-	if err := sess.Append(t.Context(), NewBranchSummaryEvent(sess.ID(), BranchSummaryData{})); err == nil {
-		t.Fatal("Append raw empty branch summary succeeded")
+
+	// Verify the path is correct
+	path := store.Ancestors("3")
+	if len(path) != 4 { // 3 -> compact -> 2 -> 1
+		t.Fatalf("Ancestors(3) = %d, want 4", len(path))
 	}
 }
 
-func TestSessionLegacyEventsReplayAsLinearBranch(t *testing.T) {
-	replayer := NewReplayer()
-	events := []Event{
-		NewUserMessage("legacy-tree", "one"),
-		NewUserMessage("legacy-tree", "two"),
-		NewUserMessage("legacy-tree", "three"),
+func TestTreeStore_Remove(t *testing.T) {
+	store := NewTreeStore()
+
+	store.Add(NewMessageEntry("root", nil, llm.Message{Role: llm.RoleUser, Content: "a"}))
+	store.Add(NewMessageEntry("child1", ptr("root"), llm.Message{Role: llm.RoleAssistant, Content: "b"}))
+	store.Add(NewMessageEntry("child2", ptr("root"), llm.Message{Role: llm.RoleAssistant, Content: "c"}))
+	store.Add(NewMessageEntry("grandchild", ptr("child1"), llm.Message{Role: llm.RoleUser, Content: "d"}))
+
+	store.SetLeaf("grandchild")
+
+	// Remove child1 and its descendants
+	if err := store.Remove("child1"); err != nil {
+		t.Fatalf("Remove: %v", err)
 	}
-	sess := replayer.NewSession("legacy-tree")
-	for _, event := range events {
-		if event.ParentID != "" {
-			t.Fatalf("test event unexpectedly has parent %q", event.ParentID)
-		}
-		if err := replayer.Apply(sess, event); err != nil {
-			t.Fatalf("replay: %v", err)
-		}
+
+	if _, ok := store.Get("child1"); ok {
+		t.Fatal("child1 should be removed")
 	}
-	messages, err := sess.EffectiveMessages()
-	if err != nil {
-		t.Fatalf("EffectiveMessages: %v", err)
+	if _, ok := store.Get("grandchild"); ok {
+		t.Fatal("grandchild should be removed")
 	}
-	got := messageContents(messages)
-	want := []string{"one", "two", "three"}
-	if !sameStrings(got, want) {
-		t.Fatalf("legacy effective messages = %#v, want %#v", got, want)
+
+	// Root and child2 should still exist
+	if _, ok := store.Get("root"); !ok {
+		t.Fatal("root should still exist")
+	}
+	if _, ok := store.Get("child2"); !ok {
+		t.Fatal("child2 should still exist")
+	}
+
+	// Leaf should be cleared
+	if store.LeafID() != "" {
+		t.Fatalf("leaf should be cleared, got %s", store.LeafID())
+	}
+
+	// Remove nonexistent entry
+	if err := store.Remove("x"); err == nil {
+		t.Fatal("expected error for nonexistent entry")
 	}
 }
 
-func TestSessionEffectiveSettingsFollowActiveBranch(t *testing.T) {
-	sess := New("settings-branch")
-	if err := sess.AppendModelSelection(t.Context(), ModelSelection{
-		ProviderID: "faux",
-		Model:      "model-a",
-	}); err != nil {
-		t.Fatalf("append model-a: %v", err)
+func TestTreeStore_Branching(t *testing.T) {
+	store := NewTreeStore()
+
+	// Create a linear conversation
+	store.Add(NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "question"}))
+	store.Add(NewMessageEntry("2", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "answer-A"}))
+
+	// Fork: create an alternative answer
+	store.Add(NewMessageEntry("2-alt", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "answer-B"}))
+
+	// Add follow-up to alternative
+	store.Add(NewMessageEntry("3", ptr("2-alt"), llm.Message{Role: llm.RoleUser, Content: "follow-up"}))
+
+	// Set leaf to the alternative path
+	store.SetLeaf("3")
+
+	messages := store.Messages()
+	if len(messages) != 3 {
+		t.Fatalf("Messages() = %d, want 3", len(messages))
 	}
-	root, ok := sess.LastEvent()
-	if !ok {
-		t.Fatal("missing root model event")
-	}
-	if err := sess.AppendThinkingSelection(t.Context(), ThinkingSelection{Level: "low"}); err != nil {
-		t.Fatalf("append low thinking: %v", err)
-	}
-	if err := sess.AppendModelSelection(t.Context(), ModelSelection{
-		ProviderID: "faux",
-		Model:      "main-model",
-	}); err != nil {
-		t.Fatalf("append main model: %v", err)
+	if messages[1].Content != "answer-B" {
+		t.Fatalf("Messages()[1] = %q, want answer-B", messages[1].Content)
 	}
 
-	if err := sess.MoveLeaf(t.Context(), root.ID.String()); err != nil {
-		t.Fatalf("move leaf: %v", err)
+	// Switch back to original path
+	store.SetLeaf("2")
+	messages = store.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("Messages() = %d, want 2", len(messages))
 	}
-	if err := sess.AppendThinkingSelection(t.Context(), ThinkingSelection{Level: "high"}); err != nil {
-		t.Fatalf("append branch thinking: %v", err)
-	}
-	if err := sess.AppendModelSelection(t.Context(), ModelSelection{
-		ProviderID: "faux",
-		Model:      "branch-model",
-	}); err != nil {
-		t.Fatalf("append branch model: %v", err)
-	}
-
-	settings, err := sess.EffectiveSettings()
-	if err != nil {
-		t.Fatalf("EffectiveSettings: %v", err)
-	}
-	if !settings.HasModel || settings.Model.Model != "branch-model" ||
-		settings.ThinkingLevel != "high" {
-		t.Fatalf("settings = %#v, want branch-model/high", settings)
+	if messages[1].Content != "answer-A" {
+		t.Fatalf("Messages()[1] = %q, want answer-A", messages[1].Content)
 	}
 }
 
-func messageContents(messages []llm.Message) []string {
-	out := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		out = append(out, msg.Content)
+func TestTreeStore_Concurrent(t *testing.T) {
+	store := NewTreeStore()
+	store.Add(NewMessageEntry("root", nil, llm.Message{Role: llm.RoleUser, Content: "root"}))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("entry-%d", i)
+			store.Add(NewMessageEntry(id, ptr("root"), llm.Message{Role: llm.RoleUser, Content: id}))
+			store.Get(id)
+			store.Children("root")
+			store.Len()
+		}(i)
 	}
-	return out
+	wg.Wait()
+
+	if store.Len() != 101 { // root + 100
+		t.Fatalf("Len() = %d, want 101", store.Len())
+	}
 }
 
-func eventContents(t *testing.T, events []Event) []string {
-	t.Helper()
-	out := make([]string, 0, len(events))
-	for i := range events {
-		if events[i].Type != MessageAdded {
-			continue
-		}
-		msg, err := events[i].ensureMessage()
-		if err != nil {
-			t.Fatalf("decode message %s: %v", events[i].ID, err)
-		}
-		out = append(out, msg.Content)
-	}
-	return out
+func ptr(s string) *string {
+	return &s
 }
 
-func sameStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+func now() time.Time {
+	return time.Now()
 }

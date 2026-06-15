@@ -154,3 +154,29 @@ func NewEvent(sessionID string, eventType EventType, data any) Event {
 func NewMessage(sessionID string, msg llm.Message) Event {
 	return NewEvent(sessionID, MessageAdded, msg)
 }
+
+// LeafMovedData holds the data for a leaf-moved event.
+type LeafMovedData struct {
+	TargetID string `json:"target_id"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// LeafMovedData decodes the payload of a leaf-moved event.
+func (e Event) LeafMovedData() (LeafMovedData, bool, error) {
+	if e.Type != LeafMoved {
+		return LeafMovedData{}, false, nil
+	}
+	var data LeafMovedData
+	if err := e.UnmarshalData(&data); err != nil {
+		return LeafMovedData{}, false, err
+	}
+	return data, true, nil
+}
+
+// NewLeafMoved creates a new leaf-moved event.
+func NewLeafMoved(sessionID string, targetID string, reason string) Event {
+	return NewEvent(sessionID, LeafMoved, LeafMovedData{
+		TargetID: targetID,
+		Reason:   reason,
+	})
+}

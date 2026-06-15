@@ -44,6 +44,14 @@ type Chunk struct {
 	// Usage is cumulative when present. Providers may emit multiple usage chunks;
 	// consumers should keep the latest value rather than summing chunks.
 	Usage *Usage `json:"usage,omitempty"`
+
+	// Assistant message metadata (Pi parity).
+	// Set on the final chunk to propagate provider/model context to the response.
+	StopReason    StopReason `json:"stop_reason,omitempty"`
+	Model         string     `json:"model,omitempty"`
+	ResponseModel string     `json:"response_model,omitempty"`
+	ResponseID    string     `json:"response_id,omitempty"`
+	ErrorMessage  string     `json:"error_message,omitempty"`
 }
 
 // StreamAccumulator assembles normalized stream chunks into a provider response.
@@ -82,6 +90,22 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 	}
 	if chunk.Usage != nil {
 		a.resp.Usage = *chunk.Usage
+	}
+	// Propagate assistant message metadata (Pi parity)
+	if chunk.StopReason != "" {
+		a.resp.StopReason = chunk.StopReason
+	}
+	if chunk.Model != "" {
+		a.resp.Model = chunk.Model
+	}
+	if chunk.ResponseModel != "" {
+		a.resp.ResponseModel = chunk.ResponseModel
+	}
+	if chunk.ResponseID != "" {
+		a.resp.ResponseID = chunk.ResponseID
+	}
+	if chunk.ErrorMessage != "" {
+		a.resp.ErrorMessage = chunk.ErrorMessage
 	}
 }
 

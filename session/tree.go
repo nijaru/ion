@@ -1,134 +1,446 @@
 package session
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"slices"
+	"sync"
+	"time"
+
+	"github.com/nijaru/ion/llm"
 )
 
-var errSessionTreeCycle = errors.New("session tree: cycle detected")
+// EntryType discriminates the kind of session tree entry.
+type EntryType string
 
-// LeafMovedData records a durable active-branch movement.
-type LeafMovedData struct {
-	TargetEventID string `json:"target_event_id,omitzero"`
+const (
+	EntryMessage             EntryType = "message"
+	EntryCompaction          EntryType = "compaction"
+	EntryBranchSummary       EntryType = "branch_summary"
+	EntryThinkingLevelChange EntryType = "thinking_level_change"
+	EntryModelChange         EntryType = "model_change"
+	EntryActiveToolsChange   EntryType = "active_tools_change"
+	EntryLabel               EntryType = "label"
+	EntrySessionInfo         EntryType = "session_info"
+	EntryLeaf                EntryType = "leaf"
+	EntryCustom              EntryType = "custom"
+)
+
+// TreeEntry is a single node in the session tree.
+// Each entry has a unique ID, an optional parent, a type, and a timestamp.
+// Type-specific data is stored in the union fields.
+type TreeEntry struct {
+	ID        string    `json:"id"`
+	ParentID  *string   `json:"parent_id,omitempty"`
+	Type      EntryType `json:"type"`
+	Timestamp time.Time `json:"timestamp"`
+
+	// Union: exactly one of these is set based on Type.
+	Message       *llm.Message        `json:"message,omitempty"`
+	Compaction    *CompactionData       `json:"compaction,omitempty"`
+	BranchSummary *TreeBranchSummaryData `json:"branch_summary,omitempty"`
+	ThinkingLevel *ThinkingLevelData  `json:"thinking_level,omitempty"`
+	ModelChange   *ModelChangeData    `json:"model_change,omitempty"`
+	ToolsChange   *ActiveToolsData    `json:"tools_change,omitempty"`
+	Label         *LabelData          `json:"label,omitempty"`
+	SessionInfo   *SessionInfoData    `json:"session_info,omitempty"`
+	Custom        *CustomData         `json:"custom,omitempty"`
 }
 
-// NewLeafMovedEvent records that the active session branch moved to targetEventID.
-// An empty target moves the active branch to the session root.
-func NewLeafMovedEvent(sessionID string, targetEventID string) Event {
-	return NewEvent(sessionID, LeafMoved, LeafMovedData{TargetEventID: targetEventID})
+// CompactionData holds summarized context.
+type CompactionData struct {
+	Summary          string `json:"summary"`
+	FirstKeptEntryID string `json:"first_kept_entry_id"`
+	TokensBefore     int    `json:"tokens_before"`
 }
 
-// LeafMovedData decodes the payload of a leaf-moved event.
-func (e Event) LeafMovedData() (LeafMovedData, bool, error) {
-	return decodeEventData[LeafMovedData](e, LeafMoved, "leaf moved")
+// TreeBranchSummaryData holds a summary of a branch in the tree.
+type TreeBranchSummaryData struct {
+	FromID  string `json:"from_id"`
+	Summary string `json:"summary"`
 }
 
-// LeafID returns the event id at the tip of the active branch.
-func (s *Session) LeafID() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.activeLeafID
+// ThinkingLevelData records a thinking level change.
+type ThinkingLevelData struct {
+	Level string `json:"level"`
 }
 
-// MoveLeaf records a durable active-branch movement. An empty eventID moves the
-// active branch to the session root.
-func (s *Session) MoveLeaf(ctx context.Context, eventID string) error {
-	return s.Append(ctx, NewLeafMovedEvent(s.ID(), eventID))
+// ModelChangeData records a model change.
+type ModelChangeData struct {
+	Provider string `json:"provider"`
+	ModelID  string `json:"model_id"`
 }
 
-// ActiveEvents returns the durable events on the active branch.
-func (s *Session) ActiveEvents() ([]Event, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.activeEventsLocked()
+// ActiveToolsData records a change in active tools.
+type ActiveToolsData struct {
+	ToolNames []string `json:"tool_names"`
 }
 
-// BranchEvents returns the durable events on the branch ending at eventID. An
-// empty eventID returns an empty root branch.
-func (s *Session) BranchEvents(eventID string) ([]Event, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.branchEventsLocked(eventID)
+// LabelData attaches a label to another entry.
+type LabelData struct {
+	TargetID string `json:"target_id"`
+	Label    string `json:"label"`
 }
 
-func (s *Session) activeEventsLocked() ([]Event, error) {
-	return s.branchEventsLocked(s.activeLeafID)
+// SessionInfoData holds session metadata.
+type SessionInfoData struct {
+	Name string `json:"name,omitempty"`
 }
 
-func (s *Session) branchEventsLocked(eventID string) ([]Event, error) {
-	if eventID == "" {
-		return nil, nil
+// CustomData holds extensible custom entry data.
+type CustomData struct {
+	CustomType string `json:"custom_type"`
+	Data       any    `json:"data,omitempty"`
+}
+
+// NewMessageEntry creates a message entry.
+func NewMessageEntry(id string, parentID *string, msg llm.Message) *TreeEntry {
+	return &TreeEntry{
+		ID:        id,
+		ParentID:  parentID,
+		Type:      EntryMessage,
+		Timestamp: time.Now(),
+		Message:   &msg,
+	}
+}
+
+// NewCompactionEntry creates a compaction entry.
+func NewCompactionEntry(id string, parentID *string, summary string, firstKeptID string, tokensBefore int) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryCompaction,
+		Timestamp: time.Now(),
+		Compaction: &CompactionData{
+			Summary:          summary,
+			FirstKeptEntryID: firstKeptID,
+			TokensBefore:     tokensBefore,
+		},
+	}
+}
+
+// NewBranchSummaryEntry creates a branch summary entry.
+func NewBranchSummaryEntry(id string, parentID *string, fromID string, summary string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryBranchSummary,
+		Timestamp: time.Now(),
+		BranchSummary: &TreeBranchSummaryData{
+			FromID:  fromID,
+			Summary: summary,
+		},
+	}
+}
+
+// NewModelChangeEntry creates a model change entry.
+func NewModelChangeEntry(id string, parentID *string, provider string, modelID string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryModelChange,
+		Timestamp: time.Now(),
+		ModelChange: &ModelChangeData{
+			Provider: provider,
+			ModelID:  modelID,
+		},
+	}
+}
+
+// NewCustomEntry creates a custom entry.
+func NewCustomEntry(id string, parentID *string, customType string, data any) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryCustom,
+		Timestamp: time.Now(),
+		Custom: &CustomData{
+			CustomType: customType,
+			Data:       data,
+		},
+	}
+}
+
+// Validate checks that the entry has exactly one type-specific field set.
+func (e *TreeEntry) Validate() error {
+	count := 0
+	if e.Message != nil {
+		count++
+	}
+	if e.Compaction != nil {
+		count++
+	}
+	if e.BranchSummary != nil {
+		count++
+	}
+	if e.ThinkingLevel != nil {
+		count++
+	}
+	if e.ModelChange != nil {
+		count++
+	}
+	if e.ToolsChange != nil {
+		count++
+	}
+	if e.Label != nil {
+		count++
+	}
+	if e.SessionInfo != nil {
+		count++
+	}
+	if e.Custom != nil {
+		count++
+	}
+	if count != 1 {
+		return fmt.Errorf("entry %s: expected exactly 1 type-specific field, got %d", e.ID, count)
+	}
+	return nil
+}
+
+// TreeStore is an in-memory tree of session entries.
+// Thread-safe for concurrent access.
+type TreeStore struct {
+	entries  map[string]*TreeEntry
+	children map[string][]string // parentId -> child ids
+	leafID   string              // active leaf
+	mu       sync.RWMutex
+}
+
+// NewTreeStore creates an empty tree store.
+func NewTreeStore() *TreeStore {
+	return &TreeStore{
+		entries:  make(map[string]*TreeEntry),
+		children: make(map[string][]string),
+	}
+}
+
+// Add inserts an entry into the tree.
+// Returns an error if the entry ID already exists or parent doesn't exist.
+func (t *TreeStore) Add(entry *TreeEntry) error {
+	if err := entry.Validate(); err != nil {
+		return err
 	}
 
-	byID := make(map[string]Event, len(s.events))
-	for _, e := range s.events {
-		byID[e.ID.String()] = e
-	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	seen := make(map[string]struct{})
-	events := make([]Event, 0, len(s.events))
-	for currentID := eventID; currentID != ""; {
-		if _, ok := seen[currentID]; ok {
-			return nil, errSessionTreeCycle
+	if _, exists := t.entries[entry.ID]; exists {
+		return fmt.Errorf("entry %s already exists", entry.ID)
+	}
+	if entry.ParentID != nil {
+		if _, exists := t.entries[*entry.ParentID]; !exists {
+			return fmt.Errorf("parent %s does not exist", *entry.ParentID)
 		}
-		seen[currentID] = struct{}{}
+	}
 
-		e, ok := byID[currentID]
+	t.entries[entry.ID] = entry
+	if entry.ParentID != nil {
+		t.children[*entry.ParentID] = append(t.children[*entry.ParentID], entry.ID)
+	}
+	return nil
+}
+
+// Get returns an entry by ID.
+func (t *TreeStore) Get(id string) (*TreeEntry, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	entry, ok := t.entries[id]
+	return entry, ok
+}
+
+// Children returns the child entry IDs of the given parent.
+func (t *TreeStore) Children(id string) []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return append([]string{}, t.children[id]...)
+}
+
+// Parent returns the parent entry, or nil if the entry is root.
+func (t *TreeStore) Parent(id string) *TreeEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	entry, ok := t.entries[id]
+	if !ok || entry.ParentID == nil {
+		return nil
+	}
+	return t.entries[*entry.ParentID]
+}
+
+// Leaf returns the active leaf entry.
+func (t *TreeStore) Leaf() *TreeEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.leafID == "" {
+		return nil
+	}
+	return t.entries[t.leafID]
+}
+
+// SetLeaf sets the active leaf to the given entry ID.
+func (t *TreeStore) SetLeaf(id string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.entries[id]; !exists {
+		return fmt.Errorf("entry %s does not exist", id)
+	}
+	t.leafID = id
+	return nil
+}
+
+// LeafID returns the active leaf entry ID.
+func (t *TreeStore) LeafID() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.leafID
+}
+
+// Len returns the number of entries in the tree.
+func (t *TreeStore) Len() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.entries)
+}
+
+// Ancestors returns the path from the given entry to the root (inclusive).
+func (t *TreeStore) Ancestors(id string) []*TreeEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	var result []*TreeEntry
+	current := id
+	for current != "" {
+		entry, ok := t.entries[current]
 		if !ok {
-			return nil, fmt.Errorf("session tree: event %q not found", currentID)
+			break
 		}
-		if e.Type != LeafMoved {
-			events = append(events, e)
+		result = append(result, entry)
+		if entry.ParentID == nil {
+			break
 		}
-		currentID = e.ParentID
+		current = *entry.ParentID
 	}
-	slices.Reverse(events)
-	return events, nil
+	return result
 }
 
-func (s *Session) validateTreeEventLocked(e *Event) error {
-	if e.ParentID != "" && !s.hasEventLocked(e.ParentID) {
-		return fmt.Errorf("session tree: parent event %q not found", e.ParentID)
+// Path returns the entries on the path from ancestor to descendant.
+func (t *TreeStore) Path(fromID, toID string) ([]*TreeEntry, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	// Build ancestor set from 'to' to root
+	ancestorSet := make(map[string]bool)
+	var toPath []*TreeEntry
+	current := toID
+	for current != "" {
+		ancestorSet[current] = true
+		entry, ok := t.entries[current]
+		if !ok {
+			break
+		}
+		toPath = append(toPath, entry)
+		if entry.ParentID == nil {
+			break
+		}
+		current = *entry.ParentID
 	}
-	if e.Type != LeafMoved {
+
+	if !ancestorSet[fromID] {
+		return nil, fmt.Errorf("entry %s is not an ancestor of %s", fromID, toID)
+	}
+
+	// Find the sub-path from 'from' to 'to'
+	// toPath is [leaf, ..., root], we want [root, ..., leaf]
+	var result []*TreeEntry
+	found := false
+	for i := len(toPath) - 1; i >= 0; i-- {
+		if toPath[i].ID == fromID {
+			found = true
+		}
+		if found {
+			result = append(result, toPath[i])
+		}
+	}
+	return result, nil
+}
+
+// Messages returns all message entries on the path from root to the active leaf.
+func (t *TreeStore) Messages() []llm.Message {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.leafID == "" {
 		return nil
 	}
-	data, _, err := e.LeafMovedData()
-	if err != nil {
-		return err
+
+	var messages []llm.Message
+	current := t.leafID
+	for current != "" {
+		entry, ok := t.entries[current]
+		if !ok {
+			break
+		}
+		if entry.Type == EntryMessage && entry.Message != nil {
+			messages = append(messages, *entry.Message)
+		}
+		if entry.ParentID == nil {
+			break
+		}
+		current = *entry.ParentID
 	}
-	if data.TargetEventID == "" {
-		return nil
+
+	// Reverse to get root-first order
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
 	}
-	if data.TargetEventID == e.ID.String() {
-		return fmt.Errorf("session tree: leaf target cannot be the leaf event itself")
+	return messages
+}
+
+// Entries returns all entries in the tree (for serialization).
+func (t *TreeStore) Entries() []*TreeEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	result := make([]*TreeEntry, 0, len(t.entries))
+	for _, entry := range t.entries {
+		result = append(result, entry)
 	}
-	if !s.hasEventLocked(data.TargetEventID) {
-		return fmt.Errorf("session tree: target event %q not found", data.TargetEventID)
+	return result
+}
+
+// Remove deletes an entry and all its descendants from the tree.
+func (t *TreeStore) Remove(id string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	entry, exists := t.entries[id]
+	if !exists {
+		return fmt.Errorf("entry %s does not exist", id)
 	}
+
+	// Remove from parent's children list
+	if entry.ParentID != nil {
+		siblings := t.children[*entry.ParentID]
+		for i, childID := range siblings {
+			if childID == id {
+				t.children[*entry.ParentID] = append(siblings[:i], siblings[i+1:]...)
+				break
+			}
+		}
+	}
+
+	// Recursively remove descendants
+	t.removeRecursive(id)
 	return nil
 }
 
-func (s *Session) hasEventLocked(eventID string) bool {
-	for _, event := range s.events {
-		if event.ID.String() == eventID {
-			return true
-		}
+func (t *TreeStore) removeRecursive(id string) {
+	// Remove children first
+	for _, childID := range t.children[id] {
+		t.removeRecursive(childID)
 	}
-	return false
-}
+	delete(t.children, id)
+	delete(t.entries, id)
 
-func (s *Session) advanceActiveLeafLocked(e Event) error {
-	if e.Type != LeafMoved {
-		s.activeLeafID = e.ID.String()
-		return nil
+	// Update leaf if needed
+	if t.leafID == id {
+		t.leafID = ""
 	}
-	data, _, err := e.LeafMovedData()
-	if err != nil {
-		return err
-	}
-	s.activeLeafID = data.TargetEventID
-	return nil
 }

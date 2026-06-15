@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -122,4 +123,100 @@ func (s *Session) removeSubscriber(target *subscriber) {
 			return
 		}
 	}
+}
+
+// validateTreeEventLocked checks that the event's parent exists in the event log.
+func (s *Session) validateTreeEventLocked(e *Event) error {
+	if e.ParentID == "" {
+		return nil
+	}
+	for _, existing := range s.events {
+		if existing.ID.String() == e.ParentID {
+			return nil
+		}
+	}
+	return fmt.Errorf("parent event %s does not exist", e.ParentID)
+}
+
+// advanceActiveLeafLocked updates the active leaf after appending an event.
+func (s *Session) advanceActiveLeafLocked(e Event) error {
+	if e.ParentID != "" && e.ParentID != s.activeLeafID {
+		// Event is on a different branch - this is a leaf move
+		if err := s.validateLeafMoveLocked(e.ParentID); err != nil {
+			return err
+		}
+	}
+	s.activeLeafID = e.ID.String()
+	return nil
+}
+
+// validateLeafMoveLocked checks that the target is a valid leaf move.
+func (s *Session) validateLeafMoveLocked(targetID string) error {
+	// Any existing event can be a leaf target
+	for _, existing := range s.events {
+		if existing.ID.String() == targetID {
+			return nil
+		}
+	}
+	return fmt.Errorf("target event %s does not exist", targetID)
+}
+
+// activeEventsLocked returns events on the active path from root to leaf.
+func (s *Session) activeEventsLocked() ([]Event, error) {
+	if s.activeLeafID == "" {
+		return nil, nil
+	}
+
+	// Build parent map
+	parentMap := make(map[string]string)
+	for _, e := range s.events {
+		if e.ParentID != "" {
+			parentMap[e.ID.String()] = e.ParentID
+		}
+	}
+
+	// Trace path from leaf to root
+	var path []string
+	current := s.activeLeafID
+	for current != "" {
+		path = append(path, current)
+		current = parentMap[current]
+	}
+
+	// Reverse to get root-first order
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	// Collect events in path order
+	result := make([]Event, 0, len(path))
+	for _, id := range path {
+		for _, e := range s.events {
+			if e.ID.String() == id {
+				result = append(result, e)
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+// MoveLeaf moves the active leaf to the specified event ID.
+func (s *Session) MoveLeaf(ctx context.Context, targetID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.validateLeafMoveLocked(targetID); err != nil {
+		return err
+	}
+
+	s.activeLeafID = targetID
+	return nil
+}
+
+// ActiveLeafID returns the current active leaf event ID.
+func (s *Session) ActiveLeafID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeLeafID
 }

@@ -978,7 +978,7 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	)
 
 	releaseFirst := make(chan struct{})
-	secondRan := make(chan struct{})
+	secondFinalized := make(chan struct{}) // closed after afterToolCall for second completes
 
 	agent := New(AgentConfig{
 		Model:             llm.Model{ID: "model"},
@@ -998,7 +998,6 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 				<-releaseFirst
 				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("first done")}}, nil
 			case "second":
-				close(secondRan)
 				return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("second done")}}, nil
 			default:
 				return AgentToolResult{}, errors.New("unexpected tool")
@@ -1014,6 +1013,9 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 			mu.Lock()
 			finalized = append(finalized, hookCtx.ToolCall.Name)
 			mu.Unlock()
+			if hookCtx.ToolCall.Name == "second" {
+				close(secondFinalized)
+			}
 			return AfterToolCallResult{}
 		},
 		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
@@ -1033,9 +1035,9 @@ func TestAgentParallelPreflightSequentialAndFinalizeConcurrent(t *testing.T) {
 	}()
 
 	select {
-	case <-secondRan:
+	case <-secondFinalized:
 	case <-time.After(time.Second):
-		t.Fatal("second parallel tool did not run while first was blocked")
+		t.Fatal("second parallel tool did not finish while first was blocked")
 	}
 
 	// Since AfterToolCall runs concurrently, second tool must have finished and appended to finalized

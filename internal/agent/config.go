@@ -83,6 +83,23 @@ type AgentConfig struct {
 	// This enables streaming tool output to the TUI in real-time.
 	// Default: nil (no streaming).
 	OnToolProgress func(ctx context.Context, toolUseID, toolName string, partialResult any) `json:"-"`
+
+	// Lifecycle hooks (Pi parity)
+	// BeforeAgentStart is called before the agent loop starts processing.
+	// Can modify the prompt or abort the run.
+	// Default: nil (no-op).
+	BeforeAgentStart func(ctx context.Context, hookCtx BeforeAgentStartContext) BeforeAgentStartResult `json:"-"`
+	// BeforeProviderRequest is called before each provider request.
+	// Can modify the request or abort.
+	// Default: nil (no-op).
+	BeforeProviderRequest func(ctx context.Context, hookCtx BeforeProviderRequestContext) BeforeProviderRequestResult `json:"-"`
+	// BeforeProviderPayload is called before sending the payload to the provider.
+	// Can modify the payload.
+	// Default: nil (no-op).
+	BeforeProviderPayload func(ctx context.Context, hookCtx BeforeProviderPayloadContext) BeforeProviderPayloadResult `json:"-"`
+	// AfterProviderResponse is called after receiving the response from the provider.
+	// Default: nil (no-op).
+	AfterProviderResponse func(ctx context.Context, hookCtx AfterProviderResponseContext) `json:"-"`
 }
 
 // DefaultConvertToLlm filters AgentMessages to standard LLM roles.

@@ -46,7 +46,12 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 			}
 		case "message_delta":
 			delta := event.AsMessageDelta()
-			return s.updateUsage(usageFromMessageDelta(delta.Usage)), true
+			chunk := s.updateUsage(usageFromMessageDelta(delta.Usage))
+			// Set stop reason from message delta (Pi parity)
+			if delta.Delta.StopReason != "" {
+				chunk.StopReason = mapStopReason(string(delta.Delta.StopReason))
+			}
+			return chunk, true
 		case "content_block_stop":
 			s.activeCall = nil
 		case "message_stop":
@@ -58,6 +63,20 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 		s.err = err
 	}
 	return nil, false
+}
+
+// mapStopReason maps Anthropic stop reasons to Ion's StopReason type.
+func mapStopReason(reason string) llm.StopReason {
+	switch reason {
+	case "end_turn":
+		return llm.StopReasonStop
+	case "max_tokens":
+		return llm.StopReasonLength
+	case "tool_use":
+		return llm.StopReasonToolUse
+	default:
+		return llm.StopReasonStop
+	}
 }
 
 func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk {

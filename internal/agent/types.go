@@ -120,6 +120,72 @@ type AgentLoopTurnUpdate struct {
 // PrepareNextTurnContext extends ShouldStopAfterTurnContext with additional context.
 type PrepareNextTurnContext = ShouldStopAfterTurnContext
 
+// Lifecycle hook contexts (Pi parity)
+
+// BeforeAgentStartContext is passed to the beforeAgentStart hook.
+type BeforeAgentStartContext struct {
+	// Prompt is the user's prompt.
+	Prompt string
+	// SystemPrompt is the system prompt.
+	SystemPrompt string
+	// Model is the model that will be used.
+	Model llm.Model
+	// Tools are the tools that will be available.
+	Tools []AgentTool
+}
+
+// BeforeAgentStartResult is returned from the beforeAgentStart hook.
+type BeforeAgentStartResult struct {
+	// Abort indicates whether to abort the run.
+	Abort bool `json:"abort,omitempty"`
+	// Reason is the reason for aborting.
+	Reason string `json:"reason,omitempty"`
+}
+
+// BeforeProviderRequestContext is passed to the beforeProviderRequest hook.
+type BeforeProviderRequestContext struct {
+	// Model is the model being used.
+	Model llm.Model
+	// SessionID is the current session ID.
+	SessionID string
+	// Messages are the messages that will be sent.
+	Messages []llm.Message
+	// Tools are the tools that will be sent.
+	Tools []*llm.Spec
+}
+
+// BeforeProviderRequestResult is returned from the beforeProviderRequest hook.
+type BeforeProviderRequestResult struct {
+	// Abort indicates whether to abort the request.
+	Abort bool `json:"abort,omitempty"`
+	// Reason is the reason for aborting.
+	Reason string `json:"reason,omitempty"`
+}
+
+// BeforeProviderPayloadContext is passed to the beforeProviderPayload hook.
+type BeforeProviderPayloadContext struct {
+	// Model is the model being used.
+	Model llm.Model
+	// Payload is the request payload.
+	Payload *llm.Request
+}
+
+// BeforeProviderPayloadResult is returned from the beforeProviderPayload hook.
+type BeforeProviderPayloadResult struct {
+	// Modified indicates whether the payload was modified.
+	Modified bool `json:"modified,omitempty"`
+}
+
+// AfterProviderResponseContext is passed to the afterProviderResponse hook.
+type AfterProviderResponseContext struct {
+	// Model is the model that was used.
+	Model llm.Model
+	// Response is the response from the provider.
+	Response *llm.Response
+	// Error is any error that occurred.
+	Error error
+}
+
 // ThinkingLevel controls the depth of internal reasoning.
 type ThinkingLevel string
 
@@ -148,6 +214,8 @@ type AgentMessage struct {
 	Name string `json:"name,omitempty"`
 	// IsError indicates whether this is an error result.
 	IsError bool `json:"is_error,omitempty"`
+	// Details is additional structured data (from tool results).
+	Details any `json:"details,omitempty"`
 	// Usage is the LLM's reported token usage for this message.
 	InputTokens  int     `json:"input_tokens,omitzero"`
 	OutputTokens int     `json:"output_tokens,omitzero"`
@@ -155,6 +223,16 @@ type AgentMessage struct {
 	Cost         float64 `json:"cost,omitzero"`
 	// Timestamp is when the message was created.
 	Timestamp int64 `json:"timestamp,omitempty"`
+
+	// Assistant message metadata (Pi parity).
+	// These fields track provider/model context for diagnostics and multi-provider sessions.
+	API           string          `json:"api,omitzero"`
+	Provider      string          `json:"provider,omitzero"`
+	Model         string          `json:"model,omitzero"`
+	ResponseModel string          `json:"response_model,omitzero"` // Concrete model when different from requested
+	ResponseID    string          `json:"response_id,omitzero"`    // Provider-specific response identifier
+	StopReason    llm.StopReason  `json:"stop_reason,omitzero"`
+	ErrorMessage  string          `json:"error_message,omitzero"`
 }
 
 // TextContent returns the concatenated text from all text parts.
@@ -245,6 +323,10 @@ type AgentState struct {
 	SystemPrompt string `json:"system_prompt"`
 	// IsStreaming indicates whether the agent is currently streaming.
 	IsStreaming bool `json:"is_streaming"`
+	// StreamingMessage is the partial assistant message during streaming.
+	StreamingMessage *AgentMessage `json:"streaming_message,omitempty"`
+	// PendingToolCalls is the set of tool call IDs currently executing.
+	PendingToolCalls map[string]bool `json:"pending_tool_calls,omitempty"`
 	// ErrorMessage is the last error message, if any.
 	ErrorMessage string `json:"error_message,omitempty"`
 }

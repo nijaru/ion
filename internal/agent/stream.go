@@ -58,6 +58,28 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		ReasoningEffort: string(l.config.ThinkingLevel),
 	}
 
+	// Call beforeProviderRequest hook (Pi parity)
+	if l.config.BeforeProviderRequest != nil {
+		hookCtx := BeforeProviderRequestContext{
+			Model:    l.state.Model,
+			Messages: llmMessages,
+			Tools:    toolSpecs,
+		}
+		result := l.config.BeforeProviderRequest(ctx, hookCtx)
+		if result.Abort {
+			return AgentMessage{}, llm.Message{}, fmt.Errorf("aborted by beforeProviderRequest hook: %s", result.Reason)
+		}
+	}
+
+	// Call beforeProviderPayload hook (Pi parity)
+	if l.config.BeforeProviderPayload != nil {
+		hookCtx := BeforeProviderPayloadContext{
+			Model:   l.state.Model,
+			Payload: req,
+		}
+		l.config.BeforeProviderPayload(ctx, hookCtx)
+	}
+
 	// Stream the response
 	stream, err := l.config.StreamFn(ctx, req)
 	if err != nil {
@@ -68,8 +90,20 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	// Collect the response using StreamAccumulator.
 	// Events are emitted for streaming; accumulation handles blocks + flat fields.
 	var acc llm.StreamAccumulator
-	// Maintain partial message state (Pi model: message_update carries full state)
-	partialMessage := session.AgentMessage{}
+
+	// Pi parity: push a partial assistant message to context.messages at stream start,
+	// then update it in-place for each chunk. This makes the partial message visible
+	// to hooks that read context.messages during streaming.
+	partialIdx := len(l.state.Messages)
+	l.state.Messages = append(l.state.Messages, AgentMessage{Role: "assistant"})
+	partialSessionMsg := session.AgentMessage{}
+
+	// Track content block state for structured events (Pi parity)
+	var currentBlockType string // "text", "thinking", "tool_call"
+	var currentBlockIndex int
+	var currentToolID string
+	var currentToolName string
+	var toolCallStarted bool
 
 	for {
 		chunk, ok := stream.Next()
@@ -77,33 +111,142 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 			break
 		}
 
-		// Maintain partial message state (Pi model: message_update carries full state)
+		// Detect content block transitions for structured events
+		if chunk.Block != nil {
+			switch b := chunk.Block.(type) {
+			case llm.TextBlock:
+				if currentBlockType != "text" {
+					if currentBlockType != "" {
+						emitBlockEnd(l, currentBlockType, currentBlockIndex, currentToolID, currentToolName, partialSessionMsg)
+					}
+					currentBlockType = "text"
+					currentBlockIndex = len(acc.Response().Blocks)
+					l.emit(session.TextStart{
+						Base:         session.BaseNow(),
+						ContentIndex: currentBlockIndex,
+						Partial:      partialSessionMsg,
+					})
+				}
+			case llm.ThinkingBlock:
+				if currentBlockType != "thinking" {
+					if currentBlockType != "" {
+						emitBlockEnd(l, currentBlockType, currentBlockIndex, currentToolID, currentToolName, partialSessionMsg)
+					}
+					currentBlockType = "thinking"
+					currentBlockIndex = len(acc.Response().Blocks)
+					l.emit(session.ThinkingStart{
+						Base:         session.BaseNow(),
+						ContentIndex: currentBlockIndex,
+						Partial:      partialSessionMsg,
+					})
+				}
+			case llm.ToolCallBlock:
+				if currentBlockType != "tool_call" || b.ID != currentToolID {
+					if currentBlockType != "" {
+						emitBlockEnd(l, currentBlockType, currentBlockIndex, currentToolID, currentToolName, partialSessionMsg)
+					}
+					currentBlockType = "tool_call"
+					currentBlockIndex = len(acc.Response().Blocks)
+					currentToolID = b.ID
+					currentToolName = b.Name
+					toolCallStarted = false
+				}
+				if !toolCallStarted {
+					l.emit(session.ToolCallBlockStart{
+						Base:         session.BaseNow(),
+						ContentIndex: currentBlockIndex,
+						ToolUseID:    b.ID,
+						ToolName:     b.Name,
+						Partial:      partialSessionMsg,
+					})
+					toolCallStarted = true
+				}
+			}
+		}
+
+		// Emit structured deltas + backward-compatible MessageUpdate
 		if chunk.Content != "" {
-			partialMessage.Message += chunk.Content
+			partialSessionMsg.Message += chunk.Content
+			l.emit(session.TextDelta{
+				Base:         session.BaseNow(),
+				ContentIndex: currentBlockIndex,
+				Delta:        chunk.Content,
+				Partial:      partialSessionMsg,
+			})
+			// Backward-compatible MessageUpdate
 			l.emit(session.MessageUpdate{
 				Base:      session.BaseNow(),
-				Message:   partialMessage,
+				Message:   partialSessionMsg,
 				Delta:     chunk.Content,
 				BlockType: "text",
 			})
 		}
 		if chunk.Reasoning != "" {
-			partialMessage.Reasoning += chunk.Reasoning
+			partialSessionMsg.Reasoning += chunk.Reasoning
+			l.emit(session.ThinkingDelta{
+				Base:         session.BaseNow(),
+				ContentIndex: currentBlockIndex,
+				Delta:        chunk.Reasoning,
+				Partial:      partialSessionMsg,
+			})
+			// Backward-compatible MessageUpdate
 			l.emit(session.MessageUpdate{
 				Base:      session.BaseNow(),
-				Message:   partialMessage,
+				Message:   partialSessionMsg,
 				Delta:     chunk.Reasoning,
 				BlockType: "thinking",
 			})
 		}
+		for _, call := range chunk.Calls {
+			l.emit(session.ToolCallBlockDelta{
+				Base:         session.BaseNow(),
+				ContentIndex: currentBlockIndex,
+				ToolUseID:    call.ID,
+				Delta:        call.Function.Arguments,
+				Partial:      partialSessionMsg,
+			})
+		}
 		acc.Add(chunk)
+
+		// Update the partial message in-place in context.messages (Pi parity)
+		resp := acc.Response()
+		l.state.Messages[partialIdx] = AgentMessage{
+			Role:         "assistant",
+			Parts:        respParts(resp),
+			InputTokens:  usageValue(&resp.Usage, "input"),
+			OutputTokens: usageValue(&resp.Usage, "output"),
+			TotalTokens:  usageValue(&resp.Usage, "total"),
+			Cost:         usageValueF(&resp.Usage),
+		}
+	}
+
+	// Emit final block end
+	if currentBlockType != "" {
+		emitBlockEnd(l, currentBlockType, currentBlockIndex, currentToolID, currentToolName, partialSessionMsg)
 	}
 
 	if err := stream.Err(); err != nil {
+		// Remove the partial message on error
+		l.state.Messages = l.state.Messages[:partialIdx]
+		// Call afterProviderResponse hook on error (Pi parity)
+		if l.config.AfterProviderResponse != nil {
+			l.config.AfterProviderResponse(ctx, AfterProviderResponseContext{
+				Model: l.state.Model,
+				Error: err,
+			})
+		}
 		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
 	}
 
 	resp := acc.Response()
+
+	// Call afterProviderResponse hook on success (Pi parity)
+	if l.config.AfterProviderResponse != nil {
+		l.config.AfterProviderResponse(ctx, AfterProviderResponseContext{
+			Model:    l.state.Model,
+			Response: &resp,
+		})
+	}
 	var calls []AgentToolCall
 	for _, call := range resp.ToolCalls() {
 		calls = append(calls, AgentToolCall{
@@ -122,6 +265,8 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		TotalTokens:  usageValue(&resp.Usage, "total"),
 		Cost:         usageValueF(&resp.Usage),
 	}
+	// Replace the partial message with the final message
+	l.state.Messages[partialIdx] = message
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.Blocks = resp.GetContentBlocks()
 	return message, llmMessage, nil
@@ -175,4 +320,32 @@ func respParts(resp llm.Response) []llm.ContentPart {
 		}
 	}
 	return parts
+}
+
+// emitBlockEnd emits the appropriate end event for a content block.
+func emitBlockEnd(l *AgentLoop, blockType string, index int, toolID, toolName string, partial session.AgentMessage) {
+	switch blockType {
+	case "text":
+		l.emit(session.TextEnd{
+			Base:         session.BaseNow(),
+			ContentIndex: index,
+			Content:      partial.Message,
+			Partial:      partial,
+		})
+	case "thinking":
+		l.emit(session.ThinkingEnd{
+			Base:         session.BaseNow(),
+			ContentIndex: index,
+			Content:      partial.Reasoning,
+			Partial:      partial,
+		})
+	case "tool_call":
+		l.emit(session.ToolCallBlockEnd{
+			Base:         session.BaseNow(),
+			ContentIndex: index,
+			ToolUseID:    toolID,
+			ToolName:     toolName,
+			Partial:      partial,
+		})
+	}
 }

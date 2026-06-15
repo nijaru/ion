@@ -47,6 +47,11 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 			Reasoning: choice.Delta.ReasoningContent,
 		}
 
+		// Set stop reason from finish reason (Pi parity)
+		if choice.FinishReason != "" {
+			chunk.StopReason = mapFinishReason(string(choice.FinishReason))
+		}
+
 		// Set typed block for text/reasoning (one block per chunk).
 		// Tool calls use the flat Calls path — they need one block per call,
 		// which the accumulator handles via addCall/upsert in Response().
@@ -99,4 +104,20 @@ func (s *OpenAIStream) Err() error {
 func (s *OpenAIStream) Close() error {
 	s.stream.Close()
 	return nil
+}
+
+// mapFinishReason maps OpenAI finish reasons to Ion's StopReason type.
+func mapFinishReason(reason string) llm.StopReason {
+	switch reason {
+	case "stop":
+		return llm.StopReasonStop
+	case "length":
+		return llm.StopReasonLength
+	case "tool_calls", "function_call":
+		return llm.StopReasonToolUse
+	case "content_filter":
+		return llm.StopReasonError
+	default:
+		return llm.StopReasonStop
+	}
 }

@@ -54,6 +54,20 @@ func NewAgentLoop(config AgentConfig, state AgentState, emit func(session.AgentE
 func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
 	l.emit(session.AgentStart{Base: session.BaseNow()})
 
+	// Call beforeAgentStart hook (Pi parity)
+	if l.config.BeforeAgentStart != nil {
+		hookCtx := BeforeAgentStartContext{
+			Prompt:       prompts[0].TextContent(),
+			SystemPrompt: l.state.SystemPrompt,
+			Model:        l.state.Model,
+			Tools:        l.state.Tools,
+		}
+		result := l.config.BeforeAgentStart(ctx, hookCtx)
+		if result.Abort {
+			return nil, fmt.Errorf("aborted by beforeAgentStart hook: %s", result.Reason)
+		}
+	}
+
 	// Append prompts to state
 	l.state.Messages = append(l.state.Messages, prompts...)
 
@@ -193,8 +207,7 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				},
 			})
 
-			// Add assistant message to state
-			l.state.Messages = append(l.state.Messages, message)
+			// Note: streamAssistantResponse already added the message to l.state.Messages
 			newMessages = append(newMessages, message)
 
 			if err := l.writeModelMessage(ctx, llmMessage); err != nil {

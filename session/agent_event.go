@@ -71,6 +71,116 @@ type MessageUpdate struct {
 func (e MessageUpdate) isAgentEvent() {}
 func (e MessageUpdate) EventType() EventType { return MessageUpdated }
 
+// TextStart fires when a text content block starts streaming.
+// Pi equivalent: text_start with contentIndex.
+type TextStart struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e TextStart) isAgentEvent() {}
+func (e TextStart) EventType() EventType { return MessageUpdated }
+
+// TextDelta fires for each text chunk during streaming.
+// Pi equivalent: text_delta with contentIndex and delta.
+type TextDelta struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Delta        string        `json:"delta"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e TextDelta) isAgentEvent() {}
+func (e TextDelta) EventType() EventType { return MessageUpdated }
+
+// TextEnd fires when a text content block finishes.
+// Pi equivalent: text_end with contentIndex and content.
+type TextEnd struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Content      string        `json:"content"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e TextEnd) isAgentEvent() {}
+func (e TextEnd) EventType() EventType { return MessageUpdated }
+
+// ThinkingStart fires when a thinking content block starts streaming.
+// Pi equivalent: thinking_start with contentIndex.
+type ThinkingStart struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ThinkingStart) isAgentEvent() {}
+func (e ThinkingStart) EventType() EventType { return MessageUpdated }
+
+// ThinkingDelta fires for each thinking chunk during streaming.
+// Pi equivalent: thinking_delta with contentIndex and delta.
+type ThinkingDelta struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Delta        string        `json:"delta"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ThinkingDelta) isAgentEvent() {}
+func (e ThinkingDelta) EventType() EventType { return MessageUpdated }
+
+// ThinkingEnd fires when a thinking content block finishes.
+// Pi equivalent: thinking_end with contentIndex and content.
+type ThinkingEnd struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	Content      string        `json:"content"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ThinkingEnd) isAgentEvent() {}
+func (e ThinkingEnd) EventType() EventType { return MessageUpdated }
+
+// ToolCallBlockStart fires when a tool call content block starts streaming.
+// Pi equivalent: toolcall_start with contentIndex.
+type ToolCallBlockStart struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	ToolUseID    string        `json:"tool_use_id"`
+	ToolName     string        `json:"tool_name"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ToolCallBlockStart) isAgentEvent() {}
+func (e ToolCallBlockStart) EventType() EventType { return ToolStarted }
+
+// ToolCallBlockDelta fires for each tool call argument chunk during streaming.
+// Pi equivalent: toolcall_delta with contentIndex and delta.
+type ToolCallBlockDelta struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	ToolUseID    string        `json:"tool_use_id"`
+	Delta        string        `json:"delta"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ToolCallBlockDelta) isAgentEvent() {}
+func (e ToolCallBlockDelta) EventType() EventType { return ToolUpdated }
+
+// ToolCallBlockEnd fires when a tool call content block finishes.
+// Pi equivalent: toolcall_end with contentIndex and toolCall.
+type ToolCallBlockEnd struct {
+	Base
+	ContentIndex int           `json:"content_index"`
+	ToolUseID    string        `json:"tool_use_id"`
+	ToolName     string        `json:"tool_name"`
+	Args         string        `json:"args"`
+	Partial      AgentMessage  `json:"partial"`
+}
+
+func (e ToolCallBlockEnd) isAgentEvent() {}
+func (e ToolCallBlockEnd) EventType() EventType { return ToolCompleted }
+
 // UserMessage fires when a user message is committed to the durable session.
 type UserMessage struct {
 	Base

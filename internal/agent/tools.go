@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -109,14 +110,14 @@ func (l *AgentLoop) executeToolCallsParallel(
 		}
 	}
 
-	// 2. Execute and finalize prepared tools concurrently
+	// 2. Execute prepared tools concurrently
 	type execResult struct {
 		idx     int
 		result  AgentToolResult
 		isError bool
 	}
 	var wg sync.WaitGroup
-	results := make(chan execResult, len(toolCalls))
+	results := make([]execResult, len(toolCalls))
 	for i, prep := range prepared {
 		if prep.Kind != "prepared" {
 			continue
@@ -126,21 +127,24 @@ func (l *AgentLoop) executeToolCallsParallel(
 			defer wg.Done()
 			result, isError := l.executePreparedToolCall(ctx, p)
 			result, isError = l.finalizeExecutedToolCall(ctx, assistantLLM, p, result, isError)
-			results <- execResult{idx, result, isError}
+			results[idx] = execResult{idx, result, isError}
 		}(i, prep)
 	}
 	wg.Wait()
-	close(results)
 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, false, err
 	}
 
-	// 3. Create messages and emit results in completion order
-	for r := range results {
-		prep := prepared[r.idx]
+	// 3. Create messages and emit results in INPUT ORDER (Pi parity).
+	// Pi uses Promise.all which preserves order, then iterates sequentially.
+	for i, prep := range prepared {
+		if prep.Kind != "prepared" {
+			continue
+		}
+		r := results[i]
 		message := createToolResultMessage(prep.ToolCall, r.result, r.isError)
-		finalized[r.idx] = toolCallResult{
+		finalized[i] = toolCallResult{
 			toolCall:  prep.ToolCall,
 			result:    r.result,
 			message:   message,
@@ -148,8 +152,7 @@ func (l *AgentLoop) executeToolCallsParallel(
 			isError:   r.isError,
 			terminate: r.result.Terminate,
 		}
-		// Emit tool result as it completes (Pi parity: tool_execution_end in completion order)
-		l.emitToolResult(finalized[r.idx])
+		l.emitToolResult(finalized[i])
 	}
 
 	return toolMessages(finalized)
@@ -226,6 +229,14 @@ func (l *AgentLoop) prepareToolCall(
 			Args:             toolCall.Arguments,
 			Context:          l.buildContext(),
 		})
+		// Pi parity: check cancellation after beforeToolCall hook.
+		if ctx.Err() != nil {
+			return toolPreparation{
+				Kind:    "immediate",
+				Result:  errorToolResult("Operation aborted"),
+				IsError: true,
+			}
+		}
 		if before.Block {
 			reason := before.Reason
 			if strings.TrimSpace(reason) == "" {
@@ -324,11 +335,13 @@ func (l *AgentLoop) finalizeExecutedToolCall(
 func createToolResultMessage(toolCall AgentToolCall, result AgentToolResult, isError bool) AgentMessage {
 	parts := normalizeContentParts(result.Content)
 	return AgentMessage{
-		Role:   "tool",
-		Parts:  parts,
-		ToolID: toolCall.ID,
-		Name:   toolCall.Name,
-		IsError: isError,
+		Role:      "tool",
+		Parts:     parts,
+		ToolID:    toolCall.ID,
+		Name:      toolCall.Name,
+		IsError:   isError,
+		Details:   result.Details,
+		Timestamp: time.Now().UnixMilli(),
 	}
 }
 
@@ -361,12 +374,13 @@ func (l *AgentLoop) findTool(name string) (AgentTool, bool) {
 func toolMessages(finalized []toolCallResult) ([]AgentMessage, []llm.Message, bool, error) {
 	messages := make([]AgentMessage, 0, len(finalized))
 	llmMessages := make([]llm.Message, 0, len(finalized))
-	terminate := false
+	// Pi parity: terminate requires ALL tools to agree (every), not ANY.
+	terminate := len(finalized) > 0
 	for _, result := range finalized {
 		messages = append(messages, result.message)
 		llmMessages = append(llmMessages, result.llm)
-		if result.terminate {
-			terminate = true
+		if !result.terminate {
+			terminate = false
 		}
 	}
 	return messages, llmMessages, terminate, nil

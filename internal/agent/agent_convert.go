@@ -108,10 +108,18 @@ func agentMessageFromLLM(message llm.Message) AgentMessage {
 		role = "tool"
 	}
 	result := AgentMessage{
-		Role:   role,
-		Parts:  normalizeContentParts(message.Parts),
-		Name:   message.Name,
-		ToolID: message.ToolID,
+		Role:      role,
+		Parts:     normalizeContentParts(message.Parts),
+		Name:      message.Name,
+		ToolID:    message.ToolID,
+		StopReason: message.StopReason,
+		API:        message.API,
+		Provider:   message.Provider,
+		Model:      message.Model,
+		ResponseModel: message.ResponseModel,
+		ResponseID: message.ResponseID,
+		ErrorMessage: message.ErrorMessage,
+		Timestamp:  message.Timestamp,
 	}
 	// Build Parts from Blocks if Parts is empty.
 	if len(result.Parts) == 0 && len(message.Blocks) > 0 {

@@ -83,6 +83,17 @@ type Message struct {
 	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
 	// Call GetContentBlocks() to get a unified view.
 	Blocks ContentBlocks `json:"blocks,omitzero"`
+
+	// Assistant message metadata (Pi parity).
+	// These fields are set on assistant messages to track provider/model context.
+	API           string     `json:"api,omitzero"`
+	Provider      string     `json:"provider,omitzero"`
+	Model         string     `json:"model,omitzero"`
+	ResponseModel string     `json:"response_model,omitzero"` // Concrete model when different from requested (e.g. OpenRouter auto)
+	ResponseID    string     `json:"response_id,omitzero"`    // Provider-specific response identifier
+	StopReason    StopReason `json:"stop_reason,omitzero"`
+	ErrorMessage  string     `json:"error_message,omitzero"`
+	Timestamp     int64      `json:"timestamp,omitzero"` // Unix timestamp in milliseconds
 }
 
 // TextMessage creates a message whose text is also represented as a structured
@@ -324,6 +335,14 @@ type Response struct {
 	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
 	Blocks     ContentBlocks `json:"blocks,omitzero"`
 	StopReason StopReason     `json:"stop_reason,omitzero"`
+
+	// Assistant message metadata (Pi parity).
+	API           string `json:"api,omitzero"`
+	Provider      string `json:"provider,omitzero"`
+	Model         string `json:"model,omitzero"`
+	ResponseModel string `json:"response_model,omitzero"` // Concrete model when different from requested
+	ResponseID    string `json:"response_id,omitzero"`    // Provider-specific response identifier
+	ErrorMessage  string `json:"error_message,omitzero"`
 }
 
 // GetContentBlocks returns structured content blocks, converting from flat
@@ -418,10 +437,35 @@ type Usage struct {
 // Model describes an LLM model exposed by a provider.
 type Model struct {
 	ID            string        `json:"id"                       toml:"id"`
+	Name          string        `json:"name,omitzero"            toml:"name,omitzero"`          // Human-readable name
+	API           string        `json:"api,omitzero"             toml:"api,omitzero"`           // API type (anthropic-messages, openai-completions, etc.)
+	Provider      string        `json:"provider,omitzero"        toml:"provider,omitzero"`      // Provider slug (anthropic, openai, etc.)
+	BaseURL       string        `json:"base_url,omitzero"        toml:"base_url,omitzero"`      // Base URL for API calls
+	Reasoning     bool          `json:"reasoning,omitzero"       toml:"reasoning,omitzero"`     // Whether model supports reasoning
+	Input         []string      `json:"input,omitzero"           toml:"input,omitzero"`         // Input types (text, image)
+	MaxTokens     int           `json:"max_tokens,omitzero"      toml:"max_tokens,omitzero"`    // Maximum output tokens
+	Headers       map[string]string `json:"headers,omitzero"      toml:"headers,omitzero"`       // Custom headers for API calls
 	ContextWindow int           `json:"context_window,omitzero"  toml:"context_window,omitzero"`
 	CostPer1MIn   float64       `json:"cost_per_1m_in,omitzero"  toml:"cost_per_1m_in,omitzero"`
 	CostPer1MOut  float64       `json:"cost_per_1m_out,omitzero" toml:"cost_per_1m_out,omitzero"`
+	CostPer1MCacheRead  float64 `json:"cost_per_1m_cache_read,omitzero"  toml:"cost_per_1m_cache_read,omitzero"`
+	CostPer1MCacheWrite float64 `json:"cost_per_1m_cache_write,omitzero" toml:"cost_per_1m_cache_write,omitzero"`
 	Capabilities  *Capabilities `json:"capabilities,omitzero"    toml:"capabilities,omitzero"`
+	// ThinkingLevelMap maps thinking levels to provider-specific values.
+	// Missing keys use provider defaults. Empty map means no thinking support.
+	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero" toml:"thinking_level_map,omitzero"`
+	// Compat holds compatibility flags for OpenAI-compatible APIs.
+	Compat *CompatFlags `json:"compat,omitzero" toml:"compat,omitzero"`
+}
+
+// CompatFlags holds compatibility overrides for OpenAI-compatible APIs.
+type CompatFlags struct {
+	SupportsStore           *bool `json:"supports_store,omitzero"            toml:"supports_store,omitzero"`
+	SupportsDeveloperRole   *bool `json:"supports_developer_role,omitzero"   toml:"supports_developer_role,omitzero"`
+	SupportsReasoningEffort *bool `json:"supports_reasoning_effort,omitzero" toml:"supports_reasoning_effort,omitzero"`
+	SupportsStreamOptions   *bool `json:"supports_stream_options,omitzero"   toml:"supports_stream_options,omitzero"`
+	SupportsVision          *bool `json:"supports_vision,omitzero"           toml:"supports_vision,omitzero"`
+	SupportsToolChoice      *bool `json:"supports_tool_choice,omitzero"      toml:"supports_tool_choice,omitzero"`
 }
 
 // ProviderConfig captures the shared endpoint/auth/model metadata used by
