@@ -419,6 +419,38 @@ func (t *TreeStore) Messages() []llm.Message {
 	return messages
 }
 
+// CommonAncestor returns the ID of the nearest common ancestor of two entries.
+func (t *TreeStore) CommonAncestor(id1, id2 string) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	// Build ancestor set for id1
+	ancestors := make(map[string]bool)
+	current := id1
+	for current != "" {
+		ancestors[current] = true
+		entry, ok := t.entries[current]
+		if !ok || entry.ParentID == nil {
+			break
+		}
+		current = *entry.ParentID
+	}
+
+	// Walk id2's ancestors to find first common
+	current = id2
+	for current != "" {
+		if ancestors[current] {
+			return current
+		}
+		entry, ok := t.entries[current]
+		if !ok || entry.ParentID == nil {
+			break
+		}
+		current = *entry.ParentID
+	}
+	return ""
+}
+
 // Entries returns all entries in the tree (for serialization).
 func (t *TreeStore) Entries() []*TreeEntry {
 	t.mu.RLock()

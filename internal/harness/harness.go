@@ -220,6 +220,33 @@ func (h *Harness) SetTools(tools []agent.AgentTool) {
 	h.agent.SetTools(tools)
 }
 
+// NavigateTree moves the active leaf to the target entry.
+// If summarize is true, a branch summary is generated for entries between old leaf and target.
+func (h *Harness) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {
+	// Dispatch before_tree_navigation hook
+	result, err := h.hooks.Dispatch(ctx, HookEvent{
+		Type: BeforeTreeNavigation,
+		Payload: map[string]any{"targetID": targetID, "summarize": summarize},
+	})
+	if err != nil {
+		return "", fmt.Errorf("before_tree_navigation hook: %w", err)
+	}
+	if result.Abort {
+		return "", fmt.Errorf("aborted by before_tree_navigation hook: %s", result.Reason)
+	}
+
+	// Navigate tree
+	newLeafID, err := h.agent.NavigateTree(ctx, targetID, summarize)
+
+	// Dispatch after_tree_navigation hook
+	h.hooks.Dispatch(ctx, HookEvent{
+		Type: AfterTreeNavigation,
+		Payload: map[string]any{"targetID": targetID, "newLeafID": newLeafID, "error": err},
+	})
+
+	return newLeafID, err
+}
+
 // Abort aborts the current run.
 func (h *Harness) Abort() {
 	h.agent.Abort()

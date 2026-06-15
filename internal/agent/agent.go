@@ -797,6 +797,65 @@ func (a *Agent) Compact(ctx context.Context) (bool, error) {
 	return a.runCompaction(ctx)
 }
 
+// NavigateTree moves the active leaf to the target entry.
+// If summarize is true and entries exist between old leaf and target,
+// a branch summary is generated.
+func (a *Agent) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.closed {
+		return "", fmt.Errorf("session is closed")
+	}
+
+	oldLeafID := a.tree.LeafID()
+	if oldLeafID == targetID {
+		return "", nil
+	}
+
+	// Get target entry
+	target, ok := a.tree.Get(targetID)
+	if !ok {
+		return "", fmt.Errorf("entry %s not found", targetID)
+	}
+
+	// Collect entries between old leaf and target for branch summary
+	var entriesToSummarize []session.TreeEntry
+	if summarize && oldLeafID != "" {
+		// Get path from common ancestor to old leaf
+		commonAncestor := a.tree.CommonAncestor(oldLeafID, targetID)
+		if commonAncestor != "" {
+			// Collect entries from old leaf to common ancestor
+			current := oldLeafID
+			for current != commonAncestor {
+				if entry, ok := a.tree.Get(current); ok {
+					entriesToSummarize = append(entriesToSummarize, *entry)
+				}
+				if entry, ok := a.tree.Get(current); ok && entry.ParentID != nil {
+					current = *entry.ParentID
+				} else {
+					break
+				}
+			}
+		}
+	}
+
+	// Move leaf to target
+	newLeafID := targetID
+	if target.Type == session.EntryMessage && target.Message != nil && target.Message.Role == "user" {
+		// If target is a user message, move to its parent (skip the user message)
+		if target.ParentID != nil {
+			newLeafID = *target.ParentID
+		}
+	}
+
+	if err := a.tree.SetLeaf(newLeafID); err != nil {
+		return "", fmt.Errorf("set leaf: %w", err)
+	}
+
+	return newLeafID, nil
+}
+
 // runCompaction runs the compaction function if available.
 // Caller must NOT hold a.mu (blocking call).
 func (a *Agent) runCompaction(ctx context.Context) (bool, error) {
