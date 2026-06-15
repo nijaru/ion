@@ -214,3 +214,18 @@ func (h *Harness) SetModel(model llm.Model) {
 func (h *Harness) SetThinkingLevel(level agent.ThinkingLevel) {
 	h.agent.SetThinkingLevel(level)
 }
+
+// SetTools updates the agent's available tools.
+func (h *Harness) SetTools(tools []agent.AgentTool) {
+	h.agent.SetTools(tools)
+}
+
+// Abort aborts the current run.
+func (h *Harness) Abort() {
+	h.agent.Abort()
+}
+
+// WaitForIdle waits for the agent to reach an idle state.
+func (h *Harness) WaitForIdle(ctx context.Context) error {
+	return h.agent.WaitForIdle(ctx)
+}
