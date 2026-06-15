@@ -244,7 +244,7 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				},
 			})
 
-			// Note: streamAssistantResponse already added the message to l.state.Messages
+			// Note: streamAssistantResponse already added the message to the tree store
 			newMessages = append(newMessages, message)
 
 			if err := l.writeModelMessage(ctx, llmMessage); err != nil {
