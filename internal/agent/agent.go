@@ -233,6 +233,20 @@ func (a *Agent) SetTools(tools []AgentTool) {
 	a.state.Tools = tools
 }
 
+// SetSteeringMode sets the steering queue mode.
+func (a *Agent) SetSteeringMode(mode QueueMode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.SteeringMode = mode
+}
+
+// SetFollowUpMode sets the follow-up queue mode.
+func (a *Agent) SetFollowUpMode(mode QueueMode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.FollowUpMode = mode
+}
+
 // SetActiveTools sets the active tool names.
 // Only tools with these names will be available for the next turn.
 func (a *Agent) SetActiveTools(toolNames []string) {

@@ -226,6 +226,16 @@ func (h *Harness) SetActiveTools(toolNames []string) {
 	h.agent.SetActiveTools(toolNames)
 }
 
+// SetSteeringMode sets the steering queue mode.
+func (h *Harness) SetSteeringMode(mode agent.QueueMode) {
+	h.agent.SetSteeringMode(mode)
+}
+
+// SetFollowUpMode sets the follow-up queue mode.
+func (h *Harness) SetFollowUpMode(mode agent.QueueMode) {
+	h.agent.SetFollowUpMode(mode)
+}
+
 // NavigateTree moves the active leaf to the target entry.
 // If summarize is true, a branch summary is generated for entries between old leaf and target.
 func (h *Harness) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {

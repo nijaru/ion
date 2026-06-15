@@ -30,6 +30,8 @@ type AgentConfig struct {
 	// Execution settings
 	ToolExecutionMode ToolExecutionMode `json:"tool_execution_mode"`
 	QueueMode         QueueMode         `json:"queue_mode"`
+	SteeringMode      QueueMode         `json:"steering_mode,omitzero"`
+	FollowUpMode      QueueMode         `json:"follow_up_mode,omitzero"`
 	MaxTokens         int               `json:"max_tokens"`
 	Temperature       float64           `json:"temperature"`
 
