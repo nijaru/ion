@@ -247,6 +247,25 @@ func (a *Agent) SetFollowUpMode(mode QueueMode) {
 	a.config.FollowUpMode = mode
 }
 
+// AppendMessage appends a message to the conversation history.
+func (a *Agent) AppendMessage(msg AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Add to tree store
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+		parentID = &id
+	}
+	llmMsg := agentMessageToLLM(msg)
+	entryID := a.tree.NextID()
+	entry := session.NewMessageEntry(entryID, parentID, llmMsg)
+	if err := a.tree.Add(entry); err == nil {
+		a.tree.SetLeaf(entryID)
+	}
+}
+
 // SetActiveTools sets the active tool names.
 // Only tools with these names will be available for the next turn.
 func (a *Agent) SetActiveTools(toolNames []string) {
