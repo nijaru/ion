@@ -109,7 +109,7 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	}
 
 	// Verify event sequence
-	var gotAgentStart, gotUserMessage, gotTurnStarted, gotThinkingDelta, gotAgentDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnEnd bool
+	var gotAgentStart, gotUserMessage, gotTurnStarted, gotThinkingDelta, gotTextDelta, gotAgentMessage, gotToolCallStarted, gotToolResult, gotTurnEnd bool
 
 	for _, ev := range events {
 		switch msg := ev.(type) {
@@ -123,8 +123,8 @@ func TestAgentEventsAndLoop(t *testing.T) {
 			gotTurnStarted = true
 		case session.ThinkingDelta:
 			gotThinkingDelta = true
-		case session.AgentDelta:
-			gotAgentDelta = true
+		case session.TextDelta:
+			gotTextDelta = true
 		case session.AgentMessage:
 			gotAgentMessage = true
 		case session.ToolCallStart:
@@ -148,8 +148,8 @@ func TestAgentEventsAndLoop(t *testing.T) {
 	if !gotThinkingDelta {
 		t.Error("missing ThinkingDelta event")
 	}
-	if !gotAgentDelta {
-		t.Error("missing AgentDelta event")
+	if !gotTextDelta {
+		t.Error("missing TextDelta event")
 	}
 	if !gotAgentMessage {
 		t.Error("missing AgentMessage event")

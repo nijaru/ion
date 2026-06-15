@@ -242,10 +242,9 @@ func (a *Agent) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.
 		}
 
 		if chunk.Content != "" {
-			a.emit(session.AgentDelta{
-				Base:      session.BaseNow(),
-				Delta:     chunk.Content,
-				BlockType: "text",
+			a.emit(session.TextDelta{
+				Base:  session.BaseNow(),
+				Delta: chunk.Content,
 			})
 		}
 		if chunk.Reasoning != "" {
