@@ -35,6 +35,8 @@ const (
 	OnError HookType = "on_error"
 	// OnAbort fires on abort.
 	OnAbort HookType = "on_abort"
+	// OnModelUpdate fires when the model changes.
+	OnModelUpdate HookType = "model_update"
 )
 
 // HookEvent is a lifecycle event dispatched to hooks.

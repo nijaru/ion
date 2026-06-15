@@ -208,6 +208,12 @@ func (h *Harness) Compact(ctx context.Context) (bool, error) {
 // SetModel updates the agent's model.
 func (h *Harness) SetModel(model llm.Model) {
 	h.agent.SetModel(model)
+
+	// Dispatch model_update hook
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnModelUpdate,
+		Payload: map[string]any{"model": model},
+	})
 }
 
 // SetThinkingLevel updates the agent's thinking level.
