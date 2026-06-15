@@ -266,6 +266,14 @@ func (a *Agent) AppendMessage(msg AgentMessage) {
 	}
 }
 
+// NextTurn queues a message for the next turn.
+// The message will be injected at the start of the next turn.
+func (a *Agent) NextTurn(msg AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.followUpQueue = append(a.followUpQueue, msg.TextContent())
+}
+
 // SetActiveTools sets the active tool names.
 // Only tools with these names will be available for the next turn.
 func (a *Agent) SetActiveTools(toolNames []string) {
