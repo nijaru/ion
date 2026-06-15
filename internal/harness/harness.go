@@ -25,6 +25,8 @@ import (
 type Harness struct {
 	agent      *agent.Agent
 	hooks      *HookDispatcher
+	router     *ModelRouter
+	extensions *ExtensionManager
 	mu         sync.RWMutex
 }
 
@@ -34,6 +36,10 @@ type Config struct {
 	Agent *agent.Agent
 	// Hooks are optional lifecycle hooks.
 	Hooks *HookDispatcher
+	// Router is optional model router.
+	Router *ModelRouter
+	// Extensions is optional extension manager.
+	Extensions *ExtensionManager
 }
 
 // New creates a new harness.
@@ -41,9 +47,17 @@ func New(cfg Config) *Harness {
 	if cfg.Hooks == nil {
 		cfg.Hooks = NewHookDispatcher()
 	}
+	if cfg.Router == nil {
+		cfg.Router = NewModelRouter()
+	}
+	if cfg.Extensions == nil {
+		cfg.Extensions = NewExtensionManager()
+	}
 	return &Harness{
-		agent: cfg.Agent,
-		hooks: cfg.Hooks,
+		agent:      cfg.Agent,
+		hooks:      cfg.Hooks,
+		router:     cfg.Router,
+		extensions: cfg.Extensions,
 	}
 }
 
@@ -55,6 +69,16 @@ func (h *Harness) Agent() *agent.Agent {
 // Hooks returns the hook dispatcher.
 func (h *Harness) Hooks() *HookDispatcher {
 	return h.hooks
+}
+
+// Router returns the model router.
+func (h *Harness) Router() *ModelRouter {
+	return h.router
+}
+
+// Extensions returns the extension manager.
+func (h *Harness) Extensions() *ExtensionManager {
+	return h.extensions
 }
 
 // Run starts the agent loop with the given prompt messages.
