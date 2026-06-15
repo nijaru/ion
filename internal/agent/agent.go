@@ -239,6 +239,18 @@ func (a *Agent) SetModel(model llm.Model) {
 	defer a.mu.Unlock()
 	a.state.Model = model
 	a.config.Model = model
+
+	// Add model change entry to tree
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+		parentID = &id
+	}
+	entryID := a.tree.NextID()
+	entry := session.NewModelChangeEntry(entryID, parentID, model.Provider, model.ID)
+	if err := a.tree.Add(entry); err == nil {
+		a.tree.SetLeaf(entryID)
+	}
 }
 
 // SetThinkingLevel sets the thinking level for the agent.
