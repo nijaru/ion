@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -33,7 +32,6 @@ type AgentLoop struct {
 	state  AgentState
 	emit   func(session.AgentEvent)
 	tree   *session.TreeStore
-	treeMu sync.RWMutex
 }
 
 // NewAgentLoop creates a new pure agent loop.
@@ -78,17 +76,15 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 	}
 
 	// Add prompts to tree store
-	l.treeMu.Lock()
 	var parentID *string
 	if leaf := l.tree.Leaf(); leaf != nil {
 		id := leaf.ID
-			parentID = &id
+		parentID = &id
 	}
 	for _, prompt := range prompts {
 		llmMsg := agentMessageToLLM(prompt)
-		parentID = l.addToTreeLocked(parentID, &llmMsg)
+		parentID = l.addToTree(parentID, &llmMsg)
 	}
-	l.treeMu.Unlock()
 
 	// Emit message events for prompts and persist them
 	var newMessages []AgentMessage
@@ -112,9 +108,8 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 	return newMessages, err
 }
 
-// addToTreeLocked adds a message to the tree store and returns the new entry's ID.
-// Must be called with treeMu held.
-func (l *AgentLoop) addToTreeLocked(parentID *string, msg *llm.Message) *string {
+// addToTree adds a message to the tree store and returns the new entry's ID.
+func (l *AgentLoop) addToTree(parentID *string, msg *llm.Message) *string {
 	id := fmt.Sprintf("%d", l.tree.Len()+1)
 	entry := session.NewMessageEntry(id, parentID, *msg)
 	if err := l.tree.Add(entry); err != nil {
@@ -194,17 +189,15 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			// Inject pending messages
 			if len(pendingMessages) > 0 {
 				// Add to tree store
-				l.treeMu.Lock()
 				var parentID *string
 				if leaf := l.tree.Leaf(); leaf != nil {
 					id := leaf.ID
-						parentID = &id
-					}
+					parentID = &id
+				}
 				for _, msg := range pendingMessages {
 					llmMsg := agentMessageToLLM(msg)
-					parentID = l.addToTreeLocked(parentID, &llmMsg)
+					parentID = l.addToTree(parentID, &llmMsg)
 				}
-				l.treeMu.Unlock()
 				newMessages = append(newMessages, pendingMessages...)
 				for _, msg := range pendingMessages {
 					if msg.Role == "user" {
@@ -294,17 +287,15 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				}
 
 				// Add tool results to tree store
-				l.treeMu.Lock()
 				var parentID *string
 				if leaf := l.tree.Leaf(); leaf != nil {
 					id := leaf.ID
-						parentID = &id
-					}
+					parentID = &id
+				}
 				for _, result := range toolResults {
 					llmMsg := agentMessageToLLM(result)
-					parentID = l.addToTreeLocked(parentID, &llmMsg)
+					parentID = l.addToTree(parentID, &llmMsg)
 				}
-				l.treeMu.Unlock()
 				newMessages = append(newMessages, toolResults...)
 				for _, result := range llmToolResults {
 					if err := l.writeModelMessage(ctx, result); err != nil {
@@ -403,14 +394,12 @@ func (l *AgentLoop) applyTurnUpdate(update *AgentLoopTurnUpdate) {
 	}
 	if update.Context != nil {
 		// Update tree store with new messages
-		l.treeMu.Lock()
 		l.tree = session.NewTreeStore()
 		var parentID *string
 		for _, msg := range update.Context.Messages {
 			llmMsg := agentMessageToLLM(msg)
-			parentID = l.addToTreeLocked(parentID, &llmMsg)
+			parentID = l.addToTree(parentID, &llmMsg)
 		}
-		l.treeMu.Unlock()
 		l.state.SystemPrompt = update.Context.SystemPrompt
 		l.state.Tools = append([]AgentTool(nil), update.Context.Tools...)
 		l.state.Model = update.Context.Model

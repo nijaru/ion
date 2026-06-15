@@ -299,6 +299,22 @@ func (t *TreeStore) Len() int {
 	return len(t.entries)
 }
 
+// Update replaces the message content of an existing entry.
+// Returns an error if the entry doesn't exist or isn't a message entry.
+func (t *TreeStore) Update(id string, msg llm.Message) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	entry, ok := t.entries[id]
+	if !ok {
+		return fmt.Errorf("entry %s does not exist", id)
+	}
+	if entry.Type != EntryMessage {
+		return fmt.Errorf("entry %s is not a message entry", id)
+	}
+	entry.Message = &msg
+	return nil
+}
+
 // Ancestors returns the path from the given entry to the root (inclusive).
 func (t *TreeStore) Ancestors(id string) []*TreeEntry {
 	t.mu.RLock()

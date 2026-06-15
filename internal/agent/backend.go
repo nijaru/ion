@@ -166,14 +166,12 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Update tree store with compacted messages
-	b.session.treeMu.Lock()
 	b.session.tree = session.NewTreeStore()
 	summaryMsg := llm.Message{Role: "assistant", Content: summary}
 	entryID := "1"
 	entry := session.NewMessageEntry(entryID, nil, summaryMsg)
 	b.session.tree.Add(entry)
 	b.session.tree.SetLeaf(entryID)
-	b.session.treeMu.Unlock()
 	b.session.resetContextTokens()
 	b.session.mu.Unlock()
 

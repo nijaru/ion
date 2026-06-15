@@ -109,18 +109,16 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 
 	// Pi parity: push a partial assistant message to tree store at stream start.
 	// This makes the partial message visible to hooks that read context.messages during streaming.
-	l.treeMu.Lock()
 	var partialParentID *string
 	if leaf := l.tree.Leaf(); leaf != nil {
 		id := leaf.ID
 			partialParentID = &id
-		}
-		partialEntryID := fmt.Sprintf("%d", l.tree.Len()+1)
-		partialEntry := session.NewMessageEntry(partialEntryID, partialParentID, llm.Message{Role: "assistant"})
-		if err := l.tree.Add(partialEntry); err == nil {
-			l.tree.SetLeaf(partialEntryID)
-		}
-	l.treeMu.Unlock()
+	}
+	partialEntryID := fmt.Sprintf("%d", l.tree.Len()+1)
+	partialEntry := session.NewMessageEntry(partialEntryID, partialParentID, llm.Message{Role: "assistant"})
+	if err := l.tree.Add(partialEntry); err == nil {
+		l.tree.SetLeaf(partialEntryID)
+	}
 	partialSessionMsg := session.AgentMessage{}
 
 	// Track content block state for structured events (Pi parity)
@@ -235,18 +233,10 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 
 		// Update the partial message in tree store (Pi parity)
 		resp := acc.Response()
-		l.treeMu.Lock()
-		if entry, ok := l.tree.Get(partialEntryID); ok {
-			llmMsg := llm.Message{
-				Role:    "assistant",
-				Content: resp.Content,
-			}
-			updatedEntry := session.NewMessageEntry(partialEntryID, entry.ParentID, llmMsg)
-			l.tree.Remove(partialEntryID)
-			l.tree.Add(updatedEntry)
-			l.tree.SetLeaf(partialEntryID)
-		}
-		l.treeMu.Unlock()
+		l.tree.Update(partialEntryID, llm.Message{
+			Role:    "assistant",
+			Content: resp.Content,
+		})
 	}
 
 	// Emit final block end
@@ -256,9 +246,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 
 	if err := stream.Err(); err != nil {
 		// Remove the partial message from tree store on error
-		l.treeMu.Lock()
 		l.tree.Remove(partialEntryID)
-		l.treeMu.Unlock()
 		// Call afterProviderResponse hook on error (Pi parity)
 		if l.config.AfterProviderResponse != nil {
 			l.config.AfterProviderResponse(ctx, AfterProviderResponseContext{
@@ -298,15 +286,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	}
 
 	// Update the partial message in tree store with final message
-	l.treeMu.Lock()
-	if entry, ok := l.tree.Get(partialEntryID); ok {
-		llmMsg := agentMessageToLLM(message)
-		updatedEntry := session.NewMessageEntry(partialEntryID, entry.ParentID, llmMsg)
-		l.tree.Remove(partialEntryID)
-		l.tree.Add(updatedEntry)
-		l.tree.SetLeaf(partialEntryID)
-	}
-	l.treeMu.Unlock()
+	l.tree.Update(partialEntryID, agentMessageToLLM(message))
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.Blocks = resp.GetContentBlocks()
 	return message, llmMessage, nil

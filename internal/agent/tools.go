@@ -186,16 +186,14 @@ type toolPreparation struct {
 
 // addToolResultsToTree adds tool result messages to the tree store.
 func (l *AgentLoop) addToolResultsToTree(finalized []toolCallResult) {
-	l.treeMu.Lock()
-	defer l.treeMu.Unlock()
 	var parentID *string
 	if leaf := l.tree.Leaf(); leaf != nil {
 		id := leaf.ID
-			parentID = &id
-		}
+		parentID = &id
+	}
 	for _, res := range finalized {
 		llmMsg := agentMessageToLLM(res.message)
-		parentID = l.addToTreeLocked(parentID, &llmMsg)
+		parentID = l.addToTree(parentID, &llmMsg)
 	}
 }
 

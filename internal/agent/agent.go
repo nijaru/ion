@@ -27,7 +27,6 @@ type Agent struct {
 	listeners []func(session.AgentEvent)
 	mu        sync.RWMutex
 	tree      *session.TreeStore
-	treeMu    sync.RWMutex
 
 	// Session state
 	id            string
@@ -305,10 +304,9 @@ func (a *Agent) ClearAllQueues() {
 	a.emitQueueUpdatedLocked()
 }
 
-// setMessagesLocked replaces messages in the tree store without acquiring the lock.
+// setMessagesLocked replaces messages in the tree store.
 // Caller must hold a.mu.
 func (a *Agent) setMessagesLocked(messages []AgentMessage) {
-	a.treeMu.Lock()
 	a.tree = session.NewTreeStore()
 	var parentID *string
 	for _, msg := range messages {
@@ -321,7 +319,6 @@ func (a *Agent) setMessagesLocked(messages []AgentMessage) {
 			parentID = &id
 		}
 	}
-	a.treeMu.Unlock()
 }
 
 // newLoop creates a new AgentLoop with the current agent state.
@@ -855,18 +852,16 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 	// Commit the user message to tree store synchronously.
 	llmMsg := agentMessageToLLM(userMsg)
-	a.treeMu.Lock()
 	var parentID *string
 	if leaf := a.tree.Leaf(); leaf != nil {
 		id := leaf.ID
-			parentID = &id
-		}
-		entryID := fmt.Sprintf("%d", a.tree.Len()+1)
-		entry := session.NewMessageEntry(entryID, parentID, llmMsg)
-		if err := a.tree.Add(entry); err == nil {
-			a.tree.SetLeaf(entryID)
-		}
-	a.treeMu.Unlock()
+		parentID = &id
+	}
+	entryID := fmt.Sprintf("%d", a.tree.Len()+1)
+	entry := session.NewMessageEntry(entryID, parentID, llmMsg)
+	if err := a.tree.Add(entry); err == nil {
+		a.tree.SetLeaf(entryID)
+	}
 	a.emitLocked(session.UserMessage{
 		Base:    session.BaseNow(),
 		Message: userMsg.TextContent(),
