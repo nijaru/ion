@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -31,6 +32,8 @@ type AgentLoop struct {
 	config AgentConfig
 	state  AgentState
 	emit   func(session.AgentEvent)
+	tree   *session.TreeStore
+	treeMu sync.RWMutex
 }
 
 // NewAgentLoop creates a new pure agent loop.
@@ -39,7 +42,13 @@ func NewAgentLoop(config AgentConfig, state AgentState, emit func(session.AgentE
 		config: config,
 		state:  state,
 		emit:   emit,
+		tree:   session.NewTreeStore(),
 	}
+}
+
+// TreeStore returns the underlying tree store.
+func (l *AgentLoop) TreeStore() *session.TreeStore {
+	return l.tree
 }
 
 // Run starts the agent loop with prompt messages.
@@ -71,6 +80,19 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 	// Append prompts to state
 	l.state.Messages = append(l.state.Messages, prompts...)
 
+	// Add prompts to tree store
+	l.treeMu.Lock()
+	var parentID *string
+	if leaf := l.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+			parentID = &id
+	}
+	for _, prompt := range prompts {
+		llmMsg := agentMessageToLLM(prompt)
+		parentID = l.addToTreeLocked(parentID, &llmMsg)
+	}
+	l.treeMu.Unlock()
+
 	// Emit message events for prompts and persist them
 	var newMessages []AgentMessage
 	for _, prompt := range prompts {
@@ -91,6 +113,19 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 	newMessages = append(newMessages, loopMessages...)
 
 	return newMessages, err
+}
+
+// addToTreeLocked adds a message to the tree store and returns the new entry's ID.
+// Must be called with treeMu held.
+func (l *AgentLoop) addToTreeLocked(parentID *string, msg *llm.Message) *string {
+	id := fmt.Sprintf("%d", l.tree.Len()+1)
+	entry := session.NewMessageEntry(id, parentID, *msg)
+	if err := l.tree.Add(entry); err != nil {
+		// Log error but don't fail - tree is optional
+		return parentID
+	}
+	l.tree.SetLeaf(id)
+	return &id
 }
 
 // Continue continues the agent loop without adding new messages.

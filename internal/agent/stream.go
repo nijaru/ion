@@ -267,6 +267,17 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	}
 	// Replace the partial message with the final message
 	l.state.Messages[partialIdx] = message
+
+	// Add assistant message to tree store
+	l.treeMu.Lock()
+	var parentID *string
+	if leaf := l.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+			parentID = &id
+		}
+		llmMsg := agentMessageToLLM(message)
+		l.addToTreeLocked(parentID, &llmMsg)
+	l.treeMu.Unlock()
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.Blocks = resp.GetContentBlocks()
 	return message, llmMessage, nil

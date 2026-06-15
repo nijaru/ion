@@ -77,6 +77,9 @@ func (l *AgentLoop) executeToolCallsSequential(
 		return nil, nil, false, err
 	}
 
+	// Add tool results to tree store
+	l.addToolResultsToTree(finalized)
+
 	return toolMessages(finalized)
 }
 
@@ -155,6 +158,9 @@ func (l *AgentLoop) executeToolCallsParallel(
 		l.emitToolResult(finalized[i])
 	}
 
+	// Add tool results to tree store
+	l.addToolResultsToTree(finalized)
+
 	return toolMessages(finalized)
 }
 
@@ -176,6 +182,21 @@ type toolPreparation struct {
 	IsError  bool
 	ToolCall AgentToolCall
 	Args     any
+}
+
+// addToolResultsToTree adds tool result messages to the tree store.
+func (l *AgentLoop) addToolResultsToTree(finalized []toolCallResult) {
+	l.treeMu.Lock()
+	defer l.treeMu.Unlock()
+	var parentID *string
+	if leaf := l.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+			parentID = &id
+		}
+	for _, res := range finalized {
+		llmMsg := agentMessageToLLM(res.message)
+		parentID = l.addToTreeLocked(parentID, &llmMsg)
+	}
 }
 
 func (l *AgentLoop) emitToolCallStarted(toolCall AgentToolCall) {
