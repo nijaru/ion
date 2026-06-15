@@ -173,6 +173,60 @@ func NewModelChangeEntry(id string, parentID *string, provider string, modelID s
 	}
 }
 
+// NewLabelEntry creates a label entry.
+func NewLabelEntry(id string, parentID *string, targetID string, label string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryLabel,
+		Timestamp: time.Now(),
+		Label: &LabelData{
+			TargetID: targetID,
+			Label:    label,
+		},
+	}
+}
+
+// NewSessionInfoEntry creates a session info entry.
+func NewSessionInfoEntry(id string, parentID *string, name string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntrySessionInfo,
+		Timestamp: time.Now(),
+		SessionInfo: &SessionInfoData{
+			Name: name,
+		},
+	}
+}
+
+// NewLeafEntry creates a leaf entry.
+func NewLeafEntry(id string, parentID *string, targetID string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryLeaf,
+		Timestamp: time.Now(),
+		Label: &LabelData{
+			TargetID: targetID,
+		},
+	}
+}
+
+// NewCustomMessageEntry creates a custom message entry.
+func NewCustomMessageEntry(id string, parentID *string, customType string, content string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryCustom,
+		Timestamp: time.Now(),
+		Custom: &CustomData{
+			CustomType: customType,
+			Data:       content,
+		},
+	}
+}
+
 // NewCustomEntry creates a custom entry.
 func NewCustomEntry(id string, parentID *string, customType string, data any) *TreeEntry {
 	return &TreeEntry{
