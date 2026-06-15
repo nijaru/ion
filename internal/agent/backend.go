@@ -158,6 +158,12 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		messages = append(messages, llmMessageToAgent(msg))
 	}
 
+	// Record tokens before compaction
+	tokensBefore := b.session.contextTokens
+
+	// Get current leaf ID for firstKeptEntryId
+	firstKeptEntryID := b.session.tree.LeafID()
+
 	// Generate summary using LLM
 	summary, err := b.generateSummary(ctx, messages)
 	if err != nil {
@@ -165,13 +171,20 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("generate summary: %w", err)
 	}
 
-	// Update tree store with compacted messages
-	b.session.tree = session.NewTreeStore()
-	summaryMsg := llm.Message{Role: "assistant", Content: summary}
-	entryID := "1"
-	entry := session.NewMessageEntry(entryID, nil, summaryMsg)
-	b.session.tree.Add(entry)
-	b.session.tree.SetLeaf(entryID)
+	// Add compaction entry to tree (Pi parity: preserve history)
+	compactID := fmt.Sprintf("compact-%d", b.session.tree.Len()+1)
+	compactEntry := session.NewCompactionEntry(
+		compactID,
+		&firstKeptEntryID,
+		summary,
+		firstKeptEntryID,
+		tokensBefore,
+	)
+	if err := b.session.tree.Add(compactEntry); err != nil {
+		b.session.mu.Unlock()
+		return false, fmt.Errorf("add compaction entry: %w", err)
+	}
+	b.session.tree.SetLeaf(compactID)
 	b.session.resetContextTokens()
 	b.session.mu.Unlock()
 

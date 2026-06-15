@@ -791,6 +791,12 @@ func (a *Agent) resetContextTokens() {
 	a.contextTokens = 0
 }
 
+// Compact runs compaction on the session.
+// Returns true if compaction occurred.
+func (a *Agent) Compact(ctx context.Context) (bool, error) {
+	return a.runCompaction(ctx)
+}
+
 // runCompaction runs the compaction function if available.
 // Caller must NOT hold a.mu (blocking call).
 func (a *Agent) runCompaction(ctx context.Context) (bool, error) {

@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -175,4 +176,41 @@ func (h *Harness) SteerTurn(ctx context.Context, text string) (session.SteeringR
 // FollowUpTurn sends a follow-up message to the agent.
 func (h *Harness) FollowUpTurn(ctx context.Context, text string) (session.QueuedInputResult, error) {
 	return h.agent.FollowUpTurn(ctx, text)
+}
+
+// Compact runs compaction on the session.
+// Returns true if compaction occurred.
+func (h *Harness) Compact(ctx context.Context) (bool, error) {
+	// Dispatch before_compaction hook
+	result, err := h.hooks.Dispatch(ctx, HookEvent{
+		Type: BeforeCompaction,
+		Payload: BeforeCompactionPayload{},
+	})
+	if err != nil {
+		return false, fmt.Errorf("before_compaction hook: %w", err)
+	}
+	if result.Abort {
+		return false, fmt.Errorf("aborted by before_compaction hook: %s", result.Reason)
+	}
+
+	// Run compaction
+	compacted, err := h.agent.Compact(ctx)
+
+	// Dispatch after_compaction hook
+	h.hooks.Dispatch(ctx, HookEvent{
+		Type: AfterCompaction,
+		Payload: AfterCompactionPayload{},
+	})
+
+	return compacted, err
+}
+
+// SetModel updates the agent's model.
+func (h *Harness) SetModel(model llm.Model) {
+	h.agent.SetModel(model)
+}
+
+// SetThinkingLevel updates the agent's thinking level.
+func (h *Harness) SetThinkingLevel(level agent.ThinkingLevel) {
+	h.agent.SetThinkingLevel(level)
 }
