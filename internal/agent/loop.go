@@ -110,7 +110,7 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 
 // addToTree adds a message to the tree store and returns the new entry's ID.
 func (l *AgentLoop) addToTree(parentID *string, msg *llm.Message) *string {
-	id := fmt.Sprintf("%d", l.tree.Len()+1)
+	id := l.tree.NextID()
 	entry := session.NewMessageEntry(id, parentID, *msg)
 	if err := l.tree.Add(entry); err != nil {
 		// Log error but don't fail - tree is optional

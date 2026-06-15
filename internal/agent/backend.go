@@ -172,7 +172,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Add compaction entry to tree (Pi parity: preserve history)
-	compactID := fmt.Sprintf("compact-%d", b.session.tree.Len()+1)
+	compactID := b.session.tree.NextID()
 	compactEntry := session.NewCompactionEntry(
 		compactID,
 		&firstKeptEntryID,

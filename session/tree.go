@@ -201,6 +201,7 @@ type TreeStore struct {
 	entries  map[string]*TreeEntry
 	children map[string][]string // parentId -> child ids
 	leafID   string              // active leaf
+	nextID   int64               // monotonically increasing ID counter
 	mu       sync.RWMutex
 }
 
@@ -209,7 +210,16 @@ func NewTreeStore() *TreeStore {
 	return &TreeStore{
 		entries:  make(map[string]*TreeEntry),
 		children: make(map[string][]string),
+		nextID:   1,
 	}
+}
+
+// NextID returns the next unique entry ID and increments the counter.
+// Must be called with mu held or on a single-goroutine path.
+func (t *TreeStore) NextID() string {
+	id := t.nextID
+	t.nextID++
+	return fmt.Sprintf("%d", id)
 }
 
 // Add inserts an entry into the tree.

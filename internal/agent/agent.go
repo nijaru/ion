@@ -311,7 +311,7 @@ func (a *Agent) setMessagesLocked(messages []AgentMessage) {
 	var parentID *string
 	for _, msg := range messages {
 		llmMsg := agentMessageToLLM(msg)
-		entryID := fmt.Sprintf("%d", a.tree.Len()+1)
+		entryID := a.tree.NextID()
 		entry := session.NewMessageEntry(entryID, parentID, llmMsg)
 		if err := a.tree.Add(entry); err == nil {
 			a.tree.SetLeaf(entryID)
@@ -863,7 +863,7 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 		id := leaf.ID
 		parentID = &id
 	}
-	entryID := fmt.Sprintf("%d", a.tree.Len()+1)
+	entryID := a.tree.NextID()
 	entry := session.NewMessageEntry(entryID, parentID, llmMsg)
 	if err := a.tree.Add(entry); err == nil {
 		a.tree.SetLeaf(entryID)

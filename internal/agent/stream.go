@@ -114,7 +114,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		id := leaf.ID
 			partialParentID = &id
 	}
-	partialEntryID := fmt.Sprintf("%d", l.tree.Len()+1)
+	partialEntryID := l.tree.NextID()
 	partialEntry := session.NewMessageEntry(partialEntryID, partialParentID, llm.Message{Role: "assistant"})
 	if err := l.tree.Add(partialEntry); err == nil {
 		l.tree.SetLeaf(partialEntryID)
