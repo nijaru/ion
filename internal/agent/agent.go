@@ -247,6 +247,18 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	defer a.mu.Unlock()
 	a.state.ThinkingLevel = level
 	a.config.ThinkingLevel = level
+
+	// Add thinking level change entry to tree
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+		parentID = &id
+	}
+	entryID := a.tree.NextID()
+	entry := session.NewThinkingLevelChangeEntry(entryID, parentID, string(level))
+	if err := a.tree.Add(entry); err == nil {
+		a.tree.SetLeaf(entryID)
+	}
 }
 
 // SetMessages replaces the provider-visible conversation history.

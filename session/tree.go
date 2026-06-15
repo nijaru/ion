@@ -133,6 +133,19 @@ func NewBranchSummaryEntry(id string, parentID *string, fromID string, summary s
 	}
 }
 
+// NewThinkingLevelChangeEntry creates a thinking level change entry.
+func NewThinkingLevelChangeEntry(id string, parentID *string, level string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryThinkingLevelChange,
+		Timestamp: time.Now(),
+		ThinkingLevel: &ThinkingLevelData{
+			Level: level,
+		},
+	}
+}
+
 // NewModelChangeEntry creates a model change entry.
 func NewModelChangeEntry(id string, parentID *string, provider string, modelID string) *TreeEntry {
 	return &TreeEntry{
