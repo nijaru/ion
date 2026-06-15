@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -365,6 +366,11 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	if err != nil {
 		a.state.ErrorMessage = err.Error()
 	}
+	// Persist tree store
+	if saveErr := a.saveTree(); saveErr != nil {
+		// Log but don't fail — tree persistence is optional
+		slog.Warn("failed to save tree", "error", saveErr)
+	}
 	a.mu.Unlock()
 
 	return newMessages, err
@@ -395,6 +401,11 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	if err != nil {
 		a.state.ErrorMessage = err.Error()
 	}
+	// Persist tree store
+	if saveErr := a.saveTree(); saveErr != nil {
+		// Log but don't fail — tree persistence is optional
+		slog.Warn("failed to save tree", "error", saveErr)
+	}
 	a.mu.Unlock()
 
 	return newMessages, err
@@ -423,13 +434,27 @@ func (a *Agent) Resume(ctx context.Context, sessionID string) error {
 
 	a.id = sessionID
 
-	if history, err := a.loadModelHistoryLocked(ctx); err != nil {
+	// Try to load tree store from file
+	treePath := a.treePath()
+	if tree, err := session.LoadTreeStore(treePath); err == nil {
+		a.tree = tree
+	} else if history, err := a.loadModelHistoryLocked(ctx); err != nil {
 		return err
 	} else if history != nil {
 		a.setMessagesLocked(history)
 	}
 
 	return nil
+}
+
+// treePath returns the path to the tree store file for this session.
+func (a *Agent) treePath() string {
+	return fmt.Sprintf(".pi/sessions/%s/tree.json", a.id)
+}
+
+// saveTree persists the tree store to disk.
+func (a *Agent) saveTree() error {
+	return a.tree.Save(a.treePath())
 }
 
 // CancelTurn interrupts an in-flight turn if the backend supports it.

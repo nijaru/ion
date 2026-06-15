@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -461,6 +463,53 @@ func (t *TreeStore) Entries() []*TreeEntry {
 		result = append(result, entry)
 	}
 	return result
+}
+
+// Save persists the tree store to a JSON file.
+func (t *TreeStore) Save(path string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	data := treeStoreData{
+		Entries:  t.entries,
+		Children: t.children,
+		LeafID:   t.leafID,
+		NextID:   t.nextID,
+	}
+
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal tree: %w", err)
+	}
+
+	return os.WriteFile(path, bytes, 0644)
+}
+
+// LoadTreeStore loads a tree store from a JSON file.
+func LoadTreeStore(path string) (*TreeStore, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read tree: %w", err)
+	}
+
+	var data treeStoreData
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		return nil, fmt.Errorf("unmarshal tree: %w", err)
+	}
+
+	return &TreeStore{
+		entries:  data.Entries,
+		children: data.Children,
+		leafID:   data.LeafID,
+		nextID:   data.NextID,
+	}, nil
+}
+
+type treeStoreData struct {
+	Entries  map[string]*TreeEntry `json:"entries"`
+	Children map[string][]string   `json:"children"`
+	LeafID   string                `json:"leaf_id"`
+	NextID   int64                 `json:"next_id"`
 }
 
 // Remove deletes an entry and all its descendants from the tree.
