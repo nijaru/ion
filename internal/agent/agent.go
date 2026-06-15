@@ -233,6 +233,40 @@ func (a *Agent) SetTools(tools []AgentTool) {
 	a.state.Tools = tools
 }
 
+// SetActiveTools sets the active tool names.
+// Only tools with these names will be available for the next turn.
+func (a *Agent) SetActiveTools(toolNames []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Build name set
+	nameSet := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
+		nameSet[name] = true
+	}
+
+	// Filter tools to only active ones
+	active := make([]AgentTool, 0, len(toolNames))
+	for _, tool := range a.state.Tools {
+		if nameSet[tool.Name] {
+			active = append(active, tool)
+		}
+	}
+	a.state.Tools = active
+
+	// Add active tools change entry to tree
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+		parentID = &id
+	}
+	entryID := a.tree.NextID()
+	entry := session.NewActiveToolsChangeEntry(entryID, parentID, toolNames)
+	if err := a.tree.Add(entry); err == nil {
+		a.tree.SetLeaf(entryID)
+	}
+}
+
 // SetModel sets the model for the agent.
 func (a *Agent) SetModel(model llm.Model) {
 	a.mu.Lock()

@@ -220,6 +220,12 @@ func (h *Harness) SetTools(tools []agent.AgentTool) {
 	h.agent.SetTools(tools)
 }
 
+// SetActiveTools sets the active tool names.
+// Only tools with these names will be available for the next turn.
+func (h *Harness) SetActiveTools(toolNames []string) {
+	h.agent.SetActiveTools(toolNames)
+}
+
 // NavigateTree moves the active leaf to the target entry.
 // If summarize is true, a branch summary is generated for entries between old leaf and target.
 func (h *Harness) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {

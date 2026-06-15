@@ -146,6 +146,19 @@ func NewThinkingLevelChangeEntry(id string, parentID *string, level string) *Tre
 	}
 }
 
+// NewActiveToolsChangeEntry creates an active tools change entry.
+func NewActiveToolsChangeEntry(id string, parentID *string, toolNames []string) *TreeEntry {
+	return &TreeEntry{
+		ID:       id,
+		ParentID: parentID,
+		Type:     EntryActiveToolsChange,
+		Timestamp: time.Now(),
+		ToolsChange: &ActiveToolsData{
+			ToolNames: toolNames,
+		},
+	}
+}
+
 // NewModelChangeEntry creates a model change entry.
 func NewModelChangeEntry(id string, parentID *string, provider string, modelID string) *TreeEntry {
 	return &TreeEntry{
