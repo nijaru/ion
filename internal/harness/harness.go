@@ -254,29 +254,29 @@ func (h *Harness) NextTurn(msg agent.AgentMessage) {
 
 // NavigateTree moves the active leaf to the target entry.
 // If summarize is true, a branch summary is generated for entries between old leaf and target.
-func (h *Harness) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {
+func (h *Harness) NavigateTree(ctx context.Context, targetID string, options agent.NavigateTreeOptions) (agent.NavigateTreeResult, error) {
 	// Dispatch before_tree_navigation hook
 	result, err := h.hooks.Dispatch(ctx, HookEvent{
 		Type: BeforeTreeNavigation,
-		Payload: map[string]any{"targetID": targetID, "summarize": summarize},
+		Payload: map[string]any{"targetID": targetID, "summarize": options.Summarize},
 	})
 	if err != nil {
-		return "", fmt.Errorf("before_tree_navigation hook: %w", err)
+		return agent.NavigateTreeResult{}, fmt.Errorf("before_tree_navigation hook: %w", err)
 	}
 	if result.Abort {
-		return "", fmt.Errorf("aborted by before_tree_navigation hook: %s", result.Reason)
+		return agent.NavigateTreeResult{}, fmt.Errorf("aborted by before_tree_navigation hook: %s", result.Reason)
 	}
 
 	// Navigate tree
-	newLeafID, err := h.agent.NavigateTree(ctx, targetID, summarize)
+	treeResult, err := h.agent.NavigateTree(ctx, targetID, options)
 
 	// Dispatch after_tree_navigation hook
 	h.hooks.Dispatch(ctx, HookEvent{
 		Type: AfterTreeNavigation,
-		Payload: map[string]any{"targetID": targetID, "newLeafID": newLeafID, "error": err},
+		Payload: map[string]any{"targetID": targetID, "newLeafID": treeResult, "error": err},
 	})
 
-	return newLeafID, err
+	return treeResult, err
 }
 
 // Abort aborts the current run.
