@@ -39,13 +39,31 @@ fix it now.
 3. Fix at the right layer; simplify duplicates after.
 
 **Pi-parity work** (features or fixes that match Pi's behavior):
-1. **Understand the invariant** — read Pi's source in `pi-agent-core`
-   (`node_modules/@earendil-works/pi-agent-core/dist/`). Focus on the contract
-   (what must always be true), not the mechanism.
-2. **Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
+
+⚠️ **CRITICAL: We have repeatedly declared parity complete when it wasn't.**
+The checklist lied. Trust only source-level verification.
+
+1. **Read Pi's source FIRST** — before implementing or claiming done, read the
+   actual code in `pi-agent-core/dist/`. The checklist, docs, and memory are
+   not reliable. Only the source code is.
+2. **Verify line-by-line** — for each parity item, find the exact Pi function,
+   read its implementation, then verify Ion's implementation matches the
+   behavior (not just the function signature).
+3. **Check the gap analysis** — `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md` is the
+   authoritative list of known gaps. Update it when you find new gaps or fix
+   existing ones.
+4. **Never trust a checklist that says ✅** — a ✅ means "someone claimed this
+   works." It does NOT mean "verified against Pi source." Assume the checklist
+   is wrong until you verify.
+5. **Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
    channels, try/finally vs defer. Same invariant, different mechanism.
-3. **Implement with clear ownership** — one layer owns each guarantee. Document
+6. **Implement with clear ownership** — one layer owns each guarantee. Document
    it in comments where non-obvious. Verify with tests and race detector.
+7. **Report honestly** — if you can't verify an item, say so. If an item is
+   partially done, say what's missing. Never round up to "done."
+
+Pi source location:
+`/Users/nick/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/`
 
 **Aggressive rewrites.** When a module has duplicate ownership, hidden state,
 or architecture that has repeatedly let bugs through — rewrite it. The boundary
