@@ -227,9 +227,11 @@ func (a *Agent) SetSystemPrompt(prompt string) {
 }
 
 // SetTools sets the available tools for the agent.
+// This updates both AllTools (full list) and Tools (active list).
 func (a *Agent) SetTools(tools []AgentTool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.state.AllTools = tools
 	a.state.Tools = tools
 }
 
@@ -276,6 +278,7 @@ func (a *Agent) NextTurn(msg AgentMessage) {
 
 // SetActiveTools sets the active tool names.
 // Only tools with these names will be available for the next turn.
+// The full tool list (AllTools) is preserved so tools can be re-enabled.
 func (a *Agent) SetActiveTools(toolNames []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -286,9 +289,9 @@ func (a *Agent) SetActiveTools(toolNames []string) {
 		nameSet[name] = true
 	}
 
-	// Filter tools to only active ones
+	// Filter from AllTools (not Tools) to preserve the full list
 	active := make([]AgentTool, 0, len(toolNames))
-	for _, tool := range a.state.Tools {
+	for _, tool := range a.state.AllTools {
 		if nameSet[tool.Name] {
 			active = append(active, tool)
 		}

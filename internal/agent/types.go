@@ -315,7 +315,9 @@ type AgentState struct {
 	Model llm.Model `json:"model"`
 	// ThinkingLevel is the current thinking level.
 	ThinkingLevel ThinkingLevel `json:"thinking_level"`
-	// Tools is the list of available tools.
+	// AllTools is the full list of available tools (never filtered).
+	AllTools []AgentTool `json:"all_tools"`
+	// Tools is the list of active tools (filtered subset of AllTools).
 	Tools []AgentTool `json:"tools"`
 	// SystemPrompt is the system prompt for the agent.
 	SystemPrompt string `json:"system_prompt"`
