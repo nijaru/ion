@@ -933,63 +933,178 @@ func (a *Agent) Compact(ctx context.Context) (bool, error) {
 	return a.runCompaction(ctx)
 }
 
+// NavigateTreeOptions holds options for NavigateTree.
+type NavigateTreeOptions struct {
+	Summarize         bool
+	CustomInstructions string
+	Label             string
+}
+
+// NavigateTreeResult holds the result of NavigateTree.
+type NavigateTreeResult struct {
+	Cancelled    bool
+	EditorText   string
+	SummaryEntry *session.TreeEntry
+}
+
 // NavigateTree moves the active leaf to the target entry.
 // If summarize is true and entries exist between old leaf and target,
 // a branch summary is generated.
-func (a *Agent) NavigateTree(ctx context.Context, targetID string, summarize bool) (string, error) {
+func (a *Agent) NavigateTree(ctx context.Context, targetID string, options NavigateTreeOptions) (NavigateTreeResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.closed {
-		return "", fmt.Errorf("session is closed")
+		return NavigateTreeResult{}, fmt.Errorf("session is closed")
 	}
 
 	oldLeafID := a.tree.LeafID()
 	if oldLeafID == targetID {
-		return "", nil
+		return NavigateTreeResult{Cancelled: false}, nil
 	}
 
 	// Get target entry
 	target, ok := a.tree.Get(targetID)
 	if !ok {
-		return "", fmt.Errorf("entry %s not found", targetID)
+		return NavigateTreeResult{}, fmt.Errorf("entry %s not found", targetID)
 	}
 
 	// Collect entries between old leaf and target for branch summary
+	commonAncestor := a.tree.CommonAncestor(oldLeafID, targetID)
 	var entriesToSummarize []session.TreeEntry
-	if summarize && oldLeafID != "" {
-		// Get path from common ancestor to old leaf
-		commonAncestor := a.tree.CommonAncestor(oldLeafID, targetID)
-		if commonAncestor != "" {
-			// Collect entries from old leaf to common ancestor
-			current := oldLeafID
-			for current != commonAncestor {
-				if entry, ok := a.tree.Get(current); ok {
-					entriesToSummarize = append(entriesToSummarize, *entry)
-				}
-				if entry, ok := a.tree.Get(current); ok && entry.ParentID != nil {
-					current = *entry.ParentID
-				} else {
-					break
+	if oldLeafID != "" && commonAncestor != "" {
+		// Collect entries from old leaf to common ancestor
+		current := oldLeafID
+		for current != commonAncestor {
+			if entry, ok := a.tree.Get(current); ok {
+				entriesToSummarize = append(entriesToSummarize, *entry)
+			}
+			if entry, ok := a.tree.Get(current); ok && entry.ParentID != nil {
+				current = *entry.ParentID
+			} else {
+				break
+			}
+		}
+	}
+
+	// Fire session_before_tree hook
+	if a.config.OnBeforeTreeNavigation != nil {
+		result := a.config.OnBeforeTreeNavigation(ctx, targetID, oldLeafID, commonAncestor, entriesToSummarize, options.CustomInstructions)
+		if result.Cancel {
+			return NavigateTreeResult{Cancelled: true}, nil
+			}
+	}
+
+	// Determine newLeafId and editorText
+	var editorText string
+	newLeafID := targetID
+	if target.Type == session.EntryMessage && target.Message != nil && target.Message.Role == "user" {
+		if target.ParentID != nil {
+			newLeafID = *target.ParentID
+		}
+		editorText = target.Message.Content
+	} else if target.Type == session.EntryCustom {
+		// Custom entries: move to parent
+		if target.ParentID != nil {
+			newLeafID = *target.ParentID
+		}
+	}
+
+	// Generate summary if requested and entries exist
+	var summaryEntry *session.TreeEntry
+	if options.Summarize && len(entriesToSummarize) > 0 {
+		// Use LLM to generate summary
+		if a.config.StreamFn != nil {
+			smmary, err := a.generateBranchSummary(ctx, entriesToSummarize, options.CustomInstructions)
+			if err == nil && smmary != "" {
+				// Create branch_summary entry
+				branchID := a.tree.NextID()
+				branchEntry := session.NewBranchSummaryEntry(branchID, &newLeafID, oldLeafID, smmary)
+				if err := a.tree.Add(branchEntry); err == nil {
+					summaryEntry = branchEntry
 				}
 			}
 		}
 	}
 
 	// Move leaf to target
-	newLeafID := targetID
-	if target.Type == session.EntryMessage && target.Message != nil && target.Message.Role == "user" {
-		// If target is a user message, move to its parent (skip the user message)
-		if target.ParentID != nil {
-			newLeafID = *target.ParentID
+	if newLeafID == "" {
+		// If newLeafID is empty (target was root user message), use targetID
+		newLeafID = targetID
+	}
+	if err := a.tree.SetLeaf(newLeafID); err != nil {
+		return NavigateTreeResult{}, fmt.Errorf("set leaf: %w", err)
+	}
+
+	// Fire session_tree hook
+	if a.config.OnAfterTreeNavigation != nil {
+		a.config.OnAfterTreeNavigation(ctx, newLeafID, oldLeafID, summaryEntry)
+	}
+
+	return NavigateTreeResult{
+		Cancelled:    false,
+		EditorText:   editorText,
+		SummaryEntry: summaryEntry,
+	}, nil
+}
+
+// generateBranchSummary generates a summary of the branch using the LLM.
+func (a *Agent) generateBranchSummary(ctx context.Context, entries []session.TreeEntry, customInstructions string) (string, error) {
+	// Build conversation text from entries
+	var conversationText string
+	for _, entry := range entries {
+		if entry.Message != nil {
+			conversationText += string(entry.Message.Role) + ": " + entry.Message.Content + "\n\n"
 		}
 	}
 
-	if err := a.tree.SetLeaf(newLeafID); err != nil {
-		return "", fmt.Errorf("set leaf: %w", err)
+	if conversationText == "" {
+		return "No content to summarize", nil
 	}
 
-	return newLeafID, nil
+	// Build prompt
+	prompt := "The user explored a different conversation branch before returning here.\nSummary of that exploration:\n\n"
+	if customInstructions != "" {
+		prompt += "Additional focus: " + customInstructions + "\n\n"
+	}
+	prompt += "<conversation>\n" + conversationText + "</conversation>\n\n"
+	prompt += "Create a structured summary of this conversation branch for context when returning later."
+
+	// Call LLM
+	messages := []llm.Message{
+		{Role: "user", Content: prompt},
+	}
+	stream, err := a.config.StreamFn(ctx, &llm.Request{
+		Model:    a.state.Model.ID,
+		Messages: messages,
+		MaxTokens: 2048,
+	})
+	if err != nil {
+		return "", fmt.Errorf("generate summary: %w", err)
+	}
+	defer stream.Close()
+
+	// Collect response
+	var summary string
+	for {
+		chunk, ok := stream.Next()
+		if !ok {
+			break
+		}
+		if chunk.Content != "" {
+			summary += chunk.Content
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return "", fmt.Errorf("stream error: %w", err)
+	}
+
+	if summary == "" {
+		return "No summary generated", nil
+	}
+
+	return summary, nil
 }
 
 // runCompaction runs the compaction function if available.

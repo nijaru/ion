@@ -74,6 +74,15 @@ type AgentConfig struct {
 	// If nil, compaction is skipped.
 	CompactFunc func(ctx context.Context) (bool, error) `json:"-"`
 
+	// Tree navigation hooks
+	// OnBeforeTreeNavigation is called before navigating the tree.
+	// Can cancel the navigation or provide a summary.
+	// Default: nil (no-op).
+	OnBeforeTreeNavigation func(ctx context.Context, targetID, oldLeafID, commonAncestorID string, entriesToSummarize []session.TreeEntry, customInstructions string) BeforeTreeNavigationResult `json:"-"`
+	// OnAfterTreeNavigation is called after navigating the tree.
+	// Default: nil (no-op).
+	OnAfterTreeNavigation func(ctx context.Context, newLeafID, oldLeafID string, summaryEntry *session.TreeEntry) `json:"-"`
+
 	// Tool hooks
 	// BeforeToolCall is called before each tool execution.
 	// Default: nil (no blocking).

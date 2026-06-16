@@ -331,4 +331,18 @@ type AgentState struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 }
 
+// BeforeTreeNavigationResult holds the result of the OnBeforeTreeNavigation hook.
+type BeforeTreeNavigationResult struct {
+	// Cancel cancels the navigation.
+	Cancel bool
+	// Summary is an optional summary to use instead of generating one.
+	Summary *BranchSummary
+}
+
+// BranchSummary holds a branch summary provided by a hook.
+type BranchSummary struct {
+	Summary string
+	Details map[string]any
+}
+
 
