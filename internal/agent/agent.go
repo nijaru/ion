@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,6 +403,86 @@ func (a *Agent) SetResources(resources AgentResources) {
 		Skills:          skills,
 		PromptTemplates: templates,
 	})
+}
+
+// Skill executes a turn with a skill invocation.
+// Finds the named skill in resources, formats it as a skill block, and runs a turn.
+// additionalInstructions is appended after the skill block.
+func (a *Agent) Skill(ctx context.Context, name string, additionalInstructions string) ([]AgentMessage, error) {
+	a.mu.RLock()
+	resources := a.config.Resources
+	a.mu.RUnlock()
+
+	var found *Skill
+	for i := range resources.Skills {
+		if resources.Skills[i].Name == name {
+			found = &resources.Skills[i]
+			break
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("unknown skill: %s", name)
+	}
+
+	prompt := formatSkillInvocation(*found, additionalInstructions)
+	return a.Run(ctx, []AgentMessage{{
+		Role:  "user",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: prompt}},
+	}})
+}
+
+// PromptFromTemplate executes a turn with a prompt template.
+// Finds the named template in resources, substitutes args, and runs a turn.
+func (a *Agent) PromptFromTemplate(ctx context.Context, name string, args []string) ([]AgentMessage, error) {
+	a.mu.RLock()
+	resources := a.config.Resources
+	a.mu.RUnlock()
+
+	var found *PromptTemplate
+	for i := range resources.PromptTemplates {
+		if resources.PromptTemplates[i].Name == name {
+			found = &resources.PromptTemplates[i]
+			break
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("unknown prompt template: %s", name)
+	}
+
+	prompt := formatPromptTemplateInvocation(*found, args)
+	return a.Run(ctx, []AgentMessage{{
+		Role:  "user",
+		Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: prompt}},
+	}})
+}
+
+// formatSkillInvocation formats a skill as an invocation prompt.
+func formatSkillInvocation(skill Skill, additionalInstructions string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("<skill name=\"%s\" location=\"%s\">\n", skill.Name, skill.Location))
+	b.WriteString(fmt.Sprintf("References are relative to %s.\n\n", filepath.Dir(skill.Location)))
+	b.WriteString(skill.Content)
+	b.WriteString("\n</skill>")
+	if additionalInstructions != "" {
+		b.WriteString("\n\n")
+		b.WriteString(additionalInstructions)
+	}
+	return b.String()
+}
+
+// formatPromptTemplateInvocation substitutes args into a template.
+// Supports $1, $2, ..., $ARGUMENTS, $@ placeholders.
+func formatPromptTemplateInvocation(template PromptTemplate, args []string) string {
+	content := template.Content
+	// Replace $N with indexed args (1-based)
+	for i, arg := range args {
+		content = strings.ReplaceAll(content, fmt.Sprintf("$%d", i+1), arg)
+	}
+	// Replace $ARGUMENTS and $@ with all args joined
+	allArgs := strings.Join(args, " ")
+	content = strings.ReplaceAll(content, "$ARGUMENTS", allArgs)
+	content = strings.ReplaceAll(content, "$@", allArgs)
+	return content
 }
 
 // Signal returns the active abort signal for the current run, if any.

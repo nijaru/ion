@@ -252,6 +252,16 @@ func (h *Harness) SetResources(resources agent.AgentResources) {
 	h.agent.SetResources(resources)
 }
 
+// Skill executes a turn with a skill invocation.
+func (h *Harness) Skill(ctx context.Context, name string, additionalInstructions string) ([]agent.AgentMessage, error) {
+	return h.agent.Skill(ctx, name, additionalInstructions)
+}
+
+// PromptFromTemplate executes a turn with a prompt template.
+func (h *Harness) PromptFromTemplate(ctx context.Context, name string, args []string) ([]agent.AgentMessage, error) {
+	return h.agent.PromptFromTemplate(ctx, name, args)
+}
+
 // AppendMessage appends a message to the conversation history.
 func (h *Harness) AppendMessage(msg agent.AgentMessage) {
 	h.agent.AppendMessage(msg)
