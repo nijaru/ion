@@ -93,6 +93,15 @@ type CustomData struct {
 	Data       any    `json:"data,omitempty"`
 }
 
+// SessionContext holds the extracted metadata and messages from a session path.
+// This matches Pi's buildSessionContext return value.
+type SessionContext struct {
+	Messages        []llm.Message
+	ThinkingLevel   string
+	Model           *ModelChangeData
+	ActiveToolNames []string
+}
+
 // NewMessageEntry creates a message entry.
 func NewMessageEntry(id string, parentID *string, msg llm.Message) *TreeEntry {
 	return &TreeEntry{
@@ -469,8 +478,9 @@ func (t *TreeStore) Path(fromID, toID string) ([]*TreeEntry, error) {
 	return result, nil
 }
 
-// Messages returns all message entries on the path from root to the active leaf.
-func (t *TreeStore) Messages() []llm.Message {
+// PathToRoot returns all entries on the path from root to the active leaf.
+// Entries are in root-first order (oldest first).
+func (t *TreeStore) PathToRoot() []TreeEntry {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -478,16 +488,14 @@ func (t *TreeStore) Messages() []llm.Message {
 		return nil
 	}
 
-	var messages []llm.Message
+	var entries []TreeEntry
 	current := t.leafID
 	for current != "" {
 		entry, ok := t.entries[current]
 		if !ok {
 			break
 		}
-		if entry.Type == EntryMessage && entry.Message != nil {
-			messages = append(messages, *entry.Message)
-		}
+		entries = append(entries, *entry)
 		if entry.ParentID == nil {
 			break
 		}
@@ -495,10 +503,130 @@ func (t *TreeStore) Messages() []llm.Message {
 	}
 
 	// Reverse to get root-first order
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
 	}
-	return messages
+	return entries
+}
+
+// BuildSessionContext extracts metadata and messages from the active path.
+// This matches Pi's buildSessionContext function.
+func (t *TreeStore) BuildSessionContext() SessionContext {
+	pathEntries := t.PathToRoot()
+	return buildSessionContextFromEntries(pathEntries)
+}
+
+// buildSessionContextFromEntries implements the core logic.
+func buildSessionContextFromEntries(pathEntries []TreeEntry) SessionContext {
+	var ctx SessionContext
+	ctx.ThinkingLevel = "off"
+
+	var compaction *TreeEntry
+
+	// First pass: extract metadata
+	for i := range pathEntries {
+		entry := &pathEntries[i]
+		switch entry.Type {
+		case EntryThinkingLevelChange:
+			if entry.ThinkingLevel != nil {
+				ctx.ThinkingLevel = entry.ThinkingLevel.Level
+			}
+		case EntryModelChange:
+			if entry.ModelChange != nil {
+				ctx.Model = entry.ModelChange
+			}
+		case EntryMessage:
+			if entry.Message != nil && entry.Message.Role == "assistant" {
+				// Assistant messages carry provider/model metadata
+				if entry.Message.Provider != "" && entry.Message.Model != "" {
+					ctx.Model = &ModelChangeData{
+						Provider: entry.Message.Provider,
+						ModelID:  entry.Message.Model,
+					}
+				}
+			}
+		case EntryActiveToolsChange:
+			if entry.ToolsChange != nil {
+				ctx.ActiveToolNames = entry.ToolsChange.ToolNames
+			}
+		case EntryCompaction:
+			compaction = entry
+		}
+	}
+
+	// Second pass: build messages
+	appendMessage := func(entry *TreeEntry) {
+		switch entry.Type {
+		case EntryMessage:
+			if entry.Message != nil {
+				ctx.Messages = append(ctx.Messages, *entry.Message)
+			}
+		case EntryBranchSummary:
+			if entry.BranchSummary != nil && entry.BranchSummary.Summary != "" {
+				// Convert branch summary to a user message with prefix
+				text := "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n" +
+					entry.BranchSummary.Summary + "\n</summary>"
+				ctx.Messages = append(ctx.Messages, llm.Message{
+					Role:      "user",
+					Content:   text,
+					Timestamp: entry.Timestamp.UnixMilli(),
+				})
+			}
+		case EntryCustom:
+			// Custom entries are ignored in message context
+		}
+	}
+
+	if compaction != nil && compaction.Compaction != nil {
+		// Add compaction summary message
+		summaryText := "The conversation history before this point was compacted into the following summary:\n\n<summary>\n" +
+			compaction.Compaction.Summary + "\n</summary>"
+		ctx.Messages = append(ctx.Messages, llm.Message{
+			Role:      "user",
+			Content:   summaryText,
+			Timestamp: compaction.Timestamp.UnixMilli(),
+		})
+
+		// Find compaction index in pathEntries
+		compactionIdx := -1
+		for i, entry := range pathEntries {
+			if entry.ID == compaction.ID {
+				compactionIdx = i
+				break
+			}
+		}
+
+		if compactionIdx >= 0 {
+			// Walk entries BEFORE compaction, starting from firstKeptEntryId
+			foundFirstKept := false
+			for i := 0; i < compactionIdx; i++ {
+				entry := &pathEntries[i]
+				if entry.ID == compaction.Compaction.FirstKeptEntryID {
+					foundFirstKept = true
+				}
+				if foundFirstKept {
+					appendMessage(entry)
+				}
+			}
+			// Walk entries AFTER compaction
+			for i := compactionIdx + 1; i < len(pathEntries); i++ {
+				appendMessage(&pathEntries[i])
+			}
+		}
+	} else {
+		// No compaction: add all entries
+		for i := range pathEntries {
+			appendMessage(&pathEntries[i])
+		}
+	}
+
+	return ctx
+}
+
+// Messages returns all message entries on the path from root to the active leaf.
+// This is a convenience wrapper around BuildSessionContext.
+func (t *TreeStore) Messages() []llm.Message {
+	return t.BuildSessionContext().Messages
 }
 
 // CommonAncestor returns the ID of the nearest common ancestor of two entries.
