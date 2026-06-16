@@ -242,6 +242,16 @@ func (h *Harness) SetFollowUpMode(mode agent.QueueMode) {
 	h.agent.SetFollowUpMode(mode)
 }
 
+// GetResources returns the current agent resources.
+func (h *Harness) GetResources() agent.AgentResources {
+	return h.agent.GetResources()
+}
+
+// SetResources sets the agent resources (skills and prompt templates).
+func (h *Harness) SetResources(resources agent.AgentResources) {
+	h.agent.SetResources(resources)
+}
+
 // AppendMessage appends a message to the conversation history.
 func (h *Harness) AppendMessage(msg agent.AgentMessage) {
 	h.agent.AppendMessage(msg)

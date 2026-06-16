@@ -406,6 +406,30 @@ type QueuedInputUpdate struct {
 func (e QueuedInputUpdate) isAgentEvent() {}
 func (e QueuedInputUpdate) EventType() EventType { return ExternalInput }
 
+// AgentSkill is a skill available to the agent. Used in ResourcesUpdate events.
+type AgentSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Location    string `json:"location,omitempty"`
+}
+
+// AgentPromptTemplate is a prompt template available to the agent.
+type AgentPromptTemplate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// ResourcesUpdate fires when skills and/or prompt templates change.
+// Pi equivalent: resources_update.
+type ResourcesUpdate struct {
+	Base
+	Skills          []AgentSkill          `json:"skills,omitempty"`
+	PromptTemplates []AgentPromptTemplate `json:"prompt_templates,omitempty"`
+}
+
+func (e ResourcesUpdate) isAgentEvent() {}
+func (e ResourcesUpdate) EventType() EventType { return StatusChanged }
+
 // TypedEventToEvent converts a typed AgentEvent to a storage Event.
 // This bridges the typed event bus and the storage layer.
 func TypedEventToEvent(ev AgentEvent, sessionID string) Event {

@@ -367,6 +367,42 @@ func (a *Agent) SetMessages(messages []AgentMessage) {
 	a.setMessagesLocked(messages)
 }
 
+// GetResources returns the current resources (skills and prompt templates).
+func (a *Agent) GetResources() AgentResources {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.config.Resources
+}
+
+// SetResources sets the resources (skills and prompt templates).
+// Emits a ResourcesUpdate event.
+func (a *Agent) SetResources(resources AgentResources) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.Resources = resources
+
+	// Emit resources_update event
+	skills := make([]session.AgentSkill, len(resources.Skills))
+	for i, s := range resources.Skills {
+		skills[i] = session.AgentSkill{
+			Name:        s.Name,
+			Description: s.Description,
+			Location:    s.Location,
+		}
+	}
+	templates := make([]session.AgentPromptTemplate, len(resources.PromptTemplates))
+	for i, t := range resources.PromptTemplates {
+		templates[i] = session.AgentPromptTemplate{
+			Name:        t.Name,
+			Description: t.Description,
+		}
+	}
+	a.emit(session.ResourcesUpdate{
+		Skills:          skills,
+		PromptTemplates: templates,
+	})
+}
+
 // Signal returns the active abort signal for the current run, if any.
 // Returns nil if no run is active.
 func (a *Agent) Signal() context.Context {

@@ -8,6 +8,28 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+// Skill represents a skill loaded from a SKILL.md file.
+type Skill struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Location     string   `json:"location"`
+	Content      string   `json:"content"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+}
+
+// PromptTemplate represents a prompt template loaded from a .md file.
+type PromptTemplate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+}
+
+// AgentResources holds skills and prompt templates available to the agent.
+type AgentResources struct {
+	Skills          []Skill          `json:"skills,omitempty"`
+	PromptTemplates []PromptTemplate `json:"prompt_templates,omitempty"`
+}
+
 // AgentConfig is the configuration for an Agent instance.
 // It defines the agent's behavior, callbacks, and hooks.
 type AgentConfig struct {
@@ -82,6 +104,11 @@ type AgentConfig struct {
 	// OnAfterTreeNavigation is called after navigating the tree.
 	// Default: nil (no-op).
 	OnAfterTreeNavigation func(ctx context.Context, newLeafID, oldLeafID string, summaryEntry *session.TreeEntry) `json:"-"`
+
+	// Resources (skills and prompt templates)
+	// Resources holds the current skills and prompt templates.
+	// Default: empty.
+	Resources AgentResources `json:"resources,omitempty"`
 
 	// Tool hooks
 	// BeforeToolCall is called before each tool execution.
