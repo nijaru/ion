@@ -131,6 +131,11 @@ type AgentConfig struct {
 	// Default: zero (use defaults from config).
 	StreamOptions StreamOptions `json:"stream_options,omitempty"`
 
+	// ThinkingBudgets maps thinking levels to token budgets.
+	// Pi parity: per-level thinking budget map.
+	// Example: {"low": 1024, "medium": 4096, "high": 16384}
+	ThinkingBudgets map[ThinkingLevel]int `json:"thinking_budgets,omitempty"`
+
 	// Tool hooks
 	// BeforeToolCall is called before each tool execution.
 	// Default: nil (no blocking).

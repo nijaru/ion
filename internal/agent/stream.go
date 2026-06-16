@@ -80,6 +80,11 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		SessionID:       l.sessionID,
 	}
 
+	// Set thinking budget from per-level map if configured
+	if budget, ok := l.config.ThinkingBudgets[l.config.ThinkingLevel]; ok && budget > 0 {
+		req.ThinkingBudget = budget
+	}
+
 	// Call beforeProviderRequest hook (Pi parity)
 	if l.config.BeforeProviderRequest != nil {
 		hookCtx := BeforeProviderRequestContext{
