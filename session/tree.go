@@ -22,8 +22,9 @@ const (
 	EntryActiveToolsChange   EntryType = "active_tools_change"
 	EntryLabel               EntryType = "label"
 	EntrySessionInfo         EntryType = "session_info"
-	EntryLeaf                EntryType = "leaf"
+	EntryCustomMessage       EntryType = "custom_message"
 	EntryCustom              EntryType = "custom"
+	EntryLeaf                EntryType = "leaf"
 )
 
 // TreeEntry is a single node in the session tree.
@@ -45,6 +46,7 @@ type TreeEntry struct {
 	Label         *LabelData          `json:"label,omitempty"`
 	SessionInfo   *SessionInfoData    `json:"session_info,omitempty"`
 	Custom        *CustomData         `json:"custom,omitempty"`
+	CustomMessage *CustomMessageData  `json:"custom_message,omitempty"`
 }
 
 // CompactionData holds summarized context.
@@ -91,6 +93,15 @@ type SessionInfoData struct {
 type CustomData struct {
 	CustomType string `json:"custom_type"`
 	Data       any    `json:"data,omitempty"`
+}
+
+// CustomMessageData holds a display message from an extension.
+// Pi parity: CustomMessageEntry.
+type CustomMessageData struct {
+	CustomType string `json:"custom_type"`
+	Content    string `json:"content"`
+	Display    bool   `json:"display"`
+	Details    any    `json:"details,omitempty"`
 }
 
 // SessionContext holds the extracted metadata and messages from a session path.
@@ -227,11 +238,12 @@ func NewCustomMessageEntry(id string, parentID *string, customType string, conte
 	return &TreeEntry{
 		ID:       id,
 		ParentID: parentID,
-		Type:     EntryCustom,
+		Type:     EntryCustomMessage,
 		Timestamp: time.Now(),
-		Custom: &CustomData{
+		CustomMessage: &CustomMessageData{
 			CustomType: customType,
-			Data:       content,
+			Content:    content,
+			Display:    true,
 		},
 	}
 }
