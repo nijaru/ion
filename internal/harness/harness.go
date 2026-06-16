@@ -252,6 +252,16 @@ func (h *Harness) SetResources(resources agent.AgentResources) {
 	h.agent.SetResources(resources)
 }
 
+// GetStreamOptions returns the current stream options.
+func (h *Harness) GetStreamOptions() agent.StreamOptions {
+	return h.agent.GetStreamOptions()
+}
+
+// SetStreamOptions sets the stream options.
+func (h *Harness) SetStreamOptions(opts agent.StreamOptions) {
+	h.agent.SetStreamOptions(opts)
+}
+
 // Skill executes a turn with a skill invocation.
 func (h *Harness) Skill(ctx context.Context, name string, additionalInstructions string) ([]agent.AgentMessage, error) {
 	return h.agent.Skill(ctx, name, additionalInstructions)

@@ -30,6 +30,23 @@ type AgentResources struct {
 	PromptTemplates []PromptTemplate `json:"prompt_templates,omitempty"`
 }
 
+// StreamOptions holds runtime streaming configuration.
+// Pi parity: AgentHarnessStreamOptions.
+type StreamOptions struct {
+	// TimeoutMs is the provider request timeout in milliseconds.
+	TimeoutMs int `json:"timeout_ms,omitempty"`
+	// MaxRetries is the max provider retry attempts (0 = use config default).
+	MaxRetries int `json:"max_retries,omitempty"`
+	// MaxRetryDelayMs is the cap for retry delays (0 = no cap).
+	MaxRetryDelayMs int `json:"max_retry_delay_ms,omitempty"`
+	// Headers are additional request headers merged with auth headers.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+func (s StreamOptions) IsZero() bool {
+	return s.TimeoutMs == 0 && s.MaxRetries == 0 && s.MaxRetryDelayMs == 0 && len(s.Headers) == 0
+}
+
 // AgentConfig is the configuration for an Agent instance.
 // It defines the agent's behavior, callbacks, and hooks.
 type AgentConfig struct {
@@ -109,6 +126,10 @@ type AgentConfig struct {
 	// Resources holds the current skills and prompt templates.
 	// Default: empty.
 	Resources AgentResources `json:"resources,omitempty"`
+
+	// StreamOptions holds runtime streaming configuration.
+	// Default: zero (use defaults from config).
+	StreamOptions StreamOptions `json:"stream_options,omitempty"`
 
 	// Tool hooks
 	// BeforeToolCall is called before each tool execution.

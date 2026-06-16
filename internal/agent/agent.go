@@ -405,6 +405,21 @@ func (a *Agent) SetResources(resources AgentResources) {
 	})
 }
 
+// GetStreamOptions returns the current stream options.
+func (a *Agent) GetStreamOptions() StreamOptions {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.config.StreamOptions
+}
+
+// SetStreamOptions sets the stream options.
+// Zero-value fields are left unchanged (merged, not replaced).
+func (a *Agent) SetStreamOptions(opts StreamOptions) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.StreamOptions = opts
+}
+
 // Skill executes a turn with a skill invocation.
 // Finds the named skill in resources, formats it as a skill block, and runs a turn.
 // additionalInstructions is appended after the skill block.
