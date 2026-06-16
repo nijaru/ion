@@ -83,9 +83,10 @@ func New(config AgentConfig) *Agent {
 		a.config.OnModelMessage = a.appendModelMessage
 	}
 	// Wire queue callbacks if not already set.
-	queueMode := a.config.QueueMode
-	if queueMode == "" {
-		queueMode = QueueModeOneAtATime
+	// Each queue uses its own mode (steering vs follow-up).
+	defaultMode := a.config.QueueMode
+	if defaultMode == "" {
+		defaultMode = QueueModeOneAtATime
 	}
 	if a.config.GetSteeringMessages == nil {
 		a.config.GetSteeringMessages = func() []AgentMessage {
@@ -94,7 +95,11 @@ func New(config AgentConfig) *Agent {
 			if len(a.steeringQueue) == 0 {
 				return nil
 			}
-			msgs := drainQueuedMessagesLocked(&a.steeringQueue, queueMode)
+			mode := a.config.SteeringMode
+			if mode == "" {
+				mode = defaultMode
+			}
+			msgs := drainQueuedMessagesLocked(&a.steeringQueue, mode)
 			a.emitQueueUpdatedLocked()
 			return msgs
 		}
@@ -106,7 +111,11 @@ func New(config AgentConfig) *Agent {
 			if len(a.followUpQueue) == 0 {
 				return nil
 			}
-			msgs := drainQueuedMessagesLocked(&a.followUpQueue, queueMode)
+			mode := a.config.FollowUpMode
+			if mode == "" {
+				mode = defaultMode
+			}
+			msgs := drainQueuedMessagesLocked(&a.followUpQueue, mode)
 			a.emitQueueUpdatedLocked()
 			return msgs
 		}
