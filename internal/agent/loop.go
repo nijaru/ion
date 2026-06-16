@@ -286,16 +286,8 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 					}})
 				}
 
-				// Add tool results to tree store
-				var parentID *string
-				if leaf := l.tree.Leaf(); leaf != nil {
-					id := leaf.ID
-					parentID = &id
-				}
-				for _, result := range toolResults {
-					llmMsg := agentMessageToLLM(result)
-					parentID = l.addToTree(parentID, &llmMsg)
-				}
+				// Note: executeToolCalls already adds tool results to the tree store
+				// via addToolResultsToTree, so we don't add them again here.
 				newMessages = append(newMessages, toolResults...)
 				for _, result := range llmToolResults {
 					if err := l.writeModelMessage(ctx, result); err != nil {
