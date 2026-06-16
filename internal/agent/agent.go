@@ -569,7 +569,7 @@ func (a *Agent) setMessagesLocked(messages []AgentMessage) {
 // newLoop creates a new AgentLoop with the current agent state.
 // Caller must hold a.mu (read lock is sufficient).
 func (a *Agent) newLoop() *AgentLoop {
-	loop := NewAgentLoop(a.config, a.state, a.emit)
+	loop := NewAgentLoop(a.config, a.state, a.emit, a.id)
 	loop.tree = a.tree
 	return loop
 }

@@ -322,6 +322,8 @@ type Request struct {
 	// ThinkingBudget, when > 0, enables Anthropic extended thinking with the given
 	// token budget (minimum 1024, must be less than MaxTokens).
 	ThinkingBudget int `json:"thinking_budget,omitzero"`
+	// SessionID is forwarded to providers for cache-aware backends.
+	SessionID string `json:"session_id,omitzero"`
 }
 
 // Response is the unified response from any provider.

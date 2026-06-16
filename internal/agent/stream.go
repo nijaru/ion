@@ -77,6 +77,7 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		MaxTokens:       l.config.MaxTokens,
 		Temperature:     l.config.Temperature,
 		ReasoningEffort: string(l.config.ThinkingLevel),
+		SessionID:       l.sessionID,
 	}
 
 	// Call beforeProviderRequest hook (Pi parity)

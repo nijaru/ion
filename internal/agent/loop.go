@@ -28,19 +28,21 @@ import (
 //   - Session lifecycle (Open/Resume/Close are on the wrapper)
 //   - Queue management (GetSteeringMessages/GetFollowUpMessages are callbacks)
 type AgentLoop struct {
-	config AgentConfig
-	state  AgentState
-	emit   func(session.AgentEvent)
-	tree   *session.TreeStore
+	config    AgentConfig
+	state     AgentState
+	emit      func(session.AgentEvent)
+	tree      *session.TreeStore
+	sessionID string
 }
 
 // NewAgentLoop creates a new pure agent loop.
-func NewAgentLoop(config AgentConfig, state AgentState, emit func(session.AgentEvent)) *AgentLoop {
+func NewAgentLoop(config AgentConfig, state AgentState, emit func(session.AgentEvent), sessionID string) *AgentLoop {
 	return &AgentLoop{
-		config: config,
-		state:  state,
-		emit:   emit,
-		tree:   session.NewTreeStore(),
+		config:    config,
+		state:     state,
+		emit:      emit,
+		tree:      session.NewTreeStore(),
+		sessionID: sessionID,
 	}
 }
 
