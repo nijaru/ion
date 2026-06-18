@@ -162,6 +162,9 @@ func (p *Provider) setHeaders(req *http.Request) {
 type openRouterRequest struct {
 	sashaoai.ChatCompletionRequest
 	Reasoning *openRouterReasoning `json:"reasoning,omitempty"`
+	// SessionID enables OpenRouter's sticky routing for consistent provider selection.
+	// See: https://openrouter.ai/docs/features/session-sticky-routing
+	SessionID string `json:"session_id,omitempty"`
 }
 
 type openRouterReasoning struct {
@@ -178,6 +181,7 @@ func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
+		SessionID:            req.SessionID,
 	}
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.
