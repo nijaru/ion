@@ -35,8 +35,23 @@ const (
 	OnError HookType = "on_error"
 	// OnAbort fires on abort.
 	OnAbort HookType = "on_abort"
+	// OnSettled fires when the harness reaches idle state after all queues are drained.
+	OnSettled HookType = "settled"
+	// OnSavePoint fires when pending session writes are flushed.
+	OnSavePoint HookType = "save_point"
+	// OnResourcesUpdate fires when resources (skills, prompt templates) change.
+	OnResourcesUpdate HookType = "resources_update"
+	// OnQueueUpdate fires when the steer/followUp/nextTurn queues change.
+	OnQueueUpdate HookType = "queue_update"
+	// OnContext fires before each LLM call with the message context.
+	// Can modify messages by returning a ContextResult with new messages.
+	OnContext HookType = "context"
 	// OnModelUpdate fires when the model changes.
 	OnModelUpdate HookType = "model_update"
+	// OnThinkingLevelUpdate fires when the thinking level changes.
+	OnThinkingLevelUpdate HookType = "thinking_level_update"
+	// OnToolsUpdate fires when tools or active tools change.
+	OnToolsUpdate HookType = "tools_update"
 )
 
 // HookEvent is a lifecycle event dispatched to hooks.
@@ -67,6 +82,12 @@ type BeforeAgentStartPayload struct {
 type AfterAgentRunPayload struct {
 	Messages []agent.AgentMessage
 	Error    error
+}
+
+// ContextResult is the result for the context hook.
+// Return this via HookResult.Data to modify messages before LLM call.
+type ContextResult struct {
+	Messages []agent.AgentMessage
 }
 
 // BeforeProviderRequestPayload is the payload for before_provider_request hook.

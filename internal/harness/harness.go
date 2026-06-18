@@ -111,6 +111,21 @@ func (h *Harness) Run(ctx context.Context, prompts []agent.AgentMessage) ([]agen
 		},
 	})
 
+	// Emit settled event if no more queued messages (Pi parity)
+	if !h.agent.HasQueuedMessages() {
+		h.hooks.Dispatch(ctx, HookEvent{
+			Type: OnSettled,
+			Payload: map[string]any{"nextTurnCount": 0},
+		})
+	}
+
+	// Emit save_point event (Pi parity)
+	// Ion doesn't have pendingSessionWrites, so hadPendingMutations is always false
+	h.hooks.Dispatch(ctx, HookEvent{
+		Type: OnSavePoint,
+		Payload: map[string]any{"hadPendingMutations": false},
+	})
+
 	return messages, err
 }
 
@@ -218,18 +233,50 @@ func (h *Harness) SetModel(model llm.Model) {
 
 // SetThinkingLevel updates the agent's thinking level.
 func (h *Harness) SetThinkingLevel(level agent.ThinkingLevel) {
+	previousLevel := h.agent.State().ThinkingLevel
 	h.agent.SetThinkingLevel(level)
+
+	// Dispatch thinking_level_update hook (Pi parity)
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnThinkingLevelUpdate,
+		Payload: map[string]any{"level": level, "previousLevel": previousLevel},
+	})
 }
 
 // SetTools updates the agent's available tools.
 func (h *Harness) SetTools(tools []agent.AgentTool) {
+	previousTools := h.agent.State().AllTools
 	h.agent.SetTools(tools)
+
+	// Dispatch tools_update hook (Pi parity)
+	previousToolNames := make([]string, len(previousTools))
+	for i, t := range previousTools {
+		previousToolNames[i] = t.Name
+	}
+	toolNames := make([]string, len(tools))
+	for i, t := range tools {
+		toolNames[i] = t.Name
+	}
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnToolsUpdate,
+		Payload: map[string]any{"toolNames": toolNames, "previousToolNames": previousToolNames, "source": "set"},
+	})
 }
 
 // SetActiveTools sets the active tool names.
 // Only tools with these names will be available for the next turn.
 func (h *Harness) SetActiveTools(toolNames []string) {
+	var previousActiveToolNames []string
+	for _, t := range h.agent.State().Tools {
+		previousActiveToolNames = append(previousActiveToolNames, t.Name)
+	}
 	h.agent.SetActiveTools(toolNames)
+
+	// Dispatch tools_update hook (Pi parity)
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnToolsUpdate,
+		Payload: map[string]any{"activeToolNames": toolNames, "previousActiveToolNames": previousActiveToolNames, "source": "set"},
+	})
 }
 
 // SetSteeringMode sets the steering queue mode.
@@ -249,7 +296,14 @@ func (h *Harness) GetResources() agent.AgentResources {
 
 // SetResources sets the agent resources (skills and prompt templates).
 func (h *Harness) SetResources(resources agent.AgentResources) {
+	previousResources := h.agent.GetResources()
 	h.agent.SetResources(resources)
+
+	// Dispatch resources_update hook (Pi parity)
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnResourcesUpdate,
+		Payload: map[string]any{"resources": resources, "previousResources": previousResources},
+	})
 }
 
 // GetStreamOptions returns the current stream options.
@@ -311,10 +365,51 @@ func (h *Harness) NavigateTree(ctx context.Context, targetID string, options age
 
 // Abort aborts the current run.
 func (h *Harness) Abort() {
+	// Get queued messages before clearing
+	var clearedSteer []agent.AgentMessage
+	for _, msg := range h.agent.SteeringQueue() {
+		clearedSteer = append(clearedSteer, agent.AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart(msg)}})
+	}
+	var clearedFollowUp []agent.AgentMessage
+	for _, msg := range h.agent.FollowUpQueue() {
+		clearedFollowUp = append(clearedFollowUp, agent.AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart(msg)}})
+	}
+
 	h.agent.Abort()
+
+	// Dispatch abort hook (Pi parity)
+	h.hooks.Dispatch(context.Background(), HookEvent{
+		Type: OnAbort,
+		Payload: map[string]any{"clearedSteer": clearedSteer, "clearedFollowUp": clearedFollowUp},
+	})
 }
 
 // WaitForIdle waits for the agent to reach an idle state.
 func (h *Harness) WaitForIdle(ctx context.Context) error {
 	return h.agent.WaitForIdle(ctx)
+}
+
+// WireContextHook sets up the agent's TransformContext to emit OnContext hooks.
+// Call this after creating the harness to enable context hook subscribers.
+// If the agent already has a TransformContext, it will be called first,
+// then the result is passed to the OnContext hook.
+// Hook handlers can return modified messages via HookResult.Data (type ContextResult).
+func (h *Harness) WireContextHook() {
+	original := h.agent.Config().TransformContext
+	h.agent.SetTransformContext(func(ctx context.Context, messages []agent.AgentMessage) []agent.AgentMessage {
+		// Call original transform first
+		if original != nil {
+			messages = original(ctx, messages)
+		}
+		// Dispatch OnContext hook
+		result, _ := h.hooks.Dispatch(ctx, HookEvent{
+			Type: OnContext,
+			Payload: map[string]any{"messages": messages},
+		})
+		// Check if handler returned modified messages
+		if ctxResult, ok := result.Data.(ContextResult); ok && ctxResult.Messages != nil {
+			return ctxResult.Messages
+		}
+		return messages
+	})
 }

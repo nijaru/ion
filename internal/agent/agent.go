@@ -406,10 +406,26 @@ func (a *Agent) SetResources(resources AgentResources) {
 }
 
 // GetStreamOptions returns the current stream options.
+// GetStreamOptions returns the current stream options.
 func (a *Agent) GetStreamOptions() StreamOptions {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.StreamOptions
+}
+
+// SetTransformContext sets the TransformContext callback on the agent config.
+// This allows the harness to wire up context hooks after agent creation.
+func (a *Agent) SetTransformContext(fn func(ctx context.Context, messages []AgentMessage) []AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.TransformContext = fn
+}
+
+// Config returns a copy of the agent config.
+func (a *Agent) Config() AgentConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.config
 }
 
 // SetStreamOptions sets the stream options.
@@ -538,6 +554,24 @@ func (a *Agent) ClearFollowUpQueue() {
 	defer a.mu.Unlock()
 	a.followUpQueue = nil
 	a.emitQueueUpdatedLocked()
+}
+
+// SteeringQueue returns a copy of the current steering queue.
+func (a *Agent) SteeringQueue() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]string, len(a.steeringQueue))
+	copy(result, a.steeringQueue)
+	return result
+}
+
+// FollowUpQueue returns a copy of the current follow-up queue.
+func (a *Agent) FollowUpQueue() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]string, len(a.followUpQueue))
+	copy(result, a.followUpQueue)
+	return result
 }
 
 // ClearAllQueues removes all queued steering and follow-up messages.
