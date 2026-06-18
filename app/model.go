@@ -375,6 +375,10 @@ type Model struct {
 	PasteMarkers map[string]pasteMarker
 	pasteSeq     int // next paste marker ID
 
+	// ToolOutputExpanded tracks whether tool output is globally expanded.
+	// Toggled by Ctrl+O.
+	ToolOutputExpanded bool
+
 	// Styles (initialized once in New)
 	st styles
 }

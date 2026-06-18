@@ -63,6 +63,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m.openThinkingPicker()
 
+	case "ctrl+o":
+		m.clearPendingAction()
+		m.ToolOutputExpanded = !m.ToolOutputExpanded
+		return m, nil
+
 	case "ctrl+c":
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
@@ -135,8 +140,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.submitComposer()
 
-	case "shift+enter", "alt+enter", "ctrl+j":
+	case "shift+enter", "ctrl+j":
 		m.clearPendingAction()
+		return m, m.insertComposerText("\n")
+
+	case "alt+enter":
+		m.clearPendingAction()
+		if m.InFlight.Thinking {
+			// Queue follow-up message when agent is streaming
+			return m.queueFollowUp()
+		}
+		// When idle, insert newline
 		return m, m.insertComposerText("\n")
 
 	case "up", "ctrl+p":
@@ -149,6 +163,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, m.updateComposer(msg)
+
+	case "alt+up":
+		m.clearPendingAction()
+		return m.recallQueuedTurns()
 
 	case "down", "ctrl+n":
 		m.clearPendingAction()

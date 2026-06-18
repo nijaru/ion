@@ -169,6 +169,15 @@ func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	return m.queueBusyInputLocal(text)
 }
 
+// queueFollowUp queues a follow-up message when Alt+Enter is pressed while the agent is streaming.
+func (m Model) queueFollowUp() (Model, tea.Cmd) {
+	text := strings.TrimSpace(m.Input.Composer.Value())
+	if text == "" {
+		return m, nil
+	}
+	return m.queueBusyInput(text)
+}
+
 func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := steering.SteerTurn(context.Background(), text)

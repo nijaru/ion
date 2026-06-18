@@ -106,7 +106,8 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return b.String()
 		}
-		if m.shouldSummarizeToolOutput(e) {
+		// When expanded (Ctrl+O), show full output regardless of verbosity
+		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
 			if isWriteTool(e.Title) {
 				return b.String()
 			}
@@ -116,14 +117,14 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			return m.planeBFitLine(b.String())
 		}
 		b.WriteString("\n")
-		if toolVerbosity == "collapsed" {
+		if !m.ToolOutputExpanded && toolVerbosity == "collapsed" {
 			b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
 			b.WriteString("\n")
 		} else {
 			lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
 			const maxLines = 10
 			shown := lines
-			if len(lines) > maxLines {
+			if !m.ToolOutputExpanded && len(lines) > maxLines {
 				shown = lines[len(lines)-maxLines:]
 				b.WriteString(m.planeBLine(m.st.dim, 4, fmt.Sprintf("... (%d lines total)", len(lines))))
 				b.WriteString("\n")
@@ -320,7 +321,8 @@ func (m Model) renderEntry(e session.Entry) string {
 		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return labelStr
 		}
-		if m.shouldSummarizeToolOutput(e) {
+		// When expanded (Ctrl+O), show full output regardless of verbosity
+		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
 			if isWriteTool(e.Title) {
 				return labelStr
 			}
@@ -336,20 +338,20 @@ func (m Model) renderEntry(e session.Entry) string {
 		var b strings.Builder
 		b.WriteString(labelStr)
 		b.WriteString("\n")
-		if toolVerbosity == "collapsed" {
+		if !m.ToolOutputExpanded && toolVerbosity == "collapsed" {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
 			b.WriteString("\n")
 		} else {
 			lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 			shown := lines
-			if len(lines) > 10 {
+			if !m.ToolOutputExpanded && len(lines) > 10 {
 				shown = lines[:10]
 			}
 			for _, l := range shown {
 				b.WriteString(m.st.dim.Render("  " + l))
 				b.WriteString("\n")
 			}
-			if len(lines) > 10 {
+			if !m.ToolOutputExpanded && len(lines) > 10 {
 				b.WriteString(m.st.dim.Render(
 					fmt.Sprintf("  ... (%d more lines)", len(lines)-10),
 				))

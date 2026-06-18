@@ -5,9 +5,13 @@ policy — not a changelog.
 
 ## Session Start
 
-Read `ai/README.md`, `ai/STATUS.md`, `ai/PLAN.md`, run `tk ready`, then
-start the selected task. Before investigating, check `tk show <id>`, relevant
-`ai/` files, and git history.
+1. Read `ai/brief.md` (required — active context snapshot)
+2. Read `ai/STATUS.md` (current phase and blockers)
+3. Run `tk ready` to see next task
+4. Before investigating: check `tk show <id>`, relevant `ai/` files, git history
+
+**Update `ai/` as you work**, not just at session end. If you discover
+something that changes the picture, update the relevant file immediately.
 
 ## Project
 
@@ -40,30 +44,43 @@ fix it now.
 
 **Pi-parity work** (features or fixes that match Pi's behavior):
 
-⚠️ **CRITICAL: We have repeatedly declared parity complete when it wasn't.**
-The checklist lied. Trust only source-level verification.
+## Verification Standard
 
-1. **Read Pi's source FIRST** — before implementing or claiming done, read the
-   actual code in `pi-agent-core/dist/`. The checklist, docs, and memory are
-   not reliable. Only the source code is.
-2. **Verify line-by-line** — for each parity item, find the exact Pi function,
-   read its implementation, then verify Ion's implementation matches the
-   behavior (not just the function signature).
-3. **Check the gap analysis** — `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md` is the
-   authoritative list of known gaps. Update it when you find new gaps or fix
-   existing ones.
-4. **Never trust a checklist that says ✅** — a ✅ means "someone claimed this
-   works." It does NOT mean "verified against Pi source." Assume the checklist
-   is wrong until you verify.
-5. **Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
-   channels, try/finally vs defer. Same invariant, different mechanism.
-6. **Implement with clear ownership** — one layer owns each guarantee. Document
-   it in comments where non-obvious. Verify with tests and race detector.
-7. **Report honestly** — if you can't verify an item, say so. If an item is
-   partially done, say what's missing. Never round up to "done."
+**Every claim of "done" needs evidence.** This applies to parity items,
+bug fixes, and feature implementations.
 
-Pi source location:
-`/Users/nick/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/`
+### What counts as evidence
+- **Source comparison**: Pi file + line numbers vs Ion file + line numbers
+- **Test output**: command run + pass/fail result
+- **Behavioral proof**: terminal output showing the feature works
+
+### What does NOT count
+- "I implemented a function with that name"
+- "The checklist says ✅"
+- "I remember doing this"
+- "It should work based on the code I wrote"
+
+### Pi-parity workflow
+1. **Read Pi's source FIRST** — find the exact function in `pi-agent-core/dist/`
+2. **Read Ion's implementation** — find the corresponding code
+3. **Compare behavior** — same inputs → same outputs? Same edge cases handled?
+4. **Record evidence** — Pi source lines, Ion source lines, test output
+5. **Update PI-PARITY-CHECKLIST.md** — mark verified with evidence
+
+### When you find a gap
+- Add it to `ai/PI-PARITY-CHECKLIST.md` with status ❌ or ⚠️
+- If it's a structural issue, add to `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md`
+- Log in `tk` with the finding
+- Don't mark it done until verified
+
+**Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
+channels, try/finally vs defer. Same invariant, different mechanism.
+
+**Implement with clear ownership** — one layer owns each guarantee. Document
+it in comments where non-obvious. Verify with tests and race detector.
+
+**Report honestly** — if you can't verify an item, say so. If an item is
+partially done, say what's missing. Never round up to "done."
 
 **Aggressive rewrites.** When a module has duplicate ownership, hidden state,
 or architecture that has repeatedly let bugs through — rewrite it. The boundary
@@ -134,9 +151,17 @@ tk done <id>      # mark complete
 
 ## References
 
-- `ai/README.md` — index of active context files
+**Active ai/ files** (update as you work):
+- `ai/brief.md` — active context snapshot (read every session)
 - `ai/STATUS.md` — current phase, focus, blockers
 - `ai/PLAN.md` — active work sequence
-- `ai/DESIGN.md` — architecture
-- `ai/DECISIONS.md` — durable decisions and decision log
-- `/Users/nick/github/earendil-works/pi` — primary Pi reference
+- `ai/decisions.md` — principles + decision log
+- `ai/architecture.md` — system overview
+- `ai/journal.md` — session findings (append-only)
+- `ai/PI-PARITY-CHECKLIST.md` — parity tracking
+- `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md` — known gaps
+
+**Archived** (historical reference only): `ai/archive/`
+
+**Pi source** (read on-demand, not all at once):
+`/Users/nick/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/`
