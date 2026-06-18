@@ -119,13 +119,54 @@ type AfterToolCallPayload struct {
 
 // BeforeCompactionPayload is the payload for before_compaction hook.
 type BeforeCompactionPayload struct {
-	Messages []agent.AgentMessage
+	FirstKeptEntryId    string
+	MessagesToSummarize []agent.AgentMessage
+	TurnPrefixMessages  []agent.AgentMessage
+	IsSplitTurn         bool
+	TokensBefore        int
+	PreviousSummary     string
+	FileOps             FileOperations
+	Settings            CompactionSettings
+}
+
+// FileOperations tracks file operations during a turn.
+type FileOperations struct {
+	Read   []string
+	Written []string
+	Edited  []string
+}
+
+// CompactionSettings contains compaction configuration.
+type CompactionSettings struct {
+	Enabled         bool
+	ReserveTokens   int
+	KeepRecentTokens int
 }
 
 // AfterCompactionPayload is the payload for after_compaction hook.
 type AfterCompactionPayload struct {
 	Summary  string
 	Messages []agent.AgentMessage
+}
+
+// BeforeTreeNavigationPayload is the payload for before_tree_navigation hook.
+type BeforeTreeNavigationPayload struct {
+	TargetId            string
+	OldLeafId           string
+	CommonAncestorId    string
+	EntriesToSummarize  []agent.AgentMessage
+	UserWantsSummary    bool
+	CustomInstructions  string
+	ReplaceInstructions bool
+	Label               string
+}
+
+// AfterTreeNavigationPayload is the payload for after_tree_navigation hook.
+type AfterTreeNavigationPayload struct {
+	NewLeafId     string
+	OldLeafId     string
+	SummaryEntry  string
+	FromHook      bool
 }
 
 // HookDispatcher dispatches lifecycle events to registered hooks.

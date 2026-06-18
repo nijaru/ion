@@ -777,6 +777,13 @@ func (a *Agent) ID() string {
 	return a.id
 }
 
+// LeafID returns the current leaf entry ID.
+func (a *Agent) LeafID() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.tree.LeafID()
+}
+
 // Meta returns session metadata.
 func (a *Agent) Meta() map[string]string {
 	a.mu.Lock()
