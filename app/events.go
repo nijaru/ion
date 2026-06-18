@@ -72,6 +72,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m, tea.Suspend
 
+	case "ctrl+v":
+		m.clearPendingAction()
+		return m.pasteImageFromClipboard()
+
 	case "ctrl+c":
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()

@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
+	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
@@ -471,6 +472,16 @@ func New(
 	m.loadInputHistory(context.Background())
 
 	return m
+}
+
+// pasteImageFromClipboard reads an image from the clipboard and inserts its path.
+func (m Model) pasteImageFromClipboard() (Model, tea.Cmd) {
+	img, err := ionclipboard.ReadClipboardImage()
+	if err != nil || img == nil {
+		return m, nil
+	}
+	// Insert the file path into the composer
+	return m, m.insertComposerText(img.FilePath)
 }
 
 func (m Model) Init() tea.Cmd {
