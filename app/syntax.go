@@ -21,8 +21,8 @@ func highlightSyntax(code, language string) string {
 		lexer = lexers.Fallback
 	}
 
-	// Use terminal-friendly style
-	style := chromastyles.Get("monokai")
+	// Use catppuccin-mocha (dark theme)
+	style := chromastyles.Get("catppuccin-mocha")
 	if style == nil {
 		style = chromastyles.Fallback
 	}
