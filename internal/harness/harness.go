@@ -28,7 +28,22 @@ type Harness struct {
 	hooks      *HookDispatcher
 	router     *ModelRouter
 	extensions *ExtensionManager
-	mu         sync.RWMutex
+
+	// pendingSessionWrites buffers mutations during a turn.
+	// Flushed on agent_end to session.
+	pendingSessionWrites []PendingSessionWrite
+
+	mu sync.RWMutex
+}
+
+// PendingSessionWrite represents a buffered session mutation.
+type PendingSessionWrite struct {
+	Type            string
+	Message         *agent.AgentMessage
+	ModelProvider   string
+	ModelId         string
+	ThinkingLevel   string
+	ActiveToolNames []string
 }
 
 // Config holds the harness configuration.
@@ -60,6 +75,40 @@ func New(cfg Config) *Harness {
 		router:     cfg.Router,
 		extensions: cfg.Extensions,
 	}
+}
+
+// queuePendingWrite buffers a session mutation.
+func (h *Harness) queuePendingWrite(write PendingSessionWrite) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pendingSessionWrites = append(h.pendingSessionWrites, write)
+}
+
+// flushPendingWrites flushes buffered session mutations.
+// Returns true if there were pending mutations.
+func (h *Harness) flushPendingWrites() bool {
+	h.mu.Lock()
+	hadPending := len(h.pendingSessionWrites) > 0
+	writes := h.pendingSessionWrites
+	h.pendingSessionWrites = nil
+	h.mu.Unlock()
+
+	for _, write := range writes {
+		switch write.Type {
+		case "message":
+			if write.Message != nil {
+				h.agent.AppendMessage(*write.Message)
+			}
+		case "model_change":
+			// Model changes are handled by the agent directly
+		case "thinking_level_change":
+			// Thinking level changes are handled by the agent directly
+		case "active_tools_change":
+			// Active tools changes are handled by the agent directly
+		}
+	}
+
+	return hadPending
 }
 
 // Agent returns the underlying agent.
@@ -119,11 +168,11 @@ func (h *Harness) Run(ctx context.Context, prompts []agent.AgentMessage) ([]agen
 		})
 	}
 
-	// Emit save_point event (Pi parity)
-	// Ion doesn't have pendingSessionWrites, so hadPendingMutations is always false
+	// Flush pending session writes and emit save_point event
+	hadPendingMutations := h.flushPendingWrites()
 	h.hooks.Dispatch(ctx, HookEvent{
 		Type: OnSavePoint,
-		Payload: map[string]any{"hadPendingMutations": false},
+		Payload: map[string]any{"hadPendingMutations": hadPendingMutations},
 	})
 
 	return messages, err
