@@ -91,6 +91,10 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 
 	case terminalCommitLinesMsg:
 		return m, terminalCommitFlushCmd(msg.lines...), true
+
+	case tea.ResumeMsg:
+		// Resume from suspend - no special handling needed
+		return m, nil, true
 	}
 
 	return m, nil, false

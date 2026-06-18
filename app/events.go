@@ -68,6 +68,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.ToolOutputExpanded = !m.ToolOutputExpanded
 		return m, nil
 
+	case "ctrl+z":
+		m.clearPendingAction()
+		return m, tea.Suspend
+
 	case "ctrl+c":
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
