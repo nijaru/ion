@@ -80,7 +80,14 @@ func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []str
 			}
 			lines = append(lines, "")
 		case *ast.FencedCodeBlock:
-			lines = append(lines, m.renderMarkdownCodeBlock(n.Text(source), depth)...)
+			lang := ""
+			if n.Info != nil {
+				info := strings.TrimSpace(string(n.Info.Text(source)))
+				if info != "" {
+					lang = info
+				}
+			}
+			lines = append(lines, m.renderMarkdownCodeBlockWithLang(n.Text(source), lang, depth)...)
 			lines = append(lines, "")
 		case *ast.CodeBlock:
 			lines = append(lines, m.renderMarkdownCodeBlock(n.Text(source), depth)...)
@@ -205,6 +212,46 @@ func (m Model) renderMarkdownCodeBlock(content []byte, depth int) []string {
 		return nil
 	}
 	indent := strings.Repeat("  ", depth) + "  "
+
+	// Try syntax highlighting (no language specified)
+	highlighted := highlightSyntax(text, "")
+	if highlighted != text {
+		lines := strings.Split(highlighted, "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			out = append(out, indent+line)
+		}
+		return out
+	}
+
+	// Fallback to dim text
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, m.st.dim.Render(indent+line))
+	}
+	return out
+}
+
+func (m Model) renderMarkdownCodeBlockWithLang(content []byte, lang string, depth int) []string {
+	text := strings.TrimRight(string(content), "\n")
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	indent := strings.Repeat("  ", depth) + "  "
+
+	// Try syntax highlighting with language
+	highlighted := highlightSyntax(text, lang)
+	if highlighted != text {
+		lines := strings.Split(highlighted, "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			out = append(out, indent+line)
+		}
+		return out
+	}
+
+	// Fallback to dim text
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {

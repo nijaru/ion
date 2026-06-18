@@ -384,6 +384,10 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "Complete" 30
   assert_not_contains "## Canto"
   assert_line_count_at_most "• Here's the summary of both status files:" 1
+  # Verify code block is rendered (not raw markdown)
+  assert_contains 'func main()'
+  assert_contains 'fmt.Println'
+  assert_not_contains '```go'
   assert_visible_separator_line_count_at_most 2
   trace_pass "markdown_stream_commit"
 

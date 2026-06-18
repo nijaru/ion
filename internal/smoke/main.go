@@ -424,6 +424,14 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 		"- The markdown stream should not be committed raw.",
 		"- A long line with a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes must still fit the shell width.",
 		"",
+		"### Example with syntax highlighting",
+		"",
+		"```go",
+		"func main() {",
+		"\tfmt.Println(\"hello world\")", 
+		"}",
+		"```",
+		"",
 		"Bottom line: formatted final output should be the only committed assistant entry.",
 	}, "\n")})
 	b.emit(ctx, session.TurnEnd{})
