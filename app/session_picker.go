@@ -48,6 +48,11 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case "ctrl+n":
+		// Pi parity: Ctrl+N toggles named session filter
+		m.Picker.Session.namedOnly = !m.Picker.Session.namedOnly
+		m.pickerReducer().refreshSessionFilter(m.App.Workdir)
+		return m, nil
 	case "backspace":
 		m.pickerReducer().backspaceSessionQuery(m.App.Workdir)
 		return m, nil

@@ -381,10 +381,24 @@ func (r pickerReducer) refreshSessionFilter(workdir string) {
 		return
 	}
 	query := strings.TrimSpace(r.picker.Session.query)
+
+	// Start with all items or named-only items
+	var baseItems []sessionPickerItem
+	if r.picker.Session.namedOnly {
+		baseItems = make([]sessionPickerItem, 0)
+		for _, item := range r.picker.Session.items {
+			if item.info.Title != "" {
+				baseItems = append(baseItems, item)
+			}
+		}
+	} else {
+		baseItems = r.picker.Session.items
+	}
+
 	if query == "" {
 		r.picker.Session.filtered = append(
 			[]sessionPickerItem(nil),
-			r.picker.Session.items...,
+			baseItems...,
 		)
 		if len(r.picker.Session.filtered) == 0 {
 			r.picker.Session.index = 0
@@ -396,7 +410,7 @@ func (r pickerReducer) refreshSessionFilter(workdir string) {
 		return
 	}
 	r.picker.Session.filtered = rankedSessionPickerItems(
-		r.picker.Session.items,
+		baseItems,
 		query,
 		workdir,
 	)

@@ -205,6 +205,7 @@ type sessionPickerState struct {
 	err      string
 	loading  bool
 	request  uint64
+	namedOnly bool // Pi parity: filter to named sessions only
 }
 
 type pickerPurpose int
