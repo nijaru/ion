@@ -19,6 +19,28 @@ import (
 //  5. Accumulates the response into an assistant message
 //
 // Returns: AgentMessage (agent's representation), llm.Message (LLM's representation), error.
+
+// applyStreamOptionsPatch applies patches to stream options.
+func (l *AgentLoop) applyStreamOptionsPatch(patch *StreamOptionsPatch) {
+	if patch.TimeoutMs != nil {
+		l.config.StreamOptions.TimeoutMs = *patch.TimeoutMs
+	}
+	if patch.MaxRetries != nil {
+		l.config.StreamOptions.MaxRetries = *patch.MaxRetries
+	}
+	if patch.MaxRetryDelayMs != nil {
+		l.config.StreamOptions.MaxRetryDelayMs = *patch.MaxRetryDelayMs
+	}
+	if patch.Headers != nil {
+		if l.config.StreamOptions.Headers == nil {
+			l.config.StreamOptions.Headers = make(map[string]string)
+		}
+		for k, v := range patch.Headers {
+			l.config.StreamOptions.Headers[k] = v
+		}
+	}
+}
+
 func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
 	// Get messages from tree store and apply context transforms.
 	// Tree stores llm.Message; callbacks expect []AgentMessage.
@@ -98,6 +120,10 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		result := l.config.BeforeProviderRequest(ctx, hookCtx)
 		if result.Abort {
 			return AgentMessage{}, llm.Message{}, fmt.Errorf("aborted by beforeProviderRequest hook: %s", result.Reason)
+		}
+		// Apply stream options patch if provided
+		if result.StreamOptionsPatch != nil {
+			l.applyStreamOptionsPatch(result.StreamOptionsPatch)
 		}
 	}
 

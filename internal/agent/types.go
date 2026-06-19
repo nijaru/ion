@@ -160,6 +160,20 @@ type BeforeProviderRequestResult struct {
 	Abort bool `json:"abort,omitempty"`
 	// Reason is the reason for aborting.
 	Reason string `json:"reason,omitempty"`
+	// StreamOptions patches applied to the stream configuration.
+	StreamOptionsPatch *StreamOptionsPatch `json:"stream_options_patch,omitempty"`
+}
+
+// StreamOptionsPatch holds optional patches to stream options.
+type StreamOptionsPatch struct {
+	// TimeoutMs overrides the provider request timeout.
+	TimeoutMs *int `json:"timeout_ms,omitempty"`
+	// MaxRetries overrides the max retry attempts.
+	MaxRetries *int `json:"max_retries,omitempty"`
+	// MaxRetryDelayMs overrides the retry delay cap.
+	MaxRetryDelayMs *int `json:"max_retry_delay_ms,omitempty"`
+	// Headers are additional request headers merged with existing headers.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // BeforeProviderPayloadContext is passed to the beforeProviderPayload hook.
