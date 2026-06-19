@@ -86,6 +86,11 @@ type AfterAgentRunPayload struct {
 
 // ContextResult is the result for the context hook.
 // Return this via HookResult.Data to modify messages before LLM call.
+// CompactionResult is returned from before_compaction hooks to provide a custom summary.
+type CompactionResult struct {
+	Summary string
+}
+
 type ContextResult struct {
 	Messages []agent.AgentMessage
 }

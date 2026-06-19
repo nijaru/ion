@@ -1114,6 +1114,19 @@ func (a *Agent) Compact(ctx context.Context) (bool, error) {
 	return a.runCompaction(ctx)
 }
 
+// SetCompactionSummary sets a custom compaction summary from a hook.
+func (a *Agent) SetCompactionSummary(summary string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Add the summary as a compaction entry to the tree store
+	var parentID *string
+	if leaf := a.tree.Leaf(); leaf != nil {
+		id := leaf.ID
+		parentID = &id
+	}
+	a.tree.Add(session.NewCompactionEntry("hook-compaction", parentID, summary, "", 0))
+}
+
 // NavigateTreeOptions holds options for NavigateTree.
 type NavigateTreeOptions struct {
 	Summarize         bool

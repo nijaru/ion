@@ -312,6 +312,19 @@ func (h *Harness) Compact(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("aborted by before_compaction hook: %s", result.Reason)
 	}
 
+	// Check if hook provided a custom compaction result
+	if compactionResult, ok := result.Data.(CompactionResult); ok && compactionResult.Summary != "" {
+		// Use the hook-provided summary
+		h.agent.SetCompactionSummary(compactionResult.Summary)
+		h.hooks.Dispatch(ctx, HookEvent{
+			Type: AfterCompaction,
+			Payload: AfterCompactionPayload{
+				Summary: compactionResult.Summary,
+			},
+		})
+		return true, nil
+	}
+
 	// Run compaction
 	compacted, err := h.agent.Compact(ctx)
 
