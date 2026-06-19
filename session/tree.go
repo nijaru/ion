@@ -44,7 +44,8 @@ type TreeEntry struct {
 	ModelChange   *ModelChangeData    `json:"model_change,omitempty"`
 	ToolsChange   *ActiveToolsData    `json:"tools_change,omitempty"`
 	Label         *LabelData          `json:"label,omitempty"`
-	SessionInfo   *SessionInfoData    `json:"session_info,omitempty"`
+	SessionInfo   *SessionInfoData    `json:"session_info,omitempty`
+	Leaf          *LeafData           `json:"leaf,omitempty"`
 	Custom        *CustomData         `json:"custom,omitempty"`
 	CustomMessage *CustomMessageData  `json:"custom_message,omitempty"`
 }
@@ -104,6 +105,11 @@ type CustomMessageData struct {
 	Content    string `json:"content"`
 	Display    bool   `json:"display"`
 	Details    any    `json:"details,omitempty"`
+}
+
+// LeafData holds the target for a leaf entry.
+type LeafData struct {
+	TargetID string `json:"target_id"`
 }
 
 // SessionContext holds the extracted metadata and messages from a session path.
@@ -225,11 +231,11 @@ func NewSessionInfoEntry(id string, parentID *string, name string) *TreeEntry {
 // NewLeafEntry creates a leaf entry.
 func NewLeafEntry(id string, parentID *string, targetID string) *TreeEntry {
 	return &TreeEntry{
-		ID:       id,
-		ParentID: parentID,
-		Type:     EntryLeaf,
+		ID:        id,
+		ParentID:  parentID,
+		Type:      EntryLeaf,
 		Timestamp: time.Now(),
-		Label: &LabelData{
+		Leaf: &LeafData{
 			TargetID: targetID,
 		},
 	}
