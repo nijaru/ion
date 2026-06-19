@@ -459,3 +459,42 @@ func TestToolExecutionUpdateEventsEmittedDuringStreaming(t *testing.T) {
 		t.Errorf("expected 3 tool_execution_update events, got %d (events: %v)", updateCount, rec.events)
 }
 }
+
+func TestContinueEmitsAgentEndOnEarlyFailure(t *testing.T) {
+	// Create a loop with an empty tree store (will cause early failure)
+	state := AgentState{
+		SystemPrompt: "test",
+		Model:        llm.Model{ID: "test-model"},
+	}
+	var events []session.AgentEvent
+	emit := func(ev session.AgentEvent) {
+		events = append(events, ev)
+	}
+	loop := NewAgentLoop(AgentConfig{}, state, emit, "test-session")
+
+	ctx := context.Background()
+	_, err := loop.Continue(ctx)
+
+	// Should get an error
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+
+	// Check that AgentEnd was emitted
+	var hasAgentStart, hasAgentEnd bool
+	for _, ev := range events {
+		switch ev.(type) {
+		case session.AgentStart:
+			hasAgentStart = true
+		case session.AgentEnd:
+			hasAgentEnd = true
+		}
+	}
+
+	if !hasAgentStart {
+		t.Fatal("Missing AgentStart event")
+	}
+	if !hasAgentEnd {
+		t.Fatal("Missing AgentEnd event — subscribers would see unclosed agent run")
+	}
+}

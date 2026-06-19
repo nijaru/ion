@@ -73,7 +73,10 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 		}
 		result := l.config.BeforeAgentStart(ctx, hookCtx)
 		if result.Abort {
-			return nil, fmt.Errorf("aborted by beforeAgentStart hook: %s", result.Reason)
+			err := fmt.Errorf("aborted by beforeAgentStart hook: %s", result.Reason)
+			l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+			l.emit(session.AgentEnd{Base: session.BaseNow()})
+			return nil, err
 		}
 	}
 
@@ -99,6 +102,8 @@ func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMes
 			})
 		}
 		if err := l.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
+			l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+			l.emit(session.AgentEnd{Base: session.BaseNow()})
 			return newMessages, fmt.Errorf("write prompt message: %w", err)
 		}
 	}
@@ -133,11 +138,13 @@ func (l *AgentLoop) Continue(ctx context.Context) ([]AgentMessage, error) {
 	messages, err := l.tree.Messages()
 	if err != nil {
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		l.emit(session.AgentEnd{Base: session.BaseNow()})
 		return nil, fmt.Errorf("continue: %w", err)
 	}
 	if len(messages) == 0 {
 		err := fmt.Errorf("cannot continue: no messages in context")
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		l.emit(session.AgentEnd{Base: session.BaseNow()})
 		return nil, err
 	}
 
@@ -145,6 +152,7 @@ func (l *AgentLoop) Continue(ctx context.Context) ([]AgentMessage, error) {
 	if lastMsg.Role == "assistant" {
 		err := fmt.Errorf("cannot continue from message role: assistant")
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		l.emit(session.AgentEnd{Base: session.BaseNow()})
 		return nil, err
 	}
 
