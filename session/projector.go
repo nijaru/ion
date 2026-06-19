@@ -94,6 +94,10 @@ func (p Projector) HistoryEntry(entry HistoryEntry) (Entry, bool) {
 	if display, ok := p.ContextEntry(entry); ok {
 		return display, true
 	}
+	// Branch summaries are displayed as system entries with a prefix
+	if entry.EventType == BranchSummary {
+		return EntrySystem(entry.Message.TextContent(), time.Time{})
+	}
 	msg := entry.Message
 	switch msg.Role {
 	case llm.RoleUser:

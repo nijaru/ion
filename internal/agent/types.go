@@ -217,6 +217,9 @@ const (
 type AgentMessage struct {
 	// Role of the message (user, assistant, tool, system).
 	Role string `json:"role"`
+	// Type is the original entry type (e.g., "branchSummary", "compactionSummary", "custom").
+	// Empty for regular messages. Used to preserve type information for display.
+	Type string `json:"type,omitempty"`
 	// Parts are structured content parts (text, images, etc.).
 	// This is the single source of truth for message content.
 	Parts []llm.ContentPart `json:"parts,omitempty"`
