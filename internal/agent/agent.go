@@ -727,7 +727,7 @@ func (a *Agent) Resume(ctx context.Context, sessionID string) error {
 
 // treePath returns the path to the tree store file for this session.
 func (a *Agent) treePath() string {
-	return fmt.Sprintf(".pi/sessions/%s/tree.json", a.id)
+	return fmt.Sprintf(".ion/sessions/%s/tree.json", a.id)
 }
 
 // saveTree persists the tree store to disk.
