@@ -334,16 +334,18 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 }
 
 func TestCtrlCCancelsRunningTurn(t *testing.T) {
+	// Pi parity: Ctrl+C clears editor, Escape cancels running turn.
+	// This test verifies Escape cancels running turn.
 	sess := &stubSession{events: make(chan session.AgentEvent)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"follow up"}
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = testModel(t, updated)
 	if cmd == nil {
-		t.Fatal("ctrl+c while running should print durable cancellation")
+		t.Fatal("escape while running should print durable cancellation")
 	}
 	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should remain clear while running")

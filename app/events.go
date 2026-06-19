@@ -77,15 +77,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.pasteImageFromClipboard()
 
 	case "ctrl+c":
+		// Pi parity: Ctrl+C always clears editor.
+		// Escape cancels/aborts. Ctrl+D exits when empty.
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
 			m.resetComposerDraft()
 			return m, nil
 		}
-		if m.InFlight.Thinking {
-			m.clearPendingAction()
-			return m.cancelRunningTurn("Canceled by user")
-		}
+		// Editor is empty — arm quit on second press
 		if m.Input.Pending == pendingActionQuitCtrlC {
 			return m, tea.Quit
 		}
