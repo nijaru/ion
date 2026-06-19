@@ -57,6 +57,12 @@ const (
 	ChildMerged           EventType = "child_merged"
 	ArtifactRecorded      EventType = "artifact_recorded"
 
+	// Tree metadata
+	LabelChanged          EventType = "label_changed"
+	SessionInfoChanged    EventType = "session_info_changed"
+	CustomEntry           EventType = "custom_entry"
+	CustomMessageEntry    EventType = "custom_message_entry"
+
 	// Framework Extensions
 	ToolOutputDeltaType EventType = "tool_output_delta"
 )

@@ -816,6 +816,13 @@ func (a *Agent) SetSession(sess session.SessionHandle) {
 	a.sess = sess
 }
 
+// Session returns the storage session handle.
+func (a *Agent) Session() session.SessionHandle {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sess
+}
+
 // SteerTurn sends steering input during an active turn.
 func (a *Agent) SteerTurn(
 	ctx context.Context,

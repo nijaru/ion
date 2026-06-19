@@ -117,6 +117,18 @@ type SessionHandle interface {
 
 	// Close finalizes and closes any open file handles for the session.
 	Close() error
+
+	// AppendLabel tags targetID with the given label.
+	AppendLabel(ctx context.Context, targetID string, label string) (string, error)
+
+	// AppendCustomEntry appends a custom entry (for extensions).
+	AppendCustomEntry(ctx context.Context, customType string, data any) (string, error)
+
+	// AppendCustomMessageEntry appends a custom message entry (for extensions).
+	AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error)
+
+	// AppendSessionInfo appends a session info entry (e.g., display name).
+	AppendSessionInfo(ctx context.Context, name string) (string, error)
 }
 
 // Metadata represents the persistent meta for a session.

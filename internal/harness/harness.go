@@ -50,6 +50,20 @@ type PendingSessionWrite struct {
 	ModelId         string
 	ThinkingLevel   string
 	ActiveToolNames []string
+
+	// Label support
+	TargetID string
+	Label    string
+
+	// Custom entry support
+	CustomType string
+	Data       any
+	Content    string
+	Display    string
+	Details    string
+
+	// Session info
+	Name string
 }
 
 // Config holds the harness configuration.
@@ -118,6 +132,8 @@ func (h *Harness) flushPendingWrites() bool {
 	h.pendingSessionWrites = nil
 	h.mu.Unlock()
 
+	sess := h.agent.Session()
+
 	for _, write := range writes {
 		switch write.Type {
 		case "message":
@@ -150,6 +166,22 @@ func (h *Harness) flushPendingWrites() bool {
 				Type: OnToolsUpdate,
 				Payload: map[string]any{"toolNames": write.ActiveToolNames, "source": "flush"},
 			})
+		case "label":
+			if sess != nil {
+				sess.AppendLabel(context.Background(), write.TargetID, write.Label)
+			}
+		case "custom":
+			if sess != nil {
+				sess.AppendCustomEntry(context.Background(), write.CustomType, write.Data)
+			}
+		case "custom_message":
+			if sess != nil {
+				sess.AppendCustomMessageEntry(context.Background(), write.CustomType, write.Content, write.Display, write.Details)
+			}
+		case "session_info":
+			if sess != nil {
+				sess.AppendSessionInfo(context.Background(), write.Name)
+			}
 		}
 	}
 
@@ -425,6 +457,75 @@ func (h *Harness) SetActiveTools(toolNames []string) {
 		Type: OnToolsUpdate,
 		Payload: map[string]any{"activeToolNames": toolNames, "previousActiveToolNames": previousActiveToolNames, "source": "set"},
 	})
+}
+
+// AppendLabel tags targetID with the given label. Empty label clears.
+// Buffered if a turn is in progress.
+func (h *Harness) AppendLabel(targetID string, label string) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:     "label",
+			TargetID: targetID,
+			Label:    label,
+		})
+		return
+	}
+	sess := h.agent.Session()
+	if sess != nil {
+		sess.AppendLabel(context.Background(), targetID, label)
+	}
+}
+
+// AppendCustomEntry appends a custom entry (for extensions).
+// Buffered if a turn is in progress.
+func (h *Harness) AppendCustomEntry(customType string, data any) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:       "custom",
+			CustomType: customType,
+			Data:       data,
+		})
+		return
+	}
+	sess := h.agent.Session()
+	if sess != nil {
+		sess.AppendCustomEntry(context.Background(), customType, data)
+	}
+}
+
+// AppendCustomMessageEntry appends a custom message entry (for extensions).
+// Buffered if a turn is in progress.
+func (h *Harness) AppendCustomMessageEntry(customType string, content string, display string, details string) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:       "custom_message",
+			CustomType: customType,
+			Content:    content,
+			Display:    display,
+			Details:    details,
+		})
+		return
+	}
+	sess := h.agent.Session()
+	if sess != nil {
+		sess.AppendCustomMessageEntry(context.Background(), customType, content, display, details)
+	}
+}
+
+// SetSessionName sets the session display name.
+// Buffered if a turn is in progress.
+func (h *Harness) SetSessionName(name string) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+		Type: "session_info",
+			Name: name,
+		})
+		return
+	}
+	sess := h.agent.Session()
+	if sess != nil {
+		sess.AppendSessionInfo(context.Background(), name)
+	}
 }
 
 // SetSteeringMode sets the steering queue mode.

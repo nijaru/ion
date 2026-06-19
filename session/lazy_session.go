@@ -170,3 +170,39 @@ func IsMaterialized(sess SessionHandle) bool {
 	}
 	return true
 }
+
+// AppendLabel tags targetID with the given label.
+func (s *LazySession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	created, err := s.Ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	return created.AppendLabel(ctx, targetID, label)
+}
+
+// AppendCustomEntry appends a custom entry (for extensions).
+func (s *LazySession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
+	created, err := s.Ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	return created.AppendCustomEntry(ctx, customType, data)
+}
+
+// AppendCustomMessageEntry appends a custom message entry (for extensions).
+func (s *LazySession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
+	created, err := s.Ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	return created.AppendCustomMessageEntry(ctx, customType, content, display, details)
+}
+
+// AppendSessionInfo appends a session info entry (e.g., display name).
+func (s *LazySession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	created, err := s.Ensure(ctx)
+	if err != nil {
+		return "", err
+	}
+	return created.AppendSessionInfo(ctx, name)
+}

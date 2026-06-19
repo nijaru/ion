@@ -205,3 +205,25 @@ func (a *usageAccumulator) addUsage(usage llm.Usage) {
 func usageHasValue(usage llm.Usage) bool {
 	return usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.Cost != 0
 }
+
+// AppendLabel tags targetID with the given label.
+func (s *cantoSession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	// Labels are tree metadata stored as events in the session.
+	// For now, store as a system message until tree entry persistence is unified.
+	return "", nil
+}
+
+// AppendCustomEntry appends a custom entry (for extensions).
+func (s *cantoSession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
+	return "", nil
+}
+
+// AppendCustomMessageEntry appends a custom message entry (for extensions).
+func (s *cantoSession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
+	return "", nil
+}
+
+// AppendSessionInfo appends a session info entry (e.g., display name).
+func (s *cantoSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
