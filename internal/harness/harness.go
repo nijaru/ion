@@ -35,6 +35,10 @@ type Harness struct {
 	// Flushed on agent_end to session.
 	pendingSessionWrites []PendingSessionWrite
 
+	// busy guards concurrent operations (Run, Compact, NavigateTree).
+	// Pi throws "busy" when attempting concurrent operations.
+	busy bool
+
 	mu sync.RWMutex
 }
 
@@ -77,6 +81,25 @@ func New(cfg Config) *Harness {
 		router:     cfg.Router,
 		extensions: cfg.Extensions,
 	}
+}
+
+// acquireBusy tries to set the busy flag.
+// Returns an error if already busy (Pi parity: throws "busy").
+func (h *Harness) acquireBusy() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.busy {
+		return fmt.Errorf("busy: another operation is in progress")
+	}
+	h.busy = true
+	return nil
+}
+
+// releaseBusy clears the busy flag.
+func (h *Harness) releaseBusy() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.busy = false
 }
 
 // queuePendingWrite buffers a session mutation.
@@ -136,6 +159,11 @@ func (h *Harness) Extensions() *ExtensionManager {
 // Run starts the agent loop with the given prompt messages.
 // It dispatches lifecycle hooks around the agent run.
 func (h *Harness) Run(ctx context.Context, prompts []agent.AgentMessage) ([]agent.AgentMessage, error) {
+	if err := h.acquireBusy(); err != nil {
+		return nil, err
+	}
+	defer h.releaseBusy()
+
 	// Dispatch before_agent_start hook
 	result, err := h.hooks.Dispatch(ctx, HookEvent{
 		Type: BeforeAgentStart,
@@ -247,6 +275,11 @@ func (h *Harness) FollowUpTurn(ctx context.Context, text string) (session.Queued
 // Compact runs compaction on the session.
 // Returns true if compaction occurred.
 func (h *Harness) Compact(ctx context.Context) (bool, error) {
+	if err := h.acquireBusy(); err != nil {
+		return false, err
+	}
+	defer h.releaseBusy()
+
 	// Dispatch before_compaction hook
 	result, err := h.hooks.Dispatch(ctx, HookEvent{
 		Type: BeforeCompaction,
@@ -390,6 +423,11 @@ func (h *Harness) NextTurn(msg agent.AgentMessage) {
 // NavigateTree moves the active leaf to the target entry.
 // If summarize is true, a branch summary is generated for entries between old leaf and target.
 func (h *Harness) NavigateTree(ctx context.Context, targetID string, options agent.NavigateTreeOptions) (agent.NavigateTreeResult, error) {
+	if err := h.acquireBusy(); err != nil {
+		return agent.NavigateTreeResult{}, err
+	}
+	defer h.releaseBusy()
+
 	// Get current leaf ID for hook payload
 	oldLeafID := ""
 	if h.agent != nil {
