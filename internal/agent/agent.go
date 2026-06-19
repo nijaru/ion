@@ -230,6 +230,13 @@ func (a *Agent) State() AgentState {
 	return a.state
 }
 
+// IsTurnInProgress returns true if a turn is currently being executed.
+func (a *Agent) IsTurnInProgress() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.turnCtx != nil
+}
+
 // SetSystemPrompt sets the system prompt for the agent.
 func (a *Agent) SetSystemPrompt(prompt string) {
 	a.mu.Lock()

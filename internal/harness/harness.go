@@ -125,11 +125,31 @@ func (h *Harness) flushPendingWrites() bool {
 				h.agent.AppendMessage(*write.Message)
 			}
 		case "model_change":
-			// Model changes are handled by the agent directly
-		case "thinking_level_change":
-			// Thinking level changes are handled by the agent directly
-		case "active_tools_change":
-			// Active tools changes are handled by the agent directly
+			model := llm.Model{Provider: write.ModelProvider, ID: write.ModelId}
+			h.agent.SetModel(model)
+			h.hooks.Dispatch(context.Background(), HookEvent{
+				Type: OnModelUpdate,
+				Payload: map[string]any{"model": model},
+			})
+		case "thinking_level":
+			level := agent.ThinkingLevel(write.ThinkingLevel)
+			previousLevel := h.agent.State().ThinkingLevel
+			h.agent.SetThinkingLevel(level)
+			h.hooks.Dispatch(context.Background(), HookEvent{
+				Type: OnThinkingLevelUpdate,
+				Payload: map[string]any{"level": level, "previousLevel": previousLevel},
+			})
+		case "tools_change":
+			// Convert tool names to AgentTool objects
+			var tools []agent.AgentTool
+			for _, name := range write.ActiveToolNames {
+				tools = append(tools, agent.AgentTool{Name: name})
+			}
+			h.agent.SetTools(tools)
+			h.hooks.Dispatch(context.Background(), HookEvent{
+				Type: OnToolsUpdate,
+				Payload: map[string]any{"toolNames": write.ActiveToolNames, "source": "flush"},
+			})
 		}
 	}
 
@@ -306,6 +326,15 @@ func (h *Harness) Compact(ctx context.Context) (bool, error) {
 
 // SetModel updates the agent's model.
 func (h *Harness) SetModel(model llm.Model) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:          "model_change",
+			ModelProvider: model.Provider,
+			ModelId:       model.ID,
+		})
+		return
+	}
+
 	h.agent.SetModel(model)
 
 	// Dispatch model_update hook
@@ -316,7 +345,16 @@ func (h *Harness) SetModel(model llm.Model) {
 }
 
 // SetThinkingLevel updates the agent's thinking level.
+// If a turn is in progress, the change is buffered and applied at turn_end.
 func (h *Harness) SetThinkingLevel(level agent.ThinkingLevel) {
+	if h.agent.IsTurnInProgress() {
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:          "thinking_level",
+			ThinkingLevel: string(level),
+		})
+		return
+	}
+
 	previousLevel := h.agent.State().ThinkingLevel
 	h.agent.SetThinkingLevel(level)
 
@@ -328,7 +366,20 @@ func (h *Harness) SetThinkingLevel(level agent.ThinkingLevel) {
 }
 
 // SetTools updates the agent's available tools.
+// If a turn is in progress, the change is buffered and applied at turn_end.
 func (h *Harness) SetTools(tools []agent.AgentTool) {
+	if h.agent.IsTurnInProgress() {
+		toolNames := make([]string, len(tools))
+		for i, t := range tools {
+			toolNames[i] = t.Name
+		}
+		h.queuePendingWrite(PendingSessionWrite{
+			Type:            "tools_change",
+			ActiveToolNames: toolNames,
+		})
+		return
+	}
+
 	previousTools := h.agent.State().AllTools
 	h.agent.SetTools(tools)
 
