@@ -78,6 +78,11 @@ func New(config AgentConfig) *Agent {
 			select {
 			case a.events <- ev:
 			default:
+				// Channel full — event dropped. Log for observability.
+				// Blocking would stall the agent loop.
+				if a.config.Logger != nil {
+					a.config.Logger.Warn("event channel full, dropping event")
+				}
 			}
 		}
 	}

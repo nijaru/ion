@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"os"
 
 	"github.com/nijaru/ion/llm"
@@ -65,6 +66,8 @@ type AgentConfig struct {
 	StreamingToolExecutor StreamingToolExecutor `json:"-"`
 	OnEvent       func(event session.AgentEvent) `json:"-"`
 	OnModelMessage ModelMessageWriter `json:"-"`
+	// Logger is optional. If nil, logging is skipped.
+	Logger        *slog.Logger    `json:"-"`
 
 	// Execution settings
 	ToolExecutionMode ToolExecutionMode `json:"tool_execution_mode"`
