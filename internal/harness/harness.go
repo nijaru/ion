@@ -15,7 +15,9 @@ package harness
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
@@ -440,6 +442,15 @@ func (h *Harness) Abort() {
 	}
 
 	h.agent.Abort()
+
+	// Wait for the turn to complete (Pi parity: abort waits for idle)
+	// Use a reasonable timeout to avoid blocking forever
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.WaitForIdle(waitCtx); err != nil {
+		// Log but don't fail — the abort itself succeeded
+		slog.Warn("abort: wait for idle", "error", err)
+	}
 
 	// Dispatch abort hook (Pi parity)
 	h.hooks.Dispatch(context.Background(), HookEvent{
