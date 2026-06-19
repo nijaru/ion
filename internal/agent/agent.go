@@ -40,6 +40,7 @@ type Agent struct {
 	followUpQueue []string
 	turnCtx       context.Context
 	cancel        context.CancelFunc
+	idleCh        chan struct{} // closed when turn completes
 
 	// Recovery state
 	overflowAttempted bool
@@ -1339,6 +1340,7 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.turnCtx = turnCtx
 	a.cancel = cancel
+	a.idleCh = make(chan struct{})
 
 	// Check if auto-compaction is needed before submitting
 	if a.needsCompaction() && a.config.CompactFunc != nil {
@@ -1390,6 +1392,10 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 	if err := a.writeModelMessage(turnCtx, agentMessageToLLM(userMsg)); err != nil {
 		a.mu.Lock()
 		a.cancel = nil
+		if a.idleCh != nil {
+			close(a.idleCh)
+			a.idleCh = nil
+		}
 		a.turnCtx = nil
 		a.mu.Unlock()
 		cancel()
@@ -1404,6 +1410,10 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 			// A newer SubmitTurn may have replaced it.
 			if a.turnCtx == turnCtx {
 				a.cancel = nil
+				if a.idleCh != nil {
+					close(a.idleCh)
+					a.idleCh = nil
+				}
 				a.turnCtx = nil
 				a.overflowAttempted = false
 				a.retryAttempt = 0
@@ -1419,27 +1429,20 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 // WaitForIdle blocks until the agent is idle (no active turn).
 func (a *Agent) WaitForIdle(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// If already idle, return immediately
+	a.mu.RLock()
 	if a.turnCtx == nil {
+		a.mu.RUnlock()
 		return nil
 	}
+	idleCh := a.idleCh
+	a.mu.RUnlock()
 
-	// Wait for turn to complete
-	for a.turnCtx != nil {
-		a.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			a.mu.Lock()
-			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
-			a.mu.Lock()
-		}
+	select {
+	case <-idleCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	return nil
 }
 
 // Reset clears the agent state and emits a fresh start.
