@@ -597,6 +597,15 @@ func buildSessionContextFromEntries(pathEntries []TreeEntry) SessionContext {
 			}
 		case EntryCustom:
 			// Custom entries are ignored in message context
+		case EntryCustomMessage:
+			// Custom message entries are included in context as user messages
+			if entry.CustomMessage != nil {
+				ctx.Messages = append(ctx.Messages, llm.Message{
+					Role:      "user",
+					Content:   entry.CustomMessage.Content,
+					Timestamp: entry.Timestamp.UnixMilli(),
+				})
+			}
 		}
 	}
 
