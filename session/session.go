@@ -167,9 +167,12 @@ func (s *Session) activeEventsLocked() ([]Event, error) {
 		return nil, nil
 	}
 
-	// Build parent map
+	// Build event lookup and parent map
+	eventByID := make(map[string]*Event)
 	parentMap := make(map[string]string)
-	for _, e := range s.events {
+	for i := range s.events {
+		e := &s.events[i]
+		eventByID[e.ID.String()] = e
 		if e.ParentID != "" {
 			parentMap[e.ID.String()] = e.ParentID
 		}
@@ -179,8 +182,15 @@ func (s *Session) activeEventsLocked() ([]Event, error) {
 	var path []string
 	current := s.activeLeafID
 	for current != "" {
+		if _, exists := eventByID[current]; !exists {
+			return nil, fmt.Errorf("path integrity: event %s not found", current)
+		}
 		path = append(path, current)
-		current = parentMap[current]
+		parent, hasParent := parentMap[current]
+		if !hasParent {
+			break // reached root
+		}
+		current = parent
 	}
 
 	// Reverse to get root-first order
@@ -191,11 +201,8 @@ func (s *Session) activeEventsLocked() ([]Event, error) {
 	// Collect events in path order
 	result := make([]Event, 0, len(path))
 	for _, id := range path {
-		for _, e := range s.events {
-			if e.ID.String() == id {
-				result = append(result, e)
-				break
-			}
+		if e, ok := eventByID[id]; ok {
+			result = append(result, *e)
 		}
 	}
 	return result, nil
@@ -219,4 +226,12 @@ func (s *Session) ActiveLeafID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeLeafID
+}
+
+// ActivePath returns events on the active path from root to leaf.
+// Returns an error if a parent event is missing (corrupted session).
+func (s *Session) ActivePath() ([]Event, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeEventsLocked()
 }

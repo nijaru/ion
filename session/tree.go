@@ -52,8 +52,10 @@ type TreeEntry struct {
 // CompactionData holds summarized context.
 type CompactionData struct {
 	Summary          string `json:"summary"`
-	FirstKeptEntryID string `json:"first_kept_entry_id"`
-	TokensBefore     int    `json:"tokens_before"`
+	FirstKeptEntryID string `json:"first_kept_entry_id,omitempty"`
+	TokensBefore     int    `json:"tokens_before,omitempty"`
+	Details          any    `json:"details,omitempty"`
+	FromHook         bool   `json:"from_hook,omitempty"`
 }
 
 // TreeBranchSummaryData holds a summary of a branch in the tree.
@@ -492,12 +494,13 @@ func (t *TreeStore) Path(fromID, toID string) ([]*TreeEntry, error) {
 
 // PathToRoot returns all entries on the path from root to the active leaf.
 // Entries are in root-first order (oldest first).
-func (t *TreeStore) PathToRoot() []TreeEntry {
+// Returns an error if a parent entry is missing (corrupted session).
+func (t *TreeStore) PathToRoot() ([]TreeEntry, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	if t.leafID == "" {
-		return nil
+		return nil, nil
 	}
 
 	var entries []TreeEntry
@@ -505,7 +508,12 @@ func (t *TreeStore) PathToRoot() []TreeEntry {
 	for current != "" {
 		entry, ok := t.entries[current]
 		if !ok {
-			break
+			return nil, fmt.Errorf("path integrity: entry %s not found (parent of %s)", current, func() string {
+				if len(entries) > 0 {
+					return entries[len(entries)-1].ID
+				}
+				return "leaf"
+			}())
 		}
 		entries = append(entries, *entry)
 		if entry.ParentID == nil {
@@ -518,14 +526,17 @@ func (t *TreeStore) PathToRoot() []TreeEntry {
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
 		entries[i], entries[j] = entries[j], entries[i]
 	}
-	return entries
+	return entries, nil
 }
 
 // BuildSessionContext extracts metadata and messages from the active path.
 // This matches Pi's buildSessionContext function.
-func (t *TreeStore) BuildSessionContext() SessionContext {
-	pathEntries := t.PathToRoot()
-	return buildSessionContextFromEntries(pathEntries)
+func (t *TreeStore) BuildSessionContext() (SessionContext, error) {
+	pathEntries, err := t.PathToRoot()
+	if err != nil {
+		return SessionContext{}, err
+	}
+	return buildSessionContextFromEntries(pathEntries), nil
 }
 
 // buildSessionContextFromEntries implements the core logic.
@@ -637,8 +648,12 @@ func buildSessionContextFromEntries(pathEntries []TreeEntry) SessionContext {
 
 // Messages returns all message entries on the path from root to the active leaf.
 // This is a convenience wrapper around BuildSessionContext.
-func (t *TreeStore) Messages() []llm.Message {
-	return t.BuildSessionContext().Messages
+func (t *TreeStore) Messages() ([]llm.Message, error) {
+	ctx, err := t.BuildSessionContext()
+	if err != nil {
+		return nil, err
+	}
+	return ctx.Messages, nil
 }
 
 // CommonAncestor returns the ID of the nearest common ancestor of two entries.

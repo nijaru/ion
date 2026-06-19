@@ -199,3 +199,42 @@ func TestSessionBranchRequiresSessionBranchWriter(t *testing.T) {
 		t.Fatal("expected branch without session-branch writer to fail")
 	}
 }
+
+func TestSessionPathIntegrity_MissingParent(t *testing.T) {
+	store := New("test-session")
+	ctx := context.Background()
+
+	// Add a normal event
+	e1 := NewMessage("test-session", llm.Message{Role: llm.RoleUser, Content: "hello"})
+	if err := store.Append(ctx, e1); err != nil {
+		t.Fatalf("Append e1: %v", err)
+	}
+
+	// Add a second event with a parent
+	e2 := NewMessage("test-session", llm.Message{Role: llm.RoleAssistant, Content: "hi"})
+	e2.ParentID = e1.ID.String()
+	if err := store.Append(ctx, e2); err != nil {
+		t.Fatalf("Append e2: %v", err)
+	}
+
+	// Corrupt the store by removing event-1
+	id1 := e1.ID
+	store.mu.Lock()
+	var filtered []Event
+	for _, e := range store.events {
+		if e.ID != id1 {
+			filtered = append(filtered, e)
+		}
+	}
+	store.events = filtered
+	store.mu.Unlock()
+
+	// PathToRoot should return an error, not truncate
+	_, err := store.ActivePath()
+	if err == nil {
+		t.Fatal("Expected error for missing parent, got nil")
+	}
+	if !strings.Contains(err.Error(), "path integrity") {
+		t.Fatalf("Expected path integrity error, got: %v", err)
+	}
+}

@@ -130,7 +130,11 @@ func (l *AgentLoop) addToTree(parentID *string, msg *llm.Message) *string {
 func (l *AgentLoop) Continue(ctx context.Context) ([]AgentMessage, error) {
 	l.emit(session.AgentStart{Base: session.BaseNow()})
 
-	messages := l.tree.Messages()
+	messages, err := l.tree.Messages()
+	if err != nil {
+		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
+		return nil, fmt.Errorf("continue: %w", err)
+	}
 	if len(messages) == 0 {
 		err := fmt.Errorf("cannot continue: no messages in context")
 		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
@@ -314,15 +318,23 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			})
 
 			// Prepare next turn (may update context/model/thinking level)
+			ctx, err := l.buildContext()
+			if err != nil {
+				return nil, err
+			}
 			turnContext := ShouldStopAfterTurnContext{
 				Message:     llmMessage,
 				ToolResults: agentMessagesToLLM(toolResults),
-				Context:     l.buildContext(),
+				Context:     ctx,
 				NewMessages: cloneAgentMessages(newMessages),
 			}
 			if l.config.PrepareNextTurn != nil {
 				l.applyTurnUpdate(l.config.PrepareNextTurn(turnContext))
-				turnContext.Context = l.buildContext()
+				ctx, err = l.buildContext()
+				if err != nil {
+					return nil, err
+				}
+				turnContext.Context = ctx
 			}
 
 			// Check if we should stop
@@ -365,9 +377,12 @@ func (l *AgentLoop) getFollowUpMessages() []AgentMessage {
 }
 
 // buildContext builds the current AgentContext from the loop state.
-func (l *AgentLoop) buildContext() AgentContext {
+func (l *AgentLoop) buildContext() (AgentContext, error) {
 	// Convert llm.Message to AgentMessage
-	llmMessages := l.tree.Messages()
+	llmMessages, err := l.tree.Messages()
+	if err != nil {
+		return AgentContext{}, fmt.Errorf("build context: %w", err)
+	}
 	messages := make([]AgentMessage, 0, len(llmMessages))
 	for _, msg := range llmMessages {
 		messages = append(messages, llmMessageToAgent(msg))
@@ -378,7 +393,7 @@ func (l *AgentLoop) buildContext() AgentContext {
 		Tools:         l.state.Tools,
 		Model:         l.state.Model,
 		ThinkingLevel: l.state.ThinkingLevel,
-	}
+	}, nil
 }
 
 // applyTurnUpdate applies a turn update to the loop state.
@@ -421,7 +436,12 @@ func (l *AgentLoop) writeModelMessage(ctx context.Context, message llm.Message) 
 // Messages returns the current message history from the tree store.
 func (l *AgentLoop) Messages() []AgentMessage {
 	// Convert llm.Message to AgentMessage
-	llmMessages := l.tree.Messages()
+	llmMessages, err := l.tree.Messages()
+	if err != nil {
+		// Log error but return empty slice to avoid breaking callers
+		// The error will be surfaced through the next turn attempt
+		return nil
+	}
 	result := make([]AgentMessage, 0, len(llmMessages))
 	for _, msg := range llmMessages {
 		result = append(result, llmMessageToAgent(msg))

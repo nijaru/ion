@@ -242,11 +242,19 @@ func (l *AgentLoop) prepareToolCall(
 		}
 	}
 	if l.config.BeforeToolCall != nil {
+		bc, bcErr := l.buildContext()
+		if bcErr != nil {
+			return toolPreparation{
+				Kind:    "immediate",
+				Result:  errorToolResult(fmt.Sprintf("Tool %s: context build failed: %v", toolCall.Name, bcErr)),
+				IsError: true,
+			}
+		}
 		before := l.config.BeforeToolCall(ctx, BeforeToolCallContext{
 			AssistantMessage: assistantLLM,
 			ToolCall:         toolCall,
 			Args:             toolCall.Arguments,
-			Context:          l.buildContext(),
+			Context:          bc,
 		})
 		// Pi parity: check cancellation after beforeToolCall hook.
 		if ctx.Err() != nil {
@@ -325,13 +333,19 @@ func (l *AgentLoop) finalizeExecutedToolCall(
 	isError bool,
 ) (AgentToolResult, bool) {
 	if l.config.AfterToolCall != nil {
+		bc, bcErr := l.buildContext()
+		if bcErr != nil {
+			result.IsError = true
+			result.Content = []llm.ContentPart{llm.TextPart(fmt.Sprintf("Context build failed: %v", bcErr))}
+			return result, true
+		}
 		after := l.config.AfterToolCall(ctx, AfterToolCallContext{
 			AssistantMessage: assistantLLM,
 			ToolCall:         prepared.ToolCall,
 			Args:             prepared.Args,
 			Result:           result,
 			IsError:          isError,
-			Context:          l.buildContext(),
+			Context:          bc,
 		})
 		if after.Content != nil {
 			result.Content = after.Content

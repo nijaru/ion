@@ -22,7 +22,10 @@ import (
 func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
 	// Get messages from tree store and apply context transforms.
 	// Tree stores llm.Message; callbacks expect []AgentMessage.
-	llmMessages := l.tree.Messages()
+	llmMessages, err := l.tree.Messages()
+	if err != nil {
+		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
+	}
 	if l.config.TransformContext != nil || l.config.ConvertToLlm != nil {
 		// Convert to AgentMessage for transform/converter
 		agentMessages := make([]AgentMessage, 0, len(llmMessages))

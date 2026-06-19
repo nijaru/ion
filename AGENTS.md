@@ -1,167 +1,145 @@
 # Agent Instructions
 
-Ion is an early-stage terminal coding agent. This file is stable operating
-policy — not a changelog.
+## Project
+
+Ion is a terminal coding agent in Go, modeled on Pi (Node.js). Goal: a fast,
+native daily-driver coding agent. Pi is the **reference implementation** — read
+its source for behavior, but implement idiomatically in Go. Not strict parity.
+
+Ion is `v0.0.0`. Clean breaks allowed. No shims, no compatibility layers, no v2
+files. Fix the actual code.
+
+**P1 bar:** `submit → stream → tool call/result → cancel/error → persist →
+replay/resume`. This must work under tmux, race detector, and live providers.
 
 ## Session Start
 
-1. Read `ai/brief.md` (required — active context snapshot)
-2. Read `ai/STATUS.md` (current phase and blockers)
-3. Run `tk ready` to see next task
-4. Before investigating: check `tk show <id>`, relevant `ai/` files, git history
+1. `cat ai/brief.md` — current state
+2. `tk ready` — next task
+3. `git log --oneline -10` — recent changes
 
-**Update `ai/` as you work**, not just at session end. If you discover
-something that changes the picture, update the relevant file immediately.
+Update `ai/` as you work when state changes materially.
 
-## Project
+## Project Layout
 
-- Ion is the product: CLI/TUI UX, session management, provider integration,
-  settings, and coding tools.
-- Product roadmap: Pi-level core first, then Pi+ extras that improve the
-  coding workflow without destabilizing the core loop.
-- P1 bar: `submit → stream → tool call/result → cancel/error → persist →
-  replay/resume`. This must work under tmux, race detector, and live providers.
-- Ion is `v0.0.0`. Clean breaks are allowed. No compatibility shims, fallback
-  branches, or migration scaffolding unless explicitly asked.
-- The native Go path is primary. ACP, subagents, background agents, sandbox
-  modes, workflows, and other Pi+ features stay parked until `ai/PLAN.md` and
-  `tk` promote them.
+- `internal/agent/` — agent loop, stream, tools, config (the core)
+- `internal/harness/` — harness with hooks (wraps the agent)
+- `session/` — session tree (source of truth), events, settings, projection
+- `app/` — TUI (Bubble Tea v2), markdown, syntax highlighting
+- `llm/` — LLM message types and providers (anthropic, openai, openrouter, etc.)
+- `tool/` — tool interface and implementations (bash, edit, read, glob, grep)
+- `tool/mcp/` — MCP client (stdio) and first-party MCP server
+- `config/` — settings loading
+- `archive/` — stale code, ignored (tests may fail there, not blocking)
 
-## Work Method
+## Reference Posture
 
-**Always refactor towards the optimal solution.** Early-stage development means
-every piece of debt compounds. Never leave cruft, half-baked workarounds, or
-"good enough" patches. If code could be cleaner, simpler, or more correct —
-fix it now.
+**Pi is a reference, not a spec to copy line-by-line.** Pi source:
+`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`
 
-**Read before changing.** Target file, immediate callers, shared utilities,
-`ai/` context, and the active `tk` task.
+1. Read Pi's source for the feature you're building
+2. Understand the invariant (what guarantee it provides)
+3. Express it idiomatically in Go (errors not exceptions, channels not
+   EventStream, defer not try/finally)
+4. Document intentional divergence
 
-**Contract-first fixes over patch-first.** When fixing core loop bugs:
-1. Identify the owner (which layer owns the guarantee).
-2. Add or update focused tests for the invariant.
-3. Fix at the right layer; simplify duplicates after.
+## Implementation Rules
 
-**Pi-parity work** (features or fixes that match Pi's behavior):
+1. **Read Pi source first** — find the exact function, understand the behavior
+2. **Fix actual code** — no shims, wrappers, or v2 files at v0
+3. **Test behavior, not existence** — verify `GetLabel("x")` returns the right
+   string, not just that it compiles
+4. **One layer owns each guarantee** — no duplicate ownership across files
+5. **Surgical changes** — no opportunistic reformat
+6. **Root causes, not symptoms** — when a module repeatedly lets bugs through,
+   rewrite it
 
-## Verification Standard
-
-**Every claim of "done" needs evidence.** This applies to parity items,
-bug fixes, and feature implementations.
+## Verification
 
 ### What counts as evidence
-- **Source comparison**: Pi file + line numbers vs Ion file + line numbers
-- **Test output**: command run + pass/fail result
-- **Behavioral proof**: terminal output showing the feature works
+- **Pi source**: file.js:line_number
+- **Ion source**: file.go:line_number
+- **Test output**: command + pass/fail with actual output
+- **Behavioral proof**: terminal output showing it works
 
 ### What does NOT count
 - "I implemented a function with that name"
 - "The checklist says ✅"
+- "Tests pass" (without showing which tests)
 - "I remember doing this"
-- "It should work based on the code I wrote"
 
-### Pi-parity workflow
-1. **Read Pi's source FIRST** — find the exact function in `pi-agent-core/dist/`
-2. **Read Ion's implementation** — find the corresponding code
-3. **Compare behavior** — same inputs → same outputs? Same edge cases handled?
-4. **Record evidence** — Pi source lines, Ion source lines, test output
-5. **Update PI-PARITY-CHECKLIST.md** — mark verified with evidence
+### Done workflow
+1. Read Pi source for the feature
+2. Implement in Ion's actual code (no shims)
+3. Write behavioral test
+4. Run test, show output
+5. If substantial: spawn parallel reviewers for source comparison
+6. Only then claim done
 
-### When you find a gap
-- Add it to `ai/PI-PARITY-CHECKLIST.md` with status ❌ or ⚠️
-- If it's a structural issue, add to `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md`
-- Log in `tk` with the finding
-- Don't mark it done until verified
+### Red flags — stop and re-audit
+- "Phase 1 is complete" (said 3 times, found bugs each time)
+- "I think it's done" without source comparison
+- Checklist has all ✅ but no behavioral verification
+- User says "are you sure?" — answer is "let me verify"
 
-**Find the Go idiom** — JS exceptions vs Go error returns, EventStream vs
-channels, try/finally vs defer. Same invariant, different mechanism.
+## Work Style
 
-**Implement with clear ownership** — one layer owns each guarantee. Document
-it in comments where non-obvious. Verify with tests and race detector.
+- Let errors propagate. Catch only to recover or add context.
+- Commit after each coherent change set.
+- `tk` for all multi-step work. Log findings while fresh.
+- Short prompts (`proceed`, `what's next`) mean: verify repo truth first, pick
+  the next slice from `ai/`/`tk`, execute.
 
-**Report honestly** — if you can't verify an item, say so. If an item is
-partially done, say what's missing. Never round up to "done."
+## Architecture Constraints
 
-**Aggressive rewrites.** When a module has duplicate ownership, hidden state,
-or architecture that has repeatedly let bugs through — rewrite it. The boundary
-is relevance to correctness, not line-count.
-
-**Short prompts** like `proceed`, `what's next`, or `hows it look` mean: verify
-repo truth first, select the next clear slice from `ai/`/`tk`, and execute it.
-
-**Use `tk` for all multi-step work.** Log concrete findings while they are
-fresh: files reviewed, root cause, fix, commands run, residual risk.
-
-## Dogfood Regressions
-
-User-reported behavior bugs are regressions until proven otherwise. Handle with
-evidence, not memory.
-
-- Before answering "is this fixed" or "what was the last issue", search `tk`,
-  `ai/STATUS.md`, `ai/PLAN.md`, and recent commits for the exact symptom.
-- If no record exists, create a focused `tk` task. Don't guess.
-- Each regression task captures: exact error snippet, provider/model/session,
-  expected vs actual, root cause, fix, verification commands, remaining caveats.
-
-## TUI
-
-- Uses Bubble Tea v2. Use the `bubbletea` skill for non-trivial changes.
-- The TUI is projection/control over runtime events. It must not own a second
+- **Session tree is the source of truth.** All state (messages, model changes,
+  thinking level, compaction) flows through the tree.
+- **TUI is projection/control over runtime events.** It must not own a second
   agent loop, second transcript, or hidden session materializer.
-- Test TUI behavior in tmux or another PTY capture. Unit tests for reducers;
-  tmux smoke for terminal integration.
+- **Hooks are extension points.** Keep the core small; optional capabilities
+  live behind explicit hook boundaries.
 
 ## Config And State
 
-- Global files under `~/.ion/`: `config.toml` (user settings), `state.toml`
-  (runtime state), `credentials.toml` (API keys, private permissions).
+- Global files under `~/.ion/`: `config.toml` (settings), `state.toml` (runtime
+  state), `credentials.toml` (API keys).
 - Don't persist provider/model at startup. Only explicit user edits or TUI
-  actions should write settings/state.
-- Hardcode defaults. Add persistent state only when it genuinely needs to
-  survive sessions.
-
-## Verification
-
-```bash
-# Standard gates (always run)
-go test ./... -count=1 -timeout 300s
-go vet ./...
-git diff --check
-
-# Concurrency-sensitive changes (streaming, state-machine, TUI, storage)
-go test -race ./internal/agent/ ./session/ ./app/ -count=1 -timeout 120s
-
-# TUI behavior changes
-tmux smoke scripts
-
-# Provider/tool-loop changes
-# Use live provider from ai/STATUS.md or user
-```
-
-Report exact commands. If a gate is skipped, say why.
+  actions write settings/state.
 
 ## Commands
 
 ```bash
+# Verification
+go test ./... -count=1 -timeout 300s
+go test -race ./internal/agent/ ./session/ ./app/ -count=1 -timeout 120s
+go vet ./...
+
+# Task tracking
 tk ready          # what's next
 tk show <id>      # task detail
 tk log <id> "msg" # record finding
 tk done <id>      # mark complete
+
+# TUI changes: test in tmux. Unit tests for reducers; tmux smoke for integration.
 ```
+
+Report exact commands run. If a gate is skipped, say why.
+
+## Dogfood Regressions
+
+User-reported behavior bugs are regressions until proven otherwise. Before
+answering "is this fixed", search `tk`, `ai/STATUS.md`, recent commits. If no
+record exists, create a `tk` task. Don't guess.
 
 ## References
 
-**Active ai/ files** (update as you work):
-- `ai/brief.md` — active context snapshot (read every session)
-- `ai/STATUS.md` — current phase, focus, blockers
+**Active `ai/` files** (update as you work):
+- `ai/brief.md` — current state (read every session)
+- `ai/STATUS.md` — phase, focus, blockers
 - `ai/PLAN.md` — active work sequence
 - `ai/decisions.md` — principles + decision log
 - `ai/architecture.md` — system overview
 - `ai/journal.md` — session findings (append-only)
-- `ai/PI-PARITY-CHECKLIST.md` — parity tracking
-- `ai/PI-ARCHITECTURE-GAP-ANALYSIS.md` — known gaps
+- `ai/COMPREHENSIVE-AUDIT.md` — source-level findings
 
-**Archived** (historical reference only): `ai/archive/`
-
-**Pi source** (read on-demand, not all at once):
-`/Users/nick/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/`
+**Archived** (historical only): `ai/archive/`

@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -169,7 +170,10 @@ func TestTreeStore_Messages(t *testing.T) {
 
 	store.SetLeaf("3")
 
-	messages := store.Messages()
+	messages, err := store.Messages()
+	if err != nil {
+		t.Fatalf("Messages() error: %v", err)
+	}
 	if len(messages) != 3 {
 		t.Fatalf("Messages() = %d messages, want 3", len(messages))
 	}
@@ -189,7 +193,10 @@ func TestTreeStore_MessagesWithCompaction(t *testing.T) {
 
 	store.SetLeaf("3")
 
-	messages := store.Messages()
+	messages, err := store.Messages()
+	if err != nil {
+		t.Fatalf("Messages() error: %v", err)
+	}
 	// Should include compaction summary as a system message + msg3
 	// The compaction entry acts as a barrier — Messages() should include it as a synthetic system message
 	if len(messages) < 1 {
@@ -260,7 +267,10 @@ func TestTreeStore_Branching(t *testing.T) {
 	// Set leaf to the alternative path
 	store.SetLeaf("3")
 
-	messages := store.Messages()
+	messages, err := store.Messages()
+	if err != nil {
+		t.Fatalf("Messages() error: %v", err)
+	}
 	if len(messages) != 3 {
 		t.Fatalf("Messages() = %d, want 3", len(messages))
 	}
@@ -270,7 +280,10 @@ func TestTreeStore_Branching(t *testing.T) {
 
 	// Switch back to original path
 	store.SetLeaf("2")
-	messages = store.Messages()
+	messages, err = store.Messages()
+	if err != nil {
+		t.Fatalf("Messages() error: %v", err)
+	}
 	if len(messages) != 2 {
 		t.Fatalf("Messages() = %d, want 2", len(messages))
 	}
@@ -308,4 +321,36 @@ func ptr(s string) *string {
 
 func now() time.Time {
 	return time.Now()
+}
+
+func TestTreeStorePathIntegrity_MissingParent(t *testing.T) {
+	store := NewTreeStore()
+
+	// Add entries
+	store.Add(NewMessageEntry("1", nil, llm.Message{Role: llm.RoleUser, Content: "hello"}))
+	store.Add(NewMessageEntry("2", ptr("1"), llm.Message{Role: llm.RoleAssistant, Content: "hi"}))
+	store.SetLeaf("2")
+
+	// Verify path works
+	path, err := store.PathToRoot()
+	if err != nil {
+		t.Fatalf("PathToRoot() error: %v", err)
+	}
+	if len(path) != 2 {
+		t.Fatalf("PathToRoot() = %d entries, want 2", len(path))
+	}
+
+	// Corrupt the store by removing entry "1"
+	store.mu.Lock()
+	delete(store.entries, "1")
+	store.mu.Unlock()
+
+	// PathToRoot should return an error, not truncate
+	_, err = store.PathToRoot()
+	if err == nil {
+		t.Fatal("Expected error for missing parent, got nil")
+	}
+	if !strings.Contains(err.Error(), "path integrity") {
+		t.Fatalf("Expected path integrity error, got: %v", err)
+	}
 }

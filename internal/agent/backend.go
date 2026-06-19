@@ -146,7 +146,11 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Get current messages from tree store
-	llmMessages := b.session.tree.Messages()
+	llmMessages, err := b.session.tree.Messages()
+	if err != nil {
+		b.session.mu.Unlock()
+		return false, fmt.Errorf("build context: %w", err)
+	}
 	if len(llmMessages) == 0 {
 		b.session.mu.Unlock()
 		return false, nil
