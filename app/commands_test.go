@@ -1223,21 +1223,16 @@ func TestRuntimeSwitchBlocksPresetHotkey(t *testing.T) {
 }
 
 func TestRuntimeSwitchBlocksThinkingPickerHotkey(t *testing.T) {
+	// Ctrl+T now toggles thinking blocks, not opens picker.
+	// Runtime switch should not block thinking block toggle.
 	model := readyModel(t)
 	model.Model.RuntimeSwitchRequest = 1
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 
-	if cmd == nil {
-		t.Fatal("expected runtime-switch guard error")
-	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "runtime switch") {
-		t.Fatalf("error = %v, want runtime-switch guard", err)
-	}
-	if model.Picker.Overlay != nil {
-		t.Fatalf("picker overlay = %#v, want none during runtime switch", model.Picker.Overlay)
+	if !model.ThinkingBlockExpanded {
+		t.Fatal("thinking blocks should be expanded after Ctrl+T even during runtime switch")
 	}
 }
 

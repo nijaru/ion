@@ -579,28 +579,26 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
-func TestCtrlTOpensThinkingPicker(t *testing.T) {
+func TestCtrlTTogglesThinkingBlocks(t *testing.T) {
+	// Pi parity: Ctrl+T toggles thinking blocks visibility.
 	model := readyModel(t)
+
+	if model.ThinkingBlockExpanded {
+		t.Fatal("thinking blocks should start collapsed")
+	}
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 
-	if model.Picker.Overlay == nil {
-		t.Fatal("expected thinking picker to open")
+	if !model.ThinkingBlockExpanded {
+		t.Fatal("thinking blocks should be expanded after Ctrl+T")
 	}
-	if model.Picker.Overlay.purpose != pickerPurposeThinking {
-		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
-	}
-	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
-		t.Fatalf("picker title = %q", got)
-	}
-	var values []string
-	for _, item := range model.Picker.Overlay.items {
-		values = append(values, item.Value)
-	}
-	want := []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh"}
-	if !slices.Equal(values, want) {
-		t.Fatalf("thinking picker values = %#v, want %#v", values, want)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+
+	if model.ThinkingBlockExpanded {
+		t.Fatal("thinking blocks should be collapsed after second Ctrl+T")
 	}
 }
 

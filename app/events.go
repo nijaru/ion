@@ -60,8 +60,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.switchPresetCommand(presetFast)
 
 	case "ctrl+t":
+		// Pi parity: Ctrl+T toggles thinking blocks visibility.
 		m.clearPendingAction()
-		return m.openThinkingPicker()
+		m.ThinkingBlockExpanded = !m.ThinkingBlockExpanded
+		return m, nil
 
 	case "ctrl+o":
 		m.clearPendingAction()
@@ -123,8 +125,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+tab":
+		// Pi parity: Shift+Tab cycles thinking level.
 		m.clearPendingAction()
-		return m, nil
+		return m.openThinkingPicker()
 
 	case "tab":
 		if next, cmd, ok := m.completeSlashCommand(); ok {
