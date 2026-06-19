@@ -396,6 +396,22 @@ func (s *stubStorageSession) Close() error {
 	return nil
 }
 
+func (s *stubStorageSession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	return "", nil
+}
+
+func (s *stubStorageSession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
+	return "", nil
+}
+
+func (s *stubStorageSession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
+	return "", nil
+}
+
+func (s *stubStorageSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+
 type resumeOnlyStore struct {
 	resumed session.SessionHandle
 }

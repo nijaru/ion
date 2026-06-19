@@ -47,6 +47,22 @@ func (s *closeStorageSession) Close() error {
 	return nil
 }
 
+func (s *closeStorageSession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	return "", nil
+}
+
+func (s *closeStorageSession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
+	return "", nil
+}
+
+func (s *closeStorageSession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
+	return "", nil
+}
+
+func (s *closeStorageSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+
 type providerBackend struct {
 	provider string
 	model    string

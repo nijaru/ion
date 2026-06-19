@@ -296,3 +296,19 @@ func (s *fakeStorage) Close() error {
 	s.closed = true
 	return nil
 }
+
+func (s *fakeStorage) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	return "", nil
+}
+
+func (s *fakeStorage) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
+	return "", nil
+}
+
+func (s *fakeStorage) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
+	return "", nil
+}
+
+func (s *fakeStorage) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
