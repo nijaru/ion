@@ -39,6 +39,7 @@ type Agent struct {
 	closeOnce     sync.Once
 	steeringQueue []string
 	followUpQueue []string
+	nextTurnQueue []string
 	turnCtx       context.Context
 	cancel        context.CancelFunc
 	idleCh        chan struct{} // closed when turn completes
@@ -301,11 +302,12 @@ func (a *Agent) AppendMessage(msg AgentMessage) {
 }
 
 // NextTurn queues a message for the next turn.
-// The message will be injected at the start of the next turn.
+// The message will be injected when the user sends a new message.
 func (a *Agent) NextTurn(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.followUpQueue = append(a.followUpQueue, msg.TextContent())
+	a.nextTurnQueue = append(a.nextTurnQueue, msg.TextContent())
+	a.emitQueueUpdatedLocked()
 }
 
 // SetActiveTools sets the active tool names.
@@ -617,6 +619,7 @@ func (a *Agent) ClearAllQueues() {
 	defer a.mu.Unlock()
 	a.steeringQueue = nil
 	a.followUpQueue = nil
+	a.nextTurnQueue = nil
 	a.emitQueueUpdatedLocked()
 }
 
@@ -664,6 +667,10 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	a.state.IsStreaming = true
 	a.state.ErrorMessage = ""
 	a.state.StreamingMessage = nil
+
+	// Inject nextTurn messages before user prompts
+	nextTurnMsgs := a.drainNextTurnLocked()
+
 	loop := a.newLoop()
 	a.mu.Unlock()
 
@@ -674,7 +681,9 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 		a.mu.Unlock()
 	}()
 
-	newMessages, err := loop.Run(ctx, prompts)
+	// Combine nextTurn messages with user prompts
+	allPrompts := append(nextTurnMsgs, prompts...)
+	newMessages, err := loop.Run(ctx, allPrompts)
 
 	a.mu.Lock()
 	a.syncLoopState(loop)
@@ -911,6 +920,7 @@ func (a *Agent) ClearQueuedInput(
 
 	a.steeringQueue = nil
 	a.followUpQueue = nil
+	a.nextTurnQueue = nil
 	a.emitQueueUpdatedLocked()
 
 	return snapshot, nil
@@ -920,6 +930,7 @@ func (a *Agent) emitQueueUpdatedLocked() {
 	snapshot := session.QueuedInputSnapshot{
 		Steering: append([]string(nil), a.steeringQueue...),
 		FollowUp: append([]string(nil), a.followUpQueue...),
+		NextTurn: append([]string(nil), a.nextTurnQueue...),
 	}
 	a.emitLocked(session.QueuedInputUpdate{
 		Base:     session.BaseNow(),
@@ -1499,6 +1510,7 @@ func (a *Agent) Reset() {
 	// Clear queues
 	a.steeringQueue = nil
 	a.followUpQueue = nil
+	a.nextTurnQueue = nil
 
 	// Emit fresh start
 	a.emitLocked(session.AgentStart{Base: session.BaseNow()})
@@ -1551,5 +1563,20 @@ func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
 		msgs[i] = AgentMessage{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}}
 	}
 	*queue = (*queue)[count:]
+	return msgs
+}
+
+// drainNextTurnLocked drains all nextTurn messages.
+// nextTurn messages are always drained completely when a new turn starts.
+func (a *Agent) drainNextTurnLocked() []AgentMessage {
+	if len(a.nextTurnQueue) == 0 {
+		return nil
+	}
+	msgs := make([]AgentMessage, len(a.nextTurnQueue))
+	for i, text := range a.nextTurnQueue {
+		msgs[i] = AgentMessage{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}}
+	}
+	a.nextTurnQueue = nil
+	a.emitQueueUpdatedLocked()
 	return msgs
 }
