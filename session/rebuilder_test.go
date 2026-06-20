@@ -180,6 +180,50 @@ func TestRebuilderDropsLateToolMessageAfterTurnBoundary(t *testing.T) {
 	}
 }
 
+// TestRebuilderReconstructsToolArgsFromAssistantCall tests the real-agent
+// persistence scenario: messages are persisted but ToolStarted/ToolCompleted
+// lifecycle events are NOT. The tool arguments live in the assistant message's
+// Calls and must be reconstructed for display during replay.
+func TestRebuilderReconstructsToolArgsFromAssistantCall(t *testing.T) {
+	call := llm.Call{ID: "call-1", Type: "function"}
+	call.Function.Name = "read"
+	call.Function.Arguments = `{"path":"ai/brief.md"}`
+
+	sess := New("tool-args-reconstruct")
+	if err := sess.Append(t.Context(), NewMessage(sess.ID(), llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{call},
+	})); err != nil {
+		t.Fatalf("append assistant call: %v", err)
+	}
+	// No ToolStarted event — this is what the real agent persists.
+	if err := sess.Append(t.Context(), NewMessage(sess.ID(), llm.Message{
+		Role:    llm.RoleTool,
+		ToolID:  "call-1",
+		Name:    "read",
+		Content: "file contents",
+	})); err != nil {
+		t.Fatalf("append tool result message: %v", err)
+	}
+	// No ToolCompleted event either.
+
+	entries, err := sess.EffectiveEntries()
+	if err != nil {
+		t.Fatalf("EffectiveEntries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2: %#v", len(entries), entries)
+	}
+	tool := entries[1].Tool
+	if tool == nil {
+		t.Fatalf("tool metadata missing from entry: %#v", entries[1])
+	}
+	if tool.Arguments != `{"path":"ai/brief.md"}` {
+		t.Fatalf("tool arguments not reconstructed from assistant call: got %q, want %q",
+			tool.Arguments, `{"path":"ai/brief.md"}`)
+	}
+}
+
 func TestRebuilderAnnotatesToolHistoryFromLifecycleEvents(t *testing.T) {
 	call := llm.Call{ID: "call-1", Type: "function"}
 	call.Function.Name = "read"

@@ -111,6 +111,9 @@ func toolEntryFromLifecycle(call llm.Call, record toolLifecycle) HistoryEntry {
 		ToolID: call.ID,
 		Name:   name,
 	}, record)
+	if tool.Arguments == "" {
+		tool.Arguments = call.Function.Arguments
+	}
 	return HistoryEntry{
 		EventID:   record.completedID,
 		EventType: ToolCompleted,
@@ -272,9 +275,6 @@ func withToolHistory(entries []HistoryEntry, events []Event) ([]HistoryEntry, er
 	if err != nil {
 		return nil, err
 	}
-	if len(lifecycle.records) == 0 {
-		return entries, nil
-	}
 
 	for i := 0; i < len(entries); {
 		entry := entries[i]
@@ -282,6 +282,16 @@ func withToolHistory(entries []HistoryEntry, events []Event) ([]HistoryEntry, er
 		if msg.Role != llm.RoleAssistant || len(msg.Calls) == 0 {
 			i++
 			continue
+		}
+
+		// Reconstruct tool arguments from the assistant message's Calls so
+		// tool entries get their arguments even when ToolStarted lifecycle
+		// events were never persisted (the real-agent persistence path).
+		argsByCallID := make(map[string]string, len(msg.Calls))
+		for _, c := range msg.Calls {
+			if c.ID != "" {
+				argsByCallID[c.ID] = c.Function.Arguments
+			}
 		}
 
 		j := i + 1
@@ -298,11 +308,15 @@ func withToolHistory(entries []HistoryEntry, events []Event) ([]HistoryEntry, er
 			if entries[k].Message.ToolID == "" {
 				continue
 			}
-			record, ok := matcher.consume(entries[k].Message.ToolID, false)
-			if !ok && entries[k].Tool == nil {
+			callID := entries[k].Message.ToolID
+			record, ok := matcher.consume(callID, false)
+			if !ok && entries[k].Tool == nil && argsByCallID[callID] == "" {
 				continue
 			}
 			tool := mergeToolHistory(entries[k].Tool, entries[k].Message, record)
+			if tool.Arguments == "" && argsByCallID[callID] != "" {
+				tool.Arguments = argsByCallID[callID]
+			}
 			entries[k].Tool = &tool
 		}
 		i = j
