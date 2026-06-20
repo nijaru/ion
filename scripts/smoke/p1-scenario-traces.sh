@@ -62,7 +62,7 @@ run_layer timeout_surfacing timeout \
     -count=1 -timeout 180s
 
 run_layer smoke_resume_persistence persistence \
-  go test ./internal/smoke ./internal/storage \
+  go test ./test/tui ./internal/storage \
     -run '^(TestSmokeBackendPersistsNativeTranscriptForResume|TestCantoStoreDisplayReplaySharesProviderHistorySource)$' \
     -count=1 -timeout 180s
 
