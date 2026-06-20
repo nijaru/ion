@@ -37,9 +37,9 @@ type Agent struct {
 	events        chan session.AgentEvent
 	closed        bool
 	closeOnce     sync.Once
-	steeringQueue []string
-	followUpQueue []string
-	nextTurnQueue []string
+	steeringQueue []AgentMessage
+	followUpQueue []AgentMessage
+	nextTurnQueue []AgentMessage
 	turnCtx       context.Context
 	cancel        context.CancelFunc
 	idleCh        chan struct{} // closed when turn completes
@@ -306,7 +306,7 @@ func (a *Agent) AppendMessage(msg AgentMessage) {
 func (a *Agent) NextTurn(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.nextTurnQueue = append(a.nextTurnQueue, msg.TextContent())
+	a.nextTurnQueue = append(a.nextTurnQueue, msg)
 	a.emitQueueUpdatedLocked()
 }
 
@@ -596,19 +596,19 @@ func (a *Agent) ClearFollowUpQueue() {
 }
 
 // SteeringQueue returns a copy of the current steering queue.
-func (a *Agent) SteeringQueue() []string {
+func (a *Agent) SteeringQueue() []AgentMessage {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	result := make([]string, len(a.steeringQueue))
+	result := make([]AgentMessage, len(a.steeringQueue))
 	copy(result, a.steeringQueue)
 	return result
 }
 
 // FollowUpQueue returns a copy of the current follow-up queue.
-func (a *Agent) FollowUpQueue() []string {
+func (a *Agent) FollowUpQueue() []AgentMessage {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	result := make([]string, len(a.followUpQueue))
+	result := make([]AgentMessage, len(a.followUpQueue))
 	copy(result, a.followUpQueue)
 	return result
 }
@@ -865,14 +865,14 @@ func (a *Agent) Session() session.SessionHandle {
 // SteerTurn sends steering input during an active turn.
 func (a *Agent) SteerTurn(
 	ctx context.Context,
-	text string,
+	msg AgentMessage,
 ) (session.SteeringResult, error) {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
 		return session.SteeringResult{}, fmt.Errorf("session is closed")
 	}
-	a.steeringQueue = append(a.steeringQueue, text)
+	a.steeringQueue = append(a.steeringQueue, msg)
 	a.emitQueueUpdatedLocked()
 	a.mu.Unlock()
 
@@ -885,14 +885,14 @@ func (a *Agent) SteerTurn(
 // FollowUpTurn sends follow-up input after the agent would stop.
 func (a *Agent) FollowUpTurn(
 	ctx context.Context,
-	text string,
+	msg AgentMessage,
 ) (session.QueuedInputResult, error) {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
 		return session.QueuedInputResult{}, fmt.Errorf("session is closed")
 	}
-	a.followUpQueue = append(a.followUpQueue, text)
+	a.followUpQueue = append(a.followUpQueue, msg)
 	a.emitQueueUpdatedLocked()
 	a.mu.Unlock()
 
@@ -914,8 +914,8 @@ func (a *Agent) ClearQueuedInput(
 	}
 
 	snapshot := session.QueuedInputSnapshot{
-		Steering: append([]string(nil), a.steeringQueue...),
-		FollowUp: append([]string(nil), a.followUpQueue...),
+		Steering: agentMessagesToTexts(a.steeringQueue),
+		FollowUp: agentMessagesToTexts(a.followUpQueue),
 	}
 
 	a.steeringQueue = nil
@@ -928,9 +928,9 @@ func (a *Agent) ClearQueuedInput(
 
 func (a *Agent) emitQueueUpdatedLocked() {
 	snapshot := session.QueuedInputSnapshot{
-		Steering: append([]string(nil), a.steeringQueue...),
-		FollowUp: append([]string(nil), a.followUpQueue...),
-		NextTurn: append([]string(nil), a.nextTurnQueue...),
+		Steering: agentMessagesToTexts(a.steeringQueue),
+		FollowUp: agentMessagesToTexts(a.followUpQueue),
+		NextTurn: agentMessagesToTexts(a.nextTurnQueue),
 	}
 	a.emitLocked(session.QueuedInputUpdate{
 		Base:     session.BaseNow(),
@@ -1548,9 +1548,21 @@ func (a *Agent) UpdateConfig(config AgentConfig) {
 	a.state.SystemPrompt = config.SystemPrompt
 }
 
+// agentMessagesToTexts extracts text content from AgentMessages for snapshot display.
+func agentMessagesToTexts(msgs []AgentMessage) []string {
+	if len(msgs) == 0 {
+		return nil
+	}
+	result := make([]string, len(msgs))
+	for i, msg := range msgs {
+		result[i] = msg.TextContent()
+	}
+	return result
+}
+
 // drainQueuedMessagesLocked drains messages from a queue based on the queue mode.
 // Caller must hold a.mu.
-func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
+func drainQueuedMessagesLocked(queue *[]AgentMessage, mode QueueMode) []AgentMessage {
 	if len(*queue) == 0 {
 		return nil
 	}
@@ -1559,9 +1571,7 @@ func drainQueuedMessagesLocked(queue *[]string, mode QueueMode) []AgentMessage {
 		count = len(*queue)
 	}
 	msgs := make([]AgentMessage, count)
-	for i, text := range (*queue)[:count] {
-		msgs[i] = AgentMessage{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}}
-	}
+	copy(msgs, (*queue)[:count])
 	*queue = (*queue)[count:]
 	return msgs
 }
@@ -1573,9 +1583,7 @@ func (a *Agent) drainNextTurnLocked() []AgentMessage {
 		return nil
 	}
 	msgs := make([]AgentMessage, len(a.nextTurnQueue))
-	for i, text := range a.nextTurnQueue {
-		msgs[i] = AgentMessage{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}}
-	}
+	copy(msgs, a.nextTurnQueue)
 	a.nextTurnQueue = nil
 	a.emitQueueUpdatedLocked()
 	return msgs

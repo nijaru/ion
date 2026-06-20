@@ -314,13 +314,13 @@ func (h *Harness) ID() string {
 }
 
 // SteerTurn sends a steering message to the agent.
-func (h *Harness) SteerTurn(ctx context.Context, text string) (session.SteeringResult, error) {
-	return h.agent.SteerTurn(ctx, text)
+func (h *Harness) SteerTurn(ctx context.Context, msg agent.AgentMessage) (session.SteeringResult, error) {
+	return h.agent.SteerTurn(ctx, msg)
 }
 
 // FollowUpTurn sends a follow-up message to the agent.
-func (h *Harness) FollowUpTurn(ctx context.Context, text string) (session.QueuedInputResult, error) {
-	return h.agent.FollowUpTurn(ctx, text)
+func (h *Harness) FollowUpTurn(ctx context.Context, msg agent.AgentMessage) (session.QueuedInputResult, error) {
+	return h.agent.FollowUpTurn(ctx, msg)
 }
 
 // Compact runs compaction on the session.
@@ -634,14 +634,8 @@ func (h *Harness) NavigateTree(ctx context.Context, targetID string, options age
 // Abort aborts the current run.
 func (h *Harness) Abort() {
 	// Get queued messages before clearing
-	var clearedSteer []agent.AgentMessage
-	for _, msg := range h.agent.SteeringQueue() {
-		clearedSteer = append(clearedSteer, agent.AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart(msg)}})
-	}
-	var clearedFollowUp []agent.AgentMessage
-	for _, msg := range h.agent.FollowUpQueue() {
-		clearedFollowUp = append(clearedFollowUp, agent.AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart(msg)}})
-	}
+	clearedSteer := h.agent.SteeringQueue()
+	clearedFollowUp := h.agent.FollowUpQueue()
 
 	h.agent.Abort()
 

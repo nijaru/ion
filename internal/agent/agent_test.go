@@ -242,7 +242,7 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 	}
 
 	// Test Steering
-	res, err := adapter.SteerTurn(ctx, "steering info")
+	res, err := adapter.SteerTurn(ctx, AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart("steering info")}})
 	if err != nil {
 		t.Fatalf("steer: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestSessionAdapterQueuesAndCancel(t *testing.T) {
 	}
 
 	// Test FollowUp
-	qres, err := adapter.FollowUpTurn(ctx, "follow-up message")
+	qres, err := adapter.FollowUpTurn(ctx, AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart("follow-up message")}})
 	if err != nil {
 		t.Fatalf("follow-up: %v", err)
 	}
@@ -406,10 +406,10 @@ func TestSessionAdapterDrainsQueuedFollowUpsOneAtATime(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first stream did not start")
 	}
-	if _, err := adapter.FollowUpTurn(context.Background(), "follow one"); err != nil {
+	if _, err := adapter.FollowUpTurn(context.Background(), AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart("follow one")}}); err != nil {
 		t.Fatalf("first follow-up: %v", err)
 	}
-	if _, err := adapter.FollowUpTurn(context.Background(), "follow two"); err != nil {
+	if _, err := adapter.FollowUpTurn(context.Background(), AgentMessage{Role: "user", Parts: []llm.ContentPart{llm.TextPart("follow two")}}); err != nil {
 		t.Fatalf("second follow-up: %v", err)
 	}
 	close(releaseFirstStream)
