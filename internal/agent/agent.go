@@ -27,7 +27,8 @@ import (
 type Agent struct {
 	config    AgentConfig
 	state     AgentState
-	listeners []func(session.AgentEvent)
+	listeners map[uint64]func(session.AgentEvent)
+	nextID    uint64
 	mu        sync.RWMutex
 	tree      *session.TreeStore
 
@@ -135,6 +136,10 @@ func (a *Agent) emit(ev session.AgentEvent) {
 	a.mu.RLock()
 	closed := a.closed
 	onEvent := a.config.OnEvent
+	listeners := make([]func(session.AgentEvent), 0, len(a.listeners))
+	for _, l := range a.listeners {
+		listeners = append(listeners, l)
+	}
 	a.mu.RUnlock()
 	if closed {
 		return
@@ -145,6 +150,9 @@ func (a *Agent) emit(ev session.AgentEvent) {
 
 	if onEvent != nil {
 		onEvent(ev)
+	}
+	for _, l := range listeners {
+		l(ev)
 	}
 }
 
@@ -1502,17 +1510,17 @@ func (a *Agent) Subscribe(listener func(session.AgentEvent)) func() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.listeners = append(a.listeners, listener)
+	if a.listeners == nil {
+		a.listeners = make(map[uint64]func(session.AgentEvent))
+	}
+	a.nextID++
+	id := a.nextID
+	a.listeners[id] = listener
 
 	return func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		for i, l := range a.listeners {
-			if fmt.Sprintf("%p", l) == fmt.Sprintf("%p", listener) {
-				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
-				return
-			}
-		}
+		delete(a.listeners, id)
 	}
 }
 
