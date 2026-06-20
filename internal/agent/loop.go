@@ -311,19 +311,23 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 				}
 			}
 
-			// Emit turn_end
-			l.emit(session.TurnEnd{
-				Base: session.BaseNow(),
-				Message: session.AgentMessage{
-					Message:      message.TextContent(),
-					Reasoning:    message.ReasoningContent(),
-					InputTokens:  message.InputTokens,
-					OutputTokens: message.OutputTokens,
-					TotalTokens:  message.TotalTokens,
-					Cost:         message.Cost,
-				},
-				ToolResults: toSessionAgentMessages(toolResults),
-			})
+			// Emit turn_end only when the inner loop is done.
+			// If hasMoreToolCalls is true, the model will be called again
+			// to produce a text response after tool results.
+			if !hasMoreToolCalls && len(pendingMessages) == 0 {
+				l.emit(session.TurnEnd{
+					Base: session.BaseNow(),
+					Message: session.AgentMessage{
+						Message:      message.TextContent(),
+						Reasoning:    message.ReasoningContent(),
+						InputTokens:  message.InputTokens,
+						OutputTokens: message.OutputTokens,
+						TotalTokens:  message.TotalTokens,
+						Cost:         message.Cost,
+					},
+					ToolResults: toSessionAgentMessages(toolResults),
+				})
+			}
 
 			// Prepare next turn (may update context/model/thinking level)
 			ctx, err := l.buildContext()
@@ -348,6 +352,19 @@ func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
 			// Check if we should stop
 			if l.config.ShouldStopAfterTurn != nil {
 				if l.config.ShouldStopAfterTurn(turnContext) {
+					// Emit turn_end before exiting
+					l.emit(session.TurnEnd{
+						Base: session.BaseNow(),
+						Message: session.AgentMessage{
+							Message:      message.TextContent(),
+							Reasoning:    message.ReasoningContent(),
+							InputTokens:  message.InputTokens,
+							OutputTokens: message.OutputTokens,
+							TotalTokens:  message.TotalTokens,
+							Cost:         message.Cost,
+						},
+						ToolResults: toSessionAgentMessages(toolResults),
+					})
 					return newMessages, nil
 				}
 			}
