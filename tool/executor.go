@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,6 +30,7 @@ const (
 type localExecutor struct {
 	sandbox     SandboxMode
 	environment EnvironmentPolicy
+	opts        Operations
 }
 
 type EnvironmentPolicy struct {
@@ -76,7 +76,23 @@ func newLocalExecutorWithEnvironment(
 	sandbox SandboxMode,
 	environment EnvironmentPolicy,
 ) *localExecutor {
-	return &localExecutor{sandbox: sandbox, environment: environment}
+	return &localExecutor{
+		sandbox:     sandbox,
+		environment: environment,
+		opts:        LocalOperations{},
+	}
+}
+
+func newLocalExecutorWithOperations(
+	sandbox SandboxMode,
+	environment EnvironmentPolicy,
+	opts Operations,
+) *localExecutor {
+	return &localExecutor{
+		sandbox:     sandbox,
+		environment: environment,
+		opts:        opts,
+	}
 }
 
 func (p EnvironmentPolicy) commandEnv() []string {
@@ -114,7 +130,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		defer func() { _ = plan.cleanup() }()
 	}
 
-	cmd := exec.CommandContext(ctx, plan.name, plan.args...)
+	cmd := e.opts.CommandContext(ctx, plan.name, plan.args...)
 	cmd.Dir = plan.dir
 	cmd.Env = e.environment.commandEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

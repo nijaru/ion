@@ -16,14 +16,23 @@ import (
 type FileTool struct {
 	cwd        string
 	checkpoint *ionworkspace.CheckpointStore
+	opts       Operations
 }
 
 func NewFileTool(cwd string) *FileTool {
 	path, err := ionworkspace.DefaultCheckpointPath()
 	if err != nil {
-		return &FileTool{cwd: cwd}
+		return &FileTool{cwd: cwd, opts: LocalOperations{}}
 	}
-	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path)}
+	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path), opts: LocalOperations{}}
+}
+
+func NewFileToolWithOperations(cwd string, opts Operations) *FileTool {
+	path, err := ionworkspace.DefaultCheckpointPath()
+	if err != nil {
+		return &FileTool{cwd: cwd, opts: opts}
+	}
+	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path), opts: opts}
 }
 
 func (t *FileTool) absolutePath(target string) (string, error) {

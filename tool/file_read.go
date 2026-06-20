@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/nijaru/ion/llm"
@@ -58,7 +57,7 @@ func (r *Read) ExecuteContent(ctx context.Context, args string) ([]llm.ContentPa
 		return nil, toolContextErr("read", err)
 	}
 
-	content, err := os.ReadFile(absPath)
+	content, err := r.opts.ReadFile(absPath)
 	if err != nil {
 		return nil, err
 	}

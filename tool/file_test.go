@@ -20,6 +20,7 @@ func newTestFileTool(t *testing.T, cwd string) *FileTool {
 	return &FileTool{
 		cwd:        cwd,
 		checkpoint: ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints")),
+		opts:       LocalOperations{},
 	}
 }
 
