@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -730,6 +731,10 @@ func (t *TreeStore) Save(path string) error {
 	bytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal tree: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
 	}
 
 	return os.WriteFile(path, bytes, 0644)
