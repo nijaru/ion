@@ -202,6 +202,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.AgentStart,
 		session.AgentEnd,
 		session.MessageUpdate,
+		session.MessageEnd,
 		session.UserMessage,
 		session.AgentMessage,
 		session.ToolCallStart,

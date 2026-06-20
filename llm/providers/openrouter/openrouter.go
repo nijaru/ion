@@ -141,8 +141,11 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 	}
 
 	return &openRouterStream{
-		body:   httpResp.Body,
-		reader: httpResp.Body,
+		body:     httpResp.Body,
+		reader:   httpResp.Body,
+		provider: p,
+		ctx:      ctx,
+		model:    prepared.Model,
 	}, nil
 }
 
@@ -181,7 +184,7 @@ func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
-		SessionID:            req.SessionID,
+		SessionID:             req.SessionID,
 	}
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.

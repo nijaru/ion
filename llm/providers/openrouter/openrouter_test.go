@@ -1,7 +1,9 @@
 package openrouter
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/llm"
@@ -321,6 +323,76 @@ func TestStreamRequestSetsStreamTrue(t *testing.T) {
 	stream, ok := parsed["stream"]
 	if !ok || stream != true {
 		t.Fatalf("stream = %v (present=%v), want true", stream, ok)
+	}
+}
+
+func TestStreamUsageChunkIncludesCalculatedCost(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{
+		APIKey: "test-key",
+		Models: []llm.Model{{
+			ID:           "test/model",
+			CostPer1MIn:  1,
+			CostPer1MOut: 2,
+			Capabilities: &llm.Capabilities{Streaming: true},
+		}},
+	})
+	stream := &openRouterStream{
+		reader: strings.NewReader(
+			`data: {"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500}}` + "\n" +
+				`data: [DONE]` + "\n",
+		),
+		provider: p,
+		ctx:      context.Background(),
+		model:    "test/model",
+	}
+
+	chunk, ok := stream.Next()
+	if !ok {
+		t.Fatal("Next returned ok=false, want usage chunk")
+	}
+	if chunk.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if got, want := chunk.Usage.InputTokens, 1000; got != want {
+		t.Fatalf("InputTokens = %d, want %d", got, want)
+	}
+	if got, want := chunk.Usage.OutputTokens, 500; got != want {
+		t.Fatalf("OutputTokens = %d, want %d", got, want)
+	}
+	if got, want := chunk.Usage.Cost, 0.002; got != want {
+		t.Fatalf("Cost = %.6f, want %.6f", got, want)
+	}
+}
+
+func TestStreamUsageChunkPrefersOpenRouterRawCost(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{
+		APIKey: "test-key",
+		Models: []llm.Model{{
+			ID:           "test/model",
+			CostPer1MIn:  1,
+			CostPer1MOut: 2,
+			Capabilities: &llm.Capabilities{Streaming: true},
+		}},
+	})
+	stream := &openRouterStream{
+		reader: strings.NewReader(
+			`data: {"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500,"cost":0.0042}}` + "\n" +
+				`data: [DONE]` + "\n",
+		),
+		provider: p,
+		ctx:      context.Background(),
+		model:    "test/model",
+	}
+
+	chunk, ok := stream.Next()
+	if !ok {
+		t.Fatal("Next returned ok=false, want usage chunk")
+	}
+	if chunk.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if got, want := chunk.Usage.Cost, 0.0042; got != want {
+		t.Fatalf("Cost = %.6f, want %.6f", got, want)
 	}
 }
 

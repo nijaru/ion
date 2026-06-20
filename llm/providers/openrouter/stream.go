@@ -2,6 +2,7 @@ package openrouter
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
@@ -17,6 +18,9 @@ type openRouterStream struct {
 	reader      io.Reader
 	scanner     *bufio.Scanner
 	activeCalls map[int]llm.Call
+	provider    *Provider
+	ctx         context.Context
+	model       string
 	err         error
 }
 
@@ -55,13 +59,17 @@ func (s *openRouterStream) Next() (*llm.Chunk, bool) {
 
 		// Handle final usage chunk (which may have no choices).
 		if resp.Usage != nil {
-			return &llm.Chunk{
-				Usage: &llm.Usage{
-					InputTokens:  resp.Usage.PromptTokens,
-					OutputTokens: resp.Usage.CompletionTokens,
-					TotalTokens:  resp.Usage.TotalTokens,
-				},
-			}, true
+			usage := llm.Usage{
+				InputTokens:  resp.Usage.PromptTokens,
+				OutputTokens: resp.Usage.CompletionTokens,
+				TotalTokens:  resp.Usage.TotalTokens,
+			}
+			if rawCost := openRouterUsageCost(data); rawCost > 0 {
+				usage.Cost = rawCost
+			} else if s.provider != nil {
+				usage.Cost = s.provider.Base.Cost(s.ctx, s.model, usage)
+			}
+			return &llm.Chunk{Usage: &usage}, true
 		}
 
 		if len(resp.Choices) == 0 {
@@ -105,6 +113,18 @@ func (s *openRouterStream) Next() (*llm.Chunk, bool) {
 
 		return chunk, true
 	}
+}
+
+func openRouterUsageCost(data string) float64 {
+	var envelope struct {
+		Usage *struct {
+			Cost float64 `json:"cost"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(data), &envelope); err != nil || envelope.Usage == nil {
+		return 0
+	}
+	return envelope.Usage.Cost
 }
 
 func (s *openRouterStream) Err() error {

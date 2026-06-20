@@ -382,6 +382,9 @@ func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
 	case session.MessageUpdate:
 		return m.handleMessageUpdate(msg)
 
+	case session.MessageEnd:
+		return m.handleMessageEnd(msg)
+
 	case session.UserMessage:
 		return m.handleUserMessage(msg)
 
@@ -547,6 +550,23 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	return m, tea.Sequence(cmds...)
 }
 
+func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
+	// Token usage rides on MessageEnd (one per model call, including tool-use turns).
+	m.turnReducer().ApplyTokenUsage(msg.Message)
+	var cmds []tea.Cmd
+	if msg.Message.InputTokens > 0 || msg.Message.OutputTokens > 0 || msg.Message.Cost > 0 {
+		cmds = append(cmds, m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
+			Type:   "token_usage",
+			Input:  msg.Message.InputTokens,
+			Output: msg.Message.OutputTokens,
+			Cost:   msg.Message.Cost,
+			TS:     entryUnix(msg.Timestamp),
+		}))
+	}
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, sequenceCmds(cmds...)
+}
+
 func (m Model) handleMessageUpdate(msg session.MessageUpdate) (Model, tea.Cmd) {
 	// Route based on block_type (Pi model: single message_update event)
 	switch msg.BlockType {
@@ -633,4 +653,3 @@ func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
 	}
 	return m, m.awaitSessionEvent()
 }
-
