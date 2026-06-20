@@ -16,6 +16,14 @@ type Tool interface {
 	Execute(ctx context.Context, args string) (string, error)
 }
 
+// DetailedTool is a tool that can return structured details along with its result.
+// If a tool implements this interface, the details will be included in the AgentToolResult.
+type DetailedTool interface {
+	Tool
+	// ExecuteDetailed runs the tool and returns both content and structured details.
+	ExecuteDetailed(ctx context.Context, args string) (content string, details any, err error)
+}
+
 type StreamingTool interface {
 	Tool
 	// ExecuteStreaming runs the tool and returns an iterator that yields

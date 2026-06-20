@@ -246,6 +246,21 @@ func toolExecutorFromRegistry(registry *tool.Registry) agent.ToolExecutor {
 			return agent.AgentToolResult{Content: ionParts}, nil
 		}
 
+		// Try DetailedTool for structured details
+		if dt, ok := t.(tool.DetailedTool); ok {
+			content, details, execErr := dt.ExecuteDetailed(ctx, string(argsJSON))
+			if execErr != nil {
+				return agent.AgentToolResult{
+					Content: []llm.ContentPart{{Type: "text", Text: execErr.Error()}},
+					IsError: true,
+				}, nil
+			}
+			return agent.AgentToolResult{
+				Content: []llm.ContentPart{{Type: "text", Text: content}},
+				Details: details,
+			}, nil
+		}
+
 		// Fall back to plain text Execute
 		result, execErr := t.Execute(ctx, string(argsJSON))
 		if execErr != nil {
