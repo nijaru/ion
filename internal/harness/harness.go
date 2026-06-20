@@ -14,7 +14,6 @@ package harness
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -103,7 +102,7 @@ func (h *Harness) acquireBusy() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.busy {
-		return fmt.Errorf("busy: another operation is in progress")
+		return NewBusyError()
 	}
 	h.busy = true
 	return nil
@@ -224,10 +223,10 @@ func (h *Harness) Run(ctx context.Context, prompts []agent.AgentMessage) ([]agen
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("before_agent_start hook: %w", err)
+		return nil, NewHookFailedError("before_agent_start", err)
 	}
 	if result.Abort {
-		return nil, fmt.Errorf("aborted by before_agent_start hook: %s", result.Reason)
+		return nil, NewHookAbortedError("before_agent_start", result.Reason)
 	}
 
 	// Run the agent
@@ -268,10 +267,10 @@ func (h *Harness) Continue(ctx context.Context) ([]agent.AgentMessage, error) {
 		Payload: BeforeAgentStartPayload{},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("before_agent_start hook: %w", err)
+		return nil, NewHookFailedError("before_agent_start", err)
 	}
 	if result.Abort {
-		return nil, fmt.Errorf("aborted by before_agent_start hook: %s", result.Reason)
+		return nil, NewHookAbortedError("before_agent_start", result.Reason)
 	}
 
 	// Continue the agent
@@ -338,10 +337,10 @@ func (h *Harness) Compact(ctx context.Context) (bool, error) {
 		Payload: BeforeCompactionPayload{},
 	})
 	if err != nil {
-		return false, fmt.Errorf("before_compaction hook: %w", err)
+		return false, NewHookFailedError("before_compaction", err)
 	}
 	if result.Abort {
-		return false, fmt.Errorf("aborted by before_compaction hook: %s", result.Reason)
+		return false, NewHookAbortedError("before_compaction", result.Reason)
 	}
 
 	// Check if hook provided a custom compaction result
@@ -611,10 +610,10 @@ func (h *Harness) NavigateTree(ctx context.Context, targetID string, options age
 		},
 	})
 	if err != nil {
-		return agent.NavigateTreeResult{}, fmt.Errorf("before_tree_navigation hook: %w", err)
+		return agent.NavigateTreeResult{}, NewHookFailedError("before_tree_navigation", err)
 	}
 	if result.Abort {
-		return agent.NavigateTreeResult{}, fmt.Errorf("aborted by before_tree_navigation hook: %s", result.Reason)
+		return agent.NavigateTreeResult{}, NewHookAbortedError("before_tree_navigation", result.Reason)
 	}
 
 	// Navigate tree
