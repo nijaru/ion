@@ -19,6 +19,20 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
+// checkRgInstalled checks if rg (ripgrep) is available in PATH.
+// Returns an error with installation instructions if not found.
+func checkRgInstalled() error {
+	_, err := exec.LookPath("rg")
+	if err != nil {
+		return fmt.Errorf("ripgrep (rg) is not installed. Install it with:\n" +
+			"  brew install ripgrep (macOS)\n" +
+			"  apt install ripgrep (Debian/Ubuntu)\n" +
+			"  dnf install ripgrep (Fedora)\n" +
+			"  cargo install ripgrep (any platform)")
+	}
+	return nil
+}
+
 const (
 	defaultGrepLimit = 100
 	defaultFindLimit = 1000
@@ -159,6 +173,9 @@ func (g *Grep) Spec() llm.Spec {
 }
 
 func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
+	if err := checkRgInstalled(); err != nil {
+		return "", err
+	}
 	input, err := decodeToolArgs[grepInput]("grep", args)
 	if err != nil {
 		return "", err
@@ -421,6 +438,9 @@ func (f *Find) Spec() llm.Spec {
 }
 
 func (f *Find) Execute(ctx context.Context, args string) (string, error) {
+	if err := checkRgInstalled(); err != nil {
+		return "", err
+	}
 	input, err := decodeToolArgs[findInput]("find", args)
 	if err != nil {
 		return "", err
