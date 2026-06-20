@@ -441,12 +441,28 @@ func (a *Agent) Config() AgentConfig {
 	return a.config
 }
 
-// SetStreamOptions sets the stream options.
+// SetStreamOptions merges stream options.
 // Zero-value fields are left unchanged (merged, not replaced).
 func (a *Agent) SetStreamOptions(opts StreamOptions) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.config.StreamOptions = opts
+	if opts.TimeoutMs != 0 {
+		a.config.StreamOptions.TimeoutMs = opts.TimeoutMs
+	}
+	if opts.MaxRetries != 0 {
+		a.config.StreamOptions.MaxRetries = opts.MaxRetries
+	}
+	if opts.MaxRetryDelayMs != 0 {
+		a.config.StreamOptions.MaxRetryDelayMs = opts.MaxRetryDelayMs
+	}
+	if opts.Headers != nil {
+		if a.config.StreamOptions.Headers == nil {
+			a.config.StreamOptions.Headers = make(map[string]string)
+		}
+		for k, v := range opts.Headers {
+			a.config.StreamOptions.Headers[k] = v
+		}
+	}
 }
 
 // Skill executes a turn with a skill invocation.
