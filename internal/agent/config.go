@@ -48,6 +48,13 @@ func (s StreamOptions) IsZero() bool {
 	return s.TimeoutMs == 0 && s.MaxRetries == 0 && s.MaxRetryDelayMs == 0 && len(s.Headers) == 0
 }
 
+// SystemPromptContext provides context for dynamic system prompt generation.
+type SystemPromptContext struct {
+	Model         llm.Model
+	ThinkingLevel ThinkingLevel
+	Tools         []AgentTool
+}
+
 // AgentConfig is the configuration for an Agent instance.
 // It defines the agent's behavior, callbacks, and hooks.
 type AgentConfig struct {
@@ -58,6 +65,10 @@ type AgentConfig struct {
 	Model         llm.Model       `json:"model"`
 	ThinkingLevel ThinkingLevel   `json:"thinking_level"`
 	SystemPrompt  string          `json:"system_prompt,omitempty"`
+	// SystemPromptFunc is an optional function that returns a dynamic system prompt.
+	// If set, it is called before each turn to generate the system prompt.
+	// Takes precedence over SystemPrompt when both are set.
+	SystemPromptFunc func(SystemPromptContext) string `json:"-"`
 	Tools         []AgentTool     `json:"tools,omitempty"`
 	StreamFn      StreamFn        `json:"-"`
 	ToolExecutor  ToolExecutor    `json:"-"`

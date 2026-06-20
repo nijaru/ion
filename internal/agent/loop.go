@@ -412,9 +412,20 @@ func (l *AgentLoop) buildContext() (AgentContext, error) {
 	for _, msg := range llmMessages {
 		messages = append(messages, llmMessageToAgent(msg))
 	}
+
+	// Use dynamic system prompt if available
+	systemPrompt := l.state.SystemPrompt
+	if l.config.SystemPromptFunc != nil {
+		systemPrompt = l.config.SystemPromptFunc(SystemPromptContext{
+			Model:         l.state.Model,
+			ThinkingLevel: l.state.ThinkingLevel,
+			Tools:         l.state.Tools,
+		})
+	}
+
 	return AgentContext{
 		Messages:      messages,
-		SystemPrompt:  l.state.SystemPrompt,
+		SystemPrompt:  systemPrompt,
 		Tools:         l.state.Tools,
 		Model:         l.state.Model,
 		ThinkingLevel: l.state.ThinkingLevel,
