@@ -88,11 +88,60 @@ func New(cfg Config) *Harness {
 	if cfg.Extensions == nil {
 		cfg.Extensions = NewExtensionManager()
 	}
-	return &Harness{
+	h := &Harness{
 		agent:      cfg.Agent,
 		hooks:      cfg.Hooks,
 		router:     cfg.Router,
 		extensions: cfg.Extensions,
+	}
+	// Bridge agent events to hook dispatcher
+	if cfg.Agent != nil {
+		h.wireAgentHooks()
+	}
+	return h
+}
+
+// wireAgentHooks bridges agent events to the hook dispatcher.
+// This allows harness hook subscribers to intercept agent events.
+func (h *Harness) wireAgentHooks() {
+	if h.agent == nil {
+		return
+	}
+	// Get current config and wrap OnEvent to also dispatch through hooks
+	cfg := h.agent.Config()
+	originalOnEvent := cfg.OnEvent
+	cfg.OnEvent = func(ev session.AgentEvent) {
+		// Call original handler first
+		if originalOnEvent != nil {
+			originalOnEvent(ev)
+		}
+		// Map agent events to hook dispatcher events
+		h.mapAgentEventToHooks(ev)
+	}
+	h.agent.UpdateConfig(cfg)
+}
+
+// mapAgentEventToHooks maps agent events to hook dispatcher events.
+func (h *Harness) mapAgentEventToHooks(ev session.AgentEvent) {
+	switch e := ev.(type) {
+	case session.AgentStart:
+		h.hooks.Dispatch(context.Background(), HookEvent{
+			Type: BeforeAgentStart,
+		})
+	case session.AgentEnd:
+		h.hooks.Dispatch(context.Background(), HookEvent{
+			Type: AfterAgentRun,
+			Payload: AfterAgentRunPayload{Error: e.Error},
+		})
+	case session.TurnStart:
+		h.hooks.Dispatch(context.Background(), HookEvent{
+			Type: OnSettled,
+		})
+	case session.MessageStart:
+		h.hooks.Dispatch(context.Background(), HookEvent{
+			Type: OnContext,
+			Payload: map[string]any{"message": e.Message},
+		})
 	}
 }
 
