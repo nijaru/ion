@@ -146,11 +146,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Get current messages from tree store
-	llmMessages, err := b.session.tree.Messages()
-	if err != nil {
-		b.session.mu.Unlock()
-		return false, fmt.Errorf("build context: %w", err)
-	}
+	llmMessages := b.session.tree.Messages()
 	if len(llmMessages) == 0 {
 		b.session.mu.Unlock()
 		return false, nil
@@ -162,12 +158,6 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		messages = append(messages, llmMessageToAgent(msg))
 	}
 
-	// Record tokens before compaction
-	tokensBefore := b.session.contextTokens
-
-	// Get current leaf ID for firstKeptEntryId
-	firstKeptEntryID := b.session.tree.LeafID()
-
 	// Generate summary using LLM
 	summary, err := b.generateSummary(ctx, messages)
 	if err != nil {
@@ -176,19 +166,10 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	}
 
 	// Add compaction entry to tree (Pi parity: preserve history)
-	compactID := b.session.tree.NextID()
-	compactEntry := session.NewCompactionEntry(
-		compactID,
-		&firstKeptEntryID,
-		summary,
-		firstKeptEntryID,
-		tokensBefore,
-	)
-	if err := b.session.tree.Add(compactEntry); err != nil {
+	if err := b.session.tree.Append(ctx, session.NewEvent(b.session.id, session.MessageAdded, llm.TextMessage(llm.RoleUser, summary))); err != nil {
 		b.session.mu.Unlock()
 		return false, fmt.Errorf("add compaction entry: %w", err)
 	}
-	b.session.tree.SetLeaf(compactID)
 	b.session.resetContextTokens()
 	b.session.mu.Unlock()
 

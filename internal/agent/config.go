@@ -131,10 +131,10 @@ type AgentConfig struct {
 	// OnBeforeTreeNavigation is called before navigating the tree.
 	// Can cancel the navigation or provide a summary.
 	// Default: nil (no-op).
-	OnBeforeTreeNavigation func(ctx context.Context, targetID, oldLeafID, commonAncestorID string, entriesToSummarize []session.TreeEntry, customInstructions string) BeforeTreeNavigationResult `json:"-"`
+	OnBeforeTreeNavigation func(ctx context.Context, targetID, oldLeafID, commonAncestorID string, entriesToSummarize []session.Event, customInstructions string) BeforeTreeNavigationResult `json:"-"`
 	// OnAfterTreeNavigation is called after navigating the tree.
 	// Default: nil (no-op).
-	OnAfterTreeNavigation func(ctx context.Context, newLeafID, oldLeafID string, summaryEntry *session.TreeEntry) `json:"-"`
+	OnAfterTreeNavigation func(ctx context.Context, newLeafID, oldLeafID string, summaryEntry *session.Event) `json:"-"`
 
 	// Resources (skills and prompt templates)
 	// Resources holds the current skills and prompt templates.

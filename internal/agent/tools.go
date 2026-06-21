@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +79,7 @@ func (l *AgentLoop) executeToolCallsSequential(
 	}
 
 	// Add tool results to tree store
-	l.addToolResultsToTree(finalized)
+	l.addToolResultsToTree(ctx, finalized)
 
 	return toolMessages(finalized)
 }
@@ -159,7 +160,7 @@ func (l *AgentLoop) executeToolCallsParallel(
 	}
 
 	// Add tool results to tree store
-	l.addToolResultsToTree(finalized)
+	l.addToolResultsToTree(ctx, finalized)
 
 	return toolMessages(finalized)
 }
@@ -185,15 +186,13 @@ type toolPreparation struct {
 }
 
 // addToolResultsToTree adds tool result messages to the tree store.
-func (l *AgentLoop) addToolResultsToTree(finalized []toolCallResult) {
-	var parentID *string
-	if leaf := l.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
+func (l *AgentLoop) addToolResultsToTree(ctx context.Context, finalized []toolCallResult) {
 	for _, res := range finalized {
 		llmMsg := agentMessageToLLM(res.message)
-		parentID = l.addToTree(parentID, &llmMsg)
+		event := session.NewMessage(l.sessionID, llmMsg)
+		if err := l.tree.Append(ctx, event); err != nil {
+			slog.Warn("failed to append tool result to tree", "error", err)
+		}
 	}
 }
 

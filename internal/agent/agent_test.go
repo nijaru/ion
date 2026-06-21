@@ -1253,8 +1253,8 @@ func TestSessionAdapterResumeHydratesModelHistory(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	// Get messages from tree store
-	llmMessages, err := adapter.tree.Messages()
-	if err != nil {
+	llmMessages := adapter.tree.Messages()
+	if len(llmMessages) == 0 {
 		t.Fatalf("Messages() error: %v", err)
 	}
 	if len(llmMessages) != 2 {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/oklog/ulid/v2"
 )
 
 // Writer persists events to a durable store.
@@ -228,10 +230,91 @@ func (s *Session) ActiveLeafID() string {
 	return s.activeLeafID
 }
 
+// Leaf returns the current active leaf event.
+func (s *Session) Leaf() (Event, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeLeafID == "" {
+		return Event{}, false
+	}
+	for _, e := range s.events {
+		if e.ID.String() == s.activeLeafID {
+			return e, true
+		}
+	}
+	return Event{}, false
+}
+
 // ActivePath returns events on the active path from root to leaf.
 // Returns an error if a parent event is missing (corrupted session).
 func (s *Session) ActivePath() ([]Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeEventsLocked()
+}
+
+// Get returns an event by ID.
+func (s *Session) Get(id string) (Event, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.events {
+		if e.ID.String() == id {
+			return e, true
+		}
+	}
+	return Event{}, false
+}
+
+// CommonAncestor returns the ID of the nearest common ancestor of two events.
+func (s *Session) CommonAncestor(id1, id2 string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Build ancestor set for id1
+	ancestors := make(map[string]bool)
+	current := id1
+	for current != "" {
+		ancestors[current] = true
+		parent := s.parentID(current)
+		if parent == "" {
+			break
+		}
+		current = parent
+	}
+
+	// Walk id2's ancestors to find first common
+	current = id2
+	for current != "" {
+		if ancestors[current] {
+			return current
+		}
+		parent := s.parentID(current)
+		if parent == "" {
+			break
+		}
+		current = parent
+	}
+	return ""
+}
+
+// parentID returns the parent ID of an event.
+func (s *Session) parentID(id string) string {
+	for _, e := range s.events {
+		if e.ID.String() == id {
+			return e.ParentID
+		}
+	}
+	return ""
+}
+
+// ParentID returns the parent ID of an event.
+func (s *Session) ParentID(id string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.parentID(id)
+}
+
+// NextID generates a new ULID string.
+func (s *Session) NextID() string {
+	return ulid.Make().String()
 }

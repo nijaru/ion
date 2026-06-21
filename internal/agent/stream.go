@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -44,10 +45,7 @@ func (l *AgentLoop) applyStreamOptionsPatch(patch *StreamOptionsPatch) {
 func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, llm.Message, error) {
 	// Get messages from tree store and apply context transforms.
 	// Tree stores llm.Message; callbacks expect []AgentMessage.
-	llmMessages, err := l.tree.Messages()
-	if err != nil {
-		return AgentMessage{}, llm.Message{}, fmt.Errorf("stream: %w", err)
-	}
+	llmMessages := l.tree.Messages()
 	if l.config.TransformContext != nil || l.config.ConvertToLlm != nil {
 		// Convert to AgentMessage for transform/converter
 		agentMessages := make([]AgentMessage, 0, len(llmMessages))
@@ -147,18 +145,6 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	// Events are emitted for streaming; accumulation handles blocks + flat fields.
 	var acc llm.StreamAccumulator
 
-	// Pi parity: push a partial assistant message to tree store at stream start.
-	// This makes the partial message visible to hooks that read context.messages during streaming.
-	var partialParentID *string
-	if leaf := l.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-			partialParentID = &id
-	}
-	partialEntryID := l.tree.NextID()
-	partialEntry := session.NewMessageEntry(partialEntryID, partialParentID, llm.Message{Role: "assistant"})
-	if err := l.tree.Add(partialEntry); err == nil {
-		l.tree.SetLeaf(partialEntryID)
-	}
 	partialSessionMsg := session.AgentMessage{}
 
 	// Track content block state for structured events (Pi parity)
@@ -270,13 +256,6 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 			})
 		}
 		acc.Add(chunk)
-
-		// Update the partial message in tree store (Pi parity)
-		resp := acc.Response()
-		l.tree.Update(partialEntryID, llm.Message{
-			Role:    "assistant",
-			Content: resp.Content,
-		})
 	}
 
 	// Emit final block end
@@ -285,8 +264,6 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 	}
 
 	if err := stream.Err(); err != nil {
-		// Remove the partial message from tree store on error
-		l.tree.Remove(partialEntryID)
 		// Call afterProviderResponse hook on error (Pi parity)
 		if l.config.AfterProviderResponse != nil {
 			l.config.AfterProviderResponse(ctx, AfterProviderResponseContext{
@@ -325,10 +302,13 @@ func (l *AgentLoop) streamAssistantResponse(ctx context.Context) (AgentMessage, 
 		Cost:         usageValueF(&resp.Usage),
 	}
 
-	// Update the partial message in tree store with final message
-	l.tree.Update(partialEntryID, agentMessageToLLM(message))
+	// Add final message to tree store
 	llmMessage := agentMessageToLLM(message)
 	llmMessage.Blocks = resp.GetContentBlocks()
+	finalEvent := session.NewMessage(l.sessionID, llmMessage)
+	if err := l.tree.Append(ctx, finalEvent); err != nil {
+		slog.Warn("failed to append final message to tree", "error", err)
+	}
 	return message, llmMessage, nil
 }
 

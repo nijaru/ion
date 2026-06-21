@@ -30,7 +30,7 @@ type Agent struct {
 	listeners map[uint64]func(session.AgentEvent)
 	nextID    uint64
 	mu        sync.RWMutex
-	tree      *session.TreeStore
+	tree      *session.Session
 
 	// Session state
 	id            string
@@ -71,7 +71,7 @@ func New(config AgentConfig) *Agent {
 		},
 		id:     id,
 		events: make(chan session.AgentEvent, 100),
-		tree:   session.NewTreeStore(),
+		tree:   session.New(id),
 	}
 	// Wire OnEvent to send to events channel if not already set.
 	if a.config.OnEvent == nil {
@@ -287,17 +287,10 @@ func (a *Agent) AppendMessage(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Add to tree store
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
 	llmMsg := agentMessageToLLM(msg)
-	entryID := a.tree.NextID()
-	entry := session.NewMessageEntry(entryID, parentID, llmMsg)
-	if err := a.tree.Add(entry); err == nil {
-		a.tree.SetLeaf(entryID)
+	event := session.NewMessage(a.id, llmMsg)
+	if err := a.tree.Append(context.Background(), event); err != nil {
+		slog.Warn("failed to append message to tree", "error", err)
 	}
 }
 
@@ -333,15 +326,8 @@ func (a *Agent) SetActiveTools(toolNames []string) {
 	a.state.Tools = active
 
 	// Add active tools change entry to tree
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
-	entryID := a.tree.NextID()
-	entry := session.NewActiveToolsChangeEntry(entryID, parentID, toolNames)
-	if err := a.tree.Add(entry); err == nil {
-		a.tree.SetLeaf(entryID)
+	if err := a.tree.AppendToolSelection(context.Background(), session.ToolSelection{Names: toolNames}); err != nil {
+		slog.Warn("failed to append tool selection to tree", "error", err)
 	}
 }
 
@@ -353,15 +339,11 @@ func (a *Agent) SetModel(model llm.Model) {
 	a.config.Model = model
 
 	// Add model change entry to tree
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
-	entryID := a.tree.NextID()
-	entry := session.NewModelChangeEntry(entryID, parentID, model.Provider, model.ID)
-	if err := a.tree.Add(entry); err == nil {
-		a.tree.SetLeaf(entryID)
+	if err := a.tree.AppendModelSelection(context.Background(), session.ModelSelection{
+		ProviderID: model.Provider,
+		Model:      model.ID,
+	}); err != nil {
+		slog.Warn("failed to append model selection to tree", "error", err)
 	}
 }
 
@@ -373,15 +355,10 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	a.config.ThinkingLevel = level
 
 	// Add thinking level change entry to tree
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
-	entryID := a.tree.NextID()
-	entry := session.NewThinkingLevelChangeEntry(entryID, parentID, string(level))
-	if err := a.tree.Add(entry); err == nil {
-		a.tree.SetLeaf(entryID)
+	if err := a.tree.AppendThinkingSelection(context.Background(), session.ThinkingSelection{
+		Level: string(level),
+	}); err != nil {
+		slog.Warn("failed to append thinking selection to tree", "error", err)
 	}
 }
 
@@ -626,16 +603,12 @@ func (a *Agent) ClearAllQueues() {
 // setMessagesLocked replaces messages in the tree store.
 // Caller must hold a.mu.
 func (a *Agent) setMessagesLocked(messages []AgentMessage) {
-	a.tree = session.NewTreeStore()
-	var parentID *string
+	a.tree = session.New(a.id)
 	for _, msg := range messages {
 		llmMsg := agentMessageToLLM(msg)
-		entryID := a.tree.NextID()
-		entry := session.NewMessageEntry(entryID, parentID, llmMsg)
-		if err := a.tree.Add(entry); err == nil {
-			a.tree.SetLeaf(entryID)
-			id := entryID
-			parentID = &id
+		event := session.NewMessage(a.id, llmMsg)
+		if err := a.tree.Append(context.Background(), event); err != nil {
+			slog.Warn("failed to append message to tree", "error", err)
 		}
 	}
 }
@@ -690,11 +663,6 @@ func (a *Agent) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage
 	if err != nil {
 		a.state.ErrorMessage = err.Error()
 	}
-	// Persist tree store
-	if saveErr := a.saveTree(); saveErr != nil {
-		// Log but don't fail — tree persistence is optional
-		slog.Warn("failed to save tree", "error", saveErr)
-	}
 	a.mu.Unlock()
 
 	return newMessages, err
@@ -725,11 +693,6 @@ func (a *Agent) Continue(ctx context.Context) ([]AgentMessage, error) {
 	if err != nil {
 		a.state.ErrorMessage = err.Error()
 	}
-	// Persist tree store
-	if saveErr := a.saveTree(); saveErr != nil {
-		// Log but don't fail — tree persistence is optional
-		slog.Warn("failed to save tree", "error", saveErr)
-	}
 	a.mu.Unlock()
 
 	return newMessages, err
@@ -758,27 +721,14 @@ func (a *Agent) Resume(ctx context.Context, sessionID string) error {
 
 	a.id = sessionID
 
-	// Try to load tree store from file
-	treePath := a.treePath()
-	if tree, err := session.LoadTreeStore(treePath); err == nil {
-		a.tree = tree
-	} else if history, err := a.loadModelHistoryLocked(ctx); err != nil {
+	// Rebuild tree from durable session store
+	if history, err := a.loadModelHistoryLocked(ctx); err != nil {
 		return err
 	} else if history != nil {
 		a.setMessagesLocked(history)
 	}
 
 	return nil
-}
-
-// treePath returns the path to the tree store file for this session.
-func (a *Agent) treePath() string {
-	return fmt.Sprintf(".ion/sessions/%s/tree.json", a.id)
-}
-
-// saveTree persists the tree store to disk.
-func (a *Agent) saveTree() error {
-	return a.tree.Save(a.treePath())
 }
 
 // CancelTurn interrupts an in-flight turn if the backend supports it.
@@ -827,7 +777,7 @@ func (a *Agent) ID() string {
 func (a *Agent) LeafID() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.tree.LeafID()
+	return a.tree.ActiveLeafID()
 }
 
 // Meta returns session metadata.
@@ -1167,12 +1117,9 @@ func (a *Agent) SetCompactionSummary(summary string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	// Add the summary as a compaction entry to the tree store
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
+	if err := a.tree.Append(context.Background(), session.NewEvent(a.id, session.MessageAdded, llm.TextMessage(llm.RoleUser, summary))); err != nil {
+		slog.Warn("failed to append compaction summary to tree", "error", err)
 	}
-	a.tree.Add(session.NewCompactionEntry("hook-compaction", parentID, summary, "", 0))
 }
 
 // NavigateTreeOptions holds options for NavigateTree.
@@ -1186,7 +1133,7 @@ type NavigateTreeOptions struct {
 type NavigateTreeResult struct {
 	Cancelled    bool
 	EditorText   string
-	SummaryEntry *session.TreeEntry
+	SummaryEntry *session.Event
 }
 
 // NavigateTree moves the active leaf to the target entry.
@@ -1200,7 +1147,7 @@ func (a *Agent) NavigateTree(ctx context.Context, targetID string, options Navig
 		return NavigateTreeResult{}, fmt.Errorf("session is closed")
 	}
 
-	oldLeafID := a.tree.LeafID()
+	oldLeafID := a.tree.ActiveLeafID()
 	if oldLeafID == targetID {
 		return NavigateTreeResult{Cancelled: false}, nil
 	}
@@ -1213,16 +1160,17 @@ func (a *Agent) NavigateTree(ctx context.Context, targetID string, options Navig
 
 	// Collect entries between old leaf and target for branch summary
 	commonAncestor := a.tree.CommonAncestor(oldLeafID, targetID)
-	var entriesToSummarize []session.TreeEntry
+	var entriesToSummarize []session.Event
 	if oldLeafID != "" && commonAncestor != "" {
 		// Collect entries from old leaf to common ancestor
 		current := oldLeafID
 		for current != commonAncestor {
 			if entry, ok := a.tree.Get(current); ok {
-				entriesToSummarize = append(entriesToSummarize, *entry)
+				entriesToSummarize = append(entriesToSummarize, entry)
 			}
-			if entry, ok := a.tree.Get(current); ok && entry.ParentID != nil {
-				current = *entry.ParentID
+			parent := a.tree.ParentID(current)
+			if parent != "" {
+				current = parent
 			} else {
 				break
 			}
@@ -1234,36 +1182,40 @@ func (a *Agent) NavigateTree(ctx context.Context, targetID string, options Navig
 		result := a.config.OnBeforeTreeNavigation(ctx, targetID, oldLeafID, commonAncestor, entriesToSummarize, options.CustomInstructions)
 		if result.Cancel {
 			return NavigateTreeResult{Cancelled: true}, nil
-			}
+		}
 	}
 
 	// Determine newLeafId and editorText
 	var editorText string
 	newLeafID := targetID
-	if target.Type == session.EntryMessage && target.Message != nil && target.Message.Role == "user" {
-		if target.ParentID != nil {
-			newLeafID = *target.ParentID
+	if target.Type == session.MessageAdded {
+		var msg llm.Message
+		if err := target.UnmarshalData(&msg); err == nil && msg.Role == "user" {
+			if target.ParentID != "" {
+				newLeafID = target.ParentID
+			}
+			editorText = msg.Content
 		}
-		editorText = target.Message.Content
-	} else if target.Type == session.EntryCustom {
+	} else if target.Type == session.CustomEntry {
 		// Custom entries: move to parent
-		if target.ParentID != nil {
-			newLeafID = *target.ParentID
+		if target.ParentID != "" {
+			newLeafID = target.ParentID
 		}
 	}
 
 	// Generate summary if requested and entries exist
-	var summaryEntry *session.TreeEntry
+	var summaryEvent *session.Event
 	if options.Summarize && len(entriesToSummarize) > 0 {
 		// Use LLM to generate summary
 		if a.config.StreamFn != nil {
 			smmary, err := a.generateBranchSummary(ctx, entriesToSummarize, options.CustomInstructions)
 			if err == nil && smmary != "" {
-				// Create branch_summary entry
-				branchID := a.tree.NextID()
-				branchEntry := session.NewBranchSummaryEntry(branchID, &newLeafID, oldLeafID, smmary)
-				if err := a.tree.Add(branchEntry); err == nil {
-					summaryEntry = branchEntry
+				// Create branch_summary event
+				if err := a.tree.MoveLeafWithSummary(ctx, newLeafID, session.BranchSummaryData{
+					Summary: smmary,
+				}); err == nil {
+					event, _ := a.tree.Leaf()
+					summaryEvent = &event
 				}
 			}
 		}
@@ -1274,29 +1226,32 @@ func (a *Agent) NavigateTree(ctx context.Context, targetID string, options Navig
 		// If newLeafID is empty (target was root user message), use targetID
 		newLeafID = targetID
 	}
-	if err := a.tree.SetLeaf(newLeafID); err != nil {
+	if err := a.tree.MoveLeaf(ctx, newLeafID); err != nil {
 		return NavigateTreeResult{}, fmt.Errorf("set leaf: %w", err)
 	}
 
 	// Fire session_tree hook
 	if a.config.OnAfterTreeNavigation != nil {
-		a.config.OnAfterTreeNavigation(ctx, newLeafID, oldLeafID, summaryEntry)
+		a.config.OnAfterTreeNavigation(ctx, newLeafID, oldLeafID, summaryEvent)
 	}
 
 	return NavigateTreeResult{
 		Cancelled:    false,
 		EditorText:   editorText,
-		SummaryEntry: summaryEntry,
+		SummaryEntry: summaryEvent,
 	}, nil
 }
 
 // generateBranchSummary generates a summary of the branch using the LLM.
-func (a *Agent) generateBranchSummary(ctx context.Context, entries []session.TreeEntry, customInstructions string) (string, error) {
+func (a *Agent) generateBranchSummary(ctx context.Context, entries []session.Event, customInstructions string) (string, error) {
 	// Build conversation text from entries
 	var conversationText string
 	for _, entry := range entries {
-		if entry.Message != nil {
-			conversationText += string(entry.Message.Role) + ": " + entry.Message.Content + "\n\n"
+		if entry.Type == session.MessageAdded {
+			var msg llm.Message
+			if err := entry.UnmarshalData(&msg); err == nil {
+				conversationText += string(msg.Role) + ": " + msg.Content + "\n\n"
+			}
 		}
 	}
 
@@ -1411,15 +1366,9 @@ func (a *Agent) SubmitTurn(ctx context.Context, input string) error {
 
 	// Commit the user message to tree store synchronously.
 	llmMsg := agentMessageToLLM(userMsg)
-	var parentID *string
-	if leaf := a.tree.Leaf(); leaf != nil {
-		id := leaf.ID
-		parentID = &id
-	}
-	entryID := a.tree.NextID()
-	entry := session.NewMessageEntry(entryID, parentID, llmMsg)
-	if err := a.tree.Add(entry); err == nil {
-		a.tree.SetLeaf(entryID)
+	event := session.NewMessage(a.id, llmMsg)
+	if err := a.tree.Append(context.Background(), event); err != nil {
+		slog.Warn("failed to append user message to tree", "error", err)
 	}
 	a.emitLocked(session.UserMessage{
 		Base:    session.BaseNow(),
@@ -1505,7 +1454,7 @@ func (a *Agent) Reset() {
 	a.contextTokens = 0
 
 	// Clear tree store
-	a.tree = session.NewTreeStore()
+	a.tree = session.New(a.id)
 
 	// Clear queues
 	a.steeringQueue = nil
