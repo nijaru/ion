@@ -151,6 +151,10 @@ func (m Model) dispatchPickerControllerMessage(msg tea.Msg) (Model, tea.Cmd, boo
 	case sessionForkedMsg:
 		next, cmd := m.handleSessionForked(msg)
 		return next, cmd, true
+
+	case sessionTreeMsg:
+		next, cmd := m.handleSessionTree(msg)
+		return next, cmd, true
 	}
 
 	return m, nil, false

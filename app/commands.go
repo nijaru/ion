@@ -265,6 +265,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return sessionCompactedMsg{notice: "Session is already within compaction limits"}
 		}
 
+	case "/tree":
+		return m.showSessionTree()
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 
@@ -336,4 +339,74 @@ func cmdError(msg string) tea.Cmd {
 	return func() tea.Msg {
 		return localErrorMsg{err: fmt.Errorf("%s", msg)}
 	}
+}
+
+func (m Model) showSessionTree() (Model, tea.Cmd) {
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	reader, ok := m.Model.Store.(session.SessionTreeReader)
+	if !ok {
+		return m, cmdError("store does not support session tree")
+	}
+	if m.Model.Session == nil {
+		return m, cmdError("no active session")
+	}
+	sessionID := m.Model.Session.ID()
+	return m, func() tea.Msg {
+		tree, err := reader.SessionTree(context.Background(), sessionID)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		return sessionTreeMsg{tree: tree}
+	}
+}
+
+type sessionTreeMsg struct {
+	tree session.SessionTree
+}
+
+func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
+	tree := msg.tree
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(m.cardTopBorder("Session Tree"))
+	b.WriteString("\n")
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  Current: "+tree.Current.ID))
+	b.WriteString("\n")
+	if tree.Current.Title != "" {
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Title: "+tree.Current.Title))
+		b.WriteString("\n")
+	}
+	if len(tree.Lineage) > 0 {
+		b.WriteString(m.cardDivider())
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Lineage:"))
+		b.WriteString("\n")
+		for _, info := range tree.Lineage {
+			title := info.ID
+			if info.Title != "" {
+				title = info.Title
+			}
+			b.WriteString(m.cardPaddedLine(m.st.dim, "    • "+title))
+			b.WriteString("\n")
+		}
+	}
+	if len(tree.Children) > 0 {
+		b.WriteString(m.cardDivider())
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Children:"))
+		b.WriteString("\n")
+		for _, info := range tree.Children {
+			title := info.ID
+			if info.Title != "" {
+				title = info.Title
+			}
+			b.WriteString(m.cardPaddedLine(m.st.dim, "    • "+title))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(m.cardBottomBorder())
+	m.terminalCommit().Entries(systemEntry(b.String()))
+	return m, nil
 }
