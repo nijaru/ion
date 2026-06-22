@@ -279,6 +279,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m.importSession(fields[1])
 
+	case "/name":
+		if len(fields) < 2 {
+			return m, cmdError("usage: /name <session-name>")
+		}
+		return m.nameSession(strings.Join(fields[1:], " "))
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 
@@ -493,5 +499,28 @@ type sessionImportedMsg struct {
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
 	notice := fmt.Sprintf("Imported %d session(s) from %s", len(msg.sessions), msg.filename)
 	m.terminalCommit().Entries(systemEntry(notice))
+	return m, nil
+}
+
+func (m Model) nameSession(name string) (Model, tea.Cmd) {
+	if m.Model.Storage == nil {
+		return m, cmdError("no active session")
+	}
+	storage := m.Model.Storage
+	return m, func() tea.Msg {
+		_, err := storage.AppendSessionInfo(context.Background(), name)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		return sessionNamedMsg{name: name}
+	}
+}
+
+type sessionNamedMsg struct {
+	name string
+}
+
+func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
+	m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
 	return m, nil
 }
