@@ -163,6 +163,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
 
+	case "/logout":
+		return m.logoutProvider()
+
 	case "/settings":
 		return m.handleSettingsCommand(fields)
 
@@ -522,5 +525,21 @@ type sessionNamedMsg struct {
 
 func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 	m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
+	return m, nil
+}
+
+func (m Model) logoutProvider() (Model, tea.Cmd) {
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	provider := cfg.Provider
+	if provider == "" {
+		return m, cmdError("no active provider")
+	}
+	if err := config.SaveAPIKey(provider, ""); err != nil {
+		return m, cmdError(fmt.Sprintf("failed to clear API key: %v", err))
+	}
+	m.terminalCommit().Entries(systemEntry("Logged out from " + provider))
 	return m, nil
 }
