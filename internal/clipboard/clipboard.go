@@ -290,3 +290,46 @@ func randomID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// WriteClipboardText writes text to the system clipboard.
+func WriteClipboardText(text string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return writeMacOSClipboard(text)
+	case "linux":
+		return writeLinuxClipboard(text)
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
+
+// writeMacOSClipboard writes text to macOS clipboard using pbcopy.
+func writeMacOSClipboard(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
+// writeLinuxClipboard writes text to Linux clipboard.
+func writeLinuxClipboard(text string) error {
+	// Check for Wayland
+	if os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+		return writeWaylandClipboard(text)
+	}
+	// Try xclip for X11
+	return writeX11Clipboard(text)
+}
+
+// writeWaylandClipboard writes text using wl-copy.
+func writeWaylandClipboard(text string) error {
+	cmd := exec.Command("wl-copy")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
+// writeX11Clipboard writes text using xclip.
+func writeX11Clipboard(text string) error {
+	cmd := exec.Command("xclip", "-selection", "clipboard")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}

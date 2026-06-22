@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	tea "charm.land/bubbletea/v2"
+	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/core"
 )
@@ -288,6 +289,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m.nameSession(strings.Join(fields[1:], " "))
 
+	case "/copy":
+		return m.copyLastResponse()
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 
@@ -541,5 +545,31 @@ func (m Model) logoutProvider() (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to clear API key: %v", err))
 	}
 	m.terminalCommit().Entries(systemEntry("Logged out from " + provider))
+	return m, nil
+}
+
+func (m Model) copyLastResponse() (Model, tea.Cmd) {
+	if m.Model.Storage == nil {
+		return m, cmdError("no active session")
+	}
+	entries, err := m.Model.Storage.Entries(context.Background())
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to get entries: %v", err))
+	}
+	// Find the last assistant message
+	var lastResponse string
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == session.RoleAgent {
+			lastResponse = entries[i].Content
+			break
+		}
+	}
+	if lastResponse == "" {
+		return m, cmdError("no assistant response to copy")
+	}
+	if err := ionclipboard.WriteClipboardText(lastResponse); err != nil {
+		return m, cmdError(fmt.Sprintf("failed to copy: %v", err))
+	}
+	m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
 	return m, nil
 }
