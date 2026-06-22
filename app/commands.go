@@ -3,7 +3,9 @@ package app
 import (
 	"github.com/nijaru/ion/config"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/nijaru/ion/llm"
@@ -268,6 +270,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/tree":
 		return m.showSessionTree()
 
+	case "/export":
+		return m.exportSession()
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 
@@ -408,5 +413,43 @@ func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
 	}
 	b.WriteString(m.cardBottomBorder())
 	m.terminalCommit().Entries(systemEntry(b.String()))
+	return m, nil
+}
+
+func (m Model) exportSession() (Model, tea.Cmd) {
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	if !ok {
+		return m, cmdError("store does not support export")
+	}
+	if m.Model.Session == nil {
+		return m, cmdError("no active session")
+	}
+	sessionID := m.Model.Session.ID()
+	return m, func() tea.Msg {
+		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		data, err := json.Marshal(bundle)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		filename := fmt.Sprintf("session-%s.json", sessionID)
+		if err := os.WriteFile(filename, data, 0644); err != nil {
+			return localErrorMsg{err: err}
+		}
+		return sessionExportedMsg{filename: filename}
+	}
+}
+
+type sessionExportedMsg struct {
+	filename string
+}
+
+func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
+	m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
 	return m, nil
 }
