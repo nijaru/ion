@@ -273,6 +273,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/export":
 		return m.exportSession()
 
+	case "/import":
+		if len(fields) < 2 {
+			return m, cmdError("usage: /import <filename>")
+		}
+		return m.importSession(fields[1])
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 
@@ -451,5 +457,41 @@ type sessionExportedMsg struct {
 
 func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
 	m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
+	return m, nil
+}
+
+func (m Model) importSession(filename string) (Model, tea.Cmd) {
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	importer, ok := m.Model.Store.(session.SessionBundleImporter)
+	if !ok {
+		return m, cmdError("store does not support import")
+	}
+	return m, func() tea.Msg {
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		var bundle session.SessionBundle
+		if err := json.Unmarshal(data, &bundle); err != nil {
+			return localErrorMsg{err: err}
+		}
+		imported, err := importer.ImportSessionBundle(context.Background(), bundle)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		return sessionImportedMsg{sessions: imported, filename: filename}
+	}
+}
+
+type sessionImportedMsg struct {
+	sessions []session.SessionInfo
+	filename string
+}
+
+func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
+	notice := fmt.Sprintf("Imported %d session(s) from %s", len(msg.sessions), msg.filename)
+	m.terminalCommit().Entries(systemEntry(notice))
 	return m, nil
 }

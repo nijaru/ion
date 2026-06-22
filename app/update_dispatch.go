@@ -159,6 +159,10 @@ func (m Model) dispatchPickerControllerMessage(msg tea.Msg) (Model, tea.Cmd, boo
 	case sessionExportedMsg:
 		next, cmd := m.handleSessionExported(msg)
 		return next, cmd, true
+
+	case sessionImportedMsg:
+		next, cmd := m.handleSessionImported(msg)
+		return next, cmd, true
 	}
 
 	return m, nil, false
