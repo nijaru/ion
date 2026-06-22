@@ -79,6 +79,12 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m.resumeStoredSessionByID(selected.ID)
+	case "ctrl+f":
+		selected, ok := m.pickerReducer().selectedSession()
+		if !ok {
+			return m, nil
+		}
+		return m.forkSessionFromPicker(selected.ID)
 	default:
 		if text, ok := keyTextInput(msg); ok {
 			m.pickerReducer().appendSessionQuery(text, m.App.Workdir)
@@ -184,7 +190,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(m.cardDivider())
 	b.WriteString("\n")
 	b.WriteString(
-		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Esc cancel"),
+		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Esc cancel"),
 	)
 	b.WriteString("\n")
 	b.WriteString(m.cardBottomBorder())
@@ -386,4 +392,36 @@ func truncateRunes(s string, max int) string {
 	}
 	b.WriteString("…")
 	return b.String()
+}
+
+func (m Model) forkSessionFromPicker(parentID string) (Model, tea.Cmd) {
+	store := m.Model.Store
+	if store == nil {
+		return m, nil
+	}
+	forker, ok := store.(session.SessionForker)
+	if !ok {
+		return m, nil
+	}
+	m.pickerReducer().closeSession()
+	return m, func() tea.Msg {
+		handle, err := forker.ForkSession(context.Background(), parentID, session.SessionForkOptions{})
+		if err != nil {
+			return sessionForkedMsg{err: err}
+		}
+		return sessionForkedMsg{sessionID: handle.ID()}
+	}
+}
+
+type sessionForkedMsg struct {
+	sessionID string
+	err       error
+}
+
+func (m Model) handleSessionForked(msg sessionForkedMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		m.progressReducer().setStatus("Fork failed: " + msg.err.Error())
+		return m, nil
+	}
+	return m.resumeStoredSessionByID(msg.sessionID)
 }
