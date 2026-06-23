@@ -569,7 +569,7 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			)
 		}
 		return m, nil
-	case "ctrl+m":
+	case "ctrl+l":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
 			preset := togglePreset(m.Picker.Overlay.Preset())
 			return m.openModelPickerForPreset(m.Picker.Overlay.cfg, preset)

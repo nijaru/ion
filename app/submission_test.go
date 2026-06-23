@@ -1693,7 +1693,7 @@ func TestBusyInputSteersWithoutActiveToolBoundary(t *testing.T) {
 	}
 }
 
-func TestCtrlGRecallsBackendOwnedQueuedTurns(t *testing.T) {
+func TestAltUpRecallsBackendOwnedQueuedTurns(t *testing.T) {
 	sess := &queuedInputStubSession{
 		stubSession: stubSession{events: make(chan session.AgentEvent)},
 	}
@@ -1704,7 +1704,7 @@ func TestCtrlGRecallsBackendOwnedQueuedTurns(t *testing.T) {
 	model.InFlight.QueuedTurnsBackendOwned = true
 	model.Input.Composer.SetValue("draft")
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt})
 	model = testModel(t, updated)
 	if len(model.InFlight.QueuedSteering) != 0 ||
 		len(model.InFlight.QueuedTurns) != 0 ||
@@ -1740,7 +1740,7 @@ func TestQueuedSteeringRendersAboveComposer(t *testing.T) {
 
 	view := ansi.Strip(model.View().Content)
 	for _, want := range []string{
-		"Steering (Ctrl+G edit): use the smaller test",
+		"Steering (Alt+Up edit): use the smaller test",
 		"+1 more",
 		"2 queued",
 	} {
@@ -1759,7 +1759,7 @@ func TestQueuedFollowUpRendersAboveComposer(t *testing.T) {
 
 	view := ansi.Strip(model.View().Content)
 	for _, want := range []string{
-		"Queued (Ctrl+G edit): what happened? please explain",
+		"Queued (Alt+Up edit): what happened? please explain",
 		"+1 more",
 		"2 queued",
 	} {
@@ -1769,12 +1769,12 @@ func TestQueuedFollowUpRendersAboveComposer(t *testing.T) {
 	}
 }
 
-func TestCtrlGRecallsQueuedTurnsIntoComposer(t *testing.T) {
+func TestAltUpRecallsQueuedTurnsIntoComposer(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.QueuedTurns = []string{"queued one", "queued two"}
 	model.Input.Composer.SetValue("draft")
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt})
 	model = testModel(t, updated)
 
 	if cmd != nil {

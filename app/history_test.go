@@ -98,12 +98,12 @@ func TestMultilineHistoryNavigation(t *testing.T) {
 	}
 }
 
-func TestCtrlPHistoryRespectsBoundaries(t *testing.T) {
+func TestHistoryRespectsBoundaries(t *testing.T) {
 	model := readyModel(t)
 	model.Input.History = []string{"multiline\nitem"}
 
 	// 1. Move to multiline item
-	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Value(); got != "multiline\nitem" {
@@ -113,8 +113,8 @@ func TestCtrlPHistoryRespectsBoundaries(t *testing.T) {
 		t.Fatalf("expected cursor at line 1, got %d", got)
 	}
 
-	// 2. Press Ctrl+P - should move cursor to line 0
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	// 2. Press Up - should move cursor to line 0
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Line(); got != 0 {
@@ -124,15 +124,15 @@ func TestCtrlPHistoryRespectsBoundaries(t *testing.T) {
 		t.Fatal("should not have navigated history yet")
 	}
 
-	// 3. Press Ctrl+P again - should try to navigate (but only 1 item)
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	// 3. Press Up again - should try to navigate (but only 1 item)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 	if model.Input.HistoryIdx != 0 {
 		t.Fatal("should still be at index 0")
 	}
 
-	// 4. Press Ctrl+N - should move to line 1
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	// 4. Press Down - should move to line 1
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = testModel(t, updated)
 
 	if got := model.Input.Composer.Line(); got != 1 {
@@ -142,8 +142,8 @@ func TestCtrlPHistoryRespectsBoundaries(t *testing.T) {
 		t.Fatal("should still be at index 0")
 	}
 
-	// 5. Press Ctrl+N again - should exit to draft
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	// 5. Press Down again - should exit to draft
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = testModel(t, updated)
 
 	if model.Input.HistoryIdx != -1 {

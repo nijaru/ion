@@ -179,7 +179,7 @@ func p1MatrixQueuedInputVisible(t *testing.T) {
 		t.Fatalf("queued turns = %#v", model.InFlight.QueuedTurns)
 	}
 	view := assertP1ShellFrame(t, model)
-	assertP1ViewContains(t, view, "Queued (Ctrl+G edit): follow up after this")
+	assertP1ViewContains(t, view, "Queued (Alt+Up edit): follow up after this")
 	assertP1ViewContains(t, view, "1 queued")
 }
 

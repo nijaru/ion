@@ -37,27 +37,32 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	}
 
-	if msg.Keystroke() == "ctrl+x" || msg.String() == "\x18" {
-		m.clearPendingAction()
-		return m.openExternalEditor()
-	}
-
 	switch msg.String() {
 	case "ctrl+g":
 		m.clearPendingAction()
-		return m.recallQueuedTurns()
+		return m.openExternalEditor()
 
-	case "ctrl+m":
+	case "ctrl+l":
 		m.clearPendingAction()
 		if m.activePreset() == presetFast {
 			return m.switchPresetCommand(presetPrimary)
 		}
-		// If no fast model is configured, open the model picker for fast preset
 		cfg, _ := m.commandConfig()
 		if cfg != nil && strings.TrimSpace(cfg.FastModel) == "" {
 			return m.openModelPickerForPreset(cfg, presetFast)
 		}
 		return m.switchPresetCommand(presetFast)
+
+	case "shift+ctrl+l":
+		m.clearPendingAction()
+		if m.activePreset() == presetPrimary {
+			cfg, _ := m.commandConfig()
+			if cfg != nil && strings.TrimSpace(cfg.FastModel) == "" {
+				return m.openModelPickerForPreset(cfg, presetFast)
+			}
+			return m.switchPresetCommand(presetFast)
+		}
+		return m.switchPresetCommand(presetPrimary)
 
 	case "ctrl+t":
 		// Pi parity: Ctrl+T toggles thinking blocks visibility.
@@ -163,7 +168,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// When idle, insert newline
 		return m, m.insertComposerText("\n")
 
-	case "up", "ctrl+p":
+	case "up":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
 			if draft, ok := m.inputReducer().previousHistoryDraft(
@@ -178,7 +183,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m.recallQueuedTurns()
 
-	case "down", "ctrl+n":
+	case "down":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 &&
 			m.inputReducer().browsingHistory() {

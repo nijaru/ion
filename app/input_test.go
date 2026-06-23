@@ -98,7 +98,7 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second prompt" {
 		t.Fatalf("composer = %q, want latest persisted input", got)
@@ -650,7 +650,7 @@ func TestExternalEditorReturnsBeforeBufferWriteCompletes(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("draft")
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("external editor should return a command")
@@ -717,56 +717,56 @@ func TestWriteExternalEditorBuffer(t *testing.T) {
 	}
 }
 
-func TestCtrlXControlTextDoesNotEnterComposerWhileBusy(t *testing.T) {
+func TestCtrlGExternalEditorDoesNotEnterComposerWhileBusy(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("draft")
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 
 	if cmd == nil {
-		t.Fatal("busy editor handoff should print a notice")
+		t.Fatal("external editor should open even while busy")
 	}
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want draft without control character", got)
 	}
 }
 
-func TestCtrlPRecallsHistory(t *testing.T) {
+func TestUpArrowRecallsHistory(t *testing.T) {
 	model := readyModel(t)
 	model.Input.History = []string{"first", "second"}
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second" {
 		t.Fatalf("composer = %q, want latest history entry", got)
 	}
 
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "first" {
 		t.Fatalf("composer = %q, want previous history entry", got)
 	}
 }
 
-func TestCtrlNTogglesForwardThroughHistory(t *testing.T) {
+func TestDownArrowTogglesForwardThroughHistory(t *testing.T) {
 	model := readyModel(t)
 	model.Input.History = []string{"first", "second"}
 
-	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = testModel(t, updated)
 
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = testModel(t, updated)
 	if got := model.Input.Composer.Value(); got != "second" {
 		t.Fatalf("composer = %q, want next history entry", got)
 	}
 }
 
-func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
+func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfgDir := filepath.Join(home, ".ion")
@@ -805,10 +805,10 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		},
 	)
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 	if cmd == nil {
-		t.Fatal("expected ctrl+m to return a switch command")
+		t.Fatal("expected ctrl+l to return a switch command")
 	}
 	msg := cmd()
 	switched, ok := msg.(runtimeSwitchedMsg)
@@ -834,10 +834,10 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("fast reasoning = %q, want low", got)
 	}
 
-	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 	if cmd == nil {
-		t.Fatal("expected ctrl+m to switch back to primary")
+		t.Fatal("expected ctrl+l to switch back to primary")
 	}
 	msg = cmd()
 	switched, ok = msg.(runtimeSwitchedMsg)
@@ -864,7 +864,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	}
 }
 
-func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
+func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 	oldSession := &stubSession{events: make(chan session.AgentEvent)}
 	model := New(
 		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
@@ -884,10 +884,10 @@ func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
 	})
 	model.InFlight.Thinking = true
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 	if cmd == nil {
-		t.Fatal("expected ctrl+m to return a busy-turn error")
+		t.Fatal("expected ctrl+l to return a busy-turn error")
 	}
 	err := localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {

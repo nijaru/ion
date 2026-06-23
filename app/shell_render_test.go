@@ -457,7 +457,7 @@ func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
 	model.InFlight.QueuedTurns = []string{"what happened?"}
 
 	view := ansi.Strip(model.View().Content)
-	if !strings.Contains(view, "Queued (Ctrl+G edit): what happened?\n\n") ||
+	if !strings.Contains(view, "Queued (Alt+Up edit): what happened?\n\n") ||
 		!strings.Contains(view, "Streaming...") {
 		t.Fatalf("view = %q, want one blank row between queued turn and shell progress", view)
 	}

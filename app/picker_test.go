@@ -219,7 +219,7 @@ func TestPickerHelpUsesKeyActionFormat(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	help := model.renderPickerHelpText()
 	if !strings.Contains(help, "Tab: providers") ||
-		!strings.Contains(help, "Ctrl+M: primary/fast") ||
+		!strings.Contains(help, "Ctrl+L: primary/fast") ||
 		strings.Contains(help, "Tab change provider") {
 		t.Fatalf("model picker help = %q, want key/action labels", help)
 	}
@@ -1179,7 +1179,7 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	}
 }
 
-func TestModelPickerCtrlMChangesEditTargetWithoutChangingActiveRuntime(t *testing.T) {
+func TestModelPickerCtrlLChangesEditTargetWithoutChangingActiveRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("OPENAI_API_KEY", "test-key")
@@ -1197,7 +1197,7 @@ func TestModelPickerCtrlMChangesEditTargetWithoutChangingActiveRuntime(t *testin
 
 	updated, _ := model.openModelPickerWithConfig(cfg)
 	model = updated
-	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = updated
 
 	if model.App.ActivePreset != presetPrimary {

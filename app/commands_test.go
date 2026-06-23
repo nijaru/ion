@@ -1207,7 +1207,7 @@ func TestRuntimeSwitchBlocksPresetHotkey(t *testing.T) {
 	model.Model.RuntimeSwitchRequest = 1
 	model.App.ActivePreset = presetPrimary
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
 
 	if cmd == nil {
@@ -1330,8 +1330,8 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	wantCommands = append(
 		wantCommands,
-		"Ctrl+P",
-		"Ctrl+X",
+		"Ctrl+L",
+		"Ctrl+G",
 		"Tab",
 		"Esc",
 		"Up / Down",
@@ -1425,11 +1425,11 @@ func TestRenderHelpLineStylesLabelsWithoutChangingText(t *testing.T) {
 }
 
 func TestSplitHelpDetail(t *testing.T) {
-	key, sep, detail, ok := splitHelpDetail("  Ctrl+P / Ctrl+N  command history")
+	key, sep, detail, ok := splitHelpDetail("  Ctrl+L  cycle model (primary/fast)")
 	if !ok {
 		t.Fatal("splitHelpDetail did not split help row")
 	}
-	if key != "Ctrl+P / Ctrl+N" || sep != "  " || detail != "command history" {
+	if key != "Ctrl+L" || detail != "cycle model (primary/fast)" {
 		t.Fatalf("key=%q sep=%q detail=%q", key, sep, detail)
 	}
 }
