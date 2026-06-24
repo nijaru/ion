@@ -817,21 +817,12 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	}
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
-	if model.App.ActivePreset != presetFast {
-		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
-	}
-	state, err := config.LoadState()
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
-	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
-		t.Fatalf("state active_preset = %#v, want fast", state.ActivePreset)
+	// With available model cycling, preset stays primary but model changes
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
-		t.Fatalf("fast model = %q, want gpt-4.1-mini", got)
-	}
-	if got := model.Progress.ReasoningEffort; got != "low" {
-		t.Fatalf("fast reasoning = %q, want low", got)
+		t.Fatalf("model = %q, want gpt-4.1-mini", got)
 	}
 
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
@@ -849,15 +840,8 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	if model.App.ActivePreset != presetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
-	state, err = config.LoadState()
-	if err != nil {
-		t.Fatalf("load state after primary switch: %v", err)
-	}
-	if state.ActivePreset == nil || *state.ActivePreset != "primary" {
-		t.Fatalf("state active_preset = %#v, want primary", state.ActivePreset)
-	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
-		t.Fatalf("primary model = %q, want gpt-4.1", got)
+		t.Fatalf("model = %q, want gpt-4.1", got)
 	}
 	if !slices.Equal(observedModels, []string{"gpt-4.1-mini", "gpt-4.1"}) {
 		t.Fatalf("switched models = %#v, want fast then primary", observedModels)
@@ -1034,5 +1018,69 @@ func TestPickScopedModel(t *testing.T) {
 	_, ok = pickScopedModel(nil, "openai", "a", true)
 	if ok {
 		t.Fatal("empty scoped models should not cycle")
+	}
+}
+
+
+
+
+
+func TestBuildAvailableModels(t *testing.T) {
+	model := readyModel(t)
+
+	// Test with primary and fast models configured
+	cfg := &config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		FastModel: "gpt-4.1-mini",
+	}
+	available := model.buildAvailableModels(cfg)
+	if len(available) != 2 {
+		t.Fatalf("expected 2 available models, got %d: %+v", len(available), available)
+	}
+	if available[0].Provider != "openai" || available[0].Model != "gpt-4.1" {
+		t.Fatalf("first model = %s/%s, want openai/gpt-4.1", available[0].Provider, available[0].Model)
+	}
+	if available[1].Provider != "openai" || available[1].Model != "gpt-4.1-mini" {
+		t.Fatalf("second model = %s/%s, want openai/gpt-4.1-mini", available[1].Provider, available[1].Model)
+	}
+
+	// Test with only primary model (no fast)
+	cfg2 := &config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+	}
+	available2 := model.buildAvailableModels(cfg2)
+	if len(available2) != 1 {
+		t.Fatalf("expected 1 available model, got %d: %+v", len(available2), available2)
+	}
+
+	// Test with same primary and fast model
+	cfg3 := &config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		FastModel: "gpt-4.1",
+	}
+	available3 := model.buildAvailableModels(cfg3)
+	if len(available3) != 1 {
+		t.Fatalf("expected 1 available model when primary == fast, got %d: %+v", len(available3), available3)
+	}
+
+	// Test with originalPrimaryModel set (preserves list after cycling)
+	model.Model.originalPrimaryModel = "gpt-4.1"
+	cfg4 := &config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1-mini", // Currently on fast model
+		FastModel: "gpt-4.1-mini",
+	}
+	available4 := model.buildAvailableModels(cfg4)
+	if len(available4) != 2 {
+		t.Fatalf("expected 2 available models with originalPrimaryModel, got %d: %+v", len(available4), available4)
+	}
+	if available4[0].Model != "gpt-4.1" {
+		t.Fatalf("first model = %s, want gpt-4.1 (original primary)", available4[0].Model)
+	}
+	if available4[1].Model != "gpt-4.1-mini" {
+		t.Fatalf("second model = %s, want gpt-4.1-mini", available4[1].Model)
 	}
 }

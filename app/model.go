@@ -321,6 +321,9 @@ type ModelState struct {
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
+	// originalPrimaryModel stores the primary model name before cycling.
+	// Used by buildAvailableModels to always have the full list.
+	originalPrimaryModel string
 }
 
 // core.SubagentProgress, core.InFlightState, core.ProgressState are aliases for core types.
@@ -464,6 +467,7 @@ func New(
 
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
+		m.Model.originalPrimaryModel = cfg.Model
 		m.progressReducer().setReasoningEffort(normalizeThinkingValue(cfg.ReasoningEffort))
 	} else {
 		m.progressReducer().setReasoningEffort(config.DefaultReasoningEffort)

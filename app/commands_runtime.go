@@ -152,22 +152,104 @@ func (m Model) cyclePresetFallback(
 	preset core.Preset,
 	forward bool,
 ) (Model, tea.Cmd) {
+	// Build available models list: primary + fast (if configured and different)
+	available := m.buildAvailableModels(cfg)
+	if len(available) <= 1 {
+		// Only one model available — open picker to configure fast
+		return m.openModelPickerForPreset(cfg, presetFast)
+	}
+
+	// Find current model in available list
+	currentProvider := cfg.Provider
+	var currentModel string
+	switch preset {
+	case presetFast:
+		currentModel = cfg.FastModel
+	default:
+		currentModel = cfg.Model
+	}
+
+	currentIndex := -1
+	for i, am := range available {
+		if am.Provider == currentProvider && am.Model == currentModel {
+			currentIndex = i
+			break
+		}
+	}
+	if currentIndex == -1 {
+		currentIndex = 0
+	}
+
+	// Cycle
+	length := len(available)
+	var nextIndex int
 	if forward {
-		if preset == presetFast {
-			return m.switchPresetCommand(presetPrimary)
-		}
-		if strings.TrimSpace(cfg.FastModel) == "" {
-			return m.openModelPickerForPreset(cfg, presetFast)
-		}
-		return m.switchPresetCommand(presetFast)
+		nextIndex = (currentIndex + 1) % length
+	} else {
+		nextIndex = (currentIndex - 1 + length) % length
 	}
-	if preset == presetPrimary {
-		if strings.TrimSpace(cfg.FastModel) == "" {
-			return m.openModelPickerForPreset(cfg, presetFast)
-		}
-		return m.switchPresetCommand(presetFast)
+	next := available[nextIndex]
+
+	// Apply model change
+	updated := *cfg
+	updated.Provider = next.Provider
+	switch preset {
+	case presetFast:
+		updated.FastModel = next.Model
+	default:
+		updated.Model = next.Model
 	}
-	return m.switchPresetCommand(presetPrimary)
+
+	runtimeUpdated, err := m.runtimeConfigForPreset(&updated, preset)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve model: %v", err))
+	}
+	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
+	notice := systemEntry("Switched to " + label)
+	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	return m.switchRuntimeCommand(
+		transition,
+		notice,
+		m.currentMaterializedSessionID(),
+		false,
+	)
+}
+
+// availableModel represents a provider/model pair for cycling.
+type availableModel struct {
+	Provider string
+	Model    string
+}
+
+// buildAvailableModels builds the list of available provider/model pairs.
+// Includes primary model and fast model (if configured and different).
+// Uses originalPrimaryModel to preserve the full list after cycling.
+func (m Model) buildAvailableModels(cfg *config.Config) []availableModel {
+	var available []availableModel
+
+	// Use original primary model if available, otherwise fall back to config
+	primaryModel := m.Model.originalPrimaryModel
+	if primaryModel == "" {
+		primaryModel = cfg.Model
+	}
+
+	// Primary model
+	if cfg.Provider != "" && primaryModel != "" {
+		available = append(available, availableModel{
+			Provider: cfg.Provider,
+			Model:    primaryModel,
+		})
+	}
+
+	// Fast model (if different from primary)
+	if cfg.FastModel != "" && cfg.FastModel != primaryModel {
+		available = append(available, availableModel{
+			Provider: cfg.Provider,
+			Model:    cfg.FastModel,
+		})
+	}
+
+	return available
 }
 
 func pickScopedModel(
