@@ -182,14 +182,14 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 
 func TestTabIgnoresHiddenSlashCommandAliases(t *testing.T) {
 	model := readyModel(t)
-	model.Input.Composer.SetValue("/rea")
+	model.Input.Composer.SetValue("/tru")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = testModel(t, updated)
 	if cmd != nil {
 		t.Fatalf("unexpected autocomplete cmd %T", cmd)
 	}
-	if got := model.Input.Composer.Value(); got != "/rea" {
+	if got := model.Input.Composer.Value(); got != "/tru" {
 		t.Fatalf("composer = %q, want unchanged hidden alias prefix", got)
 	}
 	if model.Picker.Overlay != nil {

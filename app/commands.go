@@ -57,6 +57,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/hotkeys":
 		return m, m.terminalCommit().Help(hotkeysText())
 
+	case "/reload":
+		return m.reloadConfig()
+
 	case "/primary":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /primary")
@@ -621,4 +624,20 @@ type sessionClonedMsg struct {
 
 func (m Model) handleSessionCloned(msg sessionClonedMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry("Cloned session " + msg.newSessionID))
+}
+
+func (m Model) reloadConfig() (Model, tea.Cmd) {
+	// Reload keybindings
+	km, err := LoadKeybindings()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("reload keybindings: %v", err))
+	}
+	m.Keybindings = km
+
+	// Reload model config
+	if cfg, err := config.Load(); err == nil {
+		m.Model.Config = cfg
+	}
+
+	return m, m.terminalCommit().Entries(systemEntry("Configuration reloaded"))
 }

@@ -39,6 +39,7 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 	return []SlashCommandInfo{
 		{Name: "/help", Detail: "show help", HelpLabel: "/help", HelpDetail: "show this help"},
 		{Name: "/hotkeys", Detail: "show keyboard shortcuts", HelpLabel: "/hotkeys", HelpDetail: "show all keyboard shortcuts"},
+		{Name: "/reload", Detail: "reload configuration", HelpLabel: "/reload", HelpDetail: "reload keybindings and model config"},
 		{
 			Name:       "/new",
 			Detail:     "start a new session",
