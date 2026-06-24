@@ -116,6 +116,7 @@ Common TUI commands:
 /logout     clear provider API key
 /reload     reload keybindings and model config
 /scoped-models  show configured scoped models
+/changelog   show changelog entries
 /quit       exit
 ```
 
