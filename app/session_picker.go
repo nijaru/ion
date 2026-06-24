@@ -53,6 +53,11 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.Picker.Session.namedOnly = !m.Picker.Session.namedOnly
 		m.pickerReducer().refreshSessionFilter(m.App.Workdir)
 		return m, nil
+	case "ctrl+s":
+		// Pi parity: Ctrl+S cycles sort mode
+		m.Picker.Session.sortMode = (m.Picker.Session.sortMode + 1) % 3
+		m.pickerReducer().refreshSessionFilter(m.App.Workdir)
+		return m, nil
 	case "backspace":
 		m.pickerReducer().backspaceSessionQuery(m.App.Workdir)
 		return m, nil
@@ -190,7 +195,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(m.cardDivider())
 	b.WriteString("\n")
 	b.WriteString(
-		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Ctrl+N named • Esc cancel"),
+		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Ctrl+N named • Ctrl+S sort • Esc cancel"),
 	)
 	b.WriteString("\n")
 	b.WriteString(m.cardBottomBorder())

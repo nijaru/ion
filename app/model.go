@@ -206,7 +206,17 @@ type sessionPickerState struct {
 	loading  bool
 	request  uint64
 	namedOnly bool // Pi parity: filter to named sessions only
+	sortMode sessionSortMode // Pi parity: sort mode for session list
 }
+
+// sessionSortMode represents the sort mode for the session picker.
+type sessionSortMode int
+
+const (
+	sortModeRecent    sessionSortMode = iota // Most recent first (default)
+	sortModeThreaded                         // Tree structure
+	sortModeRelevance                        // Sorted by search score
+)
 
 type pickerPurpose int
 
@@ -388,6 +398,9 @@ type Model struct {
 	// Toggled by Ctrl+T (Pi parity: app.thinking.toggle).
 	ThinkingBlockExpanded bool
 
+	// Keybindings manages keybinding configuration.
+	Keybindings *KeybindingsManager
+
 	// Styles (initialized once in New)
 	st styles
 }
@@ -458,6 +471,7 @@ func New(
 			HistoryIdx: -1,
 		},
 		PasteMarkers: make(map[string]pasteMarker),
+		Keybindings:  NewKeybindingsManager(),
 		st:           st,
 	}
 
