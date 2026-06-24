@@ -99,6 +99,7 @@ Common TUI commands:
 
 ```text
 /help       show commands and keys
+/hotkeys    show all keyboard shortcuts
 /provider   choose a provider
 /login      save an API key
 /model      choose a model
@@ -106,8 +107,37 @@ Common TUI commands:
 /status     show runtime status
 /resume     resume a previous session
 /compact    compact the current session
+/clone      duplicate the current session
+/copy       copy last assistant response to clipboard
+/export     export session as JSON bundle
+/import     import session from JSON bundle
+/tree       show session lineage and children
+/name       set session display name
+/logout     clear provider API key
+/reload     reload keybindings and model config
+/scoped-models  show configured scoped models
 /quit       exit
 ```
+
+## Hotkeys
+
+| Key | Action |
+|-----|--------|
+| Ctrl+L | Cycle model forward (scoped models or primary/fast) |
+| Ctrl+Shift+L | Cycle model backward |
+| Ctrl+G | Open external editor |
+| Ctrl+T | Toggle thinking blocks visibility |
+| Ctrl+O | Toggle tool output |
+| Shift+Tab | Cycle thinking level |
+| Alt+Up | Recall queued turns |
+| Alt+Enter | Queue follow-up |
+| Ctrl+C | Clear editor (double-tap to quit) |
+| Ctrl+D | Exit (double-tap when empty) |
+| Ctrl+Z | Suspend |
+| Ctrl+V | Paste image |
+| Up/Down | History navigation |
+| Enter | Send message |
+| Ctrl+J / Shift+Enter | Insert newline |
 
 ## Development
 
