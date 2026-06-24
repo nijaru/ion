@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/internal/core"
 )
@@ -168,10 +169,28 @@ func toolSurfaceSummary(surface core.ToolSurface) string {
 func runtimeStatusSummary(m Model) string {
 	lines := []string{"Permissions: trusted by default"}
 	if provider := m.runtimeProvider(); provider != "" {
-		lines = append(lines, "Provider: "+provider)
+		lines = append(lines, "Provider: "+llm.DisplayName(provider)+" ("+provider+")")
 	}
 	if model := m.runtimeModel(); model != "" {
 		lines = append(lines, "Model: "+model)
+	}
+	if reasoning := m.Model.Runtime.Reasoning; reasoning != "" {
+		lines = append(lines, "Thinking: "+reasoning)
+	}
+	if preset := m.Model.Runtime.Preset; preset != "" {
+		lines = append(lines, "Preset: "+string(preset))
+	}
+	if sessionID := m.Model.Runtime.SessionID; sessionID != "" {
+		lines = append(lines, "Session: "+sessionID[:8]+"...")
+	}
+	// Token usage
+	progress := m.Progress
+	if progress.TokensSent > 0 || progress.TokensReceived > 0 {
+		lines = append(lines, fmt.Sprintf("Tokens: %s sent, %s received",
+			compactCount(progress.TokensSent), compactCount(progress.TokensReceived)))
+	}
+	if progress.TotalCost > 0 {
+		lines = append(lines, fmt.Sprintf("Cost: $%.4f", progress.TotalCost))
 	}
 	if summarizer, ok := m.Model.Backend.(core.ToolSummarizer); ok {
 		surface := summarizer.ToolSurface()
