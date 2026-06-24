@@ -101,6 +101,106 @@ func (m Model) switchPresetCommand(preset core.Preset) (Model, tea.Cmd) {
 	)
 }
 
+func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
+	if m.localCommandBusy() {
+		return m, cmdError(m.localCommandBusyMessage("changing models"))
+	}
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	preset := m.activePreset()
+	runtimeCfg, err := m.runtimeConfigForPreset(cfg, preset)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
+	}
+	next, ok := pickScopedModel(cfg.ScopedModels, runtimeCfg.Provider, runtimeCfg.Model, forward)
+	if !ok {
+		return m.cyclePresetFallback(cfg, preset, forward)
+	}
+	updated := *cfg
+	updated.Provider = next.Provider
+	switch preset {
+	case presetFast:
+		updated.FastModel = next.Model
+		if next.Thinking != "" {
+			updated.FastReasoningEffort = next.Thinking
+		}
+	default:
+		updated.Model = next.Model
+		if next.Thinking != "" {
+			updated.ReasoningEffort = next.Thinking
+		}
+	}
+	runtimeUpdated, err := m.runtimeConfigForPreset(&updated, preset)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve scoped model: %v", err))
+	}
+	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
+	notice := systemEntry("Switched to " + label)
+	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	return m.switchRuntimeCommand(
+		transition,
+		notice,
+		m.currentMaterializedSessionID(),
+		false,
+	)
+}
+
+func (m Model) cyclePresetFallback(
+	cfg *config.Config,
+	preset core.Preset,
+	forward bool,
+) (Model, tea.Cmd) {
+	if forward {
+		if preset == presetFast {
+			return m.switchPresetCommand(presetPrimary)
+		}
+		if strings.TrimSpace(cfg.FastModel) == "" {
+			return m.openModelPickerForPreset(cfg, presetFast)
+		}
+		return m.switchPresetCommand(presetFast)
+	}
+	if preset == presetPrimary {
+		if strings.TrimSpace(cfg.FastModel) == "" {
+			return m.openModelPickerForPreset(cfg, presetFast)
+		}
+		return m.switchPresetCommand(presetFast)
+	}
+	return m.switchPresetCommand(presetPrimary)
+}
+
+func pickScopedModel(
+	models []config.ScopedModel,
+	currentProvider string,
+	currentModel string,
+	forward bool,
+) (config.ScopedModel, bool) {
+	if len(models) <= 1 {
+		return config.ScopedModel{}, false
+	}
+	currentProvider = strings.ToLower(strings.TrimSpace(currentProvider))
+	currentModel = strings.TrimSpace(currentModel)
+	idx := -1
+	for i, sm := range models {
+		if strings.EqualFold(sm.Provider, currentProvider) &&
+			strings.TrimSpace(sm.Model) == currentModel {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		idx = 0
+	}
+	n := len(models)
+	if forward {
+		idx = (idx + 1) % n
+	} else {
+		idx = (idx - 1 + n) % n
+	}
+	return models[idx], true
+}
+
 func (m Model) currentMaterializedSessionID() string {
 	if id := m.Model.Runtime.MaterializedSessionID(); id != "" {
 		return id

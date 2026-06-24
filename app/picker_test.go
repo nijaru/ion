@@ -219,7 +219,7 @@ func TestPickerHelpUsesKeyActionFormat(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	help := model.renderPickerHelpText()
 	if !strings.Contains(help, "Tab: providers") ||
-		!strings.Contains(help, "Ctrl+L: primary/fast") ||
+		!strings.Contains(help, "Ctrl+L: cycle model") ||
 		strings.Contains(help, "Tab change provider") {
 		t.Fatalf("model picker help = %q, want key/action labels", help)
 	}

@@ -44,25 +44,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "ctrl+l":
 		m.clearPendingAction()
-		if m.activePreset() == presetFast {
-			return m.switchPresetCommand(presetPrimary)
-		}
-		cfg, _ := m.commandConfig()
-		if cfg != nil && strings.TrimSpace(cfg.FastModel) == "" {
-			return m.openModelPickerForPreset(cfg, presetFast)
-		}
-		return m.switchPresetCommand(presetFast)
+		return m.cycleScopedModelCommand(true)
 
-	case "shift+ctrl+l":
+	case "ctrl+shift+l":
 		m.clearPendingAction()
-		if m.activePreset() == presetPrimary {
-			cfg, _ := m.commandConfig()
-			if cfg != nil && strings.TrimSpace(cfg.FastModel) == "" {
-				return m.openModelPickerForPreset(cfg, presetFast)
-			}
-			return m.switchPresetCommand(presetFast)
-		}
-		return m.switchPresetCommand(presetPrimary)
+		return m.cycleScopedModelCommand(false)
 
 	case "ctrl+t":
 		// Pi parity: Ctrl+T toggles thinking blocks visibility.

@@ -48,6 +48,13 @@ type Config struct {
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
 	Models                 []ModelDef        `toml:"models,omitempty" json:"models,omitempty"`
+	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty" json:"scoped_model,omitempty"`
+}
+
+type ScopedModel struct {
+	Provider string `toml:"provider" json:"provider"`
+	Model    string `toml:"model" json:"model"`
+	Thinking string `toml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 type ModelDef struct {

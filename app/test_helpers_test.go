@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/internal/core"
+	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 type stubBackend struct {
@@ -466,6 +467,44 @@ func readyModel(t *testing.T) Model {
 	sess := &stubSession{events: make(chan session.AgentEvent)}
 	b := stubBackend{sess: sess}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return testModel(t, updated)
+}
+
+func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
+	t.Helper()
+	if home, err := os.UserHomeDir(); err == nil {
+		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") &&
+			!strings.Contains(home, "folders") &&
+			!strings.Contains(home, "/var/") {
+			t.Setenv("HOME", t.TempDir())
+		}
+	}
+	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+			if observed != nil {
+				*observed = append(*observed, cfg.Model)
+			}
+			resolved := *cfg
+			newBackend := testutil.New()
+			newBackend.SetConfig(&resolved)
+			newStorage := &stubStorageSession{
+				id:     sessionID,
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "main",
+			}
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	return testModel(t, updated)
 }

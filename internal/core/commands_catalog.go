@@ -269,7 +269,7 @@ func HelpText() string {
 		"",
 		"keys",
 		"",
-		"  Ctrl+L           cycle model (primary/fast)",
+		"  Ctrl+L           cycle model (scoped models or primary/fast)",
 		"  Ctrl+T           thinking picker",
 		"  Ctrl+G           open composer in external editor",
 		"  Tab              complete slash commands and @file refs; swap provider/model pickers",

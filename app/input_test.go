@@ -900,3 +900,139 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 }
+
+func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
+	var observed []string
+	model := readyModelWithSwitcher(t, &observed).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Provider: "openai", Model: "gpt-4.1"},
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			{Provider: "openai", Model: "gpt-4.1-mini"},
+		},
+	})
+
+	// Forward: gpt-4.1 → claude-sonnet-4-5
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected ctrl+l to switch to next scoped model")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(switched)
+	model = testModel(t, next)
+	if got, want := model.Model.Backend.Model(), "claude-sonnet-4-5"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if got := model.Model.Backend.Provider(); got != "anthropic" {
+		t.Fatalf("provider = %q, want anthropic", got)
+	}
+
+	// Forward: claude-sonnet-4-5 → gpt-4.1-mini
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	msg = cmd()
+	switched, ok = msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ = model.Update(switched)
+	model = testModel(t, next)
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+		t.Fatalf("model = %q, want gpt-4.1-mini", got)
+	}
+
+	// Forward: gpt-4.1-mini → gpt-4.1 (wraps)
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	msg = cmd()
+	switched, ok = msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ = model.Update(switched)
+	model = testModel(t, next)
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("model = %q, want gpt-4.1 (wrap)", got)
+	}
+}
+
+func TestCtrlLCyclesScopedModelsBackward(t *testing.T) {
+	var observed []string
+	model := readyModelWithSwitcher(t, &observed).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Provider: "openai", Model: "gpt-4.1"},
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			{Provider: "openai", Model: "gpt-4.1-mini"},
+		},
+	})
+
+	// Backward from gpt-4.1 wraps to gpt-4.1-mini
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl | tea.ModShift})
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("expected shift+ctrl+l to switch scoped model")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(switched)
+	model = testModel(t, next)
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+		t.Fatalf("model = %q, want gpt-4.1-mini (backward wrap)", got)
+	}
+}
+
+func TestPickScopedModel(t *testing.T) {
+	models := []config.ScopedModel{
+		{Provider: "openai", Model: "a"},
+		{Provider: "anthropic", Model: "b"},
+		{Provider: "openai", Model: "c"},
+	}
+
+	// Forward from index 0 → 1
+	next, ok := pickScopedModel(models, "openai", "a", true)
+	if !ok || next.Model != "b" {
+		t.Fatalf("forward from a: got %+v ok=%v, want b", next, ok)
+	}
+
+	// Forward from last index wraps to 0
+	next, ok = pickScopedModel(models, "openai", "c", true)
+	if !ok || next.Model != "a" {
+		t.Fatalf("forward wrap from c: got %+v ok=%v, want a", next, ok)
+	}
+
+	// Backward from index 0 wraps to last
+	next, ok = pickScopedModel(models, "openai", "a", false)
+	if !ok || next.Model != "c" {
+		t.Fatalf("backward wrap from a: got %+v ok=%v, want c", next, ok)
+	}
+
+	// Unknown current model defaults to index 0, then advances
+	next, ok = pickScopedModel(models, "unknown", "xxx", true)
+	if !ok || next.Model != "b" {
+		t.Fatalf("unknown current: got %+v ok=%v, want b", next, ok)
+	}
+
+	// Single model → no cycling
+	single := []config.ScopedModel{{Provider: "openai", Model: "a"}}
+	_, ok = pickScopedModel(single, "openai", "a", true)
+	if ok {
+		t.Fatal("single scoped model should not cycle")
+	}
+
+	// Empty list → no cycling
+	_, ok = pickScopedModel(nil, "openai", "a", true)
+	if ok {
+		t.Fatal("empty scoped models should not cycle")
+	}
+}
