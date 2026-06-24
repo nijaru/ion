@@ -105,6 +105,13 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 			Idle:       SlashCommandIdleAlways,
 		},
 		{
+			Name:       "/changelog",
+			Detail:     "show changelog",
+			HelpLabel:  "/changelog",
+			HelpDetail: "show changelog entries",
+			Idle:       SlashCommandIdleAlways,
+		},
+		{
 			Name:       "/provider",
 			Detail:     "choose provider",
 			HelpLabel:  "/provider [name]",

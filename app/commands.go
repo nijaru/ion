@@ -200,6 +200,16 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			systemEntry(runtimeStatusSummary(m)),
 		)
 
+	case "/changelog":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /changelog")
+		}
+		content, err := os.ReadFile("CHANGELOG.md")
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to read CHANGELOG.md: %v", err))
+		}
+		return m, m.terminalCommit().Entries(systemEntry(string(content)))
+
 	case "/skills":
 		dir, err := config.DefaultSkillsDir()
 		if err != nil {
