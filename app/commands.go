@@ -60,6 +60,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/reload":
 		return m.reloadConfig()
 
+	case "/scoped-models":
+		return m.showScopedModels()
+
 	case "/primary":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /primary")
@@ -640,4 +643,36 @@ func (m Model) reloadConfig() (Model, tea.Cmd) {
 	}
 
 	return m, m.terminalCommit().Entries(systemEntry("Configuration reloaded"))
+}
+
+func (m Model) showScopedModels() (Model, tea.Cmd) {
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(err.Error())
+	}
+	if len(cfg.ScopedModels) == 0 {
+		return m, m.terminalCommit().Entries(systemEntry("No scoped models configured"))
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(m.cardTopBorder("Scoped Models"))
+	b.WriteString("\n")
+	for i, sm := range cfg.ScopedModels {
+		line := fmt.Sprintf("  %d. %s", i+1, sm.Model)
+		if sm.Provider != "" {
+			line += fmt.Sprintf(" (provider: %s)", sm.Provider)
+		}
+		if sm.Thinking != "" {
+			line += fmt.Sprintf(" [thinking: %s]", sm.Thinking)
+		}
+		b.WriteString(m.cardPaddedLine(m.st.dim, line))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  Ctrl+L/Shift+Ctrl+L to cycle models"))
+	b.WriteString("\n")
+	b.WriteString(m.cardBottomBorder())
+	return m, m.terminalCommit().Help(b.String())
 }

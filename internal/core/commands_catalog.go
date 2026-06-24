@@ -40,6 +40,7 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 		{Name: "/help", Detail: "show help", HelpLabel: "/help", HelpDetail: "show this help"},
 		{Name: "/hotkeys", Detail: "show keyboard shortcuts", HelpLabel: "/hotkeys", HelpDetail: "show all keyboard shortcuts"},
 		{Name: "/reload", Detail: "reload configuration", HelpLabel: "/reload", HelpDetail: "reload keybindings and model config"},
+		{Name: "/scoped-models", Detail: "show scoped models", HelpLabel: "/scoped-models", HelpDetail: "show configured scoped models"},
 		{
 			Name:       "/new",
 			Detail:     "start a new session",
