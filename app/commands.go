@@ -54,6 +54,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/help":
 		return m, m.terminalCommit().Help(helpText())
 
+	case "/hotkeys":
+		return m, m.terminalCommit().Help(hotkeysText())
+
 	case "/primary":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /primary")
@@ -288,6 +291,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError("usage: /name <session-name>")
 		}
 		return m.nameSession(strings.Join(fields[1:], " "))
+
+	case "/clone":
+		return m.cloneSession()
 
 	case "/copy":
 		return m.copyLastResponse()
@@ -572,4 +578,47 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 	}
 	m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
 	return m, nil
+}
+
+func (m Model) cloneSession() (Model, tea.Cmd) {
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	if !ok {
+		return m, cmdError("store does not support session export")
+	}
+	importer, ok := m.Model.Store.(session.SessionBundleImporter)
+	if !ok {
+		return m, cmdError("store does not support session import")
+	}
+	if m.Model.Session == nil {
+		return m, cmdError("no active session")
+	}
+	sessionID := m.Model.Session.ID()
+	return m, func() tea.Msg {
+		ctx := context.Background()
+		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
+		if err != nil {
+			return localErrorMsg{err: fmt.Errorf("export session: %w", err)}
+		}
+		// Clear the root session ID so import creates a new session
+		bundle.RootSessionID = ""
+		imported, err := importer.ImportSessionBundle(ctx, bundle)
+		if err != nil {
+			return localErrorMsg{err: fmt.Errorf("import session: %w", err)}
+		}
+		if len(imported) == 0 {
+			return localErrorMsg{err: fmt.Errorf("no sessions imported")}
+		}
+		return sessionClonedMsg{newSessionID: imported[0].ID}
+	}
+}
+
+type sessionClonedMsg struct {
+	newSessionID string
+}
+
+func (m Model) handleSessionCloned(msg sessionClonedMsg) (Model, tea.Cmd) {
+	return m, m.terminalCommit().Entries(systemEntry("Cloned session " + msg.newSessionID))
 }

@@ -7,6 +7,7 @@ import (
 )
 
 func helpText() string                                 { return core.HelpText() }
+func hotkeysText() string                              { return core.HotkeysText() }
 func slashCommands() []string                          { return core.SlashCommands() }
 func deferredFeatureMessage(f string) string           { return core.DeferredFeatureMessage(f) }
 func slashCommandDefinitions() []core.SlashCommandInfo { return core.SlashCommandDefinitions() }

@@ -38,6 +38,7 @@ func DeferredFeatureMessage(feature string) string {
 func SlashCommandDefinitions() []SlashCommandInfo {
 	return []SlashCommandInfo{
 		{Name: "/help", Detail: "show help", HelpLabel: "/help", HelpDetail: "show this help"},
+		{Name: "/hotkeys", Detail: "show keyboard shortcuts", HelpLabel: "/hotkeys", HelpDetail: "show all keyboard shortcuts"},
 		{
 			Name:       "/new",
 			Detail:     "start a new session",
@@ -81,6 +82,18 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 			HelpDetail: "show session lineage and children",
 			Hidden:     true,
 			Deferred:   true,
+		},
+		{
+			Name:       "/clone",
+			Detail:     "clone session",
+			HelpLabel:  "/clone",
+			HelpDetail: "duplicate the current session",
+		},
+		{
+			Name:       "/copy",
+			Detail:     "copy last response",
+			HelpLabel:  "/copy",
+			HelpDetail: "copy the last assistant response to clipboard",
 		},
 		{
 			Name:       "/compact",
@@ -294,4 +307,45 @@ func SlashCommands() []string {
 		out = append(out, command.Name)
 	}
 	return out
+}
+
+// HotkeysText returns a detailed list of all keyboard shortcuts.
+func HotkeysText() string {
+	lines := []string{
+		"ion hotkeys",
+		"",
+		"model",
+		"  Ctrl+L             cycle model forward (scoped models or primary/fast)",
+		"  Ctrl+Shift+L       cycle model backward",
+		"  Shift+Tab          cycle thinking level",
+		"  Ctrl+T             toggle thinking blocks visibility",
+		"",
+		"editor",
+		"  Ctrl+G             open external editor",
+		"  Ctrl+V             paste image from clipboard",
+		"  Ctrl+J             insert newline",
+		"  Shift+Enter        insert newline",
+		"  Alt+Enter          insert newline",
+		"  Tab                complete slash commands and @file refs",
+		"",
+		"session",
+		"  Ctrl+N             toggle named session filter (in picker)",
+		"  Ctrl+S             cycle sort mode (in picker)",
+		"  Ctrl+F             fork session (in picker)",
+		"  Alt+Enter          queue follow-up message",
+		"  Alt+Up             restore queued messages",
+		"",
+		"navigation",
+		"  Up / Down          command history",
+		"  PgUp / PgDn        page through picker lists",
+		"  Esc                cancel running turn",
+		"",
+		"general",
+		"  Enter              send message",
+		"  Ctrl+C             clear composer, cancel running turn, or quit on double-tap",
+		"  Ctrl+D             delete forward, or quit on double-tap when empty",
+		"  Ctrl+O             toggle tool output",
+		"  Ctrl+Z             suspend to background",
+	}
+	return strings.Join(lines, "\n")
 }
