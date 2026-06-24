@@ -4,6 +4,7 @@ import (
 	"github.com/nijaru/ion/config"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -252,12 +253,36 @@ func (m Model) buildAvailableModels(cfg *config.Config) []availableModel {
 	return available
 }
 
+// filterScopedModelsByAuth returns only scoped models with configured API keys.
+// Models with empty provider are included (they use the default provider).
+// If no credentials file exists, all models are included (allows tests to work).
+func filterScopedModelsByAuth(models []config.ScopedModel) []config.ScopedModel {
+	// If no credentials file exists, don't filter (test environment)
+	credPath, err := config.CredentialPath()
+	if err != nil {
+		return models
+	}
+	if _, err := os.Stat(credPath); os.IsNotExist(err) {
+		return models
+	}
+
+	var filtered []config.ScopedModel
+	for _, sm := range models {
+		if sm.Provider == "" || config.HasAPIKey(sm.Provider) {
+			filtered = append(filtered, sm)
+		}
+	}
+	return filtered
+}
+
 func pickScopedModel(
 	models []config.ScopedModel,
 	currentProvider string,
 	currentModel string,
 	forward bool,
 ) (config.ScopedModel, bool) {
+	// Filter by auth availability (Pi parity)
+	models = filterScopedModelsByAuth(models)
 	if len(models) <= 1 {
 		return config.ScopedModel{}, false
 	}

@@ -190,7 +190,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(m.cardDivider())
 	b.WriteString("\n")
 	b.WriteString(
-		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Esc cancel"),
+		m.cardPaddedLine(m.st.dim, "  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Ctrl+N named • Esc cancel"),
 	)
 	b.WriteString("\n")
 	b.WriteString(m.cardBottomBorder())

@@ -38,6 +38,12 @@ func LookupAPIKey(provider string) (string, bool) {
 	return key, key != ""
 }
 
+// HasAPIKey returns true if the provider has a configured API key.
+func HasAPIKey(provider string) bool {
+	_, ok := LookupAPIKey(provider)
+	return ok
+}
+
 func SaveAPIKey(provider, key string) error {
 	provider = normalizeCredentialProvider(provider)
 	key = strings.TrimSpace(key)
