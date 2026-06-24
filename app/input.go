@@ -29,7 +29,7 @@ func (m Model) statusLine() string {
 		limit = m.Model.Backend.ContextLimit()
 	}
 	if provider != "" {
-		provider = m.st.dim.Render(provider)
+		provider = m.st.dim.Render(providerDisplayName(provider))
 	}
 	if model != "" {
 		model = m.st.dim.Render(m.statusModelLabel(model))
