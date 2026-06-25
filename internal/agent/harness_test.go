@@ -12,7 +12,7 @@ import (
 // INVARIANT: Harness.Prompt produces an assistant message and persists it.
 func TestHarnessPrompt(t *testing.T) {
 	store := newTestStore(t)
-	sess := session.NewSession(store)
+	sess := session.NewSession(store, 64)
 
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		return &mockStream{chunks: []*llm.Chunk{
@@ -53,7 +53,7 @@ func TestHarnessPrompt(t *testing.T) {
 // INVARIANT: Harness blocks concurrent prompts (single active run).
 func TestHarnessSingleActiveRun(t *testing.T) {
 	store := newTestStore(t)
-	sess := session.NewSession(store)
+	sess := session.NewSession(store, 64)
 
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		return &mockStream{chunks: []*llm.Chunk{
@@ -77,7 +77,7 @@ func TestHarnessSingleActiveRun(t *testing.T) {
 // INVARIANT: Harness emits events to the TUI channel.
 func TestHarnessEmitsEvents(t *testing.T) {
 	store := newTestStore(t)
-	sess := session.NewSession(store)
+	sess := session.NewSession(store, 64)
 
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		return &mockStream{chunks: []*llm.Chunk{

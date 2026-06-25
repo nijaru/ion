@@ -31,6 +31,7 @@ type Session interface {
 	SubmitTurn(ctx context.Context, text string) error
 	CancelTurn(ctx context.Context) error
 	Events() <-chan Event
+	EventSender() chan<- Event
 
 	// Tree navigation.
 	GetEntry(ctx context.Context, id string) (Entry, error)

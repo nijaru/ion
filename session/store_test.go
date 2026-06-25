@@ -138,7 +138,7 @@ func TestStoreAllEntryTypes(t *testing.T) {
 func TestSessionAppendMessage(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	sess := NewSession(store)
+	sess := NewSession(store, 64)
 
 	id, err := sess.AppendMessage(ctx, NewUserText("hello", time.Now()))
 	if err != nil {
@@ -156,7 +156,7 @@ func TestSessionAppendMessage(t *testing.T) {
 func TestSessionBuildContext(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	sess := NewSession(store)
+	sess := NewSession(store, 64)
 
 	sess.AppendMessage(ctx, NewUserText("hi", time.Now()))
 	sess.AppendMessage(ctx, &AssistantMessage{StopReason: StopReasonEndTurn, Timestamp: time.Now()})
@@ -180,7 +180,7 @@ func TestSessionBuildContext(t *testing.T) {
 func TestSessionUsage(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	sess := NewSession(store)
+	sess := NewSession(store, 64)
 
 	sess.AppendMessage(ctx, &AssistantMessage{
 		Usage: Usage{Input: 100, Output: 50, Cost: Cost{Total: 0.01}},
@@ -207,7 +207,7 @@ func TestSessionUsage(t *testing.T) {
 func TestSessionTypedAppends(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	sess := NewSession(store)
+	sess := NewSession(store, 64)
 
 	sess.AppendModelChange(ctx, "openai", "gpt-4")
 	sess.AppendThinkingChange(ctx, ThinkingHigh)
@@ -236,7 +236,7 @@ func TestSessionTypedAppends(t *testing.T) {
 func TestSessionMoveTo(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	sess := NewSession(store)
+	sess := NewSession(store, 64)
 
 	sess.AppendMessage(ctx, NewUserText("a", time.Now()))
 	id2, _ := sess.AppendMessage(ctx, NewUserText("b", time.Now()))

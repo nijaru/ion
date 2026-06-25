@@ -127,6 +127,10 @@ func (s *unconfiguredSession) Events() <-chan session.Event {
 	return s.events
 }
 
+func (s *unconfiguredSession) EventSender() chan<- session.Event {
+	return s.events
+}
+
 func (s *unconfiguredSession) ID() string {
 	return s.id
 }

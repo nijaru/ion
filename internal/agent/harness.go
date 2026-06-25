@@ -39,6 +39,7 @@ type Harness struct {
 
 	// event channel for TUI
 	events chan session.Event
+	externalEvents bool
 
 	// buffered session writes during a run
 	pending []pendingWrite
@@ -60,6 +61,7 @@ type pendingWrite struct {
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
+	Events chan session.Event
 	Session  session.Session
 	Store    session.Store
 	Tools    []Tool
@@ -83,7 +85,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 			active = append(active, t.Name)
 		}
 	}
-	return &Harness{
+	h := &Harness{
 		session:  cfg.Session,
 		store:    cfg.Store,
 		tools:    toolMap,
@@ -94,8 +96,13 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		stream:   cfg.StreamFn,
 		auth:     cfg.Auth,
 		phase: PhaseIdle,
-		events:   make(chan session.Event, 64),
+		events:   cfg.Events,
+		externalEvents: cfg.Events != nil,
 	}
+	if h.events == nil {
+		h.events = make(chan session.Event, 64)
+	}
+	return h
 }
 
 // Events returns the channel the TUI subscribes to.
@@ -324,7 +331,9 @@ func (h *Harness) Abort() error {
 
 // Close releases resources.
 func (h *Harness) Close() error {
-	close(h.events)
+	if !h.externalEvents {
+		close(h.events)
+	}
 	return h.session.Close()
 }
 

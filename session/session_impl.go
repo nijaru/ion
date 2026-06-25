@@ -9,12 +9,13 @@ import (
 
 // sessionImpl implements Session over a Store.
 type sessionImpl struct {
-	store Store
+	store  Store
+	events chan Event
 }
 
 // NewSession wraps a Store with the Session façade.
-func NewSession(store Store) Session {
-	return &sessionImpl{store: store}
+func NewSession(store Store, bufferSize int) Session {
+	return &sessionImpl{store: store, events: make(chan Event, bufferSize)}
 }
 
 func (s *sessionImpl) ID() string   { return s.store.GetMetadata().ID }
@@ -195,3 +196,5 @@ func (s *sessionImpl) SubmitTurn(ctx context.Context, text string) error {
 	_, err := s.AppendMessage(ctx, NewUserText(text, time.Now()))
 	return err
 }
+
+func (s *sessionImpl) EventSender() chan<- Event { return s.events }
