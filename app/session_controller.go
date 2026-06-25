@@ -426,23 +426,17 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 }
 
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, ok := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.Timestamp)
-	if !ok {
-		return m, m.awaitSessionEvent()
-	}
+	entry, _ := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.Timestamp)
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
-	entry, ok := m.turnReducer().StreamClosed(time.Now())
-	if !ok {
-		return m, nil
-	}
+	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.terminalCommit().Entries(entry))
+	cmds = append(cmds, m.terminalCommit().Entries(entryIf.(session.Entry)))
 	cmds = append(cmds, m.persistEntryCmd("persist stream close error", session.StoreSystem{
 		Type:    "system",
-		Content: session.EntryText(entry),
+		Content: session.EntryText(entryIf.(session.Entry)),
 		TS:      now(),
 	}))
 	return m, sequenceCmds(cmds...)
@@ -496,7 +490,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChange) (Model, tea.Cmd) {
-	decision := m.turnReducer().ApplyStatusChanged(msg)
+	decision := m.turnReducer().ApplyStatusChangedInput(msg)
 	persistTimestamp := msg.Timestamp
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp

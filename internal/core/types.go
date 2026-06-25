@@ -372,7 +372,35 @@ func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
 
 func (t TurnReducer) FinishDrain() {}
 
-func (t TurnReducer) StreamClosed(now time.Time) error { return nil }
+func (t TurnReducer) StreamClosed(now time.Time) (interface{}, bool) { return nil, false }
 func (t TurnReducer) FailTurn(msg string, now time.Time)  {}
 func (t TurnReducer) ClearLocalErrorIfIdle()              {}
-func (t TurnReducer) ApplyStatusChanged(status string)    {}
+func (t TurnReducer) ApplyStatusChangedInput(msg interface{}) StatusChangedDecision { return StatusChangedDecision{} }
+
+type StatusChangedDecision struct {
+	Root            bool
+	PersistTimestamp time.Time
+	Status          string
+}
+
+
+func (t TurnReducer) StartTurn(now time.Time, ts time.Time)           {}
+func (t TurnReducer) StopThinking()                      {}
+func (t TurnReducer) FinishPendingAssistant() (interface{}, bool, bool) { return nil, false, false }
+func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {}
+func (t TurnReducer) BeginDrain(now time.Time)           {}
+
+func (t TurnReducer) FinishTurnMode(completed bool) (interface{}, bool) { return nil, false }
+
+
+type TurnFinishedDispatch struct {
+	Action              string
+	Text                string
+	RearmSessionEvents  bool
+}
+
+var TurnFinishedDispatchSubmitLocal = "submit_local"
+
+func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
+	return TurnFinishedDispatch{}
+}

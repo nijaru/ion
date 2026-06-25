@@ -25,7 +25,9 @@ type AgentStart struct {
 }
 
 // TurnStart opens a turn (one assistant response + its tool execution).
-type TurnStart struct{}
+type TurnStart struct{
+	Timestamp time.Time
+}
 
 // MessageStart opens a message (user prompt, assistant response, or tool result).
 type MessageStart struct {
@@ -250,7 +252,10 @@ type SessionTreeReader interface {
 
 func IsMaterialized(s Session) bool { return true }
 
-type QueuedInputUpdate struct{ EntryBase }
+type QueuedInputUpdate struct{
+	EntryBase
+	Snapshot QueuedSnapshot
+}
 func (QueuedInputUpdate) isEvent() {}
 
 type AgentMessage = Message
@@ -474,7 +479,7 @@ type ErrorSettlementInput struct {
 }
 
 type ErrorSettlementDecision struct {
-	RoutingStop   bool
+	RoutingStop   *ErrorRoutingStop
 	PersistSystem bool
 	AwaitNext     bool
 	DisplayError string
@@ -486,11 +491,23 @@ func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
 }
 
 type StoreStatus struct {
-	EntryBase
 	Status    string
-	Timestamp time.Time
+	EntryBase
+	Type      string
+	Content   string
+	TS        int64
 }
 func (StoreStatus) isEntry() {}
 func (s StoreStatus) ID() string { return s.EntryBase.ID }
 func (s StoreStatus) ParentID() string { return s.EntryBase.ParentID }
 func (s StoreStatus) When() time.Time { return s.EntryBase.Timestamp }
+
+type ErrorRoutingStop struct {
+	Reason     string
+	StopReason string
+}
+
+type QueuedSnapshot struct {
+	Steering []string
+	FollowUp []string
+}
