@@ -26,6 +26,13 @@ type Store interface {
 
 	// GetMetadata returns session-level metadata.
 	GetMetadata() Metadata
+	Meta() Metadata
+
+	// GetInputs returns queued user inputs.
+	GetInputs(ctx context.Context, workdir string, n int) ([]string, error)
+
+	// AddInput adds a queued user input.
+	AddInput(ctx context.Context, workdir string, input string) error
 
 	// Close releases resources.
 	Close() error
@@ -33,6 +40,19 @@ type Store interface {
 
 // Metadata holds session-level state.
 type Metadata struct {
+	Model  string
+	Branch string
 	ID   string // session identifier
 	Name string // user-facing name (set via AppendSessionInfo)
 }
+
+// ResumeSession loads an existing session by ID.
+func ResumeSession(ctx context.Context, store Store, sessionID string) (Store, string, error) {
+	_, err := store.GetEntry(ctx, sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	return store, sessionID, nil
+}
+
+

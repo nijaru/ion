@@ -177,7 +177,7 @@ func (m Model) thinkingSelectionTransition(
 		return core.Transition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
-		WithReasoningPersistence(preset, level)
+		WithReasoningPersistence()
 	return transition, runtimeCfg, nil
 }
 
@@ -213,7 +213,7 @@ func (m *Model) applyRuntimeSnapshot(snapshot core.Snapshot) {
 }
 
 func (m *Model) refreshRuntimeSessionSnapshot() {
-	sessionID, materialized := core.SessionState(m.Handles())
+	sessionID, materialized := core.GetSessionState(m.Handles())
 	m.Model.Runtime.SessionID = sessionID
 	m.Model.Runtime.Materialized = materialized
 }

@@ -67,5 +67,5 @@ func entryUnix(timestamp time.Time) int64 {
 }
 
 func setEntryTimestamp(entry *session.Entry, timestamp time.Time) {
-	session.SetTimestamp(entry, timestamp)
+	session.SetTimestamp(*entry, timestamp)
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 
 	_ "modernc.org/sqlite"
@@ -73,6 +74,7 @@ func (s *SQLiteStore) loadMeta() error {
 
 func (s *SQLiteStore) GetLeafID() string      { return s.leaf }
 func (s *SQLiteStore) GetMetadata() Metadata   { return s.meta }
+func (s *SQLiteStore) Meta() Metadata            { return s.meta }
 func (s *SQLiteStore) Close() error            { return s.db.Close() }
 
 func (s *SQLiteStore) SetLeafID(id string) error {
@@ -85,3 +87,6 @@ func (s *SQLiteStore) SetLeafID(id string) error {
 	}
 	return err
 }
+
+func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) { return nil, nil }
+func (s *SQLiteStore) AddInput(ctx context.Context, workdir string, input string) error { return nil }

@@ -123,7 +123,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) session.Stor
 		SessionCost:    m.Progress.TotalCost,
 		TurnCost:       m.Progress.CurrentTurnCost,
 		StopReason:     stopReason,
-		TS:             now(),
+		TS:             time.Now(),
 	}
 }
 

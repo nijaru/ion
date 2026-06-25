@@ -17,6 +17,7 @@ import (
 // Reference: Pi agent-harness.js AgentHarness (line 125).
 type Harness struct {
 	session session.Session
+	store   session.Store
 	tools   map[string]Tool
 	active  []string // active tool names
 	model   llm.Model
@@ -60,6 +61,7 @@ type pendingWrite struct {
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
 	Session  session.Session
+	Store    session.Store
 	Tools    []Tool
 	Active   []string // active tool names (subset of Tools); nil = all
 	Model    llm.Model
@@ -83,6 +85,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	}
 	return &Harness{
 		session:  cfg.Session,
+		store:    cfg.Store,
 		tools:    toolMap,
 		active:   active,
 		model:    cfg.Model,
@@ -323,4 +326,16 @@ func (h *Harness) Abort() error {
 func (h *Harness) Close() error {
 	close(h.events)
 	return h.session.Close()
+}
+
+// Session returns the underlying session handle. Used by TUI for ID(), Usage(), Entries().
+func (h *Harness) Session() session.Session { return h.session }
+
+// Store returns the underlying store. Used by TUI for export/tree operations.
+func (h *Harness) Store() session.Store { return h.store }
+
+// Compact triggers context compaction.
+func (h *Harness) Compact(ctx context.Context) error {
+	// TODO: implement compaction via the harness
+	return nil
 }

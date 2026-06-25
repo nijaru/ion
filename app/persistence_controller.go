@@ -16,12 +16,12 @@ func (m Model) persistenceController() persistenceController {
 	return persistenceController{storage: m.Model.Storage}
 }
 
-func (c persistenceController) appendEntry(action string, entry session.StoreEvent) tea.Cmd {
+func (c persistenceController) appendEntry(action string, entry session.Entry) tea.Cmd {
 	if c.storage == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		if err := c.storage.Append(context.Background(), entry); err != nil {
+		if _, err := c.storage.Append(context.Background(), entry); err != nil {
 			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
 		}
 		return nil

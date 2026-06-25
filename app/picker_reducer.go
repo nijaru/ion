@@ -281,7 +281,7 @@ func (r pickerReducer) applySessionLoad(
 	}
 	items := make([]sessionPickerItem, 0, len(sessions))
 	for _, info := range sessions {
-		if !session.IsConversationSessionInfo(info) {
+		if !session.IsConversationSessionInfo(&info) {
 			continue
 		}
 		items = append(items, sessionPickerItem{info: info})
@@ -367,7 +367,7 @@ func (r pickerReducer) refreshSessionFilter(workdir string) {
 	if r.picker.Session.namedOnly {
 		baseItems = make([]sessionPickerItem, 0)
 		for _, item := range r.picker.Session.items {
-			if item.info.Title != "" {
+			if item.info.Title() != "" {
 				baseItems = append(baseItems, item)
 			}
 		}

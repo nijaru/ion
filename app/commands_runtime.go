@@ -39,7 +39,7 @@ func (m Model) storedSessionConfig(
 	store session.Store,
 	sessionID string,
 ) (*config.Config, error) {
-	resumed, err := store.ResumeSession(ctx, sessionID)
+	resumed, _, err := session.ResumeSession(ctx, m.Model.Store, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 	}
@@ -365,7 +365,11 @@ func pickScopedModel(
 }
 
 func (m Model) currentMaterializedSessionID() string {
-	if id := m.Model.Runtime.MaterializedSessionID(); id != "" {
+	id := ""
+	if m.Model.Runtime.Materialized {
+		id = m.Model.Runtime.SessionID
+	}
+	if id != "" {
 		return id
 	}
 	if m.Model.Session == nil {
@@ -390,7 +394,7 @@ func (m Model) switchRuntimeCommand(
 	sessionID string,
 	preserveSession bool,
 ) (Model, tea.Cmd) {
-	transition = transition.WithActivePresetPersistence()
+	transition = transition.WithActivePresetPersistence(m.App.ActivePreset)
 
 	if m.Model.Switcher == nil {
 		return m.beginRuntimeTransitionCommit(transition, notice)
@@ -416,7 +420,7 @@ func (m Model) switchRuntimeCommand(
 			switchID:   requestID,
 			runtime:    result.Runtime,
 			previous:   result.Previous,
-			notice:     notice.Content,
+			notice:     session.EntryText(notice),
 			showStatus: preserveSession,
 		}
 	}
@@ -457,8 +461,8 @@ func (m Model) resumeRuntimeCommand(
 			runtime:       result.Runtime,
 			previous:      result.Previous,
 			printLines:    printLines,
-			replayEntries: result.Entries,
-			notice:        notice.Content,
+			replayEntries: func() []session.Entry { e, _ := result.GetEntries(context.Background(), m.Model.Store); return e }(),
+			notice:        session.EntryText(notice),
 			showStatus:    false,
 		}
 	}

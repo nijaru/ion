@@ -97,12 +97,12 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		}
 		return m, sequenceCmds(routingCmd, historyCmd)
 	}
-	m.turnReducer().RejectSubmit()
+	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
 		draftCmd = m.setComposerDraft(msg.draft)
 	}
-	return m, tea.Batch(draftCmd, cmdError(session.DisplayError(msg.err)))
+	return m, tea.Batch(draftCmd, cmdError(msg.err.Error()))
 }
 
 func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {

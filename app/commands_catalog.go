@@ -12,7 +12,7 @@ func slashCommands() []string                          { return core.SlashComman
 func deferredFeatureMessage(f string) string           { return core.DeferredFeatureMessage(f) }
 func slashCommandDefinitions() []core.SlashCommandInfo { return core.SlashCommandDefinitions() }
 func slashCommandDefinition(name string) (core.SlashCommandInfo, bool) {
-	return core.SlashCommandDefinition(name)
+	return core.LookupSlashCommand(name)
 }
 func resolveSlashCommand(name string) (core.SlashCommandInfo, bool) {
 	return core.ResolveSlashCommand(name)

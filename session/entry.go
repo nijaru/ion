@@ -138,3 +138,19 @@ func EntryTitle(e Entry) string {
 	}
 	return ""
 }
+
+// EntrySystem creates a system message entry.
+func EntrySystem(content string, ts time.Time) (*MessageEntry, error) {
+	return &MessageEntry{
+		EntryBase: EntryBase{Timestamp: ts},
+		Message:   &UserMessage{Content: []Content{TextContent{Text: content}}, Timestamp: ts},
+	}, nil
+}
+
+func SetTimestamp(e Entry, t time.Time) {
+	if eb, ok := e.(interface{ SetWhen(time.Time) }); ok {
+		eb.SetWhen(t)
+	}
+}
+
+func (e *SessionInfoEntry) Title() string { return e.Name }

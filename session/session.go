@@ -1,5 +1,7 @@
 package session
 
+import "time"
+
 import "context"
 
 // Session is the live session handle. The harness is the only writer.
@@ -25,6 +27,8 @@ type Session interface {
 	AppendLabel(ctx context.Context, targetID, label string) (string, error)
 	AppendSessionInfo(ctx context.Context, name string) (string, error)
 	AppendCustom(ctx context.Context, entry *CustomEntry) (string, error)
+	Append(ctx context.Context, entry Entry) (string, error)
+	SubmitTurn(ctx context.Context, text string) error
 
 	// Tree navigation.
 	GetEntry(ctx context.Context, id string) (Entry, error)
@@ -56,4 +60,10 @@ type CompactionData struct {
 type BranchSummaryData struct {
 	Summary string
 	Details []byte
+}
+
+// SubmitTurn submits a user turn. Stub for app/ compat.
+func SubmitTurn(ctx context.Context, sess Session, text string) error {
+	_, err := sess.AppendMessage(ctx, NewUserText(text, time.Now()))
+	return err
 }

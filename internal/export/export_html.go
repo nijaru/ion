@@ -223,3 +223,15 @@ func extractThinking(content []session.Content) string {
 	}
 	return ""
 }
+
+// BundleToHTML converts a SessionBundle to HTML string.
+func BundleToHTML(bundle session.SessionBundle) (string, error) {
+	data := SessionData{
+		SessionID: bundle.RootSessionID,
+		Exported:  bundle.ExportedAt,
+	}
+	for _, rec := range bundle.Sessions {
+		data.Entries = append(data.Entries, rec.Events...)
+	}
+	return GenerateHTML(data), nil
+}

@@ -496,8 +496,8 @@ func New(
 	}
 
 	if s != nil {
-		if input, output, cost, err := s.Usage(context.Background()); err == nil {
-			m.progressReducer().applySessionUsage(input, output, cost)
+		if usage, err := s.Usage(context.Background()); err == nil {
+			m.progressReducer().applySessionUsage(usage.Input, usage.Output, usage.Cost.Total)
 		}
 	}
 	m.loadInputHistory(context.Background())

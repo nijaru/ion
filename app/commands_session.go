@@ -52,12 +52,12 @@ func loadSessionUsageCmd(generation uint64, sess session.Session) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		input, output, cost, err := sess.Usage(context.Background())
+		usage, err := sess.Usage(context.Background())
 		return sessionUsageLoadedMsg{
 			generation: generation,
-			input:      input,
-			output:     output,
-			cost:       cost,
+			input:      usage.Input,
+			output:     usage.Output,
+			cost:       usage.Cost.Total,
 			err:        err,
 		}
 	}
@@ -77,13 +77,13 @@ func (m Model) sessionCostCmd() tea.Cmd {
 		outputTokens := m.Progress.TokensReceived
 		totalCost := m.Progress.TotalCost
 		if m.Model.Storage != nil {
-			input, output, cost, err := m.Model.Storage.Usage(context.Background())
+			usage, err := m.Model.Storage.Usage(context.Background())
 			if err != nil {
 				return localErrorMsg{err: fmt.Errorf("failed to load session usage: %w", err)}
 			}
-			inputTokens = input
-			outputTokens = output
-			totalCost = cost
+			inputTokens = usage.Input
+			outputTokens = usage.Output
+			totalCost = usage.Cost.Total
 		}
 		if totalCost <= 0 {
 			if m.Model.Config != nil &&
@@ -111,7 +111,10 @@ func (m Model) sessionInfoCmd() tea.Cmd {
 }
 
 func (m Model) sessionInfoNotice() (string, error) {
-	sessionID := m.Model.Runtime.MaterializedSessionID()
+	sessionID := ""
+	if m.Model.Runtime.Materialized {
+		sessionID = m.Model.Runtime.SessionID
+	}
 	if m.Model.Storage != nil {
 		if sessionID == "" && session.IsMaterialized(m.Model.Storage) {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
@@ -135,13 +138,13 @@ func (m Model) sessionInfoNotice() (string, error) {
 	inputTokens, outputTokens, totalCost := m.Progress.TokensSent, m.Progress.TokensReceived, m.Progress.TotalCost
 	var entries []session.Entry
 	if m.Model.Storage != nil {
-		input, output, cost, err := m.Model.Storage.Usage(context.Background())
+		usage, err := m.Model.Storage.Usage(context.Background())
 		if err != nil {
 			return "", fmt.Errorf("failed to load session usage: %w", err)
 		}
-		inputTokens = input
-		outputTokens = output
-		totalCost = cost
+		inputTokens = usage.Input
+		outputTokens = usage.Output
+		totalCost = usage.Cost.Total
 		loaded, err := m.Model.Storage.Entries(context.Background())
 		if err != nil {
 			return "", fmt.Errorf("failed to load session entries: %w", err)
@@ -181,12 +184,12 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	var counts sessionCounts
 	for _, entry := range entries {
 		counts.total++
-		switch entry.Role {
-		case session.RoleUser:
+		switch session.EntryRole(entry) {
+		case "user":
 			counts.user++
-		case session.RoleAgent:
+		case "assistant":
 			counts.agent++
-		case session.RoleTool:
+		case "tool_result":
 			counts.tool++
 		}
 	}

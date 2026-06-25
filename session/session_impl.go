@@ -182,3 +182,13 @@ func newID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+func (s *sessionImpl) Append(ctx context.Context, entry Entry) (string, error) {
+	if err := s.store.Append(ctx, entry); err != nil { return "", err }
+	return entry.(interface{ ID() string }).ID(), nil
+}
+
+func (s *sessionImpl) SubmitTurn(ctx context.Context, text string) error {
+	_, err := s.AppendMessage(ctx, NewUserText(text, time.Now()))
+	return err
+}

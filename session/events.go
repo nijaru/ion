@@ -195,26 +195,38 @@ type SessionOrigin struct {
 
 // App-facing types — app/ uses these until its rewrite against the new Event taxonomy.
 
-type StoreEvent = CustomEntry
+type StoreEvent = Entry
 
 type StoreRoutingDecision struct {
 	EntryBase
-	Decision string
-	Reason   string
+	Type           string
+	Decision       string
+	Reason         string
+	ModelSlot      string
+	Provider       string
+	Model          string
+	Reasoning      string
+	MaxSessionCost float64
+	MaxTurnCost    float64
+	SessionCost    float64
+	TurnCost       float64
+	StopReason     string
+	TS             time.Time
 }
 func (*StoreRoutingDecision) isEvent() {}
 
 type SubmitPreflightDecision struct {
+	Allowed bool
 	ShouldSubmit bool
 	Reason       string
 }
 
 type SteeringSession interface {
-	SteerTurn(ctx context.Context, text string) error
+	SteerTurn(ctx context.Context, text string) (BusyInputResultAccepted, error)
 }
 
 type QueuedInputSession interface {
-	FollowUpTurn(ctx context.Context, text string) error
+	FollowUpTurn(ctx context.Context, text string) (BusyInputResultAccepted, error)
 	ClearQueuedInput(ctx context.Context) error
 }
 
@@ -283,3 +295,72 @@ type SessionBundleImporter interface {
 }
 
 const RoleAgent = "agent"
+
+type SubmitPreflightInput struct {
+	RuntimeRequired bool
+	Provider        string
+	Model           string
+	TotalCost       float64
+	MaxSessionCost  float64
+	MaxTurnCost     float64
+}
+
+func DecideSubmitPreflight(input SubmitPreflightInput) SubmitPreflightDecision {
+	return SubmitPreflightDecision{Allowed: true}
+}
+
+var budgetStopReasonStr = "budget_stop"
+
+func BudgetStopReason(input BudgetStopInput) string { return budgetStopReasonStr }
+
+type BudgetStopInput struct {
+	Reason         string
+	CurrentTurnCost float64
+	TotalCost      float64
+	MaxTurnCost    float64
+	MaxSessionCost float64
+}
+
+// Additional fields needed by app/ model_status.go
+
+func IsConversationSessionInfo(e Entry) bool {
+	_, ok := e.(*SessionInfoEntry)
+	return ok
+}
+
+type DisplayError struct {
+	EntryBase
+	Err error
+}
+func (*DisplayError) isEvent() {}
+
+func RouteBusyInput(input BusyInputRouting) string { return input.Route }
+
+type BusyInputRouting struct {
+	Mode              string
+	Thinking          bool
+	Compacting        bool
+	SupportsSteering  bool
+	SupportsFollowUp  bool
+	Route string
+}
+
+var BusyInputRouteSteer = "steer"
+var BusyInputRouteFollowUp = "follow_up"
+
+func (e StoreRoutingDecision) ID() string      { return e.EntryBase.ID }
+func (e StoreRoutingDecision) ParentID() string { return e.EntryBase.ParentID }
+func (e StoreRoutingDecision) When() time.Time  { return e.EntryBase.Timestamp }
+
+type BusyInputResultAccepted struct{ EntryBase }
+func (BusyInputResultAccepted) isEvent() {}
+
+type FollowUpResultInput struct{ Text string }
+
+func DecideSteeringResult(input struct{}) BusyInputResultAccepted {
+	return BusyInputResultAccepted{}
+}
+
+func DecideFollowUpResult(input FollowUpResultInput) BusyInputResultAccepted {
+	return BusyInputResultAccepted{}
+}

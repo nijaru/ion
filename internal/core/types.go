@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"context"
 	"time"
 
@@ -100,7 +101,17 @@ func PresetFromString(s string) Preset {
 	}
 }
 
-type Snapshot struct{}
+type Snapshot struct {
+	AppConfig     config.Config
+	BackendConfig config.Config
+	Preset        Preset
+	Status        string
+	Reasoning     string
+	Provider      string
+	Model         string
+	SessionID     string
+	Materialized  bool
+}
 
 type Transition struct {
 	Snapshot             Snapshot
@@ -129,7 +140,7 @@ const (
 type Handles struct {
 	Backend Backend
 	Session session.Session
-	Storage session.Store
+	Storage session.Session
 }
 
 type Switcher func(context.Context, *config.Config, string) (Backend, session.Session, session.Session, error)
@@ -150,6 +161,7 @@ const (
 type TurnReducer struct{}
 
 type ProviderSelection struct {
+	Setup SetupPromptKind
 	Config               *config.Config
 	SupportsModelListing bool
 	Transition           Transition
@@ -219,3 +231,128 @@ func SlashCommandHelpLines() []string {
 	}
 	return out
 }
+
+// Additional core types used by app/.
+
+
+
+
+
+
+type SessionStateInfo struct {
+	Backend Backend
+	Session session.Session
+	Store   session.Store
+}
+
+
+
+
+func IsLocalBusyStatus(s string) bool {
+	return s != "" && s != "idle" && s != "complete"
+}
+
+func IsCompactingStatus(s string) bool {
+	return s == "compacting"
+}
+
+type SwitchInput struct {
+	Context         context.Context
+	Config          *config.Config
+	ProviderKey     string
+	Switcher        Switcher
+	Transition      Transition
+	Current         Handles
+	TargetSessionID string
+	PreserveSession bool
+	SaveState       func(update config.RuntimeStateUpdate) error
+}
+
+func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
+	return SwitchResult{}, fmt.Errorf("resume not implemented")
+}
+
+type ResumeInput struct {
+	Switcher   Switcher
+	Transition Transition
+	Current    Handles
+	SaveState  func(update config.RuntimeStateUpdate) error
+	Context   context.Context
+	Store     session.Store
+	SessionID string
+}
+
+func CloseHandles(handles Handles) {
+	// cleanup
+}
+
+func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
+	return SwitchResult{}, fmt.Errorf("switch not implemented")
+}
+
+func LookupSlashCommand(name string) (SlashCommandInfo, bool) {
+	return ResolveSlashCommand(name)
+}
+
+func (p Preset) String() string { return string(p) }
+
+func (t Transition) WithActivePresetPersistence(p ...Preset) Transition {
+	t.PersistActivePreset = true
+	t.PersistReasoningSlot = t.Snapshot.Preset
+	return t
+}
+
+type SwitchResult struct {
+	Runtime  Accepted
+	Previous Handles
+}
+
+
+
+func (t TurnReducer) ClearActiveState(full bool)     {}
+func (t TurnReducer) ResetFinishedTurnSummary()       {}
+func (t TurnReducer) setReasoningEffort(v int)        {}
+func (t TurnReducer) applySessionUsage(in, out int, cost float64) {}
+
+func (r SwitchResult) GetEntries(ctx context.Context, store session.Store) ([]session.Entry, error) {
+	if store == nil {
+		return nil, nil
+	}
+	return store.Entries(ctx)
+}
+
+func (t TurnReducer) PopQueuedTurn() string { return "" }
+
+func (s Snapshot) WithHandles(h Handles) Snapshot { return s }
+
+func NewSnapshot(appCfg, backendCfg *config.Config, preset Preset, status string) Snapshot {
+	return Snapshot{Preset: preset, Status: status}
+}
+
+func NewTransition(appCfg, backendCfg *config.Config, preset Preset, status string) Transition {
+	return Transition{}
+}
+
+func (t Transition) NeedsPersistence() bool { return t.PersistState || t.PersistActivePreset }
+func (t Transition) WithHandles(h Handles) Transition { return t }
+
+func (t Transition) Persist(fn func(update config.RuntimeStateUpdate) error) error {
+	if fn == nil { return nil }
+	return fn(config.RuntimeStateUpdate{})
+}
+func (t Transition) WithStatePersistence() Transition { t.PersistState = true; return t }
+func (t Transition) WithReasoningPersistence() Transition { t.PersistReasoning = true; return t }
+
+
+func GetSessionState(h Handles) (string, bool) {
+	if h.Session == nil {
+		return "", false
+	}
+	return h.Session.ID(), true
+}
+
+func (t TurnReducer) StartSubmit() {}
+func (t TurnReducer) RejectSubmit(reason string) {}
+
+func (t TurnReducer) SetBackendQueuedInput(text string) {}
+func (t TurnReducer) QueueTurn(text string) {}

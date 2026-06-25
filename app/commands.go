@@ -44,7 +44,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unknown command: %s", command))
 	}
-	if !commandInfo.Available() {
+	if !commandInfo.Available {
 		return m, cmdError(deferredFeatureMessage(commandInfo.Name))
 	}
 	if m.commandRequiresIdle(commandInfo, fields) && m.localCommandBusy() {
@@ -543,17 +543,17 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		return sessionImportedMsg{sessions: imported, filename: filename}
+		return sessionImportedMsg{sessionID: imported, filename: filename}
 	}
 }
 
 type sessionImportedMsg struct {
-	sessions []session.SessionInfoEntry
+	sessionID string
 	filename string
 }
 
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
-	notice := fmt.Sprintf("Imported %d session(s) from %s", len(msg.sessions), msg.filename)
+	notice := fmt.Sprintf("Imported %d session(s) from %s", 1, msg.filename)
 	m.terminalCommit().Entries(systemEntry(notice))
 	return m, nil
 }
@@ -654,7 +654,7 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 		if len(imported) == 0 {
 			return localErrorMsg{err: fmt.Errorf("no sessions imported")}
 		}
-		return sessionClonedMsg{newSessionID: imported[0].ID}
+		return sessionClonedMsg{newSessionID: imported}
 	}
 }
 
