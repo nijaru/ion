@@ -110,6 +110,7 @@ Common TUI commands:
 /clone      duplicate the current session
 /copy       copy last assistant response to clipboard
 /export     export session as JSON bundle
+/export-html  export session as self-contained HTML
 /import     import session from JSON bundle
 /tree       show session lineage and children
 /name       set session display name
@@ -117,6 +118,7 @@ Common TUI commands:
 /reload     reload keybindings and model config
 /scoped-models  show configured scoped models
 /changelog   show changelog entries
+/debug       write debug diagnostics to log file
 /quit       exit
 ```
 
