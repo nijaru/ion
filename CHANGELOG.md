@@ -2,6 +2,29 @@
 
 All notable changes to Ion are documented in this file.
 
+## [0.0.0] — 2026-06-23
+
+### Added
+
+#### Commands
+- `/debug` — write debug diagnostics to `~/.ion/debug.log`
+- `/export-html` — export session as self-contained HTML
+- `/changelog` — show changelog entries
+
+#### Features
+- Unified model picker — single-step provider+model selection
+- Tab autocomplete — shell-style LCP completion in model picker
+- System prompt enhancements — date, CWD, tool descriptions, guidelines
+- Startup timing — `ION_TIMING=1` environment variable for profiling
+- Real-time git branch watching — polls `.git/HEAD` for branch changes
+- Glob patterns for scoped models — `*` and `?` patterns in `[[scoped_model]]`
+- 12 new providers — Google Vertex, Amazon Bedrock, Azure OpenAI, Vercel AI Gateway, Cloudflare, OpenCode, and more (33 total)
+- OpenRouter attribution headers
+
+### Changed
+
+- Status bar hides "OpenAI-compatible" label (model name is sufficient)
+
 ## [0.0.0] — 2026-06-21
 
 ### Added
