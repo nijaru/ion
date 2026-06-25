@@ -155,6 +155,9 @@ func (p *Provider) setHeaders(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 	req.Header.Set("User-Agent", "ion/0.0.0")
+	// OpenRouter attribution headers for analytics
+	req.Header.Set("HTTP-Referer", "https://ion.dev")
+	req.Header.Set("X-Title", "ion")
 	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}

@@ -818,4 +818,156 @@ var definitions = []Definition{
 		AuthKind:    AuthACP,
 		Runtime:     RuntimeACP,
 	},
+
+	// Google Vertex AI
+	{
+		ID:                   "google-vertex",
+		DisplayName:          "Google Vertex AI",
+		Kind:                 KindDirect,
+		Family:               FamilyGemini,
+		AuthKind:             AuthToken,
+		DefaultEnvVar:        "GOOGLE_VERTEX_API_KEY",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Amazon Bedrock
+	{
+		ID:                   "amazon-bedrock",
+		DisplayName:          "Amazon Bedrock",
+		Kind:                 KindDirect,
+		Family:               FamilyAnthropic,
+		AuthKind:             AuthToken,
+		DefaultEnvVar:        "AWS_BEARER_TOKEN_BEDROCK",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Azure OpenAI
+	{
+		ID:                     "azure-openai-responses",
+		DisplayName:            "Azure OpenAI",
+		Kind:                   KindDirect,
+		Family:                 FamilyOpenAI,
+		AuthKind:               AuthAPIKey,
+		DefaultEnvVar:          "AZURE_OPENAI_API_KEY",
+		SupportsModelListing:   true,
+		SupportsCustomEndpoint: true,
+		Runtime:                RuntimeNative,
+	},
+
+	// Vercel AI Gateway
+	{
+		ID:                   "vercel-ai-gateway",
+		DisplayName:          "Vercel AI Gateway",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthToken,
+		DefaultEnvVar:        "VERCEL_AI_GATEWAY_TOKEN",
+		DefaultEndpoint:      "https://ai-gateway.vercel.sh/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Xiaomi Token Plan (China)
+	{
+		ID:                   "xiaomi-token-plan-cn",
+		DisplayName:          "Xiaomi Token Plan (CN)",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "XIAOMI_API_KEY",
+		DefaultEndpoint:      "https://api.xiaomimimo.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Xiaomi Token Plan (Amsterdam)
+	{
+		ID:                   "xiaomi-token-plan-ams",
+		DisplayName:          "Xiaomi Token Plan (AMS)",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "XIAOMI_API_KEY",
+		DefaultEndpoint:      "https://api-ams.xiaomimimo.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Xiaomi Token Plan (Singapore)
+	{
+		ID:                   "xiaomi-token-plan-sgp",
+		DisplayName:          "Xiaomi Token Plan (SGP)",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "XIAOMI_API_KEY",
+		DefaultEndpoint:      "https://api-sgp.xiaomimimo.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Moonshot AI (China)
+	{
+		ID:                   "moonshotai-cn",
+		DisplayName:          "Moonshot AI (CN)",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "MOONSHOT_API_KEY",
+		DefaultEndpoint:      "https://api.moonshot.cn/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Kimi Coding
+	{
+		ID:                   "kimi-coding",
+		DisplayName:          "Kimi Coding",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "KIMI_CODING_API_KEY",
+		DefaultEndpoint:      "https://api.kimi.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// ZAI Coding (China)
+	{
+		ID:                   "zai-coding-cn",
+		DisplayName:          "ZAI Coding (CN)",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "ZAI_API_KEY",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+
+	// Cloudflare Workers AI
+	{
+		ID:                   "cloudflare-workers-ai",
+		DisplayName:          "Cloudflare Workers AI",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "CLOUDFLARE_API_TOKEN",
+		SupportsModelListing: false,
+		Runtime:              RuntimeNative,
+	},
+
+	// OpenCode
+	{
+		ID:                   "opencode",
+		DisplayName:          "OpenCode",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "OPENCODE_API_KEY",
+		DefaultEndpoint:      "https://opencode.ai/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
 }

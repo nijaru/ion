@@ -41,6 +41,13 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 		"ZAI_API_KEY",
 		"XAI_API_KEY",
 		"OPENAI_COMPATIBLE_API_KEY",
+		"XIAOMI_API_KEY",
+		"AWS_BEARER_TOKEN_BEDROCK",
+		"AZURE_OPENAI_API_KEY",
+		"VERCEL_AI_GATEWAY_TOKEN",
+		"KIMI_CODING_API_KEY",
+		"CLOUDFLARE_API_TOKEN",
+		"OPENCODE_API_KEY",
 	} {
 		t.Setenv(name, "")
 	}
@@ -51,23 +58,37 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 	for _, item := range items {
 		got = append(got, item.Label)
 	}
+	// With OPENROUTER_API_KEY and GOOGLE_API_KEY set:
+	// Gemini and OpenRouter are "set", Ollama is local, rest are unset (alphabetical)
 	want := []string{
 		"Gemini",
 		"OpenRouter",
 		"Ollama",
 		"OpenAI-compatible",
+		"Amazon Bedrock",
 		"Anthropic",
+		"Azure OpenAI",
 		"Cerebras",
 		"DeepSeek",
 		"Fireworks AI",
+		"Google Vertex AI",
 		"Groq",
+		"Kimi Coding",
 		"Mistral",
 		"Moonshot AI",
+		"Moonshot AI (CN)",
 		"OpenAI",
+		"Xiaomi Token Plan (AMS)",
+		"Xiaomi Token Plan (CN)",
+		"Xiaomi Token Plan (SGP)",
 		"Z.ai",
+		"ZAI Coding (CN)",
 		"xAI",
+		"Cloudflare Workers AI",
 		"Hugging Face",
+		"OpenCode",
 		"Together AI",
+		"Vercel AI Gateway",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("provider order = %#v, want %#v", got, want)
