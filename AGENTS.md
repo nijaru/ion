@@ -54,6 +54,52 @@ Update `ai/` as you work when state changes materially.
 6. **Root causes, not symptoms** — when a module repeatedly lets bugs through,
    rewrite it
 
+## Design Discipline
+
+The recurring failure mode is **refactoring without a cohesive target**: each
+refactor optimizes locally and the whole drifts. These rules prevent relapse.
+
+1. **`ai/DESIGN.md` is the single source of truth for the target architecture.**
+   It is defined on its own terms (learning from Pi's `pi-agent-core` source),
+   not derived from current code. Every structural commit is measured against
+   it. Drift requires updating the doc by explicit decision — or reverting.
+
+2. **Target-first, never anchor to existing code.** The order is: define the
+   optimal target → measure the gap → migrate. A structural decision phrased as
+   "move X out of agent.go" is a smell; it should be "the target owns Y here."
+
+3. **Read Pi source for the actual invariant before designing.** Pi is the
+   reference (`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`
+   and `pi-ai`'s `types.d.ts`). Cite with grep-verified line numbers. Have the
+   `architect` subagent verify load-bearing claims against the source before
+   committing to them (prior citations were off by 15-110 lines).
+
+4. **Verify premises before they're load-bearing.** LOC counts, interface
+   counts, "dead" claims, import graphs — grep-derive every one. Repeated
+   numbers in `ai/` files were wrong ("86k" counted tests) and drove bad
+   decisions. No number enters the design without a reproducing command.
+
+5. **Tests encode design contracts, not old behavior.** There is nothing worth
+   characterizing in pre-redesign code — it's the thing being escaped. Contract
+   tests assert the target's invariants (sealed unions are exhaustive, the loop
+   is stateless, one `AgentEnd` per turn) and pass only when the design is
+   realized. "Tests pass" is not done; the contract tests for the phase being
+   green, with output shown, is done.
+
+6. **Work on `main` in place. No branches, no parallel systems, no cutover.**
+   A red build mid-refactor is honest — it reflects the gap between old
+   consumers and the new model, and the red list *is* the work plan. v0.0.0
+   means clean breaks; preserving old behavior is not a goal.
+
+7. **No shims, no transitional code, no "v2" files.** (Already rule 2 of
+   Implementation Rules; restated because it's also the anti-drift mechanism —
+   there is no forgotten temporary mess.)
+
+8. **Adversarial review at phase boundaries.** The `reviewer`/`architect`
+   subagent (GLM-5.2) reviews each phase's diff against `DESIGN.md` before it
+   ships. The D3 overflow-recovery regression was caught this way — review is
+   load-bearing, not ceremonial.
+
 ## Verification
 
 ### What counts as evidence
@@ -92,10 +138,19 @@ Update `ai/` as you work when state changes materially.
 
 ## Architecture Constraints
 
+- **`ai/DESIGN.md` is authoritative** for package layout, the domain model, the
+  loop/harness contract, and the `session` interface allowlist. Contradictions
+  in `architecture.md`/`brief.md`/`STATUS.md` are stale; `DESIGN.md` wins.
 - **Session tree is the source of truth.** All state (messages, model changes,
   thinking level, compaction) flows through the tree.
+- **The agent loop is stateless and persists nothing.** It takes all inputs as
+  args (prompts, TurnContext, LoopConfig, emit, signal) and emits events as its
+  sole output. No `*session.Session` field, no persistence calls in loop files.
+- **The harness is the sole stateful owner** of session, tools, model state,
+  queues, compaction, and recovery. It builds a fresh `LoopConfig` per turn.
 - **TUI is projection/control over runtime events.** It must not own a second
-  agent loop, second transcript, or hidden session materializer.
+  agent loop, second transcript, or hidden session materializer. Its contract
+  with the core is typed (events in, commands out), part of `DESIGN.md`.
 - **Hooks are extension points.** Keep the core small; optional capabilities
   live behind explicit hook boundaries.
 
@@ -128,18 +183,19 @@ Report exact commands run. If a gate is skipped, say why.
 ## Dogfood Regressions
 
 User-reported behavior bugs are regressions until proven otherwise. Before
-answering "is this fixed", search `tk`, `ai/STATUS.md`, recent commits. If no
+answering "is this fixed", search `tk`, `ai/journal.md`, recent commits. If no
 record exists, create a `tk` task. Don't guess.
 
 ## References
 
 **Active `ai/` files** (update as you work):
-- `ai/brief.md` — current state (read every session)
-- `ai/STATUS.md` — phase, focus, blockers
-- `ai/PLAN.md` — active work sequence
-- `ai/decisions.md` — principles + decision log
-- `ai/architecture.md` — system overview
+- `ai/DESIGN.md` — **the target architecture; authoritative** (read every session)
+- `ai/brief.md` — current state + pointer (read every session)
+- `ai/decisions.md` — decision log (append)
 - `ai/journal.md` — session findings (append-only)
-- `ai/COMPREHENSIVE-AUDIT.md` — source-level findings
 
-**Archived** (historical only): `ai/archive/`
+**Archived** (historical only, superseded by `DESIGN.md`): `ai/archive/`
+contains `REWRITE-PLAN.md`, `architecture.md`, `STATUS.md`, `PLAN.md`, the
+`spec-*.md` files, `COMPREHENSIVE-AUDIT.md`, `CODEBASE-QUALITY.md`,
+`PI-PARITY-GAP.md`. Read for history only; where they disagree with `DESIGN.md`,
+`DESIGN.md` wins.
