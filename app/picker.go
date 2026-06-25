@@ -59,6 +59,9 @@ func pickerItemByValue(items []pickerItem, value string) (pickerItem, bool) {
 }
 
 func providerDisplayName(value string) string {
+	if llm.IsOpenAICompatible(value) {
+		return ""
+	}
 	return llm.DisplayName(value)
 }
 
