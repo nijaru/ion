@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestWithFileMutationQueueSerializes(t *testing.T) {
@@ -15,15 +16,12 @@ func TestWithFileMutationQueueSerializes(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			WithFileMutationQueue("/tmp/test-file.txt", func() (string, error) {
+			WithFileMutationQueue("/tmp/test-serialize-file.txt", func() (string, error) {
 				n := running.Add(1)
 				if n > maxConcurrent.Load() {
 					maxConcurrent.Store(n)
 				}
-				// Simulate work
-				for j := 0; j < 1000; j++ {
-					_ = j
-				}
+				time.Sleep(5 * time.Millisecond)
 				running.Add(-1)
 				return "", nil
 			})
@@ -37,22 +35,27 @@ func TestWithFileMutationQueueSerializes(t *testing.T) {
 }
 
 func TestWithFileMutationQueueParallelDifferentFiles(t *testing.T) {
-	var running atomic.Int32
+	startBarrier := make(chan struct{})
+	var entered atomic.Int32
 	var maxConcurrent atomic.Int32
+	var running atomic.Int32
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			WithFileMutationQueue("/tmp/test-file-"+string(rune('a'+idx))+".txt", func() (string, error) {
+			WithFileMutationQueue("/tmp/test-parallel-"+string(rune('a'+idx))+".txt", func() (string, error) {
 				n := running.Add(1)
 				if n > maxConcurrent.Load() {
 					maxConcurrent.Store(n)
 				}
-				for j := 0; j < 1000; j++ {
-					_ = j
+				entered.Add(1)
+				// Wait until all goroutines have entered their critical section
+				for entered.Load() < 3 {
+					time.Sleep(time.Millisecond)
 				}
+				time.Sleep(5 * time.Millisecond)
 				running.Add(-1)
 				return "", nil
 			})
@@ -63,4 +66,5 @@ func TestWithFileMutationQueueParallelDifferentFiles(t *testing.T) {
 	if maxConcurrent.Load() < 2 {
 		t.Errorf("expected >1 concurrent operations for different files, got %d", maxConcurrent.Load())
 	}
+	_ = startBarrier // unused but keeps the linter happy
 }
