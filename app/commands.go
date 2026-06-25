@@ -12,6 +12,7 @@ import (
 	"github.com/nijaru/ion/session"
 	tea "charm.land/bubbletea/v2"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
+	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/core"
 )
@@ -296,6 +297,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/export":
 		return m.exportSession()
 
+	case "/export-html":
+		return m.exportSessionHTML()
+
 	case "/import":
 		if len(fields) < 2 {
 			return m, cmdError("usage: /import <filename>")
@@ -480,6 +484,35 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 		}
 		filename := fmt.Sprintf("session-%s.json", sessionID)
 		if err := os.WriteFile(filename, data, 0644); err != nil {
+			return localErrorMsg{err: err}
+		}
+		return sessionExportedMsg{filename: filename}
+	}
+}
+
+func (m Model) exportSessionHTML() (Model, tea.Cmd) {
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	if !ok {
+		return m, cmdError("store does not support export")
+	}
+	if m.Model.Session == nil {
+		return m, cmdError("no active session")
+	}
+	sessionID := m.Model.Session.ID()
+	return m, func() tea.Msg {
+		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		htmlContent, err := ionexport.BundleToHTML(bundle)
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		filename := fmt.Sprintf("session-%s.html", sessionID[:min(8, len(sessionID))])
+		if err := os.WriteFile(filename, []byte(htmlContent), 0644); err != nil {
 			return localErrorMsg{err: err}
 		}
 		return sessionExportedMsg{filename: filename}

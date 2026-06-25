@@ -112,6 +112,24 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 			Idle:       SlashCommandIdleAlways,
 		},
 		{
+			Name:       "/export",
+			Detail:     "export session (JSON)",
+			HelpLabel:  "/export",
+			HelpDetail: "export session as JSON bundle",
+		},
+		{
+			Name:       "/export-html",
+			Detail:     "export session (HTML)",
+			HelpLabel:  "/export-html",
+			HelpDetail: "export session as shareable HTML",
+		},
+		{
+			Name:       "/import",
+			Detail:     "import session",
+			HelpLabel:  "/import <file>",
+			HelpDetail: "import session from JSON bundle",
+		},
+		{
 			Name:       "/provider",
 			Detail:     "choose provider",
 			HelpLabel:  "/provider [name]",
