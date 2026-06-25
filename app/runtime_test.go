@@ -54,7 +54,7 @@ func TestResumeSessionIDUsesMaterializedStorage(t *testing.T) {
 func TestWithConfigForRuntimePresetKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
 		WithConfigForRuntimePreset(
@@ -92,7 +92,7 @@ func TestWithConfigForRuntimePresetKeepsAppConfigAndAppliesRuntimeConfig(t *test
 func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 	capture := &configCaptureBackend{
 		stubBackend: stubBackend{
-			sess: &stubSession{events: make(chan session.AgentEvent)},
+			sess: &stubSession{events: make(chan session.Event)},
 		},
 	}
 	model := readyModel(t)
@@ -113,7 +113,7 @@ func TestRuntimeSwitchAppliesAppAndRuntimeSnapshotSeparately(t *testing.T) {
 		presetFast,
 		"ready",
 		capture,
-		&stubSession{events: make(chan session.AgentEvent)},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
 	model = testModel(t, updated)
@@ -142,8 +142,8 @@ func runtimeSwitchMsgForTest(
 	preset core.Preset,
 	status string,
 	backend core.Backend,
-	sess session.AgentSession,
-	storageSess session.SessionHandle,
+	sess session.Session,
+	storageSess session.Session,
 ) runtimeSwitchedMsg {
 	return runtimeSwitchedMsg{
 		runtime: newAcceptedRuntime(
@@ -176,11 +176,11 @@ func TestRuntimeSwitchAcceptedSnapshotIncludesRuntimeMetadata(t *testing.T) {
 		presetFast,
 		"ready",
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "gpt-4.1-mini",
 		},
-		&stubSession{events: make(chan session.AgentEvent)},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
 	model = testModel(t, updated)
@@ -224,11 +224,11 @@ func TestRuntimeSwitchReturnsBeforeUsageLoadCompletes(t *testing.T) {
 			presetPrimary,
 			"",
 			stubBackend{
-				sess:     &stubSession{events: make(chan session.AgentEvent)},
+				sess:     &stubSession{events: make(chan session.Event)},
 				provider: "openai",
 				model:    "gpt-4.1",
 			},
-			&stubSession{events: make(chan session.AgentEvent)},
+			&stubSession{events: make(chan session.Event)},
 			storageSess,
 		))
 		returned <- updateResult{model: testModel(t, updated), cmd: cmd}
@@ -307,11 +307,11 @@ func TestRuntimeSwitchSnapshotTracksLazySessionWithoutResumingIt(t *testing.T) {
 		presetPrimary,
 		"ready",
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "gpt-4.1",
 		},
-		&stubSession{events: make(chan session.AgentEvent)},
+		&stubSession{events: make(chan session.Event)},
 		lazy,
 	))
 	model = testModel(t, updated)
@@ -395,7 +395,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession}
 
 	switched := false
@@ -407,7 +407,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			switched = true
 			observedSessionID = sessionID
 
@@ -474,7 +474,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
@@ -504,7 +504,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	withOpenRouterKey(t)
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
@@ -556,7 +556,7 @@ func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openai",
 		model:    "gpt-4.1",
 	}
@@ -656,7 +656,7 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession}
 
 	newStorage := &stubStorageSession{
@@ -671,7 +671,7 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			resolved := *cfg
 			newBackend := testutil.New()
 			newBackend.SetConfig(&resolved)
@@ -712,8 +712,8 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 		nil,
 		"",
 		"ready",
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
-		&stubSession{events: make(chan session.AgentEvent)},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	))
 	model = testModel(t, next)
@@ -733,8 +733,8 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 }
 
 func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
-	oldSession := &stubSession{events: make(chan session.AgentEvent, 1)}
-	newSession := &stubSession{events: make(chan session.AgentEvent, 1)}
+	oldSession := &stubSession{events: make(chan session.Event, 1)}
+	newSession := &stubSession{events: make(chan session.Event, 1)}
 	model := readyModel(t)
 	model.Model.Session = oldSession
 	waitOld := model.awaitSessionEvent()
@@ -783,7 +783,7 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	initialSession := &stubSession{events: make(chan session.AgentEvent)}
+	initialSession := &stubSession{events: make(chan session.Event)}
 	type openedRuntime struct {
 		session *stubSession
 		storage *stubStorageSession
@@ -797,8 +797,8 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
-			sess := &stubSession{events: make(chan session.AgentEvent)}
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
+			sess := &stubSession{events: make(chan session.Event)}
 			storageSess := &stubStorageSession{id: cfg.Model, model: cfg.Provider + "/" + cfg.Model}
 			opened[cfg.Model] = openedRuntime{session: sess, storage: storageSess}
 			return stubBackend{
@@ -879,9 +879,9 @@ func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
 func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
 		id:     "new-session",
 		model:  "openai/new",
@@ -895,7 +895,7 @@ func TestRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -975,9 +975,9 @@ func TestRuntimeSwitchErrorClearsSwitchingStatus(t *testing.T) {
 func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldStorage := &stubStorageSession{id: "old-session", model: "openai/old", branch: "main"}
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
 		id:     "resumed-session",
 		model:  "openai/new",
@@ -991,7 +991,7 @@ func TestResumeRuntimeSwitchClosesPreviousStorageSession(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -1041,8 +1041,8 @@ func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
 		t.Fatalf("save active preset: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
 		id:     "resumed-session",
 		model:  "openai/new",
@@ -1055,7 +1055,7 @@ func TestResumeRuntimeSwitchPersistsPrimaryPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{
 				sess:     newSession,
 				provider: cfg.Provider,
@@ -1097,7 +1097,7 @@ func TestResumeRuntimeWithoutSwitcherUpdatesAppConfig(t *testing.T) {
 	t.Setenv("HOME", home)
 	capture := &configCaptureBackend{
 		stubBackend: stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "old",
 		},
@@ -1131,8 +1131,8 @@ func TestResumeRuntimeWithoutSwitcherUpdatesAppConfig(t *testing.T) {
 
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{id: "new-session", branch: "main"}
 	model := New(
 		stubBackend{sess: oldSession},
@@ -1141,7 +1141,7 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)
@@ -1184,7 +1184,7 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
@@ -1210,7 +1210,7 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	var observed *config.Config
 	model := New(
 		stubBackend{sess: oldSession, provider: "openrouter", model: "tencent/hy3-preview:free"},
@@ -1219,7 +1219,7 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			copied := *cfg
 			observed = &copied
 			newBackend := testutil.New()
@@ -1264,15 +1264,15 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 
 func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Session = &stubSession{events: make(chan session.AgentEvent)}
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
 	msg := runtimeSwitchMsgForTest(
 		nil,
 		nil,
 		"",
 		"Connected via Canto",
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
-		&stubSession{events: make(chan session.AgentEvent)},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	)
 	msg.printLines = []string{"ion v0.0.0", "~/tmp/test • main", "", "--- resumed ---"}
@@ -1292,15 +1292,15 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 func TestRuntimeSwitchMarksPrintedTranscriptForReplay(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
-	model.Model.Session = &stubSession{events: make(chan session.AgentEvent)}
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
 	msg := runtimeSwitchMsgForTest(
 		nil,
 		nil,
 		"",
 		"ready",
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
-		&stubSession{events: make(chan session.AgentEvent)},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	)
 	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
@@ -1319,15 +1319,15 @@ func TestRuntimeSwitchMarksPrintedTranscriptForReplay(t *testing.T) {
 func TestRuntimeSwitchMarksPrintedTranscriptForHeaderOnlyReplay(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
-	model.Model.Session = &stubSession{events: make(chan session.AgentEvent)}
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
 	msg := runtimeSwitchMsgForTest(
 		nil,
 		nil,
 		"",
 		"ready",
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
-		&stubSession{events: make(chan session.AgentEvent)},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	)
 	msg.printLines = []string{"ion v0.0.0", "--- resumed ---"}
@@ -1345,15 +1345,15 @@ func TestRuntimeSwitchMarksPrintedTranscriptForHeaderOnlyReplay(t *testing.T) {
 func TestRuntimeSwitchMarksPrintedTranscriptForNotice(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
-	model.Model.Session = &stubSession{events: make(chan session.AgentEvent)}
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
 	msg := runtimeSwitchMsgForTest(
 		nil,
 		nil,
 		"",
 		"ready",
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
-		&stubSession{events: make(chan session.AgentEvent)},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubSession{events: make(chan session.Event)},
 		&stubStorageSession{id: "session-1", branch: "main"},
 	)
 	msg.notice = "Switched to fast"
@@ -1392,13 +1392,13 @@ type blockingResumeStore struct {
 	resumeOnlyStore
 	started chan struct{}
 	release chan struct{}
-	session session.SessionHandle
+	session session.Session
 }
 
 func (s *blockingResumeStore) ResumeSession(
 	ctx context.Context,
 	id string,
-) (session.SessionHandle, error) {
+) (session.Session, error) {
 	close(s.started)
 	select {
 	case <-s.release:
@@ -1475,13 +1475,13 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	}
 
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		&resumeOnlyStore{resumed: tempSession},
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			newBackend := testutil.New()
 			opened := &stubStorageSession{
 				id:     sessionID,
@@ -1533,15 +1533,15 @@ func TestResumeStoredSessionPreservesOpenAICompatibleEndpoint(t *testing.T) {
 
 	var captured config.Config
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		&resumeOnlyStore{resumed: tempSession},
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			captured = *cfg
-			newSession := &stubSession{events: make(chan session.AgentEvent)}
+			newSession := &stubSession{events: make(chan session.Event)}
 			opened := &stubStorageSession{
 				id:     sessionID,
 				model:  cfg.Provider + "/" + cfg.Model,
@@ -1608,7 +1608,7 @@ func TestConfigForStoredSessionClearsProviderScopedPresets(t *testing.T) {
 }
 
 func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
 		id:      "session-1",
 		model:   "openai/gpt-4.1",
@@ -1616,13 +1616,13 @@ func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 		entries: []session.Entry{{Role: session.RoleUser, Content: "hello"}},
 	}
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		nil,
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)
@@ -1658,8 +1658,8 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		t.Fatalf("save active preset: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
-	newSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
 	newStorage := &stubStorageSession{
 		id:         "session-1",
 		model:      "openai/gpt-4.1",
@@ -1673,7 +1673,7 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return stubBackend{sess: newSession}, newSession, newStorage, nil
 		},
 	)
@@ -1710,7 +1710,7 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:        &stubSession{events: make(chan session.AgentEvent)},
+		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "",
@@ -1726,7 +1726,7 @@ func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:        &stubSession{events: make(chan session.AgentEvent)},
+		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",
@@ -1749,7 +1749,7 @@ func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *t
 func TestProgressLineShowsMeaningfulRestoredStatus(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:        &stubSession{events: make(chan session.AgentEvent)},
+		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",
@@ -1766,7 +1766,7 @@ func TestProgressLineShowsMeaningfulRestoredStatus(t *testing.T) {
 func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:        &stubSession{events: make(chan session.AgentEvent)},
+		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",

@@ -84,7 +84,7 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -116,7 +116,7 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	cwd := t.TempDir()
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -241,7 +241,7 @@ func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
 }
 
 func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.RuntimeSwitchRequest = 1
@@ -336,7 +336,7 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	// Pi parity: Ctrl+C clears editor, Escape cancels running turn.
 	// This test verifies Escape cancels running turn.
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -373,7 +373,7 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 }
 
 func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -477,7 +477,7 @@ func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 }
 
 func TestCtrlDIgnoredWhileRunning(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -499,7 +499,7 @@ func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 }
 
 func TestEscCancelsRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	stored := &stubStorageSession{}
 	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.InFlight.Thinking = true
@@ -779,7 +779,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
 
 	var observedModels []string
@@ -790,7 +790,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := testutil.New()
@@ -849,7 +849,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 }
 
 func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	model := New(
 		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
 		nil,
@@ -857,7 +857,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

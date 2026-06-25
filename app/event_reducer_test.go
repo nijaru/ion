@@ -1216,7 +1216,7 @@ func TestStatusPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	model := readyModel(t)
-	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	model.Model.Session = sess
 	model.Model.Storage = storageSess
 

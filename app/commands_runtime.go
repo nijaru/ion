@@ -36,7 +36,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 func (m Model) storedSessionConfig(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	sessionID string,
 ) (*config.Config, error) {
 	resumed, err := store.ResumeSession(ctx, sessionID)
@@ -532,7 +532,7 @@ func closeRuntimeHandles(handles core.Handles) {
 	core.CloseHandles(handles)
 }
 
-func currentBranchName(defaultBranch string, sess session.SessionHandle) string {
+func currentBranchName(defaultBranch string, sess session.Session) string {
 	if sess == nil {
 		return defaultBranch
 	}

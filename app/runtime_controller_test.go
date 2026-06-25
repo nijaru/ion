@@ -23,7 +23,7 @@ func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {
 			ctx context.Context,
 			cfg *config.Config,
 			sessionID string,
-		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.Session, session.Session, error) {
 			targetSessionID = sessionID
 			return fakeBackend{
 				provider: cfg.Provider,
@@ -81,7 +81,7 @@ func TestSwitchLeavesCurrentRuntimeUntouchedWhenOpenFails(t *testing.T) {
 			context.Context,
 			*config.Config,
 			string,
-		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.Session, session.Session, error) {
 			return nil, nil, nil, openErr
 		},
 		Transition: core.NewTransition(
@@ -119,7 +119,7 @@ func TestSwitchClosesNewHandlesOnPersistFailure(t *testing.T) {
 			context.Context,
 			*config.Config,
 			string,
-		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.Session, session.Session, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
 		Transition: core.NewTransition(
@@ -164,7 +164,7 @@ func TestResumeClosesNewHandlesWhenTranscriptLoadFailsBeforePersist(t *testing.T
 			context.Context,
 			*config.Config,
 			string,
-		) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		) (core.Backend, session.Session, session.Session, error) {
 			return fakeBackend{session: newSession}, newSession, newStorage, nil
 		},
 		Transition: core.NewTransition(
@@ -207,7 +207,7 @@ type fakeBackend struct {
 	provider string
 	model    string
 	status   string
-	session  session.AgentSession
+	session  session.Session
 }
 
 func (b fakeBackend) Name() string { return "fake" }
@@ -222,11 +222,11 @@ func (b fakeBackend) Bootstrap() core.Bootstrap {
 	return core.Bootstrap{Status: b.status}
 }
 
-func (b fakeBackend) Session() session.AgentSession { return b.session }
+func (b fakeBackend) Session() session.Session { return b.session }
 
-func (b fakeBackend) SetStore(session.SessionStore) {}
+func (b fakeBackend) SetStore(session.Store) {}
 
-func (b fakeBackend) SetSession(session.SessionHandle) {}
+func (b fakeBackend) SetSession(session.Session) {}
 
 func (b fakeBackend) SetConfig(*config.Config) {}
 
@@ -234,7 +234,7 @@ type fakeSession struct {
 	id      string
 	cancels int
 	closed  bool
-	events  chan session.AgentEvent
+	events  chan session.Event
 }
 
 func (s *fakeSession) Open(context.Context) error { return nil }
@@ -253,7 +253,7 @@ func (s *fakeSession) Close() error {
 	return nil
 }
 
-func (s *fakeSession) Events() <-chan session.AgentEvent { return s.events }
+func (s *fakeSession) Events() <-chan session.Event { return s.events }
 
 func (s *fakeSession) ID() string { return s.id }
 

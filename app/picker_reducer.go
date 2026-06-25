@@ -267,7 +267,7 @@ func (r pickerReducer) beginSessionLoad() uint64 {
 
 func (r pickerReducer) applySessionLoad(
 	requestID uint64,
-	sessions []session.SessionInfo,
+	sessions []session.SessionInfoEntry,
 	err error,
 ) bool {
 	if !r.sessionLoadMatches(requestID) {
@@ -310,13 +310,13 @@ func (r pickerReducer) closeSession() {
 	r.picker.Session = nil
 }
 
-func (r pickerReducer) selectedSession() (session.SessionInfo, bool) {
+func (r pickerReducer) selectedSession() (session.SessionInfoEntry, bool) {
 	if r.picker.Session == nil || len(r.picker.Session.filtered) == 0 {
-		return session.SessionInfo{}, false
+		return session.SessionInfoEntry{}, false
 	}
 	index := r.picker.Session.index
 	if index < 0 || index >= len(r.picker.Session.filtered) {
-		return session.SessionInfo{}, false
+		return session.SessionInfoEntry{}, false
 	}
 	return r.picker.Session.filtered[index].info, true
 }

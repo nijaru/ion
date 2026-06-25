@@ -47,7 +47,7 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, sess session.SessionHandle) tea.Cmd {
+func loadSessionUsageCmd(generation uint64, sess session.Session) tea.Cmd {
 	if sess == nil {
 		return nil
 	}

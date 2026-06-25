@@ -17,7 +17,7 @@ import (
 )
 
 type stubBackend struct {
-	sess         session.AgentSession
+	sess         session.Session
 	provider     string
 	model        string
 	providerSet  bool
@@ -81,11 +81,11 @@ func (b stubBackend) Bootstrap() core.Bootstrap {
 	}
 }
 
-func (b stubBackend) Session() session.AgentSession { return b.sess }
+func (b stubBackend) Session() session.Session { return b.sess }
 
-func (b stubBackend) SetStore(s session.SessionStore) {}
+func (b stubBackend) SetStore(s session.Store) {}
 
-func (b stubBackend) SetSession(s session.SessionHandle) {}
+func (b stubBackend) SetSession(s session.Session) {}
 
 func (b stubBackend) SetConfig(cfg *config.Config) {}
 
@@ -104,7 +104,7 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events    chan session.AgentEvent
+	events    chan session.Event
 	submits   []string
 	cancels   int
 	submitErr error
@@ -114,7 +114,7 @@ type stubSession struct {
 type steeringStubSession struct {
 	stubSession
 	steers []string
-	result session.SteeringResult
+	result struct{}
 	err    error
 }
 
@@ -122,7 +122,7 @@ type queuedInputStubSession struct {
 	stubSession
 	followUps []string
 	clears    int
-	result    session.QueuedInputResult
+	result    struct{}
 	err       error
 	clearErr  error
 }
@@ -242,7 +242,7 @@ func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 	return messages
 }
 
-func containsSessionEvent[T session.AgentEvent](messages []tea.Msg) bool {
+func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
 	for _, msg := range messages {
 		eventMsg, ok := msg.(sessionEventMsg)
 		if !ok {
@@ -294,7 +294,7 @@ func (s *stubSession) Close() error {
 	}
 	return nil
 }
-func (s *stubSession) Events() <-chan session.AgentEvent { return s.events }
+func (s *stubSession) Events() <-chan session.Event { return s.events }
 
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
@@ -302,13 +302,13 @@ func (s *stubSession) Meta() map[string]string { return nil }
 func (s *steeringStubSession) SteerTurn(
 	ctx context.Context,
 	text string,
-) (session.SteeringResult, error) {
+) (struct{}, error) {
 	s.steers = append(s.steers, text)
 	if s.err != nil {
-		return session.SteeringResult{}, s.err
+		return struct{}{}, s.err
 	}
 	if s.result.Outcome == "" {
-		return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+		return struct{}{Outcome: session.SteeringAccepted}, nil
 	}
 	return s.result, nil
 }
@@ -316,13 +316,13 @@ func (s *steeringStubSession) SteerTurn(
 func (s *queuedInputStubSession) FollowUpTurn(
 	ctx context.Context,
 	text string,
-) (session.QueuedInputResult, error) {
+) (struct{}, error) {
 	s.followUps = append(s.followUps, text)
 	if s.err != nil {
-		return session.QueuedInputResult{}, s.err
+		return struct{}{}, s.err
 	}
 	if s.result.Outcome == "" {
-		return session.QueuedInputResult{Outcome: session.QueuedInputAccepted}, nil
+		return struct{}{Outcome: session.QueuedInputAccepted}, nil
 	}
 	return s.result, nil
 }
@@ -414,31 +414,31 @@ func (s *stubStorageSession) AppendSessionInfo(ctx context.Context, name string)
 }
 
 type resumeOnlyStore struct {
-	resumed session.SessionHandle
+	resumed session.Session
 }
 
 func (s *resumeOnlyStore) OpenSession(
 	ctx context.Context,
 	cwd, model, branch string,
-) (session.SessionHandle, error) {
+) (session.Session, error) {
 	return nil, nil
 }
 
-func (s *resumeOnlyStore) ResumeSession(ctx context.Context, id string) (session.SessionHandle, error) {
+func (s *resumeOnlyStore) ResumeSession(ctx context.Context, id string) (session.Session, error) {
 	return s.resumed, nil
 }
 
 func (s *resumeOnlyStore) ListSessions(
 	ctx context.Context,
 	cwd string,
-) ([]session.SessionInfo, error) {
+) ([]session.SessionInfoEntry, error) {
 	return nil, nil
 }
 
 func (s *resumeOnlyStore) GetRecentSession(
 	ctx context.Context,
 	cwd string,
-) (*session.SessionInfo, error) {
+) (*session.SessionInfoEntry, error) {
 	return nil, nil
 }
 
@@ -448,7 +448,7 @@ func (s *resumeOnlyStore) GetInputs(ctx context.Context, cwd string, limit int) 
 	return nil, nil
 }
 
-func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si session.SessionInfo) error {
+func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si session.SessionInfoEntry) error {
 	return nil
 }
 
@@ -464,7 +464,7 @@ func readyModel(t *testing.T) Model {
 			t.Setenv("HOME", t.TempDir())
 		}
 	}
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	b := stubBackend{sess: sess}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -480,7 +480,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 			t.Setenv("HOME", t.TempDir())
 		}
 	}
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
 	model := New(
 		oldBackend,
@@ -489,7 +489,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			if observed != nil {
 				*observed = append(*observed, cfg.Model)
 			}

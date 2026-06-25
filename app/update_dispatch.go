@@ -245,7 +245,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.ChildBlock,
 		session.ChildFail,
 		session.ChildCancel:
-		next, cmd := m.handleSessionEvent(msg.(session.AgentEvent))
+		next, cmd := m.handleSessionEvent(msg.(session.Event))
 		return next, cmd, true
 	}
 

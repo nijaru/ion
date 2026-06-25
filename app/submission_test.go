@@ -69,20 +69,20 @@ type blockingSteeringSession struct {
 func (s *blockingSteeringSession) SteerTurn(
 	ctx context.Context,
 	text string,
-) (session.SteeringResult, error) {
+) (struct{}, error) {
 	close(s.started)
 	select {
 	case <-s.release:
 	case <-ctx.Done():
-		return session.SteeringResult{}, ctx.Err()
+		return struct{}{}, ctx.Err()
 	}
 	s.steers = append(s.steers, text)
-	return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+	return struct{}{Outcome: session.SteeringAccepted}, nil
 }
 
 func TestSubmitTextReturnsBeforeBackendSubmitCompletes(t *testing.T) {
 	sess := &blockingSubmitSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 		started:     make(chan struct{}),
 		release:     make(chan struct{}),
 	}
@@ -204,7 +204,7 @@ func TestAwaitSessionEventReportsMissingEventStream(t *testing.T) {
 func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 	sess := &blockingSteeringSession{
 		steeringStubSession: steeringStubSession{
-			stubSession: stubSession{events: make(chan session.AgentEvent)},
+			stubSession: stubSession{events: make(chan session.Event)},
 		},
 		started: make(chan struct{}),
 		release: make(chan struct{}),
@@ -271,7 +271,7 @@ func TestBusyInputReturnsBeforeSteeringCompletes(t *testing.T) {
 }
 
 func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	sess.events <- session.UserMessage{Message: "route this"}
 	storageSess := &stubStorageSession{}
 	model := New(
@@ -355,7 +355,7 @@ func TestSubmitTextRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *testi
 
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/gpt-4.1", "main")
 	sess := &materializingSubmitSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 		lazy:        lazy,
 	}
 	model := New(
@@ -401,7 +401,7 @@ func TestSubmitErrorRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *test
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/gpt-4.1", "main")
 	sess := &materializingSubmitSession{
 		stubSession: stubSession{
-			events:    make(chan session.AgentEvent),
+			events:    make(chan session.Event),
 			submitErr: errors.New("provider rejected turn"),
 		},
 		lazy: lazy,
@@ -442,7 +442,7 @@ func TestSubmitErrorRefreshesRuntimeSnapshotAfterLazySessionMaterializes(t *test
 }
 
 func TestSubmitResultArmsEventReader(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -476,7 +476,7 @@ func TestSubmitResultArmsEventReader(t *testing.T) {
 }
 
 func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &blockingAppendStorage{
 		entered: make(chan any, 1),
 		release: make(chan struct{}),
@@ -536,7 +536,7 @@ func TestSubmitRoutingPersistenceReturnsBeforeStorageAppendCompletes(t *testing.
 }
 
 func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	sess.events <- session.UserMessage{Message: "keep going"}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
@@ -579,7 +579,7 @@ func TestSubmitTextDefersUserEchoWhenRoutingPersistenceFails(t *testing.T) {
 func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		storageSess,
 		nil,
 		"/tmp/test",
@@ -615,7 +615,7 @@ func TestSlashCommandBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	}
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		lazy,
 		store,
 		"/tmp/test",
@@ -663,7 +663,7 @@ func TestSlashCommandDoesNotEchoTranscriptEntry(t *testing.T) {
 }
 
 func TestSubmitComposerRejectsIncompleteRuntimeConfiguration(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Backend = stubBackend{
@@ -693,7 +693,7 @@ func TestSubmitComposerRejectsIncompleteRuntimeConfiguration(t *testing.T) {
 }
 
 func TestSubmitComposerPreservesPasteMarkersWhenPromptIsBlocked(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Backend = stubBackend{
@@ -731,7 +731,7 @@ func TestSubmitComposerPreservesPasteMarkersWhenPromptIsBlocked(t *testing.T) {
 }
 
 func TestSubmitComposerConsumesPasteMarkersAfterAcceptedPrompt(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	placeholder := "[paste #1 +12 lines]"
@@ -768,7 +768,7 @@ func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	}
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		lazy,
 		store,
 		"/tmp/test",
@@ -794,7 +794,7 @@ func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 
 func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 	storageSess := &stubStorageSession{}
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := New(
 		stubBackend{sess: sess},
 		storageSess,
@@ -818,7 +818,7 @@ func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 }
 
 func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -900,7 +900,7 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 }
 
 func TestTokenUsagePersistenceErrorStillCancelsOverBudgetTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -970,7 +970,7 @@ func TestTurnFinishedPreservesUserCancellation(t *testing.T) {
 }
 
 func TestQueuedTurnRearmsEventReaderWhenSubmissionBlocked(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Config = &config.Config{MaxSessionCost: 0.01}
@@ -992,7 +992,7 @@ func TestQueuedTurnRearmsEventReaderWhenSubmissionBlocked(t *testing.T) {
 }
 
 func TestQueuedTurnCanUseExistingEventReaderWhenSubmissionBlocked(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Config = &config.Config{MaxSessionCost: 0.01}
@@ -1019,7 +1019,7 @@ func TestQueuedTurnCanUseExistingEventReaderWhenSubmissionBlocked(t *testing.T) 
 }
 
 func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -1074,7 +1074,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 	if !model.InFlight.DrainUntilTurnStarted {
 		t.Fatal("late turn start cleared drain fence")
 	}
-	for _, ev := range []session.AgentEvent{
+	for _, ev := range []session.Event{
 		session.NewTextUpdate("stale", session.AgentMessage{}),
 		session.NewThinkingUpdate("stale reasoning", session.AgentMessage{}),
 		session.AgentMessage{Message: "stale final"},
@@ -1169,7 +1169,7 @@ func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
 }
 
 func TestCancelRunningTurnDoesNotWaitForStorageAppend(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &blockingAppendStorage{
 		entered: make(chan any, 1),
 		release: make(chan struct{}),
@@ -1253,7 +1253,7 @@ func TestCancelRunningTurnDoesNotWaitForStorageAppend(t *testing.T) {
 }
 
 func TestCancelRunningTurnPersistenceFailureStillCancels(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	storageSess := &stubStorageSession{appendErr: errors.New("disk full")}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1283,7 +1283,7 @@ func TestCancelRunningTurnPersistenceFailureStillCancels(t *testing.T) {
 }
 
 func TestCancelTurnCmdCallsBackend(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 
 	msg := cancelTurnCmd(sess)()
 	result, ok := msg.(turnCancelResultMsg)
@@ -1330,7 +1330,7 @@ func TestTurnFinishedPreservesSessionError(t *testing.T) {
 }
 
 func TestSubmitTextDoesNotBlockOnPriorTurnBudget(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
@@ -1349,7 +1349,7 @@ func TestSubmitTextDoesNotBlockOnPriorTurnBudget(t *testing.T) {
 }
 
 func TestSubmitTextBlocksWhenSessionBudgetAlreadyExceeded(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Model.Config = &config.Config{MaxSessionCost: 0.05}
@@ -1371,7 +1371,7 @@ func TestSubmitTextBlocksWhenSessionBudgetAlreadyExceeded(t *testing.T) {
 
 func TestCostCommandReportsMissingCost(t *testing.T) {
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		&stubStorageSession{},
 		nil,
 		"/tmp/test",
@@ -1392,7 +1392,7 @@ func TestCostCommandReportsMissingCost(t *testing.T) {
 }
 
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 1)}
+	sess := &stubSession{events: make(chan session.Event, 1)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Input.Composer.SetValue("follow up")
@@ -1465,7 +1465,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 
 func TestBusyInputUsesBackendFollowUpQueueWhenAvailable(t *testing.T) {
 	sess := &queuedInputStubSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1525,7 +1525,7 @@ func TestFollowUpResultPreservesBackendSteeringProjection(t *testing.T) {
 	updated, cmd := model.Update(followUpResultMsg{
 		text:               "follow up",
 		priorFollowUpCount: 0,
-		result:             session.QueuedInputResult{Outcome: session.QueuedInputAccepted},
+		result:             struct{}{Outcome: session.QueuedInputAccepted},
 	})
 	model = testModel(t, updated)
 
@@ -1590,7 +1590,7 @@ func TestQueuedInputUpdateOwnsBackendQueueProjection(t *testing.T) {
 
 func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 	sess := &steeringStubSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1633,8 +1633,8 @@ func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
 
 func TestBusyInputQueuesWhenSteeringDeclines(t *testing.T) {
 	sess := &steeringStubSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
-		result:      session.SteeringResult{Outcome: session.SteeringQueued},
+		stubSession: stubSession{events: make(chan session.Event)},
+		result:      struct{}{Outcome: session.SteeringQueued},
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1665,7 +1665,7 @@ func TestBusyInputQueuesWhenSteeringDeclines(t *testing.T) {
 
 func TestBusyInputSteersWithoutActiveToolBoundary(t *testing.T) {
 	sess := &steeringStubSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1695,7 +1695,7 @@ func TestBusyInputSteersWithoutActiveToolBoundary(t *testing.T) {
 
 func TestAltUpRecallsBackendOwnedQueuedTurns(t *testing.T) {
 	sess := &queuedInputStubSession{
-		stubSession: stubSession{events: make(chan session.AgentEvent)},
+		stubSession: stubSession{events: make(chan session.Event)},
 	}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -1823,7 +1823,7 @@ func TestSlashCommandOpensProviderPickerDuringTurn(t *testing.T) {
 }
 
 func TestUnknownSlashCommandDuringTurnStaysLocal(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
@@ -1844,7 +1844,7 @@ func TestUnknownSlashCommandDuringTurnStaysLocal(t *testing.T) {
 }
 
 func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	stored := &stubStorageSession{}
 	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.InFlight.Thinking = true
@@ -1870,7 +1870,7 @@ func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 
 func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T) {
 	sess := &stubSession{
-		events:    make(chan session.AgentEvent),
+		events:    make(chan session.Event),
 		submitErr: errors.New("backend unavailable"),
 	}
 	storeSess := &stubStorageSession{id: "stub-session"}
@@ -1945,7 +1945,7 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 }
 
 func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Progress.Mode = stateError

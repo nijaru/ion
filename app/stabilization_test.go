@@ -10,7 +10,7 @@ import (
 )
 
 func TestToolStreaming(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
+	sess := &stubSession{events: make(chan session.Event, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
@@ -83,7 +83,7 @@ func TestRenderEntry(t *testing.T) {
 }
 
 func TestAsyncSubagents(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
+	sess := &stubSession{events: make(chan session.Event, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 
@@ -142,7 +142,7 @@ func TestAsyncSubagents(t *testing.T) {
 }
 
 func TestSubagentCollapseRule(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent, 10)}
+	sess := &stubSession{events: make(chan session.Event, 10)}
 	b := &stubBackend{sess: sess}
 	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
 

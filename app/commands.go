@@ -548,7 +548,7 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 }
 
 type sessionImportedMsg struct {
-	sessions []session.SessionInfo
+	sessions []session.SessionInfoEntry
 	filename string
 }
 

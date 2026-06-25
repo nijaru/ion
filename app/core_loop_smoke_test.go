@@ -27,7 +27,7 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 		t.Fatalf("submitted turns = %#v, want run smoke", sess.submits)
 	}
 
-	for _, ev := range []session.AgentEvent{
+	for _, ev := range []session.Event{
 		session.TurnStart{},
 		session.AgentMessage{InputTokens: 12, OutputTokens: 4, Cost: 0.0012},
 		session.NewTextUpdate("working", session.AgentMessage{}),
@@ -102,7 +102,7 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 		t.Fatalf("submitted turns = %#v, want inspect workspace", sess.submits)
 	}
 
-	for _, ev := range []session.AgentEvent{
+	for _, ev := range []session.Event{
 		session.TurnStart{},
 		session.AgentMessage{InputTokens: 20, OutputTokens: 8, Cost: 0.003},
 		session.NewTextUpdate("\n\nReading before tool", session.AgentMessage{}),
@@ -237,7 +237,7 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -347,7 +347,7 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -410,7 +410,7 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	stored := &stubStorageSession{}
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "fake",
 			model:    "model",
 		},
@@ -443,7 +443,7 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	}
 }
 
-func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, session.SessionStore, session.SessionHandle) {
+func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, session.Store, session.Session) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
@@ -455,7 +455,7 @@ func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, session.SessionSt
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := New(
 		stubBackend{sess: sess, provider: "fake", model: "model"},
 		stored,
@@ -510,7 +510,7 @@ func requireEntriesInOrder(t *testing.T, entries []session.Entry, wants []entryW
 func appendCantoHistory(
 	t *testing.T,
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	sessionID string,
 	messages ...llm.Message,
 ) {

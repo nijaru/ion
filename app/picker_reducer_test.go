@@ -13,7 +13,7 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 	staleRequest := model.pickerReducer().beginSessionLoad()
 	currentRequest := model.pickerReducer().beginSessionLoad()
 
-	applied := model.pickerReducer().applySessionLoad(staleRequest, []session.SessionInfo{
+	applied := model.pickerReducer().applySessionLoad(staleRequest, []session.SessionInfoEntry{
 		{
 			ID:          "stale",
 			Title:       "stale session",
@@ -29,7 +29,7 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 		t.Fatalf("session picker = %#v, want current loading request", model.Picker.Session)
 	}
 
-	applied = model.pickerReducer().applySessionLoad(currentRequest, []session.SessionInfo{
+	applied = model.pickerReducer().applySessionLoad(currentRequest, []session.SessionInfoEntry{
 		{
 			ID:          "current",
 			Title:       "current session",
@@ -66,20 +66,20 @@ func TestPickerReducerSessionQueryFiltersAndClampsIndex(t *testing.T) {
 	model.App.Workdir = "/tmp/project"
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: session.SessionInfo{
+			{info: session.SessionInfoEntry{
 				ID:          "sess-alpha",
 				Title:       "alpha plan",
 				LastPreview: "review tests",
 			}},
-			{info: session.SessionInfo{
+			{info: session.SessionInfoEntry{
 				ID:          "sess-beta",
 				Title:       "beta resume",
 				LastPreview: "continue reducer work",
 			}},
 		},
 		filtered: []sessionPickerItem{
-			{info: session.SessionInfo{ID: "sess-alpha"}},
-			{info: session.SessionInfo{ID: "sess-beta"}},
+			{info: session.SessionInfoEntry{ID: "sess-alpha"}},
+			{info: session.SessionInfoEntry{ID: "sess-beta"}},
 		},
 		index: 1,
 	}

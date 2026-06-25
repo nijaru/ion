@@ -1,66 +1,67 @@
 package export
 
 import (
-	"encoding/json"
 	"fmt"
 	"html"
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
 // SessionData holds the data needed to export a session to HTML.
 type SessionData struct {
 	SessionID string
-	Entries   []session.HistoryEntry
+	Entries   []session.Entry
 	Exported  time.Time
 }
 
 // EntryToHTML converts a single session entry to HTML.
-func EntryToHTML(entry session.HistoryEntry) string {
-	msg := entry.Message
-	role := string(msg.Role)
-	content := html.EscapeString(msg.Content)
+func EntryToHTML(entry session.Entry) string {
+	me, ok := entry.(*session.MessageEntry)
+	if !ok {
+		return "" // skip non-message entries
+	}
 
-	switch msg.Role {
-	case llm.RoleUser:
+	msg := me.Message
+	switch m := msg.(type) {
+	case *session.UserMessage:
+		content := extractText(m.Content)
 		return fmt.Sprintf(`<div class="entry user">
   <div class="role">You</div>
   <div class="content">%s</div>
-</div>`, content)
+</div>`, html.EscapeString(content))
 
-	case llm.RoleAssistant:
+	case *session.AssistantMessage:
 		var b strings.Builder
 		b.WriteString(`<div class="entry assistant">`)
 		b.WriteString("\n  <div class=\"role\">Assistant</div>")
-		if msg.Reasoning != "" {
+		reasoning := extractThinking(m.Content)
+		if reasoning != "" {
 			b.WriteString("\n  <details class=\"thinking\"><summary>Thinking...</summary>")
 			b.WriteString("\n  <pre>")
-			b.WriteString(html.EscapeString(msg.Reasoning))
+			b.WriteString(html.EscapeString(reasoning))
 			b.WriteString("</pre>\n  </details>")
 		}
+		content := extractText(m.Content)
 		b.WriteString("\n  <div class=\"content\">")
-		b.WriteString(content)
+		b.WriteString(html.EscapeString(content))
 		b.WriteString("</div>\n</div>")
 		return b.String()
 
-	case llm.RoleTool:
-		label := msg.Name
+	case *session.ToolResultMessage:
+		content := extractText(m.Content)
+		label := m.ToolName
 		if label == "" {
 			label = "tool"
 		}
 		return fmt.Sprintf(`<div class="entry tool">
   <div class="role">%s</div>
   <div class="content"><pre>%s</pre></div>
-</div>`, html.EscapeString(label), content)
+</div>`, html.EscapeString(label), html.EscapeString(content))
 
 	default:
-		return fmt.Sprintf(`<div class="entry system">
-  <div class="role">%s</div>
-  <div class="content">%s</div>
-</div>`, html.EscapeString(role), content)
+		return ""
 	}
 }
 
@@ -178,17 +179,17 @@ func GenerateHTML(data SessionData) string {
 	b.WriteString(html.EscapeString(data.SessionID[:min(8, len(data.SessionID))]))
 	b.WriteString(" &middot; ")
 	b.WriteString(fmt.Sprintf("%d", len(data.Entries)))
-	b.WriteString(" messages &middot; exported ")
+	b.WriteString(" entries &middot; exported ")
 	b.WriteString(data.Exported.Format("2006-01-02 15:04"))
 	b.WriteString(`</div>
 </div>
 `)
 	for _, entry := range data.Entries {
-		if entry.Message.Content == "" && entry.Message.Reasoning == "" {
-			continue
+		s := EntryToHTML(entry)
+		if s != "" {
+			b.WriteString(s)
+			b.WriteString("\n")
 		}
-		b.WriteString(EntryToHTML(entry))
-		b.WriteString("\n")
 	}
 
 	b.WriteString(`
@@ -201,45 +202,24 @@ func GenerateHTML(data SessionData) string {
 	return b.String()
 }
 
-// BundleToHTML converts an exported session bundle into HTML.
-func BundleToHTML(bundle session.SessionBundle) (string, error) {
-	if len(bundle.Sessions) == 0 {
-		return "", fmt.Errorf("bundle has no sessions")
-	}
+// --- helpers ---
 
-	// Use the root session
-	var root *session.SessionBundleRecord
-	for i := range bundle.Sessions {
-		if bundle.Sessions[i].Info.ID == bundle.RootSessionID {
-			root = &bundle.Sessions[i]
-			break
+func extractText(content []session.Content) string {
+	var sb strings.Builder
+	for _, c := range content {
+		switch c := c.(type) {
+		case session.TextContent:
+			sb.WriteString(c.Text)
 		}
 	}
-	if root == nil {
-		root = &bundle.Sessions[0]
-	}
+	return sb.String()
+}
 
-	// Reconstruct session from events using Replayer
-	replayer := session.NewReplayer()
-	sess := replayer.NewSession(root.Info.ID)
-	for _, raw := range root.Events {
-		var ev session.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			continue // skip malformed events
-		}
-		if err := replayer.Apply(sess, ev); err != nil {
-			continue // skip events that fail to apply
+func extractThinking(content []session.Content) string {
+	for _, c := range content {
+		if tc, ok := c.(session.ThinkingContent); ok {
+			return tc.Text
 		}
 	}
-
-	entries, err := sess.EffectiveEntries()
-	if err != nil {
-		return "", fmt.Errorf("rebuild entries: %w", err)
-	}
-
-	return GenerateHTML(SessionData{
-		SessionID: root.Info.ID,
-		Entries:   entries,
-		Exported:  bundle.ExportedAt,
-	}), nil
+	return ""
 }

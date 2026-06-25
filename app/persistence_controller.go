@@ -9,7 +9,7 @@ import (
 )
 
 type persistenceController struct {
-	storage session.SessionHandle
+	storage session.Session
 }
 
 func (m Model) persistenceController() persistenceController {

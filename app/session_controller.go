@@ -64,7 +64,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	return m, submitTurnCmd(m.Model.Session, text, draft)
 }
 
-func submitTurnCmd(sess session.AgentSession, text, draft string) tea.Cmd {
+func submitTurnCmd(sess session.Session, text, draft string) tea.Cmd {
 	return func() tea.Msg {
 		if sess == nil {
 			return turnSubmitResultMsg{
@@ -276,7 +276,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	)
 }
 
-func cancelTurnCmd(sess session.AgentSession) tea.Cmd {
+func cancelTurnCmd(sess session.Session) tea.Cmd {
 	return func() tea.Msg {
 		if sess == nil {
 			return turnCancelResultMsg{err: errors.New("session unavailable")}
@@ -341,7 +341,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 }
 
 // handleSessionEvent processes events from the agent session channel.
-func (m Model) handleSessionEvent(ev session.AgentEvent) (Model, tea.Cmd) {
+func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	turn := m.turnReducer()
 	if turn.DrainingUntilTurnStarted() {
 		decision := session.DecideEventDrain(session.EventDrainInput{

@@ -329,7 +329,7 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 	tests := []string{"/help", "/session", "/cost", "/tools", "/status", "/skills"}
 	for _, command := range tests {
 		t.Run(command, func(t *testing.T) {
-			sess := &stubSession{events: make(chan session.AgentEvent)}
+			sess := &stubSession{events: make(chan session.Event)}
 			model := readyModel(t)
 			model.Model.Session = sess
 			model = applyP1Events(
@@ -385,7 +385,7 @@ func p1MatrixReadOnlySlashCommandsLocalWhileActive(t *testing.T) {
 }
 
 func p1MatrixCancelActiveTool(t *testing.T) {
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model = applyP1Events(
@@ -471,7 +471,7 @@ func p1MatrixPickerOverlaysKeepShellFrame(t *testing.T) {
 	view := assertP1ShellFrame(t, model)
 	assertP1ViewContains(t, view, "Pick a command")
 
-	item := sessionPickerItem{info: session.SessionInfo{
+	item := sessionPickerItem{info: session.SessionInfoEntry{
 		ID:          "session-1",
 		CWD:         model.App.Workdir,
 		Model:       "fake/model",
@@ -512,7 +512,7 @@ func p1MatrixLocalStatus(t *testing.T) {
 	assertP1ViewContains(t, view, "Loading settings")
 }
 
-func applyP1Events(t *testing.T, model Model, events ...session.AgentEvent) Model {
+func applyP1Events(t *testing.T, model Model, events ...session.Event) Model {
 	t.Helper()
 	for _, ev := range events {
 		updated, _ := model.Update(ev)

@@ -211,7 +211,7 @@ func benchmarkSessionPickerItems(count int, workdir string) []sessionPickerItem 
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	for i := range count {
 		items = append(items, sessionPickerItem{
-			info: session.SessionInfo{
+			info: session.SessionInfoEntry{
 				ID:           fmt.Sprintf("session-%04d", i),
 				CWD:          workdir,
 				Model:        "qwen3.6:27b",
@@ -264,8 +264,8 @@ func benchmarkReplayEntries(count int) []session.Entry {
 	return entries
 }
 
-func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
-	events := []session.AgentEvent{
+func benchmarkP1TurnEvents(deltaCount int) []session.Event {
+	events := []session.Event{
 		session.UserMessage{Message: "inspect the workspace"},
 		session.TurnStart{},
 		session.StatusChange{Status: "Thinking..."},
@@ -285,8 +285,8 @@ func benchmarkP1TurnEvents(deltaCount int) []session.AgentEvent {
 	return events
 }
 
-func benchmarkMessageUpdates(count int) []session.AgentEvent {
-	events := make([]session.AgentEvent, 0, count)
+func benchmarkMessageUpdates(count int) []session.Event {
+	events := make([]session.Event, 0, count)
 	for i := range count {
 		events = append(events, session.NewTextUpdate(fmt.Sprintf("delta-%03d ", i), session.AgentMessage{}))
 	}

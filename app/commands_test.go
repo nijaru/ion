@@ -38,7 +38,7 @@ func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			oldSession := &stubSession{events: make(chan session.AgentEvent)}
+			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
 			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
@@ -174,7 +174,7 @@ func TestModelCommandRejectsMissingProviderBeforePersistingState(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		nil,
 		"/tmp/test",
@@ -205,7 +205,7 @@ func TestModelCommandUsesBackendProviderWhenConfigMissing(t *testing.T) {
 
 	capture := &configCaptureBackend{
 		stubBackend: stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "gpt-4.1-old",
 		},
@@ -253,7 +253,7 @@ func TestProviderCommandStagesListingProviderUntilModelSelection(t *testing.T) {
 
 	capture := &configCaptureBackend{
 		stubBackend: stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "gpt-4.1",
 		},
@@ -446,7 +446,7 @@ func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
 	}
 
 	oldBackend := stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openai",
 		model:    "gpt-4.1-old",
 	}
@@ -457,7 +457,7 @@ func TestModelCommandDoesNotPersistStateWhenRuntimeSwitchFails(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			return nil, nil, nil, errors.New("switch failed")
 		},
 	)
@@ -500,7 +500,7 @@ func TestModelCommandWithoutSwitcherUpdatesAppConfig(t *testing.T) {
 
 	capture := &configCaptureBackend{
 		stubBackend: stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "gpt-4.1-old",
 		},
@@ -568,7 +568,7 @@ func TestProviderCommandRejectsInvalidProvidersBeforePersistingState(t *testing.
 
 func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 	backend := &compactBackend{
-		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   true,
 	}
 	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
@@ -635,7 +635,7 @@ func TestComposerQueuesWhileCompacting(t *testing.T) {
 
 func TestCompactCommandReportsNoOp(t *testing.T) {
 	backend := &compactBackend{
-		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   false,
 	}
 	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
@@ -658,7 +658,7 @@ func TestCompactCommandDoesNotMaterializeLazySession(t *testing.T) {
 	}
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
 	backend := &compactBackend{
-		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   true,
 	}
 	model := New(backend, lazy, store, "/tmp/test", "main", "dev", nil)
@@ -700,7 +700,7 @@ func TestCompactCompletionClearsStaleErrorState(t *testing.T) {
 
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		nil,
 		"/tmp/test",
@@ -736,7 +736,7 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 				t.Fatalf("write config: %v", err)
 			}
 
-			oldSession := &stubSession{events: make(chan session.AgentEvent)}
+			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
 
 			var observedSessionID string
@@ -747,7 +747,7 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 				"/tmp/test",
 				"main",
 				"dev",
-				func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+				func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 					observedSessionID = sessionID
 					newStorage := &stubStorageSession{
 						id:     "fresh-session",
@@ -794,7 +794,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldSession := &stubSession{events: make(chan session.AgentEvent)}
+	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{
 		sess:     oldSession,
 		provider: "openrouter",
@@ -808,7 +808,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.AgentSession, session.SessionHandle, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
@@ -843,7 +843,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 
 func TestCostCommandReportsSessionTotals(t *testing.T) {
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		&stubStorageSession{usageIn: 1200, usageOut: 300, usageCost: 0.012345},
 		nil,
 		"/tmp/test",
@@ -868,7 +868,7 @@ func TestCostCommandReportsSessionTotals(t *testing.T) {
 func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openrouter",
 			model:    "minimax/minimax-m2.5:free",
 		},
@@ -917,7 +917,7 @@ func TestSessionInfoNoticeDoesNotMaterializeLazySession(t *testing.T) {
 	lazy := session.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
 	model := New(
 		stubBackend{
-			sess:     &stubSession{events: make(chan session.AgentEvent)},
+			sess:     &stubSession{events: make(chan session.Event)},
 			provider: "openai",
 			model:    "model-a",
 		},
@@ -1045,7 +1045,7 @@ func TestSessionCommandReturnsBeforeStorageCompletes(t *testing.T) {
 
 func TestCostCommandReportsConfiguredBudgets(t *testing.T) {
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		&stubStorageSession{usageIn: 1200, usageOut: 300, usageCost: 0.012345},
 		nil,
 		"/tmp/test",
@@ -1248,7 +1248,7 @@ func TestRuntimeSwitchBlocksRuntimeChangingPickerSelection(t *testing.T) {
 
 func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.AgentEvent)}},
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
 		nil,
 		"/tmp/test",
@@ -1405,7 +1405,7 @@ func TestSettingsCommandOpensCommonSettingsPicker(t *testing.T) {
 
 	model := readyModel(t)
 	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.AgentEvent)},
+		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "tencent/hy3-preview:free",
 	}
@@ -1670,7 +1670,7 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
 	model.Model.Config = &config.Config{}
@@ -1723,7 +1723,7 @@ func TestSettingsCommandPreservesRuntimeSelection(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
 		WithConfig(&config.Config{
@@ -1774,7 +1774,7 @@ func TestSettingsCommandPreservesFastRuntimeSelection(t *testing.T) {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 
-	sess := &stubSession{events: make(chan session.AgentEvent)}
+	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
 	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
 		WithConfigForRuntimePreset(

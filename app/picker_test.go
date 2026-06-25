@@ -387,7 +387,7 @@ func TestMatchingWorkspaceFileReferencesRejectsSymlinkDirEscapes(t *testing.T) {
 }
 
 func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
-	info := session.SessionInfo{
+	info := session.SessionInfoEntry{
 		ID:          "sess-1",
 		Model:       "local-api/qwen3.6:27b",
 		Branch:      "main",
@@ -408,7 +408,7 @@ func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
 }
 
 func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
-	info := session.SessionInfo{
+	info := session.SessionInfoEntry{
 		ID:          "sess-1",
 		LastPreview: "hello",
 	}
@@ -426,13 +426,13 @@ type blockingSessionListStore struct {
 	resumeOnlyStore
 	started  chan struct{}
 	release  chan struct{}
-	sessions []session.SessionInfo
+	sessions []session.SessionInfoEntry
 }
 
 func (s *blockingSessionListStore) ListSessions(
 	ctx context.Context,
 	cwd string,
-) ([]session.SessionInfo, error) {
+) ([]session.SessionInfoEntry, error) {
 	close(s.started)
 	select {
 	case <-s.release:
@@ -446,7 +446,7 @@ func TestOpenSessionPickerReturnsBeforeListCompletes(t *testing.T) {
 	store := &blockingSessionListStore{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
-		sessions: []session.SessionInfo{{
+		sessions: []session.SessionInfoEntry{{
 			ID:          "sess-1",
 			Title:       "core.Resume task",
 			LastPreview: "continue work",
@@ -525,7 +525,7 @@ func TestStartupPickerCmdLoadsInitialSessionPicker(t *testing.T) {
 	store := &blockingSessionListStore{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
-		sessions: []session.SessionInfo{{
+		sessions: []session.SessionInfoEntry{{
 			ID:          "sess-startup",
 			Title:       "core.Resume startup picker",
 			LastPreview: "continue after launch",
@@ -573,7 +573,7 @@ func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 
 	updated, cmd := model.Update(sessionPickerLoadedMsg{
 		requestID: 1,
-		sessions: []session.SessionInfo{{
+		sessions: []session.SessionInfoEntry{{
 			ID:    "stale",
 			Title: "stale session",
 		}},
@@ -592,13 +592,13 @@ func TestSessionPickerIgnoresStaleLoad(t *testing.T) {
 
 func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
 	items := []sessionPickerItem{
-		{info: session.SessionInfo{
+		{info: session.SessionInfoEntry{
 			ID:          "sess-1",
 			Title:       "Fix core.Resume Flow",
 			Summary:     "Workspace history",
 			LastPreview: "Recovered stalled session",
 		}},
-		{info: session.SessionInfo{
+		{info: session.SessionInfoEntry{
 			ID:          "sess-2",
 			Title:       "Tool output cleanup",
 			Summary:     "Background jobs",
@@ -621,8 +621,8 @@ func TestSessionPickerFilteringSelectsTopRankedMatch(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: session.SessionInfo{ID: "sess-1", Title: "zz resume"}},
-			{info: session.SessionInfo{ID: "sess-2", Title: "resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-1", Title: "zz resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-2", Title: "resume"}},
 		},
 		index: 1,
 	}
@@ -649,8 +649,8 @@ func TestSessionPickerPasteFiltersWithoutChangingComposer(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: session.SessionInfo{ID: "sess-1", Title: "zz resume"}},
-			{info: session.SessionInfo{ID: "sess-2", Title: "resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-1", Title: "zz resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-2", Title: "resume"}},
 		},
 		index: 1,
 	}
@@ -675,10 +675,10 @@ func TestSessionPickerIgnoresControlKeyText(t *testing.T) {
 	model.Input.Composer.SetValue("draft")
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
-			{info: session.SessionInfo{ID: "sess-1", Title: "resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-1", Title: "resume"}},
 		},
 		filtered: []sessionPickerItem{
-			{info: session.SessionInfo{ID: "sess-1", Title: "resume"}},
+			{info: session.SessionInfoEntry{ID: "sess-1", Title: "resume"}},
 		},
 		query: "res",
 	}
@@ -706,7 +706,7 @@ func TestSessionPickerPageKeysJumpByPage(t *testing.T) {
 	items := make([]sessionPickerItem, 12)
 	for i := range items {
 		items[i] = sessionPickerItem{
-			info: session.SessionInfo{
+			info: session.SessionInfoEntry{
 				ID:    "sess-" + string(rune('a'+i)),
 				Title: "session " + string(rune('a'+i)),
 			},
@@ -736,7 +736,7 @@ func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	model.App.Width = 80
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{{
-			info: session.SessionInfo{
+			info: session.SessionInfoEntry{
 				ID:          "sess-1",
 				Model:       "local-api/qwen3.6:27b-uncensored",
 				Branch:      "feature/very-long-session-picker-branch-name",
@@ -2449,7 +2449,7 @@ func TestInitWithoutSessionDoesNotAwaitSessionEvent(t *testing.T) {
 	}
 
 	// Model with active session
-	activeSession := &stubSession{events: make(chan session.AgentEvent)}
+	activeSession := &stubSession{events: make(chan session.Event)}
 	activeStorageSession := &stubStorageSession{}
 	activeBackend := stubBackend{sess: activeSession}
 	modelWithSess := New(activeBackend, activeStorageSession, store, "/tmp/test", "main", "dev", nil)

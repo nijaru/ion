@@ -22,7 +22,7 @@ const (
 
 type sessionEventMsg struct {
 	generation uint64
-	event      session.AgentEvent
+	event      session.Event
 }
 
 type streamClosedMsg struct {
@@ -171,14 +171,14 @@ type turnSubmitResultMsg struct {
 
 type steeringResultMsg struct {
 	text   string
-	result session.SteeringResult
+	result struct{}
 	err    error
 }
 
 type followUpResultMsg struct {
 	text               string
 	priorFollowUpCount int
-	result             session.QueuedInputResult
+	result             struct{}
 	err                error
 }
 
@@ -191,12 +191,12 @@ type turnCancelResultMsg struct {
 }
 
 type sessionPickerItem struct {
-	info session.SessionInfo
+	info session.SessionInfoEntry
 }
 
 type sessionPickerLoadedMsg struct {
 	requestID uint64
-	sessions  []session.SessionInfo
+	sessions  []session.SessionInfoEntry
 	err       error
 }
 
@@ -326,9 +326,9 @@ type AppState struct {
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
 	Backend              core.Backend
-	Session              session.AgentSession
-	Storage              session.SessionHandle
-	Store                session.SessionStore
+	Session              session.Session
+	Storage              session.Session
+	Store                session.Store
 	Switcher             core.Switcher
 	Config               *config.Config
 	Runtime              core.Snapshot
@@ -414,8 +414,8 @@ type Model struct {
 
 func New(
 	b core.Backend,
-	s session.SessionHandle,
-	store session.SessionStore,
+	s session.Session,
+	store session.Store,
 	workdir, branch, version string,
 	switcher core.Switcher,
 ) Model {
@@ -441,7 +441,7 @@ func New(
 	spt.Style = st.cyan
 
 	var boot core.Bootstrap
-	var sess session.AgentSession
+	var sess session.Session
 	if b != nil {
 		boot = b.Bootstrap()
 		sess = b.Session()
