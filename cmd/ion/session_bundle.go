@@ -18,7 +18,7 @@ type exportedSessionBundle struct {
 
 func exportSessionBundleFile(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	sessionID string,
 	path string,
 ) (exportedSessionBundle, error) {
@@ -47,9 +47,9 @@ func exportSessionBundleFile(
 
 func importSessionBundleFile(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	path string,
-) ([]session.SessionInfo, error) {
+) ([]session.SessionInfoEntry, error) {
 	importer, ok := store.(session.SessionBundleImporter)
 	if !ok {
 		return nil, fmt.Errorf("session store does not support import")
@@ -79,7 +79,7 @@ func printSessionBundleExport(w io.Writer, exported exportedSessionBundle) {
 	)
 }
 
-func printSessionBundleImport(w io.Writer, imported []session.SessionInfo) {
+func printSessionBundleImport(w io.Writer, imported []session.SessionInfoEntry) {
 	switch len(imported) {
 	case 0:
 		fmt.Fprintln(w, "Imported 0 sessions")

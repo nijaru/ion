@@ -128,11 +128,11 @@ func isConfigurationStatus(status string) bool {
 }
 
 func noProviderConfiguredStatus() string {
-	return session.NoProviderConfiguredStatus()
+	return session.NoProviderConfiguredStatus
 }
 
 func noModelConfiguredStatus() string {
-	return session.NoModelConfiguredStatus()
+	return session.NoModelConfiguredStatus
 }
 
 func toolSurfaceSummary(surface core.ToolSurface) string {
@@ -321,8 +321,8 @@ func (m Model) handleDebugCommand() (Model, tea.Cmd) {
 		} else {
 			fmt.Fprintf(&b, "Entries: %d\n", len(entries))
 			for i, e := range entries {
-				role := string(e.Role)
-				content := e.Content
+				role := string(session.EntryRole(e))
+				content := session.EntryContent(e)
 				if len(content) > 200 {
 					content = content[:200] + "..."
 				}

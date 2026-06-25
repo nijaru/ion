@@ -37,13 +37,17 @@ type MessageStart struct {
 // MessageUpdate carries an incremental update to the streaming assistant message.
 // The Delta union is the collapsed form of Pi's text/thinking/toolcall deltas.
 type MessageUpdate struct {
-	Message Message // the accumulated partial message
-	Delta   Delta
+	Message   Message
+	Delta     Delta
+	BlockType string
+	AgentID   string
+	Timestamp time.Time
 }
 
 // MessageEnd closes a message; Message is final.
 type MessageEnd struct {
-	Message Message
+	Message   Message
+	Timestamp time.Time
 }
 
 // ToolExecStart opens execution of one tool call.
@@ -258,7 +262,16 @@ type QueuedInputUpdate struct{
 }
 func (QueuedInputUpdate) isEvent() {}
 
-type AgentMessage = Message
+type AgentMessage struct {
+	EntryBase
+	AgentID      string
+	Message      Message
+	InputTokens  int
+	OutputTokens int
+	Cost         float64
+}
+func (AgentMessage) isEvent() {}
+func (s AgentMessage) When() time.Time { return s.EntryBase.Timestamp }
 
 type ToolCallStart struct {
 	EntryBase
@@ -511,3 +524,92 @@ type QueuedSnapshot struct {
 	Steering []string
 	FollowUp []string
 }
+var TurnFinishedDispatchSubmitLocal = "submit_local"
+type StoreTokenUsage struct {
+	EntryBase
+	Type   string
+	Input  int
+	Output int
+	Cost   float64
+	TS     int64
+}
+func (StoreTokenUsage) isEntry() {}
+func (s StoreTokenUsage) ID() string { return s.EntryBase.ID }
+func (s StoreTokenUsage) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreTokenUsage) When() time.Time { return s.EntryBase.Timestamp }
+
+func (s StatusChange) When() time.Time { return s.when() }
+func (s TurnStart) When() time.Time    { return time.Time{} }
+func (s MessageEnd) When() time.Time   { return s.Timestamp }
+func (s MessageUpdate) When() time.Time { return s.Timestamp }
+
+func (s ToolCallStart) ToolUseID() string { return s.ToolCallID }
+func (s ToolCallStart) ToolName() string  { return s.Name }
+func (s ToolCallStart) When() time.Time  { return s.EntryBase.Timestamp }
+func (s ToolCallStart) ArgsString() string { return string(s.Args) }
+
+func (s ToolExecutionUpdate) ToolUseID() string { return s.ToolCallID }
+func (s ToolExecutionUpdate) When() time.Time  { return s.EntryBase.Timestamp }
+
+func (s ToolExecutionUpdate) PartialResult() string { return "" }
+func (s ToolExecutionUpdate) IsError() bool { return false }
+
+func (s ToolCallEnd) ToolUseID() string { return s.ToolCallID }
+func (s ToolCallEnd) When() time.Time  { return s.EntryBase.Timestamp }
+
+
+// RuntimeRequest stubs
+type RuntimeRequestBeginInput struct {
+	Current uint64
+	Status  string
+}
+
+type RuntimeRequestDecision struct {
+	RequestID       uint64
+	SetLocalStatus  bool
+	Status          string
+	Matched         bool
+	Active          uint64
+	ClearLocalStatus bool
+}
+
+func BeginRuntimeRequest(input RuntimeRequestBeginInput) RuntimeRequestDecision {
+	return RuntimeRequestDecision{RequestID: input.Current + 1}
+}
+
+func RuntimeRequestMatches(current, requestID uint64) bool {
+	return current == requestID
+}
+
+type FinishRuntimeRequestInput struct{}
+type FinishRuntimeRequestDecision struct {
+	Matched         bool
+	Active          uint64
+	ClearLocalStatus bool
+}
+
+func FinishRuntimeRequest(current, requestID uint64) FinishRuntimeRequestDecision {
+	return FinishRuntimeRequestDecision{Matched: current == requestID}
+}
+
+type ClearRuntimeRequestDecision struct {
+	Active          uint64
+	ClearLocalStatus bool
+}
+
+func ClearRuntimeRequest() ClearRuntimeRequestDecision {
+	return ClearRuntimeRequestDecision{}
+}
+
+type SessionForkOptions struct{}
+type SessionForker interface {
+	ForkSession(ctx context.Context, parentID string, opts SessionForkOptions) (SessionHandle, error)
+}
+
+type SessionHandle struct {
+	id string
+}
+func (s SessionHandle) ID() string { return s.id }
+
+var NoProviderConfiguredStatus = "No provider configured"
+var NoModelConfiguredStatus = "No model configured"

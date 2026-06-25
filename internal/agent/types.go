@@ -122,3 +122,6 @@ type StopContext struct {
 	ToolResults []session.ToolResultMessage
 	Context     TurnContext
 }
+
+type ToolExecutor interface{}
+type AgentTool struct{}

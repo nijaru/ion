@@ -65,8 +65,13 @@ type LabelEntry struct {
 }
 
 type SessionInfoEntry struct {
+	Model      string
+	Branch     string
+	UpdatedAt  time.Time
 	EntryBase
-	Name string
+	Name        string
+	Summary     string
+	LastPreview string
 }
 
 // CustomEntry is an extension point for auxiliary persisted data
@@ -154,3 +159,34 @@ func SetTimestamp(e Entry, t time.Time) {
 }
 
 func (e *SessionInfoEntry) Title() string { return e.Name }
+
+
+
+// EntryIsError returns true if the entry is a tool result with an error.
+func EntryIsError(e Entry) bool {
+	if me, ok := e.(*MessageEntry); ok {
+		if tr, ok := me.Message.(*ToolResultMessage); ok {
+			return tr.IsError
+		}
+	}
+	return false
+}
+
+// EntryRole returns the role of the entry (for tool_render.go compatibility).
+func EntryRoleString(e Entry) string { return EntryRole(e) }
+
+// EntryContent returns the text content of the entry.
+func EntryContent(e Entry) string { return EntryText(e) }
+
+func EntryReasoning(e Entry) string {
+	if me, ok := e.(*MessageEntry); ok {
+		if am, ok := me.Message.(*AssistantMessage); ok {
+			for _, c := range am.Content {
+				if tc, ok := c.(ThinkingContent); ok {
+					return tc.Text
+				}
+			}
+		}
+	}
+	return ""
+}

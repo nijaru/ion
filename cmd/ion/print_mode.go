@@ -63,14 +63,14 @@ func resolvePrintFlags(
 }
 
 // runPrintMode submits a single turn and prints the response to stdout.
-func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string) error {
+func runPrintMode(ctx context.Context, agent session.Session, prompt string) error {
 	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, "text")
 }
 
 func runPrintModeWithWriter(
 	ctx context.Context,
 	w io.Writer,
-	agent session.AgentSession,
+	agent session.Session,
 	prompt string,
 	output string,
 ) error {
@@ -83,7 +83,7 @@ func runPrintModeWithWriter(
 
 func runPromptTurn(
 	ctx context.Context,
-	agent session.AgentSession,
+	agent session.Session,
 	prompt string,
 ) (printResult, error) {
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
@@ -140,7 +140,7 @@ func runPromptTurn(
 	}
 }
 
-func cancelPrintTurn(agent session.AgentSession) {
+func cancelPrintTurn(agent session.Session) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = agent.CancelTurn(ctx)
@@ -181,7 +181,7 @@ func promptWithStdinContext(prompt, stdinText string) string {
 func runPrintModeWithTimeout(
 	ctx context.Context,
 	w io.Writer,
-	agent session.AgentSession,
+	agent session.Session,
 	prompt string,
 	timeout time.Duration,
 	output string,

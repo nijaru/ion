@@ -31,6 +31,9 @@ type Store interface {
 	// GetInputs returns queued user inputs.
 	GetInputs(ctx context.Context, workdir string, n int) ([]string, error)
 
+	// ListSessions returns all sessions for the picker.
+	ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error)
+
 	// AddInput adds a queued user input.
 	AddInput(ctx context.Context, workdir string, input string) error
 
@@ -40,6 +43,7 @@ type Store interface {
 
 // Metadata holds session-level state.
 type Metadata struct {
+	CWD  string
 	Model  string
 	Branch string
 	ID   string // session identifier
@@ -54,5 +58,6 @@ func ResumeSession(ctx context.Context, store Store, sessionID string) (Store, s
 	}
 	return store, sessionID, nil
 }
+
 
 

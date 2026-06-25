@@ -75,14 +75,14 @@ type unconfiguredSession struct {
 	events chan session.Event
 	reason error
 	id     string
-	meta   map[string]string
+	meta   session.Metadata
 }
 
 func newUnconfiguredSession(reason error) *unconfiguredSession {
 	return &unconfiguredSession{
 		events: make(chan session.Event, 10),
 		reason: reason,
-		meta:   map[string]string{},
+		meta:   session.Metadata{},
 	}
 }
 
@@ -92,10 +92,10 @@ func (s *unconfiguredSession) setStorage(storageSession session.Session) {
 	}
 	s.id = storageSession.ID()
 	meta := storageSession.Meta()
-	s.meta = map[string]string{
-		"model":  meta.Model,
-		"branch": meta.Branch,
-		"cwd":    meta.CWD,
+	s.meta = session.Metadata{
+		Model:  meta.Model,
+		Branch: meta.Branch,
+		CWD:    meta.CWD,
 	}
 }
 
@@ -131,6 +131,61 @@ func (s *unconfiguredSession) ID() string {
 	return s.id
 }
 
-func (s *unconfiguredSession) Meta() map[string]string {
+func (s *unconfiguredSession) Meta() session.Metadata {
 	return s.meta
 }
+
+func (s *unconfiguredSession) Append(ctx context.Context, entry session.Entry) (string, error) {
+	return "", nil
+}
+
+func (s *unconfiguredSession) AppendBranchSummary(ctx context.Context, data session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendCustom(ctx context.Context, entry *session.CustomEntry) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) GetEntry(ctx context.Context, id string) (session.Entry, error) {
+	return nil, nil
+}
+func (s *unconfiguredSession) GetLeafID() string { return "" }
+func (s *unconfiguredSession) SetLeafID(id string) error { return nil }
+func (s *unconfiguredSession) MoveTo(ctx context.Context, leafID string, summary *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+
+func (s *unconfiguredSession) AppendCompaction(ctx context.Context, data session.CompactionData) (string, error) {
+	return "", nil
+}
+
+func (s *unconfiguredSession) AppendMessage(ctx context.Context, msg session.Message) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendModelChange(ctx context.Context, provider, modelID string) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendThinkingChange(ctx context.Context, level session.ThinkingLevel) (string, error) {
+	return "", nil
+}
+func (s *unconfiguredSession) AppendToolsChange(ctx context.Context, tools []string) (string, error) {
+	return "", nil
+}
+
+func (s *unconfiguredSession) Branch(ctx context.Context) ([]session.Entry, error) {
+	return nil, nil
+}
+
+func (s *unconfiguredSession) BuildContext(ctx context.Context) (session.ContextSnapshot, error) {
+	return session.ContextSnapshot{}, nil
+}
+
+
+func (s *unconfiguredSession) Usage(ctx context.Context) (session.Usage, error) { return session.Usage{}, nil }
+
+func (s *unconfiguredSession) Entries(ctx context.Context) ([]session.Entry, error) { return nil, nil }

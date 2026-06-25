@@ -132,7 +132,7 @@ func firstNonEmpty(values ...string) string {
 
 func applySessionConfigFromMetadata(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	sessionID string,
 	cfg *config.Config,
 ) error {

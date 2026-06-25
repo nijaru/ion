@@ -372,7 +372,7 @@ func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
 
 func (t TurnReducer) FinishDrain() {}
 
-func (t TurnReducer) StreamClosed(now time.Time) (interface{}, bool) { return nil, false }
+func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) { return nil, false }
 func (t TurnReducer) FailTurn(msg string, now time.Time)  {}
 func (t TurnReducer) ClearLocalErrorIfIdle()              {}
 func (t TurnReducer) ApplyStatusChangedInput(msg interface{}) StatusChangedDecision { return StatusChangedDecision{} }
@@ -386,14 +386,16 @@ type StatusChangedDecision struct {
 
 func (t TurnReducer) StartTurn(now time.Time, ts time.Time)           {}
 func (t TurnReducer) StopThinking()                      {}
-func (t TurnReducer) FinishPendingAssistant() (interface{}, bool, bool) { return nil, false, false }
+func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) { return nil, false, false }
 func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {}
 func (t TurnReducer) BeginDrain(now time.Time)           {}
 
-func (t TurnReducer) FinishTurnMode(completed bool) (interface{}, bool) { return nil, false }
+func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) { return nil, false }
 
 
 type TurnFinishedDispatch struct {
+	ReloadGitDiff     bool
+	AwaitNext         bool
 	Action              string
 	Text                string
 	RearmSessionEvents  bool
@@ -404,3 +406,21 @@ var TurnFinishedDispatchSubmitLocal = "submit_local"
 func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
 	return TurnFinishedDispatch{}
 }
+// ReloadGitDiff and AwaitNext were missing from TurnFinishedDispatch
+func init() {}
+func (t TurnReducer) ApplyTokenUsage(msg interface{}) {}
+
+func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {}
+func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time.Time) {}
+
+func (t TurnReducer) ApplyBudgetStop(reason string, ts time.Time) (session.Entry, error) { return nil, nil }
+func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) { return nil, false }
+func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {}
+func (t TurnReducer) AppendToolOutput(id string, output string, isError bool) {}
+func (t TurnReducer) AppendToolError(id, name, err string, ts time.Time) {}
+
+func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) { return nil, false }
+
+func NewTurnReducer(inFlight *InFlightState, progress *ProgressState) TurnReducer { return TurnReducer{} }
+
+func (t TurnReducer) AgentStreamContent() string { return "" }

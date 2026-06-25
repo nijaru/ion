@@ -17,15 +17,15 @@ func (m Model) renderToolLabel(label string, isError bool) string {
 }
 
 func (m Model) toolOutputHidden(e session.Entry) bool {
-	if e.IsError {
+	if session.EntryIsError(e) {
 		return false
 	}
 	switch {
-	case isReadLikeTool(e.Title):
+	case isReadLikeTool(session.EntryTitle(e)):
 		return toolReadOutput(m.Model.Config) == "hidden"
-	case isWriteTool(e.Title):
+	case isWriteTool(session.EntryTitle(e)):
 		return toolWriteOutput(m.Model.Config) == "hidden"
-	case isBashLikeTool(e.Title):
+	case isBashLikeTool(session.EntryTitle(e)):
 		return toolBashOutput(m.Model.Config) == "hidden"
 	default:
 		return false
@@ -33,26 +33,26 @@ func (m Model) toolOutputHidden(e session.Entry) bool {
 }
 
 func (m Model) shouldSummarizeToolOutput(e session.Entry) bool {
-	if e.Role != session.RoleTool || e.IsError {
+	if session.EntryRole(e) != session.RoleTool || session.EntryIsError(e) {
 		return false
 	}
-	if isReadLikeTool(e.Title) {
+	if isReadLikeTool(session.EntryTitle(e)) {
 		return toolReadOutput(m.Model.Config) == "summary"
 	}
-	if isWriteTool(e.Title) {
+	if isWriteTool(session.EntryTitle(e)) {
 		return toolWriteOutput(m.Model.Config) == "summary"
 	}
-	if isBashLikeTool(e.Title) {
+	if isBashLikeTool(session.EntryTitle(e)) {
 		return toolBashOutput(m.Model.Config) == "summary"
 	}
 	if m.Model.Config != nil && m.Model.Config.ToolVerbosity == "full" {
 		return false
 	}
-	return isReadLikeTool(e.Title)
+	return isReadLikeTool(session.EntryTitle(e))
 }
 
 func (m Model) shouldRenderWriteDiff(e session.Entry) bool {
-	return isWriteTool(e.Title) && toolWriteOutput(m.Model.Config) == "diff"
+	return isWriteTool(session.EntryTitle(e)) && toolWriteOutput(m.Model.Config) == "diff"
 }
 
 func toolReadOutput(cfg *config.Config) string {
@@ -121,20 +121,20 @@ func isBashLikeTool(title string) bool {
 }
 
 func toolOutputSummary(e session.Entry) string {
-	trimmed := strings.TrimSpace(e.Content)
+	trimmed := strings.TrimSpace(session.EntryContent(e))
 	if trimmed == "" {
 		return ""
 	}
-	lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
 	n := len(lines)
-	switch toolTitleVerb(e.Title) {
+	switch toolTitleVerb(session.EntryTitle(e)) {
 	case "list", "ls", "find", "glob":
 		if n == 1 {
 			return "1 entry"
 		}
 		return fmt.Sprintf("%d entries", n)
 	case "grep", "search":
-		if strings.TrimSuffix(strings.TrimSpace(e.Content), ".") == "No matches found" {
+		if strings.TrimSuffix(strings.TrimSpace(session.EntryContent(e)), ".") == "No matches found" {
 			return "0 matches"
 		}
 		if n == 1 {

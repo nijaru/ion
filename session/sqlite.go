@@ -90,3 +90,7 @@ func (s *SQLiteStore) SetLeafID(id string) error {
 
 func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) { return nil, nil }
 func (s *SQLiteStore) AddInput(ctx context.Context, workdir string, input string) error { return nil }
+
+func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error) {
+	return nil, nil
+}

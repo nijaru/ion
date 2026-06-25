@@ -14,8 +14,8 @@ import (
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.RoleTool
-	hasPendingAgent := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.RoleAgent
+	hasPendingTool := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleTool
+	hasPendingAgent := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleAgent
 	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
 		!hasPendingAgent &&
 		m.InFlight.ReasonBuf == "" &&
@@ -40,7 +40,7 @@ func (m Model) renderPlaneB() string {
 	if hasPendingAgent {
 		entry := *m.InFlight.Pending
 		if content := m.agentStreamContent(); content != "" {
-			entry.Content = content
+			// content already set on entry
 		}
 		b.WriteString(m.renderPendingEntry(entry))
 		b.WriteString("\n")
@@ -90,25 +90,25 @@ func (m Model) agentStreamContent() string {
 func (m Model) renderPendingEntry(e session.Entry) string {
 	toolVerbosity := m.verbosity("tool")
 
-	switch e.Role {
+	switch session.EntryRole(e) {
 	case session.RoleAgent:
-		if e.Content == "" {
+		if session.EntryContent(e) == "" {
 			return m.planeBLine(m.st.dim, 2, "• ...")
 		}
-		return m.renderLiveAgentContent(e.Content)
+		return m.renderLiveAgentContent(session.EntryContent(e))
 	case session.RoleTool:
-		label := m.normalizeToolTitle(e.Title)
+		label := m.normalizeToolTitle(session.EntryTitle(e))
 		if label == "" {
 			label = "tool"
 		}
 		var b strings.Builder
-		b.WriteString(m.renderToolLabel(label, e.IsError))
-		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
+		b.WriteString(m.renderToolLabel(label, session.EntryIsError(e)))
+		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return b.String()
 		}
 		// When expanded (Ctrl+O), show full output regardless of verbosity
 		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
-			if isWriteTool(e.Title) {
+			if isWriteTool(session.EntryTitle(e)) {
 				return b.String()
 			}
 			if summary := toolOutputSummary(e); summary != "" {
@@ -121,7 +121,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
 			b.WriteString("\n")
 		} else {
-			lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
+			lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
 			const maxLines = 10
 			shown := lines
 			if !m.ToolOutputExpanded && len(lines) > maxLines {
@@ -136,19 +136,19 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		}
 		return b.String()
 	case session.RoleSubagent:
-		label := e.Title
+		label := session.EntryTitle(e)
 		if label == "" {
 			label = "subagent"
 		}
 		var b strings.Builder
 		b.WriteString(m.st.subagent.Render("↳ " + label))
-		if e.Content != "" {
+		if session.EntryContent(e) != "" {
 			b.WriteString("\n")
-			b.WriteString(m.planeBLine(m.st.dim, 4, e.Content))
+			b.WriteString(m.planeBLine(m.st.dim, 4, session.EntryContent(e)))
 		}
 		return b.String()
 	default:
-		return m.planeBFitLine(e.Content)
+		return m.planeBFitLine(session.EntryContent(e))
 	}
 }
 
@@ -280,26 +280,26 @@ func (m Model) renderEntry(e session.Entry) string {
 	thinkingVerbosity := m.verbosity("thinking")
 	toolVerbosity := m.verbosity("tool")
 
-	switch e.Role {
+	switch session.EntryRole(e) {
 	case session.RoleUser:
-		return m.renderUserEntry(e.Content)
+		return m.renderUserEntry(session.EntryContent(e))
 
 	case session.RoleAgent:
 		var b strings.Builder
-		if e.Reasoning != "" {
+		if session.EntryReasoning(e) != "" {
 			b.WriteString(m.st.system.Render("• Thinking..."))
 			b.WriteString("\n")
 			if thinkingVerbosity == "full" {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(session.EntryReasoning(e)))
 				b.WriteString("\n")
 			}
 		}
-		rendered := strings.TrimRightFunc(m.renderMarkdownContent(e.Content), unicode.IsSpace)
+		rendered := strings.TrimRightFunc(m.renderMarkdownContent(session.EntryContent(e)), unicode.IsSpace)
 		if rendered == "" {
 			if b.Len() > 0 {
 				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 			}
-			if e.Reasoning != "" {
+			if session.EntryReasoning(e) != "" {
 				b.WriteString(m.st.system.Render("• Thinking..."))
 				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 			}
@@ -313,17 +313,17 @@ func (m Model) renderEntry(e session.Entry) string {
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.RoleTool:
-		label := m.normalizeToolTitle(e.Title)
+		label := m.normalizeToolTitle(session.EntryTitle(e))
 		if label == "" {
 			label = "tool"
 		}
-		labelStr := m.renderToolLabel(label, e.IsError)
-		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
+		labelStr := m.renderToolLabel(label, session.EntryIsError(e))
+		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return labelStr
 		}
 		// When expanded (Ctrl+O), show full output regardless of verbosity
 		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
-			if isWriteTool(e.Title) {
+			if isWriteTool(session.EntryTitle(e)) {
 				return labelStr
 			}
 			if summary := toolOutputSummary(e); summary != "" {
@@ -331,7 +331,7 @@ func (m Model) renderEntry(e session.Entry) string {
 			}
 			return labelStr
 		}
-		content := e.Content
+		content := session.EntryContent(e)
 		if m.shouldRenderWriteDiff(e) {
 			content = m.renderDiff(content)
 		}
@@ -360,26 +360,26 @@ func (m Model) renderEntry(e session.Entry) string {
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.RoleSubagent:
-		label := e.Title
+		label := session.EntryTitle(e)
 		if label == "" {
 			label = "subagent"
 		}
 		var b strings.Builder
 		b.WriteString(m.st.subagent.Render("↳ " + label))
-		if e.Content != "" {
+		if session.EntryContent(e) != "" {
 			b.WriteString("\n")
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
+			b.WriteString(m.st.dim.PaddingLeft(4).Render(session.EntryContent(e)))
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.RoleSystem:
-		if strings.HasPrefix(e.Content, "Error: ") {
-			return m.st.warn.Render("× " + e.Content)
+		if strings.HasPrefix(session.EntryContent(e), "Error: ") {
+			return m.st.warn.Render("× " + session.EntryContent(e))
 		}
-		return m.st.system.Render("• " + e.Content)
+		return m.st.system.Render("• " + session.EntryContent(e))
 
 	default:
-		return e.Content
+		return session.EntryContent(e)
 	}
 }
 

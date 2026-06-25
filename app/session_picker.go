@@ -80,16 +80,16 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.pickerReducer().closeSession()
 		if m.Picker.PreStartupMode {
-			m.Picker.SelectedSessionID = selected.ID
+			m.Picker.SelectedSessionID = selected.ID()
 			return m, tea.Quit
 		}
-		return m.resumeStoredSessionByID(selected.ID)
+		return m.resumeStoredSessionByID(selected.ID())
 	case "ctrl+f":
 		selected, ok := m.pickerReducer().selectedSession()
 		if !ok {
 			return m, nil
 		}
-		return m.forkSessionFromPicker(selected.ID)
+		return m.forkSessionFromPicker(selected.ID())
 	default:
 		if text, ok := keyTextInput(msg); ok {
 			m.pickerReducer().appendSessionQuery(text, m.App.Workdir)
@@ -218,8 +218,8 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	ranked := make([]rankedItem, 0, len(items))
 	for i, item := range items {
 		fields := [...]pickerSearchField{
-			{value: normalizeSearchQuery(item.info.ID), weight: 0},
-			{value: normalizeSearchQuery(item.info.Title), weight: 3},
+			{value: normalizeSearchQuery(item.info.ID()), weight: 0},
+			{value: normalizeSearchQuery(item.info.Title()), weight: 3},
 			{value: normalizeSearchQuery(item.info.Summary), weight: 4},
 			{value: normalizeSearchQuery(item.info.LastPreview), weight: 5},
 			{value: cwdBase, weight: 10},
@@ -233,7 +233,7 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 			item:           item,
 			score:          score,
 			index:          i,
-			titleKey:       strings.ToLower(item.info.Title),
+			titleKey:       strings.ToLower(item.info.Title()),
 			summaryKey:     strings.ToLower(item.info.Summary),
 			lastPreviewKey: strings.ToLower(item.info.LastPreview),
 		})
@@ -316,7 +316,7 @@ func fitSessionPickerMetadata(parts []string, width int) string {
 }
 
 func sessionPickerParts(cwd string, info session.SessionInfoEntry) (string, string, []string) {
-	title := strings.TrimSpace(info.Title)
+	title := strings.TrimSpace(info.Title())
 	summary := strings.TrimSpace(info.Summary)
 	preview := strings.TrimSpace(info.LastPreview)
 
@@ -328,7 +328,7 @@ func sessionPickerParts(cwd string, info session.SessionInfoEntry) (string, stri
 		label = summary
 	}
 	if label == "" {
-		label = info.ID
+		label = info.ID()
 	}
 	labelSource := label
 	label = truncateRunes(label, 64)

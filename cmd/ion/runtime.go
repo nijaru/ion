@@ -15,9 +15,9 @@ import (
 )
 
 func closeRuntimeHandles(
-	agent session.AgentSession,
+	agent session.Session,
 	sess session.SessionHandle,
-	store session.SessionStore,
+	store session.Store,
 ) error {
 	var errs []error
 	if agent != nil {
@@ -34,9 +34,9 @@ func closeRuntimeHandles(
 
 func recentSessionForContinue(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	cwd string,
-) (*session.SessionInfo, error) {
+) (*session.SessionInfoEntry, error) {
 	sessions, err := store.ListSessions(ctx, cwd)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func recentSessionForContinue(
 	return nil, nil
 }
 
-func openStartupStore(noSession bool) (session.SessionStore, error) {
+func openStartupStore(noSession bool) (session.Store, error) {
 	if noSession {
 		return session.NewEphemeralCantoStore()
 	}
@@ -63,7 +63,7 @@ func openStartupStore(noSession bool) (session.SessionStore, error) {
 
 func startupSessionID(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	cwd string,
 	sessionID string,
 	resumeID string,
@@ -94,7 +94,7 @@ func startupSessionID(
 
 func openRuntime(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	cwd, branch string,
 	cfg *config.Config,
 	sessionID string,
@@ -181,7 +181,7 @@ func openRuntime(
 func closeRuntimeOpenError(
 	label string,
 	err error,
-	agent session.AgentSession,
+	agent session.Session,
 	sess session.SessionHandle,
 ) error {
 	if closeErr := closeRuntimeHandles(agent, sess, nil); closeErr != nil {
@@ -192,13 +192,13 @@ func closeRuntimeOpenError(
 
 func syncSessionMetadata(
 	ctx context.Context,
-	store session.SessionStore,
+	store session.Store,
 	sessionID, modelName, branch string,
 ) error {
 	if store == nil || sessionID == "" {
 		return nil
 	}
-	return store.UpdateSession(ctx, session.SessionInfo{
+	return store.UpdateSession(ctx, session.SessionInfoEntry{
 		ID:                sessionID,
 		Model:             modelName,
 		Branch:            branch,

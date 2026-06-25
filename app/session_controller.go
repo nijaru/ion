@@ -426,17 +426,17 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 }
 
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, _ := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.Timestamp)
+	entry, _ := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.When())
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.terminalCommit().Entries(entryIf.(session.Entry)))
+	cmds = append(cmds, m.terminalCommit().Entries(entryIf))
 	cmds = append(cmds, m.persistEntryCmd("persist stream close error", session.StoreSystem{
 		Type:    "system",
-		Content: session.EntryText(entryIf.(session.Entry)),
+		Content: session.EntryText(entryIf),
 		TS:      now(),
 	}))
 	return m, sequenceCmds(cmds...)
@@ -491,7 +491,7 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 
 func (m Model) handleStatusChanged(msg session.StatusChange) (Model, tea.Cmd) {
 	decision := m.turnReducer().ApplyStatusChangedInput(msg)
-	persistTimestamp := msg.Timestamp
+	persistTimestamp := msg.When()
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp
 	}
@@ -508,7 +508,7 @@ func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdate) (Model, t
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
-	m.turnReducer().StartTurn(msg.Timestamp, time.Now())
+	m.turnReducer().StartTurn(msg.When(), time.Now())
 	return m, m.awaitSessionEvent()
 }
 
@@ -548,13 +548,14 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 	// Token usage rides on MessageEnd (one per model call, including tool-use turns).
 	m.turnReducer().ApplyTokenUsage(msg.Message)
 	var cmds []tea.Cmd
-	if msg.Message.InputTokens > 0 || msg.Message.OutputTokens > 0 || msg.Message.Cost > 0 {
+	in, out, cost := session.TokenUsage(msg.Message)
+	if in > 0 || out > 0 || cost > 0 {
 		cmds = append(cmds, m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
 			Type:   "token_usage",
-			Input:  msg.Message.InputTokens,
-			Output: msg.Message.OutputTokens,
-			Cost:   msg.Message.Cost,
-			TS:     entryUnix(msg.Timestamp),
+			Input:  in,
+			Output: out,
+			Cost:   cost,
+			TS:     entryUnix(msg.When()),
 		}))
 	}
 	cmds = append(cmds, m.awaitSessionEvent())
@@ -567,7 +568,7 @@ func (m Model) handleMessageUpdate(msg session.MessageUpdate) (Model, tea.Cmd) {
 	case "thinking":
 		m.turnReducer().AppendThinkingDelta(msg.AgentID, msg.Delta)
 	default:
-		m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.Timestamp)
+		m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.When())
 	}
 	return m, m.awaitSessionEvent()
 }
@@ -586,12 +587,12 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 			Input:  msg.InputTokens,
 			Output: msg.OutputTokens,
 			Cost:   msg.Cost,
-			TS:     entryUnix(msg.Timestamp),
+			TS:     entryUnix(msg.When()),
 		}))
 	}
 	if reason := m.configuredBudgetStopReason(); reason != "" &&
 		reason != m.Progress.BudgetStopReason {
-		entry, _ := m.turnReducer().ApplyBudgetStop(reason, msg.Timestamp)
+		entry, _ := m.turnReducer().ApplyBudgetStop(reason, msg.When())
 		cmds = append(
 			cmds,
 			m.persistEntryCmd(
@@ -603,7 +604,7 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
 				Type:    "system",
 				Content: session.EntryText(entry),
-				TS:      entryUnix(msg.Timestamp),
+				TS:      entryUnix(msg.When()),
 			}))
 			cmds = append([]tea.Cmd{
 				tea.Batch(
@@ -625,20 +626,20 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 
 func (m Model) handleToolCallStarted(msg session.ToolCallStart) (Model, tea.Cmd) {
 	m.turnReducer().StartToolCall(
-		msg.ToolUseID,
-		msg.Timestamp,
-		config.Redact(m.formatToolTitle(msg.ToolName, msg.Args)),
+		msg.ToolUseID(),
+		msg.When(),
+		config.Redact(m.formatToolTitle(msg.ToolName(), msg.ArgsString())),
 	)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleToolExecutionUpdate(msg session.ToolExecutionUpdate) (Model, tea.Cmd) {
-	m.turnReducer().AppendToolOutput(msg.ToolUseID, msg.PartialResult, false)
+	m.turnReducer().AppendToolOutput(msg.ToolUseID(), msg.PartialResult(), false)
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
-	toolUseID := msg.ToolUseID
+	toolUseID := msg.ToolUseID()
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID
 	}
@@ -655,3 +656,7 @@ func (m Model) handleChildCompleted(msg session.ChildComplete) (Model, tea.Cmd) 
 func (m Model) handleChildBlocked(msg session.ChildBlock) (Model, tea.Cmd) { return m, nil }
 func (m Model) handleChildFailed(msg session.ChildFail) (Model, tea.Cmd) { return m, nil }
 func (m Model) handleChildCanceled(msg session.ChildCancel) (Model, tea.Cmd) { return m, nil }
+
+func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
+	return m, m.awaitSessionEvent()
+}
