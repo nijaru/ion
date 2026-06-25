@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/timing"
 	"github.com/nijaru/ion/session"
 )
 
@@ -22,6 +23,8 @@ func main() {
 	if handled, code := runTopLevelCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
 		os.Exit(code)
 	}
+
+	timing.Record("cli-parse")
 
 	cli := registerCLIFlags()
 	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
@@ -36,6 +39,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	timing.Record("config-load")
 
 	providerOverride := cli.providerOverride()
 	modelOverride := cli.modelOverride()
@@ -54,6 +58,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
 	}
+	timing.Record("store-open")
 
 	printRequested, prompt, output, err := resolvePrintFlags(
 		cli.printRequested(),
@@ -304,6 +309,8 @@ func main() {
 		)
 		model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	}
+	timing.Record("tui-init")
+	timing.Print()
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
 	agentToClose, sessionToClose := runtimeHandlesForClose(finalModel, b.Session(), sess)
