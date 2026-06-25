@@ -73,6 +73,12 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleGitDiffStats(msg)
 		return next, cmd, true
 
+	case gitBranchChangedMsg:
+		if msg.branch != m.App.Branch {
+			m.App.Branch = msg.branch
+		}
+		return m, m.pollGitBranch(), true
+
 	case externalEditorFinishedMsg:
 		next, cmd := m.handleExternalEditorFinished(msg)
 		return next, cmd, true

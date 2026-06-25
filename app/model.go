@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
+	"github.com/nijaru/ion/internal/gitwatch"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
@@ -150,6 +151,10 @@ type terminalCommitLinesMsg struct {
 type gitDiffStatsMsg struct {
 	workdir string
 	stats   string
+}
+
+type gitBranchChangedMsg struct {
+	branch string
 }
 
 type queuedTurnMsg struct {
@@ -402,6 +407,9 @@ type Model struct {
 
 	// Styles (initialized once in New)
 	st styles
+
+	// GitWatcher monitors .git/HEAD for real-time branch change detection.
+	GitWatcher *gitwatch.Watcher
 }
 
 func New(
@@ -472,6 +480,7 @@ func New(
 		PasteMarkers: make(map[string]pasteMarker),
 		Keybindings:  NewKeybindingsManager(),
 		st:           st,
+		GitWatcher:   gitwatch.New(workdir),
 	}
 
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
@@ -516,7 +525,27 @@ func (m Model) Init() tea.Cmd {
 	if m.Model.Session != nil {
 		cmds = append(cmds, m.awaitSessionEvent())
 	}
+	// Start git branch watcher
+	if m.GitWatcher != nil {
+		m.GitWatcher.OnChange(func(branch string) {
+			// This callback runs from the watcher goroutine
+		})
+		m.GitWatcher.Start()
+		cmds = append(cmds, m.pollGitBranch())
+	}
 	return tea.Batch(cmds...)
+}
+
+// pollGitBranch returns a command that polls for git branch changes.
+func (m Model) pollGitBranch() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(2 * time.Second)
+		if m.GitWatcher == nil {
+			return nil
+		}
+		branch := m.GitWatcher.Branch()
+		return gitBranchChangedMsg{branch: branch}
+	}
 }
 
 func (m Model) SelectedSessionID() string {
