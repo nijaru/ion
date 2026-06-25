@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	"github.com/nijaru/ion/internal/gitwatch"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
@@ -339,6 +340,9 @@ type ModelState struct {
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
+	// Runner is the agent runner (Harness). When set, the TUI uses it
+	// instead of Backend + Session for turn execution and events.
+	Runner               agent.Runner
 }
 
 // core.SubagentProgress, core.InFlightState, core.ProgressState are aliases for core types.

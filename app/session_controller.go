@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -61,11 +62,17 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	m.turnReducer().StartSubmit()
 	m.resetComposerDraft()
-	return m, submitTurnCmd(m.Model.Session, text, draft)
+	return m, submitTurnCmd(m.Model.Session, m.Model.Runner, text, draft)
 }
 
-func submitTurnCmd(sess session.Session, text, draft string) tea.Cmd {
+func submitTurnCmd(sess session.Session, runner agent.Runner, text, draft string) tea.Cmd {
 	return func() tea.Msg {
+		if runner != nil {
+			// Use the Runner (Harness) for turn execution.
+			// Prompt blocks until the turn completes and emits events.
+			_, err := runner.Prompt(context.Background(), text)
+			return turnSubmitResultMsg{text: text, draft: draft, err: err}
+		}
 		if sess == nil {
 			return turnSubmitResultMsg{
 				text:  text,
@@ -308,18 +315,12 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
-	if m.Model.Session == nil {
-		return func() tea.Msg {
-			return sessionEventMsg{
-				generation: generation,
-				event: session.TurnEnd{
-					Base:  session.BaseNow(),
-					Error: errors.New("session unavailable"),
-				},
-			}
-		}
+	var events <-chan session.Event
+	if m.Model.Runner != nil {
+		events = m.Model.Runner.Events()
+	} else if m.Model.Session != nil {
+		events = m.Model.Session.Events()
 	}
-	events := m.Model.Session.Events()
 	if events == nil {
 		return func() tea.Msg {
 			return sessionEventMsg{

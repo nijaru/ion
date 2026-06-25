@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/core"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
@@ -71,5 +72,16 @@ func (m Model) WithModelPicker() Model {
 
 func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 	m.Model.Checkpoints = store
+	return m
+}
+
+// WithRunner sets the agent runner (Harness) for the model.
+// When set, the TUI uses the Runner for turn execution and events
+// instead of Backend + Session directly.
+func (m Model) WithRunner(r agent.Runner) Model {
+	m.Model.Runner = r
+	if r != nil {
+		m.Model.Session = r.Session()
+	}
 	return m
 }

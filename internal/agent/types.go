@@ -146,3 +146,41 @@ type AgentTool struct {
 var ToolExecutionParallel = "parallel"
 
 
+
+// Runner is the interface app/ uses to drive the agent.
+// The Harness implements this. It replaces the old Backend + Session pattern.
+type Runner interface {
+	// Events returns the channel the TUI subscribes to for agent events.
+	Events() <-chan session.Event
+
+	// Prompt submits a user message and runs a full agent turn.
+	// Blocks until the turn completes. Returns the final assistant message.
+	Prompt(ctx context.Context, text string) (session.Message, error)
+
+	// Steer queues a steering message (mid-turn direction change).
+	Steer(text string)
+
+	// FollowUp queues a follow-up message for the next turn.
+	FollowUp(text string)
+
+	// NextTurn queues a message to start a new turn.
+	NextTurn(text string)
+
+	// Abort cancels the current turn.
+	Abort() error
+
+	// SetModel switches the active model.
+	SetModel(model llm.Model)
+
+	// SetThinking changes the thinking level.
+	SetThinking(level session.ThinkingLevel)
+
+	// SetTools updates the active tool set.
+	SetTools(tools []Tool, active []string)
+
+	// Session returns the underlying session for auxiliary reads.
+	Session() session.Session
+
+	// Close releases resources.
+	Close() error
+}
