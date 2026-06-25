@@ -66,7 +66,11 @@ func importSessionBundleFile(
 	if err := json.Unmarshal(raw, &bundle); err != nil {
 		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
 	}
-	return importer.ImportSessionBundle(ctx, bundle)
+	id, err := importer.ImportSessionBundle(ctx, bundle)
+	if err != nil {
+		return nil, err
+	}
+	return []session.SessionInfoEntry{{EntryBase: session.EntryBase{ID: id}}}, nil
 }
 
 func printSessionBundleExport(w io.Writer, exported exportedSessionBundle) {

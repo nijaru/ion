@@ -29,7 +29,8 @@ func TestStoreAppendGetEntry(t *testing.T) {
 		EntryBase: EntryBase{ID: "e1", ParentID: "", Timestamp: msg.Timestamp},
 		Message:   msg,
 	}
-	if err := s.Append(ctx, entry); err != nil {
+	_, err := s.Append(ctx, entry)
+		if err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetEntry(ctx, "e1")
@@ -66,7 +67,7 @@ func TestStoreBranchOrder(t *testing.T) {
 	e3 := &MessageEntry{EntryBase: EntryBase{ID: "e3", ParentID: "e2", Timestamp: time.Now()}, Message: NewUserText("b", time.Now())}
 
 	for _, e := range []Entry{e1, e2, e3} {
-		if err := s.Append(ctx, e); err != nil {
+		if _, err := s.Append(ctx, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,7 +119,7 @@ func TestStoreAllEntryTypes(t *testing.T) {
 		&CustomEntry{EntryBase: EntryBase{ID: "cu1", Timestamp: ts}, Type: "status", Data: []byte(`{"ok":true}`)},
 	}
 	for _, e := range entries {
-		if err := s.Append(ctx, e); err != nil {
+		if _, err := s.Append(ctx, e); err != nil {
 			t.Fatalf("append %T(%s): %v", e, e.ID(), err)
 		}
 	}

@@ -6,7 +6,7 @@ import "context"
 // an interface for test fakes. The Session façade wraps this.
 type Store interface {
 	// Append persists an entry. The entry's ID must be set.
-	Append(ctx context.Context, entry Entry) error
+	Append(ctx context.Context, entry Entry) (string, error)
 
 	// GetEntry returns a single entry by ID.
 	GetEntry(ctx context.Context, id string) (Entry, error)
@@ -34,6 +34,9 @@ type Store interface {
 	// ListSessions returns all sessions for the picker.
 	ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error)
 
+	// UpdateSession updates session metadata.
+	UpdateSession(ctx context.Context, info SessionInfoEntry) error
+
 	// AddInput adds a queued user input.
 	AddInput(ctx context.Context, workdir string, input string) error
 
@@ -58,6 +61,7 @@ func ResumeSession(ctx context.Context, store Store, sessionID string) (Store, s
 	}
 	return store, sessionID, nil
 }
+
 
 
 

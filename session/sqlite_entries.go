@@ -9,19 +9,19 @@ import (
 )
 
 // Append persists an entry to the store.
-func (s *SQLiteStore) Append(ctx context.Context, entry Entry) error {
+func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	id := entry.ID()
 	parentID := entry.ParentID()
 	ts := entry.When().UnixMilli()
 	typ, payload, err := encodeEntry(entry)
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, err = s.db.ExecContext(ctx,
 		"INSERT INTO entries(id,parent_id,type,timestamp,payload) VALUES(?,?,?,?,?)",
 		id, parentID, typ, ts, payload,
 	)
-	return err
+	return id, err
 }
 
 // GetEntry returns a single entry by ID.

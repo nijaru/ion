@@ -268,7 +268,7 @@ func main() {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, session.Session, session.SessionHandle, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, session.Session, session.Session, error) {
 		switchedBackend, switchedSession, err := openRuntime(
 			ctx,
 			store,
@@ -347,8 +347,8 @@ func startupModelMissing(b app.Backend) bool {
 func runtimeHandlesForClose(
 	finalModel tea.Model,
 	fallbackAgent session.Session,
-	fallbackSession session.SessionHandle,
-) (session.Session, session.SessionHandle) {
+	fallbackSession session.Session,
+) (session.Session, session.Session) {
 	if model, ok := finalModel.(*app.Model); ok && model != nil {
 		return model.Model.Session, model.Model.Storage
 	}

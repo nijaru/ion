@@ -123,5 +123,26 @@ type StopContext struct {
 	Context     TurnContext
 }
 
-type ToolExecutor interface{}
-type AgentTool struct{}
+type ToolExecutor func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error)
+type AgentToolCall struct {
+	Name      string
+	Arguments map[string]any
+}
+
+type AgentToolResult struct {
+	Content []llm.ContentPart
+	IsError bool
+	Details any
+}
+
+type AgentTool struct {
+	Name          string
+	Description   string
+	Parameters    any
+	ReadOnly      bool
+	ExecutionMode string
+}
+
+var ToolExecutionParallel = "parallel"
+
+

@@ -198,3 +198,29 @@ const RoleTool = "tool"
 const RoleSubagent = "subagent"
 const RoleUser = "user"
 const RoleSystem = "system"
+
+// MessageText extracts text content from a message.
+func MessageText(msg Message) string {
+	if msg == nil {
+		return ""
+	}
+	switch m := msg.(type) {
+	case *AssistantMessage:
+		var b strings.Builder
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
+	case *UserMessage:
+		var b strings.Builder
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
+}

@@ -16,7 +16,7 @@ import (
 
 func closeRuntimeHandles(
 	agent session.Session,
-	sess session.SessionHandle,
+	sess session.Session,
 	store session.Store,
 ) error {
 	var errs []error
@@ -42,7 +42,7 @@ func recentSessionForContinue(
 		return nil, err
 	}
 	for i := range sessions {
-		if !session.IsConversationSessionInfo(sessions[i]) {
+		if !session.IsConversationSessionInfo(&sessions[i]) {
 			continue
 		}
 		return &sessions[i], nil
@@ -89,7 +89,7 @@ func startupSessionID(
 	if recent == nil {
 		return "", fmt.Errorf("no conversation session to continue in this directory")
 	}
-	return recent.ID, nil
+	return recent.ID(), nil
 }
 
 func openRuntime(
@@ -99,20 +99,12 @@ func openRuntime(
 	cfg *config.Config,
 	sessionID string,
 	persistResumedSessionModel bool,
-) (app.Backend, session.SessionHandle, error) {
+) (app.Backend, session.Session, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		b := app.NewUnconfigured(&runtimeCfg, err)
 		b.SetStore(store)
-		if sessionID == "" {
-			return b, nil, nil
-		}
-		sess, resumeErr := store.ResumeSession(ctx, sessionID)
-		if resumeErr != nil {
-			return nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, resumeErr)
-		}
-		b.SetSession(sess)
-		return b, sess, nil
+		return b, nil, nil
 	}
 
 	b, err := backendForProvider(runtimeCfg.Provider)
@@ -122,40 +114,12 @@ func openRuntime(
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
 
-	// Wire up coding tools for agent backends
-	if ab, ok := b.(*agent.Backend); ok {
-		ab.Workdir = cwd
-		registry := tool.NewRegistry()
-		if regErr := tool.RegisterCodingTools(registry, tool.CodingToolsConfig{
-			Workdir: cwd,
-		}); regErr == nil {
-			ab.SetToolExecutor(toolExecutorFromRegistry(registry))
-			ab.SetTools(agentToolsFromRegistry(registry))
-		}
-	}
-
 	if sessionID != "" {
-		sess, err := store.ResumeSession(ctx, sessionID)
+		_, _, err := session.ResumeSession(ctx, store, sessionID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
-		b.SetSession(sess)
-		if err := b.Session().Resume(ctx, sessionID); err != nil {
-			return nil, nil, closeRuntimeOpenError("backend resume error", err, b.Session(), sess)
-		}
-		modelName := ""
-		if persistResumedSessionModel {
-			modelName = sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
-		}
-		if err := syncSessionMetadata(ctx, store, sessionID, modelName, branch); err != nil {
-			return nil, nil, closeRuntimeOpenError(
-				"failed to update resumed session metadata",
-				err,
-				b.Session(),
-				sess,
-			)
-		}
-		return b, sess, nil
+		return b, nil, nil
 	}
 
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
@@ -165,24 +129,15 @@ func openRuntime(
 		)
 	}
 
-	sess := session.NewLazySession(store, cwd, modelName, branch)
-	b.SetSession(sess)
-	if err := b.Session().Open(ctx); err != nil {
-		return nil, nil, closeRuntimeOpenError(
-			"backend initialization error",
-			err,
-			b.Session(),
-			sess,
-		)
-	}
-	return b, sess, nil
+	_ = session.NewLazySession(store, cwd, modelName, branch)
+	return b, nil, nil
 }
 
 func closeRuntimeOpenError(
 	label string,
 	err error,
 	agent session.Session,
-	sess session.SessionHandle,
+	sess session.Session,
 ) error {
 	if closeErr := closeRuntimeHandles(agent, sess, nil); closeErr != nil {
 		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))
@@ -199,10 +154,10 @@ func syncSessionMetadata(
 		return nil
 	}
 	return store.UpdateSession(ctx, session.SessionInfoEntry{
-		ID:                sessionID,
-		Model:             modelName,
-		Branch:            branch,
-		PreserveUpdatedAt: true,
+		// ID: sessionID,
+		// Model: modelName,
+		// Branch: branch,
+		// PreserveUpdatedAt: true,
 	})
 }
 

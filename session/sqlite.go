@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	_ "modernc.org/sqlite"
 )
@@ -94,3 +95,8 @@ func (s *SQLiteStore) AddInput(ctx context.Context, workdir string, input string
 func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error) {
 	return nil, nil
 }
+
+func NewEphemeralCantoStore() (Store, error) { return nil, nil }
+func NewCantoStore(path string) (Store, error) { return nil, fmt.Errorf("not implemented") }
+
+func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) error { return nil }

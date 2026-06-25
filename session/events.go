@@ -343,9 +343,8 @@ type BudgetStopInput struct {
 
 // Additional fields needed by app/ model_status.go
 
-func IsConversationSessionInfo(e Entry) bool {
-	_, ok := e.(*SessionInfoEntry)
-	return ok
+func IsConversationSessionInfo(e *SessionInfoEntry) bool {
+	return true
 }
 
 type DisplayError struct {
@@ -606,10 +605,29 @@ type SessionForker interface {
 	ForkSession(ctx context.Context, parentID string, opts SessionForkOptions) (SessionHandle, error)
 }
 
-type SessionHandle struct {
-	id string
+type SessionHandle interface {
+	ID() string
+	Session() Session
 }
-func (s SessionHandle) ID() string { return s.id }
 
 var NoProviderConfiguredStatus = "No provider configured"
 var NoModelConfiguredStatus = "No model configured"
+
+type ApprovalRequest struct {
+	EntryBase
+	ToolName  string
+	ToolID    string
+	Args      string
+	AutoApprove bool
+}
+func (ApprovalRequest) isEvent() {}
+
+func DeltaText(d Delta) string {
+	if d == nil {
+		return ""
+	}
+	if td, ok := d.(TextDelta); ok {
+		return td.Text
+	}
+	return ""
+}

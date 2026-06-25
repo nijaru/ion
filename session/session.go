@@ -72,3 +72,7 @@ func SubmitTurn(ctx context.Context, sess Session, text string) error {
 
 func (s *sessionImpl) CancelTurn(ctx context.Context) error { return nil }
 func (s *sessionImpl) Events() <-chan Event { return nil }
+
+func NewLazySession(store Store, cwd, modelName, branch string) Session {
+	return nil // TODO: implement
+}

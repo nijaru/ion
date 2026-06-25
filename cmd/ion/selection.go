@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/internal/agent"
+	
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
@@ -139,14 +139,14 @@ func applySessionConfigFromMetadata(
 	if store == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
-	sess, err := store.ResumeSession(ctx, sessionID)
+	resumedStore, _, err := session.ResumeSession(ctx, store, sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect session %s metadata: %w", sessionID, err)
 	}
 	defer func() {
-		_ = sess.Close()
+		_ = resumedStore.Close()
 	}()
-	provider, model := splitSessionModelName(sess.Meta().Model)
+	provider, model := splitSessionModelName(resumedStore.GetMetadata().Model)
 	if provider == "" {
 		return nil
 	}
@@ -174,7 +174,7 @@ func backendForProvider(provider string) (app.Backend, error) {
 		)
 	}
 	if def.Runtime == llm.RuntimeNative {
-		return agent.NewBackend(), nil
+		return nil, nil
 	}
 
 	return nil, fmt.Errorf("unsupported provider %q", provider)
