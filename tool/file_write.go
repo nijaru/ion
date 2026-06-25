@@ -28,6 +28,16 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return WithFileMutationQueue(input.Path, func() (string, error) {
+		return w.execute(ctx, args)
+	})
+}
+
+func (w *Write) execute(ctx context.Context, args string) (string, error) {
+	input, err := decodeToolArgs[writeInput]("write", args)
+	if err != nil {
+		return "", err
+	}
 
 	absPath, err := w.mutationPath(input.Path)
 	if err != nil {

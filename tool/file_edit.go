@@ -33,6 +33,17 @@ func (e *Edit) Spec() llm.Spec {
 }
 
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
+	// Extract file path for queue key before full decode
+	input, err := decodeToolArgs[editInput]("edit", args)
+	if err != nil {
+		return "", err
+	}
+	return WithFileMutationQueue(input.Path, func() (string, error) {
+		return e.execute(ctx, args)
+	})
+}
+
+func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 	input, err := decodeToolArgs[editInput]("edit", args)
 	if err != nil {
 		return "", err
