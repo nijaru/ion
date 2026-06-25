@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/config"
@@ -242,18 +243,84 @@ func (b *Backend) createSession() *Agent {
 	}
 
 	// Load workspace instruction layers if Workdir is set
-	systemPrompt := ""
 	workdir := b.Workdir
 	if workdir == "" {
 		if wd, err := os.Getwd(); err == nil {
 			workdir = wd
 		}
 	}
-	if workdir != "" {
-		if insts, err := instructions.BuildInstructions("", workdir); err == nil {
-			systemPrompt = insts
+
+	// Format tool descriptions for system prompt
+	toolDescriptions := ""
+	if len(b.tools) > 0 {
+		var toolLines []string
+		for _, t := range b.tools {
+			desc := t.Description
+			if desc == "" {
+				desc = t.Name
+			}
+			// Truncate to first sentence for one-line snippet
+			if idx := strings.IndexByte(desc, '.'); idx > 0 && idx < 80 {
+				desc = desc[:idx+1]
+			} else if len(desc) > 80 {
+				desc = desc[:77] + "..."
+			}
+			toolLines = append(toolLines, fmt.Sprintf("- %s: %s", t.Name, desc))
+		}
+		toolDescriptions = strings.Join(toolLines, "\n")
+	}
+
+	// Build guidelines based on available tools
+	guidelines := []string{
+		"Be concise in your responses",
+		"Show file paths clearly when working with files",
+	}
+	// Add tool-specific guidelines
+	hasBash := false
+	hasGrep, hasFind, hasLs := false, false, false
+	for _, t := range b.tools {
+		switch t.Name {
+		case "bash":
+			hasBash = true
+		case "grep":
+			hasGrep = true
+		case "find":
+			hasFind = true
+		case "ls":
+			hasLs = true
 		}
 	}
+	if hasBash && !hasGrep && !hasFind && !hasLs {
+		guidelines = append(guidelines, "Use bash for file operations like ls, rg, find")
+	}
+	guidelinesList := ""
+	for _, g := range guidelines {
+		guidelinesList += "- " + g + "\n"
+	}
+
+	// Build base prompt with tool descriptions and guidelines
+	basePrompt := "You are an expert coding assistant operating inside ion, a coding agent harness.\n\n"
+	if toolDescriptions != "" {
+		basePrompt += "Available tools:\n" + toolDescriptions + "\n\n"
+	}
+	basePrompt += "Guidelines:\n" + guidelinesList + "\n"
+
+	systemPrompt := ""
+
+	// Combine base prompt with workspace instructions
+	fullPrompt := basePrompt
+	if workdir != "" {
+		if insts, err := instructions.BuildInstructions(basePrompt, workdir); err == nil {
+			fullPrompt = insts
+		}
+	}
+
+	// Add date and working directory at the end
+	if workdir != "" {
+		fullPrompt += fmt.Sprintf("\nCurrent date: %s", time.Now().Format("2006-01-02"))
+		fullPrompt += fmt.Sprintf("\nCurrent working directory: %s", strings.ReplaceAll(workdir, "\\", "/"))
+	}
+	systemPrompt = fullPrompt
 
 	// Load and format skills if 'read' tool is available
 	hasRead := false
