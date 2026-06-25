@@ -1961,3 +1961,33 @@ Instructions for review.
 		t.Fatal("expected error command for non-existent skill")
 	}
 }
+
+func TestDebugCommandWritesToDebugLog(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleCommand("/debug")
+	if cmd == nil {
+		t.Fatal("debug command returned nil cmd")
+	}
+
+	// Verify the debug log file is created
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("failed to get home dir: %v", err)
+	}
+	debugPath := filepath.Join(home, ".ion", "debug.log")
+	content, readErr := os.ReadFile(debugPath)
+	if readErr != nil {
+		t.Fatalf("failed to read debug log: %v", readErr)
+	}
+	got := string(content)
+	for _, want := range []string{
+		"Debug output at",
+		"Go:",
+		"OS:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("debug log = %q, want %q", got, want)
+		}
+	}
+}
