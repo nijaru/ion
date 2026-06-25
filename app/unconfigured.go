@@ -127,7 +127,7 @@ func (s *unconfiguredSession) Events() <-chan session.Event {
 	return s.events
 }
 
-func (s *unconfiguredSession) EventSender() chan<- session.Event {
+func (s *unconfiguredSession) EventSender() chan session.Event {
 	return s.events
 }
 

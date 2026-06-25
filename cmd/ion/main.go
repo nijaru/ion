@@ -212,7 +212,7 @@ func main() {
 	}
 
 	persistResumedSessionModel := !(sessionID != "" && explicitRuntimeOverride)
-	b, sess, err := openRuntime(
+	b, sess, runner, err := openRuntime(
 		ctx,
 		store,
 		cwd,
@@ -269,7 +269,7 @@ func main() {
 		}
 	}
 	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, session.Session, session.Session, error) {
-		switchedBackend, switchedSession, err := openRuntime(
+		switchedBackend, switchedSession, _, err := openRuntime(
 			ctx,
 			store,
 			cwd,
@@ -291,6 +291,7 @@ func main() {
 	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
+		WithRunner(runner).
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
 		WithSize(width, height)
 	if openResumePicker {

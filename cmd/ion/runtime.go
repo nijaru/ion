@@ -10,6 +10,7 @@ import (
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -99,17 +100,17 @@ func openRuntime(
 	cfg *config.Config,
 	sessionID string,
 	persistResumedSessionModel bool,
-) (app.Backend, session.Session, error) {
+) (app.Backend, session.Session, agent.Runner, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		b := app.NewUnconfigured(&runtimeCfg, err)
 		b.SetStore(store)
-		return b, nil, nil
+		return b, nil, nil, nil
 	}
 
 	b, err := backendForProvider(runtimeCfg.Provider)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
@@ -117,20 +118,36 @@ func openRuntime(
 	if sessionID != "" {
 		_, _, err := session.ResumeSession(ctx, store, sessionID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
-		return b, nil, nil
+		return b, nil, nil, nil
 	}
 
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
 	if modelName == "" {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"provider and model must be set (e.g. provider=\"openrouter\" model=\"openai/gpt-5.4\")",
 		)
 	}
 
-	_ = session.NewLazySession(store, cwd, modelName, branch)
-	return b, nil, nil
+	// Create a Provider and Harness for turn execution.
+	provider, err := providers.NewProviderFromConfig(&runtimeCfg)
+	if err != nil {
+		// Provider creation failed — return Backend only (no Runner).
+		return b, nil, nil, nil
+	}
+
+	sess := session.NewSession(store, 64)
+	model := llm.Model{ID: runtimeCfg.Model}
+	harness := agent.NewHarness(agent.HarnessConfig{
+		Session:  sess,
+		Store:    store,
+		Model:    model,
+		Events:   sess.EventSender(),
+		StreamFn: provider.Stream,
+	})
+
+	return b, sess, harness, nil
 }
 
 func closeRuntimeOpenError(

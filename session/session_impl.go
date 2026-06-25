@@ -197,4 +197,4 @@ func (s *sessionImpl) SubmitTurn(ctx context.Context, text string) error {
 	return err
 }
 
-func (s *sessionImpl) EventSender() chan<- Event { return s.events }
+func (s *sessionImpl) EventSender() chan Event { return s.events }
