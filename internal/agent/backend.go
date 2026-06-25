@@ -1,0 +1,43 @@
+package agent
+
+import (
+	"context"
+
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/session"
+)
+
+type Bootstrap struct {
+	Entries []session.Entry
+	Status  string
+}
+
+type Backend interface {
+	Name() string
+	Provider() string
+	Model() string
+	ContextLimit() int
+	Bootstrap() Bootstrap
+	Session() session.Session
+	SetStore(session.Store)
+	SetConfig(*config.Config)
+}
+
+type Compactor interface {
+	Compact(context.Context) (bool, error)
+}
+
+type ToolSurface struct {
+	Count         int
+	LazyThreshold int
+	LazyEnabled   bool
+	Names         []string
+	ActiveNames   []string
+	Mode          string
+	Sandbox       string
+	Environment   string
+}
+
+type ToolSummarizer interface {
+	ToolSurface() ToolSurface
+}
