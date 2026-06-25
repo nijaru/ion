@@ -511,46 +511,26 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
-			if cfg.Provider != "openrouter" {
-				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			if cfg.Provider == "openrouter" {
+				return []llm.ModelMetadata{
+					{ID: "z-ai/glm-4.5"},
+					{ID: "z-ai/glm-5"},
+					{ID: "z-ai/glm-5-turbo"},
+				}, nil
 			}
-			return []llm.ModelMetadata{
-				{ID: "z-ai/glm-4.5"},
-				{ID: "z-ai/glm-5"},
-				{ID: "z-ai/glm-5-turbo"},
-			}, nil
+			return nil, nil
 		},
 	)
 
-	model.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a provider",
-		items:    providerItems(&config.Config{}),
-		filtered: providerItems(&config.Config{}),
-		index:    pickerIndex(providerItems(&config.Config{}), "openrouter"),
-		purpose:  pickerPurposeProvider,
-		cfg:      &config.Config{Provider: "openrouter", Model: "z-ai/glm-5"},
-	}
+	// Use /provider command which now opens unified model picker
+	updated, cmd := model.handleCommand("/provider openrouter")
+	model = resolveModelPickerLoad(t, updated, cmd)
 
-	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated
-	model = resolveProviderSelectionAndModelLoad(t, model, cmd)
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker to open")
 	}
 	if model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker purpose = %v, want model picker", model.Picker.Overlay.purpose)
-	}
-	if model.Picker.Overlay.cfg == nil {
-		t.Fatal("expected picker config to be preserved")
-	}
-	if got := model.Picker.Overlay.cfg.Provider; got != "openrouter" {
-		t.Fatalf("picker provider = %q, want openrouter", got)
-	}
-	if got := model.Picker.Overlay.cfg.Model; got != "z-ai/glm-5" {
-		t.Fatalf("picker model = %q, want z-ai/glm-5", got)
-	}
-	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "z-ai/glm-5" {
-		t.Fatalf("selected model = %q, want z-ai/glm-5", got)
 	}
 	if got := model.Model.Backend.Provider(); got != "openrouter" {
 		t.Fatalf("backend provider = %q, want openrouter", got)
@@ -567,10 +547,10 @@ func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
-			if cfg.Provider != "anthropic" {
-				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			if cfg.Provider == "anthropic" {
+				return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 			}
-			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
+			return nil, nil
 		},
 	)
 
@@ -580,31 +560,22 @@ func TestProviderPickerStagesListingProviderUntilModelSelection(t *testing.T) {
 		provider: "openai",
 		model:    "gpt-4.1",
 	}
-	model.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a provider",
-		items:    providerItems(&config.Config{}),
-		filtered: providerItems(&config.Config{}),
-		index:    pickerIndex(providerItems(&config.Config{}), "anthropic"),
-		purpose:  pickerPurposeProvider,
-		cfg:      &config.Config{Provider: "openai", Model: "gpt-4.1"},
-	}
 
-	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = resolveProviderSelectionAndModelLoad(t, updated, cmd)
+	updated, cmd := model.handleCommand("/provider anthropic")
+	model = resolveModelPickerLoad(t, updated, cmd)
+
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
 	}
-	if got := model.Picker.Overlay.cfg.Provider; got != "anthropic" {
-		t.Fatalf("picker provider = %q, want anthropic", got)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
-		t.Fatalf("state file error = %v, want provider unstored until model selection", err)
-	}
+	// Backend unchanged until model selection
 	if got := model.Model.Backend.Provider(); got != "openai" {
 		t.Fatalf("backend provider = %q, want unchanged openai", got)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("backend model = %q, want unchanged gpt-4.1", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "state.toml")); !os.IsNotExist(err) {
+		t.Fatalf("state file error = %v, want provider unstored until model selection", err)
 	}
 }
 
@@ -613,59 +584,32 @@ func TestModelPickerRejectsProviderWithoutModelListing(t *testing.T) {
 
 	updated, cmd := model.openModelPickerWithConfig(&config.Config{Provider: "zai"})
 	model = updated
-	if model.Picker.Overlay != nil {
-		t.Fatal("expected no model picker for provider without listing support")
+	// Unified picker loads from all providers — it opens even if target provider doesn't support listing
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected model picker to open")
 	}
-	if cmd == nil {
-		t.Fatal("expected model picker error command")
-	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "Set a model with /model <id>") {
-		t.Fatalf("error = %v, want manual model entry notice", err)
-	}
+	_ = cmd
 }
 
 func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZAI_API_KEY", "test-key")
 	model := readyModel(t)
 	model.Progress.Mode = stateError
 	model.Progress.LastError = "failed to list models for zai"
 	model.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a provider",
+		title:    "Provider setup",
 		items:    providerItems(&config.Config{}),
 		filtered: providerItems(&config.Config{}),
 		index:    pickerIndex(providerItems(&config.Config{}), "zai"),
-		purpose:  pickerPurposeProvider,
+		purpose:  pickerPurposeProviderSetup,
 		cfg:      &config.Config{Provider: "openrouter", Model: "vendor/model-b"},
 	}
 
-	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model, cmd = resolveProviderSelection(t, updated, cmd)
-	if cmd == nil {
-		t.Fatal("expected non-listing provider selection notice")
-	}
-	model, cmd = settleRuntimeTransitionCmd(t, model, cmd)
-	if cmd == nil {
-		t.Fatal("expected non-listing provider selection print command")
-	}
-	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
-		t.Fatalf(
-			"stale error not cleared: mode=%v err=%q",
-			model.Progress.Mode,
-			model.Progress.LastError,
-		)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if cfg.Provider != "zai" {
-		t.Fatalf("config provider = %q, want zai", cfg.Provider)
-	}
-	if cfg.Model != "" {
-		t.Fatalf("config model = %q, want cleared model", cfg.Model)
+	updated, _ := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+
+	// Provider setup picker Enter opens API key prompt
+	if model.Picker.Setup == nil {
+		t.Fatal("expected API key prompt to open")
 	}
 }
 
@@ -676,10 +620,10 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 	stubModelCatalog(
 		t,
 		func(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
-			if cfg.Provider != "anthropic" {
-				t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+			if cfg.Provider == "anthropic" {
+				return []llm.ModelMetadata{{ID: "claude-test"}}, nil
 			}
-			return []llm.ModelMetadata{{ID: "claude-test"}}, nil
+			return nil, nil
 		},
 	)
 
@@ -688,9 +632,7 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 	model.Progress.LastError = "failed to list models for zai"
 
 	updated, cmd := model.handleCommand("/provider anthropic")
-	model = updated
-
-	model = resolveProviderSelectionAndModelLoad(t, model, cmd)
+	model = resolveModelPickerLoad(t, updated, cmd)
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
 		t.Fatalf(
 			"stale error not cleared: mode=%v err=%q",

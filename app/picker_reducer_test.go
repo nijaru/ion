@@ -146,7 +146,7 @@ func TestPickerReducerOverlayLoadRequestsFenceStaleResults(t *testing.T) {
 	model.Picker.ModelLoadRequest = 7
 
 	model.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
-		purpose: pickerPurposeProvider,
+		purpose: pickerPurposeProviderSetup,
 	})
 	if got := model.Picker.ModelLoadRequest; got != 8 {
 		t.Fatalf("model load request = %d, want 8", got)
@@ -262,44 +262,30 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	}
 }
 
-func TestPickerReducerProviderSelectionSettlement(t *testing.T) {
+func TestPickerReducerModelLoadSettlement(t *testing.T) {
 	model := readyModel(t)
-	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
+	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeModel})
 
-	requestID := model.pickerReducer().beginProviderSelection()
-	model.pickerReducer().markProviderOverlayLoading(requestID)
+	requestID := model.pickerReducer().beginModelOverlayLoad(pickerOverlayState{
+		purpose: pickerPurposeModel,
+		loading: true,
+	})
 	if model.Picker.Overlay == nil ||
 		!model.Picker.Overlay.loading ||
 		model.Picker.Overlay.request != requestID {
-		t.Fatalf("provider overlay = %#v, want loading request", model.Picker.Overlay)
+		t.Fatalf("model overlay = %#v, want loading request", model.Picker.Overlay)
 	}
-	if model.pickerReducer().settleProviderSelection(requestID + 1) {
-		t.Fatal("stale provider selection settled")
+	if model.pickerReducer().modelLoadRequestMatches(requestID + 1) {
+		t.Fatal("stale model load matched")
 	}
-	if !model.Picker.Overlay.loading || model.Picker.ProviderSelectionRequest != requestID {
-		t.Fatalf(
-			"stale settlement changed state: overlay=%#v request=%d",
-			model.Picker.Overlay,
-			model.Picker.ProviderSelectionRequest,
-		)
-	}
-	if !model.pickerReducer().settleProviderSelection(requestID) {
-		t.Fatal("current provider selection did not settle")
-	}
-	if model.Picker.ProviderSelectionRequest != 0 ||
-		model.Picker.Overlay.loading ||
-		model.Picker.Overlay.request != 0 {
-		t.Fatalf(
-			"provider settlement state = overlay=%#v request=%d, want idle",
-			model.Picker.Overlay,
-			model.Picker.ProviderSelectionRequest,
-		)
+	if !model.pickerReducer().modelLoadRequestMatches(requestID) {
+		t.Fatal("current model load did not match")
 	}
 }
 
 func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
 	model := readyModel(t)
-	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProvider})
+	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProviderSetup})
 	model.pickerReducer().openSetup(setupPromptState{
 		kind:  core.SetupPromptEndpoint,
 		value: "fedora",

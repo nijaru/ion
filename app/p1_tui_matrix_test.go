@@ -290,8 +290,8 @@ func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
 		purpose pickerPurpose
 		label   string
 	}{
-		{command: "/provider", purpose: pickerPurposeProvider, label: "Pick a provider"},
-		{command: "/model", purpose: pickerPurposeProvider, label: "Pick a provider"},
+		{command: "/provider", purpose: pickerPurposeProviderSetup, label: "Provider setup"},
+		{command: "/model", purpose: pickerPurposeModel, label: "Pick a model"},
 		{command: "/thinking", purpose: pickerPurposeThinking, label: "thinking level"},
 	}
 	for _, tt := range tests {
@@ -301,12 +301,10 @@ func p1MatrixRuntimePickerCommandsLocalWhileActive(t *testing.T) {
 			model = applyP1Events(t, model, session.TurnStart{})
 			model.Input.Composer.SetValue(tt.command)
 
-			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			model = testModel(t, updated)
 
-			if cmd != nil {
-				t.Fatalf("%s command = %T, want nil local picker", tt.command, cmd)
-			}
+			// Model picker loads async — cmd may be non-nil
 			if len(model.InFlight.QueuedTurns) != 0 {
 				t.Fatalf(
 					"queued turns = %#v, want none for local %s command",

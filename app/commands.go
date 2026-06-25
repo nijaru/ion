@@ -149,14 +149,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	case "/provider":
 		if len(fields) < 2 {
-			return m.openProviderPicker()
+			return m.openProviderSetupPicker()
 		}
-		name := fields[1]
-		cfg, err := m.commandConfig()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-		}
-		return m.beginProviderSelection(cfg, name, m.activePreset())
+		return m.handleProviderCommand(fields[1])
 
 	case "/login":
 		cfg, err := m.commandConfig()
@@ -170,7 +165,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			provider = cfg.Provider
 		}
 		if strings.TrimSpace(provider) == "" {
-			return m.openProviderPicker()
+			return m.openProviderSetupPicker()
 		}
 		return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
 
@@ -352,7 +347,6 @@ func (m Model) localCommandBusy() bool {
 	return m.InFlight.Thinking ||
 		m.Progress.Compacting ||
 		m.Model.RuntimeSwitchRequest != 0 ||
-		m.Picker.ProviderSelectionRequest != 0 ||
 		m.Picker.SetupSaveRequest != 0 ||
 		m.Model.SettingsRequest != 0
 }
@@ -360,9 +354,6 @@ func (m Model) localCommandBusy() bool {
 func (m Model) localCommandBusyMessage(action string) string {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return "Wait for the runtime switch to finish before " + action + "."
-	}
-	if m.Picker.ProviderSelectionRequest != 0 {
-		return "Wait for the provider check to finish before " + action + "."
 	}
 	if m.Picker.SetupSaveRequest != 0 {
 		return "Wait for provider setup to finish before " + action + "."

@@ -86,11 +86,9 @@ type resumeSessionSelectedMsg struct {
 	cfg       *config.Config
 }
 
-type providerSelectionResolvedMsg struct {
+type allModelsLoadedMsg struct {
 	requestID uint64
-	provider  string
-	preset    core.Preset
-	selection core.ProviderSelection
+	items     []pickerItem // All models from all providers, with Provider field set
 	err       error
 }
 
@@ -221,11 +219,11 @@ const (
 type pickerPurpose int
 
 const (
-	pickerPurposeProvider pickerPurpose = iota
-	pickerPurposeModel
+	pickerPurposeModel pickerPurpose = iota
 	pickerPurposeThinking
 	pickerPurposeCommand
 	pickerPurposeSettings
+	pickerPurposeProviderSetup // Tab-accessible provider setup (login/endpoint)
 )
 
 
@@ -235,6 +233,8 @@ type pickerItem struct {
 	Value       string
 	Detail      string
 	Group       string
+	Provider    string // Provider ID for unified model picker (e.g. "anthropic", "openai")
+	NeedsSetup  bool   // True if provider needs auth/endpoint setup
 	Tone        pickerTone
 	Metrics     *pickerMetrics
 	Search      []pickerSearchField
@@ -342,16 +342,15 @@ type ModelState struct {
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
-	Overlay                  *pickerOverlayState
-	Session                  *sessionPickerState
-	Setup                    *setupPromptState
-	ModelLoadRequest         uint64
-	SessionLoadRequest       uint64
-	ProviderSelectionRequest uint64
-	SetupSaveRequest         uint64
-	OverlayClosedAt          time.Time
-	PreStartupMode           bool
-	SelectedSessionID        string
+	Overlay            *pickerOverlayState
+	Session            *sessionPickerState
+	Setup              *setupPromptState
+	ModelLoadRequest   uint64
+	SessionLoadRequest uint64
+	SetupSaveRequest   uint64
+	OverlayClosedAt    time.Time
+	PreStartupMode     bool
+	SelectedSessionID  string
 }
 
 // InputState holds state for the composer, history, and double-tap tracking.

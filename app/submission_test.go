@@ -657,7 +657,7 @@ func TestSlashCommandDoesNotEchoTranscriptEntry(t *testing.T) {
 	if len(model.Input.History) != 1 || model.Input.History[0] != "/provider" {
 		t.Fatalf("history = %#v, want /provider", model.Input.History)
 	}
-	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProviderSetup {
 		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
 	}
 }
@@ -1814,7 +1814,7 @@ func TestSlashCommandOpensProviderPickerDuringTurn(t *testing.T) {
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for slash command", model.InFlight.QueuedTurns)
 	}
-	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProviderSetup {
 		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
 	}
 	if cmd != nil {

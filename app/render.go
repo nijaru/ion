@@ -516,13 +516,13 @@ func (m Model) renderDefaultPickerLine(
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • ↑/↓ move • Enter: select • Tab: providers • Ctrl+L: cycle model • Esc: cancel"
+		return "Type to search • ↑/↓ move • Enter: select • Tab: providers • Ctrl+L: cycle preset • Esc: cancel"
+	}
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProviderSetup {
+		return "Type to search • ↑/↓ move • Enter: login • Esc: back to models"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeCommand {
 		return "Type to search • ↑/↓ move • Enter: insert • Esc: cancel"
-	}
-	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProvider {
-		return "Type to search • ↑/↓ move • Enter: select • Tab: models • Esc: cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
 		return "Type to search • ↑/↓ move • Enter: change • Esc: close"

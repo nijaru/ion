@@ -246,34 +246,6 @@ func (r pickerReducer) refreshOverlayFilter() {
 	r.picker.Overlay.index = 0
 }
 
-func (r pickerReducer) beginProviderSelection() uint64 {
-	r.picker.ProviderSelectionRequest++
-	return r.picker.ProviderSelectionRequest
-}
-
-func (r pickerReducer) markProviderOverlayLoading(requestID uint64) {
-	if r.picker.Overlay == nil || r.picker.Overlay.purpose != pickerPurposeProvider {
-		return
-	}
-	r.picker.Overlay.loading = true
-	r.picker.Overlay.err = ""
-	r.picker.Overlay.request = requestID
-}
-
-func (r pickerReducer) settleProviderSelection(requestID uint64) bool {
-	if requestID == 0 || requestID != r.picker.ProviderSelectionRequest {
-		return false
-	}
-	r.picker.ProviderSelectionRequest = 0
-	if r.picker.Overlay != nil &&
-		r.picker.Overlay.purpose == pickerPurposeProvider &&
-		r.picker.Overlay.request == requestID {
-		r.picker.Overlay.loading = false
-		r.picker.Overlay.request = 0
-	}
-	return true
-}
-
 func (r pickerReducer) beginSessionLoad() uint64 {
 	r.picker.Overlay = nil
 	r.picker.SessionLoadRequest++
