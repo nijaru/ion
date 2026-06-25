@@ -313,6 +313,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/copy":
 		return m.copyLastResponse()
 
+	case "/debug":
+		return m.handleDebugCommand()
+
 	case "/exit", "/quit":
 		return m, tea.Quit
 

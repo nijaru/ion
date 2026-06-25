@@ -218,6 +218,7 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 			Hidden:     true,
 			Deferred:   true,
 		},
+		{Name: "/debug", Detail: "write debug log", HelpLabel: "/debug", HelpDetail: "write debug diagnostics to a log file"},
 		{Name: "/quit", Detail: "quit", HelpLabel: "/quit, /exit", HelpDetail: "leave ion"},
 		{Name: "/exit", Detail: "quit", Hidden: true},
 		{
