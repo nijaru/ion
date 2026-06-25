@@ -853,3 +853,23 @@ func normalizeStringMap(values map[string]string) map[string]string {
 	}
 	return normalized
 }
+
+// Validate checks config values for consistency and returns warnings.
+func Validate(cfg *Config) []string {
+	var warnings []string
+
+	// openai-compatible requires endpoint
+	if cfg.Provider == "openai-compatible" && cfg.Endpoint == "" {
+		warnings = append(warnings, "openai-compatible provider requires an endpoint")
+	}
+
+	// Warn about high retry counts
+	if cfg.MaxRetries > 5 {
+		warnings = append(warnings, fmt.Sprintf(
+			"max_retries=%d is high; consider reducing to avoid long waits",
+			cfg.MaxRetries,
+		))
+	}
+
+	return warnings
+}

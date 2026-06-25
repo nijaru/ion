@@ -39,6 +39,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	for _, w := range config.Validate(cfg) {
+		fmt.Fprintf(os.Stderr, "config warning: %s\n", w)
+	}
 	timing.Record("config-load")
 
 	providerOverride := cli.providerOverride()

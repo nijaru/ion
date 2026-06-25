@@ -1010,3 +1010,32 @@ system_role = "system"
 		t.Fatalf("m1 system_role = %q, want system", m1.SystemRole)
 	}
 }
+
+func TestValidateWarnsOnMissingEndpoint(t *testing.T) {
+	cfg := &Config{Provider: "openai-compatible"}
+	warnings := Validate(cfg)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning about missing endpoint")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "endpoint") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected endpoint warning, got: %v", warnings)
+	}
+}
+
+func TestValidateNoWarningsForValidConfig(t *testing.T) {
+	cfg := &Config{
+		Provider:   "openai-compatible",
+		Endpoint:   "http://localhost:11434/v1",
+		MaxRetries: 3,
+	}
+	warnings := Validate(cfg)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
