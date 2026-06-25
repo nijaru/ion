@@ -191,6 +191,14 @@ func (r pickerReducer) appendOverlayQuery(text string) {
 	r.refreshOverlayFilter()
 }
 
+func (r pickerReducer) setOverlayQuery(query string) {
+	if r.picker.Overlay == nil {
+		return
+	}
+	r.picker.Overlay.query = query
+	r.refreshOverlayFilter()
+}
+
 func (r pickerReducer) backspaceOverlayQuery() {
 	if r.picker.Overlay == nil || r.picker.Overlay.query == "" {
 		return

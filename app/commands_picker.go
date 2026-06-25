@@ -511,8 +511,8 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "tab":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			// Tab opens provider setup view
-			return m.openProviderSetupPicker()
+			// Tab: autocomplete model name from filtered list
+			return m.autocompletePickerModel()
 		}
 		return m, nil
 	case "ctrl+l":
@@ -554,6 +554,62 @@ func (m Model) handlePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	}
 	m.pickerReducer().appendOverlayQuery(content)
 	return m, nil
+}
+
+// autocompletePickerModel completes the current query to the longest common
+// prefix of matching model names, shell-style tab completion.
+func (m Model) autocompletePickerModel() (Model, tea.Cmd) {
+	overlay := m.Picker.Overlay
+	if overlay == nil {
+		return m, nil
+	}
+	items := overlay.filtered
+	if len(items) == 0 {
+		return m, nil
+	}
+	query := strings.ToLower(overlay.query)
+	if query == "" {
+		return m, nil
+	}
+	// Find candidates whose label starts with the query
+	var candidates []string
+	for _, item := range items {
+		if strings.HasPrefix(strings.ToLower(item.Label), query) {
+			candidates = append(candidates, item.Label)
+		}
+	}
+	if len(candidates) == 0 {
+		return m, nil
+	}
+	// Longest common prefix of all candidates
+	common := candidates[0]
+	for _, c := range candidates[1:] {
+		common = longestCommonPrefix(common, c)
+	}
+	if strings.ToLower(common) <= query {
+		// Already at max prefix — cycle to next matching item
+		for i, item := range items {
+			if strings.ToLower(item.Label) == query {
+				m.Picker.Overlay.index = (i + 1) % len(items)
+				m.pickerReducer().setOverlayQuery(items[(i+1)%len(items)].Label)
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+	m.pickerReducer().setOverlayQuery(common)
+	m.Picker.Overlay.index = 0
+	return m, nil
+}
+
+func longestCommonPrefix(a, b string) string {
+	end := min(len(a), len(b))
+	for i := 0; i < end; i++ {
+		if a[i] != b[i] {
+			return a[:i]
+		}
+	}
+	return a[:end]
 }
 
 // openProviderSetupPicker shows a provider list for setup/login purposes only.

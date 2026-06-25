@@ -220,7 +220,7 @@ func TestPickerHelpUsesKeyActionFormat(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	help := model.renderPickerHelpText()
-	if !strings.Contains(help, "Tab: providers") ||
+	if !strings.Contains(help, "Tab: autocomplete") ||
 		!strings.Contains(help, "Ctrl+L: cycle preset") ||
 		strings.Contains(help, "Tab change provider") {
 		t.Fatalf("model picker help = %q, want key/action labels", help)
@@ -1655,10 +1655,10 @@ func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
 	}
 }
 
-func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
+func TestModelPickerTabAutocompletesQuery(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{
-		title: "Pick a model for openrouter",
+		title: "Pick a model",
 		items: []pickerItem{
 			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Current"},
 			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Current"},
@@ -1667,6 +1667,7 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Current"},
 			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Current"},
 		},
+		query:   "vendor/m",
 		purpose: pickerPurposeModel,
 		cfg:     &config.Config{Provider: "openrouter"},
 	}
@@ -1675,10 +1676,14 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	model = updated
 
 	if model.Picker.Overlay == nil {
-		t.Fatal("expected provider picker to open")
+		t.Fatal("expected picker to stay open")
 	}
-	if model.Picker.Overlay.purpose != pickerPurposeProviderSetup {
-		t.Fatalf("picker purpose = %v, want provider picker", model.Picker.Overlay.purpose)
+	if model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker purpose = %v, want model picker", model.Picker.Overlay.purpose)
+	}
+	// Tab should autocomplete to common prefix
+	if model.Picker.Overlay.query != "vendor/model-" {
+		t.Fatalf("query = %q, want vendor/model-", model.Picker.Overlay.query)
 	}
 }
 
@@ -1745,14 +1750,8 @@ func TestProviderSetupPickerSelectionOpensAPIKeyPrompt(t *testing.T) {
 	}
 }
 
-func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
-	withOpenRouterKey(t)
+func TestModelPickerTabAutocompletesModelName(t *testing.T) {
 	model := readyModel(t)
-	cfg := &config.Config{
-		Provider:  "openrouter",
-		Model:     "vendor/primary",
-		FastModel: "vendor/fast",
-	}
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model",
 		items: []pickerItem{
@@ -1763,16 +1762,20 @@ func TestModelProviderPickerTabPreservesFastEditTarget(t *testing.T) {
 			{Label: "vendor/primary", Value: "vendor/primary", Group: "Current"},
 			{Label: "vendor/fast", Value: "vendor/fast", Group: "Current"},
 		},
-		index:   1,
+		query:   "vend",
+		index:   0,
 		purpose: pickerPurposeModel,
-		preset:  presetFast,
-		cfg:     cfg,
 	}
 
 	updated, _ := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = updated
-	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProviderSetup {
-		t.Fatalf("picker = %#v, want provider setup picker", model.Picker.Overlay)
+	// Tab should autocomplete to common prefix "vendor/"
+	if model.Picker.Overlay.query != "vendor/" {
+		t.Fatalf("query = %q, want vendor/", model.Picker.Overlay.query)
+	}
+	// Should stay in model picker
+	if model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("purpose = %v, want model picker", model.Picker.Overlay.purpose)
 	}
 }
 

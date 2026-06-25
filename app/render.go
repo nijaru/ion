@@ -516,7 +516,7 @@ func (m Model) renderDefaultPickerLine(
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • ↑/↓ move • Enter: select • Tab: providers • Ctrl+L: cycle preset • Esc: cancel"
+		return "Type to search • ↑/↓ move • Enter: select • Tab: autocomplete • Ctrl+L: cycle preset • Esc: cancel"
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProviderSetup {
 		return "Type to search • ↑/↓ move • Enter: login • Esc: back to models"
