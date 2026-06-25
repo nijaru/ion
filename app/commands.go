@@ -684,7 +684,8 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-	if len(cfg.ScopedModels) == 0 {
+	resolved := resolveScopedModelPatterns(context.Background(), cfg)
+	if len(resolved) == 0 {
 		return m, m.terminalCommit().Entries(systemEntry("No scoped models configured"))
 	}
 
@@ -692,7 +693,7 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	b.WriteString("\n")
 	b.WriteString(m.cardTopBorder("Scoped Models"))
 	b.WriteString("\n")
-	for i, sm := range cfg.ScopedModels {
+	for i, sm := range resolved {
 		line := fmt.Sprintf("  %d. %s", i+1, sm.Model)
 		if sm.Provider != "" {
 			line += fmt.Sprintf(" (provider: %s)", sm.Provider)

@@ -52,9 +52,10 @@ type Config struct {
 }
 
 type ScopedModel struct {
-	Provider string `toml:"provider" json:"provider"`
-	Model    string `toml:"model" json:"model"`
-	Thinking string `toml:"thinking,omitempty" json:"thinking,omitempty"`
+	Provider  string `toml:"provider,omitempty" json:"provider,omitempty"`
+	Model     string `toml:"model,omitempty" json:"model,omitempty"`
+	Pattern   string `toml:"pattern,omitempty" json:"pattern,omitempty"`
+	Thinking  string `toml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 type ModelDef struct {

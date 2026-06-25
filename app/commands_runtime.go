@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/internal/core"
 )
@@ -115,7 +117,7 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	next, ok := pickScopedModel(cfg.ScopedModels, runtimeCfg.Provider, runtimeCfg.Model, forward)
+	next, ok := pickScopedModel(resolveScopedModelPatterns(context.Background(), cfg), runtimeCfg.Provider, runtimeCfg.Model, forward)
 	if !ok {
 		return m.cyclePresetFallback(cfg, preset, forward)
 	}
@@ -273,6 +275,60 @@ func filterScopedModelsByAuth(models []config.ScopedModel) []config.ScopedModel 
 		}
 	}
 	return filtered
+}
+
+// resolveScopedModelPatterns expands glob patterns in scoped models against available models.
+// Patterns without glob characters are passed through as-is.
+func resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []config.ScopedModel {
+	if cfg == nil || len(cfg.ScopedModels) == 0 {
+		return nil
+	}
+
+	var result []config.ScopedModel
+	for _, sm := range cfg.ScopedModels {
+		if sm.Pattern == "" {
+			// Exact model — pass through
+			result = append(result, sm)
+			continue
+		}
+
+		// Glob pattern — resolve against available models
+		matched := matchModelsByPattern(ctx, cfg, sm.Pattern)
+		for _, m := range matched {
+			result = append(result, config.ScopedModel{
+				Provider: m.Provider,
+				Model:    m.ID,
+				Thinking: sm.Thinking,
+			})
+		}
+	}
+	return result
+}
+
+// matchModelsByPattern returns models matching a glob pattern.
+// Matches against "provider/model" or just "model".
+func matchModelsByPattern(ctx context.Context, cfg *config.Config, pattern string) []llm.ModelMetadata {
+	models, err := listModelsForConfig(ctx, cfg)
+	if err != nil {
+		return nil
+	}
+
+	pattern = strings.ToLower(pattern)
+	var matched []llm.ModelMetadata
+	for _, m := range models {
+		fullID := strings.ToLower(m.Provider + "/" + m.ID)
+		modelID := strings.ToLower(m.ID)
+		if matchGlob(pattern, fullID) || matchGlob(pattern, modelID) {
+			matched = append(matched, m)
+		}
+	}
+	return matched
+}
+
+// matchGlob does simple glob matching (* and ?).
+func matchGlob(pattern, name string) bool {
+	matched, err := filepath.Match(pattern, name)
+	return err == nil && matched
 }
 
 func pickScopedModel(
