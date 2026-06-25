@@ -4,6 +4,6 @@
 // the rest of the framework. Provider is the core backend contract for text
 // generation, streaming, token counting, pricing, and capability reporting.
 //
-// Registry, SmartResolver, and FailoverProvider help compose multiple
-// providers, while concrete implementations live under llm/providers.
+// Registry and SmartResolver help compose multiple providers, while
+// concrete implementations live under llm/providers.
 package llm

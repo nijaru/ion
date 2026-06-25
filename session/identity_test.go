@@ -68,43 +68,21 @@ func TestReplayerAdvancesSequenceForLegacyEvents(t *testing.T) {
 }
 
 func TestStoresPersistSequenceAndTurnID(t *testing.T) {
-	t.Run("jsonl", func(t *testing.T) {
-		store, err := NewJSONLStore(t.TempDir())
-		if err != nil {
-			t.Fatalf("NewJSONLStore: %v", err)
-		}
-		defer store.Close()
-		assertStorePersistsSequenceAndTurnID(t, store, "jsonl-identity")
-	})
-
-	t.Run("sqlite", func(t *testing.T) {
-		store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
-		if err != nil {
-			t.Fatalf("NewSQLiteStore: %v", err)
-		}
-		defer store.Close()
-		assertStorePersistsSequenceAndTurnID(t, store, "sqlite-identity")
-	})
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer store.Close()
+	assertStorePersistsSequenceAndTurnID(t, store, "sqlite-identity")
 }
 
 func TestStoresReturnEventsAfterSequence(t *testing.T) {
-	t.Run("jsonl", func(t *testing.T) {
-		store, err := NewJSONLStore(t.TempDir())
-		if err != nil {
-			t.Fatalf("NewJSONLStore: %v", err)
-		}
-		defer store.Close()
-		assertStoreReturnsEventsAfterSequence(t, store, "jsonl-events-after")
-	})
-
-	t.Run("sqlite", func(t *testing.T) {
-		store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
-		if err != nil {
-			t.Fatalf("NewSQLiteStore: %v", err)
-		}
-		defer store.Close()
-		assertStoreReturnsEventsAfterSequence(t, store, "sqlite-events-after")
-	})
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer store.Close()
+	assertStoreReturnsEventsAfterSequence(t, store, "sqlite-events-after")
 }
 
 func assertStorePersistsSequenceAndTurnID(t *testing.T, store Store, sessionID string) {

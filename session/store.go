@@ -34,8 +34,4 @@ var (
 	_ ForkStore          = (*SQLiteStore)(nil)
 	_ SessionBranchStore = (*SQLiteStore)(nil)
 	_ EventQueryStore    = (*SQLiteStore)(nil)
-	_ SessionTreeStore   = (*JSONLStore)(nil)
-	_ ForkStore          = (*JSONLStore)(nil)
-	_ SessionBranchStore = (*JSONLStore)(nil)
-	_ EventQueryStore    = (*JSONLStore)(nil)
 )
