@@ -1,5 +1,7 @@
 package session
 
+import "strings"
+
 import (
 	"encoding/json"
 	"time"
@@ -18,6 +20,7 @@ type Message interface {
 // UserMessage is a prompt from the user (or queued input). Content is Text/Image blocks.
 // A plain-text user message is constructed with NewUserText.
 type UserMessage struct {
+
 	Content   []Content
 	Timestamp time.Time
 }
@@ -129,3 +132,50 @@ const (
 	StopReasonError    StopReason = "error"   // provider/transport error
 	StopReasonAborted  StopReason = "aborted" // cancelled via signal
 )
+
+// EntryRole returns the role of a message entry.
+func EntryRole(e Entry) string {
+	me, ok := e.(*MessageEntry)
+	if !ok {
+		return ""
+	}
+	switch me.Message.(type) {
+	case *UserMessage:
+		return "user"
+	case *AssistantMessage:
+		return "assistant"
+	case *ToolResultMessage:
+		return "tool_result"
+	}
+	return ""
+}
+
+// EntryText returns the text content of a message entry.
+func EntryText(e Entry) string {
+	me, ok := e.(*MessageEntry)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	switch m := me.Message.(type) {
+	case *UserMessage:
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				sb.WriteString(tc.Text)
+			}
+		}
+	case *AssistantMessage:
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				sb.WriteString(tc.Text)
+			}
+		}
+	case *ToolResultMessage:
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				sb.WriteString(tc.Text)
+			}
+		}
+	}
+	return sb.String()
+}

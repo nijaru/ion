@@ -130,3 +130,11 @@ const (
 	ThinkingMedium ThinkingLevel = "medium"
 	ThinkingHigh   ThinkingLevel = "high"
 )
+
+// EntryTitle returns a display name for an entry, or empty string.
+func EntryTitle(e Entry) string {
+	if le, ok := e.(*LabelEntry); ok {
+		return le.Label
+	}
+	return ""
+}

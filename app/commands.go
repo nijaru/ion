@@ -416,10 +416,10 @@ func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
 	b.WriteString("\n")
 	b.WriteString(m.cardTopBorder("Session Tree"))
 	b.WriteString("\n")
-	b.WriteString(m.cardPaddedLine(m.st.dim, "  Current: "+tree.Current.ID))
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  Current: "+tree.Current.ID()))
 	b.WriteString("\n")
-	if tree.Current.Title != "" {
-		b.WriteString(m.cardPaddedLine(m.st.dim, "  Title: "+tree.Current.Title))
+	if session.EntryTitle(tree.Current) != "" {
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Title: "+session.EntryTitle(tree.Current)))
 		b.WriteString("\n")
 	}
 	if len(tree.Lineage) > 0 {
@@ -428,9 +428,9 @@ func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
 		b.WriteString(m.cardPaddedLine(m.st.dim, "  Lineage:"))
 		b.WriteString("\n")
 		for _, info := range tree.Lineage {
-			title := info.ID
-			if info.Title != "" {
-				title = info.Title
+			title := info.ID()
+			if session.EntryTitle(info) != "" {
+				title = session.EntryTitle(info)
 			}
 			b.WriteString(m.cardPaddedLine(m.st.dim, "    • "+title))
 			b.WriteString("\n")
@@ -442,9 +442,9 @@ func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
 		b.WriteString(m.cardPaddedLine(m.st.dim, "  Children:"))
 		b.WriteString("\n")
 		for _, info := range tree.Children {
-			title := info.ID
-			if info.Title != "" {
-				title = info.Title
+			title := info.ID()
+			if session.EntryTitle(info) != "" {
+				title = session.EntryTitle(info)
 			}
 			b.WriteString(m.cardPaddedLine(m.st.dim, "    • "+title))
 			b.WriteString("\n")
@@ -608,8 +608,8 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 	// Find the last assistant message
 	var lastResponse string
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role == session.RoleAgent {
-			lastResponse = entries[i].Content
+		if session.EntryRole(entries[i]) == "assistant" {
+			lastResponse = session.EntryText(entries[i])
 			break
 		}
 	}

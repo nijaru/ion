@@ -1,5 +1,11 @@
 package session
 
+import (
+	"context"
+
+	"time"
+)
+
 // Event is the closed union of events the agent loop and harness emit.
 // The loop emits the lifecycle + streaming + tool-execution events (Event Agent
 // interface methods tag the source). The harness emits session/control events.
@@ -186,3 +192,94 @@ type SessionOrigin struct {
 	SessionID string
 	ChildID   string // non-empty for subagent-originated events
 }
+
+// App-facing types — app/ uses these until its rewrite against the new Event taxonomy.
+
+type StoreEvent = CustomEntry
+
+type StoreRoutingDecision struct {
+	EntryBase
+	Decision string
+	Reason   string
+}
+func (*StoreRoutingDecision) isEvent() {}
+
+type SubmitPreflightDecision struct {
+	ShouldSubmit bool
+	Reason       string
+}
+
+type SteeringSession interface {
+	SteerTurn(ctx context.Context, text string) error
+}
+
+type QueuedInputSession interface {
+	FollowUpTurn(ctx context.Context, text string) error
+	ClearQueuedInput(ctx context.Context) error
+}
+
+type StatusChange struct {
+	EntryBase
+	Status string
+}
+func (*StatusChange) isEvent() {}
+
+type SessionTree struct {
+	Current  Entry
+	Lineage  []Entry
+	Children []Entry
+}
+
+type SessionTreeReader interface {
+	SessionTree(ctx context.Context, leafID string) (SessionTree, error)
+}
+
+func IsMaterialized(s Session) bool { return true }
+
+type QueuedInputUpdate struct{ EntryBase }
+func (*QueuedInputUpdate) isEvent() {}
+
+type AgentMessage = Message
+
+type ToolCallStart struct {
+	EntryBase
+	ToolCallID string
+	Name       string
+	Args       []byte
+}
+func (*ToolCallStart) isEvent() {}
+
+type ToolExecutionUpdate struct {
+	EntryBase
+	ToolCallID string
+	Partial    ToolPartial
+}
+func (*ToolExecutionUpdate) isEvent() {}
+
+type ToolCallEnd struct {
+	EntryBase
+	ToolCallID string
+	Result     ToolResultMessage
+}
+func (*ToolCallEnd) isEvent() {}
+
+type SessionBundle struct {
+	RootSessionID string
+	Sessions      []SessionBundleRecord
+	ExportedAt    time.Time
+}
+
+type SessionBundleRecord struct {
+	Info   Session
+	Events []Entry
+}
+
+type SessionBundleExporter interface {
+	ExportSessionBundle(ctx context.Context, leafID string) (SessionBundle, error)
+}
+
+type SessionBundleImporter interface {
+	ImportSessionBundle(ctx context.Context, bundle SessionBundle) (string, error)
+}
+
+const RoleAgent = "agent"
