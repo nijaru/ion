@@ -1,365 +1,124 @@
-// Package agent provides the core agent loop primitive for Ion.
-// It mirrors Pi's pi-agent-core package, providing a clean separation
-// between the agent loop and the product layer (TUI, commands, etc.)
+// Package agent implements the stateless turn engine (RunLoop) and will hold
+// the stateful harness in a later phase. The loop is a pure function of its
+// arguments — no persistence, no tree, no retry. Events are the sole output.
+//
+// Reference: Pi's agent-loop.js (509 lines).
 package agent
 
 import (
 	"context"
-	"strings"
+	"encoding/json"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
-// StreamFn is the function signature for streaming LLM completions.
-// It must not throw errors; failures are encoded in the returned stream.
-type StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+// RunLoop is defined in loop.go.
+// This file contains only the types used by the loop and harness.
 
-// ToolExecutor executes a tool call and returns the result.
-type ToolExecutor func(ctx context.Context, toolCall AgentToolCall) (AgentToolResult, error)
-
-// StreamingToolExecutor executes a tool call with progress updates.
-// The onProgress callback is called with partial results during execution.
-type StreamingToolExecutor func(ctx context.Context, toolCall AgentToolCall, onProgress func(partialResult any)) (AgentToolResult, error)
-
-// ModelMessageWriter persists one provider-visible message.
-type ModelMessageWriter func(ctx context.Context, message llm.Message) error
-
-// ToolExecutionMode controls how tool calls from a single assistant message are executed.
-type ToolExecutionMode string
-
-const (
-	// ToolExecutionSequential executes each tool call one by one.
-	ToolExecutionSequential ToolExecutionMode = "sequential"
-	// ToolExecutionParallel executes allowed tools concurrently.
-	ToolExecutionParallel ToolExecutionMode = "parallel"
-)
-
-// QueueMode controls how queued user messages are injected when the agent loop reaches a drain point.
-type QueueMode string
-
-const (
-	// QueueModeAll drains and injects every queued message at that point.
-	QueueModeAll QueueMode = "all"
-	// QueueModeOneAtATime drains and injects only the oldest queued message.
-	QueueModeOneAtATime QueueMode = "one-at-a-time"
-)
-
-// AgentToolCall represents a single tool call from an assistant message.
-type AgentToolCall struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-// BeforeToolCallResult is returned from the beforeToolCall hook.
-// Returning Block=true prevents the tool from executing.
-type BeforeToolCallResult struct {
-	Block  bool   `json:"block,omitempty"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// AfterToolCallResult is returned from the afterToolCall hook.
-// Fields are merged field-by-field with the original result.
-type AfterToolCallResult struct {
-	Content   []llm.ContentPart `json:"content,omitempty"`
-	Details   any               `json:"details,omitempty"`
-	IsError   *bool             `json:"isError,omitempty"`
-	Terminate *bool             `json:"terminate,omitempty"`
-}
-
-// BeforeToolCallContext is passed to the beforeToolCall hook.
-type BeforeToolCallContext struct {
-	// AssistantMessage is the assistant message that requested the tool call.
-	AssistantMessage llm.Message
-	// ToolCall is the raw tool call from the assistant message.
-	ToolCall AgentToolCall
-	// Args is the validated tool arguments for the target tool schema.
-	Args any
-	// Context is the current agent context at the time the tool call is prepared.
-	Context AgentContext
-}
-
-// AfterToolCallContext is passed to the afterToolCall hook.
-type AfterToolCallContext struct {
-	// AssistantMessage is the assistant message that requested the tool call.
-	AssistantMessage llm.Message
-	// ToolCall is the raw tool call from the assistant message.
-	ToolCall AgentToolCall
-	// Args is the validated tool arguments for the target tool schema.
-	Args any
-	// Result is the executed tool result before any overrides are applied.
-	Result AgentToolResult
-	// IsError indicates whether the executed tool result is currently treated as an error.
-	IsError bool
-	// Context is the current agent context at the time the tool call is finalized.
-	Context AgentContext
-}
-
-// ShouldStopAfterTurnContext is passed to the shouldStopAfterTurn hook.
-type ShouldStopAfterTurnContext struct {
-	// Message is the assistant message that completed the turn.
-	Message llm.Message
-	// ToolResults are the tool result messages from the turn.
-	ToolResults []llm.Message
-	// Context is the current agent context after the turn.
-	Context AgentContext
-	// NewMessages are the messages added during this loop invocation.
-	NewMessages []AgentMessage
-}
-
-// AgentLoopTurnUpdate is used to replace runtime state before starting another provider request.
-type AgentLoopTurnUpdate struct {
-	// Context for the next provider request.
-	Context *AgentContext
-	// Model for the next provider request.
-	Model *llm.Model
-	// ThinkingLevel for the next provider request.
-	ThinkingLevel *ThinkingLevel
-}
-
-// PrepareNextTurnContext extends ShouldStopAfterTurnContext with additional context.
-type PrepareNextTurnContext = ShouldStopAfterTurnContext
-
-// Lifecycle hook contexts (Pi parity)
-
-// BeforeAgentStartContext is passed to the beforeAgentStart hook.
-type BeforeAgentStartContext struct {
-	// Prompt is the user's prompt.
-	Prompt string
-	// SystemPrompt is the system prompt.
+// TurnContext is the snapshot the harness builds from the session each turn.
+// The loop operates on this snapshot — it never touches the session directly.
+type TurnContext struct {
 	SystemPrompt string
-	// Model is the model that will be used.
-	Model llm.Model
-	// Tools are the tools that will be available.
-	Tools []AgentTool
+	Messages     []session.Message // from session.buildContext()
 }
 
-// BeforeAgentStartResult is returned from the beforeAgentStart hook.
-type BeforeAgentStartResult struct {
-	// Abort indicates whether to abort the run.
-	Abort bool `json:"abort,omitempty"`
-	// Reason is the reason for aborting.
-	Reason string `json:"reason,omitempty"`
+// LoopConfig is the per-turn contract between harness and loop.
+// Built fresh by the harness each turn (Pi createLoopConfig).
+type LoopConfig struct {
+	Model    llm.Model
+	Thinking session.ThinkingLevel
+	Tools    []Tool
+
+	// StreamFn calls the LLM provider. The loop constructs an llm.Request
+	// and passes it here. The harness wraps this with auth/hooks.
+	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+
+	// Convert transforms domain Messages to provider Messages at the boundary.
+	// Default: filter to user/assistant/tool_result roles.
+	Convert func([]session.Message) []llm.Message
+
+	// TransformCtx optionally transforms the message context before each LLM call.
+	TransformCtx func(ctx context.Context, msgs []session.Message) []session.Message
+
+	// BeforeToolCall is called before executing a tool. Return non-nil to block.
+	BeforeToolCall func(ctx ToolCallContext) *ToolCallDecision
+
+	// AfterToolCall is called after executing a tool. Return non-nil to patch.
+	AfterToolCall func(ctx ToolCallResultContext) *ToolCallPatch
+
+	// PrepareNextTurn is called between turns. The harness uses this to flush
+	// buffered session writes and rebuild the context.
+	PrepareNextTurn func(ctx context.Context) *NextTurnSnapshot
+
+	// ShouldStop is called after each turn to decide whether to stop.
+	ShouldStop func(ctx StopContext) bool
+
+	// DrainSteer returns queued steering messages (injected before next assistant response).
+	DrainSteer func() []session.Message
+
+	// DrainFollowUp returns queued follow-up messages (injected after agent would stop).
+	DrainFollowUp func() []session.Message
+
+	// Auth returns the API key and headers for a provider.
+	Auth func(model llm.Model) (apiKey string, headers map[string]string)
 }
 
-// BeforeProviderRequestContext is passed to the beforeProviderRequest hook.
-type BeforeProviderRequestContext struct {
-	// Model is the model being used.
-	Model llm.Model
-	// SessionID is the current session ID.
-	SessionID string
-	// Messages are the messages that will be sent.
-	Messages []llm.Message
-	// Tools are the tools that will be sent.
-	Tools []*llm.Spec
+// Tool describes a tool the loop can execute.
+type Tool struct {
+	Name          string
+	Execute       func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
+	ExecutionMode ExecMode
+	PrepareArgs   func(json.RawMessage) json.RawMessage
 }
 
-// BeforeProviderRequestResult is returned from the beforeProviderRequest hook.
-type BeforeProviderRequestResult struct {
-	// Abort indicates whether to abort the request.
-	Abort bool `json:"abort,omitempty"`
-	// Reason is the reason for aborting.
-	Reason string `json:"reason,omitempty"`
-	// StreamOptions patches applied to the stream configuration.
-	StreamOptionsPatch *StreamOptionsPatch `json:"stream_options_patch,omitempty"`
-}
-
-// StreamOptionsPatch holds optional patches to stream options.
-type StreamOptionsPatch struct {
-	// TimeoutMs overrides the provider request timeout.
-	TimeoutMs *int `json:"timeout_ms,omitempty"`
-	// MaxRetries overrides the max retry attempts.
-	MaxRetries *int `json:"max_retries,omitempty"`
-	// MaxRetryDelayMs overrides the retry delay cap.
-	MaxRetryDelayMs *int `json:"max_retry_delay_ms,omitempty"`
-	// Headers are additional request headers merged with existing headers.
-	Headers map[string]string `json:"headers,omitempty"`
-}
-
-// BeforeProviderPayloadContext is passed to the beforeProviderPayload hook.
-type BeforeProviderPayloadContext struct {
-	// Model is the model being used.
-	Model llm.Model
-	// Payload is the request payload.
-	Payload *llm.Request
-}
-
-// BeforeProviderPayloadResult is returned from the beforeProviderPayload hook.
-type BeforeProviderPayloadResult struct {
-	// Modified indicates whether the payload was modified.
-	Modified bool `json:"modified,omitempty"`
-}
-
-// AfterProviderResponseContext is passed to the afterProviderResponse hook.
-type AfterProviderResponseContext struct {
-	// Model is the model that was used.
-	Model llm.Model
-	// Response is the response from the provider.
-	Response *llm.Response
-	// Error is any error that occurred.
-	Error error
-}
-
-// ThinkingLevel controls the depth of internal reasoning.
-type ThinkingLevel string
+// ExecMode controls how multiple tool calls in one assistant message are executed.
+type ExecMode string
 
 const (
-	ThinkingLevelOff     ThinkingLevel = "off"
-	ThinkingLevelMinimal ThinkingLevel = "minimal"
-	ThinkingLevelLow     ThinkingLevel = "low"
-	ThinkingLevelMedium  ThinkingLevel = "medium"
-	ThinkingLevelHigh    ThinkingLevel = "high"
-	ThinkingLevelXHigh   ThinkingLevel = "xhigh"
+	ExecParallel   ExecMode = "parallel"
+	ExecSequential ExecMode = "sequential"
 )
 
-// AgentMessage is a message in the agent's conversation.
-// It uses Parts as the single source of truth for structured content.
-type AgentMessage struct {
-	// Role of the message (user, assistant, tool, system).
-	Role string `json:"role"`
-	// Type is the original entry type (e.g., "branchSummary", "compactionSummary", "custom").
-	// Empty for regular messages. Used to preserve type information for display.
-	Type string `json:"type,omitempty"`
-	// Parts are structured content parts (text, images, etc.).
-	// This is the single source of truth for message content.
-	Parts []llm.ContentPart `json:"parts,omitempty"`
-	// Calls are tool calls made by the assistant.
-	Calls []AgentToolCall `json:"calls,omitempty"`
-	// ToolID is the ID of the tool call this message is a result for.
-	ToolID string `json:"tool_id,omitempty"`
-	// Name is the name of the tool or assistant.
-	Name string `json:"name,omitempty"`
-	// IsError indicates whether this is an error result.
-	IsError bool `json:"is_error,omitempty"`
-	// Details is additional structured data (from tool results).
-	Details any `json:"details,omitempty"`
-	// Usage is the LLM's reported token usage for this message.
-	InputTokens  int     `json:"input_tokens,omitzero"`
-	OutputTokens int     `json:"output_tokens,omitzero"`
-	TotalTokens  int     `json:"total_tokens,omitzero"`
-	Cost         float64 `json:"cost,omitzero"`
-	// Timestamp is when the message was created.
-	Timestamp int64 `json:"timestamp,omitempty"`
-
-	// Assistant message metadata (Pi parity).
-	// These fields track provider/model context for diagnostics and multi-provider sessions.
-	API           string          `json:"api,omitzero"`
-	Provider      string          `json:"provider,omitzero"`
-	Model         string          `json:"model,omitzero"`
-	ResponseModel string          `json:"response_model,omitzero"` // Concrete model when different from requested
-	ResponseID    string          `json:"response_id,omitzero"`    // Provider-specific response identifier
-	StopReason    llm.StopReason  `json:"stop_reason,omitzero"`
-	ErrorMessage  string          `json:"error_message,omitzero"`
+// ToolCallContext is passed to BeforeToolCall.
+type ToolCallContext struct {
+	AssistantMessage session.AssistantMessage
+	ToolCall         *session.ToolCall
+	Args             json.RawMessage
+	Context          TurnContext
 }
 
-// TextContent returns the concatenated text from all text parts.
-func (m AgentMessage) TextContent() string {
-	var sb strings.Builder
-	for _, part := range m.Parts {
-		if part.Type == "" || part.Type == llm.ContentPartText {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
+// ToolCallDecision is returned by BeforeToolCall to block execution.
+type ToolCallDecision struct {
+	Block  bool
+	Reason string
 }
 
-// ReasoningContent returns the concatenated reasoning from all thinking parts.
-func (m AgentMessage) ReasoningContent() string {
-	var sb strings.Builder
-	for _, part := range m.Parts {
-		if part.Type == "reasoning" {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
+// ToolCallResultContext is passed to AfterToolCall.
+type ToolCallResultContext struct {
+	ToolCall *session.ToolCall
+	Args     json.RawMessage
+	Result   session.ToolResultMessage
 }
 
-// ToolCalls returns the tool calls from this message.
-func (m AgentMessage) ToolCalls() []AgentToolCall {
-	return m.Calls
+// ToolCallPatch is returned by AfterToolCall to modify the result.
+type ToolCallPatch struct {
+	Content  []session.Content
+	Details  json.RawMessage
+	IsError  *bool
+	Terminate *bool
 }
 
-// AgentToolResult is the result of executing a tool.
-type AgentToolResult struct {
-	// Content is the text content of the result.
-	Content []llm.ContentPart `json:"content"`
-	// Details is additional structured data from the tool.
-	Details any `json:"details,omitempty"`
-	// IsError indicates whether the tool execution failed.
-	IsError bool `json:"is_error"`
-	// Terminate hints that the agent should stop after this tool batch.
-	Terminate bool `json:"terminate,omitempty"`
+// NextTurnSnapshot is returned by PrepareNextTurn to rebuild the context.
+type NextTurnSnapshot struct {
+	Context  TurnContext
+	Model    *llm.Model
+	Thinking *session.ThinkingLevel
 }
 
-// AgentContext is the context passed to agent hooks.
-type AgentContext struct {
-	// Messages is the current conversation history.
-	Messages []AgentMessage `json:"messages"`
-	// SystemPrompt is the system prompt for the agent.
-	SystemPrompt string `json:"system_prompt"`
-	// Tools is the list of available tools.
-	Tools []AgentTool `json:"tools"`
-	// Model is the current model being used.
-	Model llm.Model `json:"model"`
-	// ThinkingLevel is the current thinking level.
-	ThinkingLevel ThinkingLevel `json:"thinking_level"`
+// StopContext is passed to ShouldStop.
+type StopContext struct {
+	Message     session.AssistantMessage
+	ToolResults []session.ToolResultMessage
+	Context     TurnContext
 }
-
-// AgentTool is a tool definition with optional hooks.
-type AgentTool struct {
-	// Name is the unique identifier for the tool.
-	Name string `json:"name"`
-	// Description is a human-readable description of the tool.
-	Description string `json:"description"`
-	// Parameters is the JSON Schema for the tool's parameters.
-	Parameters any `json:"parameters"`
-	// ReadOnly indicates whether the tool only reads data.
-	ReadOnly bool `json:"read_only"`
-	// ExecutionMode controls how this tool's calls are executed (sequential or parallel).
-	// If empty, uses the global ToolExecutionMode from AgentConfig.
-	ExecutionMode ToolExecutionMode `json:"execution_mode,omitempty"`
-	// Label is a human-readable label for the tool (shown in TUI).
-	Label string `json:"label,omitzero"`
-	// PrepareArguments transforms tool arguments before validation and execution.
-	// Called after the LLM produces arguments but before validateToolArgs.
-	// Use for type coercion, default injection, or argument normalization.
-	PrepareArguments func(args map[string]any) map[string]any `json:"-"`
-}
-
-// AgentState is the current state of the agent.
-type AgentState struct {
-	// Model is the current model being used.
-	Model llm.Model `json:"model"`
-	// ThinkingLevel is the current thinking level.
-	ThinkingLevel ThinkingLevel `json:"thinking_level"`
-	// AllTools is the full list of available tools (never filtered).
-	AllTools []AgentTool `json:"all_tools"`
-	// Tools is the list of active tools (filtered subset of AllTools).
-	Tools []AgentTool `json:"tools"`
-	// SystemPrompt is the system prompt for the agent.
-	SystemPrompt string `json:"system_prompt"`
-	// IsStreaming indicates whether the agent is currently streaming.
-	IsStreaming bool `json:"is_streaming"`
-	// StreamingMessage is the partial assistant message during streaming.
-	StreamingMessage *AgentMessage `json:"streaming_message,omitempty"`
-	// PendingToolCalls is the set of tool call IDs currently executing.
-	PendingToolCalls map[string]bool `json:"pending_tool_calls,omitempty"`
-	// ErrorMessage is the last error message, if any.
-	ErrorMessage string `json:"error_message,omitempty"`
-}
-
-// BeforeTreeNavigationResult holds the result of the OnBeforeTreeNavigation hook.
-type BeforeTreeNavigationResult struct {
-	// Cancel cancels the navigation.
-	Cancel bool
-	// Summary is an optional summary to use instead of generating one.
-	Summary *BranchSummary
-}
-
-// BranchSummary holds a branch summary provided by a hook.
-type BranchSummary struct {
-	Summary string
-	Details map[string]any
-}
-
-

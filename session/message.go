@@ -49,13 +49,13 @@ type ToolResultMessage struct {
 	Timestamp  time.Time
 }
 
-func (*UserMessage) isMessage()       {}
-func (*AssistantMessage) isMessage()  {}
-func (*ToolResultMessage) isMessage() {}
+func (UserMessage) isMessage()       {}
+func (AssistantMessage) isMessage()  {}
+func (ToolResultMessage) isMessage() {}
 
-func (m *UserMessage) timestamp() time.Time       { return m.Timestamp }
-func (m *AssistantMessage) timestamp() time.Time  { return m.Timestamp }
-func (m *ToolResultMessage) timestamp() time.Time { return m.Timestamp }
+func (m UserMessage) timestamp() time.Time       { return m.Timestamp }
+func (m AssistantMessage) timestamp() time.Time  { return m.Timestamp }
+func (m ToolResultMessage) timestamp() time.Time { return m.Timestamp }
 
 // NewUserText is the string-shorthand constructor for a plain-text user message.
 func NewUserText(text string, ts time.Time) *UserMessage {

@@ -1,466 +1,531 @@
-// Package agent provides the core agent loop primitive for Ion.
-//
-// The agent loop is a pure turn-sequencing function. It streams assistant
-// responses, executes tool calls, and repeats until the model stops or a
-// callback says to stop. It does not manage persistence, recovery, or
-// session lifecycle — those are separate concerns composed around the loop.
 package agent
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log/slog"
+	"encoding/json"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-// AgentLoop is the pure agent turn-sequencing loop.
+// RunLoop is the stateless turn engine. All inputs are arguments.
+// Emits events via emit. Returns new messages produced during the run.
+// Failure is terminal: on error/abort, synthesize a failure AssistantMessage,
+// emit TurnEnd + AgentEnd, and return.
 //
-// It owns:
-//   - Turn sequencing (stream → tool calls → check stop → repeat)
-//   - Event emission (agent_start/end, turn_start/end, message_start/end, deltas, tool events)
-//   - Steering and follow-up message injection
-//
-// It does NOT own:
-//   - Persistence (writeModelMessage is a callback)
-//   - Recovery (overflow/retry is a wrapper)
-//   - Session lifecycle (Open/Resume/Close are on the wrapper)
-//   - Queue management (GetSteeringMessages/GetFollowUpMessages are callbacks)
-type AgentLoop struct {
-	config    AgentConfig
-	state     AgentState
-	emit      func(session.AgentEvent)
-	tree      *session.Session
-	sessionID string
-}
-
-// NewAgentLoop creates a new pure agent loop.
-func NewAgentLoop(config AgentConfig, state AgentState, emit func(session.AgentEvent), sessionID string) *AgentLoop {
-	return &AgentLoop{
-		config:    config,
-		state:     state,
-		emit:      emit,
-		tree:      session.New(sessionID),
-		sessionID: sessionID,
-	}
-}
-
-// TreeStore returns the underlying tree store.
-func (l *AgentLoop) TreeStore() *session.Session {
-	return l.tree
-}
-
-// Run starts the agent loop with prompt messages.
-//
-// It:
-//  1. Appends prompts to the message history
-//  2. Emits message_start/end for each prompt
-//  3. Delegates to runLoop for turn sequencing
-//
-// Returns the new messages added during the run.
-// Emits: agent_start, turn_start, message_start/end (per prompt), then runLoop events.
-func (l *AgentLoop) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
-	l.emit(session.AgentStart{Base: session.BaseNow()})
-
-	// Call beforeAgentStart hook (Pi parity)
-	if l.config.BeforeAgentStart != nil {
-		hookCtx := BeforeAgentStartContext{
-			Prompt:       prompts[0].TextContent(),
-			SystemPrompt: l.state.SystemPrompt,
-			Model:        l.state.Model,
-			Tools:        l.state.Tools,
-		}
-		result := l.config.BeforeAgentStart(ctx, hookCtx)
-		if result.Abort {
-			err := fmt.Errorf("aborted by beforeAgentStart hook: %s", result.Reason)
-			l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-			l.emit(session.AgentEnd{Base: session.BaseNow()})
-			return nil, err
-		}
+// Reference: Pi agent-loop.js runLoop (line 77).
+func RunLoop(
+	ctx context.Context,
+	prompts []session.Message,
+	snapshot TurnContext,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) []session.Message {
+	convert := cfg.Convert
+	if convert == nil {
+		convert = DefaultConvert
 	}
 
-	// Add prompts to tree store
-	for _, prompt := range prompts {
-		llmMsg := agentMessageToLLM(prompt)
-		event := session.NewMessage(l.sessionID, llmMsg)
-		if err := l.tree.Append(ctx, event); err != nil {
-			// Log error but don't fail - tree is optional
-			slog.Warn("failed to append prompt to tree", "error", err)
-		}
+	newMessages := make([]session.Message, 0, len(prompts))
+	currentCtx := TurnContext{
+		SystemPrompt: snapshot.SystemPrompt,
+		Messages:     append([]session.Message{}, snapshot.Messages...),
 	}
 
-	// Emit message events for prompts and persist them
-	var newMessages []AgentMessage
-	for _, prompt := range prompts {
-		newMessages = append(newMessages, prompt)
-		if prompt.Role == "user" {
-			l.emit(session.UserMessage{
-				Base:    session.BaseNow(),
-				Message: prompt.TextContent(),
-			})
-		}
-		if err := l.writeModelMessage(ctx, agentMessageToLLM(prompt)); err != nil {
-			l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-			l.emit(session.AgentEnd{Base: session.BaseNow()})
-			return newMessages, fmt.Errorf("write prompt message: %w", err)
-		}
+	emit(session.AgentStart{Origin: session.SessionOrigin{}})
+	emit(session.TurnStart{})
+
+	// Emit prompt messages (Pi: message_start + message_end for each prompt).
+	for _, p := range prompts {
+		emit(session.MessageStart{Message: p})
+		emit(session.MessageEnd{Message: p})
+		newMessages = append(newMessages, p)
+		currentCtx.Messages = append(currentCtx.Messages, p)
 	}
 
-	// Run the turn loop
-	loopMessages, err := l.runLoop(ctx)
-	newMessages = append(newMessages, loopMessages...)
+	firstTurn := true
 
-	return newMessages, err
-}
+	// Drain initial steering messages.
+	pending := drain(cfg.DrainSteer)
 
-// Continue continues the agent loop without adding new messages.
-//
-// Used for retries — context already has user message or tool results.
-// Returns the new messages added during the run.
-// Emits: agent_start, then runLoop events.
-func (l *AgentLoop) Continue(ctx context.Context) ([]AgentMessage, error) {
-	l.emit(session.AgentStart{Base: session.BaseNow()})
-
-	messages := l.tree.Messages()
-	if len(messages) == 0 {
-		err := fmt.Errorf("cannot continue: no messages in context")
-		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-		l.emit(session.AgentEnd{Base: session.BaseNow()})
-		return nil, err
-	}
-
-	lastMsg := messages[len(messages)-1]
-	if lastMsg.Role == "assistant" {
-		err := fmt.Errorf("cannot continue from message role: assistant")
-		l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-		l.emit(session.AgentEnd{Base: session.BaseNow()})
-		return nil, err
-	}
-
-	return l.runLoop(ctx)
-}
-
-// runLoop is the pure turn-sequencing loop.
-//
-// It:
-//  1. Checks for steering messages
-//  2. Streams assistant response
-//  3. Executes tool calls if any
-//  4. Checks shouldStopAfterTurn
-//  5. Checks for follow-up messages
-//  6. Repeats or exits
-//
-// Returns the new messages added during the loop.
-func (l *AgentLoop) runLoop(ctx context.Context) ([]AgentMessage, error) {
-	var newMessages []AgentMessage
-	var pendingMessages []AgentMessage
-
-	// Emit AgentEnd when the loop exits (Pi parity: single ownership).
-	defer func() {
-		l.emit(session.AgentEnd{
-			Base:     session.BaseNow(),
-			Messages: toSessionAgentMessages(newMessages),
-		})
-	}()
-
+	// Outer loop: continues when follow-up messages arrive after agent would stop.
 	for {
 		hasMoreToolCalls := true
 
-		// Check for steering messages at start of iteration
-		if len(pendingMessages) == 0 {
-			pendingMessages = l.getSteeringMessages()
-		}
+		// Inner loop: process tool calls and steering messages.
+		for hasMoreToolCalls || len(pending) > 0 {
+			if !firstTurn {
+				emit(session.TurnStart{})
+			}
+			firstTurn = false
 
-		// Inner loop: process tool calls and steering messages
-		for hasMoreToolCalls || len(pendingMessages) > 0 {
-			// Check for context cancellation
-			if ctx.Err() != nil {
-				l.emit(session.TurnEnd{Base: session.BaseNow()})
-				return newMessages, ctx.Err()
+			// Inject pending messages (steering or follow-up).
+			for _, msg := range pending {
+				emit(session.MessageStart{Message: msg})
+				emit(session.MessageEnd{Message: msg})
+				currentCtx.Messages = append(currentCtx.Messages, msg)
+				newMessages = append(newMessages, msg)
+			}
+			pending = nil
+
+			// Stream assistant response.
+			assistantMsg, aborted := streamAssistantResponse(ctx, currentCtx, cfg, convert, emit, signal)
+			newMessages = append(newMessages, assistantMsg)
+			currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
+
+			if aborted {
+				// Terminal: emit turn_end + agent_end and return.
+				emit(session.TurnEnd{Message: *assistantMsg})
+				emit(session.AgentEnd{Messages: newMessages})
+				return newMessages
 			}
 
-			l.emit(session.TurnStart{Base: session.BaseNow()})
-
-			// Inject pending messages
-			if len(pendingMessages) > 0 {
-				// Add to tree store
-				for _, msg := range pendingMessages {
-					llmMsg := agentMessageToLLM(msg)
-					event := session.NewMessage(l.sessionID, llmMsg)
-					if err := l.tree.Append(ctx, event); err != nil {
-						slog.Warn("failed to append pending message to tree", "error", err)
-					}
+			// Check for tool calls in the assistant response.
+			var toolCalls []*session.ToolCall
+			for _, c := range assistantMsg.Content {
+				if tc, ok := c.(*session.ToolCall); ok {
+					toolCalls = append(toolCalls, tc)
 				}
-				newMessages = append(newMessages, pendingMessages...)
-				for _, msg := range pendingMessages {
-					if msg.Role == "user" {
-						l.emit(session.UserMessage{
-							Base:    session.BaseNow(),
-							Message: msg.TextContent(),
-						})
-					}
-					if err := l.writeModelMessage(ctx, agentMessageToLLM(msg)); err != nil {
-						l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-						return newMessages, fmt.Errorf("write pending message: %w", err)
-					}
-				}
-				pendingMessages = nil
 			}
 
-			// Stream assistant response
-			l.emit(session.MessageStart{Base: session.BaseNow()})
-			message, llmMessage, err := l.streamAssistantResponse(ctx)
-			if err != nil {
-				// Create error message for event emission
-				l.emit(session.MessageEnd{
-					Base: session.BaseNow(),
-					Message: session.AgentMessage{
-						Message: err.Error(),
-					},
-				})
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					l.emit(session.TurnEnd{Base: session.BaseNow()})
-				} else {
-					l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-				}
-				return newMessages, fmt.Errorf("stream assistant response: %w", err)
-			}
-			l.emit(session.MessageEnd{
-				Base: session.BaseNow(),
-				Message: session.AgentMessage{
-					Message:      message.TextContent(),
-					Reasoning:    message.ReasoningContent(),
-					InputTokens:  message.InputTokens,
-					OutputTokens: message.OutputTokens,
-					TotalTokens:  message.TotalTokens,
-					Cost:         message.Cost,
-				},
-			})
-
-			// Note: streamAssistantResponse already added the message to the tree store
-			newMessages = append(newMessages, message)
-
-			if err := l.writeModelMessage(ctx, llmMessage); err != nil {
-				l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-				return newMessages, fmt.Errorf("write assistant message: %w", err)
-			}
-
-			// Check for error/abort
-			if message.IsError {
-				l.emit(session.TurnEnd{Base: session.BaseNow()})
-				return newMessages, nil
-			}
-
-			// Execute tool calls if any
-			toolCalls := message.Calls
+			var toolResults []session.ToolResultMessage
 			hasMoreToolCalls = false
-			var toolResults []AgentMessage
 
 			if len(toolCalls) > 0 {
-				var terminate bool
-				var llmToolResults []llm.Message
-				toolResults, llmToolResults, terminate, err = l.executeToolCalls(
-					ctx, message, llmMessage, toolCalls,
-				)
-				if err != nil {
-					l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-					return newMessages, fmt.Errorf("execute tool calls: %w", err)
-				}
-
+				results, terminate := executeToolCalls(ctx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
+				toolResults = results
 				hasMoreToolCalls = !terminate
 
-				// Emit message events for tool results
 				for _, result := range toolResults {
-					l.emit(session.MessageStart{Base: session.BaseNow(), Message: session.AgentMessage{
-						Message: result.TextContent(),
-					}})
-					l.emit(session.MessageEnd{Base: session.BaseNow(), Message: session.AgentMessage{
-						Message: result.TextContent(),
-					}})
+					currentCtx.Messages = append(currentCtx.Messages, &result)
+					newMessages = append(newMessages, &result)
 				}
+			}
 
-				// Note: executeToolCalls already adds tool results to the tree store
-				// via addToolResultsToTree, so we don't add them again here.
-				newMessages = append(newMessages, toolResults...)
-				for _, result := range llmToolResults {
-					if err := l.writeModelMessage(ctx, result); err != nil {
-						l.emit(session.TurnEnd{Base: session.BaseNow(), Error: err})
-						return newMessages, fmt.Errorf("write tool result: %w", err)
+			emit(session.TurnEnd{Message: assistantMsg, ToolResults: toolResults})
+
+			// Prepare next turn (harness flushes writes, rebuilds context).
+			if cfg.PrepareNextTurn != nil {
+				snap := cfg.PrepareNextTurn(ctx)
+				if snap != nil {
+					if snap.Context.Messages != nil {
+						currentCtx = snap.Context
+					}
+					if snap.Model != nil {
+						cfg.Model = *snap.Model
+					}
+					if snap.Thinking != nil {
+						cfg.Thinking = *snap.Thinking
 					}
 				}
 			}
 
-			// Emit turn_end only when the inner loop is done.
-			// If hasMoreToolCalls is true, the model will be called again
-			// to produce a text response after tool results.
-			if !hasMoreToolCalls && len(pendingMessages) == 0 {
-				l.emit(session.TurnEnd{
-					Base: session.BaseNow(),
-					Message: session.AgentMessage{
-						Message:      message.TextContent(),
-						Reasoning:    message.ReasoningContent(),
-						InputTokens:  message.InputTokens,
-						OutputTokens: message.OutputTokens,
-						TotalTokens:  message.TotalTokens,
-						Cost:         message.Cost,
-					},
-					ToolResults: toSessionAgentMessages(toolResults),
-				})
+			// Check if the agent should stop.
+			if cfg.ShouldStop != nil && cfg.ShouldStop(StopContext{
+				Message:     *assistantMsg,
+				ToolResults: toolResults,
+				Context:     currentCtx,
+			}) {
+				emit(session.AgentEnd{Messages: newMessages})
+				return newMessages
 			}
 
-			// Prepare next turn (may update context/model/thinking level)
-			ctx, err := l.buildContext()
-			if err != nil {
-				return nil, err
-			}
-			turnContext := ShouldStopAfterTurnContext{
-				Message:     llmMessage,
-				ToolResults: agentMessagesToLLM(toolResults),
-				Context:     ctx,
-				NewMessages: cloneAgentMessages(newMessages),
-			}
-			if l.config.PrepareNextTurn != nil {
-				l.applyTurnUpdate(l.config.PrepareNextTurn(turnContext))
-				ctx, err = l.buildContext()
-				if err != nil {
-					return nil, err
-				}
-				turnContext.Context = ctx
-			}
-
-			// Check if we should stop
-			if l.config.ShouldStopAfterTurn != nil {
-				if l.config.ShouldStopAfterTurn(turnContext) {
-					// Emit turn_end before exiting
-					l.emit(session.TurnEnd{
-						Base: session.BaseNow(),
-						Message: session.AgentMessage{
-							Message:      message.TextContent(),
-							Reasoning:    message.ReasoningContent(),
-							InputTokens:  message.InputTokens,
-							OutputTokens: message.OutputTokens,
-							TotalTokens:  message.TotalTokens,
-							Cost:         message.Cost,
-						},
-						ToolResults: toSessionAgentMessages(toolResults),
-					})
-					return newMessages, nil
-				}
-			}
-
-			// Get steering messages for next iteration
-			pendingMessages = l.getSteeringMessages()
+			// Drain steering messages for next inner iteration.
+			pending = drain(cfg.DrainSteer)
 		}
 
 		// Agent would stop here. Check for follow-up messages.
-		followUpMessages := l.getFollowUpMessages()
-		if len(followUpMessages) > 0 {
-			pendingMessages = followUpMessages
+		followUps := drain(cfg.DrainFollowUp)
+		if len(followUps) > 0 {
+			pending = followUps
 			continue
 		}
 
-		// No more messages, exit
-		return newMessages, nil
+		break
 	}
+
+	emit(session.AgentEnd{Messages: newMessages})
+	return newMessages
 }
 
-// getSteeringMessages returns steering messages from the config hook.
-func (l *AgentLoop) getSteeringMessages() []AgentMessage {
-	if l.config.GetSteeringMessages != nil {
-		return l.config.GetSteeringMessages()
+// streamAssistantResponse calls the LLM and accumulates the response into an AssistantMessage.
+// Returns the message and whether the stream was aborted.
+//
+// Reference: Pi agent-loop.js streamAssistantResponse (line 172).
+func streamAssistantResponse(
+	ctx context.Context,
+	snapshot TurnContext,
+	cfg LoopConfig,
+	convert func([]session.Message) []llm.Message,
+	emit func(session.Event),
+	signal <-chan struct{},
+) (*session.AssistantMessage, bool) {
+	msgs := snapshot.Messages
+	if cfg.TransformCtx != nil {
+		msgs = cfg.TransformCtx(ctx, msgs)
 	}
-	return nil
+
+	llmMsgs := convert(msgs)
+	tools := make([]*llm.Spec, len(cfg.Tools))
+	for i, t := range cfg.Tools {
+		tools[i] = &llm.Spec{
+			Name:        t.Name,
+			Description: "", // TODO: add description to Tool type
+			Parameters:  nil, // TODO: add parameters to Tool type
+		}
+	}
+
+	req := &llm.Request{
+		Model:          cfg.Model.ID,
+		Messages:       llmMsgs,
+		Tools:          tools,
+		ReasoningEffort: string(cfg.Thinking),
+		SessionID:      "", // set by harness
+	}
+
+	if cfg.Auth != nil {
+		key, _ := cfg.Auth(cfg.Model)
+		req.Model = cfg.Model.ID // auth may override
+		_ = key
+	}
+
+	stream, err := cfg.StreamFn(ctx, req)
+	if err != nil {
+		return failureMessagePtr(cfg.Model, err, false), true
+	}
+	defer stream.Close()
+
+	var acc llm.StreamAccumulator
+	var partialContent []session.Content
+	started := false
+
+	for {
+		chunk, ok := stream.Next()
+		if !ok {
+			break
+		}
+
+		acc.Add(chunk)
+
+		// Build partial message from accumulator state.
+		partial := buildPartialMessage(acc, cfg.Model)
+		partialContent = append(partialContent, partial.Content...)
+
+		if !started {
+			emit(session.MessageStart{Message: &partial})
+			started = true
+		}
+
+		// Emit delta events.
+		if chunk.Content != "" {
+			emit(session.MessageUpdate{Message: &partial, Delta: session.TextDelta{Text: chunk.Content}})
+		}
+		if chunk.Reasoning != "" {
+			emit(session.MessageUpdate{Message: &partial, Delta: session.ThinkingDelta{Text: chunk.Reasoning}})
+		}
+		for _, call := range chunk.Calls {
+			args, _ := json.Marshal(call.Function.Arguments)
+			emit(session.MessageUpdate{Message: &partial, Delta: session.ToolCallDelta{
+				ToolCallID:     call.ID,
+				Name:           call.Function.Name,
+				ArgumentsChunk: string(args),
+			}})
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		msg := failureMessage(cfg.Model, err, false)
+		if !started {
+			emit(session.MessageStart{Message: &msg})
+		}
+		emit(session.MessageEnd{Message: &msg})
+		return &msg, true
+	}
+
+	// Build final message from accumulator.
+	final := buildAssistantMessage(acc, cfg.Model)
+	if !started {
+		emit(session.MessageStart{Message: &final})
+	}
+	emit(session.MessageEnd{Message: &final})
+	return &final, false
 }
 
-// getFollowUpMessages returns follow-up messages from the config hook.
-func (l *AgentLoop) getFollowUpMessages() []AgentMessage {
-	if l.config.GetFollowUpMessages != nil {
-		return l.config.GetFollowUpMessages()
-	}
-	return nil
-}
-
-// buildContext builds the current AgentContext from the loop state.
-func (l *AgentLoop) buildContext() (AgentContext, error) {
-	// Convert llm.Message to AgentMessage
-	llmMessages := l.tree.Messages()
-	messages := make([]AgentMessage, 0, len(llmMessages))
-	for _, msg := range llmMessages {
-		messages = append(messages, llmMessageToAgent(msg))
-	}
-
-	// Use dynamic system prompt if available
-	systemPrompt := l.state.SystemPrompt
-	if l.config.SystemPromptFunc != nil {
-		systemPrompt = l.config.SystemPromptFunc(SystemPromptContext{
-			Model:         l.state.Model,
-			ThinkingLevel: l.state.ThinkingLevel,
-			Tools:         l.state.Tools,
-		})
-	}
-
-	return AgentContext{
-		Messages:      messages,
-		SystemPrompt:  systemPrompt,
-		Tools:         l.state.Tools,
-		Model:         l.state.Model,
-		ThinkingLevel: l.state.ThinkingLevel,
-	}, nil
-}
-
-// applyTurnUpdate applies a turn update to the loop state.
-func (l *AgentLoop) applyTurnUpdate(update *AgentLoopTurnUpdate) {
-	if update == nil {
-		return
-	}
-	if update.Context != nil {
-		// Update tree store with new messages
-		l.tree = session.New(l.sessionID)
-		for _, msg := range update.Context.Messages {
-			llmMsg := agentMessageToLLM(msg)
-			event := session.NewMessage(l.sessionID, llmMsg)
-			if err := l.tree.Append(context.Background(), event); err != nil {
-				slog.Warn("failed to append message to tree", "error", err)
+// executeToolCalls executes tool calls from an assistant message.
+//
+// Reference: Pi agent-loop.js executeToolCalls (line 254).
+func executeToolCalls(
+	ctx context.Context,
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	toolCalls []*session.ToolCall,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) ([]session.ToolResultMessage, bool) {
+	hasSequential := false
+	for _, tc := range toolCalls {
+		for _, t := range cfg.Tools {
+			if t.Name == tc.Name && t.ExecutionMode == ExecSequential {
+				hasSequential = true
+				break
 			}
 		}
-		l.state.SystemPrompt = update.Context.SystemPrompt
-		l.state.Tools = append([]AgentTool(nil), update.Context.Tools...)
-		l.state.Model = update.Context.Model
-		l.state.ThinkingLevel = update.Context.ThinkingLevel
 	}
-	if update.Model != nil {
-		l.state.Model = *update.Model
+
+	if hasSequential {
+		return executeToolCallsSequential(ctx, snapshot, assistantMsg, toolCalls, cfg, emit, signal)
 	}
-	if update.ThinkingLevel != nil {
-		l.state.ThinkingLevel = *update.ThinkingLevel
-	}
+	return executeToolCallsParallel(ctx, snapshot, assistantMsg, toolCalls, cfg, emit, signal)
 }
 
-// writeModelMessage persists a message through the config callback.
-func (l *AgentLoop) writeModelMessage(ctx context.Context, message llm.Message) error {
-	if l.config.OnModelMessage == nil {
-		return nil
+func executeToolCallsSequential(
+	ctx context.Context,
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	toolCalls []*session.ToolCall,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) ([]session.ToolResultMessage, bool) {
+	var results []session.ToolResultMessage
+	terminate := true
+
+	for _, tc := range toolCalls {
+		result := executeOneToolCall(ctx, snapshot, assistantMsg, tc, cfg, emit, signal)
+		results = append(results, result)
+		if !result.IsError {
+			terminate = false
+		}
+		if isAborted(signal) {
+			break
+		}
 	}
-	if isEmptyModelMessage(message) {
-		return nil
-	}
-	return l.config.OnModelMessage(ctx, message)
+
+	return results, terminate && len(results) > 0
 }
 
-// Messages returns the current message history from the tree store.
-func (l *AgentLoop) Messages() []AgentMessage {
-	// Convert llm.Message to AgentMessage
-	llmMessages := l.tree.Messages()
-	result := make([]AgentMessage, 0, len(llmMessages))
-	for _, msg := range llmMessages {
-		result = append(result, llmMessageToAgent(msg))
+func executeToolCallsParallel(
+	ctx context.Context,
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	toolCalls []*session.ToolCall,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) ([]session.ToolResultMessage, bool) {
+	type indexedResult struct {
+		index  int
+		result session.ToolResultMessage
 	}
+
+	ch := make(chan indexedResult, len(toolCalls))
+	for i, tc := range toolCalls {
+		go func(idx int, toolCall *session.ToolCall) {
+			ch <- indexedResult{idx, executeOneToolCall(ctx, snapshot, assistantMsg, toolCall, cfg, emit, signal)}
+		}(i, tc)
+	}
+
+	results := make([]session.ToolResultMessage, len(toolCalls))
+	terminate := true
+	for range toolCalls {
+		r := <-ch
+		results[r.index] = r.result
+		if !r.result.IsError {
+			terminate = false
+		}
+	}
+
+	return results, terminate && len(results) > 0
+}
+
+func executeOneToolCall(
+	ctx context.Context,
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	tc *session.ToolCall,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) session.ToolResultMessage {
+	emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name})
+
+	// Find the tool.
+	var tool *Tool
+	for i := range cfg.Tools {
+		if cfg.Tools[i].Name == tc.Name {
+			tool = &cfg.Tools[i]
+			break
+		}
+	}
+
+	if tool == nil {
+		result := session.ToolResultMessage{
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			Content:    []session.Content{session.TextContent{Text: "tool not found: " + tc.Name}},
+			IsError:    true,
+			Timestamp:  time.Now(),
+		}
+		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+		return result
+	}
+
+	args, _ := json.Marshal(tc.Arguments)
+
+	// BeforeToolCall hook.
+	if cfg.BeforeToolCall != nil {
+		decision := cfg.BeforeToolCall(ToolCallContext{
+			AssistantMessage: assistantMsg,
+			ToolCall:         tc,
+			Args:             args,
+			Context:          snapshot,
+		})
+		if decision != nil && decision.Block {
+			result := session.ToolResultMessage{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Content:    []session.Content{session.TextContent{Text: decision.Reason}},
+				IsError:    true,
+				Timestamp:  time.Now(),
+			}
+			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+			return result
+		}
+	}
+
+	// Execute.
+	progress := func(p session.ToolPartial) {
+		emit(session.ToolExecUpdate{ToolCallID: tc.ID, Partial: p})
+	}
+
+	result, err := tool.Execute(ctx, tc.ID, args, signal, progress)
+	if err != nil {
+		result = session.ToolResultMessage{
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			Content:    []session.Content{session.TextContent{Text: err.Error()}},
+			IsError:    true,
+			Timestamp:  time.Now(),
+		}
+	}
+
+	// AfterToolCall hook.
+	if cfg.AfterToolCall != nil {
+		patch := cfg.AfterToolCall(ToolCallResultContext{
+			ToolCall: tc,
+			Args:     args,
+			Result:   result,
+		})
+		if patch != nil {
+			if patch.Content != nil {
+				result.Content = patch.Content
+			}
+			if patch.Details != nil {
+				result.Details = patch.Details
+			}
+			if patch.IsError != nil {
+				result.IsError = *patch.IsError
+			}
+		}
+	}
+
+	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 	return result
 }
 
-// State returns the current loop state.
-func (l *AgentLoop) State() AgentState {
-	return l.state
+// --- helpers ---
+
+func drain(fn func() []session.Message) []session.Message {
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
+func isAborted(signal <-chan struct{}) bool {
+	select {
+	case <-signal:
+		return true
+	default:
+		return false
+	}
+}
+
+func failureMessage(model llm.Model, err error, aborted bool) session.AssistantMessage {
+	stopReason := session.StopReasonError
+	if aborted {
+		stopReason = session.StopReasonAborted
+	}
+	return session.AssistantMessage{
+		API:        model.API,
+		Provider:   model.Provider,
+		Model:      model.ID,
+		StopReason: stopReason,
+		Error:      err.Error(),
+		Timestamp:  time.Now(),
+	}
+}
+
+func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.AssistantMessage {
+	resp := acc.Response()
+	msg := session.AssistantMessage{
+		Model:      model.ID,
+		StopReason: session.StopReason(resp.StopReason),
+		Timestamp:  time.Now(),
+	}
+	for _, b := range resp.Blocks {
+		switch b := b.(type) {
+		case llm.TextBlock:
+			msg.Content = append(msg.Content, session.TextContent{Text: b.Text})
+		case llm.ThinkingBlock:
+			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
+		case llm.ToolCallBlock:
+			args := map[string]any{}
+			json.Unmarshal([]byte(b.Arguments), &args)
+			msg.Content = append(msg.Content, &session.ToolCall{ID: b.ID, Name: b.Name, Arguments: args})
+		}
+	}
+	return msg
+}
+
+func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model) session.AssistantMessage {
+	resp := acc.Response()
+	msg := session.AssistantMessage{
+		API:           resp.API,
+		Provider:      resp.Provider,
+		Model:         model.ID,
+		ResponseModel: resp.ResponseModel,
+		ResponseID:    resp.ResponseID,
+		StopReason:    session.StopReason(resp.StopReason),
+		Error:         resp.ErrorMessage,
+		Usage: session.Usage{
+			Input: resp.Usage.InputTokens,
+			Output: resp.Usage.OutputTokens,
+			CacheRead: resp.Usage.CacheReadTokens,
+			CacheWrite: resp.Usage.CacheCreationTokens,
+			TotalTokens: resp.Usage.TotalTokens,
+		},
+		Timestamp: time.Now(),
+	}
+	for _, b := range resp.Blocks {
+		switch b := b.(type) {
+		case llm.TextBlock:
+			msg.Content = append(msg.Content, session.TextContent{Text: b.Text})
+		case llm.ThinkingBlock:
+			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
+		case llm.ToolCallBlock:
+			args := map[string]any{}
+			json.Unmarshal([]byte(b.Arguments), &args)
+			msg.Content = append(msg.Content, &session.ToolCall{ID: b.ID, Name: b.Name, Arguments: args})
+		}
+	}
+	return msg
+}
+
+func failureMessagePtr(model llm.Model, err error, aborted bool) *session.AssistantMessage {
+	msg := failureMessage(model, err, aborted)
+	return &msg
 }

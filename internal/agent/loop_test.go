@@ -2,499 +2,250 @@ package agent
 
 import (
 	"context"
-	"sync"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-// eventRecorder records agent events with their types for ordered assertions.
-type eventRecorder struct {
-	events []string
+// --- helpers ---
+
+type mockStream struct {
+	chunks []*llm.Chunk
+	idx    int
 }
 
-func (r *eventRecorder) record(ev session.AgentEvent) {
-	r.events = append(r.events, eventTypeName(ev))
-}
-
-func eventTypeName(ev session.AgentEvent) string {
-	switch ev.(type) {
-	case session.AgentStart:
-		return "agent_start"
-	case session.AgentEnd:
-		return "agent_end"
-	case session.TurnStart:
-		return "turn_start"
-	case session.TurnEnd:
-		return "turn_end"
-	case session.UserMessage:
-		return "user_message"
-	case session.AgentMessage:
-		return "agent_message"
-	case session.MessageUpdate:
-		return "message_update"
-	case session.ToolCallStart:
-		return "tool_call_start"
-	case session.ToolCallEnd:
-		return "tool_call_end"
-	case session.ToolExecutionUpdate:
-		return "tool_execution_update"
-	case session.MessageStart:
-		return "message_start"
-	case session.MessageEnd:
-		return "message_end"
-	default:
-		return "unknown"
+func (s *mockStream) Next() (*llm.Chunk, bool) {
+	if s.idx >= len(s.chunks) {
+		return nil, false
 	}
+	c := s.chunks[s.idx]
+	s.idx++
+	return c, true
 }
+func (s *mockStream) Err() error  { return nil }
+func (s *mockStream) Close() error { return nil }
 
-// assertEventSequence checks that the recorded events match the expected sequence.
-// It allows extra events between expected events (prefix matching).
-func assertEventSequence(t *testing.T, got []string, want []string) {
-	t.Helper()
-	
-	gi := 0
-	for _, expected := range want {
-		found := false
-		for gi < len(got) {
-			if got[gi] == expected {
-				found = true
-				gi++
-				break
-			}
-			gi++
-		}
-		if !found {
-			t.Errorf("expected event %q not found in sequence (got through index %d of %d): %v", expected, gi, len(got), got)
-			return
-		}
-	}
-}
+// --- Loop contract tests ---
 
-// assertEventOrder checks that events appear in the specified order.
-// It does not require them to be adjacent — other events may appear between them.
-func assertEventOrder(t *testing.T, got []string, want []string) {
-	t.Helper()
-	
-	gi := 0
-	for _, expected := range want {
-		found := false
-		for gi < len(got) {
-			if got[gi] == expected {
-				found = true
-				gi++
-				break
-			}
-			gi++
-		}
-		if !found {
-			t.Errorf("expected event %q not found after index %d in: %v", expected, gi, got)
-			return
-		}
-	}
-}
-
-// TestLoopEventSequence tests the basic event sequence for a simple run.
-// Expected: agent_start → turn_start → agent_delta → agent_message → turn_end → agent_end
-func TestLoopEventSequence(t *testing.T) {
-	rec := &eventRecorder{}
-	
+// INVARIANT: RunLoop emits AgentStart, then AgentEnd (lifecycle bookends).
+func TestRunLoopLifecycleEvents(t *testing.T) {
+	var events []session.Event
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		return &mockStream{chunks: []*llm.Chunk{{Content: "hello"}}}, nil
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "hello", StopReason: "stop"},
+		}}, nil
 	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  rec.record,
-	})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "hi"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
+
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{SystemPrompt: "test"},
+		LoopConfig{
+			Model:    llm.Model{ID: "test"},
+			StreamFn: streamFn,
+		},
+		func(e session.Event) { events = append(events, e) },
+		nil,
+	)
+
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(events))
 	}
-	
-	// Verify the event sequence (agent_end is emitted by wrapper after loop returns)
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"user_message",
-		"turn_start",
-		"message_start",
-		"message_update",
-		"message_end",
-		"turn_end",
-	})
+	if _, ok := events[0].(session.AgentStart); !ok {
+		t.Fatalf("first event should be AgentStart, got %T", events[0])
+	}
+	if _, ok := events[len(events)-1].(session.AgentEnd); !ok {
+		t.Fatalf("last event should be AgentEnd, got %T", events[len(events)-1])
+	}
 }
 
-// TestLoopEventSequenceWithTool tests the event sequence with tool calls.
-// Expected: agent_start → turn_start → agent_delta → tool_call_start → tool_call_end → turn_start → agent_delta → turn_end → agent_end
-func TestLoopEventSequenceWithTool(t *testing.T) {
-	rec := &eventRecorder{}
-	
+// INVARIANT: RunLoop emits exactly one AgentEnd per run (no multi-AgentEnd bug).
+func TestRunLoopSingleAgentEnd(t *testing.T) {
+	var agentEndCount int
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		if len(rec.events) < 10 {
-			// First turn: return tool call
-			return &mockStream{chunks: []*llm.Chunk{{
-				Content: "using tool",
-				Calls:  []llm.Call{testCall("call-1", "read", `{}`)},
-			}}}, nil
-		}
-		// Second turn: return final response
-		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "ok", StopReason: "stop"},
+		}}, nil
 	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		ToolExecutor: func(ctx context.Context, tc AgentToolCall) (AgentToolResult, error) {
-			return AgentToolResult{Content: []llm.ContentPart{llm.TextPart("file contents")}}, nil
-		},
-		OnEvent: rec.record,
-		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
-			// Stop after tool results are processed
-			return len(ctx.ToolResults) > 0
-		},
-	})
-	agent.SetTools([]AgentTool{{Name: "read"}})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "read file"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	
-	// Verify the event sequence (agent_end is emitted by wrapper after loop returns)
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"user_message",
-		"turn_start",
-		"message_start",
-		"message_update",       // "using tool"
-		"message_end",
-		"tool_call_start",
-		"tool_call_end",
-		"message_start",
-		"message_end",
-		"turn_end",
-	})
-}
 
-// TestLoopEventSequenceWithSteering tests the event sequence with steering messages.
-func TestLoopEventSequenceWithSteering(t *testing.T) {
-	rec := &eventRecorder{}
-	
-	callCount := 0
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		callCount++
-		if callCount <= 2 {
-			return &mockStream{chunks: []*llm.Chunk{{Content: "working"}}}, nil
-		}
-		return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
-	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  rec.record,
-		GetSteeringMessages: func() []AgentMessage {
-			if callCount == 1 {
-				return []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "steer"}}}}
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
+		func(e session.Event) {
+			if _, ok := e.(session.AgentEnd); ok {
+				agentEndCount++
 			}
-			return nil
 		},
-		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
-			return callCount >= 3
-		},
-	})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "start"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
+		nil,
+	)
+
+	if agentEndCount != 1 {
+		t.Fatalf("expected exactly 1 AgentEnd, got %d", agentEndCount)
 	}
-	
-	// Should have multiple turns due to steering (agent_end is emitted by wrapper)
-	// Note: turn_start is emitted before steering messages are injected
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"user_message",    // initial prompt
-		"turn_start",
-		"message_start",
-		"message_update",     // first response
-		"message_end",
-		"turn_end",
-		"turn_start",      // second turn starts
-		"user_message",    // steering message injected
-		"message_start",
-		"message_update",     // second response
-		"message_end",
-		"turn_end",
-	})
 }
 
-// TestLoopEventSequenceWithFollowUp tests the event sequence with follow-up messages.
-func TestLoopEventSequenceWithFollowUp(t *testing.T) {
-	rec := &eventRecorder{}
-	
+// INVARIANT: RunLoop returns new messages (prompts + assistant response).
+func TestRunLoopReturnsNewMessages(t *testing.T) {
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "response", StopReason: "stop"},
+		}}, nil
+	}
+
+	msgs := RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
+		func(e session.Event) {},
+		nil,
+	)
+
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages (prompt + response), got %d", len(msgs))
+	}
+	// First should be the user prompt.
+	if _, ok := msgs[0].(*session.UserMessage); !ok {
+		t.Fatalf("first message should be UserMessage, got %T", msgs[0])
+	}
+	// Last should be the assistant response.
+	if _, ok := msgs[len(msgs)-1].(*session.AssistantMessage); !ok {
+		t.Fatalf("last message should be AssistantMessage, got %T", msgs[len(msgs)-1])
+	}
+}
+
+// INVARIANT: failure is terminal — error causes AgentEnd, not a retry loop.
+func TestRunLoopTerminalFailure(t *testing.T) {
+	var agentEndCount int
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	msgs := RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
+		func(e session.Event) {
+			if _, ok := e.(session.AgentEnd); ok {
+				agentEndCount++
+			}
+		},
+		nil,
+	)
+
+	if agentEndCount != 1 {
+		t.Fatalf("expected exactly 1 AgentEnd on failure, got %d", agentEndCount)
+	}
+	// Last message should be a failure assistant message.
+	last := msgs[len(msgs)-1]
+	am, ok := last.(*session.AssistantMessage)
+	if !ok {
+		t.Fatalf("expected AssistantMessage on failure, got %T", last)
+	}
+	if am.StopReason != session.StopReasonError {
+		t.Fatalf("expected error stop reason, got %q", am.StopReason)
+	}
+}
+
+// INVARIANT: signal abort causes terminal AgentEnd.
+func TestRunLoopAbort(t *testing.T) {
+	var agentEndCount int
+	signal := make(chan struct{})
+	close(signal) // pre-aborted
+
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "should not complete"},
+		}}, nil
+	}
+
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
+		func(e session.Event) {
+			if _, ok := e.(session.AgentEnd); ok {
+				agentEndCount++
+			}
+		},
+		signal,
+	)
+
+	if agentEndCount != 1 {
+		t.Fatalf("expected exactly 1 AgentEnd on abort, got %d", agentEndCount)
+	}
+}
+
+// INVARIANT: RunLoop is stateless — no fields, no persistence.
+// This is a compile-time invariant enforced by rg guard, but we verify
+// the function signature takes all inputs as args.
+func TestRunLoopIsStateless(t *testing.T) {
+	// Verify RunLoop can be called with no prior state.
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{{StopReason: "stop"}}}, nil
+	}
+	// Each call is independent — no shared state.
+	RunLoop(context.Background(), nil, TurnContext{}, LoopConfig{Model: llm.Model{ID: "x"}, StreamFn: streamFn}, func(e session.Event) {}, nil)
+	RunLoop(context.Background(), nil, TurnContext{}, LoopConfig{Model: llm.Model{ID: "y"}, StreamFn: streamFn}, func(e session.Event) {}, nil)
+}
+
+// INVARIANT: tool calls are executed and ToolExecStart/End emitted.
+func TestRunLoopToolExecution(t *testing.T) {
+	var toolEvents []session.Event
 	callCount := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		callCount++
 		if callCount == 1 {
-			return &mockStream{chunks: []*llm.Chunk{{Content: "first response"}}}, nil
+			return &mockStream{chunks: []*llm.Chunk{
+				{Calls: []llm.Call{{
+					ID: "call-1",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "test-tool", Arguments: `{"x":1}`},
+				}}, StopReason: "toolUse"},
+			}}, nil
 		}
-		return &mockStream{chunks: []*llm.Chunk{{Content: "follow-up response"}}}, nil
-	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  rec.record,
-		GetFollowUpMessages: func() []AgentMessage {
-			if callCount == 1 {
-				return []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "follow-up"}}}}
-			}
-			return nil
-		},
-		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
-			return callCount >= 2
-		},
-	})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "start"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	
-	// Should have two turns: initial + follow-up (agent_end is emitted by wrapper)
-	// Note: turn_start is emitted before follow-up messages are injected
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"user_message",    // initial prompt
-		"turn_start",
-		"message_start",
-		"message_update",     // first response
-		"message_end",
-		"turn_end",
-		"turn_start",      // second turn starts
-		"user_message",    // follow-up message injected
-		"message_start",
-		"message_update",     // follow-up response
-		"message_end",
-		"turn_end",
-	})
-}
-
-// TestLoopEventSequenceCancellation tests that cancellation emits proper events.
-func TestLoopEventSequenceCancellation(t *testing.T) {
-	rec := &eventRecorder{}
-	
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		return &mockStream{chunks: []*llm.Chunk{{Content: "started"}}}, nil
-	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  rec.record,
-	})
-	
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-	
-	_, err := agent.Run(ctx, []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "go"}}}})
-	if err == nil {
-		t.Fatal("expected error from cancelled context")
-	}
-	
-	// Should have agent_start and turn_end (with cancellation)
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"turn_end",
-	})
-}
-
-// TestLoopEventSequenceWithThinking tests the event sequence with thinking/reasoning.
-func TestLoopEventSequenceWithThinking(t *testing.T) {
-	rec := &eventRecorder{}
-	
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		return &mockStream{chunks: []*llm.Chunk{
-			{Reasoning: "let me think..."},
-			{Content: "here's my answer"},
+			{Content: "done", StopReason: "stop"},
 		}}, nil
 	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  rec.record,
-	})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "think"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	
-	// Should have thinking_delta before agent_delta (agent_end is emitted by wrapper)
-	assertEventOrder(t, rec.events, []string{
-		"agent_start",
-		"turn_start",
-		"message_start",
-		"message_update",
-		"message_update",
-		"message_end",
-		"turn_end",
-	})
-}
 
-func TestMessageUpdateDeltaAndBlockType(t *testing.T) {
-	// Use a custom recorder that stores actual events
-	type recordedEvent struct {
-		Type string
-		Ev   session.AgentEvent
-	}
-	var events []recordedEvent
-	var mu sync.Mutex
-	record := func(ev session.AgentEvent) {
-		mu.Lock()
-		defer mu.Unlock()
-		events = append(events, recordedEvent{Type: eventTypeName(ev), Ev: ev})
-	}
-	
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		return &mockStream{chunks: []*llm.Chunk{
-			{Reasoning: "let me think..."},
-			{Content: "here's my answer"},
-		}}, nil
-	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		OnEvent:  record,
-	})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "think"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	
-	// Find MessageUpdate events
-	var updates []session.MessageUpdate
-	mu.Lock()
-	for _, rec := range events {
-		if u, ok := rec.Ev.(session.MessageUpdate); ok {
-			updates = append(updates, u)
-		}
-	}
-	mu.Unlock()
-	if len(updates) != 2 {
-		t.Fatalf("expected 2 MessageUpdate events, got %d", len(updates))
-	}
-	
-	// First should be thinking
-	if updates[0].BlockType != "thinking" {
-		t.Fatalf("first update BlockType = %q, want thinking", updates[0].BlockType)
-	}
-	if updates[0].Delta != "let me think..." {
-		t.Fatalf("first update Delta = %q, want 'let me think...'", updates[0].Delta)
-	}
-	if updates[0].Message.Reasoning != "let me think..." {
-		t.Fatalf("first update Message.Reasoning = %q, want 'let me think...'", updates[0].Message.Reasoning)
-	}
-	
-	// Second should be text
-	if updates[1].BlockType != "text" {
-		t.Fatalf("second update BlockType = %q, want text", updates[1].BlockType)
-	}
-	if updates[1].Delta != "here's my answer" {
-		t.Fatalf("second update Delta = %q, want 'here's my answer'", updates[1].Delta)
-	}
-	if updates[1].Message.Message != "here's my answer" {
-		t.Fatalf("second update Message.Message = %q, want 'here's my answer'", updates[1].Message.Message)
-	}
-}
-func TestToolExecutionUpdateEventsEmittedDuringStreaming(t *testing.T) {
-	rec := &eventRecorder{}
-	
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		return &mockStream{chunks: []*llm.Chunk{{
-			Content: "using tool",
-			Calls:  []llm.Call{testCall("call-1", "slow_tool", `{"query": "test"}`)},
-		}}}, nil
-	}
-	
-	agent := New(AgentConfig{
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-		StreamingToolExecutor: func(ctx context.Context, tc AgentToolCall, onProgress func(any)) (AgentToolResult, error) {
-			// Simulate streaming progress
-			onProgress("partial result 1")
-			onProgress("partial result 2")
-			onProgress("partial result 3")
-			return AgentToolResult{
-				Content: []llm.ContentPart{llm.TextPart("final result")},
+	tool := Tool{
+		Name: "test-tool",
+		Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			return session.ToolResultMessage{
+				ToolCallID: id,
+				ToolName:   "test-tool",
+				Content:    []session.Content{session.TextContent{Text: "ok"}},
+				Timestamp:  time.Now(),
 			}, nil
 		},
-		OnEvent: rec.record,
-		ShouldStopAfterTurn: func(ctx ShouldStopAfterTurnContext) bool {
-			return len(ctx.ToolResults) > 0
-		},
-	})
-	agent.SetTools([]AgentTool{{Name: "slow_tool"}})
-	
-	_, err := agent.Run(context.Background(), []AgentMessage{{Role: "user", Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "test"}}}})
-	if err != nil {
-		t.Fatalf("run: %v", err)
 	}
-	
-	// Should have tool_execution_update events
-	updateCount := 0
-	for _, ev := range rec.events {
-		if ev == "tool_execution_update" {
-			updateCount++
+
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("use tool", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn, Tools: []Tool{tool}},
+		func(e session.Event) { toolEvents = append(toolEvents, e) },
+		nil,
+	)
+
+	hasStart, hasEnd := false, false
+	for _, e := range toolEvents {
+		switch e.(type) {
+		case session.ToolExecStart:
+			hasStart = true
+		case session.ToolExecEnd:
+			hasEnd = true
 		}
 	}
-	
-	if updateCount != 3 {
-		t.Errorf("expected 3 tool_execution_update events, got %d (events: %v)", updateCount, rec.events)
-}
-}
-
-func TestContinueEmitsAgentEndOnEarlyFailure(t *testing.T) {
-	// Create a loop with an empty tree store (will cause early failure)
-	state := AgentState{
-		SystemPrompt: "test",
-		Model:        llm.Model{ID: "test-model"},
+	if !hasStart {
+		t.Fatal("expected ToolExecStart event")
 	}
-	var events []session.AgentEvent
-	emit := func(ev session.AgentEvent) {
-		events = append(events, ev)
-	}
-	loop := NewAgentLoop(AgentConfig{}, state, emit, "test-session")
-
-	ctx := context.Background()
-	_, err := loop.Continue(ctx)
-
-	// Should get an error
-	if err == nil {
-		t.Fatal("Expected error, got nil")
-	}
-
-	// Check that AgentEnd was emitted
-	var hasAgentStart, hasAgentEnd bool
-	for _, ev := range events {
-		switch ev.(type) {
-		case session.AgentStart:
-			hasAgentStart = true
-		case session.AgentEnd:
-			hasAgentEnd = true
-		}
-	}
-
-	if !hasAgentStart {
-		t.Fatal("Missing AgentStart event")
-	}
-	if !hasAgentEnd {
-		t.Fatal("Missing AgentEnd event — subscribers would see unclosed agent run")
+	if !hasEnd {
+		t.Fatal("expected ToolExecEnd event")
 	}
 }
