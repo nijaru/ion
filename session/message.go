@@ -179,3 +179,6 @@ func EntryText(e Entry) string {
 	}
 	return sb.String()
 }
+
+func (UserMessage) isEvent() {}
+func (AssistantMessage) isEvent() {}

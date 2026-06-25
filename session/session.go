@@ -29,6 +29,8 @@ type Session interface {
 	AppendCustom(ctx context.Context, entry *CustomEntry) (string, error)
 	Append(ctx context.Context, entry Entry) (string, error)
 	SubmitTurn(ctx context.Context, text string) error
+	CancelTurn(ctx context.Context) error
+	Events() <-chan Event
 
 	// Tree navigation.
 	GetEntry(ctx context.Context, id string) (Entry, error)
@@ -67,3 +69,6 @@ func SubmitTurn(ctx context.Context, sess Session, text string) error {
 	_, err := sess.AppendMessage(ctx, NewUserText(text, time.Now()))
 	return err
 }
+
+func (s *sessionImpl) CancelTurn(ctx context.Context) error { return nil }
+func (s *sessionImpl) Events() <-chan Event { return nil }

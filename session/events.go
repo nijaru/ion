@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-
+	"fmt"
 	"time"
 )
 
@@ -65,6 +65,8 @@ type ToolExecEnd struct {
 
 // TurnEnd closes a turn.
 type TurnEnd struct {
+	Error error
+	Base  EventBase
 	Message     Message // the assistant message that ended the turn
 	ToolResults []ToolResultMessage
 }
@@ -213,7 +215,7 @@ type StoreRoutingDecision struct {
 	StopReason     string
 	TS             time.Time
 }
-func (*StoreRoutingDecision) isEvent() {}
+func (StoreRoutingDecision) isEvent() {}
 
 type SubmitPreflightDecision struct {
 	Allowed bool
@@ -222,19 +224,19 @@ type SubmitPreflightDecision struct {
 }
 
 type SteeringSession interface {
-	SteerTurn(ctx context.Context, text string) (BusyInputResultAccepted, error)
+	SteerTurn(ctx context.Context, text string) (SteeringResult, error)
 }
 
 type QueuedInputSession interface {
-	FollowUpTurn(ctx context.Context, text string) (BusyInputResultAccepted, error)
-	ClearQueuedInput(ctx context.Context) error
+	FollowUpTurn(ctx context.Context, text string) (FollowUpResult, error)
+	ClearQueuedInput(ctx context.Context) (string, error)
 }
 
 type StatusChange struct {
 	EntryBase
 	Status string
 }
-func (*StatusChange) isEvent() {}
+func (StatusChange) isEvent() {}
 
 type SessionTree struct {
 	Current  Entry
@@ -249,7 +251,7 @@ type SessionTreeReader interface {
 func IsMaterialized(s Session) bool { return true }
 
 type QueuedInputUpdate struct{ EntryBase }
-func (*QueuedInputUpdate) isEvent() {}
+func (QueuedInputUpdate) isEvent() {}
 
 type AgentMessage = Message
 
@@ -259,21 +261,21 @@ type ToolCallStart struct {
 	Name       string
 	Args       []byte
 }
-func (*ToolCallStart) isEvent() {}
+func (ToolCallStart) isEvent() {}
 
 type ToolExecutionUpdate struct {
 	EntryBase
 	ToolCallID string
 	Partial    ToolPartial
 }
-func (*ToolExecutionUpdate) isEvent() {}
+func (ToolExecutionUpdate) isEvent() {}
 
 type ToolCallEnd struct {
 	EntryBase
 	ToolCallID string
 	Result     ToolResultMessage
 }
-func (*ToolCallEnd) isEvent() {}
+func (ToolCallEnd) isEvent() {}
 
 type SessionBundle struct {
 	RootSessionID string
@@ -332,7 +334,7 @@ type DisplayError struct {
 	EntryBase
 	Err error
 }
-func (*DisplayError) isEvent() {}
+func (DisplayError) isEvent() {}
 
 func RouteBusyInput(input BusyInputRouting) string { return input.Route }
 
@@ -352,15 +354,143 @@ func (e StoreRoutingDecision) ID() string      { return e.EntryBase.ID }
 func (e StoreRoutingDecision) ParentID() string { return e.EntryBase.ParentID }
 func (e StoreRoutingDecision) When() time.Time  { return e.EntryBase.Timestamp }
 
-type BusyInputResultAccepted struct{ EntryBase }
-func (BusyInputResultAccepted) isEvent() {}
 
-type FollowUpResultInput struct{ Text string }
-
-func DecideSteeringResult(input struct{}) BusyInputResultAccepted {
-	return BusyInputResultAccepted{}
+type FollowUpResultInput struct{
+	Text               string
+	PriorFollowUpCount int
+	CurrentFollowUp    []string
+	Result             FollowUpResult
+	Err                error
 }
 
-func DecideFollowUpResult(input FollowUpResultInput) BusyInputResultAccepted {
-	return BusyInputResultAccepted{}
+func (StoreRoutingDecision) isEntry() {}
+
+type SteeringResult struct{}
+type FollowUpResult struct{}
+
+type BusyInputDecision struct {
+	Recall        bool
+	ComposerText  string
+	ClearBackend  bool
+	Action         string
+	NoticeContent  string
+	FollowUp       []string
 }
+
+var BusyInputResultAccepted = "accepted"
+
+func DecideSteeringResult(result SteeringResult, err error) BusyInputDecision {
+	if err != nil {
+		return BusyInputDecision{}
+	}
+	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Steering applied"}
+}
+
+func DecideFollowUpResult(input FollowUpResultInput) BusyInputDecision {
+	if input.Err != nil {
+		return BusyInputDecision{}
+	}
+	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Follow-up queued", FollowUp: []string{input.Text}}
+}
+
+type QueuedInputRecallInput struct{
+	Text         string
+	CurrentDraft string
+	Steering     []string
+	FollowUp     []string
+	BackendOwned bool
+}
+
+func DecideQueuedInputRecall(input QueuedInputRecallInput) BusyInputDecision {
+	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Input recalled"}
+}
+
+
+type EventBase struct {
+	Timestamp time.Time
+	Error     error
+}
+
+func BaseNow() EventBase { return EventBase{Timestamp: time.Now()} }
+func BaseAt(t time.Time) EventBase { return EventBase{Timestamp: t} }
+
+type EventDrainInput struct {
+	Active    bool
+	DrainStartedAt time.Time
+	Event     Event
+}
+
+type EventDrainDecision struct {
+	Drain       bool
+	Action      string
+	FinishDrain bool
+}
+
+var EventDrainAwait = "await"
+
+func DecideEventDrain(input EventDrainInput) EventDrainDecision {
+	return EventDrainDecision{Drain: input.Active}
+}
+
+type StoreSystem struct {
+	EntryBase
+	Type    string
+	Content string
+	TS      int64
+}
+func (StoreSystem) isEntry() {}
+func (s StoreSystem) ID() string { return s.EntryBase.ID }
+func (s StoreSystem) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreSystem) When() time.Time { return s.EntryBase.Timestamp }
+
+type ChildRequest struct{ EntryBase; AgentID string }
+func (ChildRequest) isEvent() {}
+type ChildStart struct{ EntryBase; AgentID string }
+func (ChildStart) isEvent() {}
+type ChildDelta struct{ EntryBase; AgentID string; Delta Delta }
+func (ChildDelta) isEvent() {}
+type ChildComplete struct{ EntryBase; AgentID string }
+func (ChildComplete) isEvent() {}
+type ChildBlock struct{ EntryBase; AgentID string; Reason string }
+func (ChildBlock) isEvent() {}
+type ChildCancel struct{ EntryBase; AgentID string }
+func (ChildCancel) isEvent() {}
+type ChildFail struct{ EntryBase; AgentID string; Err error }
+func (ChildFail) isEvent() {}
+
+func EntryUser(content string, ts time.Time) (*MessageEntry, string) {
+	id := fmt.Sprintf("%d", ts.UnixNano())
+	return &MessageEntry{
+		EntryBase: EntryBase{ID: id, Timestamp: ts},
+		Message:   NewUserText(content, ts),
+	}, id
+}
+
+type ErrorSettlementInput struct {
+	AwaitTerminal bool
+	Err       error
+	Thinking  bool
+	Compacting bool
+}
+
+type ErrorSettlementDecision struct {
+	RoutingStop   bool
+	PersistSystem bool
+	AwaitNext     bool
+	DisplayError string
+	EntryContent string
+}
+
+func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
+	return ErrorSettlementDecision{DisplayError: input.Err.Error()}
+}
+
+type StoreStatus struct {
+	EntryBase
+	Status    string
+	Timestamp time.Time
+}
+func (StoreStatus) isEntry() {}
+func (s StoreStatus) ID() string { return s.EntryBase.ID }
+func (s StoreStatus) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreStatus) When() time.Time { return s.EntryBase.Timestamp }

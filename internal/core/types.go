@@ -354,5 +354,25 @@ func GetSessionState(h Handles) (string, bool) {
 func (t TurnReducer) StartSubmit() {}
 func (t TurnReducer) RejectSubmit(reason string) {}
 
-func (t TurnReducer) SetBackendQueuedInput(text string) {}
+func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {}
 func (t TurnReducer) QueueTurn(text string) {}
+
+func (t TurnReducer) ClearQueuedTurns()        {}
+func (t TurnReducer) CancelActiveTurn(reason string, now time.Time) error { return nil }
+
+func (t TurnReducer) DrainingUntilTurnStarted() bool { return false }
+
+type CancelDecision struct {
+	EntryContent string
+}
+
+func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
+	return CancelDecision{EntryContent: "Turn cancelled: " + reason}
+}
+
+func (t TurnReducer) FinishDrain() {}
+
+func (t TurnReducer) StreamClosed(now time.Time) error { return nil }
+func (t TurnReducer) FailTurn(msg string, now time.Time)  {}
+func (t TurnReducer) ClearLocalErrorIfIdle()              {}
+func (t TurnReducer) ApplyStatusChanged(status string)    {}

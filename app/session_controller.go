@@ -263,13 +263,13 @@ func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
 }
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
-	decision := m.turnReducer().CancelActiveTurn(reason, time.Now())
+	decision := m.turnReducer().CancelTurn(reason, time.Now())
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
 		m.persistEntryCmd("persist cancellation", session.StoreSystem{
 			Type:    "system",
-			Content: entry.Content,
+			Content: session.EntryText(entry),
 			TS:      now(),
 		}),
 		cancelTurnCmd(m.Model.Session),
@@ -426,7 +426,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 }
 
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, ok := session.EntryUser(msg.Message, msg.Timestamp)
+	entry, ok := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.Timestamp)
 	if !ok {
 		return m, m.awaitSessionEvent()
 	}
@@ -442,7 +442,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 	cmds = append(cmds, m.persistEntryCmd("persist stream close error", session.StoreSystem{
 		Type:    "system",
-		Content: entry.Content,
+		Content: session.EntryText(entry),
 		TS:      now(),
 	}))
 	return m, sequenceCmds(cmds...)
@@ -474,7 +474,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	if decision.PersistSystem {
 		cmds = append(cmds, m.persistEntryCmd("persist session error", session.StoreSystem{
 			Type:    "system",
-			Content: entry.Content,
+			Content: session.EntryText(entry),
 			TS:      now(),
 		}))
 	}
@@ -605,10 +605,10 @@ func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
 				m.routingDecision("stop", "budget_limit", reason),
 			),
 		)
-		if entry.Content != "" {
+		if session.EntryText(entry) != "" {
 			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
 				Type:    "system",
-				Content: entry.Content,
+				Content: session.EntryText(entry),
 				TS:      entryUnix(msg.Timestamp),
 			}))
 			cmds = append([]tea.Cmd{
@@ -653,3 +653,11 @@ func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
 	}
 	return m, m.awaitSessionEvent()
 }
+
+func (m Model) handleChildRequested(msg session.ChildRequest) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildStarted(msg session.ChildStart) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildDelta(msg session.ChildDelta) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildCompleted(msg session.ChildComplete) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildBlocked(msg session.ChildBlock) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildFailed(msg session.ChildFail) (Model, tea.Cmd) { return m, nil }
+func (m Model) handleChildCanceled(msg session.ChildCancel) (Model, tea.Cmd) { return m, nil }
