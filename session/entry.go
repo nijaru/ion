@@ -163,12 +163,6 @@ func EntrySystem(content string, ts time.Time) (*MessageEntry, error) {
 	}, nil
 }
 
-func SetTimestamp(e Entry, t time.Time) {
-	if eb, ok := e.(interface{ SetWhen(time.Time) }); ok {
-		eb.SetWhen(t)
-	}
-}
-
 func (e *SessionInfoEntry) Title() string { return e.Name }
 
 
