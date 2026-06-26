@@ -341,23 +341,6 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pic
 	}
 }
 
-func loadModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
-	cfgCopy := config.Config{}
-	if cfg != nil {
-		cfgCopy = *cfg
-	}
-	return func() tea.Msg {
-		items, err := modelItemsForProvider(context.Background(), &cfgCopy)
-		return modelPickerLoadedMsg{
-			requestID: requestID,
-			cfg:       cfgCopy,
-			preset:    preset,
-			items:     items,
-			err:       err,
-		}
-	}
-}
-
 func (m Model) startupPickerCmd() tea.Cmd {
 	overlay := m.Picker.Overlay
 	if overlay != nil &&
@@ -784,14 +767,6 @@ func (p *pickerOverlayState) Preset() Preset {
 	default:
 		return runtime.PresetPrimary
 	}
-}
-
-func providerModelEntryNotice(provider string) string {
-	display := providerDisplayName(provider)
-	if strings.TrimSpace(display) == "" {
-		display = provider
-	}
-	return display + " does not provide a model list. Set a model with /model <id>."
 }
 
 // handleProviderCommand handles /provider <name> for direct provider switching.

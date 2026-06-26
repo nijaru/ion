@@ -76,14 +76,6 @@ func modelItemsForProvider(ctx context.Context, cfg *config.Config) ([]pickerIte
 	return modelItemsFromMetadata(models), nil
 }
 
-func cachedModelItemsForProvider(cfg *config.Config) ([]pickerItem, bool, bool) {
-	models, fresh, ok := cachedModelsForConfig(cfg)
-	if !ok {
-		return nil, false, false
-	}
-	return modelItemsFromMetadata(models), fresh, true
-}
-
 func modelItemsFromMetadata(metas []llm.ModelMetadata) []pickerItem {
 	metas = append([]llm.ModelMetadata(nil), metas...)
 	slices.SortFunc(metas, func(a, b llm.ModelMetadata) int {
@@ -259,19 +251,6 @@ func providerSortRank(cfg *config.Config, provider string) int {
 	}
 }
 
-func providerCredentialSet(provider string) bool {
-	def, ok := llm.Lookup(provider)
-	if !ok {
-		return false
-	}
-	_, ready := llm.CredentialStateContext(
-		context.Background(),
-		cfgForProvider(nil, def.ID),
-		def,
-	)
-	return ready
-}
-
 func modelMetrics(meta llm.ModelMetadata) *pickerMetrics {
 	metrics := &pickerMetrics{}
 	if meta.ContextLimit > 0 {
@@ -299,26 +278,6 @@ func modelMetrics(meta llm.ModelMetadata) *pickerMetrics {
 		return nil
 	}
 	return metrics
-}
-
-func pickerWindow(title string, items []pickerItem, selected int) string {
-	var b strings.Builder
-	b.WriteString(title)
-	b.WriteString("\n")
-	for i, item := range items {
-		prefix := "  "
-		if i == selected {
-			prefix = "› "
-		}
-		line := prefix + item.Label
-		if item.Detail != "" {
-			line += " • " + item.Detail
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	b.WriteString("Esc cancel • Enter select")
-	return b.String()
 }
 
 func cfgForProvider(cfg *config.Config, provider string) *config.Config {

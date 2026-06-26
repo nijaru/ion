@@ -263,16 +263,6 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	return filtered
 }
 
-func sessionPickerLine(cwd string, info session.SessionInfoEntry) (string, string) {
-	label, preview, metadataParts := sessionPickerParts(cwd, info)
-	detailParts := make([]string, 0, len(metadataParts)+1)
-	if preview != "" {
-		detailParts = append(detailParts, preview)
-	}
-	detailParts = append(detailParts, metadataParts...)
-	return label, strings.Join(detailParts, " • ")
-}
-
 func sessionPickerRenderedLine(cwd string, info session.SessionInfoEntry, width int) string {
 	label, preview, metadataParts := sessionPickerParts(cwd, info)
 	metadata := fitSessionPickerMetadata(metadataParts, width)

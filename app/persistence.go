@@ -88,6 +88,4 @@ func entryUnix(timestamp time.Time) int64 {
 	return timestamp.UTC().Unix()
 }
 
-func setEntryTimestamp(entry *session.Entry, timestamp time.Time) {
-	session.SetTimestamp(*entry, timestamp)
-}
+

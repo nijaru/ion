@@ -116,8 +116,7 @@ type EventBase struct {
 	Error     error
 }
 
-func BaseNow() EventBase           { return EventBase{Timestamp: time.Now()} }
-func BaseAt(t time.Time) EventBase { return EventBase{Timestamp: t} }
+func BaseNow() EventBase { return EventBase{Timestamp: time.Now()} }
 
 // ToolPartial is a progress payload from a running tool (opaque to the loop).
 type ToolPartial = any

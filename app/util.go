@@ -241,16 +241,6 @@ func fitLine(line string, width int) string {
 	return ansi.Truncate(line, width, "…")
 }
 
-func clamp(v, low, high int) int {
-	if v < low {
-		return low
-	}
-	if v > high {
-		return high
-	}
-	return v
-}
-
 func joinLineSegments(sep string, segments ...string) string {
 	filtered := make([]string, 0, len(segments))
 	for _, segment := range segments {

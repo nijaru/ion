@@ -163,22 +163,6 @@ func closeRuntimeOpenError(
 	return fmt.Errorf("%s: %w", label, err)
 }
 
-func syncSessionMetadata(
-	ctx context.Context,
-	store session.Store,
-	sessionID, modelName, branch string,
-) error {
-	if store == nil || sessionID == "" {
-		return nil
-	}
-	return store.UpdateSession(ctx, session.SessionInfoEntry{
-		// ID: sessionID,
-		// Model: modelName,
-		// Branch: branch,
-		// PreserveUpdatedAt: true,
-	})
-}
-
 // toolExecutorFromRegistry creates an agent.ToolExecutor that dispatches
 // tool calls to an Ion tool.Registry.
 func toolExecutorFromRegistry(registry *tool.Registry) agent.ToolExecutor {

@@ -42,8 +42,6 @@ func RuntimeRequestMatches(current, requestID uint64) bool {
 	return current == requestID
 }
 
-type FinishRuntimeRequestInput struct{}
-
 type FinishRuntimeRequestDecision struct {
 	Matched          bool
 	Active           uint64

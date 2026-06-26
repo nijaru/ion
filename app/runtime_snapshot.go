@@ -217,13 +217,6 @@ func (m *Model) refreshRuntimeSessionSnapshot() {
 	m.Model.Runtime.Materialized = materialized
 }
 
-func newAcceptedRuntime(
-	transition Transition,
-	handles Handles,
-) Accepted {
-	return NewAccepted(transition, handles)
-}
-
 func (m Model) Handles() Handles {
 	return Handles{
 		Backend: m.Model.Backend,

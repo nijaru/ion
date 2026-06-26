@@ -186,9 +186,6 @@ func EntryIsError(e Entry) bool {
 	return false
 }
 
-// EntryRole returns the role of the entry (for tool_render.go compatibility).
-func EntryRoleString(e Entry) string { return EntryRole(e) }
-
 // EntryContent returns the text content of the entry.
 func EntryContent(e Entry) string { return EntryText(e) }
 
