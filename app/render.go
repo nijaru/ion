@@ -602,33 +602,6 @@ func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidth
 	return fitLine(b.String(), m.shellWidth())
 }
 
-func (m Model) renderPickerLine(
-	prefix string,
-	item pickerItem,
-	labelWidth int,
-	metricWidths pickerMetricWidths,
-	labelStyle, metricStyle lipgloss.Style,
-) string {
-	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", 2))
-	label := prefix + item.Label + strings.Repeat(
-		" ",
-		max(0, labelWidth-lipgloss.Width(item.Label)),
-	)
-	b.WriteString(labelStyle.Render(label))
-	if item.Metrics != nil {
-		detail := m.renderPickerMetrics(*item.Metrics, metricWidths, metricStyle)
-		if detail != "" {
-			b.WriteString("    ")
-			b.WriteString(detail)
-		}
-	} else if item.Detail != "" {
-		b.WriteString("    ")
-		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
-	}
-	return fitLine(b.String(), m.shellWidth())
-}
-
 func (m Model) renderPickerMetrics(
 	metrics pickerMetrics,
 	widths pickerMetricWidths,
@@ -736,23 +709,6 @@ func highlightSyntax(code, language string) string {
 // highlightCodeBlock applies syntax highlighting to a code block,
 // preserving indentation. Each line is highlighted individually to
 // maintain consistent styling across the block.
-func highlightCodeBlock(code, language string, indent string) []string {
-	text := strings.TrimRight(code, "\n")
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-
-	// Try to highlight the entire block at once for better context
-	highlighted := highlightSyntax(text, language)
-	lines := strings.Split(highlighted, "\n")
-
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		out = append(out, indent+line)
-	}
-	return out
-}
-
 type progressReducer struct {
 	progress *ProgressState
 }

@@ -210,12 +210,6 @@ type sessionPickerState struct {
 // sessionSortMode represents the sort mode for the session picker.
 type sessionSortMode int
 
-const (
-	sortModeRecent    sessionSortMode = iota // Most recent first (default)
-	sortModeThreaded                         // Tree structure
-	sortModeRelevance                        // Sorted by search score
-)
-
 type pickerPurpose int
 
 const (

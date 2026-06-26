@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/tool"
 )
 
 func closeRuntimeHandles(
@@ -161,92 +159,4 @@ func closeRuntimeOpenError(
 		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))
 	}
 	return fmt.Errorf("%s: %w", label, err)
-}
-
-// toolExecutorFromRegistry creates an agent.ToolExecutor that dispatches
-// tool calls to an Ion tool.Registry.
-func toolExecutorFromRegistry(registry *tool.Registry) agent.ToolExecutor {
-	return func(ctx context.Context, tc agent.AgentToolCall) (agent.AgentToolResult, error) {
-		t, ok := registry.Get(tc.Name)
-		if !ok {
-			return agent.AgentToolResult{
-				Content: []llm.ContentPart{
-					{Type: "text", Text: fmt.Sprintf("Unknown tool: %s", tc.Name)},
-				},
-				IsError: true,
-			}, nil
-		}
-
-		argsJSON, err := json.Marshal(tc.Arguments)
-		if err != nil {
-			return agent.AgentToolResult{
-				Content: []llm.ContentPart{
-					{Type: "text", Text: fmt.Sprintf("Failed to marshal arguments: %v", err)},
-				},
-				IsError: true,
-			}, nil
-		}
-
-		// Try ContentTool first for richer output (images, etc.)
-		if ct, ok := t.(tool.ContentTool); ok {
-			parts, execErr := ct.ExecuteContent(ctx, string(argsJSON))
-			if execErr != nil {
-				return agent.AgentToolResult{
-					Content: []llm.ContentPart{{Type: "text", Text: execErr.Error()}},
-					IsError: true,
-				}, nil
-			}
-			ionParts := make([]llm.ContentPart, len(parts))
-			for i, p := range parts {
-				ionParts[i] = llm.ContentPart{Type: llm.ContentPartType(p.Type), Text: p.Text}
-			}
-			return agent.AgentToolResult{Content: ionParts}, nil
-		}
-
-		// Try DetailedTool for structured details
-		if dt, ok := t.(tool.DetailedTool); ok {
-			content, details, execErr := dt.ExecuteDetailed(ctx, string(argsJSON))
-			if execErr != nil {
-				return agent.AgentToolResult{
-					Content: []llm.ContentPart{{Type: "text", Text: execErr.Error()}},
-					IsError: true,
-				}, nil
-			}
-			return agent.AgentToolResult{
-				Content: []llm.ContentPart{{Type: "text", Text: content}},
-				Details: details,
-			}, nil
-		}
-
-		// Fall back to plain text Execute
-		result, execErr := t.Execute(ctx, string(argsJSON))
-		if execErr != nil {
-			return agent.AgentToolResult{
-				Content: []llm.ContentPart{{Type: "text", Text: execErr.Error()}},
-				IsError: true,
-			}, nil
-		}
-		return agent.AgentToolResult{
-			Content: []llm.ContentPart{{Type: "text", Text: result}},
-		}, nil
-	}
-}
-
-// agentToolsFromRegistry returns agent.AgentTool definitions for all tools
-// in the registry, suitable for LLM tool-spec requests.
-func agentToolsFromRegistry(registry *tool.Registry) []agent.AgentTool {
-	var result []agent.AgentTool
-	for _, entry := range registry.Entries() {
-		at := agent.AgentTool{
-			Name:        entry.Spec.Name,
-			Description: entry.Spec.Description,
-			Parameters:  entry.Spec.Parameters,
-		}
-		if _, ok := entry.Tool.(tool.ContentTool); ok {
-			at.ReadOnly = true
-			at.ExecutionMode = agent.ToolExecutionParallel
-		}
-		result = append(result, at)
-	}
-	return result
 }

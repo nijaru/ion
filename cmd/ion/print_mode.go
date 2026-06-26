@@ -62,11 +62,6 @@ func resolvePrintFlags(
 	return printRequested, prompt, output, nil
 }
 
-// runPrintMode submits a single turn and prints the response to stdout.
-func runPrintMode(ctx context.Context, agent session.Session, prompt string) error {
-	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, "text")
-}
-
 func runPrintModeWithWriter(
 	ctx context.Context,
 	w io.Writer,

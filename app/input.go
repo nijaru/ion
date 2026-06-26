@@ -372,10 +372,6 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) headerLine() string {
-	return m.headerLineFor(m.App.Branch)
-}
-
 func (m Model) headerLineFor(branch string) string {
 	sep := m.st.dim.Render(" • ")
 

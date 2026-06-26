@@ -89,18 +89,6 @@ func (m Model) costBudgetLabel(cost float64) string {
 	return fmt.Sprintf("$%.3f/$%.3f", cost, m.Model.Config.MaxSessionCost)
 }
 
-func (m Model) configuredBudgetStopReason() string {
-	if m.Model.Config == nil {
-		return ""
-	}
-	return runtime.BudgetStopReason(runtime.BudgetStopInput{
-		CurrentTurnCost: m.Progress.CurrentTurnCost,
-		TotalCost:       m.Progress.TotalCost,
-		MaxTurnCost:     m.Model.Config.MaxTurnCost,
-		MaxSessionCost:  m.Model.Config.MaxSessionCost,
-	})
-}
-
 func (m Model) routingDecision(decision, reason, stopReason string) runtime.StoreRoutingDecision {
 	provider := m.runtimeProvider()
 	model := m.runtimeModel()

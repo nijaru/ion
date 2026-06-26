@@ -374,9 +374,6 @@ func (t TurnReducer) ResetFinishedTurnSummary() {
 		t.progress.LastTurnSummary = TurnSummary{}
 	}
 }
-func (t TurnReducer) setReasoningEffort(v int)  {}
-func (t TurnReducer) applySessionUsage(in, out int, cost float64) {}
-
 func (t TurnReducer) PopQueuedTurn() string {
 	if t.inFlight == nil || len(t.inFlight.QueuedTurns) == 0 {
 		return ""

@@ -147,10 +147,6 @@ func (f cliFlags) importSessionPath() string {
 	return strings.TrimSpace(*f.importSessionFlag)
 }
 
-func (f cliFlags) sessionBundleRequested() bool {
-	return f.exportSessionPath() != "" || f.importSessionPath() != ""
-}
-
 func validatePrintSelection(printRequested, openResumePicker bool) error {
 	if printRequested && openResumePicker {
 		return fmt.Errorf("--resume requires a session ID in print mode")

@@ -15,11 +15,7 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
-var (
-	listModels            = llm.ListModels
-	listModelsForConfig   = llm.ListModelsForConfig
-	cachedModelsForConfig = llm.CachedModelsForConfig
-)
+var listModelsForConfig = llm.ListModelsForConfig
 
 const pickerPageSize = 8
 
@@ -68,14 +64,6 @@ func providerDisplayName(value string) string {
 	return llm.DisplayName(value)
 }
 
-func modelItemsForProvider(ctx context.Context, cfg *config.Config) ([]pickerItem, error) {
-	models, err := listModelsForConfig(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return modelItemsFromMetadata(models), nil
-}
-
 func modelItemsFromMetadata(metas []llm.ModelMetadata) []pickerItem {
 	metas = append([]llm.ModelMetadata(nil), metas...)
 	slices.SortFunc(metas, func(a, b llm.ModelMetadata) int {
@@ -119,11 +107,6 @@ func modelOrg(id string) string {
 		return ""
 	}
 	return left
-}
-
-func providerItem(label, value string) pickerItem {
-	def, _ := llm.Lookup(value)
-	return buildProviderItem(nil, def)
 }
 
 func buildProviderItem(cfg *config.Config, def llm.Definition) pickerItem {
@@ -394,10 +377,6 @@ func preparePickerSearchQuery(query string) pickerSearchQuery {
 		tokens = nil
 	}
 	return pickerSearchQuery{value: q, tokens: tokens}
-}
-
-func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
-	return pickerSearchScorePrepared(preparePickerSearchQuery(query), fields)
 }
 
 func pickerSearchScorePrepared(query pickerSearchQuery, fields []pickerSearchField) (int, bool) {

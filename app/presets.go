@@ -104,10 +104,6 @@ func updateProviderSelection(
 	return &updated, nil
 }
 
-func (m Model) updateModelForActivePreset(cfg *config.Config, model string) *config.Config {
-	return updateModelForPreset(cfg, model, m.activePreset())
-}
-
 func updateModelForPreset(
 	cfg *config.Config,
 	model string,
@@ -127,10 +123,6 @@ func updateModelForPreset(
 	return &updated
 }
 
-func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) *config.Config {
-	return updateThinkingForPreset(cfg, effort, m.activePreset())
-}
-
 func updateThinkingForPreset(
 	cfg *config.Config,
 	effort string,
@@ -148,10 +140,6 @@ func updateThinkingForPreset(
 		updated.ReasoningEffort = effort
 	}
 	return &updated
-}
-
-func (m Model) configuredModelForActivePreset(cfg *config.Config) string {
-	return configuredModelForPreset(cfg, m.activePreset())
 }
 
 func configuredModelForPreset(cfg *config.Config, preset Preset) string {

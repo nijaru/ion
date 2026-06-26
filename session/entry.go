@@ -82,10 +82,6 @@ type CustomEntry struct {
 	Data []byte
 }
 
-func (e EntryBase) id() string       { return e.ID }
-func (e EntryBase) parentID() string { return e.ParentID }
-func (e EntryBase) when() time.Time  { return e.Timestamp }
-
 func (e *MessageEntry) IsEntry()       {}
 func (e *ModelChangeEntry) IsEntry()   {}
 func (e *ThinkingChangeEntry) IsEntry() {}
