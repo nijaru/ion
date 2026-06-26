@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/llm"
+	rt "github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -132,11 +133,11 @@ func isConfigurationStatus(status string) bool {
 }
 
 func noProviderConfiguredStatus() string {
-	return session.NoProviderConfiguredStatus
+	return rt.NoProviderConfiguredStatus
 }
 
 func noModelConfiguredStatus() string {
-	return session.NoModelConfiguredStatus
+	return rt.NoModelConfiguredStatus
 }
 
 func toolSurfaceSummary(surface ToolSurface) string {

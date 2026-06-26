@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -207,11 +208,11 @@ func (b *smokeBackend) CancelTurn(context.Context) error {
 	return nil
 }
 
-func (b *smokeBackend) SteerTurn(ctx context.Context, text string) (session.SteeringResult, error) {
+func (b *smokeBackend) SteerTurn(ctx context.Context, text string) (runtime.SteeringResult, error) {
 	if strings.TrimSpace(text) == "" {
-		return session.SteeringResult{}, fmt.Errorf("steering text is empty")
+		return runtime.SteeringResult{}, fmt.Errorf("steering text is empty")
 	}
-	return session.SteeringResult{}, nil
+	return runtime.SteeringResult{}, nil
 }
 
 func (b *smokeBackend) Close() error {
@@ -230,11 +231,12 @@ func userEvent(text string) session.UserMessage {
 	}
 }
 
-func agentEvent(text string) session.AgentMessage {
-	return session.AgentMessage{
+func agentEndEvent(text string) session.MessageEnd {
+	return session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Content: []session.Content{session.TextContent{Text: text}},
 		},
+		Timestamp: now(),
 	}
 }
 
@@ -250,12 +252,12 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "cancel":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, session.StatusChange{Status: "[smoke] waiting for cancel"})
+		b.emit(ctx, runtime.StatusChange{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, session.StatusChange{Status: "[smoke] active before error"})
+		b.emit(ctx, runtime.StatusChange{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
@@ -269,7 +271,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	default:
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, session.StatusChange{Status: "[smoke] active progress"})
+		b.emit(ctx, runtime.StatusChange{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
@@ -277,7 +279,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolCallStart{
+		b.emit(ctx, session.ToolExecStart{
 			ToolCallID: "tool-1",
 			Name:       "bash",
 			Args:       []byte(`{"command":"sleep 2; echo ion-tmux-smoke"}`),
@@ -292,7 +294,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolCallEnd{
+		b.emit(ctx, session.ToolExecEnd{
 			ToolCallID: "tool-1",
 			Result: session.ToolResultMessage{
 				ToolCallID: "tool-1",
@@ -303,7 +305,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, agentEvent("done"))
+		b.emit(ctx, agentEndEvent("done"))
 		b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 	}
 }
@@ -311,7 +313,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, session.StatusChange{Status: "[smoke] markdown stream"})
+	b.emit(ctx, runtime.StatusChange{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -325,7 +327,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, agentEvent(strings.Join([]string{
+	b.emit(ctx, agentEndEvent(strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -351,18 +353,18 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, session.StatusChange{Status: "[smoke] active controls"})
+	b.emit(ctx, runtime.StatusChange{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
-	b.emit(ctx, agentEvent("controls done"))
+	b.emit(ctx, agentEndEvent("controls done"))
 	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, session.StatusChange{Status: "[smoke] file tool rows"})
+	b.emit(ctx, runtime.StatusChange{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -410,7 +412,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		},
 	}
 	for _, tool := range tools {
-		b.emit(ctx, session.ToolCallStart{
+		b.emit(ctx, session.ToolExecStart{
 			ToolCallID: tool.id,
 			Name:       tool.name,
 			Args:       []byte(tool.args),
@@ -418,7 +420,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 150*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolCallEnd{
+		b.emit(ctx, session.ToolExecEnd{
 			ToolCallID: tool.id,
 			Result: session.ToolResultMessage{
 				ToolCallID: tool.id,
@@ -430,7 +432,7 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 			return
 		}
 	}
-	b.emit(ctx, agentEvent("file tools done"))
+	b.emit(ctx, agentEndEvent("file tools done"))
 	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -116,7 +117,7 @@ func (m Model) sessionInfoNotice() (string, error) {
 		sessionID = m.Model.Runtime.SessionID
 	}
 	if m.Model.Storage != nil {
-		if sessionID == "" && session.IsMaterialized(m.Model.Storage) {
+		if sessionID == "" && runtime.IsMaterialized(m.Model.Storage) {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
 		}
 	} else if m.Model.Session != nil {

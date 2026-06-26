@@ -8,11 +8,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
 type exportedSessionBundle struct {
-	Bundle session.SessionBundle
+	Bundle runtime.SessionBundle
 	Path   string
 }
 
@@ -22,7 +23,7 @@ func exportSessionBundleFile(
 	sessionID string,
 	path string,
 ) (exportedSessionBundle, error) {
-	exporter, ok := store.(session.SessionBundleExporter)
+	exporter, ok := store.(runtime.SessionBundleExporter)
 	if !ok {
 		return exportedSessionBundle{}, fmt.Errorf("session store does not support export")
 	}
@@ -50,7 +51,7 @@ func importSessionBundleFile(
 	store session.Store,
 	path string,
 ) ([]session.SessionInfoEntry, error) {
-	importer, ok := store.(session.SessionBundleImporter)
+	importer, ok := store.(runtime.SessionBundleImporter)
 	if !ok {
 		return nil, fmt.Errorf("session store does not support import")
 	}
@@ -62,7 +63,7 @@ func importSessionBundleFile(
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	var bundle session.SessionBundle
+	var bundle runtime.SessionBundle
 	if err := json.Unmarshal(raw, &bundle); err != nil {
 		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
 	}

@@ -11,7 +11,7 @@ import "time"
 // branch_summary, label, session_info, custom). The interface is sealed via
 // isEntry; type switches are exhaustive.
 type Entry interface {
-	isEntry()
+	IsEntry()
 	ID() string
 	ParentID() string
 	When() time.Time
@@ -86,15 +86,15 @@ func (e EntryBase) id() string       { return e.ID }
 func (e EntryBase) parentID() string { return e.ParentID }
 func (e EntryBase) when() time.Time  { return e.Timestamp }
 
-func (e *MessageEntry) isEntry()       {}
-func (e *ModelChangeEntry) isEntry()   {}
-func (e *ThinkingChangeEntry) isEntry() {}
-func (e *ToolsChangeEntry) isEntry()   {}
-func (e *CompactionEntry) isEntry()    {}
-func (e *BranchSummaryEntry) isEntry() {}
-func (e *LabelEntry) isEntry()         {}
-func (e *SessionInfoEntry) isEntry()   {}
-func (e *CustomEntry) isEntry()        {}
+func (e *MessageEntry) IsEntry()       {}
+func (e *ModelChangeEntry) IsEntry()   {}
+func (e *ThinkingChangeEntry) IsEntry() {}
+func (e *ToolsChangeEntry) IsEntry()   {}
+func (e *CompactionEntry) IsEntry()    {}
+func (e *BranchSummaryEntry) IsEntry() {}
+func (e *LabelEntry) IsEntry()         {}
+func (e *SessionInfoEntry) IsEntry()   {}
+func (e *CustomEntry) IsEntry()        {}
 
 func (e *MessageEntry) ID() string       { return e.EntryBase.ID }
 func (e *ModelChangeEntry) ID() string   { return e.EntryBase.ID }
@@ -222,7 +222,7 @@ type TestEntry struct {
 	Timestamp    time.Time
 }
 
-func (e *TestEntry) isEntry()            {}
+func (e *TestEntry) IsEntry()            {}
 func (e *TestEntry) ID() string          { return e.TestID }
 func (e *TestEntry) ParentID() string    { return e.TestParentID }
 func (e *TestEntry) When() time.Time     { return e.Timestamp }

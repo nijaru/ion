@@ -2,13 +2,15 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"errors"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -142,20 +144,20 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	if m.Model.Config != nil {
 		mode = m.Model.Config.BusyInputMode()
 	}
-	steering, supportsSteering := m.Model.Session.(session.SteeringSession)
-	queued, supportsFollowUp := m.Model.Session.(session.QueuedInputSession)
+	steering, supportsSteering := m.Model.Session.(runtime.SteeringSession)
+	queued, supportsFollowUp := m.Model.Session.(runtime.QueuedInputSession)
 
-	switch session.RouteBusyInput(session.BusyInputRouting{
+	switch runtime.RouteBusyInput(runtime.BusyInputRouting{
 		Mode:             mode,
 		Thinking:         m.InFlight.Thinking,
 		Compacting:       m.Progress.Compacting,
 		SupportsSteering: supportsSteering,
 		SupportsFollowUp: supportsFollowUp,
 	}) {
-	case session.BusyInputRouteSteer:
+	case runtime.BusyInputRouteSteer:
 		m.resetComposerDraft()
 		return m, steerTurnCmd(steering, text)
-	case session.BusyInputRouteFollowUp:
+	case runtime.BusyInputRouteFollowUp:
 		priorFollowUpCount := len(m.InFlight.QueuedTurns)
 		m.resetComposerDraft()
 		return m, followUpTurnCmd(queued, text, priorFollowUpCount)
@@ -166,7 +168,7 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	if m.InFlight.Thinking && !m.Progress.Compacting {
-		if queued, ok := m.Model.Session.(session.QueuedInputSession); ok {
+		if queued, ok := m.Model.Session.(runtime.QueuedInputSession); ok {
 			priorFollowUpCount := len(m.InFlight.QueuedTurns)
 			m.resetComposerDraft()
 			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
@@ -185,7 +187,7 @@ func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	return m.queueBusyInput(text)
 }
 
-func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
+func steerTurnCmd(steering runtime.SteeringSession, text string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := steering.SteerTurn(context.Background(), text)
 		return steeringResultMsg{text: text, result: result, err: err}
@@ -193,8 +195,8 @@ func steerTurnCmd(steering session.SteeringSession, text string) tea.Cmd {
 }
 
 func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
-	decision := session.DecideSteeringResult(msg.result, msg.err)
-	if decision.Action == session.BusyInputResultAccepted {
+	decision := runtime.DecideSteeringResult(msg.result, msg.err)
+	if decision.Action == runtime.BusyInputResultAccepted {
 		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
 	}
@@ -202,7 +204,7 @@ func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
 }
 
 func followUpTurnCmd(
-	queued session.QueuedInputSession,
+	queued runtime.QueuedInputSession,
 	text string,
 	priorFollowUpCount int,
 ) tea.Cmd {
@@ -218,14 +220,14 @@ func followUpTurnCmd(
 }
 
 func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
-	decision := session.DecideFollowUpResult(session.FollowUpResultInput{
+	decision := runtime.DecideFollowUpResult(runtime.FollowUpResultInput{
 		Text:               msg.text,
 		PriorFollowUpCount: msg.priorFollowUpCount,
 		CurrentFollowUp:    m.InFlight.QueuedTurns,
 		Result:             msg.result,
 		Err:                msg.err,
 	})
-	if decision.Action == session.BusyInputResultAccepted {
+	if decision.Action == runtime.BusyInputResultAccepted {
 		m.turnReducer().SetBackendQueuedInput(m.InFlight.QueuedSteering, decision.FollowUp)
 		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
 		return m, m.terminalCommit().Entries(entry)
@@ -241,7 +243,7 @@ func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	decision := session.DecideQueuedInputRecall(session.QueuedInputRecallInput{
+	decision := runtime.DecideQueuedInputRecall(runtime.QueuedInputRecallInput{
 		CurrentDraft: m.Input.Composer.Value(),
 		Steering:     m.InFlight.QueuedSteering,
 		FollowUp:     m.InFlight.QueuedTurns,
@@ -253,14 +255,14 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 	m.turnReducer().ClearQueuedTurns()
 	setDraft := m.setComposerDraft(decision.ComposerText)
 	if decision.ClearBackend {
-		if queuedInput, ok := m.Model.Session.(session.QueuedInputSession); ok {
+		if queuedInput, ok := m.Model.Session.(runtime.QueuedInputSession); ok {
 			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
 		}
 	}
 	return m, setDraft
 }
 
-func clearQueuedInputCmd(queued session.QueuedInputSession) tea.Cmd {
+func clearQueuedInputCmd(queued runtime.QueuedInputSession) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := queued.ClearQueuedInput(context.Background()); err != nil {
 			return queuedInputClearResultMsg{err: err}
@@ -274,7 +276,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
-		m.persistEntryCmd("persist cancellation", session.StoreSystem{
+		m.persistEntryCmd("persist cancellation", runtime.StoreSystem{
 			Type:    "system",
 			Content: session.EntryText(entry),
 			TS:      now(),
@@ -345,12 +347,12 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	turn := m.turnReducer()
 	if turn.DrainingUntilTurnStarted() {
-		decision := session.DecideEventDrain(session.EventDrainInput{
+		decision := runtime.DecideEventDrain(runtime.EventDrainInput{
 			Active:         m.InFlight.DrainUntilTurnStarted,
 			DrainStartedAt: m.InFlight.DrainStartedAt,
 			Event:          ev,
 		})
-		if decision.Action == session.EventDrainAwait {
+		if decision.Action == runtime.EventDrainAwait {
 			return m, m.awaitSessionEvent()
 		}
 		if decision.FinishDrain {
@@ -359,10 +361,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	switch msg := ev.(type) {
-	case session.StatusChange:
+	case runtime.StatusChange:
 		return m.handleStatusChanged(msg)
 
-	case session.QueuedInputUpdate:
+	case runtime.QueuedInputUpdate:
 		return m.handleQueuedInputUpdated(msg)
 
 	case session.TurnStart:
@@ -389,45 +391,19 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.UserMessage:
 		return m.handleUserMessage(msg)
 
-	case session.AgentMessage:
-		return m.handleAgentMessage(msg)
-
-	case session.ToolCallStart:
-		return m.handleToolCallStarted(msg)
-
-	case session.ToolExecutionUpdate:
-		return m.handleToolExecutionUpdate(msg)
-
-	case session.ToolCallEnd:
-		return m.handleToolResult(msg)
-
-	case session.ChildRequest:
-		return m.handleChildRequested(msg)
-
-	case session.ChildStart:
-		return m.handleChildStarted(msg)
-
-	case session.ChildDelta:
-		return m.handleChildDelta(msg)
-
-	case session.ChildComplete:
-		return m.handleChildCompleted(msg)
-
-	case session.ChildBlock:
-		return m.handleChildBlocked(msg)
-
-	case session.ChildFail:
-		return m.handleChildFailed(msg)
-
-	case session.ChildCancel:
-		return m.handleChildCanceled(msg)
+	case session.ToolExecStart:
+		return m.handleToolExecStart(msg)
+	case session.ToolExecUpdate:
+		return m.handleToolExecUpdate(msg)
+	case session.ToolExecEnd:
+		return m.handleToolExecEnd(msg)
 	}
 
 	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, _ := session.EntryUser(msg.Content[0].(session.TextContent).Text, msg.When())
+	entry, _ := runtime.EntryUser(msg.Content[0].(session.TextContent).Text, msg.When())
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
@@ -435,7 +411,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.terminalCommit().Entries(entryIf))
-	cmds = append(cmds, m.persistEntryCmd("persist stream close error", session.StoreSystem{
+	cmds = append(cmds, m.persistEntryCmd("persist stream close error", runtime.StoreSystem{
 		Type:    "system",
 		Content: session.EntryText(entryIf),
 		TS:      now(),
@@ -444,7 +420,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	decision := session.DecideErrorSettlement(session.ErrorSettlementInput{
+	decision := runtime.DecideErrorSettlement(runtime.ErrorSettlementInput{
 		Err:           err,
 		AwaitTerminal: awaitTerminal,
 	})
@@ -467,7 +443,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.turnReducer().FailTurn(decision.DisplayError, time.Now())
 	if decision.PersistSystem {
-		cmds = append(cmds, m.persistEntryCmd("persist session error", session.StoreSystem{
+		cmds = append(cmds, m.persistEntryCmd("persist session error", runtime.StoreSystem{
 			Type:    "system",
 			Content: session.EntryText(entry),
 			TS:      now(),
@@ -490,20 +466,20 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(entry)
 }
 
-func (m Model) handleStatusChanged(msg session.StatusChange) (Model, tea.Cmd) {
+func (m Model) handleStatusChanged(msg runtime.StatusChange) (Model, tea.Cmd) {
 	decision := m.turnReducer().ApplyStatusChangedInput(msg)
 	persistTimestamp := msg.When()
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp
 	}
-	return m, batchCmds(m.persistEntryCmd("persist status", session.StoreStatus{
+	return m, batchCmds(m.persistEntryCmd("persist status", runtime.StoreStatus{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(persistTimestamp),
 	}), m.awaitSessionEvent())
 }
 
-func (m Model) handleQueuedInputUpdated(msg session.QueuedInputUpdate) (Model, tea.Cmd) {
+func (m Model) handleQueuedInputUpdated(msg runtime.QueuedInputUpdate) (Model, tea.Cmd) {
 	m.turnReducer().SetBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
 }
@@ -527,7 +503,7 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	m.turnReducer().RecordFinishedTurnSummary(time.Now())
 
 	dispatch := m.turnReducer().FinishTurnDispatch()
-	if dispatch.Action == session.TurnFinishedDispatchSubmitLocal {
+	if dispatch.Action == runtime.TurnFinishedDispatchSubmitLocal {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{
 				text:               dispatch.Text,
@@ -551,7 +527,7 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	in, out, cost := session.TokenUsage(msg.Message)
 	if in > 0 || out > 0 || cost > 0 {
-		cmds = append(cmds, m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
+		cmds = append(cmds, m.persistEntryCmd("persist token usage", runtime.StoreTokenUsage{
 			Type:   "token_usage",
 			Input:  in,
 			Output: out,
@@ -574,73 +550,26 @@ func (m Model) handleMessageUpdate(msg session.MessageUpdate) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
-	if msg.AgentID != "" {
-		return m.handleSubagentMessage(msg)
-	}
+// Old event handlers (AgentMessage, ToolCallStart, ToolExecutionUpdate, ToolCallEnd,
+// ChildRequest/Start/Delta/Complete/Block/Fail/Cancel) removed.
+// Token usage and tool tracking will be handled via TurnEnd and ToolExecStart/End.
 
-	// Token usage tracking (was separate TokenUsage event, Pi: usage in message_end)
-	m.turnReducer().ApplyTokenUsage(msg)
-	var cmds []tea.Cmd
-	if msg.InputTokens > 0 || msg.OutputTokens > 0 || msg.Cost > 0 {
-		cmds = append(cmds, m.persistEntryCmd("persist token usage", session.StoreTokenUsage{
-			Type:   "token_usage",
-			Input:  msg.InputTokens,
-			Output: msg.OutputTokens,
-			Cost:   msg.Cost,
-			TS:     entryUnix(msg.When()),
-		}))
-	}
-	if reason := m.configuredBudgetStopReason(); reason != "" &&
-		reason != m.Progress.BudgetStopReason {
-		entry, _ := m.turnReducer().ApplyBudgetStop(reason, msg.When())
-		cmds = append(
-			cmds,
-			m.persistEntryCmd(
-				"persist routing stop",
-				m.routingDecision("stop", "budget_limit", reason),
-			),
-		)
-		if session.EntryText(entry) != "" {
-			cmds = append(cmds, m.persistEntryCmd("persist budget cancellation", session.StoreSystem{
-				Type:    "system",
-				Content: session.EntryText(entry),
-				TS:      entryUnix(msg.When()),
-			}))
-			cmds = append([]tea.Cmd{
-				tea.Batch(
-					m.terminalCommit().Entries(entry),
-					cancelTurnCmd(m.Model.Session),
-				),
-			}, cmds...)
-			return m, batchCmds(append(cmds, m.awaitSessionEvent())...)
-		}
-	}
-
-	// Commit the message to the turn reducer
-	if entry, ok := m.turnReducer().CommitAgentMessage(msg); ok {
-		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
-	}
-	cmds = append(cmds, m.awaitSessionEvent())
-	return m, batchCmds(cmds...)
-}
-
-func (m Model) handleToolCallStarted(msg session.ToolCallStart) (Model, tea.Cmd) {
+func (m Model) handleToolExecStart(msg session.ToolExecStart) (Model, tea.Cmd) {
 	m.turnReducer().StartToolCall(
-		msg.ToolUseID(),
-		msg.When(),
-		config.Redact(m.formatToolTitle(msg.ToolName(), msg.ArgsString())),
+		msg.ToolCallID,
+		time.Now(),
+		config.Redact(m.formatToolTitle(msg.Name, string(msg.Args))),
 	)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolExecutionUpdate(msg session.ToolExecutionUpdate) (Model, tea.Cmd) {
-	m.turnReducer().AppendToolOutput(msg.ToolUseID(), msg.PartialResult(), false)
+func (m Model) handleToolExecUpdate(msg session.ToolExecUpdate) (Model, tea.Cmd) {
+	m.turnReducer().AppendToolOutput(msg.ToolCallID, fmt.Sprintf("%v", msg.Partial), false)
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
-	toolUseID := msg.ToolUseID()
+func (m Model) handleToolExecEnd(msg session.ToolExecEnd) (Model, tea.Cmd) {
+	toolUseID := msg.ToolCallID
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID
 	}
@@ -649,18 +578,7 @@ func (m Model) handleToolResult(msg session.ToolCallEnd) (Model, tea.Cmd) {
 	}
 	return m, m.awaitSessionEvent()
 }
-
-func (m Model) handleChildRequested(msg session.ChildRequest) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildStarted(msg session.ChildStart) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildDelta(msg session.ChildDelta) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildCompleted(msg session.ChildComplete) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildBlocked(msg session.ChildBlock) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildFailed(msg session.ChildFail) (Model, tea.Cmd) { return m, nil }
-func (m Model) handleChildCanceled(msg session.ChildCancel) (Model, tea.Cmd) { return m, nil }
-
-func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
-	return m, m.awaitSessionEvent()
-}
+// See ARCHITECTURE-PLAN.md Phase 1.
 
 type runtimeRequestController struct {
 	model *Model
@@ -671,7 +589,7 @@ func (m *Model) runtimeRequest() runtimeRequestController {
 }
 
 func (c runtimeRequestController) begin(status string) uint64 {
-	decision := session.BeginRuntimeRequest(session.RuntimeRequestBeginInput{
+	decision := runtime.BeginRuntimeRequest(runtime.RuntimeRequestBeginInput{
 		Current: c.model.Model.RuntimeSwitchRequest,
 		Status:  status,
 	})
@@ -683,11 +601,11 @@ func (c runtimeRequestController) begin(status string) uint64 {
 }
 
 func (c runtimeRequestController) matches(requestID uint64) bool {
-	return session.RuntimeRequestMatches(c.model.Model.RuntimeSwitchRequest, requestID)
+	return runtime.RuntimeRequestMatches(c.model.Model.RuntimeSwitchRequest, requestID)
 }
 
 func (c runtimeRequestController) finish(requestID uint64) bool {
-	decision := session.FinishRuntimeRequest(c.model.Model.RuntimeSwitchRequest, requestID)
+	decision := runtime.FinishRuntimeRequest(c.model.Model.RuntimeSwitchRequest, requestID)
 	if !decision.Matched {
 		return false
 	}
@@ -699,7 +617,7 @@ func (c runtimeRequestController) finish(requestID uint64) bool {
 }
 
 func (c runtimeRequestController) clear() {
-	decision := session.ClearRuntimeRequest()
+	decision := runtime.ClearRuntimeRequest()
 	c.model.Model.RuntimeSwitchRequest = decision.Active
 	if decision.ClearLocalStatus {
 		c.model.progressReducer().clearLocalBusyStatus()

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 	tea "charm.land/bubbletea/v2"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
@@ -266,7 +267,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.sessionInfoCmd()
 
 	case "/compact":
-		if m.Model.Storage != nil && !session.IsMaterialized(m.Model.Storage) {
+		if m.Model.Storage != nil && !runtime.IsMaterialized(m.Model.Storage) {
 			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
 		}
 		compactor, ok := m.Model.Backend.(Compactor)
@@ -388,7 +389,7 @@ func (m Model) showSessionTree() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	reader, ok := m.Model.Store.(session.SessionTreeReader)
+	reader, ok := m.Model.Store.(runtime.SessionTreeReader)
 	if !ok {
 		return m, cmdError("store does not support session tree")
 	}
@@ -406,7 +407,7 @@ func (m Model) showSessionTree() (Model, tea.Cmd) {
 }
 
 type sessionTreeMsg struct {
-	tree session.SessionTree
+	tree runtime.SessionTree
 }
 
 func (m Model) handleSessionTree(msg sessionTreeMsg) (Model, tea.Cmd) {
@@ -458,7 +459,7 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
 	if !ok {
 		return m, cmdError("store does not support export")
 	}
@@ -487,7 +488,7 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
 	if !ok {
 		return m, cmdError("store does not support export")
 	}
@@ -525,7 +526,7 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	importer, ok := m.Model.Store.(session.SessionBundleImporter)
+	importer, ok := m.Model.Store.(runtime.SessionBundleImporter)
 	if !ok {
 		return m, cmdError("store does not support import")
 	}
@@ -534,7 +535,7 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		var bundle session.SessionBundle
+		var bundle runtime.SessionBundle
 		if err := json.Unmarshal(data, &bundle); err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -626,11 +627,11 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(session.SessionBundleExporter)
+	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
 	if !ok {
 		return m, cmdError("store does not support session export")
 	}
-	importer, ok := m.Model.Store.(session.SessionBundleImporter)
+	importer, ok := m.Model.Store.(runtime.SessionBundleImporter)
 	if !ok {
 		return m, cmdError("store does not support session import")
 	}

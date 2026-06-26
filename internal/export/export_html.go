@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -225,7 +226,7 @@ func extractThinking(content []session.Content) string {
 }
 
 // BundleToHTML converts a SessionBundle to HTML string.
-func BundleToHTML(bundle session.SessionBundle) (string, error) {
+func BundleToHTML(bundle runtime.SessionBundle) (string, error) {
 	data := SessionData{
 		SessionID: bundle.RootSessionID,
 		Exported:  bundle.ExportedAt,

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -361,8 +362,8 @@ func toolEntry(title, content string, isError bool) *session.MessageEntry {
 	}
 }
 
-func sysEntry(content string) session.StoreSystem {
-	return session.StoreSystem{Type: "system", Content: content}
+func sysEntry(content string) runtime.StoreSystem {
+	return runtime.StoreSystem{Type: "system", Content: content}
 }
 
 // agentMsgEntry creates a MessageEntry wrapping an AssistantMessage.
@@ -520,18 +521,18 @@ func newThinkingUpdate(text string) session.MessageUpdate {
 }
 
 // newToolExecUpdate maps old session.NewToolExecutionUpdate(toolID, name, output).
-func newToolExecUpdate(toolID, name, output string) session.ToolExecutionUpdate {
-	return session.ToolExecutionUpdate{ToolCallID: toolID, Partial: output}
+func newToolExecUpdate(toolID, name, output string) session.ToolExecUpdate {
+	return session.ToolExecUpdate{ToolCallID: toolID, Partial: output}
 }
 
-// newToolCallStart maps old session.ToolCallStart{ToolUseID, ToolName, Args}.
-func newToolCallStart(toolID, name, args string) session.ToolCallStart {
-	return session.ToolCallStart{ToolCallID: toolID, Name: name, Args: []byte(args)}
+// newToolCallStart maps old session.ToolExecStart{ToolUseID, ToolName, Args}.
+func newToolCallStart(toolID, name, args string) session.ToolExecStart {
+	return session.ToolExecStart{ToolCallID: toolID, Name: name, Args: []byte(args)}
 }
 
-// newToolCallEnd maps old session.ToolCallEnd{ToolUseID, ToolName, Result}.
-func newToolCallEnd(toolID, name, result string) session.ToolCallEnd {
-	return session.ToolCallEnd{
+// newToolCallEnd maps old session.ToolExecEnd{ToolUseID, ToolName, Result}.
+func newToolCallEnd(toolID, name, result string) session.ToolExecEnd {
+	return session.ToolExecEnd{
 		ToolCallID: toolID,
 		Result: session.ToolResultMessage{
 			ToolCallID: toolID,
@@ -540,20 +541,20 @@ func newToolCallEnd(toolID, name, result string) session.ToolCallEnd {
 	}
 }
 
-// agentMsgEvent creates an AgentMessage event for tests.
-func agentMsgEvent(msg string, tokensAndCost ...int) session.AgentMessage {
-	am := session.AgentMessage{Message: &session.AssistantMessage{
+// agentMsgEvent creates a MessageEnd event for tests.
+func agentMsgEvent(msg string, tokensAndCost ...int) session.MessageEnd {
+	am := &session.AssistantMessage{
 		Content:   []session.Content{session.TextContent{Text: msg}},
 		Timestamp: time.Now(),
-	}}
+	}
 	if len(tokensAndCost) >= 2 {
-		am.InputTokens = tokensAndCost[0]
-		am.OutputTokens = tokensAndCost[1]
+		am.Usage.Input = tokensAndCost[0]
+		am.Usage.Output = tokensAndCost[1]
 	}
 	if len(tokensAndCost) >= 3 {
-		am.Cost = float64(tokensAndCost[2]) / 1000.0
+		am.Usage.Cost.Total = float64(tokensAndCost[2]) / 1000.0
 	}
-	return am
+	return session.MessageEnd{Message: am, Timestamp: time.Now()}
 }
 
 // sessionInfoEntryID creates a SessionInfoEntry with ID and Name.

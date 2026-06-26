@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/testutil"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -532,7 +533,7 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 			stored.appends,
 		)
 	}
-	system, ok := stored.appends[0].(session.StoreSystem)
+	system, ok := stored.appends[0].(runtime.StoreSystem)
 	if !ok || system.Content != "Canceled by user" {
 		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}

@@ -1,23 +1,19 @@
 package session
 
-import (
-	"context"
-	"fmt"
-	"time"
-)
+import "time"
 
 // Event is the closed union of events the agent loop and harness emit.
-// The loop emits the lifecycle + streaming + tool-execution events (Event Agent
-// interface methods tag the source). The harness emits session/control events.
+// Matches Pi's 10 events from agent-loop.js:
+//   agent_start, turn_start, message_start, message_update, message_end,
+//   tool_execution_start, tool_execution_update, tool_execution_end,
+//   turn_end, agent_end
 //
-// The taxonomy is collapsed from Pi's shape: streaming is message_start /
-// message_update (carrying a Delta union) / message_end — NOT a 9-way split of
-// text/thinking/toolcall start/delta/end. Adding an event is a design change.
+// message_update carries a Delta union (text/thinking/toolcall).
 type Event interface {
-	isEvent()
+	IsEvent()
 }
 
-// --- Loop-emitted (the loop's sole output channel). ---
+// --- Core events (Pi-aligned). ---
 
 // AgentStart opens a run. Origin tags root vs child for the future subagent seam.
 type AgentStart struct {
@@ -25,7 +21,7 @@ type AgentStart struct {
 }
 
 // TurnStart opens a turn (one assistant response + its tool execution).
-type TurnStart struct{
+type TurnStart struct {
 	Timestamp time.Time
 }
 
@@ -35,7 +31,6 @@ type MessageStart struct {
 }
 
 // MessageUpdate carries an incremental update to the streaming assistant message.
-// The Delta union is the collapsed form of Pi's text/thinking/toolcall deltas.
 type MessageUpdate struct {
 	Message   Message
 	Delta     Delta
@@ -54,7 +49,7 @@ type MessageEnd struct {
 type ToolExecStart struct {
 	ToolCallID string
 	Name       string
-	Args       []byte // raw JSON arguments
+	Args       []byte
 }
 
 // ToolExecUpdate carries a progress update from a running tool.
@@ -71,19 +66,19 @@ type ToolExecEnd struct {
 
 // TurnEnd closes a turn.
 type TurnEnd struct {
-	Error error
-	Base  EventBase
-	Message     Message // the assistant message that ended the turn
+	Error       error
+	Base        EventBase
+	Message     Message
 	ToolResults []ToolResultMessage
 }
 
-// AgentEnd closes a run. Invariant: exactly one AgentEnd per logical turn,
-// regardless of retry attempts (attempts emit AutoRetryStart/End instead).
+// AgentEnd closes a run.
 type AgentEnd struct {
 	Messages []Message
 }
 
-// Delta is the sealed union of streaming deltas (collapses the 9-way split).
+// --- Delta union (streaming deltas). ---
+
 type Delta interface {
 	isDelta()
 }
@@ -96,541 +91,57 @@ type ThinkingDelta struct {
 	Text string
 }
 
-// ToolCallDelta streams a tool-call's arguments as they arrive (partial JSON).
 type ToolCallDelta struct {
-	ToolCallID    string
-	Name          string
+	ToolCallID     string
+	Name           string
 	ArgumentsChunk string
 }
 
-func (TextDelta) isDelta()       {}
-func (ThinkingDelta) isDelta()   {}
-func (ToolCallDelta) isDelta()   {}
+func (TextDelta) isDelta()     {}
+func (ThinkingDelta) isDelta() {}
+func (ToolCallDelta) isDelta() {}
 
-// --- Harness-emitted (session/control). ---
+// --- Metadata. ---
 
-// QueueUpdate reports the pending steer/followUp/nextTurn queues (for TUI display).
-type QueueUpdate struct {
-	Steer    []Message
-	FollowUp []Message
-	NextTurn []Message
-}
-
-// ModelUpdate reports a model switch (runtime or buffered-then-applied).
-type ModelUpdate struct {
-	Model, Previous string
-}
-
-// ThinkingUpdate reports a thinking-level switch.
-type ThinkingUpdate struct {
-	Level, Previous ThinkingLevel
-}
-
-// ToolsUpdate reports an active-tools change.
-type ToolsUpdate struct {
-	Active, Previous []string
-}
-
-// CompactionTrigger signals compaction was triggered (proactive or overflow recovery).
-type CompactionTrigger struct {
-	Reason string // "proactive" | "overflow" | "manual"
-}
-
-// AutoRetryStart opens an overflow-recovery attempt (compact + retry).
-type AutoRetryStart struct {
-	Reason string
-}
-
-// AutoRetryEnd closes a recovery attempt. Exactly one terminal AgentEnd follows
-// the final attempt — AutoRetryEnd is not itself an AgentEnd.
-type AutoRetryEnd struct {
-	Success    bool
-	FinalError string
-}
-
-// SessionCompacted reports a completed compaction.
-type SessionCompacted struct {
-	Entry CompactionEntry
-}
-
-// SessionTreeMoved reports a branch navigation.
-type SessionTreeMoved struct {
-	NewLeafID, OldLeafID string
-}
-
-// Settled signals the harness returned to idle and all listeners have drained.
-type Settled struct{}
-
-// Error reports a non-recoverable harness error.
-type Error struct {
-	Err error
-}
-
-// --- Sealing. ---
-
-func (AgentStart) isEvent()       {}
-func (TurnStart) isEvent()        {}
-func (MessageStart) isEvent()     {}
-func (MessageUpdate) isEvent()    {}
-func (MessageEnd) isEvent()       {}
-func (ToolExecStart) isEvent()    {}
-func (ToolExecUpdate) isEvent()   {}
-func (ToolExecEnd) isEvent()      {}
-func (TurnEnd) isEvent()          {}
-func (AgentEnd) isEvent()         {}
-func (QueueUpdate) isEvent()      {}
-func (ModelUpdate) isEvent()      {}
-func (ThinkingUpdate) isEvent()   {}
-func (ToolsUpdate) isEvent()      {}
-func (CompactionTrigger) isEvent(){}
-func (AutoRetryStart) isEvent()   {}
-func (AutoRetryEnd) isEvent()     {}
-func (SessionCompacted) isEvent() {}
-func (SessionTreeMoved) isEvent() {}
-func (Settled) isEvent()          {}
-func (*Error) isEvent()           {}
-
-// ToolPartial is a progress payload from a running tool (opaque to the loop).
-type ToolPartial = any
-
-// SessionOrigin identifies which session an event belongs to. The root session
-// is the user's; a child session identifies a future subagent run. This is the
-// subagent seam — present now, unused until subagents ship.
+// SessionOrigin identifies which session an event belongs to.
+// The subagent seam — present now, unused until subagents ship.
 type SessionOrigin struct {
 	SessionID string
-	ChildID   string // non-empty for subagent-originated events
+	ChildID   string
 }
 
-// App-facing types — app/ uses these until its rewrite against the new Event taxonomy.
-
-type StoreEvent = Entry
-
-type StoreRoutingDecision struct {
-	EntryBase
-	Type           string
-	Decision       string
-	Reason         string
-	ModelSlot      string
-	Provider       string
-	Model          string
-	Reasoning      string
-	MaxSessionCost float64
-	MaxTurnCost    float64
-	SessionCost    float64
-	TurnCost       float64
-	StopReason     string
-	TS             time.Time
-}
-func (StoreRoutingDecision) isEvent() {}
-
-type SubmitPreflightDecision struct {
-	Allowed bool
-	ShouldSubmit bool
-	Reason       string
-}
-
-type SteeringSession interface {
-	SteerTurn(ctx context.Context, text string) (SteeringResult, error)
-}
-
-type QueuedInputSession interface {
-	FollowUpTurn(ctx context.Context, text string) (FollowUpResult, error)
-	ClearQueuedInput(ctx context.Context) (string, error)
-}
-
-type StatusChange struct {
-	EntryBase
-	Status string
-}
-func (StatusChange) isEvent() {}
-
-type SessionTree struct {
-	Current  Entry
-	Lineage  []Entry
-	Children []Entry
-}
-
-type SessionTreeReader interface {
-	SessionTree(ctx context.Context, leafID string) (SessionTree, error)
-}
-
-func IsMaterialized(s Session) bool { return true }
-
-type QueuedInputUpdate struct{
-	EntryBase
-	Snapshot QueuedSnapshot
-}
-func (QueuedInputUpdate) isEvent() {}
-
-type AgentMessage struct {
-	EntryBase
-	AgentID      string
-	Message      Message
-	InputTokens  int
-	OutputTokens int
-	Cost         float64
-}
-func (AgentMessage) isEvent() {}
-func (s AgentMessage) When() time.Time { return s.EntryBase.Timestamp }
-
-type ToolCallStart struct {
-	EntryBase
-	ToolCallID string
-	Name       string
-	Args       []byte
-}
-func (ToolCallStart) isEvent() {}
-
-type ToolExecutionUpdate struct {
-	EntryBase
-	ToolCallID string
-	Partial    ToolPartial
-}
-func (ToolExecutionUpdate) isEvent() {}
-
-type ToolCallEnd struct {
-	EntryBase
-	ToolCallID string
-	Result     ToolResultMessage
-}
-func (ToolCallEnd) isEvent() {}
-
-type SessionBundle struct {
-	RootSessionID string
-	Sessions      []SessionBundleRecord
-	ExportedAt    time.Time
-}
-
-type SessionBundleRecord struct {
-	Info   Session
-	Events []Entry
-}
-
-type SessionBundleExporter interface {
-	ExportSessionBundle(ctx context.Context, leafID string) (SessionBundle, error)
-}
-
-type SessionBundleImporter interface {
-	ImportSessionBundle(ctx context.Context, bundle SessionBundle) (string, error)
-}
-
-const RoleAgent = "agent"
-
-type SubmitPreflightInput struct {
-	RuntimeRequired bool
-	Provider        string
-	Model           string
-	TotalCost       float64
-	MaxSessionCost  float64
-	MaxTurnCost     float64
-}
-
-func DecideSubmitPreflight(input SubmitPreflightInput) SubmitPreflightDecision {
-	return SubmitPreflightDecision{Allowed: true}
-}
-
-var budgetStopReasonStr = "budget_stop"
-
-func BudgetStopReason(input BudgetStopInput) string { return budgetStopReasonStr }
-
-type BudgetStopInput struct {
-	Reason         string
-	CurrentTurnCost float64
-	TotalCost      float64
-	MaxTurnCost    float64
-	MaxSessionCost float64
-}
-
-// Additional fields needed by app/ model_status.go
-
-func IsConversationSessionInfo(e *SessionInfoEntry) bool {
-	return true
-}
-
-type DisplayError struct {
-	EntryBase
-	Err error
-}
-func (DisplayError) isEvent() {}
-
-func RouteBusyInput(input BusyInputRouting) string { return input.Route }
-
-type BusyInputRouting struct {
-	Mode              string
-	Thinking          bool
-	Compacting        bool
-	SupportsSteering  bool
-	SupportsFollowUp  bool
-	Route string
-}
-
-var BusyInputRouteSteer = "steer"
-var BusyInputRouteFollowUp = "follow_up"
-
-func (e StoreRoutingDecision) ID() string      { return e.EntryBase.ID }
-func (e StoreRoutingDecision) ParentID() string { return e.EntryBase.ParentID }
-func (e StoreRoutingDecision) When() time.Time  { return e.EntryBase.Timestamp }
-
-
-type FollowUpResultInput struct{
-	Text               string
-	PriorFollowUpCount int
-	CurrentFollowUp    []string
-	Result             FollowUpResult
-	Err                error
-}
-
-func (StoreRoutingDecision) isEntry() {}
-
-type SteeringResult struct{}
-type FollowUpResult struct{}
-
-type BusyInputDecision struct {
-	Recall        bool
-	ComposerText  string
-	ClearBackend  bool
-	Action         string
-	NoticeContent  string
-	FollowUp       []string
-}
-
-var BusyInputResultAccepted = "accepted"
-
-func DecideSteeringResult(result SteeringResult, err error) BusyInputDecision {
-	if err != nil {
-		return BusyInputDecision{}
-	}
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Steering applied"}
-}
-
-func DecideFollowUpResult(input FollowUpResultInput) BusyInputDecision {
-	if input.Err != nil {
-		return BusyInputDecision{}
-	}
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Follow-up queued", FollowUp: []string{input.Text}}
-}
-
-type QueuedInputRecallInput struct{
-	Text         string
-	CurrentDraft string
-	Steering     []string
-	FollowUp     []string
-	BackendOwned bool
-}
-
-func DecideQueuedInputRecall(input QueuedInputRecallInput) BusyInputDecision {
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Input recalled"}
-}
-
-
+// EventBase carries common event metadata.
 type EventBase struct {
 	Timestamp time.Time
 	Error     error
 }
 
-func BaseNow() EventBase { return EventBase{Timestamp: time.Now()} }
+func BaseNow() EventBase           { return EventBase{Timestamp: time.Now()} }
 func BaseAt(t time.Time) EventBase { return EventBase{Timestamp: t} }
 
-type EventDrainInput struct {
-	Active    bool
-	DrainStartedAt time.Time
-	Event     Event
+// ToolPartial is a progress payload from a running tool (opaque to the loop).
+type ToolPartial = any
+
+// --- Sealing. ---
+
+func (AgentStart) IsEvent()    {}
+func (TurnStart) IsEvent()     {}
+func (MessageStart) IsEvent()  {}
+func (MessageUpdate) IsEvent() {}
+func (MessageEnd) IsEvent()    {}
+func (ToolExecStart) IsEvent() {}
+func (ToolExecUpdate) IsEvent(){}
+func (ToolExecEnd) IsEvent()   {}
+func (TurnEnd) IsEvent()       {}
+func (AgentEnd) IsEvent()      {}
+
+// Error reports a non-recoverable harness error (e.g., persistence failure).
+type Error struct {
+	Err error
 }
+func (*Error) IsEvent() {}
 
-type EventDrainDecision struct {
-	Drain       bool
-	Action      string
-	FinishDrain bool
-}
-
-var EventDrainAwait = "await"
-
-func DecideEventDrain(input EventDrainInput) EventDrainDecision {
-	return EventDrainDecision{Drain: input.Active}
-}
-
-type StoreSystem struct {
-	EntryBase
-	Type    string
-	Content string
-	TS      int64
-}
-func (StoreSystem) isEntry() {}
-func (s StoreSystem) ID() string { return s.EntryBase.ID }
-func (s StoreSystem) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreSystem) When() time.Time { return s.EntryBase.Timestamp }
-
-type ChildRequest struct{ EntryBase; AgentID string }
-func (ChildRequest) isEvent() {}
-type ChildStart struct{ EntryBase; AgentID string }
-func (ChildStart) isEvent() {}
-type ChildDelta struct{ EntryBase; AgentID string; Delta Delta }
-func (ChildDelta) isEvent() {}
-type ChildComplete struct{ EntryBase; AgentID string }
-func (ChildComplete) isEvent() {}
-type ChildBlock struct{ EntryBase; AgentID string; Reason string }
-func (ChildBlock) isEvent() {}
-type ChildCancel struct{ EntryBase; AgentID string }
-func (ChildCancel) isEvent() {}
-type ChildFail struct{ EntryBase; AgentID string; Err error }
-func (ChildFail) isEvent() {}
-
-func EntryUser(content string, ts time.Time) (*MessageEntry, string) {
-	id := fmt.Sprintf("%d", ts.UnixNano())
-	return &MessageEntry{
-		EntryBase: EntryBase{ID: id, Timestamp: ts},
-		Message:   NewUserText(content, ts),
-	}, id
-}
-
-type ErrorSettlementInput struct {
-	AwaitTerminal bool
-	Err       error
-	Thinking  bool
-	Compacting bool
-}
-
-type ErrorSettlementDecision struct {
-	RoutingStop   *ErrorRoutingStop
-	PersistSystem bool
-	AwaitNext     bool
-	DisplayError string
-	EntryContent string
-}
-
-func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
-	return ErrorSettlementDecision{DisplayError: input.Err.Error()}
-}
-
-type StoreStatus struct {
-	Status    string
-	EntryBase
-	Type      string
-	Content   string
-	TS        int64
-}
-func (StoreStatus) isEntry() {}
-func (s StoreStatus) ID() string { return s.EntryBase.ID }
-func (s StoreStatus) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreStatus) When() time.Time { return s.EntryBase.Timestamp }
-
-type ErrorRoutingStop struct {
-	Reason     string
-	StopReason string
-}
-
-type QueuedSnapshot struct {
-	Steering []string
-	FollowUp []string
-}
-var TurnFinishedDispatchSubmitLocal = "submit_local"
-type StoreTokenUsage struct {
-	EntryBase
-	Type   string
-	Input  int
-	Output int
-	Cost   float64
-	TS     int64
-}
-func (StoreTokenUsage) isEntry() {}
-func (s StoreTokenUsage) ID() string { return s.EntryBase.ID }
-func (s StoreTokenUsage) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreTokenUsage) When() time.Time { return s.EntryBase.Timestamp }
-
-func (s StatusChange) When() time.Time { return s.when() }
-func (s TurnStart) When() time.Time    { return time.Time{} }
-func (s MessageEnd) When() time.Time   { return s.Timestamp }
-func (s MessageUpdate) When() time.Time { return s.Timestamp }
-
-func (s ToolCallStart) ToolUseID() string { return s.ToolCallID }
-func (s ToolCallStart) ToolName() string  { return s.Name }
-func (s ToolCallStart) When() time.Time  { return s.EntryBase.Timestamp }
-func (s ToolCallStart) ArgsString() string { return string(s.Args) }
-
-func (s ToolExecutionUpdate) ToolUseID() string { return s.ToolCallID }
-func (s ToolExecutionUpdate) When() time.Time  { return s.EntryBase.Timestamp }
-
-func (s ToolExecutionUpdate) PartialResult() string { return "" }
-func (s ToolExecutionUpdate) IsError() bool { return false }
-
-func (s ToolCallEnd) ToolUseID() string { return s.ToolCallID }
-func (s ToolCallEnd) When() time.Time  { return s.EntryBase.Timestamp }
-
-
-// RuntimeRequest stubs
-type RuntimeRequestBeginInput struct {
-	Current uint64
-	Status  string
-}
-
-type RuntimeRequestDecision struct {
-	RequestID       uint64
-	SetLocalStatus  bool
-	Status          string
-	Matched         bool
-	Active          uint64
-	ClearLocalStatus bool
-}
-
-func BeginRuntimeRequest(input RuntimeRequestBeginInput) RuntimeRequestDecision {
-	return RuntimeRequestDecision{
-		RequestID:      input.Current + 1,
-		SetLocalStatus: true,
-		Status:         input.Status,
-	}
-}
-
-func RuntimeRequestMatches(current, requestID uint64) bool {
-	return current == requestID
-}
-
-type FinishRuntimeRequestInput struct{}
-type FinishRuntimeRequestDecision struct {
-	Matched         bool
-	Active          uint64
-	ClearLocalStatus bool
-}
-
-func FinishRuntimeRequest(current, requestID uint64) FinishRuntimeRequestDecision {
-	if current != requestID {
-		return FinishRuntimeRequestDecision{Matched: false, Active: current}
-	}
-	return FinishRuntimeRequestDecision{
-		Matched:          true,
-		ClearLocalStatus: true,
-	}
-}
-
-type ClearRuntimeRequestDecision struct {
-	Active          uint64
-	ClearLocalStatus bool
-}
-
-func ClearRuntimeRequest() ClearRuntimeRequestDecision {
-	return ClearRuntimeRequestDecision{}
-}
-
-type SessionForkOptions struct{}
-type SessionForker interface {
-	ForkSession(ctx context.Context, parentID string, opts SessionForkOptions) (SessionHandle, error)
-}
-
-type SessionHandle interface {
-	ID() string
-	Session() Session
-}
-
-var NoProviderConfiguredStatus = "No provider configured"
-var NoModelConfiguredStatus = "No model configured"
-
-type ApprovalRequest struct {
-	EntryBase
-	ToolName  string
-	ToolID    string
-	Args      string
-	AutoApprove bool
-}
-func (ApprovalRequest) isEvent() {}
+// --- Utility functions (stay in session/ as they access domain types). ---
 
 func DeltaText(d Delta) string {
 	if d == nil {
@@ -641,3 +152,9 @@ func DeltaText(d Delta) string {
 	}
 	return ""
 }
+
+// When() methods for core events.
+
+func (s TurnStart) When() time.Time     { return s.Timestamp }
+func (s MessageEnd) When() time.Time    { return s.Timestamp }
+func (s MessageUpdate) When() time.Time { return s.Timestamp }

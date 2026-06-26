@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/runtime"
 )
 
 func TestTerminalCommitMarksPrintedTranscript(t *testing.T) {
@@ -53,7 +53,7 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 
-	cmd := model.persistenceController().appendEntry("persist test", session.StoreSystem{
+	cmd := model.persistenceController().appendEntry("persist test", runtime.StoreSystem{
 		Type:    "system",
 		Content: "hello",
 	})
@@ -68,7 +68,7 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	}
 
 	storageSess.appendErr = errors.New("disk full")
-	cmd = model.persistenceController().appendEntry("persist test", session.StoreSystem{
+	cmd = model.persistenceController().appendEntry("persist test", runtime.StoreSystem{
 		Type:    "system",
 		Content: "failed",
 	})
@@ -86,7 +86,7 @@ func TestPersistenceControllerReturnsNilWithoutStorage(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Storage = nil
 
-	if cmd := model.persistenceController().appendEntry("persist test", session.StoreSystem{}); cmd != nil {
+	if cmd := model.persistenceController().appendEntry("persist test", runtime.StoreSystem{}); cmd != nil {
 		t.Fatalf("appendEntry command = %#v, want nil without storage", cmd)
 	}
 }

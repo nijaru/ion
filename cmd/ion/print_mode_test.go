@@ -357,21 +357,8 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 	}
 }
 
-func TestPrintModeRejectsUnexpectedApprovalRequest(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 1)}
-	sess.events <- session.ApprovalRequest{ToolName: "bash"}
-
-	err := runPrintMode(context.Background(), sess, "hello")
-	if err == nil {
-		t.Fatal("runPrintMode returned nil error")
-	}
-	if err.Error() != "unexpected approval request for bash" {
-		t.Fatalf("runPrintMode error = %v", err)
-	}
-	if sess.cancelled != 1 {
-		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
-	}
-}
+// TestPrintModeRejectsUnexpectedApprovalRequest removed — ApprovalRequest event type deleted.
+// See ARCHITECTURE-PLAN.md Phase 1.
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 3)}
@@ -396,14 +383,12 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 
 func TestPrintModeWritesJSONOutput(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 4)}
-	sess.events <- session.ToolCallStart{Name: "read"}
-	sess.events <- session.AgentMessage{
+	sess.events <- session.ToolExecStart{Name: "read"}
+	sess.events <- session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Content: []session.Content{session.TextContent{Text: "done"}},
+			Usage: session.Usage{Input: 12, Output: 3, Cost: session.Cost{Total: 0.25}},
 		},
-		InputTokens:  12,
-		OutputTokens: 3,
-		Cost:         0.25,
 	}
 	sess.events <- session.TurnEnd{Base: session.BaseNow()}
 
@@ -426,16 +411,15 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 6)}
 	sess.events <- session.TurnStart{Timestamp: time.Now()}
-	sess.events <- session.ToolCallStart{Name: "bash"}
+	sess.events <- session.ToolExecStart{Name: "bash"}
 	sess.events <- session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "do"},
 		BlockType: "text",
 	}
-	sess.events <- session.AgentMessage{
-		Message:      &session.AssistantMessage{},
-		InputTokens:  10,
-		OutputTokens: 2,
-		Cost:         0.01,
+	sess.events <- session.MessageEnd{
+		Message: &session.AssistantMessage{
+			Usage: session.Usage{Input: 10, Output: 2, Cost: session.Cost{Total: 0.01}},
+		},
 	}
 	sess.events <- session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "ne"},

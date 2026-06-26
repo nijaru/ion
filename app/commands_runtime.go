@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -377,7 +378,7 @@ func (m Model) currentMaterializedSessionID() string {
 	if m.Model.Storage == nil {
 		return m.Model.Session.ID()
 	}
-	if !session.IsMaterialized(m.Model.Storage) {
+	if !runtime.IsMaterialized(m.Model.Storage) {
 		return ""
 	}
 	return strings.TrimSpace(m.Model.Storage.ID())

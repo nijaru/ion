@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/internal/runtime"
 )
 
 func (m Model) configurationStatus() string {
@@ -16,20 +16,20 @@ func (m Model) configurationStatus() string {
 	return decision.Reason
 }
 
-func (m Model) submitPreflightWithoutBudget() session.SubmitPreflightDecision {
-	return session.DecideSubmitPreflight(session.SubmitPreflightInput{
+func (m Model) submitPreflightWithoutBudget() runtime.SubmitPreflightDecision {
+	return runtime.DecideSubmitPreflight(runtime.SubmitPreflightInput{
 		RuntimeRequired: m.Model.Backend != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
 	})
 }
 
-func (m Model) submitPreflight() session.SubmitPreflightDecision {
+func (m Model) submitPreflight() runtime.SubmitPreflightDecision {
 	var maxSessionCost float64
 	if m.Model.Config != nil {
 		maxSessionCost = m.Model.Config.MaxSessionCost
 	}
-	return session.DecideSubmitPreflight(session.SubmitPreflightInput{
+	return runtime.DecideSubmitPreflight(runtime.SubmitPreflightInput{
 		RuntimeRequired: m.Model.Backend != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
@@ -93,7 +93,7 @@ func (m Model) configuredBudgetStopReason() string {
 	if m.Model.Config == nil {
 		return ""
 	}
-	return session.BudgetStopReason(session.BudgetStopInput{
+	return runtime.BudgetStopReason(runtime.BudgetStopInput{
 		CurrentTurnCost: m.Progress.CurrentTurnCost,
 		TotalCost:       m.Progress.TotalCost,
 		MaxTurnCost:     m.Model.Config.MaxTurnCost,
@@ -101,7 +101,7 @@ func (m Model) configuredBudgetStopReason() string {
 	})
 }
 
-func (m Model) routingDecision(decision, reason, stopReason string) session.StoreRoutingDecision {
+func (m Model) routingDecision(decision, reason, stopReason string) runtime.StoreRoutingDecision {
 	provider := m.runtimeProvider()
 	model := m.runtimeModel()
 	var maxSessionCost, maxTurnCost float64
@@ -109,7 +109,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) session.Stor
 		maxSessionCost = m.Model.Config.MaxSessionCost
 		maxTurnCost = m.Model.Config.MaxTurnCost
 	}
-	return session.StoreRoutingDecision{
+	return runtime.StoreRoutingDecision{
 		Type:           "routing_decision",
 		Decision:       decision,
 		Reason:         reason,

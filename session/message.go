@@ -187,8 +187,8 @@ func EntryText(e Entry) string {
 	return sb.String()
 }
 
-func (UserMessage) isEvent() {}
-func (AssistantMessage) isEvent() {}
+func (UserMessage) IsEvent() {}
+func (AssistantMessage) IsEvent() {}
 
 // TokenUsage extracts usage info from a message if available.
 func TokenUsage(msg Message) (input int, output int, cost float64) {
@@ -201,6 +201,7 @@ func TokenUsage(msg Message) (input int, output int, cost float64) {
 func (s UserMessage) When() time.Time { return s.Timestamp }
 
 const RoleTool = "tool"
+const RoleAgent = "agent"
 
 const RoleSubagent = "subagent"
 const RoleUser = "user"

@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -225,8 +226,8 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		next, cmd := m.handleTurnCancelResult(msg)
 		return next, cmd, true
 
-	case session.StatusChange,
-		session.QueuedInputUpdate,
+	case runtime.StatusChange,
+		runtime.QueuedInputUpdate,
 		session.TurnStart,
 		session.TurnEnd,
 		session.AgentStart,
@@ -234,17 +235,9 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.MessageUpdate,
 		session.MessageEnd,
 		session.UserMessage,
-		session.AgentMessage,
-		session.ToolCallStart,
-		session.ToolExecutionUpdate,
-		session.ToolCallEnd,
-		session.ChildRequest,
-		session.ChildStart,
-		session.ChildDelta,
-		session.ChildComplete,
-		session.ChildBlock,
-		session.ChildFail,
-		session.ChildCancel:
+		session.ToolExecStart,
+		session.ToolExecUpdate,
+		session.ToolExecEnd:
 		next, cmd := m.handleSessionEvent(msg.(session.Event))
 		return next, cmd, true
 	}

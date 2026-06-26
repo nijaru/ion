@@ -654,9 +654,9 @@ func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Ent
 	// Build result entry from msg
 	var entry session.Entry
 	switch m := msg.(type) {
-	case session.ToolCallEnd:
+	case session.ToolExecEnd:
 		entry = &session.MessageEntry{
-			EntryBase: session.EntryBase{Timestamp: m.When()},
+			EntryBase: session.EntryBase{Timestamp: time.Now()},
 			Message:   &m.Result,
 		}
 	default:

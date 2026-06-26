@@ -15,7 +15,7 @@ func TestSmokeBackendEmitsEvents(t *testing.T) {
 	events := []session.Event{
 		userEvent("hello"),
 		session.TurnStart{Timestamp: time.Now()},
-		agentEvent("done"),
+		agentEndEvent("done"),
 		session.TurnEnd{Base: session.BaseNow()},
 	}
 

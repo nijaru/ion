@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -43,7 +44,7 @@ func recentSessionForContinue(
 		return nil, err
 	}
 	for i := range sessions {
-		if !session.IsConversationSessionInfo(&sessions[i]) {
+		if !runtime.IsConversationSessionInfo(&sessions[i]) {
 			continue
 		}
 		return &sessions[i], nil

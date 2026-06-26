@@ -119,15 +119,13 @@ func TestEventUnionIsClosed(t *testing.T) {
 	events := []Event{
 		AgentStart{}, TurnStart{}, MessageStart{}, MessageUpdate{}, MessageEnd{},
 		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{}, TurnEnd{}, AgentEnd{},
-		QueueUpdate{}, ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{},
-		CompactionTrigger{}, AutoRetryStart{}, AutoRetryEnd{},
-		SessionCompacted{}, SessionTreeMoved{}, Settled{}, &Error{},
+		&Error{},
 	}
 	for _, e := range events {
 		// The compiler enforces exhaustiveness only in switch statements with a
 		// default; here we assert each value satisfies Event (sealed) and that
 		// AgentEnd is among them.
-		_ = e.isEvent // method present on all events
+		_ = e.IsEvent // method present on all events
 	}
 	// AgentEnd must exist (single-AgentEnd invariant, DESIGN §1.3).
 	var _ Event = AgentEnd{}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -42,7 +43,7 @@ func (m Model) persistErrorAndAwait(action string, err error) tea.Cmd {
 	return sequenceCmds(persistErrorCmd(action, err), m.awaitSessionEvent())
 }
 
-func (m Model) persistEntryCmd(action string, entry session.StoreEvent) tea.Cmd {
+func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
 	return m.persistenceController().appendEntry(action, entry)
 }
 
