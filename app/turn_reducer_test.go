@@ -1,5 +1,3 @@
-//go:build ignore
-
 package app
 
 import (
@@ -11,11 +9,12 @@ import (
 
 func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	model := readyModel(t)
-	tool := &session.Entry{Role: session.RoleTool, Content: "partial"}
+	tool := &session.TestEntry{Role: session.RoleTool, Content: "partial"}
 	model.InFlight.Thinking = true
-	model.InFlight.Pending = tool
-	model.InFlight.PendingTools = map[string]*session.Entry{"tool-a": tool}
-	model.InFlight.Subagents = map[string]*core.SubagentProgress{"child": {ID: "child"}}
+	var toolEntry session.Entry = tool
+	model.InFlight.Pending = &toolEntry
+	model.InFlight.PendingTools = map[string]session.Entry{"tool-a": tool}
+	model.InFlight.Subagents = map[string]*SubagentProgress{"child": {ID: "child"}}
 	model.InFlight.QueuedTurns = []string{"follow up"}
 	model.InFlight.StreamBuf = "stream"
 	model.InFlight.ReasonBuf = "reason"
@@ -54,12 +53,15 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 
 func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 	model := readyModel(t)
-	model.InFlight.Pending = &session.Entry{
+	pending := &session.TestEntry{
 		Role:    session.RoleAgent,
 		Content: "answer",
 	}
+	var pendEntry session.Entry = pending
+	model.InFlight.Pending = &pendEntry
 	model.InFlight.StreamBuf = "answer"
 	model.InFlight.ReasonBuf = "reasoning"
+	model.InFlight.AgentCommitted = true
 
 	entry, completed, ok := model.turnReducer().FinishPendingAssistant()
 	if !ok {
@@ -68,8 +70,9 @@ func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 	if !completed {
 		t.Fatal("assistantCompleted = false, want true")
 	}
-	if entry.Content != "answer" || entry.Reasoning != "reasoning" {
-		t.Fatalf("entry = %#v, want streamed answer with reasoning", entry)
+	if session.EntryText(entry) != "answer" || session.EntryReasoning(entry) != "reasoning" {
+		t.Fatalf("entry = text %q reasoning %q, want streamed answer with reasoning",
+			session.EntryText(entry), session.EntryReasoning(entry))
 	}
 	if model.InFlight.Pending != nil ||
 		model.InFlight.StreamBuf != "" ||
@@ -85,15 +88,18 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 	model.Progress.LastError = ""
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"stale follow-up"}
-	model.InFlight.Pending = &session.Entry{Role: session.RoleAgent}
+	pending := &session.TestEntry{Role: session.RoleAgent}
+	var pendEntry session.Entry = pending
+	model.InFlight.Pending = &pendEntry
 
 	entry, ok := model.turnReducer().FinishTurnMode(false)
 	if !ok {
 		t.Fatal("finishTurnMode did not return visible error entry")
 	}
-	if entry.Role != session.RoleSystem ||
-		entry.Content != "Error: turn finished without assistant response" {
-		t.Fatalf("entry = %#v, want empty-assistant system error", entry)
+	if session.EntryRole(entry) != session.RoleUser ||
+		session.EntryText(entry) != "Error: turn finished without assistant response" {
+		t.Fatalf("entry = role %q text %q, want system error",
+			session.EntryRole(entry), session.EntryText(entry))
 	}
 	if model.Progress.Mode != stateError ||
 		model.Progress.LastError != "turn finished without assistant response" ||
@@ -109,31 +115,36 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 
 func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	model := readyModel(t)
-	toolA := &session.Entry{Role: session.RoleTool, Content: "a partial"}
-	toolB := &session.Entry{Role: session.RoleTool, Content: "b partial"}
+	toolA := &session.TestEntry{Role: session.RoleTool, Content: "a partial"}
+	toolB := &session.TestEntry{Role: session.RoleTool, Content: "b partial"}
 	model.Progress.Mode = stateWorking
 	model.Progress.Status = "Running tools..."
 	model.Progress.ContextTokens = 456
-	model.InFlight.Pending = toolA
-	model.InFlight.PendingTools = map[string]*session.Entry{
+	var toolAEntry session.Entry = toolA
+	model.InFlight.Pending = &toolAEntry
+	model.InFlight.PendingTools = map[string]session.Entry{
 		"tool-a": toolA,
 		"tool-b": toolB,
 	}
 
 	entry, ok := model.turnReducer().CompleteToolResult("tool-a", session.ToolCallEnd{
-		ToolUseID: "tool-a",
-		Result:    "a done",
+		ToolCallID: "tool-a",
+		Result: session.ToolResultMessage{
+			ToolCallID: "tool-a",
+			Content:    []session.Content{session.TextContent{Text: "a done"}},
+		},
 	})
 	if !ok {
 		t.Fatal("completeToolResult did not return completed tool")
 	}
-	if entry.Content != "a done" {
-		t.Fatalf("entry content = %q, want a done", entry.Content)
+	if session.EntryText(entry) != "a done" {
+		t.Fatalf("entry content = %q, want a done", session.EntryText(entry))
 	}
 	if _, ok := model.InFlight.PendingTools["tool-a"]; ok {
 		t.Fatalf("tool-a still pending: %#v", model.InFlight.PendingTools)
 	}
-	if model.InFlight.Pending != toolB {
+	// Pending should be promoted to toolB
+	if model.InFlight.Pending == nil || session.EntryText(*model.InFlight.Pending) != "b partial" {
 		t.Fatalf("pending = %#v, want tool-b promoted", model.InFlight.Pending)
 	}
 	if model.Progress.Mode != stateWorking ||
@@ -143,14 +154,17 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	}
 
 	entry, ok = model.turnReducer().CompleteToolResult("tool-b", session.ToolCallEnd{
-		ToolUseID: "tool-b",
-		Result:    "b done",
+		ToolCallID: "tool-b",
+		Result: session.ToolResultMessage{
+			ToolCallID: "tool-b",
+			Content:    []session.Content{session.TextContent{Text: "b done"}},
+		},
 	})
 	if !ok {
 		t.Fatal("completeToolResult did not return final completed tool")
 	}
-	if entry.Content != "b done" {
-		t.Fatalf("entry content = %q, want b done", entry.Content)
+	if session.EntryText(entry) != "b done" {
+		t.Fatalf("entry content = %q, want b done", session.EntryText(entry))
 	}
 	if model.InFlight.Pending != nil ||
 		len(model.InFlight.PendingTools) != 0 ||
@@ -190,10 +204,11 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 	if !ok {
 		t.Fatal("completeChild returned false")
 	}
-	if entry.Role != session.RoleSubagent ||
-		entry.Title != "worker" ||
-		entry.Content != "Completed: done" {
-		t.Fatalf("completion entry = %#v", entry)
+	if session.EntryRole(entry) != session.RoleSubagent ||
+		session.EntryTitle(entry) != "worker" ||
+		session.EntryText(entry) != "Completed: done" {
+		t.Fatalf("completion entry = role %q title %q text %q",
+			session.EntryRole(entry), session.EntryTitle(entry), session.EntryText(entry))
 	}
 	if len(model.InFlight.Subagents) != 0 ||
 		model.Progress.Status != "" ||
@@ -210,10 +225,11 @@ func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
 	if !ok {
 		t.Fatal("failChild returned false")
 	}
-	if entry.Role != session.RoleSubagent ||
-		!entry.IsError ||
-		entry.Content != "Failed: boom" {
-		t.Fatalf("failure entry = %#v", entry)
+	if session.EntryRole(entry) != session.RoleSubagent ||
+		!session.EntryIsError(entry) ||
+		session.EntryText(entry) != "Failed: boom" {
+		t.Fatalf("failure entry = role %q isError=%v text %q",
+			session.EntryRole(entry), session.EntryIsError(entry), session.EntryText(entry))
 	}
 	if len(model.InFlight.Subagents) != 0 ||
 		model.Progress.Mode != stateError ||

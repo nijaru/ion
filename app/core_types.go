@@ -158,7 +158,10 @@ const (
 	SlashCommandIdleWithArgs = 1
 )
 
-type TurnReducer struct{}
+type TurnReducer struct {
+	inFlight *InFlightState
+	progress *ProgressState
+}
 
 type ProviderSelection struct {
 	Setup SetupPromptKind
@@ -309,7 +312,31 @@ type SwitchResult struct {
 
 
 
-func (t TurnReducer) ClearActiveState(full bool)     {}
+func (t TurnReducer) ClearActiveState(full bool) {
+	if t.inFlight == nil {
+		return
+	}
+	t.inFlight.Thinking = false
+	t.inFlight.Pending = nil
+	t.inFlight.PendingTools = nil
+	t.inFlight.Subagents = nil
+	t.inFlight.StreamBuf = ""
+	t.inFlight.ReasonBuf = ""
+	t.inFlight.StreamChunks = nil
+	t.inFlight.AgentCommitted = false
+	t.inFlight.DrainUntilTurnStarted = false
+	t.inFlight.DrainStartedAt = time.Time{}
+	t.inFlight.Canceling = false
+	if t.progress != nil {
+		t.progress.LastToolUseID = ""
+		t.progress.ContextTokens = 0
+	}
+	if full {
+		t.inFlight.QueuedTurns = nil
+		t.inFlight.QueuedSteering = nil
+		t.inFlight.QueuedTurnsBackendOwned = false
+	}
+}
 func (t TurnReducer) ResetFinishedTurnSummary()       {}
 func (t TurnReducer) setReasoningEffort(v int)        {}
 func (t TurnReducer) applySessionUsage(in, out int, cost float64) {}
@@ -321,7 +348,14 @@ func (r SwitchResult) GetEntries(ctx context.Context, store session.Store) ([]se
 	return store.Entries(ctx)
 }
 
-func (t TurnReducer) PopQueuedTurn() string { return "" }
+func (t TurnReducer) PopQueuedTurn() string {
+	if t.inFlight == nil || len(t.inFlight.QueuedTurns) == 0 {
+		return ""
+	}
+	text := t.inFlight.QueuedTurns[0]
+	t.inFlight.QueuedTurns = t.inFlight.QueuedTurns[1:]
+	return text
+}
 
 func (s Snapshot) WithHandles(h Handles) Snapshot { return s }
 
@@ -355,9 +389,17 @@ func (t TurnReducer) StartSubmit() {}
 func (t TurnReducer) RejectSubmit(reason string) {}
 
 func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {}
-func (t TurnReducer) QueueTurn(text string) {}
+func (t TurnReducer) QueueTurn(text string) {
+	if t.inFlight != nil {
+		t.inFlight.QueuedTurns = append(t.inFlight.QueuedTurns, text)
+	}
+}
 
-func (t TurnReducer) ClearQueuedTurns()        {}
+func (t TurnReducer) ClearQueuedTurns() {
+	if t.inFlight != nil {
+		t.inFlight.QueuedTurns = nil
+	}
+}
 func (t TurnReducer) CancelActiveTurn(reason string, now time.Time) error { return nil }
 
 func (t TurnReducer) DrainingUntilTurnStarted() bool { return false }
@@ -385,12 +427,72 @@ type StatusChangedDecision struct {
 
 
 func (t TurnReducer) StartTurn(now time.Time, ts time.Time)           {}
-func (t TurnReducer) StopThinking()                      {}
-func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) { return nil, false, false }
+func (t TurnReducer) StopThinking() {
+	if t.inFlight != nil {
+		t.inFlight.Thinking = false
+	}
+}
+func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
+	if t.inFlight == nil || t.inFlight.Pending == nil {
+		return nil, false, false
+	}
+	entry := *t.inFlight.Pending
+	// Update the entry content from stream buffer if available
+	switch e := entry.(type) {
+	case *session.MessageEntry:
+		if am, ok := e.Message.(*session.AssistantMessage); ok {
+			if t.inFlight.StreamBuf != "" {
+				am.Content = []session.Content{session.TextContent{Text: t.inFlight.StreamBuf}}
+			}
+			if t.inFlight.ReasonBuf != "" {
+				am.Content = append([]session.Content{session.ThinkingContent{Text: t.inFlight.ReasonBuf}}, am.Content...)
+			}
+		}
+	case *session.TestEntry:
+		if t.inFlight.StreamBuf != "" {
+			e.Content = t.inFlight.StreamBuf
+		}
+		if t.inFlight.ReasonBuf != "" {
+			e.Reasoning = t.inFlight.ReasonBuf
+		}
+	}
+	completed := t.inFlight.AgentCommitted
+	t.inFlight.Pending = nil
+	t.inFlight.StreamBuf = ""
+	t.inFlight.ReasonBuf = ""
+	t.inFlight.StreamChunks = nil
+	return entry, completed, true
+}
 func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {}
 func (t TurnReducer) BeginDrain(now time.Time)           {}
 
-func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) { return nil, false }
+func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) {
+	if t.inFlight == nil {
+		return nil, false
+	}
+	if !completed {
+		// Empty assistant — emit error entry
+		errMsg := "turn finished without assistant response"
+		if t.progress != nil {
+			t.progress.Mode = stateError
+			t.progress.LastError = errMsg
+			t.progress.Status = ""
+		}
+		t.ClearActiveState(true)
+		now := time.Now()
+		return &session.MessageEntry{
+			EntryBase: session.EntryBase{Timestamp: now},
+			Message: &session.UserMessage{
+				Content:   []session.Content{session.TextContent{Text: "Error: " + errMsg}},
+				Timestamp: now,
+			},
+		}, true
+	}
+	if t.progress != nil {
+		t.progress.Mode = stateIonizing
+	}
+	return nil, true
+}
 
 
 type TurnFinishedDispatch struct {
@@ -410,17 +512,199 @@ func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
 func init() {}
 func (t TurnReducer) ApplyTokenUsage(msg interface{}) {}
 
-func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {}
-func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time.Time) {}
+func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time.Time) {
+	if t.inFlight == nil {
+		return
+	}
+	t.inFlight.StreamChunks = append(t.inFlight.StreamChunks, fmt.Sprint(delta))
+	t.inFlight.StreamBuf += fmt.Sprint(delta)
+}
+
+func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {
+	if t.inFlight == nil {
+		return
+	}
+	t.inFlight.ReasonBuf += fmt.Sprint(delta)
+}
 
 func (t TurnReducer) ApplyBudgetStop(reason string, ts time.Time) (session.Entry, error) { return nil, nil }
-func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) { return nil, false }
-func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {}
+func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
+	if t.inFlight == nil {
+		return nil, false
+	}
+	switch m := msg.(type) {
+	case *session.AssistantMessage:
+		entry := &session.MessageEntry{
+			EntryBase: session.EntryBase{Timestamp: m.Timestamp},
+			Message:   m,
+		}
+		var e session.Entry = entry
+		t.inFlight.Pending = &e
+		t.inFlight.AgentCommitted = true
+		return entry, true
+	}
+	return nil, false
+}
+func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
+	if t.inFlight == nil {
+		return
+	}
+	if t.inFlight.PendingTools == nil {
+		t.inFlight.PendingTools = make(map[string]session.Entry)
+	}
+	t.inFlight.PendingTools[id] = &session.TestEntry{
+		Role:      session.RoleTool,
+		Title:     title,
+		Timestamp: ts,
+	}
+	if t.progress != nil {
+		t.progress.LastToolUseID = id
+	}
+}
 func (t TurnReducer) AppendToolOutput(id string, output string, isError bool) {}
 func (t TurnReducer) AppendToolError(id, name, err string, ts time.Time) {}
 
-func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) { return nil, false }
+func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) {
+	if t.inFlight == nil {
+		return nil, false
+	}
+	// Remove from pending tools
+	if t.inFlight.PendingTools != nil {
+		delete(t.inFlight.PendingTools, id)
+	}
+	// Promote next tool if available
+	if len(t.inFlight.PendingTools) > 0 {
+		for _, entry := range t.inFlight.PendingTools {
+			t.inFlight.Pending = &entry
+			break
+		}
+	} else {
+		t.inFlight.Pending = nil
+		if t.progress != nil {
+			t.progress.Mode = stateIonizing
+			t.progress.Status = ""
+			t.progress.ContextTokens = 0
+		}
+	}
+	// Build result entry from msg
+	var entry session.Entry
+	switch m := msg.(type) {
+	case session.ToolCallEnd:
+		entry = &session.MessageEntry{
+			EntryBase: session.EntryBase{Timestamp: m.When()},
+			Message:   &m.Result,
+		}
+	default:
+		now := time.Now()
+		entry = &session.MessageEntry{
+			EntryBase: session.EntryBase{Timestamp: now},
+			Message: &session.ToolResultMessage{
+				ToolCallID: id,
+				Timestamp:   now,
+			},
+		}
+	}
+	return entry, true
+}
 
-func NewTurnReducer(inFlight *InFlightState, progress *ProgressState) TurnReducer { return TurnReducer{} }
+func (t TurnReducer) RequestChild(name, intent string) SubagentProgress {
+	if t.inFlight == nil {
+		return SubagentProgress{Name: name, Intent: intent}
+	}
+	if t.inFlight.Subagents == nil {
+		t.inFlight.Subagents = make(map[string]*SubagentProgress)
+	}
+	child := &SubagentProgress{ID: name, Name: name, Intent: intent}
+	t.inFlight.Subagents[name] = child
+	if t.progress != nil {
+		t.progress.Mode = stateWorking
+	}
+	return *child
+}
+
+func (t TurnReducer) StartChild(id string) bool {
+	if t.inFlight == nil || t.inFlight.Subagents == nil {
+		return false
+	}
+	child, ok := t.inFlight.Subagents[id]
+	if !ok {
+		return false
+	}
+	child.Status = "running"
+	return true
+}
+
+func (t TurnReducer) AppendChildDelta(id string, delta string) bool {
+	if t.inFlight == nil || t.inFlight.Subagents == nil {
+		return false
+	}
+	child, ok := t.inFlight.Subagents[id]
+	if !ok {
+		return false
+	}
+	child.Output += delta
+	return true
+}
+
+func (t TurnReducer) CompleteChild(id, output string, ts time.Time) (session.Entry, bool) {
+	if t.inFlight == nil || t.inFlight.Subagents == nil {
+		return nil, false
+	}
+	child, ok := t.inFlight.Subagents[id]
+	if !ok {
+		return nil, false
+	}
+	delete(t.inFlight.Subagents, id)
+	if len(t.inFlight.Subagents) == 0 {
+		t.inFlight.Subagents = nil
+	}
+	if t.progress != nil && len(t.inFlight.Subagents) == 0 {
+		t.progress.Mode = stateIonizing
+		t.progress.Status = ""
+	}
+	now := time.Now()
+	if !ts.IsZero() {
+		now = ts
+	}
+	return &session.TestEntry{
+		Role:    session.RoleSubagent,
+		Title:   child.Name,
+		Content: "Completed: " + output,
+		Timestamp: now,
+	}, true
+}
+
+func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, bool) {
+	if t.inFlight == nil || t.inFlight.Subagents == nil {
+		return nil, false
+	}
+	child, ok := t.inFlight.Subagents[id]
+	if !ok {
+		return nil, false
+	}
+	delete(t.inFlight.Subagents, id)
+	if len(t.inFlight.Subagents) == 0 {
+		t.inFlight.Subagents = nil
+	}
+	if t.progress != nil {
+		t.progress.Mode = stateError
+		t.progress.LastError = "Subagent failed: " + reason
+	}
+	now := time.Now()
+	if !ts.IsZero() {
+		now = ts
+	}
+	return &session.TestEntry{
+		Role:    session.RoleSubagent,
+		Title:   child.Name,
+		Content: "Failed: " + reason,
+		IsError: true,
+		Timestamp: now,
+	}, true
+}
+
+func NewTurnReducer(inFlight *InFlightState, progress *ProgressState) TurnReducer {
+	return TurnReducer{inFlight: inFlight, progress: progress}
+}
 
 func (t TurnReducer) AgentStreamContent() string { return "" }
