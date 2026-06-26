@@ -198,6 +198,11 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 	positionals := make([]string, 0, len(args))
 	openResumePicker := false
 	allowFlagLikePositionals := false
+	seenPositional := false
+	hasFlagLikePositional := false
+	hasFlagAfterPositional := false
+	hasNonConsumedNonPromptFlag := false
+	promptFlagCount := 0
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -207,14 +212,29 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 		name, hasInlineValue, isKnown := ionFlagName(arg)
 		if !isKnown {
 			if strings.HasPrefix(arg, "-") && arg != "-" && !allowFlagLikePositionals {
+				if seenPositional {
+					hasFlagAfterPositional = true
+				}
+				hasNonConsumedNonPromptFlag = true
 				flagArgs = append(flagArgs, arg)
 				continue
 			}
 			positionals = append(positionals, arg)
+			seenPositional = true
+			if strings.HasPrefix(arg, "-") {
+				hasFlagLikePositional = true
+			}
 			continue
 		}
-		if name == "print" || name == "p" || name == "json" {
+		if seenPositional {
+			hasFlagAfterPositional = true
+		}
+		isPromptFlag := name == "print" || name == "p" || name == "json"
+		if isPromptFlag {
 			allowFlagLikePositionals = true
+			promptFlagCount++
+		} else if !ionFlagNeedsValue(name) || hasInlineValue {
+			hasNonConsumedNonPromptFlag = true
 		}
 		switch {
 		case (name == "resume" || name == "r") && !hasInlineValue:
@@ -239,9 +259,13 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 	}
 	normalized := make([]string, 0, len(flagArgs)+1+len(positionals))
 	normalized = append(normalized, flagArgs...)
-	// Add "--" separator before positionals to distinguish flags from positionals.
-	// Skip if a leading "--" was already stripped (consumer already knows).
-	if !hadLeadingSeparator {
+	// Add "--" separator before positionals when needed:
+	// 1. A flag-like positional (starts with "-") could be confused with a flag
+	// 2. A flag appears after a positional in the original args (reordered)
+	// 3. Prompt mode ambiguity: multiple prompt flags or non-consumed non-prompt flags
+	needsSeparator := hasFlagLikePositional || hasFlagAfterPositional ||
+		allowFlagLikePositionals && (promptFlagCount > 1 || hasNonConsumedNonPromptFlag)
+	if !hadLeadingSeparator && needsSeparator {
 		normalized = append(normalized, "--")
 	}
 	normalized = append(normalized, positionals...)
