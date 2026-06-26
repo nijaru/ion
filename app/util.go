@@ -23,13 +23,6 @@ func systemEntry(content string) session.Entry {
 	return entry
 }
 
-func ifthen[T any](cond bool, a, b T) T {
-	if cond {
-		return a
-	}
-	return b
-}
-
 func now() int64 { return time.Now().Unix() }
 
 // clearVisibleScreenCmd clears the visible inline frame after terminal width
