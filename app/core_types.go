@@ -409,7 +409,14 @@ type CancelDecision struct {
 }
 
 func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
-	return CancelDecision{EntryContent: "Turn cancelled: " + reason}
+	if t.inFlight != nil {
+		t.inFlight.Canceling = true
+		t.inFlight.QueuedTurns = nil
+	}
+	if t.progress != nil {
+		t.progress.Mode = stateCancelled
+	}
+	return CancelDecision{EntryContent: reason}
 }
 
 func (t TurnReducer) FinishDrain() {}

@@ -1,5 +1,3 @@
-//go:build ignore
-
 package app
 
 import (
@@ -791,15 +789,15 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := testutil.New()
 			newBackend.SetConfig(&resolved)
 			newStorage := &stubStorageSession{
-				id:     sessionID,
-				model:  cfg.Provider + "/" + cfg.Model,
-				branch: "main",
+				storageID:     sessionID,
+				storageModel:  cfg.Provider + "/" + cfg.Model,
+				storageBranch: "main",
 			}
 			newBackend.SetSession(newStorage)
 			return newBackend, newBackend.Session(), newStorage, nil
@@ -858,7 +856,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},
