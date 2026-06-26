@@ -141,11 +141,11 @@ func EntryRole(e Entry) string {
 	}
 	switch me.Message.(type) {
 	case *UserMessage:
-		return "user"
+		return RoleUser
 	case *AssistantMessage:
-		return "assistant"
+		return RoleAgent
 	case *ToolResultMessage:
-		return "tool_result"
+		return RoleTool
 	}
 	return ""
 }
