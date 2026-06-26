@@ -506,3 +506,136 @@ func (s *resumeOnlyStore) Close() error { return nil }
 func (s *resumeOnlyStore) AddInput(ctx context.Context, workdir string, input string) error {
 	return nil
 }
+
+// --- Old event constructor compatibility helpers ---
+
+// newTextUpdate maps old session.NewTextUpdate("text", AgentMessage{}).
+func newTextUpdate(text string) session.MessageUpdate {
+	return session.MessageUpdate{Delta: session.TextDelta{Text: text}, Timestamp: time.Now()}
+}
+
+// newThinkingUpdate maps old session.NewThinkingUpdate("text", AgentMessage{}).
+func newThinkingUpdate(text string) session.MessageUpdate {
+	return session.MessageUpdate{Delta: session.ThinkingDelta{Text: text}, Timestamp: time.Now()}
+}
+
+// newToolExecUpdate maps old session.NewToolExecutionUpdate(toolID, name, output).
+func newToolExecUpdate(toolID, name, output string) session.ToolExecutionUpdate {
+	return session.ToolExecutionUpdate{ToolCallID: toolID, Partial: output}
+}
+
+// newToolCallStart maps old session.ToolCallStart{ToolUseID, ToolName, Args}.
+func newToolCallStart(toolID, name, args string) session.ToolCallStart {
+	return session.ToolCallStart{ToolCallID: toolID, Name: name, Args: []byte(args)}
+}
+
+// newToolCallEnd maps old session.ToolCallEnd{ToolUseID, ToolName, Result}.
+func newToolCallEnd(toolID, name, result string) session.ToolCallEnd {
+	return session.ToolCallEnd{
+		ToolCallID: toolID,
+		Result: session.ToolResultMessage{
+			ToolCallID: toolID,
+			Content:    []session.Content{session.TextContent{Text: result}},
+		},
+	}
+}
+
+// agentMsgEvent creates an AgentMessage event for tests.
+func agentMsgEvent(msg string, tokensAndCost ...int) session.AgentMessage {
+	am := session.AgentMessage{Message: &session.AssistantMessage{
+		Content:   []session.Content{session.TextContent{Text: msg}},
+		Timestamp: time.Now(),
+	}}
+	if len(tokensAndCost) >= 2 {
+		am.InputTokens = tokensAndCost[0]
+		am.OutputTokens = tokensAndCost[1]
+	}
+	if len(tokensAndCost) >= 3 {
+		am.Cost = float64(tokensAndCost[2]) / 1000.0
+	}
+	return am
+}
+
+// sessionInfoEntryID creates a SessionInfoEntry with ID and Name.
+func sessionInfoEntryID(id, name string) session.SessionInfoEntry {
+	return session.SessionInfoEntry{
+		EntryBase: session.EntryBase{ID: id, Timestamp: time.Now()},
+		Name:      name,
+	}
+}
+
+// fakeBackend is a minimal backend stub for runtime controller tests.
+type fakeBackend struct {
+	provider string
+	model    string
+	status   string
+	sess     session.Session
+}
+
+func (b fakeBackend) Name() string                    { return b.provider + "/" + b.model }
+func (b fakeBackend) Provider() string                { return b.provider }
+func (b fakeBackend) Model() string                   { return b.model }
+func (b fakeBackend) ContextLimit() int               { return 128000 }
+func (b fakeBackend) Bootstrap() agent.Bootstrap      { return agent.Bootstrap{Status: b.status} }
+func (b fakeBackend) Session() session.Session         { return b.sess }
+func (b fakeBackend) SetConfig(_ *config.Config)      {}
+func (b fakeBackend) SetStore(_ session.Store)         {}
+
+// fakeSession is a minimal session stub for runtime controller tests.
+type fakeSession struct {
+	id      string
+	events  chan session.Event
+	entries []session.Entry
+}
+
+func (s *fakeSession) ID() string                       { return s.id }
+func (s *fakeSession) Meta() session.Metadata            { return session.Metadata{ID: s.id} }
+func (s *fakeSession) Events() <-chan session.Event {
+	if s.events == nil {
+		return make(chan session.Event)
+	}
+	return s.events
+}
+func (s *fakeSession) SubmitTurn(_ context.Context, _ string) error { return nil }
+func (s *fakeSession) CancelTurn(_ context.Context) error           { return nil }
+func (s *fakeSession) Close() error                                 { return nil }
+func (s *fakeSession) Append(_ context.Context, entry session.Entry) (string, error) {
+	s.entries = append(s.entries, entry)
+	return fmt.Sprintf("fake-%d", len(s.entries)), nil
+}
+func (s *fakeSession) GetEntry(_ context.Context, _ string) (session.Entry, error) { return nil, nil }
+func (s *fakeSession) Branch(_ context.Context) ([]session.Entry, error)          { return s.entries, nil }
+func (s *fakeSession) Entries(_ context.Context) ([]session.Entry, error)         { return s.entries, nil }
+func (s *fakeSession) GetLeafID() string                                          { return "" }
+func (s *fakeSession) SetLeafID(_ string) error                                   { return nil }
+func (s *fakeSession) GetMetadata() session.Metadata                              { return s.Meta() }
+func (s *fakeSession) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
+	return nil, nil
+}
+func (s *fakeSession) ListSessions(_ context.Context, _ string) ([]session.SessionInfoEntry, error) {
+	return nil, nil
+}
+func (s *fakeSession) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error { return nil }
+
+// fakeStorage is a minimal store stub for runtime controller tests.
+type fakeStorage struct {
+	fakeSession
+	branch      string
+	entriesErr  error
+}
+
+func (s *fakeStorage) Meta() session.Metadata {
+	return session.Metadata{ID: s.id, Branch: s.branch}
+}
+func (s *fakeStorage) Entries(_ context.Context) ([]session.Entry, error) {
+	if s.entriesErr != nil {
+		return nil, s.entriesErr
+	}
+	return append([]session.Entry(nil), s.entries...), nil
+}
+
+// pendingEntry is a helper to create a *session.Entry from a session.Entry.
+// Used for Pending assignments which require *session.Entry (pointer to interface).
+func pendingEntry(e session.Entry) *session.Entry {
+	return &e
+}
