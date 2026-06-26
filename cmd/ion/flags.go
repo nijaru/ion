@@ -189,8 +189,10 @@ func validateSessionSelection(
 }
 
 func normalizeFlagArgs(args []string) ([]string, bool) {
+	hadLeadingSeparator := false
 	if len(args) > 1 && args[0] == "--" && strings.HasPrefix(args[1], "-") {
 		args = args[1:]
+		hadLeadingSeparator = true
 	}
 	flagArgs := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
@@ -237,7 +239,11 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 	}
 	normalized := make([]string, 0, len(flagArgs)+1+len(positionals))
 	normalized = append(normalized, flagArgs...)
-	normalized = append(normalized, "--")
+	// Add "--" separator before positionals to distinguish flags from positionals.
+	// Skip if a leading "--" was already stripped (consumer already knows).
+	if !hadLeadingSeparator {
+		normalized = append(normalized, "--")
+	}
 	normalized = append(normalized, positionals...)
 	return normalized, openResumePicker
 }
