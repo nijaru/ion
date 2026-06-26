@@ -428,3 +428,27 @@ func (e oldEntry) toEntry() session.Entry {
 		return sysEntry(e.Content)
 	}
 }
+
+// makeEntry creates a session.Entry from old-style fields (compatibility helper).
+func makeEntry(role, title, content, reasoning string, isError bool) session.Entry {
+	switch role {
+	case "tool":
+		return toolEntry(title, content, isError)
+	case "user":
+		return userMsgEntry(content)
+	case "agent":
+		if reasoning != "" {
+			return &session.MessageEntry{
+				Message: &session.AssistantMessage{
+					Content: []session.Content{
+						session.ThinkingContent{Text: reasoning},
+						session.TextContent{Text: content},
+					},
+				},
+			}
+		}
+		return agentMsgEntry(content)
+	default:
+		return sysEntry(content)
+	}
+}
