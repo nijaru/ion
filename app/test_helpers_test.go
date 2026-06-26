@@ -350,6 +350,7 @@ func toolEntry(title, content string, isError bool) *session.MessageEntry {
 	return &session.MessageEntry{
 		Message: &session.ToolResultMessage{
 			ToolName: title,
+			Title:    title,
 			Content:  []session.Content{session.TextContent{Text: content}},
 			IsError:  isError,
 		},
@@ -387,4 +388,43 @@ func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
 		}
 	}
 	return false
+}
+
+// entryFromRole creates a session.Entry from role-based fields (compatibility helper).
+// Used by tests that were written against the old session.Entry struct.
+func entryFromRole(role, title, content string, isError bool) session.Entry {
+	switch role {
+	case "tool":
+		return toolEntry(title, content, isError)
+	case "user":
+		return userMsgEntry(content)
+	case "agent":
+		return agentMsgEntry(content)
+	default:
+		return sysEntry(content)
+	}
+}
+
+// oldEntry is a compatibility struct that matches the old session.Entry fields.
+// Used to convert old-style struct literals to the new Entry interface.
+type oldEntry struct {
+	Role      string
+	Title     string
+	Content   string
+	Reasoning string
+	IsError   bool
+}
+
+// toEntry converts an oldEntry to a session.Entry interface.
+func (e oldEntry) toEntry() session.Entry {
+	switch e.Role {
+	case "tool":
+		return toolEntry(e.Title, e.Content, e.IsError)
+	case "user":
+		return userMsgEntry(e.Content)
+	case "agent":
+		return agentMsgEntry(e.Content)
+	default:
+		return sysEntry(e.Content)
+	}
 }

@@ -143,6 +143,9 @@ func EntryTitle(e Entry) string {
 	}
 	if me, ok := e.(*MessageEntry); ok {
 		if tr, ok := me.Message.(*ToolResultMessage); ok {
+			if tr.Title != "" {
+				return tr.Title
+			}
 			return tr.ToolName
 		}
 	}

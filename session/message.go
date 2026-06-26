@@ -46,6 +46,7 @@ type AssistantMessage struct {
 type ToolResultMessage struct {
 	ToolCallID string
 	ToolName   string
+	Title      string // Formatted display title (e.g., "bash go test ./...")
 	Content    []Content // Text | Image
 	Details    json.RawMessage
 	IsError    bool
