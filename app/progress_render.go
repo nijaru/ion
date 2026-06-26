@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/nijaru/ion/internal/runtime"
 	"fmt"
 	"strings"
 	"time"
@@ -40,8 +41,8 @@ func (r progressReducer) completeCompaction() {
 }
 
 func (r progressReducer) clearError() {
-	if r.progress.Mode == stateError {
-		r.progress.Mode = stateReady
+	if r.progress.Mode == runtime.StateError {
+		r.progress.Mode = runtime.StateReady
 	}
 	r.progress.LastError = ""
 }
@@ -58,7 +59,7 @@ func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
 }
 
 func (r progressReducer) markRuntimeReady() {
-	r.progress.Mode = stateReady
+	r.progress.Mode = runtime.StateReady
 }
 
 func (r progressReducer) resetSessionUsage() {
@@ -136,7 +137,7 @@ func (m Model) progressLine() string {
 		return fitLine(strings.TrimRight(line, " "), m.shellWidth())
 	}
 	switch m.Progress.Mode {
-	case stateIonizing, stateStreaming, stateWorking:
+	case runtime.StateIonizing, runtime.StateStreaming, runtime.StateWorking:
 		status := retryCountdownStatus(
 			m.Progress.Status,
 			m.Progress.StatusUpdatedAt,
@@ -144,11 +145,11 @@ func (m Model) progressLine() string {
 		)
 		if isIdleStatus(status) || isConfigurationStatus(status) {
 			switch m.Progress.Mode {
-			case stateIonizing:
+			case runtime.StateIonizing:
 				status = "Ionizing..."
-			case stateStreaming:
+			case runtime.StateStreaming:
 				status = "Streaming..."
-			case stateWorking:
+			case runtime.StateWorking:
 				if len(m.InFlight.Subagents) > 0 {
 					for _, k := range sortedKeys(m.InFlight.Subagents) {
 						status = "Waiting for " + m.InFlight.Subagents[k].Name + "..."
@@ -163,19 +164,19 @@ func (m Model) progressLine() string {
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += m.renderProgressStats(stats)
 		}
-	case stateComplete:
+	case runtime.StateComplete:
 		line = m.st.success.Render("✓") + " Complete"
 		if stats := m.completedProgressParts(); len(stats) > 0 {
 			line += m.renderProgressStats(stats)
 		}
-	case stateCancelled:
+	case runtime.StateCancelled:
 		line = m.st.warn.Render("⚠ Canceled")
 		if reason := strings.TrimSpace(m.Progress.BudgetStopReason); reason != "" {
 			line += " • " + reason
 		}
-	case stateBlocked:
+	case runtime.StateBlocked:
 		line = m.st.warn.Render("⚠ Subagent blocked")
-	case stateError:
+	case runtime.StateError:
 		if m.suppressTerminalErrorProgress() {
 			return ""
 		}

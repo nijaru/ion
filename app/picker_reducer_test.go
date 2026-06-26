@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -253,7 +254,7 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
-	model.Picker.Setup = &setupPromptState{kind: SetupPromptAPIKey}
+	model.Picker.Setup = &setupPromptState{kind: runtime.SetupPromptAPIKey}
 
 	model.pickerReducer().closeAll()
 
@@ -287,7 +288,7 @@ func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
 	model := readyModel(t)
 	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProviderSetup})
 	model.pickerReducer().openSetup(setupPromptState{
-		kind:  SetupPromptEndpoint,
+		kind:  runtime.SetupPromptEndpoint,
 		value: "fedora",
 		err:   "old error",
 	})

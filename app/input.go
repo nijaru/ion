@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/nijaru/ion/internal/runtime"
 	"context"
 	"fmt"
 	"os"
@@ -310,7 +311,7 @@ func insetStatusLine(line string, width int) string {
 }
 
 func (m Model) statusModelLabel(model string) string {
-	if m.activePreset() != presetFast {
+	if m.activePreset() != runtime.PresetFast {
 		return model
 	}
 	return model + " (fast)"

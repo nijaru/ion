@@ -1,6 +1,8 @@
 
 package app
 
+import "github.com/nijaru/ion/internal/runtime"
+
 import "testing"
 
 func TestProgressReducerLocalStatusLifecycle(t *testing.T) {
@@ -26,7 +28,7 @@ func TestProgressReducerLocalStatusLifecycle(t *testing.T) {
 func TestProgressReducerCompleteCompactionClearsBusyError(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Compacting = true
-	model.Progress.Mode = stateError
+	model.Progress.Mode = runtime.StateError
 	model.Progress.LastError = "old error"
 	model.Progress.ContextTokens = 123
 	model.Progress.Status = "Compacting context..."
@@ -38,7 +40,7 @@ func TestProgressReducerCompleteCompactionClearsBusyError(t *testing.T) {
 	if model.Progress.ContextTokens != 0 {
 		t.Fatalf("context tokens = %d, want zero", model.Progress.ContextTokens)
 	}
-	if model.Progress.Mode != stateReady || model.Progress.LastError != "" {
+	if model.Progress.Mode != runtime.StateReady || model.Progress.LastError != "" {
 		t.Fatalf("progress error state = %#v, want ready without error", model.Progress)
 	}
 	if model.Progress.Status != "Ready" {

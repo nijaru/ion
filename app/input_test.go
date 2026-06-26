@@ -360,8 +360,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 			model.InFlight.Canceling,
 		)
 	}
-	if model.Progress.Mode != stateCancelled {
-		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	if model.Progress.Mode != runtime.StateCancelled {
+		t.Fatalf("progress mode = %v, want runtime.StateCancelled", model.Progress.Mode)
 	}
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
@@ -818,7 +818,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
 	// With available model cycling, preset stays primary but model changes
-	if model.App.ActivePreset != presetPrimary {
+	if model.App.ActivePreset != runtime.PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
@@ -837,7 +837,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	}
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
-	if model.App.ActivePreset != presetPrimary {
+	if model.App.ActivePreset != runtime.PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
@@ -880,7 +880,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 	if oldSession.cancels != 0 {
 		t.Fatalf("cancels = %d, want 0", oldSession.cancels)
 	}
-	if model.App.ActivePreset != presetPrimary {
+	if model.App.ActivePreset != runtime.PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 }

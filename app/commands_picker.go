@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/runtime"
 	"context"
 	"errors"
 	"fmt"
@@ -409,9 +410,9 @@ func (m Model) handleModelPickerSetupResolved(
 	}
 	cfg := msg.cfg
 	switch msg.setup {
-	case SetupPromptAPIKey:
+	case runtime.SetupPromptAPIKey:
 		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
-	case SetupPromptEndpoint:
+	case runtime.SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
 	default:
 		return m.openModelPickerForPreset(&cfg, msg.preset)
@@ -450,10 +451,10 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 }
 
 func togglePreset(p Preset) Preset {
-	if p == presetFast {
-		return presetPrimary
+	if p == runtime.PresetFast {
+		return runtime.PresetPrimary
 	}
-	return presetFast
+	return runtime.PresetFast
 }
 
 func normalizeThinkingValue(value string) string {
@@ -775,13 +776,13 @@ func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerIt
 
 func (p *pickerOverlayState) Preset() Preset {
 	if p == nil {
-		return presetPrimary
+		return runtime.PresetPrimary
 	}
 	switch p.preset {
-	case presetFast:
-		return presetFast
+	case runtime.PresetFast:
+		return runtime.PresetFast
 	default:
-		return presetPrimary
+		return runtime.PresetPrimary
 	}
 }
 

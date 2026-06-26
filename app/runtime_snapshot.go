@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/nijaru/ion/internal/runtime"
 	"context"
 	"fmt"
 	"strings"
@@ -133,18 +134,18 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKi
 		llm.ResolvedAuthToken(cfg, def) == ""
 	if def.ID == llm.OpenAICompatibleID {
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
-			return SetupPromptAPIKey, nil
+			return runtime.SetupPromptAPIKey, nil
 		}
 		if err := ensureProviderReadyForSelection(ctx, cfg); err != nil {
-			return SetupPromptEndpoint, nil
+			return runtime.SetupPromptEndpoint, nil
 		}
 		if missingAuth {
-			return SetupPromptAPIKey, nil
+			return runtime.SetupPromptAPIKey, nil
 		}
 		return 0, nil
 	}
 	if missingAuth {
-		return SetupPromptAPIKey, nil
+		return runtime.SetupPromptAPIKey, nil
 	}
 	return 0, nil
 }
@@ -183,7 +184,7 @@ func resumeSelectionTransition(cfg *config.Config) Transition {
 	return newRuntimeTransition(
 		cfg,
 		cfg,
-		presetPrimary,
+		runtime.PresetPrimary,
 		"",
 	).WithActivePresetPersistence()
 }

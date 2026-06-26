@@ -366,7 +366,6 @@ func EntryUser(content string, ts time.Time) (*session.MessageEntry, string) {
 var NoProviderConfiguredStatus = "No provider configured"
 var NoModelConfiguredStatus = "No model configured"
 
-var TurnFinishedDispatchSubmitLocal = "submit_local"
 
 // --- Type aliases ---
 

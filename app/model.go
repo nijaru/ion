@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	"github.com/nijaru/ion/internal/gitwatch"
+	"github.com/nijaru/ion/internal/runtime"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/session"
 )
@@ -54,10 +55,6 @@ const (
 
 const pendingActionTimeout = 1500 * time.Millisecond
 
-const (
-	presetPrimary = PresetPrimary
-	presetFast    = PresetFast
-)
 
 type runtimeSwitchedMsg struct {
 	switchID      uint64
@@ -298,16 +295,6 @@ type setupPromptState struct {
 }
 
 
-const (
-	stateReady      = StateReady
-	stateIonizing   = StateIonizing
-	stateStreaming  = StateStreaming
-	stateWorking    = StateWorking
-	stateComplete   = StateComplete
-	stateCancelled  = StateCancelled
-	stateBlocked    = StateBlocked
-	stateError      = StateError
-)
 
 
 // AppState holds general application and workspace metadata.
@@ -459,7 +446,7 @@ func New(
 			Workdir:      workdir,
 			Branch:       branch,
 			Version:      version,
-			ActivePreset: presetPrimary,
+			ActivePreset: runtime.PresetPrimary,
 		},
 		Model: ModelState{
 			Backend:     b,

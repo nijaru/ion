@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/config"
 	"fmt"
 	"net/url"
@@ -35,7 +36,7 @@ func (m Model) openAPIKeyPrompt(
 	cfgCopy := *cfg
 	cfgCopy.Provider = def.ID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         SetupPromptAPIKey,
+		kind:         runtime.SetupPromptAPIKey,
 		provider:     def.ID,
 		providerName: def.DisplayName,
 		preset:       preset,
@@ -60,7 +61,7 @@ func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea
 	cfgCopy := *cfg
 	cfgCopy.Provider = llm.OpenAICompatibleID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         SetupPromptEndpoint,
+		kind:         runtime.SetupPromptEndpoint,
 		provider:     llm.OpenAICompatibleID,
 		providerName: llm.DisplayName(llm.OpenAICompatibleID),
 		value:        strings.TrimSpace(cfgCopy.Endpoint),
@@ -120,7 +121,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m, cmdError(message)
 	}
 	switch prompt.kind {
-	case SetupPromptAPIKey:
+	case runtime.SetupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
 		if key == "" {
 			m.pickerReducer().setSetupError("API key cannot be empty")
@@ -143,7 +144,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 				err:       err,
 			}
 		}
-	case SetupPromptEndpoint:
+	case runtime.SetupPromptEndpoint:
 		endpoint, err := normalizeOpenAICompatibleEndpoint(prompt.value)
 		if err != nil {
 			m.pickerReducer().setSetupError(err.Error())

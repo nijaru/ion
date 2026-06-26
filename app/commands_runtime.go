@@ -79,7 +79,7 @@ func (m Model) configForStoredSession(provider, model string) (*config.Config, e
 	if err != nil {
 		return nil, err
 	}
-	return updateModelForPreset(cfg, model, presetPrimary), nil
+	return updateModelForPreset(cfg, model, runtime.PresetPrimary), nil
 }
 
 func (m Model) switchPresetCommand(preset Preset) (Model, tea.Cmd) {
@@ -124,7 +124,7 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	updated := *cfg
 	updated.Provider = next.Provider
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		updated.FastModel = next.Model
 		if next.Thinking != "" {
 			updated.FastReasoningEffort = next.Thinking
@@ -159,14 +159,14 @@ func (m Model) cyclePresetFallback(
 	available := m.buildAvailableModels(cfg)
 	if len(available) <= 1 {
 		// Only one model available — open picker to configure fast
-		return m.openModelPickerForPreset(cfg, presetFast)
+		return m.openModelPickerForPreset(cfg, runtime.PresetFast)
 	}
 
 	// Find current model in available list
 	currentProvider := cfg.Provider
 	var currentModel string
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		currentModel = cfg.FastModel
 	default:
 		currentModel = cfg.Model
@@ -197,7 +197,7 @@ func (m Model) cyclePresetFallback(
 	updated := *cfg
 	updated.Provider = next.Provider
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		updated.FastModel = next.Model
 	default:
 		updated.Model = next.Model

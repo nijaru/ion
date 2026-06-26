@@ -68,13 +68,13 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if len(fields) != 1 {
 			return m, cmdError("usage: /primary")
 		}
-		return m.switchPresetCommand(presetPrimary)
+		return m.switchPresetCommand(runtime.PresetPrimary)
 
 	case "/fast":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /fast")
 		}
-		return m.switchPresetCommand(presetFast)
+		return m.switchPresetCommand(runtime.PresetFast)
 
 	case "/resume":
 		if len(fields) < 2 {

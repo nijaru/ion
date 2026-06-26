@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/runtime"
 	"context"
 	"fmt"
 	"strings"
@@ -11,10 +12,10 @@ import (
 
 func (m Model) activePreset() Preset {
 	switch m.App.ActivePreset {
-	case presetFast:
-		return presetFast
+	case runtime.PresetFast:
+		return runtime.PresetFast
 	default:
-		return presetPrimary
+		return runtime.PresetPrimary
 	}
 }
 
@@ -24,7 +25,7 @@ func (m Model) activePresetTitle() string {
 
 func presetTitle(preset Preset) string {
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		return "fast"
 	default:
 		return "primary"
@@ -118,7 +119,7 @@ func updateModelForPreset(
 	updated := *cfg
 	model = strings.TrimSpace(model)
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		updated.FastModel = model
 	default:
 		updated.Model = model
@@ -141,7 +142,7 @@ func updateThinkingForPreset(
 	updated := *cfg
 	effort = strings.TrimSpace(effort)
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		updated.FastReasoningEffort = effort
 	default:
 		updated.ReasoningEffort = effort
@@ -158,7 +159,7 @@ func configuredModelForPreset(cfg *config.Config, preset Preset) string {
 		return ""
 	}
 	switch preset {
-	case presetFast:
+	case runtime.PresetFast:
 		return strings.TrimSpace(cfg.FastModel)
 	default:
 		return strings.TrimSpace(cfg.Model)
