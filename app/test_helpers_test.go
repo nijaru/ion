@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
@@ -332,6 +333,9 @@ type stubStorageSession struct {
 	stubSession
 	appends    []session.Entry
 	appendErr  error
+	storageID  string
+	storageModel string
+	storageBranch string
 }
 
 func (s *stubStorageSession) Append(_ context.Context, entry session.Entry) (string, error) {
@@ -453,3 +457,52 @@ func makeEntry(role, title, content, reasoning string, isError bool) session.Ent
 	}
 }
 
+
+// readyModelWithSwitcher creates a model with a switcher that records model switches.
+func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
+	t.Helper()
+	sess := newStubSession("stub")
+	b := stubBackend{sess: sess, provider: "openai", model: "gpt-4.1"}
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
+		*observed = append(*observed, cfg.Model)
+		newSess := newStubSession(sessionID)
+		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}
+		return newBackend, newSess, newSess, nil
+	}
+	model := New(b, nil, nil, "/tmp/test", "main", "dev", switcher)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return testModel(t, updated)
+}
+
+// resumeOnlyStore is a minimal store stub for tests that don't need persistence.
+type resumeOnlyStore struct{}
+
+func (s *resumeOnlyStore) Append(ctx context.Context, entry session.Entry) (string, error) {
+	return "id-" + time.Now().Format("150405"), nil
+}
+func (s *resumeOnlyStore) GetEntry(ctx context.Context, id string) (session.Entry, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) Branch(ctx context.Context) ([]session.Entry, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) GetLeafID() string                     { return "" }
+func (s *resumeOnlyStore) SetLeafID(id string) error             { return nil }
+func (s *resumeOnlyStore) GetMetadata() session.Metadata         { return session.Metadata{} }
+func (s *resumeOnlyStore) Meta() session.Metadata                 { return session.Metadata{} }
+func (s *resumeOnlyStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
+	return nil
+}
+func (s *resumeOnlyStore) Close() error { return nil }
+func (s *resumeOnlyStore) AddInput(ctx context.Context, workdir string, input string) error {
+	return nil
+}
