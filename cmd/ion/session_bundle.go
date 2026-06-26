@@ -88,11 +88,11 @@ func printSessionBundleImport(w io.Writer, imported []session.SessionInfoEntry) 
 	case 0:
 		fmt.Fprintln(w, "Imported 0 sessions")
 	case 1:
-		fmt.Fprintf(w, "Imported session %s\n", imported[0].ID)
+		fmt.Fprintf(w, "Imported session %s\n", imported[0].ID())
 	default:
 		fmt.Fprintf(w, "Imported %d sessions:\n", len(imported))
 		for _, info := range imported {
-			fmt.Fprintf(w, "- %s\n", info.ID)
+			fmt.Fprintf(w, "- %s\n", info.ID())
 		}
 	}
 }

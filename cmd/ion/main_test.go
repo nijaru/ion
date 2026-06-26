@@ -3,64 +3,74 @@ package main
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
 type closeStorageSession struct {
 	id     string
 	closed int
+	events chan session.Event
 }
 
-func (s *closeStorageSession) ID() string { return s.id }
-
-func (s *closeStorageSession) Meta() session.Metadata {
-	return session.Metadata{ID: s.id, CreatedAt: time.Now()}
+func (s *closeStorageSession) ID() string                                    { return s.id }
+func (s *closeStorageSession) Meta() session.Metadata                        { return session.Metadata{ID: s.id} }
+func (s *closeStorageSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
+	return session.ContextSnapshot{}, nil
 }
-
-func (s *closeStorageSession) Append(ctx context.Context, event session.StoreEvent) error { return nil }
-
-func (s *closeStorageSession) AppendModelMessage(ctx context.Context, msg llm.Message) error {
-	return nil
+func (s *closeStorageSession) Branch(context.Context) ([]session.Entry, error) { return nil, nil }
+func (s *closeStorageSession) AppendMessage(context.Context, session.Message) (string, error) {
+	return "", nil
 }
-
-func (s *closeStorageSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
+func (s *closeStorageSession) AppendModelChange(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendThinkingChange(context.Context, session.ThinkingLevel) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendToolsChange(context.Context, []string) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendCompaction(context.Context, session.CompactionData) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendBranchSummary(context.Context, session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendLabel(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendSessionInfo(context.Context, string) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendCustom(context.Context, *session.CustomEntry) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) Append(context.Context, session.Entry) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) SubmitTurn(context.Context, string) error    { return nil }
+func (s *closeStorageSession) CancelTurn(context.Context) error            { return nil }
+func (s *closeStorageSession) Events() <-chan session.Event                 { return s.events }
+func (s *closeStorageSession) EventSender() chan session.Event              { return s.events }
+func (s *closeStorageSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
-
-func (s *closeStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {
-	return nil, nil
+func (s *closeStorageSession) GetLeafID() string          { return "" }
+func (s *closeStorageSession) SetLeafID(string) error     { return nil }
+func (s *closeStorageSession) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
+	return "", nil
 }
-
-func (s *closeStorageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
-
-func (s *closeStorageSession) Usage(ctx context.Context) (int, int, float64, error) {
-	return 0, 0, 0, nil
+func (s *closeStorageSession) Entries(context.Context) ([]session.Entry, error) { return nil, nil }
+func (s *closeStorageSession) Usage(context.Context) (session.Usage, error) {
+	return session.Usage{}, nil
 }
-
 func (s *closeStorageSession) Close() error {
 	s.closed++
 	return nil
-}
-
-func (s *closeStorageSession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
-	return "", nil
-}
-
-func (s *closeStorageSession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
-	return "", nil
-}
-
-func (s *closeStorageSession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
-	return "", nil
-}
-
-func (s *closeStorageSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
-	return "", nil
 }
 
 type providerBackend struct {
@@ -68,41 +78,20 @@ type providerBackend struct {
 	model    string
 }
 
-func (b providerBackend) Name() string {
-	return "provider-test"
-}
-
-func (b providerBackend) Provider() string {
-	return b.provider
-}
-
-func (b providerBackend) Model() string {
-	return b.model
-}
-
-func (b providerBackend) ContextLimit() int {
-	return 0
-}
-
-func (b providerBackend) Bootstrap() app.Bootstrap {
-	return app.Bootstrap{}
-}
-
-func (b providerBackend) Session() session.AgentSession {
-	return nil
-}
-
-func (b providerBackend) SetStore(session.SessionStore) {}
-
-func (b providerBackend) SetSession(session.SessionHandle) {}
-
-func (b providerBackend) SetConfig(*config.Config) {}
+func (b providerBackend) Name() string              { return "provider-test" }
+func (b providerBackend) Provider() string          { return b.provider }
+func (b providerBackend) Model() string             { return b.model }
+func (b providerBackend) ContextLimit() int         { return 0 }
+func (b providerBackend) Bootstrap() agent.Bootstrap { return agent.Bootstrap{} }
+func (b providerBackend) Session() session.Session   { return nil }
+func (b providerBackend) SetStore(session.Store)     {}
+func (b providerBackend) SetConfig(*config.Config)   {}
 
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
-	startupAgent := &printSession{}
-	currentAgent := &printSession{}
-	startupStorage := &closeStorageSession{id: "startup"}
-	currentStorage := &closeStorageSession{id: "current"}
+	startupAgent := &printSession{events: make(chan session.Event)}
+	currentAgent := &printSession{events: make(chan session.Event)}
+	startupStorage := &closeStorageSession{id: "startup", events: make(chan session.Event)}
+	currentStorage := &closeStorageSession{id: "current", events: make(chan session.Event)}
 	final := app.Model{
 		Model: app.ModelState{
 			Session: currentAgent,
@@ -120,8 +109,8 @@ func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 }
 
 func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
-	startupAgent := &printSession{}
-	startupStorage := &closeStorageSession{id: "startup"}
+	startupAgent := &printSession{events: make(chan session.Event)}
+	startupStorage := &closeStorageSession{id: "startup", events: make(chan session.Event)}
 
 	agent, storageSession := runtimeHandlesForClose(nil, startupAgent, startupStorage)
 	if agent != startupAgent {
@@ -133,8 +122,8 @@ func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
 }
 
 func TestCloseRuntimeOpenErrorClosesPartialHandles(t *testing.T) {
-	agent := &printSession{}
-	storageSession := &closeStorageSession{id: "partial"}
+	agent := &printSession{events: make(chan session.Event)}
+	storageSession := &closeStorageSession{id: "partial", events: make(chan session.Event)}
 
 	err := closeRuntimeOpenError(
 		"backend initialization error",

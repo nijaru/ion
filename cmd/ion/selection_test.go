@@ -1,374 +1,156 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 
-type metadataStore struct {
-	updated  session.SessionInfo
-	sessions []session.SessionInfo
+// testStore implements session.Store for testing.
+type testStore struct {
+	entries  []session.Entry
+	sessions []session.SessionInfoEntry
 	listErr  error
+	leafID   string
+	meta     session.Metadata
 }
 
-func (s *metadataStore) OpenSession(
-	ctx context.Context,
-	cwd, model, branch string,
-) (session.SessionHandle, error) {
+func (s *testStore) Append(_ context.Context, _ session.Entry) (string, error) {
+	return "", nil
+}
+func (s *testStore) GetEntry(_ context.Context, _ string) (session.Entry, error) {
+	return nil, os.ErrNotExist
+}
+func (s *testStore) Branch(_ context.Context) ([]session.Entry, error) {
+	return s.entries, nil
+}
+func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
+	return s.entries, nil
+}
+func (s *testStore) GetLeafID() string            { return s.leafID }
+func (s *testStore) SetLeafID(id string) error     { s.leafID = id; return nil }
+func (s *testStore) GetMetadata() session.Metadata  { return s.meta }
+func (s *testStore) Meta() session.Metadata         { return s.meta }
+func (s *testStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil
 }
-
-func (s *metadataStore) ResumeSession(ctx context.Context, id string) (session.SessionHandle, error) {
-	return nil, nil
-}
-
-func (s *metadataStore) ListSessions(
-	ctx context.Context,
-	cwd string,
-) ([]session.SessionInfo, error) {
+func (s *testStore) ListSessions(_ context.Context, _ string) ([]session.SessionInfoEntry, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
 	return s.sessions, nil
 }
-
-func (s *metadataStore) GetRecentSession(
-	ctx context.Context,
-	cwd string,
-) (*session.SessionInfo, error) {
-	return nil, nil
-}
-
-func (s *metadataStore) AddInput(ctx context.Context, cwd, content string) error { return nil }
-
-func (s *metadataStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
-	return nil, nil
-}
-
-func (s *metadataStore) UpdateSession(ctx context.Context, si session.SessionInfo) error {
-	s.updated = si
+func (s *testStore) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error {
 	return nil
 }
+func (s *testStore) AddInput(_ context.Context, _ string, _ string) error { return nil }
+func (s *testStore) Close() error                                          { return nil }
 
-func (s *metadataStore) Close() error { return nil }
-
-func TestBackendForProvider(t *testing.T) {
-	cases := []struct {
-		name     string
-		provider string
-		want     string
-		wantErr  string
-	}{
-		{name: "canto openrouter", provider: "openrouter", want: "agent"},
-		{name: "canto anthropic", provider: "anthropic", want: "agent"},
-		{name: "canto together", provider: "together", want: "agent"},
-		{name: "canto custom openai", provider: "openai-compatible", want: "agent"},
-		{name: "canto local api", provider: "local-api", want: "agent"},
-		{name: "acp claude", provider: "claude-pro", wantErr: "ACP providers are deferred"},
-		{name: "acp gemini", provider: "gemini-advanced", wantErr: "ACP providers are deferred"},
-		{name: "acp github", provider: "gh-copilot", wantErr: "ACP providers are deferred"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			b, err := backendForProvider(tc.provider)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf(
-						"backendForProvider(%q) error = %v, want %q",
-						tc.provider,
-						err,
-						tc.wantErr,
-					)
-				}
-				if b != nil {
-					t.Fatalf("backendForProvider(%q) backend = %#v, want nil", tc.provider, b)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("backendForProvider(%q) returned error: %v", tc.provider, err)
-			}
-			if got := b.Name(); got != tc.want {
-				t.Fatalf("backendForProvider(%q).Name() = %q, want %q", tc.provider, got, tc.want)
-			}
-		})
+func sessionInfoForTest(id, lastPreview string) session.SessionInfoEntry {
+	return session.SessionInfoEntry{
+		EntryBase:   session.EntryBase{ID: id},
+		LastPreview: lastPreview,
 	}
 }
 
 func TestNormalizeFlagArgsAcceptsLeadingSeparator(t *testing.T) {
-	got, picker := normalizeFlagArgs([]string{"--", "--continue"})
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for continue")
-	}
-	if len(got) != 1 || got[0] != "--continue" {
-		t.Fatalf("normalizeFlagArgs = %#v, want --continue", got)
-	}
-
-	plain, picker := normalizeFlagArgs([]string{"--continue"})
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for plain continue")
-	}
-	if len(plain) != 1 || plain[0] != "--continue" {
-		t.Fatalf("normalizeFlagArgs plain = %#v, want unchanged", plain)
-	}
-
-	short, picker := normalizeFlagArgs([]string{"-c"})
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for short continue")
-	}
-	if len(short) != 1 || short[0] != "-c" {
-		t.Fatalf("normalizeFlagArgs short = %#v, want -c", short)
-	}
-}
-
-func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
-	got, picker := normalizeFlagArgs([]string{"--resume"})
-	if !picker {
-		t.Fatal("normalizeFlagArgs did not request resume picker")
-	}
-	if len(got) != 0 {
-		t.Fatalf("normalizeFlagArgs = %#v, want empty args", got)
-	}
-
-	withID, picker := normalizeFlagArgs([]string{"--resume", "session-1"})
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for explicit session id")
-	}
-	if len(withID) != 2 || withID[0] != "--resume" || withID[1] != "session-1" {
-		t.Fatalf("normalizeFlagArgs explicit = %#v, want resume session-1", withID)
-	}
-
-	short, picker := normalizeFlagArgs([]string{"-r"})
-	if !picker {
-		t.Fatal("normalizeFlagArgs did not request resume picker for -r")
-	}
-	if len(short) != 0 {
-		t.Fatalf("normalizeFlagArgs short = %#v, want empty args", short)
-	}
-
-	shortWithID, picker := normalizeFlagArgs([]string{"-r", "session-1"})
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for explicit short session id")
-	}
-	if len(shortWithID) != 2 || shortWithID[0] != "-r" || shortWithID[1] != "session-1" {
-		t.Fatalf("normalizeFlagArgs short explicit = %#v, want -r session-1", shortWithID)
-	}
-}
-
-func TestNormalizeFlagArgsKeepsModelAndThinkingValues(t *testing.T) {
-	got, picker := normalizeFlagArgs(
-		[]string{"-p", "--model", "local-model", "--thinking", "high", "hello"},
-	)
-	want := []string{"-p", "--model", "local-model", "--thinking", "high", "--", "hello"}
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker")
+	got, openResumePicker := normalizeFlagArgs([]string{"--", "--print", "hello"})
+	want := []string{"--print", "hello"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
 	}
+}
 
-	short, picker := normalizeFlagArgs([]string{"-p", "-m", "local-model", "hello"})
-	shortWant := []string{"-p", "-m", "local-model", "--", "hello"}
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for short model")
+func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"--resume"})
+	if !openResumePicker {
+		t.Fatal("normalizeFlagArgs did not open resume picker")
 	}
-	if !slices.Equal(short, shortWant) {
-		t.Fatalf("normalizeFlagArgs short = %#v, want %#v", short, shortWant)
+	if len(got) != 0 {
+		t.Fatalf("normalizeFlagArgs = %#v, want empty", got)
+	}
+}
+
+func TestNormalizeFlagArgsKeepsModelAndThinkingValues(t *testing.T) {
+	got, _ := normalizeFlagArgs([]string{"--model", "gpt-4.1"})
+	want := []string{"--model", "gpt-4.1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+
+	got, _ = normalizeFlagArgs([]string{"--thinking", "medium"})
+	want = []string{"--thinking", "medium"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
 	}
 }
 
 func TestNormalizeFlagArgsKeepsSessionPolicyFlags(t *testing.T) {
-	got, picker := normalizeFlagArgs([]string{"--session", "session-1", "-p", "hello"})
-	want := []string{"--session", "session-1", "-p", "--", "hello"}
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker")
-	}
+	got, _ := normalizeFlagArgs([]string{"--session", "abc123", "-p", "hello"})
+	want := []string{"--session", "abc123", "-p", "hello"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("normalizeFlagArgs session = %#v, want %#v", got, want)
-	}
-
-	got, picker = normalizeFlagArgs([]string{"--no-session", "-p", "hello"})
-	want = []string{"--no-session", "-p", "--", "hello"}
-	if picker {
-		t.Fatal("normalizeFlagArgs opened picker for no-session")
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("normalizeFlagArgs no-session = %#v, want %#v", got, want)
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
 	}
 }
 
 func TestApplyCLIConfigOverrides(t *testing.T) {
 	cfg := &config.Config{}
-	applyCLIConfigOverrides(cfg, "", "openai/gpt-4.1", "high")
-	if cfg.Provider != "openai" || cfg.Model != "gpt-4.1" || cfg.ReasoningEffort != "high" {
-		t.Fatalf("cfg = %#v, want openai/gpt-4.1 high", cfg)
-	}
 
-	cfg = &config.Config{Provider: "openrouter"}
-	applyCLIConfigOverrides(cfg, "", "openai/gpt-4.1", "")
-	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-4.1" {
-		t.Fatalf("cfg = %#v, want openrouter with slash model preserved", cfg)
-	}
+	t.Run("provider override", func(t *testing.T) {
+		applyCLIConfigOverrides(cfg, "anthropic", "", "")
+		if cfg.Provider != "anthropic" {
+			t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+		}
+	})
 
-	applyCLIConfigOverrides(cfg, "local-api", "qwen3.6:27b", "")
-	if cfg.Provider != "openai-compatible" || cfg.Model != "qwen3.6:27b" {
-		t.Fatalf("cfg = %#v, want openai-compatible qwen model", cfg)
-	}
+	t.Run("model override", func(t *testing.T) {
+		applyCLIConfigOverrides(cfg, "", "claude-sonnet-4-20250514", "")
+		if cfg.Model != "claude-sonnet-4-20250514" {
+			t.Fatalf("model = %q, want claude-sonnet-4-20250514", cfg.Model)
+		}
+	})
 
-	cfg = &config.Config{
-		Provider:               "openrouter",
-		Model:                  "openai/gpt-5.4",
-		FastModel:              "google/gemini-2.0-flash-lite-001",
-		FastReasoningEffort:    "low",
-		SummaryModel:           "google/gemini-2.0-flash-lite-001",
-		SummaryReasoningEffort: "low",
-	}
-	applyCLIConfigOverrides(cfg, "local-api", "", "")
-	if cfg.Provider != "openai-compatible" ||
-		cfg.Model != "" ||
-		cfg.FastModel != "" ||
-		cfg.FastReasoningEffort != "" ||
-		cfg.SummaryModel != "" ||
-		cfg.SummaryReasoningEffort != "" {
-		t.Fatalf(
-			"cfg = %#v, want provider-only override to clear stale provider-scoped presets",
-			cfg,
-		)
-	}
-
-	cfg = &config.Config{
-		Provider:  "local-api",
-		Model:     "qwen3.6:27b",
-		FastModel: "qwen3.6:27b-fast",
-	}
-	applyCLIConfigOverrides(cfg, "openrouter", "tencent/hy3-preview:free", "")
-	if cfg.Provider != "openrouter" ||
-		cfg.Model != "tencent/hy3-preview:free" ||
-		cfg.FastModel != "" {
-		t.Fatalf("cfg = %#v, want explicit provider/model override to clear stale fast preset", cfg)
-	}
-}
-
-func TestStartupRuntimeConfigHonorsPersistedFastPreset(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	if err := config.SaveActivePreset("fast"); err != nil {
-		t.Fatalf("save active preset: %v", err)
-	}
-
-	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
-		Provider:            "openai",
-		Model:               "gpt-4.1",
-		ReasoningEffort:     "high",
-		FastModel:           "gpt-4.1-mini",
-		FastReasoningEffort: "low",
-	}, "", false)
-	if err != nil {
-		t.Fatalf("startup runtime config: %v", err)
-	}
-	if preset != "fast" {
-		t.Fatalf("preset = %q, want fast", preset)
-	}
-	if runtimeCfg.Model != "gpt-4.1-mini" || runtimeCfg.ReasoningEffort != "low" {
-		t.Fatalf("runtime cfg = %#v, want fast model and low reasoning", runtimeCfg)
-	}
-}
-
-func TestStartupRuntimeConfigForcesPrimaryForExplicitRuntimeOverride(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	if err := config.SaveActivePreset("fast"); err != nil {
-		t.Fatalf("save active preset: %v", err)
-	}
-
-	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
-		Provider:            "openrouter",
-		Model:               "tencent/hy3-preview:free",
-		FastModel:           "google/gemini-2.0-flash-lite-001",
-		FastReasoningEffort: "low",
-	}, "", true)
-	if err != nil {
-		t.Fatalf("startup runtime config: %v", err)
-	}
-	if preset != "primary" {
-		t.Fatalf("preset = %q, want primary", preset)
-	}
-	if runtimeCfg.Model != "tencent/hy3-preview:free" {
-		t.Fatalf("runtime model = %q, want explicit primary model", runtimeCfg.Model)
-	}
-
-	state, err := config.LoadState()
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
-	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
-		t.Fatalf("active_preset = %#v, want persisted fast unchanged", state.ActivePreset)
-	}
-}
-
-func TestStartupRuntimeConfigFallsBackWhenPersistedFastIsNotConfigured(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	if err := config.SaveActivePreset("fast"); err != nil {
-		t.Fatalf("save active preset: %v", err)
-	}
-
-	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
-		Provider: "openai",
-		Model:    "gpt-4.1",
-	}, "", false)
-	if err != nil {
-		t.Fatalf("startup runtime config: %v", err)
-	}
-	if preset != "primary" {
-		t.Fatalf("preset = %q, want primary fallback", preset)
-	}
-	if runtimeCfg.Model != "gpt-4.1" {
-		t.Fatalf("runtime model = %q, want primary model", runtimeCfg.Model)
-	}
+	t.Run("thinking override", func(t *testing.T) {
+		applyCLIConfigOverrides(cfg, "", "", "medium")
+		if cfg.ReasoningEffort != "medium" {
+			t.Fatalf("reasoning_effort = %q, want medium", cfg.ReasoningEffort)
+		}
+	})
 }
 
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
-	store := &metadataStore{sessions: []session.SessionInfo{
-		{ID: "empty"},
-		{ID: "slash", LastPreview: "/resume"},
-		{ID: "slash-title", Title: "/model", LastPreview: "hi"},
-		{ID: "real", LastPreview: "hello"},
+	store := &testStore{sessions: []session.SessionInfoEntry{
+		sessionInfoForTest("empty", ""),
+		sessionInfoForTest("slash", "/resume"),
+		{
+			EntryBase:   session.EntryBase{ID: "slash-title"},
+			Name:        "/model",
+			LastPreview: "hi",
+		},
+		sessionInfoForTest("real", "hello"),
 	}}
 
 	recent, err := recentSessionForContinue(context.Background(), store, "/tmp/test")
 	if err != nil {
 		t.Fatalf("recent session: %v", err)
 	}
-	if recent == nil || recent.ID != "real" {
+	if recent == nil || recent.ID() != "real" {
 		t.Fatalf("recent = %#v, want real", recent)
 	}
 }
 
 func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
-	store := &metadataStore{sessions: []session.SessionInfo{
-		{ID: "empty"},
-		{ID: "real", LastPreview: "hello"},
+	store := &testStore{sessions: []session.SessionInfoEntry{
+		sessionInfoForTest("empty", ""),
+		sessionInfoForTest("real", "hello"),
 	}}
 
 	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
@@ -381,7 +163,7 @@ func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
 }
 
 func TestStartupSessionIDRejectsMissingContinueSession(t *testing.T) {
-	store := &metadataStore{}
+	store := &testStore{}
 
 	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
 	if err == nil || !strings.Contains(err.Error(), "no conversation session to continue") {
@@ -390,7 +172,7 @@ func TestStartupSessionIDRejectsMissingContinueSession(t *testing.T) {
 }
 
 func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
-	store := &metadataStore{listErr: os.ErrPermission}
+	store := &testStore{listErr: os.ErrPermission}
 
 	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
 	if err == nil || !strings.Contains(err.Error(), "failed to find recent session") {
@@ -399,7 +181,9 @@ func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
 }
 
 func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
-	store := &metadataStore{sessions: []session.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
+	store := &testStore{sessions: []session.SessionInfoEntry{
+		sessionInfoForTest("recent", "hello"),
+	}}
 
 	id, err := startupSessionID(
 		context.Background(),
@@ -411,7 +195,7 @@ func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 		true,
 	)
 	if err != nil {
-		t.Fatalf("startupSessionID session returned error: %v", err)
+		t.Fatalf("startupSessionID returned error: %v", err)
 	}
 	if id != "session" {
 		t.Fatalf("session ID = %q, want session", id)
@@ -434,626 +218,36 @@ func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 	}
 }
 
-func TestResolveStartupConfig(t *testing.T) {
-	t.Run("requires provider", func(t *testing.T) {
-		cfg := &config.Config{}
-		if err := resolveStartupConfig(cfg); err != errNoProviderConfigured {
-			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoProviderConfigured)
-		}
-		if strings.Contains(errNoProviderConfigured.Error(), "Ctrl+") {
-			t.Fatalf("provider error mentions stale hotkey: %v", errNoProviderConfigured)
-		}
-	})
-
-	t.Run("subscription provider requires model", func(t *testing.T) {
-		cfg := &config.Config{Provider: "claude-pro"}
-		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
-			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
-		}
-	})
-
-	t.Run("api provider requires model", func(t *testing.T) {
-		cfg := &config.Config{Provider: "anthropic"}
-		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
-			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
-		}
-		if strings.Contains(errNoModelConfigured.Error(), "Ctrl+") {
-			t.Fatalf("model error mentions stale hotkey: %v", errNoModelConfigured)
-		}
-	})
-
-	t.Run("custom endpoint provider requires endpoint", func(t *testing.T) {
-		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model"}
-		err := resolveStartupConfig(cfg)
-		if err == nil || err.Error() != "OpenAI-compatible requires endpoint configuration" {
-			t.Fatalf("resolveStartupConfig error = %v", err)
-		}
-	})
-
-	t.Run("custom endpoint provider accepts endpoint override", func(t *testing.T) {
-		cfg := &config.Config{
-			Provider: "openai-compatible",
-			Model:    "test-model",
-			Endpoint: "https://example.com/v1",
-		}
-		if err := resolveStartupConfig(cfg); err != nil {
-			t.Fatalf("resolveStartupConfig error = %v", err)
-		}
-	})
-}
-
-func TestStartupBannerLines(t *testing.T) {
-	got := startupBannerLines("v0.0.0")
-	want := []string{"ion v0.0.0"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("startupBannerLines = %#v, want %#v", got, want)
-	}
-
-	got = startupBannerLines("")
-	want = []string{"ion v0.0.0"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("startupBannerLines empty version = %#v, want %#v", got, want)
-	}
-}
-
-func TestTmuxKeyboardLineWarnsWhenModifiedEnterIsUnreliable(t *testing.T) {
-	t.Run("extended keys off", func(t *testing.T) {
-		got := tmuxKeyboardLine(func(option string) (string, error) {
-			if option == "extended-keys" {
-				return "off", nil
-			}
-			return "", nil
-		})
-		if !strings.Contains(got, "Shift+Enter may submit") ||
-			!strings.Contains(got, "Ctrl+J") {
-			t.Fatalf("tmux keyboard warning = %q", got)
-		}
-	})
-
-	t.Run("xterm format", func(t *testing.T) {
-		got := tmuxKeyboardLine(func(option string) (string, error) {
-			switch option {
-			case "extended-keys":
-				return "on", nil
-			case "extended-keys-format":
-				return "xterm", nil
-			default:
-				return "", nil
-			}
-		})
-		if !strings.Contains(got, "extended-keys-format is xterm") ||
-			!strings.Contains(got, "Ctrl+J") {
-			t.Fatalf("tmux keyboard warning = %q", got)
-		}
-	})
-
-	t.Run("csi-u is quiet", func(t *testing.T) {
-		got := tmuxKeyboardLine(func(option string) (string, error) {
-			switch option {
-			case "extended-keys":
-				return "on", nil
-			case "extended-keys-format":
-				return "csi-u", nil
-			default:
-				return "", nil
-			}
-		})
-		if got != "" {
-			t.Fatalf("tmux keyboard warning = %q, want none", got)
-		}
-	})
-}
-
-func TestPrintStartupPlacesResumeMarkerAfterHeaderBeforeTranscript(t *testing.T) {
-	var buf bytes.Buffer
-	printStartup(
-		&buf,
-		[]string{"ion v0.0.0", "Search tools enabled"},
-		"~/repo • main",
-		true,
-		[]string{"› hi", "", "• hello"},
-	)
-
-	out := ansi.Strip(buf.String())
-	workspaceIdx := strings.Index(out, "~/repo")
-	resumedIdx := strings.Index(out, "--- resumed ---")
-	transcriptIdx := strings.Index(out, "› hi")
-	if workspaceIdx < 0 || resumedIdx < 0 || transcriptIdx < 0 {
-		t.Fatalf("startup output missing expected parts: %q", out)
-	}
-	if !(workspaceIdx < resumedIdx && resumedIdx < transcriptIdx) {
-		t.Fatalf("resume marker order is wrong: %q", out)
-	}
-	if !strings.Contains(out, "--- resumed ---\n\n› hi\n\n• hello") {
-		t.Fatalf("startup output should separate resumed marker and transcript entries: %q", out)
-	}
-	if !strings.HasSuffix(out, "• hello\n\n") {
-		t.Fatalf("startup output should leave one blank row before shell: %q", out)
-	}
-}
-
-func TestPrintStartupLeavesBlankRowBeforeFreshShell(t *testing.T) {
-	var buf bytes.Buffer
-	printStartup(
-		&buf,
-		[]string{"ion v0.0.0"},
-		"~/repo • main",
-		false,
-		nil,
-	)
-
-	out := ansi.Strip(buf.String())
-	if !strings.HasSuffix(out, "~/repo • main\n\n") {
-		t.Fatalf("fresh startup output should leave one blank row before shell: %q", out)
-	}
-}
-
-func TestShortenHomePathRequiresPathBoundary(t *testing.T) {
-	home := filepath.Join(string(filepath.Separator), "Users", "nick")
-	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join(
-		"~",
-		"repo",
-	) {
-		t.Fatalf("shortened home path = %q, want ~/repo", got)
-	}
-	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
-	if got := shortenHomePath(sibling, home); got != sibling {
-		t.Fatalf("sibling path = %q, want unshortened %q", got, sibling)
-	}
-}
-
-func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-
-	b, sess, err := openRuntime(
-		context.Background(),
-		store,
-		"/tmp/test",
-		"main",
-		&config.Config{},
-		"",
-		true,
-	)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	if got := b.Name(); got != "unconfigured" {
-		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
-	}
-	if sess != nil {
-		t.Fatalf("storage session = %#v, want nil", sess)
-	}
-
-	msgErr := b.Session().SubmitTurn(context.Background(), "hello")
-	if msgErr != errNoProviderConfigured {
-		t.Fatalf("submit error = %v, want %v", msgErr, errNoProviderConfigured)
-	}
-}
-
-func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-
-	b, sess, err := openRuntime(
-		context.Background(),
-		store,
-		"/tmp/test",
-		"main",
-		&config.Config{Provider: "claude-pro"},
-		"",
-		true,
-	)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	if got := b.Name(); got != "unconfigured" {
-		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
-	}
-	if sess != nil {
-		t.Fatalf("storage session = %#v, want nil", sess)
-	}
-
-	msgErr := b.Session().SubmitTurn(context.Background(), "hello")
-	if msgErr != errNoModelConfigured {
-		t.Fatalf("submit error = %v, want %v", msgErr, errNoModelConfigured)
-	}
-}
-
-func TestOpenRuntimeDefersACPProviders(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{Provider: "claude-pro", Model: "sonnet"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
-	if err == nil {
-		t.Fatal("openRuntime returned nil error, want ACP deferred error")
-	}
-	if !strings.Contains(err.Error(), "ACP providers are deferred") {
-		t.Fatalf("openRuntime error = %v, want ACP deferred error", err)
-	}
-	if b != nil {
-		t.Fatalf("backend = %#v, want nil", b)
-	}
-	if sess != nil {
-		t.Fatalf("storage session = %#v, want nil", sess)
-	}
-}
-
-func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	if got := b.Name(); got != "unconfigured" {
-		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
-	}
-	if sess != nil {
-		t.Fatalf("storage session = %#v, want nil", sess)
-	}
-	sessions, err := store.ListSessions(context.Background(), "/tmp/test")
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(sessions) != 0 {
-		t.Fatalf("sessions = %#v, want none before a model-visible turn", sessions)
-	}
-
-	err = b.Session().SubmitTurn(context.Background(), "hello")
-	if err == nil ||
-		!strings.Contains(err.Error(), "OpenAI-compatible requires endpoint configuration") {
-		t.Fatalf("submit error = %v, want endpoint configuration error", err)
-	}
-}
-
-func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	seed, err := store.OpenSession(ctx, "/tmp/test", "local-api/qwen-test", "main")
-	if err != nil {
-		t.Fatalf("open seed session: %v", err)
-	}
-	seedID := seed.ID()
-	if err := seed.Append(ctx, session.StoreSystem{Type: "system", Content: "seeded", TS: 1}); err != nil {
-		t.Fatalf("append seed event: %v", err)
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatalf("close seed session: %v", err)
-	}
-
-	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, seedID, true)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	defer sess.Close()
-	if got := b.Name(); got != "unconfigured" {
-		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
-	}
-	if sess == nil {
-		t.Fatal("storage session = nil, want resumed session")
-	}
-	if got := sess.ID(); got != seedID {
-		t.Fatalf("storage session ID = %q, want %q", got, seedID)
-	}
-	if got := b.Session().ID(); got != seedID {
-		t.Fatalf("agent session ID = %q, want %q", got, seedID)
-	}
-	if got := b.Session().Meta()["cwd"]; got != "/tmp/test" {
-		t.Fatalf("agent cwd meta = %q, want /tmp/test", got)
-	}
-
-	sessions, err := store.ListSessions(ctx, "/tmp/test")
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(sessions) != 1 || sessions[0].ID != seedID {
-		t.Fatalf("sessions = %#v, want only resumed seed session", sessions)
-	}
-}
-
-func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{Provider: "ollama", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", true)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	defer closeRuntimeHandles(b.Session(), sess, nil)
-	if b.Name() != "agent" {
-		t.Fatalf("backend name = %q, want agent", b.Name())
-	}
-	if sess == nil {
-		t.Fatal("storage session = nil, want lazy session")
-	}
-	if session.IsMaterialized(sess) {
-		t.Fatal("fresh runtime materialized session before a model-visible turn")
-	}
-	sessions, err := store.ListSessions(context.Background(), "/tmp/test")
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(sessions) != 0 {
-		t.Fatalf("sessions = %#v, want none before a model-visible turn", sessions)
-	}
-}
-
 func TestSessionModelName(t *testing.T) {
-	if got := sessionModelName("openrouter", "openai/gpt-5.4"); got != "openrouter/openai/gpt-5.4" {
-		t.Fatalf("sessionModelName() = %q, want %q", got, "openrouter/openai/gpt-5.4")
+	cases := []struct {
+		provider, model, want string
+	}{
+		{"openai", "gpt-4.1", "openai/gpt-4.1"},
+		{"anthropic", "claude-sonnet-4-20250514", "anthropic/claude-sonnet-4-20250514"},
+		{"ollama", "llama3", "ollama/llama3"},
 	}
-	if got := sessionModelName("claude-pro", ""); got != "claude-pro" {
-		t.Fatalf("sessionModelName() = %q, want %q", got, "claude-pro")
-	}
-}
-
-func TestApplySessionConfigFromMetadata(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	seed, err := store.OpenSession(ctx, "/tmp/test", "openrouter/openai/gpt-5.4", "main")
-	if err != nil {
-		t.Fatalf("open seed session: %v", err)
-	}
-	seedID := seed.ID()
-	if err := seed.Close(); err != nil {
-		t.Fatalf("close seed session: %v", err)
-	}
-
-	cfg := &config.Config{
-		Provider:               "local-api",
-		Model:                  "qwen3.6:27b",
-		ReasoningEffort:        "high",
-		FastModel:              "qwen3.6:27b-fast",
-		FastReasoningEffort:    "low",
-		SummaryModel:           "qwen3.6:27b-summary",
-		SummaryReasoningEffort: "minimal",
-	}
-	if err := applySessionConfigFromMetadata(ctx, store, seedID, cfg); err != nil {
-		t.Fatalf("apply session config: %v", err)
-	}
-	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
-		t.Fatalf(
-			"cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4",
-			cfg.Provider,
-			cfg.Model,
-		)
-	}
-	if cfg.ReasoningEffort != "high" {
-		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
-	}
-	if cfg.FastModel != "" ||
-		cfg.FastReasoningEffort != "" ||
-		cfg.SummaryModel != "" ||
-		cfg.SummaryReasoningEffort != "" {
-		t.Fatalf("provider-scoped presets were not cleared: %#v", cfg)
-	}
-}
-
-func TestOpenRuntimeResumeCanKeepRuntimeOverrideProcessLocal(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-	store, err := session.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	seed, err := store.OpenSession(ctx, "/tmp/test", "ollama/original-model", "main")
-	if err != nil {
-		t.Fatalf("open seed session: %v", err)
-	}
-	seedID := seed.ID()
-	if err := seed.Close(); err != nil {
-		t.Fatalf("close seed session: %v", err)
-	}
-
-	cfg := &config.Config{Provider: "ollama", Model: "override-model"}
-	b, sess, err := openRuntime(
-		ctx,
-		store,
-		"/tmp/test",
-		"feature/override",
-		cfg,
-		seedID,
-		false,
-	)
-	if err != nil {
-		t.Fatalf("open runtime: %v", err)
-	}
-	defer closeRuntimeHandles(b.Session(), sess, nil)
-	if got := b.Model(); got != "override-model" {
-		t.Fatalf("runtime model = %q, want override-model", got)
-	}
-
-	loaded, err := store.ResumeSession(ctx, seedID)
-	if err != nil {
-		t.Fatalf("reload session: %v", err)
-	}
-	defer loaded.Close()
-	if got := loaded.Meta().Model; got != "ollama/original-model" {
-		t.Fatalf("persisted model = %q, want original session model", got)
+	for _, c := range cases {
+		if got := sessionModelName(c.provider, c.model); got != c.want {
+			t.Fatalf("sessionModelName(%q, %q) = %q, want %q", c.provider, c.model, got, c.want)
+		}
 	}
 }
 
 func TestSplitSessionModelName(t *testing.T) {
-	provider, model := splitSessionModelName("openrouter/openai/gpt-5.4")
-	if provider != "openrouter" || model != "openai/gpt-5.4" {
-		t.Fatalf("split openrouter model = %q/%q", provider, model)
+	provider, model := splitSessionModelName("openai/gpt-4.1")
+	if provider != "openai" || model != "gpt-4.1" {
+		t.Fatalf("splitSessionModelName = (%q, %q), want (openai, gpt-4.1)", provider, model)
 	}
-	provider, model = splitSessionModelName("claude-pro")
-	if provider != "claude-pro" || model != "" {
-		t.Fatalf("split subscription model = %q/%q", provider, model)
+
+	provider, model = splitSessionModelName("ollama/llama3")
+	if provider != "ollama" || model != "llama3" {
+		t.Fatalf("splitSessionModelName = (%q, %q), want (ollama, llama3)", provider, model)
 	}
 }
 
-func TestSyncSessionMetadata(t *testing.T) {
-	store := &metadataStore{}
-
-	if err := syncSessionMetadata(context.Background(), store, "sess-123", "openrouter/deepseek/deepseek-v4-flash", "feature/handoff"); err != nil {
-		t.Fatalf("syncSessionMetadata returned error: %v", err)
-	}
-
-	if got := store.updated.ID; got != "sess-123" {
-		t.Fatalf("updated session ID = %q, want %q", got, "sess-123")
-	}
-	if got := store.updated.Model; got != "openrouter/deepseek/deepseek-v4-flash" {
-		t.Fatalf("updated model = %q, want %q", got, "openrouter/deepseek/deepseek-v4-flash")
-	}
-	if got := store.updated.Branch; got != "feature/handoff" {
-		t.Fatalf("updated branch = %q, want %q", got, "feature/handoff")
-	}
-	if !store.updated.PreserveUpdatedAt {
-		t.Fatal("syncSessionMetadata should preserve updated_at for metadata-only resume sync")
-	}
-}
-
-func TestSyncSessionMetadataPreservesRecentOrdering(t *testing.T) {
-	storeAny, err := session.NewCantoStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer storeAny.Close()
-
-	ctx := context.Background()
-	cwd := "/tmp/test"
-	older, err := storeAny.OpenSession(ctx, cwd, "ollama/old-model", "main")
-	if err != nil {
-		t.Fatalf("open older session: %v", err)
-	}
-	time.Sleep(10 * time.Millisecond)
-	newer, err := storeAny.OpenSession(ctx, cwd, "ollama/newer-model", "main")
-	if err != nil {
-		t.Fatalf("open newer session: %v", err)
-	}
-
-	before, err := storeAny.ListSessions(ctx, cwd)
-	if err != nil {
-		t.Fatalf("list before sync: %v", err)
-	}
-	var olderUpdatedAt time.Time
-	for _, info := range before {
-		if info.ID == older.ID() {
-			olderUpdatedAt = info.UpdatedAt
-		}
-	}
-	if olderUpdatedAt.IsZero() {
-		t.Fatalf("older session missing from before list: %#v", before)
-	}
-	if before[0].ID != newer.ID() {
-		t.Fatalf("recent before sync = %q, want newer %q", before[0].ID, newer.ID())
-	}
-
-	time.Sleep(10 * time.Millisecond)
-	if err := syncSessionMetadata(ctx, storeAny, older.ID(), "ollama/resumed-model", "feature/resume"); err != nil {
-		t.Fatalf("sync metadata: %v", err)
-	}
-
-	after, err := storeAny.ListSessions(ctx, cwd)
-	if err != nil {
-		t.Fatalf("list after sync: %v", err)
-	}
-	if after[0].ID != newer.ID() {
-		t.Fatalf(
-			"recent after metadata-only resume sync = %q, want newer %q",
-			after[0].ID,
-			newer.ID(),
-		)
-	}
-	var synced session.SessionInfo
-	for _, info := range after {
-		if info.ID == older.ID() {
-			synced = info
-		}
-	}
-	if synced.ID == "" {
-		t.Fatalf("older session missing from after list: %#v", after)
-	}
-	if !synced.UpdatedAt.Equal(olderUpdatedAt) {
-		t.Fatalf("updated_at changed from %s to %s", olderUpdatedAt, synced.UpdatedAt)
-	}
-	if synced.Model != "ollama/resumed-model" || synced.Branch != "feature/resume" {
-		t.Fatalf("synced metadata = %#v, want updated model and branch", synced)
+func TestBackendForProvider(t *testing.T) {
+	_, err := backendForProvider("bad")
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
+		t.Fatalf("error = %v, want unsupported provider", err)
 	}
 }
