@@ -121,7 +121,14 @@ type Snapshot struct {
 func (s Snapshot) WithHandles(h Handles) Snapshot { return s }
 
 func NewSnapshot(appCfg, backendCfg *config.Config, preset Preset, status string) Snapshot {
-	return Snapshot{Preset: preset, Status: status}
+	s := Snapshot{Preset: preset, Status: status}
+	if appCfg != nil {
+		s.AppConfig = *appCfg
+	}
+	if backendCfg != nil {
+		s.BackendConfig = *backendCfg
+	}
+	return s
 }
 
 // Transition represents a pending config/state change.

@@ -8,6 +8,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nijaru/ion/session"
@@ -351,6 +352,21 @@ type SessionHandle interface {
 func IsMaterialized(s session.Session) bool { return true }
 
 func IsConversationSessionInfo(e *session.SessionInfoEntry) bool {
+	if e == nil {
+		return false
+	}
+	preview := strings.TrimSpace(e.LastPreview)
+	if preview == "" {
+		return false
+	}
+	// Skip sessions whose preview is only a slash command.
+	if strings.HasPrefix(preview, "/") {
+		return false
+	}
+	// Skip sessions whose name is a slash command.
+	if strings.HasPrefix(strings.TrimSpace(e.Name), "/") {
+		return false
+	}
 	return true
 }
 
