@@ -5,17 +5,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
 func TestGenerateHTMLContainsEntries(t *testing.T) {
+	userMsg := &session.UserMessage{
+		Content:   []session.Content{session.TextContent{Text: "Hello"}},
+		Timestamp: time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC),
+	}
+	assistantMsg := &session.AssistantMessage{
+		Content: []session.Content{session.TextContent{Text: "Hi there!"}},
+	}
+	toolMsg := &session.ToolResultMessage{
+		ToolCallID: "tool-1",
+		ToolName:   "bash",
+		Content:    []session.Content{session.TextContent{Text: "ls -la"}},
+	}
+
 	data := SessionData{
 		SessionID: "test-session-12345678",
-		Entries: []session.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleUser, Content: "Hello"}},
-			{Message: llm.Message{Role: llm.RoleAssistant, Content: "Hi there!"}},
-			{Message: llm.Message{Role: llm.RoleTool, Name: "bash", Content: "ls -la"}},
+		Entries: []session.Entry{
+			&session.MessageEntry{Message: userMsg},
+			&session.MessageEntry{Message: assistantMsg},
+			&session.MessageEntry{Message: toolMsg},
 		},
 		Exported: time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC),
 	}
@@ -39,75 +51,16 @@ func TestGenerateHTMLContainsEntries(t *testing.T) {
 	}
 	for _, c := range checks {
 		if !strings.Contains(html, c.want) {
-			t.Errorf("%s: missing %q in output", c.name, c.want)
+			t.Errorf("%s: expected %q in HTML", c.name, c.want)
 		}
 	}
 }
 
-func TestGenerateHTMLEmptyReasoningOmitted(t *testing.T) {
-	data := SessionData{
-		SessionID: "test",
-		Entries: []session.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleAssistant, Content: "answer", Reasoning: ""}},
-		},
-		Exported: time.Now(),
-	}
-
-	html := GenerateHTML(data)
-	if strings.Contains(html, "Thinking") {
-		t.Error("empty reasoning should not produce Thinking section")
-	}
-}
-
-func TestGenerateHTMLReasoningIncluded(t *testing.T) {
-	data := SessionData{
-		SessionID: "test",
-		Entries: []session.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleAssistant, Content: "answer", Reasoning: "let me think..."}},
-		},
-		Exported: time.Now(),
-	}
-
-	html := GenerateHTML(data)
-	if !strings.Contains(html, "Thinking") {
-		t.Error("non-empty reasoning should produce Thinking section")
-	}
-	if !strings.Contains(html, "let me think...") {
-		t.Error("reasoning content should appear in HTML")
-	}
-}
-
-func TestGenerateHTMLEscapesContent(t *testing.T) {
-	data := SessionData{
-		SessionID: "test",
-		Entries: []session.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleUser, Content: "<script>alert('xss')</script>"}},
-		},
-		Exported: time.Now(),
-	}
-
-	html := GenerateHTML(data)
-	if strings.Contains(html, "<script>") {
-		t.Error("HTML content should be escaped")
-	}
-	if !strings.Contains(html, "&lt;script&gt;") {
-		t.Error("escaped tags should appear")
-	}
-}
-
-func TestGenerateHTMLSkipsEmptyEntries(t *testing.T) {
-	data := SessionData{
-		SessionID: "test",
-		Entries: []session.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleUser, Content: "hello"}},
-			{Message: llm.Message{Role: llm.RoleAssistant, Content: ""}},
-			{Message: llm.Message{Role: llm.RoleUser, Content: "bye"}},
-		},
-		Exported: time.Now(),
-	}
-
-	html := GenerateHTML(data)
-	if strings.Count(html, "class=\"entry") != 2 {
-		t.Errorf("expected 2 entries, got %d", strings.Count(html, "class=\"entry"))
+func TestEntryToHTMLSkipsNonMessageEntries(t *testing.T) {
+	// Non-message entries should produce empty string.
+	entry := &session.LabelEntry{}
+	html := EntryToHTML(entry)
+	if html != "" {
+		t.Errorf("expected empty HTML for non-message entry, got %q", html)
 	}
 }

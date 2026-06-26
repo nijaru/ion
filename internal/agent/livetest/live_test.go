@@ -1,3 +1,5 @@
+//go:build live
+
 // Package livetest provides live-provider smoke tests for the agent loop.
 //
 // These tests run against a real LLM API and are gated behind the "live" build
