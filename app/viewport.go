@@ -47,7 +47,7 @@ func (m Model) renderPlaneB() string {
 
 	// Active in-flight tools. Sort by ID for deterministic rendering.
 	for _, id := range sortedKeys(m.InFlight.PendingTools) {
-		b.WriteString(m.renderPendingEntry(*m.InFlight.PendingTools[id]))
+		b.WriteString(m.renderPendingEntry(m.InFlight.PendingTools[id]))
 		b.WriteString("\n")
 	}
 	if hasPendingTool && len(m.InFlight.PendingTools) == 0 {

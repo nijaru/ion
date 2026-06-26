@@ -1,5 +1,3 @@
-//go:build ignore
-
 package app
 
 import (
@@ -376,11 +374,8 @@ func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateWorking
 	model.Progress.Status = "Running bash..."
-	model.InFlight.PendingTools = map[string]*session.Entry{
-		"bash-1": {
-			Role:  session.RoleTool,
-			Title: "Bash(go test ./...)",
-		},
+	model.InFlight.PendingTools = map[string]session.Entry{
+		"bash-1": toolEntry("Bash(go test ./...)", "", false),
 	}
 
 	view := ansi.Strip(model.View().Content)
@@ -776,7 +771,7 @@ func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 	model := New(
 		stubBackend{
 			sess: &stubSession{events: make(chan session.Event)},
-			surface: core.ToolSurface{
+			surface: ToolSurface{
 				Count:   2,
 				Names:   []string{"bash", "read"},
 				Sandbox: "auto: seatbelt",

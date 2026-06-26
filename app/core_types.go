@@ -44,7 +44,7 @@ type SubagentProgress struct {
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
 	Pending                 *session.Entry
-	PendingTools            map[string]*session.Entry
+	PendingTools            map[string]session.Entry
 	Subagents               map[string]*SubagentProgress
 	ReasonBuf               string
 	StreamBuf               string
