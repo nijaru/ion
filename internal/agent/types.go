@@ -181,6 +181,9 @@ type Runner interface {
 	// Session returns the underlying session for auxiliary reads.
 	Session() session.Session
 
+	// Compact triggers context compaction.
+	Compact(ctx context.Context) error
+
 	// Close releases resources.
 	Close() error
 }

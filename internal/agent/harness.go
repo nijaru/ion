@@ -43,6 +43,10 @@ type Harness struct {
 
 	// buffered session writes during a run
 	pending []pendingWrite
+
+	// compaction settings
+	compaction CompactionSettings
+	contextWindow int
 }
 
 type Phase string
@@ -71,6 +75,10 @@ type HarnessConfig struct {
 	SysPrompt string
 	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	Auth     func(model llm.Model) (apiKey string, headers map[string]string)
+
+	// Compaction settings.
+	Compaction    CompactionSettings
+	ContextWindow int // model context window size in tokens
 }
 
 // NewHarness creates a new Harness from the given configuration.
@@ -98,6 +106,8 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		phase: PhaseIdle,
 		events:   cfg.Events,
 		externalEvents: cfg.Events != nil,
+		compaction: cfg.Compaction,
+		contextWindow: cfg.ContextWindow,
 	}
 	if h.events == nil {
 		h.events = make(chan session.Event, 64)
@@ -155,11 +165,40 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	// Build LoopConfig.
 	cfg := h.buildLoopConfig(ctx, tools)
 
-	// Run the loop.
-	msgs := RunLoop(ctx, prompts, TurnContext{
-		SystemPrompt: h.sysprompt,
-		Messages:     snap.Messages,
-	}, cfg, h.handleEvent, nil)
+	// Run the loop with overflow recovery.
+	var msgs []session.Message
+	for attempt := 0; attempt < 2; attempt++ {
+		msgs = RunLoop(ctx, prompts, TurnContext{
+			SystemPrompt: h.sysprompt,
+			Messages:     snap.Messages,
+		}, cfg, h.handleEvent, nil)
+
+		// Check for context overflow error.
+		if len(msgs) > 0 {
+			if am, ok := msgs[len(msgs)-1].(*session.AssistantMessage); ok {
+				if am.StopReason == "error" {
+					// Check if it's a context overflow error.
+					for _, c := range am.Content {
+						if tc, ok := c.(session.TextContent); ok {
+							if IsContextOverflowError(fmt.Errorf("%s", tc.Text)) {
+								// Compact and retry.
+								if compactErr := h.Compact(ctx); compactErr != nil {
+									break // can't compact, give up
+								}
+								// Rebuild context after compaction.
+								snap, err = h.session.BuildContext(ctx)
+								if err != nil {
+									break
+								}
+								continue // retry
+							}
+						}
+					}
+				}
+			}
+		}
+		break // no overflow, done
+	}
 
 	// Flush any remaining pending writes.
 	h.flushPending(ctx)
@@ -190,6 +229,12 @@ func (h *Harness) handleEvent(e session.Event) {
 
 	case session.TurnEnd:
 		h.flushPending(ctx)
+		// Auto-compaction check after turn ends.
+		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
+			if err := h.Compact(ctx); err != nil {
+				h.emit(&session.Error{Err: fmt.Errorf("auto-compact: %w", err)})
+			}
+		}
 
 	case session.AgentEnd:
 		h.flushPending(ctx)
@@ -344,7 +389,13 @@ func (h *Harness) Session() session.Session { return h.session }
 func (h *Harness) Store() session.Store { return h.store }
 
 // Compact triggers context compaction.
+// Compact performs context compaction on the session.
+//
+// Reference: Pi agent-harness.js compact (line 500)
 func (h *Harness) Compact(ctx context.Context) error {
-	// TODO: implement compaction via the harness
+	_, err := Compact(ctx, h.session, h.stream, h.model.ID, h.compaction)
+	if err != nil {
+		return fmt.Errorf("compact: %w", err)
+	}
 	return nil
 }
