@@ -2,6 +2,11 @@ package app
 
 import (
 	"github.com/nijaru/ion/internal/runtime"
+	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/config"
+	"fmt"
+	"time"
+	"github.com/nijaru/ion/tool"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -746,4 +751,469 @@ func highlightCodeBlock(code, language string, indent string) []string {
 		out = append(out, indent+line)
 	}
 	return out
+}
+
+type progressReducer struct {
+	progress *ProgressState
+}
+
+func (m *Model) progressReducer() progressReducer {
+	return progressReducer{progress: &m.Progress}
+}
+
+func (r progressReducer) beginLocalStatus(status string) {
+	r.setLocalStatus(status)
+}
+
+func (r progressReducer) clearLocalBusyStatus() {
+	if r.progress.LocalStatus != "" {
+		r.setLocalStatus("")
+	}
+	if IsLocalBusyStatus(r.progress.Status) {
+		r.setStatus("")
+	}
+}
+
+func (r progressReducer) beginCompaction() {
+	r.progress.Compacting = true
+	r.setStatus("Compacting context...")
+}
+
+func (r progressReducer) completeCompaction() {
+	r.progress.Compacting = false
+	r.progress.ContextTokens = 0
+	r.setStatus("Ready")
+	r.clearError()
+}
+
+func (r progressReducer) clearError() {
+	if r.progress.Mode == runtime.StateError {
+		r.progress.Mode = runtime.StateReady
+	}
+	r.progress.LastError = ""
+}
+
+func (r progressReducer) setReasoningEffort(value string) {
+	r.progress.ReasoningEffort = value
+}
+
+func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
+	r.setReasoningEffort(snapshot.Reasoning)
+	if snapshot.Status != "" {
+		r.setStatus(snapshot.Status)
+	}
+}
+
+func (r progressReducer) markRuntimeReady() {
+	r.progress.Mode = runtime.StateReady
+}
+
+func (r progressReducer) resetSessionUsage() {
+	r.progress.TokensSent = 0
+	r.progress.TokensReceived = 0
+	r.progress.ContextTokens = 0
+	r.progress.TotalCost = 0
+}
+
+func (r progressReducer) applySessionUsage(input, output int, cost float64) {
+	r.progress.TokensSent = input
+	r.progress.TokensReceived = output
+	r.progress.TotalCost = cost
+}
+
+func (r progressReducer) setStatus(status string) {
+	r.progress.Status = status
+	if status == "" {
+		r.progress.StatusUpdatedAt = time.Time{}
+		return
+	}
+	r.progress.StatusUpdatedAt = time.Now()
+}
+
+func (r progressReducer) setLocalStatus(status string) {
+	r.progress.LocalStatus = status
+	if status == "" {
+		r.progress.LocalStatusAt = time.Time{}
+		return
+	}
+	r.progress.LocalStatusAt = time.Now()
+}
+
+func (m Model) renderQueuedTurns() string {
+	count := m.queuedInputCount()
+	if count == 0 {
+		return ""
+	}
+	kind, text := m.firstQueuedInput()
+	preview := compactQueuedText(text)
+	label := fmt.Sprintf("• %s (Alt+Up edit): %s", kind, preview)
+	if extra := count - 1; extra > 0 {
+		label += fmt.Sprintf(" • +%d more", extra)
+	}
+	return m.st.dim.Render(fitLine(label, m.shellWidth()))
+}
+
+func (m Model) queuedInputCount() int {
+	return len(m.InFlight.QueuedSteering) + len(m.InFlight.QueuedTurns)
+}
+
+func (m Model) firstQueuedInput() (string, string) {
+	if len(m.InFlight.QueuedSteering) > 0 {
+		return "Steering", m.InFlight.QueuedSteering[0]
+	}
+	if len(m.InFlight.QueuedTurns) > 0 {
+		return "Queued", m.InFlight.QueuedTurns[0]
+	}
+	return "Queued", ""
+}
+
+func compactQueuedText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+// progressLine renders the single-line progress indicator between Plane B and the composer.
+func (m Model) progressLine() string {
+	var line string
+	idleReady := false
+	if m.Progress.Compacting {
+		line = m.Input.Spinner.View() + " Compacting context..."
+		if n := m.queuedInputCount(); n > 0 {
+			line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
+		}
+		return fitLine(strings.TrimRight(line, " "), m.shellWidth())
+	}
+	switch m.Progress.Mode {
+	case runtime.StateIonizing, runtime.StateStreaming, runtime.StateWorking:
+		status := retryCountdownStatus(
+			m.Progress.Status,
+			m.Progress.StatusUpdatedAt,
+			time.Now(),
+		)
+		if isIdleStatus(status) || isConfigurationStatus(status) {
+			switch m.Progress.Mode {
+			case runtime.StateIonizing:
+				status = "Ionizing..."
+			case runtime.StateStreaming:
+				status = "Streaming..."
+			case runtime.StateWorking:
+				if len(m.InFlight.Subagents) > 0 {
+					for _, k := range sortedKeys(m.InFlight.Subagents) {
+						status = "Waiting for " + m.InFlight.Subagents[k].Name + "..."
+						break
+					}
+				} else {
+					status = "Working..."
+				}
+			}
+		}
+		line = m.Input.Spinner.View() + " " + status
+		if stats := m.runningProgressParts(); len(stats) > 0 {
+			line += m.renderProgressStats(stats)
+		}
+	case runtime.StateComplete:
+		line = m.st.success.Render("✓") + " Complete"
+		if stats := m.completedProgressParts(); len(stats) > 0 {
+			line += m.renderProgressStats(stats)
+		}
+	case runtime.StateCancelled:
+		line = m.st.warn.Render("⚠ Canceled")
+		if reason := strings.TrimSpace(m.Progress.BudgetStopReason); reason != "" {
+			line += " • " + reason
+		}
+	case runtime.StateBlocked:
+		line = m.st.warn.Render("⚠ Subagent blocked")
+	case runtime.StateError:
+		if m.suppressTerminalErrorProgress() {
+			return ""
+		}
+		line = m.st.warn.Render("× Error")
+	default:
+		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
+			line = m.st.warn.Render("• " + status)
+		} else if status := strings.TrimSpace(m.Progress.LocalStatus); status != "" {
+			line = m.st.dim.Render("• " + status)
+		} else if status := strings.TrimSpace(m.Progress.Status); !isIdleStatus(status) && !isConfigurationStatus(status) {
+			line = m.st.dim.Render("• " + status)
+		} else {
+			idleReady = true
+			line = m.st.dim.Render("• Ready")
+		}
+	}
+	if n := m.queuedInputCount(); n > 0 {
+		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
+	}
+	if idleReady && m.suppressIdleReadyProgress() {
+		return ""
+	}
+	return fitLine(strings.TrimRight(line, " "), m.shellWidth())
+}
+
+func (m Model) suppressIdleReadyProgress() bool {
+	return m.App.PrintedTranscript && m.queuedInputCount() == 0
+}
+
+func (m Model) suppressTerminalErrorProgress() bool {
+	return m.App.PrintedTranscript && m.queuedInputCount() == 0
+}
+
+func (m Model) renderProgressStats(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		b.WriteString(m.st.dim.Render(" • "))
+		b.WriteString(m.st.dim.Render(part))
+	}
+	return b.String()
+}
+
+func retryCountdownStatus(status string, updatedAt, now time.Time) string {
+	if updatedAt.IsZero() || now.IsZero() {
+		return status
+	}
+	prefix, rest, ok := strings.Cut(status, "Retrying in ")
+	if !ok {
+		return status
+	}
+	delayText, suffix, ok := strings.Cut(rest, "...")
+	if !ok {
+		return status
+	}
+	delay, err := time.ParseDuration(strings.TrimSpace(delayText))
+	if err != nil {
+		return status
+	}
+	remaining := updatedAt.Add(delay).Sub(now)
+	if remaining <= 0 {
+		return prefix + "Retrying now..." + suffix
+	}
+	return prefix + "Retrying in " + roundUpSecond(remaining).String() + "..." + suffix
+}
+
+func roundUpSecond(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return ((d + time.Second - 1) / time.Second) * time.Second
+}
+
+func (m Model) renderToolLabel(label string, isError bool) string {
+	if isError {
+		return m.st.warn.Render("✗") + " " + label
+	}
+	return m.st.tool.Render("•") + " " + label
+}
+
+func (m Model) toolOutputHidden(e session.Entry) bool {
+	if session.EntryIsError(e) {
+		return false
+	}
+	switch {
+	case isReadLikeTool(session.EntryTitle(e)):
+		return toolReadOutput(m.Model.Config) == "hidden"
+	case isWriteTool(session.EntryTitle(e)):
+		return toolWriteOutput(m.Model.Config) == "hidden"
+	case isBashLikeTool(session.EntryTitle(e)):
+		return toolBashOutput(m.Model.Config) == "hidden"
+	default:
+		return false
+	}
+}
+
+func (m Model) shouldSummarizeToolOutput(e session.Entry) bool {
+	if session.EntryRole(e) != session.RoleTool || session.EntryIsError(e) {
+		return false
+	}
+	if isReadLikeTool(session.EntryTitle(e)) {
+		return toolReadOutput(m.Model.Config) == "summary"
+	}
+	if isWriteTool(session.EntryTitle(e)) {
+		return toolWriteOutput(m.Model.Config) == "summary"
+	}
+	if isBashLikeTool(session.EntryTitle(e)) {
+		return toolBashOutput(m.Model.Config) == "summary"
+	}
+	if m.Model.Config != nil && m.Model.Config.ToolVerbosity == "full" {
+		return false
+	}
+	return isReadLikeTool(session.EntryTitle(e))
+}
+
+func (m Model) shouldRenderWriteDiff(e session.Entry) bool {
+	return isWriteTool(session.EntryTitle(e)) && toolWriteOutput(m.Model.Config) == "diff"
+}
+
+func toolReadOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeReadOutput(cfg.ReadOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "full":
+			return "full"
+		case "hidden":
+			return "hidden"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "summary"
+}
+
+func toolWriteOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeWriteOutput(cfg.WriteOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "hidden":
+			return "hidden"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "summary"
+}
+
+func toolBashOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeBashOutput(cfg.BashOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "full":
+			return "full"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "hidden"
+}
+
+func isReadLikeTool(title string) bool {
+	switch toolTitleVerb(title) {
+	case "list", "ls", "read", "find", "glob", "search", "grep":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBashLikeTool(title string) bool {
+	switch toolTitleVerb(title) {
+	case "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolOutputSummary(e session.Entry) string {
+	trimmed := strings.TrimSpace(session.EntryContent(e))
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
+	n := len(lines)
+	switch toolTitleVerb(session.EntryTitle(e)) {
+	case "list", "ls", "find", "glob":
+		if n == 1 {
+			return "1 entry"
+		}
+		return fmt.Sprintf("%d entries", n)
+	case "grep", "search":
+		if strings.TrimSuffix(strings.TrimSpace(session.EntryContent(e)), ".") == "No matches found" {
+			return "0 matches"
+		}
+		if n == 1 {
+			return "1 match"
+		}
+		return fmt.Sprintf("%d matches", n)
+	default:
+		if n == 1 {
+			return "1 line"
+		}
+		return fmt.Sprintf("%d lines", n)
+	}
+}
+
+// renderDiff colorizes diff-format output.
+// Uses plain output if the content doesn't look like a unified diff.
+func (m Model) renderDiff(content string) string {
+	lines := strings.Split(content, "\n")
+	hasDiffMarkers := false
+	for _, l := range lines {
+		if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") ||
+			strings.HasPrefix(l, "@@ ") {
+			hasDiffMarkers = true
+			break
+		}
+	}
+	if !hasDiffMarkers {
+		return content
+	}
+
+	var b strings.Builder
+	for _, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
+			b.WriteString(m.st.added.Render(l))
+		case strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---"):
+			b.WriteString(m.st.removed.Render(l))
+		case strings.HasPrefix(l, "@@ "):
+			b.WriteString(m.st.cyan.Render(l))
+		default:
+			b.WriteString(m.st.dim.Render(l))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// isWriteTool returns true if the tool title looks like a write/edit operation.
+func isWriteTool(title string) bool {
+	lower := toolTitleVerb(title)
+	for _, prefix := range []string{"write", "edit", "create"} {
+		if lower == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+func toolTitleVerb(title string) string {
+	title = strings.TrimSpace(strings.ToLower(title))
+	if title == "" {
+		return ""
+	}
+	if idx := strings.IndexAny(title, " ("); idx >= 0 {
+		return strings.TrimSpace(title[:idx])
+	}
+	return title
+}
+
+func (m Model) normalizeToolTitle(title string) string {
+	return tool.NormalizeTitle(title, m.toolTitleOptions())
+}
+
+// FormatToolTitle attempts to extract the most important argument from a tool call's
+// raw JSON string to create a more readable title.
+func FormatToolTitle(name, args string) string {
+	return tool.Title(name, args, tool.Options{})
+}
+
+func (m Model) formatToolTitle(name, args string) string {
+	return tool.Title(name, args, tool.Options{Workdir: m.App.Workdir})
+}
+
+func (m Model) toolTitleOptions() tool.Options {
+	width := 0
+	if m.shellWidth() > 0 {
+		width = max(0, m.shellWidth()-2)
+	}
+	return tool.Options{
+		Workdir: m.App.Workdir,
+		Width:   width,
+	}
 }
