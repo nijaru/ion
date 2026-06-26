@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestComposerLayoutResetsAfterClear(t *testing.T) {

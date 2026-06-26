@@ -11,7 +11,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestLayoutClampsComposerHeight(t *testing.T) {

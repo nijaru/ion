@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func (m Model) configurationStatus() string {
@@ -127,7 +126,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) session.Stor
 	}
 }
 
-func (m Model) runtimeHeaderLine(_ core.Backend) string {
+func (m Model) runtimeHeaderLine(_ Backend) string {
 	version := strings.TrimSpace(m.App.Version)
 	if version == "" {
 		version = "v0.0.0"

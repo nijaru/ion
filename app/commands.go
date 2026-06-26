@@ -14,7 +14,6 @@ import (
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
-	"github.com/nijaru/ion/internal/core"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -179,7 +178,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if len(fields) != 1 {
 			return m, cmdError("usage: /tools")
 		}
-		summarizer, ok := m.Model.Backend.(core.ToolSummarizer)
+		summarizer, ok := m.Model.Backend.(ToolSummarizer)
 		if !ok {
 			return m, cmdError("tool summary unavailable for this backend")
 		}
@@ -270,7 +269,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if m.Model.Storage != nil && !session.IsMaterialized(m.Model.Storage) {
 			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
 		}
-		compactor, ok := m.Model.Backend.(core.Compactor)
+		compactor, ok := m.Model.Backend.(Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
 		}
@@ -367,11 +366,11 @@ func (m Model) localCommandBusyMessage(action string) string {
 	return "Finish or cancel the current turn before " + action + "."
 }
 
-func (m Model) commandRequiresIdle(command core.SlashCommandInfo, fields []string) bool {
+func (m Model) commandRequiresIdle(command SlashCommandInfo, fields []string) bool {
 	switch command.Idle {
-	case core.SlashCommandIdleAlways:
+	case SlashCommandIdleAlways:
 		return true
-	case core.SlashCommandIdleWithArgs:
+	case SlashCommandIdleWithArgs:
 		return len(fields) > 1
 	default:
 		return false

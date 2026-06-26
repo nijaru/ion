@@ -7,34 +7,32 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-type ProviderSelection = core.ProviderSelection
 
 var saveRuntimeState = config.SaveRuntimeState
 
 func newRuntimeSnapshot(
 	appCfg *config.Config,
 	backendCfg *config.Config,
-	preset core.Preset,
+	preset Preset,
 	status string,
-) core.Snapshot {
-	return core.NewSnapshot(appCfg, backendCfg, preset, status)
+) Snapshot {
+	return NewSnapshot(appCfg, backendCfg, preset, status)
 }
 
 func newRuntimeTransition(
 	appCfg *config.Config,
 	backendCfg *config.Config,
-	preset core.Preset,
+	preset Preset,
 	status string,
-) core.Transition {
-	return core.NewTransition(appCfg, backendCfg, preset, status)
+) Transition {
+	return NewTransition(appCfg, backendCfg, preset, status)
 }
 
-func (m Model) commitRuntimeTransition(t core.Transition) (Model, error) {
+func (m Model) commitRuntimeTransition(t Transition) (Model, error) {
 	if t.NeedsPersistence() {
 		return m, fmt.Errorf("runtime transition requires asynchronous persistence")
 	}
@@ -44,7 +42,7 @@ func (m Model) commitRuntimeTransition(t core.Transition) (Model, error) {
 }
 
 func (m Model) beginRuntimeTransitionCommit(
-	t core.Transition,
+	t Transition,
 	notice session.Entry,
 ) (Model, tea.Cmd) {
 	if !t.NeedsPersistence() {
@@ -87,11 +85,11 @@ func (m Model) ProviderSelection(
 	ctx context.Context,
 	cfg *config.Config,
 	provider string,
-	preset core.Preset,
-) (core.ProviderSelection, error) {
+	preset Preset,
+) (ProviderSelection, error) {
 	updated, err := updateProviderSelection(cfg, provider)
 	if err != nil {
-		return core.ProviderSelection{}, err
+		return ProviderSelection{}, err
 	}
 	return providerSelectionForConfig(ctx, updated, preset)
 }
@@ -99,16 +97,16 @@ func (m Model) ProviderSelection(
 func providerSelectionForConfig(
 	ctx context.Context,
 	updated *config.Config,
-	preset core.Preset,
-) (core.ProviderSelection, error) {
+	preset Preset,
+) (ProviderSelection, error) {
 	setup, err := providerSetupPrompt(ctx, updated)
 	if err != nil {
-		return core.ProviderSelection{Config: updated}, err
+		return ProviderSelection{Config: updated}, err
 	}
 	if setup != 0 {
-		return core.ProviderSelection{Config: updated, Setup: setup}, nil
+		return ProviderSelection{Config: updated, Setup: setup}, nil
 	}
-	selection := core.ProviderSelection{
+	selection := ProviderSelection{
 		Config:               updated,
 		SupportsModelListing: llm.SupportsModelListing(updated),
 	}
@@ -123,7 +121,7 @@ func providerSelectionForConfig(
 	return selection, nil
 }
 
-func providerSetupPrompt(ctx context.Context, cfg *config.Config) (core.SetupPromptKind, error) {
+func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKind, error) {
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
 		return 0, nil
 	}
@@ -135,31 +133,31 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (core.SetupPro
 		llm.ResolvedAuthToken(cfg, def) == ""
 	if def.ID == llm.OpenAICompatibleID {
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
-			return core.SetupPromptAPIKey, nil
+			return SetupPromptAPIKey, nil
 		}
 		if err := ensureProviderReadyForSelection(ctx, cfg); err != nil {
-			return core.SetupPromptEndpoint, nil
+			return SetupPromptEndpoint, nil
 		}
 		if missingAuth {
-			return core.SetupPromptAPIKey, nil
+			return SetupPromptAPIKey, nil
 		}
 		return 0, nil
 	}
 	if missingAuth {
-		return core.SetupPromptAPIKey, nil
+		return SetupPromptAPIKey, nil
 	}
 	return 0, nil
 }
 
 func (m Model) modelSelectionTransition(
 	cfg *config.Config,
-	preset core.Preset,
+	preset Preset,
 	model string,
-) (core.Transition, *config.Config, error) {
+) (Transition, *config.Config, error) {
 	updated := updateModelForPreset(cfg, model, preset)
 	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
 	if err != nil {
-		return core.Transition{}, nil, err
+		return Transition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithStatePersistence()
@@ -168,20 +166,20 @@ func (m Model) modelSelectionTransition(
 
 func (m Model) thinkingSelectionTransition(
 	cfg *config.Config,
-	preset core.Preset,
+	preset Preset,
 	level string,
-) (core.Transition, *config.Config, error) {
+) (Transition, *config.Config, error) {
 	updated := updateThinkingForPreset(cfg, level, preset)
 	runtimeCfg, err := m.runtimeConfigForPreset(updated, preset)
 	if err != nil {
-		return core.Transition{}, nil, err
+		return Transition{}, nil, err
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithReasoningPersistence()
 	return transition, runtimeCfg, nil
 }
 
-func resumeSelectionTransition(cfg *config.Config) core.Transition {
+func resumeSelectionTransition(cfg *config.Config) Transition {
 	return newRuntimeTransition(
 		cfg,
 		cfg,
@@ -199,7 +197,7 @@ func TransitionErrorCmd(err error) tea.Cmd {
 	}
 }
 
-func (m *Model) applyRuntimeSnapshot(snapshot core.Snapshot) {
+func (m *Model) applyRuntimeSnapshot(snapshot Snapshot) {
 	appCfg := snapshot.AppConfig
 	backendCfg := snapshot.BackendConfig
 
@@ -213,20 +211,20 @@ func (m *Model) applyRuntimeSnapshot(snapshot core.Snapshot) {
 }
 
 func (m *Model) refreshRuntimeSessionSnapshot() {
-	sessionID, materialized := core.GetSessionState(m.Handles())
+	sessionID, materialized := GetSessionState(m.Handles())
 	m.Model.Runtime.SessionID = sessionID
 	m.Model.Runtime.Materialized = materialized
 }
 
 func newAcceptedRuntime(
-	transition core.Transition,
-	handles core.Handles,
-) core.Accepted {
-	return core.NewAccepted(transition, handles)
+	transition Transition,
+	handles Handles,
+) Accepted {
+	return NewAccepted(transition, handles)
 }
 
-func (m Model) Handles() core.Handles {
-	return core.Handles{
+func (m Model) Handles() Handles {
+	return Handles{
 		Backend: m.Model.Backend,
 		Session: m.Model.Session,
 		Storage: m.Model.Storage,

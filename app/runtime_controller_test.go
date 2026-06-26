@@ -8,7 +8,6 @@ import (
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestSwitchReturnsAcceptedRuntimeAndPreservesTargetSession(t *testing.T) {

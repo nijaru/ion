@@ -10,7 +10,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {

@@ -3,11 +3,10 @@ package app
 import (
 	"time"
 
-	"github.com/nijaru/ion/internal/core"
 )
 
 type progressReducer struct {
-	progress *core.ProgressState
+	progress *ProgressState
 }
 
 func (m *Model) progressReducer() progressReducer {
@@ -22,7 +21,7 @@ func (r progressReducer) clearLocalBusyStatus() {
 	if r.progress.LocalStatus != "" {
 		r.setLocalStatus("")
 	}
-	if core.IsLocalBusyStatus(r.progress.Status) {
+	if IsLocalBusyStatus(r.progress.Status) {
 		r.setStatus("")
 	}
 }
@@ -50,7 +49,7 @@ func (r progressReducer) setReasoningEffort(value string) {
 	r.progress.ReasoningEffort = value
 }
 
-func (r progressReducer) applyRuntimeSnapshot(snapshot core.Snapshot) {
+func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
 	r.setReasoningEffort(snapshot.Reasoning)
 	if snapshot.Status != "" {
 		r.setStatus(snapshot.Status)

@@ -19,7 +19,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {

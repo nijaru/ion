@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestTerminalCommitMarksPrintedTranscript(t *testing.T) {

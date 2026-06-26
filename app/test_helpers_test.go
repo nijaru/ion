@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"

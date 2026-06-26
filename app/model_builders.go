@@ -3,7 +3,6 @@ package app
 import (
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
-	"github.com/nijaru/ion/internal/core"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
@@ -37,7 +36,7 @@ func (m Model) WithConfigForRuntimePreset(
 	snapshot := newRuntimeSnapshot(
 		cfg,
 		runtimeCfg,
-		core.PresetFromString(preset),
+		PresetFromString(preset),
 		"",
 	).WithHandles(m.Handles())
 	m.applyRuntimeSnapshot(snapshot)
@@ -45,7 +44,7 @@ func (m Model) WithConfigForRuntimePreset(
 }
 
 func (m Model) WithActivePreset(value string) Model {
-	m.App.ActivePreset = core.PresetFromString(value)
+	m.App.ActivePreset = PresetFromString(value)
 	return m
 }
 

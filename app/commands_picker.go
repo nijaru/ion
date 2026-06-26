@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/internal/core"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -51,7 +50,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 
 func (m Model) openModelPickerForPreset(
 	cfg *config.Config,
-	preset core.Preset,
+	preset Preset,
 ) (Model, tea.Cmd) {
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing runtime settings"))
@@ -80,7 +79,7 @@ func (m Model) openModelPickerForPreset(
 
 // loadAllModelPickerItems loads models from ALL providers that have API keys,
 // in parallel. Returns a unified list grouped by provider.
-func loadAllModelPickerItems(requestID uint64, cfg *config.Config, preset core.Preset) tea.Cmd {
+func loadAllModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -341,7 +340,7 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pic
 	}
 }
 
-func loadModelPickerItems(requestID uint64, cfg *config.Config, preset core.Preset) tea.Cmd {
+func loadModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -381,7 +380,7 @@ func (m Model) startupPickerCmd() tea.Cmd {
 	return nil
 }
 
-func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset core.Preset) tea.Cmd {
+func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
@@ -410,9 +409,9 @@ func (m Model) handleModelPickerSetupResolved(
 	}
 	cfg := msg.cfg
 	switch msg.setup {
-	case core.SetupPromptAPIKey:
+	case SetupPromptAPIKey:
 		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
-	case core.SetupPromptEndpoint:
+	case SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
 	default:
 		return m.openModelPickerForPreset(&cfg, msg.preset)
@@ -450,7 +449,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 	return m, nil
 }
 
-func togglePreset(p core.Preset) core.Preset {
+func togglePreset(p Preset) Preset {
 	if p == presetFast {
 		return presetPrimary
 	}
@@ -774,7 +773,7 @@ func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerIt
 	)
 }
 
-func (p *pickerOverlayState) Preset() core.Preset {
+func (p *pickerOverlayState) Preset() Preset {
 	if p == nil {
 		return presetPrimary
 	}

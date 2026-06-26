@@ -3,22 +3,21 @@ package app
 import (
 	"strings"
 
-	"github.com/nijaru/ion/internal/core"
 )
 
-func helpText() string                                 { return core.HelpText() }
-func hotkeysText() string                              { return core.HotkeysText() }
-func slashCommands() []string                          { return core.SlashCommands() }
-func deferredFeatureMessage(f string) string           { return core.DeferredFeatureMessage(f) }
-func slashCommandDefinitions() []core.SlashCommandInfo { return core.SlashCommandDefinitions() }
-func slashCommandDefinition(name string) (core.SlashCommandInfo, bool) {
-	return core.LookupSlashCommand(name)
+func helpText() string                                 { return HelpText() }
+func hotkeysText() string                              { return HotkeysText() }
+func slashCommands() []string                          { return SlashCommands() }
+func deferredFeatureMessage(f string) string           { return DeferredFeatureMessage(f) }
+func slashCommandDefinitions() []SlashCommandInfo { return SlashCommandDefinitions() }
+func slashCommandDefinition(name string) (SlashCommandInfo, bool) {
+	return LookupSlashCommand(name)
 }
-func resolveSlashCommand(name string) (core.SlashCommandInfo, bool) {
-	return core.ResolveSlashCommand(name)
+func resolveSlashCommand(name string) (SlashCommandInfo, bool) {
+	return ResolveSlashCommand(name)
 }
-func slashCommandCatalog() []core.SlashCommandInfo { return core.SlashCommandCatalog() }
-func slashCommandHelpLines() []string              { return core.SlashCommandHelpLines() }
+func slashCommandCatalog() []SlashCommandInfo { return SlashCommandCatalog() }
+func slashCommandHelpLines() []string              { return SlashCommandHelpLines() }
 
 // slashCommandItems stays in app/ because it uses pickerItem (TUI type).
 func slashCommandItems() []pickerItem {

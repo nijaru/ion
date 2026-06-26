@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func ifthen[T any](cond bool, a, b T) T {
@@ -135,7 +134,7 @@ func noModelConfiguredStatus() string {
 	return session.NoModelConfiguredStatus
 }
 
-func toolSurfaceSummary(surface core.ToolSurface) string {
+func toolSurfaceSummary(surface ToolSurface) string {
 	if surface.Count == 0 {
 		return "No tools registered"
 	}
@@ -197,7 +196,7 @@ func runtimeStatusSummary(m Model) string {
 	if progress.TotalCost > 0 {
 		lines = append(lines, fmt.Sprintf("Cost: $%.4f", progress.TotalCost))
 	}
-	if summarizer, ok := m.Model.Backend.(core.ToolSummarizer); ok {
+	if summarizer, ok := m.Model.Backend.(ToolSummarizer); ok {
 		surface := summarizer.ToolSurface()
 		lines = append(lines, toolSurfaceSummary(surface))
 	}

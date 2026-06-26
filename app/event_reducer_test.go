@@ -9,7 +9,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/core"
 	"github.com/nijaru/ion/session"
 )
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 var (

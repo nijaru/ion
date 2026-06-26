@@ -15,7 +15,6 @@ import (
 	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/internal/core"
 )
 
 func TestHandleCommandPersistsStateThroughCommand(t *testing.T) {
