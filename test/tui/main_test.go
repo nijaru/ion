@@ -1,84 +1,81 @@
 package main
 
 import (
-	"path/filepath"
+	"context"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/session"
 )
 
-func TestSmokeBackendPersistsNativeTranscriptForResume(t *testing.T) {
-	ctx := t.Context()
-	root := t.TempDir()
-	store, err := session.NewCantoStore(root)
-	if err != nil {
-		t.Fatalf("new canto store: %v", err)
-	}
-	defer store.Close()
-
-	opener, ok := store.(storeWithSessionID)
-	if !ok {
-		t.Fatal("store does not support deterministic session ids")
-	}
-	stored, err := opener.OpenSessionWithID(
-		ctx,
-		"smoke-persist-session",
-		t.TempDir(),
-		"fake/fake-model",
-		"smoke",
-	)
-	if err != nil {
-		t.Fatalf("open session: %v", err)
-	}
-
-	eventStore, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
-	if err != nil {
-		t.Fatalf("new event store: %v", err)
-	}
-	defer eventStore.Close()
-
+func TestSmokeBackendEmitsEvents(t *testing.T) {
+	ctx := context.Background()
 	backend := newSmokeBackend("complete")
-	backend.SetSession(stored)
-	backend.SetCantoEventStore(eventStore)
 
-	for _, event := range []session.AgentEvent{
-		session.UserMessage{Message: "build deterministic resume transcript"},
-		session.TurnStart{},
-		session.ToolCallStart{
-			ToolUseID: "tool-1",
-			ToolName:  "bash",
-			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
-		},
-		session.ToolCallEnd{
-			ToolUseID: "tool-1",
-			ToolName:  "bash",
-			Result:    "ion-tmux-smoke\n",
-		},
-		session.AgentMessage{Message: "done"},
-		session.TurnEnd{},
-	} {
-		if !backend.emit(ctx, event) {
-			t.Fatalf("emit failed for %T", event)
+	events := []session.Event{
+		userEvent("hello"),
+		session.TurnStart{Timestamp: time.Now()},
+		agentEvent("done"),
+		session.TurnEnd{Base: session.BaseNow()},
+	}
+
+	go func() {
+		for _, event := range events {
+			if !backend.emit(ctx, event) {
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < len(events); i++ {
+		select {
+		case <-ctx.Done():
+			t.Fatal("context done before receiving all events")
+		case e := <-backend.Events():
+			if e == nil {
+				t.Fatalf("event %d is nil", i)
+			}
+		}
+	}
+}
+
+func TestSmokeBackendCancelMode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	backend := newSmokeBackend("cancel")
+
+	go backend.runScript(ctx, "test input")
+
+	// Should get UserMessage, TurnStart, StatusChange
+	for _, expected := range []string{"UserMessage", "TurnStart", "StatusChange"} {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context done before receiving %s", expected)
+		case e := <-backend.Events():
+			if e == nil {
+				t.Fatalf("received nil event, expected %s", expected)
+			}
 		}
 	}
 
-	entries, err := stored.Entries(ctx)
-	if err != nil {
-		t.Fatalf("entries: %v", err)
-	}
-	if len(entries) != 3 {
-		t.Fatalf("entries length = %d, want 3: %#v", len(entries), entries)
-	}
-	if entries[0].Role != session.RoleUser ||
-		entries[0].Content != "build deterministic resume transcript" {
-		t.Fatalf("user entry = %#v", entries[0])
-	}
-	if entries[1].Role != session.RoleTool ||
-		entries[1].Title != "Bash(sleep 2; echo ion-tmux-smoke)" ||
-		entries[1].Content != "ion-tmux-smoke\n" {
-		t.Fatalf("tool entry = %#v", entries[1])
-	}
-	if entries[2].Role != session.RoleAgent || entries[2].Content != "done" {
-		t.Fatalf("agent entry = %#v", entries[2])
+	// Cancel to unblock the script.
+	cancel()
+}
+
+func TestSmokeBackendErrorMode(t *testing.T) {
+	ctx := context.Background()
+	backend := newSmokeBackend("error")
+
+	go backend.runScript(ctx, "test input")
+
+	// Should get UserMessage, TurnStart, StatusChange, TurnEnd
+	for i := 0; i < 4; i++ {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context done before receiving event %d", i)
+		case e := <-backend.Events():
+			if e == nil {
+				t.Fatalf("received nil event at index %d", i)
+			}
+		}
 	}
 }

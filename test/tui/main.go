@@ -13,9 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
-	csession "github.com/nijaru/ion/session"
 )
 
 func main() {
@@ -37,6 +35,7 @@ func main() {
 }
 
 func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
+	_ = resume // resume not yet wired with new session model
 	ctx := context.Background()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -54,20 +53,20 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	if err != nil {
 		return err
 	}
-	store, err := session.NewCantoStore(storeRoot)
+
+	dbPath := filepath.Join(storeRoot, "sessions.db")
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		id = "smoke-session"
+	}
+	store, err := session.NewSQLiteStore(dbPath, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("open store: %w", err)
 	}
 	defer store.Close()
-	eventStore, err := csession.NewSQLiteStore(filepath.Join(storeRoot, "sessions.db"))
-	if err != nil {
-		return err
-	}
-	defer eventStore.Close()
-	stored, err := openSmokeSession(ctx, store, sessionID, cwd, resume)
-	if err != nil {
-		return err
-	}
+
+	sess := session.NewSession(store, 64)
+
 	if mode == "session-picker" {
 		if err := seedSmokeSessionPicker(ctx, store, cwd); err != nil {
 			return err
@@ -75,9 +74,6 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	}
 
 	smoke := newSmokeBackend(mode)
-	smoke.SetCantoEventStore(eventStore)
-	smoke.SetStore(store)
-	smoke.SetSession(stored)
 	cfg := &config.Config{
 		Provider: "fake",
 		Model:    "fake-model",
@@ -91,18 +87,10 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	fmt.Println(cwd + " • smoke")
 	fmt.Println()
 
-	model := app.New(smoke, stored, store, cwd, "smoke", "v0.0.0", nil).
+	model := app.New(smoke, sess, store, cwd, "smoke", "v0.0.0", nil).
 		WithConfig(cfg)
 	if mode == "session-picker" {
 		model = model.WithSessionPicker()
-	}
-	if resume {
-		startupEntries, err := stored.Entries(ctx)
-		if err != nil {
-			return fmt.Errorf("load startup history: %w", err)
-		}
-		printSmokeStartup(model.RenderEntries(startupEntries...))
-		model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	}
 	if startupCheck {
 		updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
@@ -123,92 +111,32 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	return err
 }
 
-type storeWithSessionID interface {
-	OpenSessionWithID(ctx context.Context, id, cwd, model, branch string) (session.SessionHandle, error)
-}
-
-func openSmokeSession(
-	ctx context.Context,
-	store session.SessionStore,
-	sessionID, cwd string,
-	resume bool,
-) (session.SessionHandle, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	if resume {
-		if sessionID == "" {
-			return nil, fmt.Errorf("session-id is required with --resume")
-		}
-		return store.ResumeSession(ctx, sessionID)
-	}
-	if sessionID == "" {
-		return store.OpenSession(ctx, cwd, "fake/fake-model", "smoke")
-	}
-	opener, ok := store.(storeWithSessionID)
-	if !ok {
-		return nil, fmt.Errorf("store does not support deterministic session ids")
-	}
-	return opener.OpenSessionWithID(ctx, sessionID, cwd, "fake/fake-model", "smoke")
-}
-
-func seedSmokeSessionPicker(ctx context.Context, store session.SessionStore, cwd string) error {
-	opener, ok := store.(storeWithSessionID)
-	if !ok {
-		return fmt.Errorf("store does not support deterministic session ids")
-	}
+func seedSmokeSessionPicker(ctx context.Context, store session.Store, cwd string) error {
+	_ = cwd
 	fixtures := []struct {
-		id      string
-		title   string
-		preview string
+		id    string
+		title string
 	}{
-		{
-			id:      "ion-tmux-session-picker-primary",
-			title:   "Resume deterministic picker",
-			preview: "read ai/status.md",
-		},
-		{
-			id:      "ion-tmux-session-picker-alternate",
-			title:   "Alternate deterministic branch",
-			preview: "fix tui frame",
-		},
+		{id: "ion-tmux-session-picker-primary", title: "Resume deterministic picker"},
+		{id: "ion-tmux-session-picker-alternate", title: "Alternate deterministic branch"},
 	}
 	for _, fixture := range fixtures {
-		sess, err := opener.OpenSessionWithID(ctx, fixture.id, cwd, "fake/fake-model", "smoke")
-		if err != nil {
-			return fmt.Errorf("seed session %s: %w", fixture.id, err)
+		info := session.SessionInfoEntry{
+			EntryBase: session.EntryBase{ID: fixture.id},
+			Name:      fixture.title,
+			Model:     "fake/fake-model",
 		}
-		if err := sess.Close(); err != nil {
-			return fmt.Errorf("close seed session %s: %w", fixture.id, err)
-		}
-		if err := store.UpdateSession(ctx, session.SessionInfo{
-			ID:          fixture.id,
-			Title:       fixture.title,
-			LastPreview: fixture.preview,
-			Model:       "fake/fake-model",
-			Branch:      "smoke",
-		}); err != nil {
+		if err := store.UpdateSession(ctx, info); err != nil {
 			return fmt.Errorf("update seed session %s: %w", fixture.id, err)
 		}
 	}
 	return nil
 }
 
-func printSmokeStartup(renderedEntries []string) {
-	fmt.Println("--- resumed ---")
-	if len(renderedEntries) == 0 {
-		fmt.Println()
-		return
-	}
-	fmt.Println()
-	fmt.Println(strings.Join(renderedEntries, "\n"))
-	fmt.Println()
-}
-
 type smokeBackend struct {
-	mode       string
-	events     chan session.AgentEvent
-	eventStore csession.Writer
-	storage    session.SessionHandle
-	cfg        *config.Config
+	mode   string
+	events chan session.Event
+	cfg    *config.Config
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -217,7 +145,7 @@ type smokeBackend struct {
 func newSmokeBackend(mode string) *smokeBackend {
 	return &smokeBackend{
 		mode:   mode,
-		events: make(chan session.AgentEvent, 64),
+		events: make(chan session.Event, 64),
 	}
 }
 
@@ -243,28 +171,12 @@ func (b *smokeBackend) Bootstrap() app.Bootstrap {
 	return app.Bootstrap{Status: "[smoke] ready"}
 }
 
-func (b *smokeBackend) Session() session.AgentSession { return b }
+func (b *smokeBackend) Session() session.Session { return nil }
 
-func (b *smokeBackend) SetStore(session.SessionStore) {}
-
-func (b *smokeBackend) SetSession(s session.SessionHandle) {
-	b.storage = s
-}
-
-func (b *smokeBackend) SetCantoEventStore(store csession.Writer) {
-	b.eventStore = store
-}
+func (b *smokeBackend) SetStore(session.Store) {}
 
 func (b *smokeBackend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
-}
-
-func (b *smokeBackend) ToolSurface() app.ToolSurface {
-	return app.ToolSurface{
-		Count:       7,
-		Names:       []string{"bash", "edit", "find", "grep", "ls", "read", "write"},
-		Environment: "inherit_without_provider_keys",
-	}
 }
 
 func (b *smokeBackend) Open(context.Context) error { return nil }
@@ -299,7 +211,7 @@ func (b *smokeBackend) SteerTurn(ctx context.Context, text string) (session.Stee
 	if strings.TrimSpace(text) == "" {
 		return session.SteeringResult{}, fmt.Errorf("steering text is empty")
 	}
-	return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+	return session.SteeringResult{}, nil
 }
 
 func (b *smokeBackend) Close() error {
@@ -307,29 +219,42 @@ func (b *smokeBackend) Close() error {
 	return nil
 }
 
-func (b *smokeBackend) Events() <-chan session.AgentEvent { return b.events }
+func (b *smokeBackend) Events() <-chan session.Event { return b.events }
 
-func (b *smokeBackend) ID() string {
-	if b.storage != nil {
-		return b.storage.ID()
+func now() time.Time { return time.Now() }
+
+func userEvent(text string) session.UserMessage {
+	return session.UserMessage{
+		Content:   []session.Content{session.TextContent{Text: text}},
+		Timestamp: now(),
 	}
-	return "smoke-session"
 }
 
-func (b *smokeBackend) Meta() map[string]string {
-	return map[string]string{"model": "fake/fake-model"}
+func agentEvent(text string) session.AgentMessage {
+	return session.AgentMessage{
+		Message: &session.AssistantMessage{
+			Content: []session.Content{session.TextContent{Text: text}},
+		},
+	}
+}
+
+func messageDelta(text string) session.MessageUpdate {
+	return session.MessageUpdate{
+		Delta:     session.TextDelta{Text: text},
+		BlockType: "text",
+	}
 }
 
 func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	switch b.mode {
 	case "cancel":
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, userEvent(input))
+		b.emit(ctx, session.TurnStart{Timestamp: now()})
 		b.emit(ctx, session.StatusChange{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, userEvent(input))
+		b.emit(ctx, session.TurnStart{Timestamp: now()})
 		b.emit(ctx, session.StatusChange{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
@@ -342,79 +267,65 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "markdown":
 		b.runMarkdownScript(ctx, input)
 	default:
-		b.emit(ctx, session.UserMessage{Message: input})
-		b.emit(ctx, session.TurnStart{})
+		b.emit(ctx, userEvent(input))
+		b.emit(ctx, session.TurnStart{Timestamp: now()})
 		b.emit(ctx, session.StatusChange{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
-		// Maintain partial message state (Pi model)
-		partialMessage := session.AgentMessage{}
-		delta1 := "streaming from deterministic smoke backend"
-		partialMessage.Message = delta1
-		b.emit(ctx, session.MessageUpdate{
-			Message:   partialMessage,
-			Delta:     delta1,
-			BlockType: "text",
-		})
+		b.emit(ctx, messageDelta("streaming from deterministic smoke backend"))
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
 		b.emit(ctx, session.ToolCallStart{
-			ToolUseID: "tool-1",
-			ToolName:  "bash",
-			Args:      `{"command":"sleep 2; echo ion-tmux-smoke"}`,
+			ToolCallID: "tool-1",
+			Name:       "bash",
+			Args:       []byte(`{"command":"sleep 2; echo ion-tmux-smoke"}`),
 		})
 		if !b.sleep(ctx, 1200*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.ToolExecutionUpdate{
-			ToolUseID:     "tool-1",
-			ToolName:      "bash",
-			PartialResult: "ion-tmux-",
+		b.emit(ctx, session.ToolExecUpdate{
+			ToolCallID: "tool-1",
+			Partial:    "ion-tmux-",
 		})
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
 		b.emit(ctx, session.ToolCallEnd{
-			ToolUseID: "tool-1",
-			ToolName:  "bash",
-			Result:    "ion-tmux-smoke\n",
+			ToolCallID: "tool-1",
+			Result: session.ToolResultMessage{
+				ToolCallID: "tool-1",
+				ToolName:   "bash",
+				Content:    []session.Content{session.TextContent{Text: "ion-tmux-smoke\n"}},
+			},
 		})
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.AgentMessage{Message: "done"})
-		b.emit(ctx, session.TurnEnd{})
+		b.emit(ctx, agentEvent("done"))
+		b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 	}
 }
 
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, userEvent(input))
+	b.emit(ctx, session.TurnStart{Timestamp: now()})
 	b.emit(ctx, session.StatusChange{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
-	// Maintain partial message state (Pi model)
-	partialMessage := session.AgentMessage{}
-	delta1 := strings.Join([]string{
+	b.emit(ctx, messageDelta(strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
 		"",
 		"**Key facts:**",
-	}, "\n")
-	partialMessage.Message = delta1
-	b.emit(ctx, session.MessageUpdate{
-		Message:   partialMessage,
-		Delta:     delta1,
-		BlockType: "text",
-	})
+	}, "\n")))
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, session.AgentMessage{Message: strings.Join([]string{
+	b.emit(ctx, agentEvent(strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -428,29 +339,29 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 		"",
 		"```go",
 		"func main() {",
-		"\tfmt.Println(\"hello world\")", 
+		"\tfmt.Println(\"hello world\")",
 		"}",
 		"```",
 		"",
 		"Bottom line: formatted final output should be the only committed assistant entry.",
-	}, "\n")})
-	b.emit(ctx, session.TurnEnd{})
+	}, "\n")))
+	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 }
 
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, userEvent(input))
+	b.emit(ctx, session.TurnStart{Timestamp: now()})
 	b.emit(ctx, session.StatusChange{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
-	b.emit(ctx, session.AgentMessage{Message: "controls done"})
-	b.emit(ctx, session.TurnEnd{})
+	b.emit(ctx, agentEvent("controls done"))
+	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
-	b.emit(ctx, session.UserMessage{Message: input})
-	b.emit(ctx, session.TurnStart{})
+	b.emit(ctx, userEvent(input))
+	b.emit(ctx, session.TurnStart{Timestamp: now()})
 	b.emit(ctx, session.StatusChange{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
@@ -500,128 +411,36 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 	}
 	for _, tool := range tools {
 		b.emit(ctx, session.ToolCallStart{
-			ToolUseID: tool.id,
-			ToolName:  tool.name,
-			Args:      tool.args,
+			ToolCallID: tool.id,
+			Name:       tool.name,
+			Args:       []byte(tool.args),
 		})
 		if !b.sleep(ctx, 150*time.Millisecond) {
 			return
 		}
 		b.emit(ctx, session.ToolCallEnd{
-			ToolUseID: tool.id,
-			ToolName:  tool.name,
-			Result:    tool.result,
+			ToolCallID: tool.id,
+			Result: session.ToolResultMessage{
+				ToolCallID: tool.id,
+				ToolName:   tool.name,
+				Content:    []session.Content{session.TextContent{Text: tool.result}},
+			},
 		})
 		if !b.sleep(ctx, 100*time.Millisecond) {
 			return
 		}
 	}
-	b.emit(ctx, session.AgentMessage{Message: "file tools done"})
-	b.emit(ctx, session.TurnEnd{})
+	b.emit(ctx, agentEvent("file tools done"))
+	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
 }
 
-func (b *smokeBackend) emit(ctx context.Context, event session.AgentEvent) bool {
-	if err := b.persistEvent(ctx, event); err != nil {
-		select {
-		case <-ctx.Done():
-		case b.events <- session.TurnEnd{Base: session.BaseNow(), Error: fmt.Errorf("persist smoke event: %w", err)}:
-		}
-		return false
-	}
+func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	case b.events <- event:
 		return true
 	}
-}
-
-func (b *smokeBackend) persistEvent(ctx context.Context, event session.AgentEvent) error {
-	if b.eventStore == nil || b.storage == nil {
-		return nil
-	}
-
-	sessionID := b.storage.ID()
-	switch msg := event.(type) {
-	case session.UserMessage:
-		if strings.TrimSpace(msg.Message) == "" {
-			return nil
-		}
-		return b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewMessage(sessionID, llm.TextMessage(llm.RoleUser, msg.Message)),
-		)
-	case session.TurnStart:
-		return b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewTurnStart(sessionID, csession.TurnStartedData{}),
-		)
-	case session.ToolCallStart:
-		call := llm.Call{ID: msg.ToolUseID, Type: "function"}
-		call.Function.Name = msg.ToolName
-		call.Function.Arguments = msg.Args
-		if err := b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewMessage(sessionID, llm.Message{
-				Role:  llm.RoleAssistant,
-				Calls: []llm.Call{call},
-			}),
-		); err != nil {
-			return err
-		}
-		return b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewToolStartedEvent(sessionID, csession.ToolStartedData{
-				Tool:      msg.ToolName,
-				ID:        msg.ToolUseID,
-				Arguments: msg.Args,
-			}),
-		)
-	case session.ToolCallEnd:
-		completed := csession.ToolCompletedData{
-			Tool:   msg.ToolName,
-			ID:     msg.ToolUseID,
-			Output: msg.Result,
-		}
-		if msg.Error != nil {
-			completed.Error = msg.Error.Error()
-		}
-		return b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewEvent(sessionID, csession.ToolCompleted, completed),
-		)
-	case session.AgentMessage:
-		if strings.TrimSpace(msg.Message) == "" && strings.TrimSpace(msg.Reasoning) == "" {
-			return nil
-		}
-		agent := llm.TextMessage(llm.RoleAssistant, msg.Message)
-		agent.Reasoning = msg.Reasoning
-		return b.saveCantoEvent(ctx, msg.Timestamp, csession.NewMessage(sessionID, agent))
-	case session.TurnEnd:
-		return b.saveCantoEvent(
-			ctx,
-			msg.Timestamp,
-			csession.NewTurnCompletedEvent(sessionID, csession.TurnCompletedData{}),
-		)
-	default:
-		return nil
-	}
-}
-
-func (b *smokeBackend) saveCantoEvent(
-	ctx context.Context,
-	timestamp time.Time,
-	event csession.Event,
-) error {
-	if !timestamp.IsZero() {
-		event.Timestamp = timestamp.UTC()
-	}
-	return b.eventStore.Save(ctx, event)
 }
 
 func (b *smokeBackend) sleep(ctx context.Context, d time.Duration) bool {
