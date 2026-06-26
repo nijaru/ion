@@ -362,7 +362,11 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	}
 }
 
-func (t TurnReducer) ResetFinishedTurnSummary() {}
+func (t TurnReducer) ResetFinishedTurnSummary() {
+	if t.progress != nil {
+		t.progress.LastTurnSummary = TurnSummary{}
+	}
+}
 func (t TurnReducer) setReasoningEffort(v int)  {}
 func (t TurnReducer) applySessionUsage(in, out int, cost float64) {}
 
@@ -375,7 +379,12 @@ func (t TurnReducer) PopQueuedTurn() string {
 	return text
 }
 
-func (t TurnReducer) StartSubmit()            {}
+func (t TurnReducer) StartSubmit() {
+	if t.progress != nil {
+		t.progress.Mode = StateIonizing
+		t.progress.Status = "Submitting..."
+	}
+}
 func (t TurnReducer) RejectSubmit(reason string) {}
 func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {}
 
@@ -409,8 +418,23 @@ func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
 	return CancelDecision{EntryContent: reason}
 }
 
-func (t TurnReducer) FinishDrain() {}
-func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) { return nil, false }
+func (t TurnReducer) FinishDrain() {
+	if t.inFlight != nil {
+		t.inFlight.DrainUntilTurnStarted = false
+		t.inFlight.DrainStartedAt = time.Time{}
+	}
+}
+func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) {
+	if t.inFlight == nil || t.inFlight.Pending == nil {
+		return nil, false
+	}
+	entry := *t.inFlight.Pending
+	t.inFlight.Pending = nil
+	t.inFlight.StreamBuf = ""
+	t.inFlight.ReasonBuf = ""
+	t.inFlight.StreamChunks = nil
+	return entry, true
+}
 func (t TurnReducer) FailTurn(msg string, now time.Time)              {}
 func (t TurnReducer) ClearLocalErrorIfIdle()                           {}
 
@@ -502,7 +526,20 @@ func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
 	return TurnFinishedDispatch{}
 }
 
-func (t TurnReducer) ApplyTokenUsage(msg interface{}) {}
+func (t TurnReducer) ApplyTokenUsage(msg interface{}) {
+	if t.progress == nil {
+		return
+	}
+	if m, ok := msg.(session.Message); ok {
+		in, out, cost := session.TokenUsage(m)
+		t.progress.CurrentTurnInput += in
+		t.progress.CurrentTurnOutput += out
+		t.progress.CurrentTurnCost += cost
+		t.progress.TokensSent += in
+		t.progress.TokensReceived += out
+		t.progress.TotalCost += cost
+	}
+}
 
 func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time.Time) {
 	if t.inFlight == nil {
@@ -557,7 +594,23 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 	}
 }
 
-func (t TurnReducer) AppendToolOutput(id string, output string, isError bool)  {}
+func (t TurnReducer) AppendToolOutput(id string, output string, isError bool) {
+	if t.inFlight == nil || t.inFlight.PendingTools == nil {
+		return
+	}
+	entry, ok := t.inFlight.PendingTools[id]
+	if !ok {
+		return
+	}
+	if me, ok := entry.(*session.MessageEntry); ok {
+		if tr, ok := me.Message.(*session.ToolResultMessage); ok {
+			tr.Content = append(tr.Content, session.TextContent{Text: output})
+			if isError {
+				tr.IsError = true
+			}
+		}
+	}
+}
 
 func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) {
 	if t.inFlight == nil {
