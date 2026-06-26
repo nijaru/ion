@@ -1,5 +1,3 @@
-//go:build ignore
-
 package app
 
 import (
@@ -25,7 +23,7 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = false
 
-	if cmd := model.terminalCommit().Entries(session.Entry{Role: session.RoleSystem, Content: "notice"}); cmd == nil {
+	if cmd := model.terminalCommit().Entries(sysEntry("notice")); cmd == nil {
 		t.Fatal("terminal entries commit returned nil command")
 	}
 	if !model.App.PrintedTranscript {
@@ -34,9 +32,9 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 
 	model.App.PrintedTranscript = false
 	msg := runtimeSwitchedMsg{
-		runtime: core.Accepted{
-			Transition: core.Transition{
-				Snapshot: core.Snapshot{},
+		runtime: Accepted{
+			Transition: Transition{
+				Snapshot: Snapshot{},
 			},
 		},
 		printLines: []string{"ion v0.0.0", "--- resumed ---"},
@@ -51,7 +49,7 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 }
 
 func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
-	storageSess := &stubStorageSession{}
+	storageSess := &stubStorageSession{stubSession: *newStubSession("storage")}
 	model := readyModel(t)
 	model.Model.Storage = storageSess
 

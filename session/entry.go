@@ -141,6 +141,11 @@ func EntryTitle(e Entry) string {
 	if le, ok := e.(*LabelEntry); ok {
 		return le.Label
 	}
+	if me, ok := e.(*MessageEntry); ok {
+		if tr, ok := me.Message.(*ToolResultMessage); ok {
+			return tr.ToolName
+		}
+	}
 	return ""
 }
 

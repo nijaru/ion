@@ -1,5 +1,3 @@
-//go:build ignore
-
 package app
 
 import (
@@ -10,7 +8,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/session"
 )
 
 func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
@@ -56,7 +53,7 @@ func TestTerminalCommitDefersEveryScrollbackCommit(t *testing.T) {
 		{
 			name: "entries",
 			cmd: model.terminalCommit().Entries(
-				session.Entry{Role: session.RoleSystem, Content: "notice"},
+				sysEntry("notice"),
 			),
 		},
 		{name: "help", cmd: model.terminalCommit().Help("help text")},

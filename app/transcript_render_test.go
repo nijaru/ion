@@ -158,7 +158,7 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 			Content: strings.Repeat("tool-output ", 12),
 		},
 	}
-	model.InFlight.Subagents = map[string]*core.SubagentProgress{
+	model.InFlight.Subagents = map[string]*SubagentProgress{
 		"worker": {
 			Name:   "worker-with-long-name",
 			Intent: strings.Repeat("explore unicode paths ", 4),

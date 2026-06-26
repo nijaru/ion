@@ -1,5 +1,3 @@
-//go:build ignore
-
 
 package app
 
@@ -44,7 +42,7 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 	if model.Picker.Session == nil ||
 		model.Picker.Session.loading ||
 		len(model.Picker.Session.items) != 1 ||
-		model.Picker.Session.items[0].info.ID != "current" {
+		model.Picker.Session.items[0].info.ID() != "current" {
 		t.Fatalf("session picker = %#v, want loaded current session", model.Picker.Session)
 	}
 }
@@ -91,7 +89,7 @@ func TestPickerReducerSessionQueryFiltersAndClampsIndex(t *testing.T) {
 		t.Fatalf("query = %q, want alpha", got)
 	}
 	if len(model.Picker.Session.filtered) != 1 ||
-		model.Picker.Session.filtered[0].info.ID != "sess-alpha" ||
+		model.Picker.Session.filtered[0].info.ID() != "sess-alpha" ||
 		model.Picker.Session.index != 0 {
 		t.Fatalf(
 			"filtered = %#v index=%d, want alpha at index 0",
@@ -122,7 +120,7 @@ func TestPickerReducerSessionSelectionPaging(t *testing.T) {
 		filtered: make([]sessionPickerItem, pickerPageSize+2),
 	}
 	for i := range model.Picker.Session.filtered {
-		model.Picker.Session.filtered[i].info.ID = string(rune('a' + i))
+		model.Picker.Session.filtered[i].info.EntryBase.ID = string(rune('a' + i))
 	}
 
 	model.pickerReducer().pageSessionSelection(1)
@@ -134,7 +132,7 @@ func TestPickerReducerSessionSelectionPaging(t *testing.T) {
 		t.Fatalf("index = %d, want clamped max %d", got, want)
 	}
 	selected, ok := model.pickerReducer().selectedSession()
-	if !ok || selected.ID != string(rune('a'+len(model.Picker.Session.filtered)-1)) {
+	if !ok || selected.ID() != string(rune('a'+len(model.Picker.Session.filtered)-1)) {
 		t.Fatalf("selected = %#v ok=%v, want final item", selected, ok)
 	}
 	model.pickerReducer().pageSessionSelection(-1)
@@ -255,7 +253,7 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
-	model.Picker.Setup = &setupPromptState{kind: core.SetupPromptAPIKey}
+	model.Picker.Setup = &setupPromptState{kind: SetupPromptAPIKey}
 
 	model.pickerReducer().closeAll()
 
@@ -289,7 +287,7 @@ func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
 	model := readyModel(t)
 	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProviderSetup})
 	model.pickerReducer().openSetup(setupPromptState{
-		kind:  core.SetupPromptEndpoint,
+		kind:  SetupPromptEndpoint,
 		value: "fedora",
 		err:   "old error",
 	})

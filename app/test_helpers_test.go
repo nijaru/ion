@@ -326,6 +326,56 @@ func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
 	return messages
 }
 
+// --- stubStorageSession tracks appends for persistence tests ---
+
+type stubStorageSession struct {
+	stubSession
+	appends    []session.Entry
+	appendErr  error
+}
+
+func (s *stubStorageSession) Append(_ context.Context, entry session.Entry) (string, error) {
+	if s.appendErr != nil {
+		return "", s.appendErr
+	}
+	s.appends = append(s.appends, entry)
+	return "appended-1", nil
+}
+
+// --- Entry constructors for tests ---
+
+// sysEntry creates a StoreSystem entry (implements session.Entry).
+// toolEntry creates a MessageEntry wrapping a ToolResultMessage.
+func toolEntry(title, content string, isError bool) *session.MessageEntry {
+	return &session.MessageEntry{
+		Message: &session.ToolResultMessage{
+			ToolName: title,
+			Content:  []session.Content{session.TextContent{Text: content}},
+			IsError:  isError,
+		},
+	}
+}
+
+func sysEntry(content string) session.StoreSystem {
+	return session.StoreSystem{Type: "system", Content: content}
+}
+
+// agentMsgEntry creates a MessageEntry wrapping an AssistantMessage.
+func agentMsgEntry(text string) *session.MessageEntry {
+	return &session.MessageEntry{
+		Message: &session.AssistantMessage{
+			Content: []session.Content{session.TextContent{Text: text}},
+		},
+	}
+}
+
+// userMsgEntry creates a MessageEntry wrapping a UserMessage.
+func userMsgEntry(text string) *session.MessageEntry {
+	return &session.MessageEntry{
+		Message: &session.UserMessage{Content: []session.Content{session.TextContent{Text: text}}},
+	}
+}
+
 func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
 	for _, msg := range messages {
 		eventMsg, ok := msg.(sessionEventMsg)
