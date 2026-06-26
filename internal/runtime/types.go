@@ -391,7 +391,6 @@ func (t TurnReducer) ClearQueuedTurns() {
 	}
 }
 
-func (t TurnReducer) CancelActiveTurn(reason string, now time.Time) error { return nil }
 func (t TurnReducer) DrainingUntilTurnStarted() bool { return false }
 
 // CancelDecision holds the result of a cancel attempt.
@@ -460,7 +459,6 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 }
 
 func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {}
-func (t TurnReducer) BeginDrain(now time.Time)                {}
 
 func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) {
 	if t.inFlight == nil {
@@ -521,9 +519,6 @@ func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {
 	t.inFlight.ReasonBuf += fmt.Sprint(delta)
 }
 
-func (t TurnReducer) ApplyBudgetStop(reason string, ts time.Time) (session.Entry, error) {
-	return nil, nil
-}
 
 func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
 	if t.inFlight == nil {
@@ -563,7 +558,6 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 }
 
 func (t TurnReducer) AppendToolOutput(id string, output string, isError bool)  {}
-func (t TurnReducer) AppendToolError(id, name, err string, ts time.Time)       {}
 
 func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) {
 	if t.inFlight == nil {
