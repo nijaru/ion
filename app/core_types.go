@@ -5,8 +5,6 @@ import (
 )
 
 // Re-export runtime types so app/ code can use them without runtime.X prefix.
-type ProgressMode = runtime.ProgressMode
-type TurnSummary = runtime.TurnSummary
 type SubagentProgress = runtime.SubagentProgress
 type InFlightState = runtime.InFlightState
 type ProgressState = runtime.ProgressState
@@ -18,13 +16,8 @@ type SetupPromptKind = runtime.SetupPromptKind
 type Handles = runtime.Handles
 type Switcher = runtime.Switcher
 type SwitchInput = runtime.SwitchInput
-type SwitchResult = runtime.SwitchResult
 type ResumeInput = runtime.ResumeInput
-type CancelDecision = runtime.CancelDecision
-type StatusChangedDecision = runtime.StatusChangedDecision
-type TurnFinishedDispatch = runtime.TurnFinishedDispatch
 type ProviderSelection = runtime.ProviderSelection
-type SessionStateInfo = runtime.SessionStateInfo
 type TurnReducer = runtime.TurnReducer
 
 // Re-export runtime functions
@@ -106,13 +99,5 @@ func ResolveSlashCommand(name string) (SlashCommandInfo, bool) {
 	return SlashCommandInfo{}, false
 }
 
-func SlashCommandCatalog() []SlashCommandInfo    { return SlashCommandDefinitions() }
+func SlashCommandCatalog() []SlashCommandInfo              { return SlashCommandDefinitions() }
 func LookupSlashCommand(name string) (SlashCommandInfo, bool) { return ResolveSlashCommand(name) }
-
-func SlashCommandHelpLines() []string {
-	out := make([]string, len(slashCommandDefs))
-	for i, d := range slashCommandDefs {
-		out[i] = d.Name + " — " + d.Description
-	}
-	return out
-}
