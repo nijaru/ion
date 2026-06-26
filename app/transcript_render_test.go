@@ -1,5 +1,3 @@
-//go:build ignore
-
 
 package app
 
@@ -17,7 +15,7 @@ import (
 
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "custom_tool",
 		Content: "line 1\nline 2\n",
@@ -43,7 +41,7 @@ func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 
 func TestRenderBashToolHidesOutputByDefault(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "bash go test ./...",
 		Content: "ok github.com/nijaru/ion/internal/app\n",
@@ -57,7 +55,7 @@ func TestRenderBashToolHidesOutputByDefault(t *testing.T) {
 
 func TestRenderEntryDoesNotDisplayTimestamp(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:      session.RoleUser,
 		Timestamp: time.Date(2026, 5, 2, 14, 30, 0, 0, time.UTC),
 		Content:   "hello",
@@ -71,7 +69,7 @@ func TestRenderEntryDoesNotDisplayTimestamp(t *testing.T) {
 
 func TestRenderMultilineUserEntryIndentsContinuationRows(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleUser,
 		Content: "first line\nsecond line",
 	}
@@ -88,7 +86,7 @@ func TestRenderMultilineUserEntryIndentsContinuationRows(t *testing.T) {
 func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{BashOutput: "summary"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "bash go test ./...",
 		Content: "ok github.com/nijaru/ion/internal/app\nok github.com/nijaru/ion/internal/config\n",
@@ -103,7 +101,7 @@ func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
 func TestRenderBashToolCanShowFullOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{BashOutput: "full"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "bash go test ./...",
 		Content: "ok github.com/nijaru/ion/internal/app\n",
@@ -118,7 +116,7 @@ func TestRenderBashToolCanShowFullOutput(t *testing.T) {
 
 func TestRenderRoutineToolEntryCompactsByDefault(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "read AGENTS.md",
 		Content: "line 1\nline 2\nline 3\n",
@@ -132,7 +130,7 @@ func TestRenderRoutineToolEntryCompactsByDefault(t *testing.T) {
 
 func TestRenderPendingRoutineToolEntryCompactsByDefault(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "read AGENTS.md",
 		Content: "line 1\nline 2\nline 3\n",
@@ -152,8 +150,8 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 		ThinkingVerbosity: "full",
 	}
 	model.InFlight.ReasonBuf = strings.Repeat("reasoning ", 12)
-	model.InFlight.PendingTools = map[string]*session.Entry{
-		"tool-1": {
+	model.InFlight.PendingTools = map[string]session.Entry{
+		"tool-1": &session.TestEntry{
 			Role:    session.RoleTool,
 			Title:   "bash " + strings.Repeat("very-long-command ", 8),
 			Content: strings.Repeat("tool-output ", 12),
@@ -195,7 +193,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 	}{
 		{
 			name: "list entries",
-			entry: session.Entry{
+			entry: &session.TestEntry{
 				Role:    session.RoleTool,
 				Title:   "ls internal/app",
 				Content: "model.go\nviewport.go\n",
@@ -204,7 +202,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 		},
 		{
 			name: "find entries",
-			entry: session.Entry{
+			entry: &session.TestEntry{
 				Role:    session.RoleTool,
 				Title:   "find **/*.go",
 				Content: "main.go\ninternal/app/model.go\n",
@@ -213,7 +211,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 		},
 		{
 			name: "grep matches",
-			entry: session.Entry{
+			entry: &session.TestEntry{
 				Role:    session.RoleTool,
 				Title:   "grep TODO",
 				Content: "file.go\n12:TODO\n",
@@ -222,7 +220,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 		},
 		{
 			name: "grep no matches",
-			entry: session.Entry{
+			entry: &session.TestEntry{
 				Role:    session.RoleTool,
 				Title:   "grep missing",
 				Content: "No matches found",
@@ -242,7 +240,7 @@ func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{ReadOutput: "full"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "read",
 		Content: "line 1\nline 2\n",
@@ -260,7 +258,7 @@ func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 func TestRenderRoutineToolEntryCanHideReadOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{ReadOutput: "hidden"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "read AGENTS.md",
 		Content: "line 1\nline 2\n",
@@ -276,9 +274,9 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{ReadOutput: "full"}
 	entries := []session.Entry{
-		{Role: session.RoleUser, Content: "read file"},
-		{Role: session.RoleTool, Title: "read", Content: "line 1\nline 2\nline 3"},
-		{Role: session.RoleAgent, Content: "done"},
+		&session.TestEntry{Role: session.RoleUser, Content: "read file"},
+		&session.TestEntry{Role: session.RoleTool, Title: "read", Content: "line 1\nline 2\nline 3"},
+		&session.TestEntry{Role: session.RoleAgent, Content: "done"},
 	}
 
 	got := ansi.Strip(strings.Join(model.RenderEntries(entries...), "\n"))
@@ -296,7 +294,7 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 
 func TestRenderWriteToolSummarizesByDefault(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "write hello.md",
 		Content: "Wrote hello.md.",
@@ -311,7 +309,7 @@ func TestRenderWriteToolSummarizesByDefault(t *testing.T) {
 func TestRenderWriteToolCanShowDiff(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{WriteOutput: "diff"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "write AGENTS.md",
 		Content: "--- AGENTS.md\n+++ AGENTS.md\n@@\n+line\n",
@@ -325,7 +323,7 @@ func TestRenderWriteToolCanShowDiff(t *testing.T) {
 
 func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleTool,
 		Title:   "grep",
 		Content: "grep failed\npattern missing\n",
@@ -340,7 +338,7 @@ func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 
 func TestRenderThinkingEntryShowsLabelByDefault(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:      session.RoleAgent,
 		Reasoning: "private chain of thought",
 		Content:   "answer",
@@ -358,7 +356,7 @@ func TestRenderThinkingEntryShowsLabelByDefault(t *testing.T) {
 func TestRenderThinkingEntryCanCollapseReasoning(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{ThinkingVerbosity: "collapsed"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:      session.RoleAgent,
 		Reasoning: "private chain of thought",
 		Content:   "answer",
@@ -378,7 +376,7 @@ func TestRenderThinkingEntryCanCollapseReasoning(t *testing.T) {
 
 func TestRenderReasoningOnlyEntryShowsMarkerWhenThinkingHidden(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:      session.RoleAgent,
 		Reasoning: "private chain of thought",
 	}
@@ -395,7 +393,7 @@ func TestRenderReasoningOnlyEntryShowsMarkerWhenThinkingHidden(t *testing.T) {
 func TestRenderThinkingEntryCanShowFullReasoning(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{ThinkingVerbosity: "full"}
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:      session.RoleAgent,
 		Reasoning: "visible reasoning",
 		Content:   "answer",
@@ -428,7 +426,7 @@ func TestRenderPlaneBThinkingHidesReasoningByDefault(t *testing.T) {
 
 func TestRenderAgentMarkdownIndentsContinuationLines(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role:    session.RoleAgent,
 		Content: "Read.\n\n- first\n- second",
 	}
@@ -445,7 +443,7 @@ func TestRenderAgentMarkdownIndentsContinuationLines(t *testing.T) {
 func TestRenderAgentMarkdownWrapsCompletedLinesBeforeTerminalWrap(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 40
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role: session.RoleAgent,
 		Content: "This paragraph contains a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes " +
 			"and then more words.",
@@ -470,7 +468,7 @@ func TestRenderAgentMarkdownWrapsCompletedLinesBeforeTerminalWrap(t *testing.T) 
 
 func TestRenderAgentMarkdownPreservesGFMInlineNodes(t *testing.T) {
 	model := readyModel(t)
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role: session.RoleAgent,
 		Content: strings.Join([]string{
 			"- [x] keep task markers",
@@ -496,7 +494,7 @@ func TestRenderAgentMarkdownPreservesGFMInlineNodes(t *testing.T) {
 func TestRenderAgentMarkdownPreservesTableInlineNodes(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 120
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role: session.RoleAgent,
 		Content: strings.Join([]string{
 			"| Command | Link | Done |",
@@ -521,7 +519,7 @@ func TestRenderAgentMarkdownThematicBreakFitsShellWidth(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 20
 
-	got := ansi.Strip(model.renderEntry(session.Entry{Role: session.RoleAgent, Content: "---"}))
+	got := ansi.Strip(model.renderEntry(&session.TestEntry{Role: session.RoleAgent, Content: "---"}))
 	for i, line := range strings.Split(got, "\n") {
 		if width := ansi.StringWidth(line); width > model.shellWidth() {
 			t.Fatalf(
@@ -538,7 +536,7 @@ func TestRenderAgentMarkdownThematicBreakFitsShellWidth(t *testing.T) {
 func TestRenderAgentMarkdownFallsBackFromWideTable(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 24
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role: session.RoleAgent,
 		Content: strings.Join([]string{
 			"| ColumnOne | ColumnTwo |",
@@ -567,7 +565,7 @@ func TestRenderAgentMarkdownFallsBackFromWideTable(t *testing.T) {
 func TestRenderAgentMarkdownPlainTableFallbackFitsLongCells(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 32
-	entry := session.Entry{
+	entry := &session.TestEntry{
 		Role: session.RoleAgent,
 		Content: strings.Join([]string{
 			"| File | Summary |",
@@ -612,13 +610,13 @@ func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
 	model.App.Workdir = workdir
 
 	updated, _ := model.Update(session.ToolCallStart{
-		ToolUseID: "tool-read",
-		ToolName:  "read",
-		Args:      `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
+		ToolCallID: "tool-read",
+		Name:       "read",
+		Args:       []byte(`{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`),
 	})
 	model = testModel(t, updated)
 
-	got := model.InFlight.PendingTools["tool-read"].Title
+	got := session.EntryTitle(model.InFlight.PendingTools["tool-read"])
 	if got != "Read(AGENTS.md)" {
 		t.Fatalf("tool title = %q, want workspace-relative path", got)
 	}
@@ -631,13 +629,13 @@ func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
 	path := filepath.Join(workdir, "internal", "app", "model_test.go")
 
 	updated, _ := model.Update(session.ToolCallStart{
-		ToolUseID: "tool-read",
-		ToolName:  "read",
-		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
+		ToolCallID: "tool-read",
+		Name:       "read",
+		Args:       []byte(`{"file_path":` + strconv.Quote(path) + `}`),
 	})
 	model = testModel(t, updated)
 
-	got := model.InFlight.PendingTools["tool-read"].Title
+	got := session.EntryTitle(model.InFlight.PendingTools["tool-read"])
 	if got != "Read(internal/app/model_test.go)" {
 		t.Fatalf(
 			"tool title = %q, want workspace-relative title without redacted workdir prefix",
@@ -654,18 +652,18 @@ func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
 	path := filepath.Join(workdir, "internal", "app", "model_test.go")
 
 	updated, _ := model.Update(session.ToolCallStart{
-		ToolUseID: "tool-read",
-		ToolName:  "read",
-		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
+		ToolCallID: "tool-read",
+		Name:       "read",
+		Args:       []byte(`{"file_path":` + strconv.Quote(path) + `}`),
 	})
 	model = testModel(t, updated)
 
 	entry := model.InFlight.PendingTools["tool-read"]
-	if got := entry.Title; got != "Read(internal/app/model_test.go)" {
+	if got := session.EntryTitle(entry); got != "Read(internal/app/model_test.go)" {
 		t.Fatalf("tool title = %q, want canonical workspace-relative title", got)
 	}
 
-	rendered := ansi.Strip(model.renderPendingEntry(*entry))
+	rendered := ansi.Strip(model.renderPendingEntry(entry))
 	if !strings.Contains(rendered, "…/app/model_test.go") {
 		t.Fatalf("tool render = %q, want render-time shortened path", rendered)
 	}
@@ -674,7 +672,7 @@ func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
 func TestRenderToolLabelColorsOnlyStatusMarker(t *testing.T) {
 	model := readyModel(t)
 
-	rendered := model.renderEntry(session.Entry{
+	rendered := model.renderEntry(&session.TestEntry{
 		Role:  session.RoleTool,
 		Title: "bash(sleep 5; echo ion-queued)",
 	})
@@ -693,7 +691,7 @@ func TestRenderToolLabelShortensLongWorkspacePath(t *testing.T) {
 	model.App.Workdir = workdir
 	model.App.Width = 28
 
-	rendered := model.renderEntry(session.Entry{
+	rendered := model.renderEntry(&session.TestEntry{
 		Role:  session.RoleTool,
 		Title: "read " + filepath.Join(workdir, "internal", "app", "model_test.go"),
 	})

@@ -138,6 +138,9 @@ const (
 
 // EntryTitle returns a display name for an entry, or empty string.
 func EntryTitle(e Entry) string {
+	if te, ok := e.(*TestEntry); ok {
+		return te.Title
+	}
 	if le, ok := e.(*LabelEntry); ok {
 		return le.Label
 	}
@@ -172,6 +175,9 @@ func (e *SessionInfoEntry) Title() string { return e.Name }
 
 // EntryIsError returns true if the entry is a tool result with an error.
 func EntryIsError(e Entry) bool {
+	if te, ok := e.(*TestEntry); ok {
+		return te.IsError
+	}
 	if me, ok := e.(*MessageEntry); ok {
 		if tr, ok := me.Message.(*ToolResultMessage); ok {
 			return tr.IsError
@@ -187,6 +193,9 @@ func EntryRoleString(e Entry) string { return EntryRole(e) }
 func EntryContent(e Entry) string { return EntryText(e) }
 
 func EntryReasoning(e Entry) string {
+	if te, ok := e.(*TestEntry); ok {
+		return te.Reasoning
+	}
 	if me, ok := e.(*MessageEntry); ok {
 		if am, ok := me.Message.(*AssistantMessage); ok {
 			for _, c := range am.Content {
@@ -198,3 +207,22 @@ func EntryReasoning(e Entry) string {
 	}
 	return ""
 }
+
+// TestEntry is a test-only type that implements Entry with the same fields
+// as the old Entry struct. Use this in test code to create entries with
+// known role/title/content without going through the storage layer.
+type TestEntry struct {
+	TestID       string
+	TestParentID string
+	Role         string
+	Title        string
+	Content      string
+	Reasoning    string
+	IsError      bool
+	Timestamp    time.Time
+}
+
+func (e *TestEntry) isEntry()            {}
+func (e *TestEntry) ID() string          { return e.TestID }
+func (e *TestEntry) ParentID() string    { return e.TestParentID }
+func (e *TestEntry) When() time.Time     { return e.Timestamp }

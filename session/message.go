@@ -136,6 +136,9 @@ const (
 
 // EntryRole returns the role of a message entry.
 func EntryRole(e Entry) string {
+	if te, ok := e.(*TestEntry); ok {
+		return te.Role
+	}
 	me, ok := e.(*MessageEntry)
 	if !ok {
 		return ""
@@ -153,6 +156,9 @@ func EntryRole(e Entry) string {
 
 // EntryText returns the text content of a message entry.
 func EntryText(e Entry) string {
+	if te, ok := e.(*TestEntry); ok {
+		return te.Content
+	}
 	me, ok := e.(*MessageEntry)
 	if !ok {
 		return ""

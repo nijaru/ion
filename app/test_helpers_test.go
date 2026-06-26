@@ -452,3 +452,4 @@ func makeEntry(role, title, content, reasoning string, isError bool) session.Ent
 		return sysEntry(content)
 	}
 }
+
