@@ -290,7 +290,42 @@ func CloseHandles(handles Handles) {
 }
 
 func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
-	return SwitchResult{}, fmt.Errorf("switch not implemented")
+	if input.Switcher == nil {
+		return SwitchResult{}, fmt.Errorf("switcher not provided")
+	}
+
+	cfg := input.Config
+	if cfg == nil {
+		appCfg := input.Transition.Snapshot.AppConfig
+		cfg = &appCfg
+	}
+
+	backend, sess, storage, err := input.Switcher(ctx, cfg, input.TargetSessionID)
+	if err != nil {
+		return SwitchResult{}, fmt.Errorf("switch: %w", err)
+	}
+
+	newHandles := Handles{
+		Backend: backend,
+		Session: sess,
+		Storage: storage,
+	}
+
+	result := SwitchResult{
+		Runtime: Accepted{
+			Handles:    newHandles,
+			Transition: input.Transition,
+		},
+		Previous: input.Current,
+	}
+
+	if input.SaveState != nil {
+		_ = input.SaveState(config.RuntimeStateUpdate{
+			Config: cfg,
+		})
+	}
+
+	return result, nil
 }
 
 func LookupSlashCommand(name string) (SlashCommandInfo, bool) {
@@ -364,11 +399,34 @@ func NewSnapshot(appCfg, backendCfg *config.Config, preset Preset, status string
 }
 
 func NewTransition(appCfg, backendCfg *config.Config, preset Preset, status string) Transition {
-	return Transition{}
+	if appCfg == nil {
+		appCfg = &config.Config{}
+	}
+	if backendCfg == nil {
+		backendCfg = appCfg
+	}
+	return Transition{
+		Snapshot: Snapshot{
+			AppConfig:     *appCfg,
+			BackendConfig: *backendCfg,
+			Preset:        preset,
+			Status:        status,
+			Provider:      backendCfg.Provider,
+			Model:         backendCfg.Model,
+		},
+	}
 }
 
 func (t Transition) NeedsPersistence() bool { return t.PersistState || t.PersistActivePreset }
-func (t Transition) WithHandles(h Handles) Transition { return t }
+func (t Transition) WithHandles(h Handles) Transition {
+	t.Snapshot.SessionID = ""
+	t.Snapshot.Materialized = false
+	if h.Session != nil {
+		t.Snapshot.SessionID = h.Session.ID()
+		t.Snapshot.Materialized = true
+	}
+	return t
+}
 
 func (t Transition) Persist(fn func(update config.RuntimeStateUpdate) error) error {
 	if fn == nil { return nil }

@@ -273,7 +273,13 @@ func (b *MockBackend) ContextLimit() int         { return b.CtxLimit }
 func (b *MockBackend) Bootstrap() agent.Bootstrap { return b.BootstrapVal }
 func (b *MockBackend) Session() session.Session   { return b.SessionVal }
 func (b *MockBackend) SetStore(s session.Store)   { b.StoreVal = s }
-func (b *MockBackend) SetConfig(c *config.Config) { b.ConfigVal = c }
+func (b *MockBackend) SetConfig(c *config.Config) {
+	b.ConfigVal = c
+	if c != nil {
+		b.ProviderVal = c.Provider
+		b.ModelVal = c.Model
+	}
+}
 
 // --- Event Helpers ---
 
