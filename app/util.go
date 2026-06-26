@@ -17,6 +17,11 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func systemEntry(content string) session.Entry {
+	entry, _ := session.EntrySystem(content, time.Time{})
+	return entry
+}
+
 func ifthen[T any](cond bool, a, b T) T {
 	if cond {
 		return a

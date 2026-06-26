@@ -554,3 +554,7 @@ func (m Model) pollGitBranch() tea.Cmd {
 func (m Model) SelectedSessionID() string {
 	return m.Picker.SelectedSessionID
 }
+
+func (m *Model) turnReducer() TurnReducer {
+	return NewTurnReducer(&m.InFlight, &m.Progress)
+}

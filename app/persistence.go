@@ -1,12 +1,33 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/session"
 )
+
+type persistenceController struct {
+	storage session.Session
+}
+
+func (m Model) persistenceController() persistenceController {
+	return persistenceController{storage: m.Model.Storage}
+}
+
+func (c persistenceController) appendEntry(action string, entry session.Entry) tea.Cmd {
+	if c.storage == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if _, err := c.storage.Append(context.Background(), entry); err != nil {
+			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
+		}
+		return nil
+	}
+}
 
 func persistErrorCmd(action string, err error) tea.Cmd {
 	if err == nil {
