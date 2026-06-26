@@ -1,5 +1,6 @@
 //go:build ignore
 
+
 package app
 
 import (
@@ -16,8 +17,8 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 
 	applied := model.pickerReducer().applySessionLoad(staleRequest, []session.SessionInfoEntry{
 		{
-			ID:          "stale",
-			Title:       "stale session",
+			EntryBase: session.EntryBase{ID: "stale"},
+			Name:        "stale session",
 			LastPreview: "old",
 		},
 	}, nil)
@@ -32,8 +33,8 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 
 	applied = model.pickerReducer().applySessionLoad(currentRequest, []session.SessionInfoEntry{
 		{
-			ID:          "current",
-			Title:       "current session",
+			EntryBase: session.EntryBase{ID: "current"},
+			Name:        "current session",
 			LastPreview: "recent",
 		},
 	}, nil)
@@ -68,19 +69,19 @@ func TestPickerReducerSessionQueryFiltersAndClampsIndex(t *testing.T) {
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
 			{info: session.SessionInfoEntry{
-				ID:          "sess-alpha",
-				Title:       "alpha plan",
+				EntryBase: session.EntryBase{ID: "sess-alpha"},
+				Name:        "alpha plan",
 				LastPreview: "review tests",
 			}},
 			{info: session.SessionInfoEntry{
-				ID:          "sess-beta",
-				Title:       "beta resume",
+				EntryBase: session.EntryBase{ID: "sess-beta"},
+				Name:        "beta resume",
 				LastPreview: "continue reducer work",
 			}},
 		},
 		filtered: []sessionPickerItem{
-			{info: session.SessionInfoEntry{ID: "sess-alpha"}},
-			{info: session.SessionInfoEntry{ID: "sess-beta"}},
+			{info: session.SessionInfoEntry{EntryBase: session.EntryBase{ID: "sess-alpha"}}},
+			{info: session.SessionInfoEntry{EntryBase: session.EntryBase{ID: "sess-beta"}}},
 		},
 		index: 1,
 	}

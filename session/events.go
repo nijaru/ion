@@ -573,7 +573,11 @@ type RuntimeRequestDecision struct {
 }
 
 func BeginRuntimeRequest(input RuntimeRequestBeginInput) RuntimeRequestDecision {
-	return RuntimeRequestDecision{RequestID: input.Current + 1}
+	return RuntimeRequestDecision{
+		RequestID:      input.Current + 1,
+		SetLocalStatus: true,
+		Status:         input.Status,
+	}
 }
 
 func RuntimeRequestMatches(current, requestID uint64) bool {
@@ -588,7 +592,13 @@ type FinishRuntimeRequestDecision struct {
 }
 
 func FinishRuntimeRequest(current, requestID uint64) FinishRuntimeRequestDecision {
-	return FinishRuntimeRequestDecision{Matched: current == requestID}
+	if current != requestID {
+		return FinishRuntimeRequestDecision{Matched: false, Active: current}
+	}
+	return FinishRuntimeRequestDecision{
+		Matched:          true,
+		ClearLocalStatus: true,
+	}
 }
 
 type ClearRuntimeRequestDecision struct {

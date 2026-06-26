@@ -1,9 +1,6 @@
-//go:build ignore
-
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"fmt"
 	"os"
@@ -12,10 +9,116 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/testutil"
-	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
+
+// --- stubSession implements session.Session ---
+
+type stubSession struct {
+	id         string
+	events     chan session.Event
+	submits    []string
+	cancels    int
+	submitErr  error
+	closed     bool
+	messages   []session.Message
+	entries    []session.Entry
+	leafID     string
+}
+
+func newStubSession(id string) *stubSession {
+	return &stubSession{
+		id:     id,
+		events: make(chan session.Event, 100),
+	}
+}
+
+func (s *stubSession) ID() string              { return s.id }
+func (s *stubSession) Meta() session.Metadata   { return session.Metadata{ID: s.id} }
+
+func (s *stubSession) BuildContext(_ context.Context) (session.ContextSnapshot, error) {
+	return session.ContextSnapshot{Messages: s.messages}, nil
+}
+
+func (s *stubSession) Branch(_ context.Context) ([]session.Entry, error) {
+	return s.entries, nil
+}
+
+func (s *stubSession) AppendMessage(_ context.Context, msg session.Message) (string, error) {
+	s.messages = append(s.messages, msg)
+	return "msg-1", nil
+}
+
+func (s *stubSession) AppendModelChange(_ context.Context, _, _ string) (string, error) {
+	return "mc-1", nil
+}
+func (s *stubSession) AppendThinkingChange(_ context.Context, _ session.ThinkingLevel) (string, error) {
+	return "tc-1", nil
+}
+func (s *stubSession) AppendToolsChange(_ context.Context, _ []string) (string, error) {
+	return "tools-1", nil
+}
+func (s *stubSession) AppendCompaction(_ context.Context, _ session.CompactionData) (string, error) {
+	return "compact-1", nil
+}
+func (s *stubSession) AppendBranchSummary(_ context.Context, _ session.BranchSummaryData) (string, error) {
+	return "bs-1", nil
+}
+func (s *stubSession) AppendLabel(_ context.Context, _, _ string) (string, error) {
+	return "label-1", nil
+}
+func (s *stubSession) AppendSessionInfo(_ context.Context, _ string) (string, error) {
+	return "si-1", nil
+}
+func (s *stubSession) AppendCustom(_ context.Context, _ *session.CustomEntry) (string, error) {
+	return "custom-1", nil
+}
+func (s *stubSession) Append(_ context.Context, _ session.Entry) (string, error) {
+	return "entry-1", nil
+}
+
+func (s *stubSession) SubmitTurn(_ context.Context, text string) error {
+	if s.submitErr != nil {
+		return s.submitErr
+	}
+	s.submits = append(s.submits, text)
+	return nil
+}
+
+func (s *stubSession) CancelTurn(_ context.Context) error {
+	s.cancels++
+	return nil
+}
+
+func (s *stubSession) Events() <-chan session.Event   { return s.events }
+func (s *stubSession) EventSender() chan session.Event { return s.events }
+
+func (s *stubSession) GetEntry(_ context.Context, _ string) (session.Entry, error) {
+	return nil, nil
+}
+func (s *stubSession) GetLeafID() string       { return s.leafID }
+func (s *stubSession) SetLeafID(id string) error { s.leafID = id; return nil }
+func (s *stubSession) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (s *stubSession) Entries(_ context.Context) ([]session.Entry, error) {
+	return s.entries, nil
+}
+func (s *stubSession) Usage(_ context.Context) (session.Usage, error) {
+	return session.Usage{}, nil
+}
+func (s *stubSession) Close() error {
+	s.closed = true
+	if s.events != nil {
+		close(s.events)
+		s.events = nil
+	}
+	return nil
+}
+
+// --- stubBackend implements agent.Backend ---
 
 type stubBackend struct {
 	sess         session.Session
@@ -24,19 +127,7 @@ type stubBackend struct {
 	providerSet  bool
 	modelSet     bool
 	contextLimit int
-	surface      core.ToolSurface
-}
-
-type compactBackend struct {
-	stubBackend
-	compacted bool
-	err       error
-	called    bool
-}
-
-type configCaptureBackend struct {
-	stubBackend
-	cfg *config.Config
+	surface      agent.ToolSurface
 }
 
 func (b stubBackend) Name() string { return "stub" }
@@ -46,49 +137,29 @@ func (b stubBackend) Provider() string {
 	}
 	return "stub"
 }
-
 func (b stubBackend) Model() string {
 	if b.modelSet || b.model != "" {
 		return b.model
 	}
 	return "stub-model"
 }
-
-func (b stubBackend) ContextLimit() int {
-	if b.contextLimit != 0 {
-		return b.contextLimit
-	}
-	return 0
-}
-
-func (b stubBackend) ToolSurface() core.ToolSurface {
-	if b.surface.Count != 0 ||
-		b.surface.Sandbox != "" ||
-		b.surface.Environment != "" ||
-		len(b.surface.Names) > 0 {
-		return b.surface
-	}
-	return core.ToolSurface{
-		Count:         2,
-		LazyThreshold: 20,
-		Names:         []string{"read", "write"},
-	}
-}
-
-func (b stubBackend) Bootstrap() core.Bootstrap {
-	return core.Bootstrap{
-		Entries: []session.Entry{{Role: session.RoleSystem, Content: "boot"}},
+func (b stubBackend) ContextLimit() int { return b.contextLimit }
+func (b stubBackend) Bootstrap() agent.Bootstrap {
+	return agent.Bootstrap{
+		Entries: []session.Entry{&session.LabelEntry{EntryBase: session.EntryBase{ID: "boot"}, Label: "boot"}},
 		Status:  "ready",
 	}
 }
-
 func (b stubBackend) Session() session.Session { return b.sess }
+func (b stubBackend) SetStore(_ session.Store)  {}
+func (b stubBackend) SetConfig(_ *config.Config) {}
 
-func (b stubBackend) SetStore(s session.Store) {}
+// --- configCaptureBackend ---
 
-func (b stubBackend) SetSession(s session.Session) {}
-
-func (b stubBackend) SetConfig(cfg *config.Config) {}
+type configCaptureBackend struct {
+	stubBackend
+	cfg *config.Config
+}
 
 func (b *configCaptureBackend) SetConfig(cfg *config.Config) {
 	if cfg == nil {
@@ -99,34 +170,57 @@ func (b *configCaptureBackend) SetConfig(cfg *config.Config) {
 	b.cfg = &copied
 }
 
-func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
+// --- compactBackend ---
+
+type compactBackend struct {
+	stubBackend
+	compacted bool
+	err       error
+	called    bool
+}
+
+func (b *compactBackend) Compact(_ context.Context) (bool, error) {
 	b.called = true
 	return b.compacted, b.err
 }
 
-type stubSession struct {
-	events    chan session.Event
-	submits   []string
-	cancels   int
-	submitErr error
-	closed    bool
+// --- readyModel creates a Model ready for testing ---
+
+func readyModel(t *testing.T) Model {
+	t.Helper()
+	if home, err := os.UserHomeDir(); err == nil {
+		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") &&
+			!strings.Contains(home, "folders") &&
+			!strings.Contains(home, "/var/") {
+			t.Setenv("HOME", t.TempDir())
+		}
+	}
+	sess := newStubSession("stub")
+	b := stubBackend{sess: sess}
+	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return testModel(t, updated)
 }
 
-type steeringStubSession struct {
-	stubSession
-	steers []string
-	result struct{}
-	err    error
+// --- testModel helper ---
+
+func testModel(t testing.TB, updated any) Model {
+	t.Helper()
+	switch next := updated.(type) {
+	case Model:
+		return next
+	case *Model:
+		if next == nil {
+			t.Fatal("updated model is nil")
+		}
+		return *next
+	default:
+		t.Fatalf("updated model = %T, want Model", updated)
+		return Model{}
+	}
 }
 
-type queuedInputStubSession struct {
-	stubSession
-	followUps []string
-	clears    int
-	result    struct{}
-	err       error
-	clearErr  error
-}
+// --- command helpers ---
 
 func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	t.Helper()
@@ -159,17 +253,6 @@ func requireBatchCmd(t *testing.T, cmd tea.Cmd) {
 	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
 		t.Fatalf("command = %s, want tea.BatchMsg", got)
 	}
-}
-
-func settleRuntimeTransitionCmd(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected runtime transition command")
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	next := testModel(t, updated)
-	return next, nextCmd
 }
 
 func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
@@ -254,339 +337,4 @@ func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
 		}
 	}
 	return false
-}
-
-func testModel(t testing.TB, updated any) Model {
-	t.Helper()
-	switch next := updated.(type) {
-	case Model:
-		return next
-	case *Model:
-		if next == nil {
-			t.Fatal("updated model is nil")
-		}
-		return *next
-	default:
-		t.Fatalf("updated model = %T, want Model", updated)
-		return Model{}
-	}
-}
-
-func (s *stubSession) Open(ctx context.Context) error              { return nil }
-func (s *stubSession) Resume(ctx context.Context, id string) error { return nil }
-func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
-	if s.submitErr != nil {
-		return s.submitErr
-	}
-	s.submits = append(s.submits, turn)
-	return nil
-}
-
-func (s *stubSession) CancelTurn(ctx context.Context) error {
-	s.cancels++
-	return nil
-}
-
-func (s *stubSession) Close() error {
-	s.closed = true
-	if s.events != nil {
-		close(s.events)
-		s.events = nil
-	}
-	return nil
-}
-func (s *stubSession) Events() <-chan session.Event { return s.events }
-
-func (s *stubSession) ID() string              { return "stub" }
-func (s *stubSession) Meta() map[string]string { return nil }
-
-func (s *steeringStubSession) SteerTurn(
-	ctx context.Context,
-	text string,
-) (struct{}, error) {
-	s.steers = append(s.steers, text)
-	if s.err != nil {
-		return struct{}{}, s.err
-	}
-	if s.result.Outcome == "" {
-		return struct{}{Outcome: session.SteeringAccepted}, nil
-	}
-	return s.result, nil
-}
-
-func (s *queuedInputStubSession) FollowUpTurn(
-	ctx context.Context,
-	text string,
-) (struct{}, error) {
-	s.followUps = append(s.followUps, text)
-	if s.err != nil {
-		return struct{}{}, s.err
-	}
-	if s.result.Outcome == "" {
-		return struct{}{Outcome: session.QueuedInputAccepted}, nil
-	}
-	return s.result, nil
-}
-
-func (s *queuedInputStubSession) ClearQueuedInput(
-	ctx context.Context,
-) (session.QueuedInputSnapshot, error) {
-	s.clears++
-	if s.clearErr != nil {
-		return session.QueuedInputSnapshot{}, s.clearErr
-	}
-	return session.QueuedInputSnapshot{}, nil
-}
-
-type stubStorageSession struct {
-	id         string
-	model      string
-	branch     string
-	closed     bool
-	appends    []any
-	messages   []llm.Message
-	appendErr  error
-	usageIn    int
-	usageOut   int
-	usageCost  float64
-	entries    []session.Entry
-	entriesErr error
-}
-
-func (s *stubStorageSession) ID() string { return s.id }
-
-func (s *stubStorageSession) Meta() session.Metadata {
-	return session.Metadata{
-		ID:     s.id,
-		Model:  s.model,
-		Branch: s.branch,
-	}
-}
-
-func (s *stubStorageSession) Append(ctx context.Context, event session.StoreEvent) error {
-	s.appends = append(s.appends, event)
-	return s.appendErr
-}
-
-func (s *stubStorageSession) AppendModelMessage(
-	ctx context.Context,
-	message llm.Message,
-) error {
-	s.messages = append(s.messages, message)
-	return s.appendErr
-}
-
-func (s *stubStorageSession) ModelMessages(ctx context.Context) ([]llm.Message, error) {
-	return append([]llm.Message(nil), s.messages...), nil
-}
-
-func (s *stubStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {
-	if s.entriesErr != nil {
-		return nil, s.entriesErr
-	}
-	return append([]session.Entry(nil), s.entries...), nil
-}
-
-func (s *stubStorageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
-
-func (s *stubStorageSession) Usage(ctx context.Context) (int, int, float64, error) {
-	return s.usageIn, s.usageOut, s.usageCost, nil
-}
-
-func (s *stubStorageSession) Close() error {
-	s.closed = true
-	return nil
-}
-
-func (s *stubStorageSession) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
-	return "", nil
-}
-
-func (s *stubStorageSession) AppendCustomEntry(ctx context.Context, customType string, data any) (string, error) {
-	return "", nil
-}
-
-func (s *stubStorageSession) AppendCustomMessageEntry(ctx context.Context, customType string, content string, display string, details string) (string, error) {
-	return "", nil
-}
-
-func (s *stubStorageSession) AppendSessionInfo(ctx context.Context, name string) (string, error) {
-	return "", nil
-}
-
-type resumeOnlyStore struct {
-	resumed session.Session
-}
-
-func (s *resumeOnlyStore) OpenSession(
-	ctx context.Context,
-	cwd, model, branch string,
-) (session.Session, error) {
-	return nil, nil
-}
-
-func (s *resumeOnlyStore) ResumeSession(ctx context.Context, id string) (session.Session, error) {
-	return s.resumed, nil
-}
-
-func (s *resumeOnlyStore) ListSessions(
-	ctx context.Context,
-	cwd string,
-) ([]session.SessionInfoEntry, error) {
-	return nil, nil
-}
-
-func (s *resumeOnlyStore) GetRecentSession(
-	ctx context.Context,
-	cwd string,
-) (*session.SessionInfoEntry, error) {
-	return nil, nil
-}
-
-func (s *resumeOnlyStore) AddInput(ctx context.Context, cwd, content string) error { return nil }
-
-func (s *resumeOnlyStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
-	return nil, nil
-}
-
-func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si session.SessionInfoEntry) error {
-	return nil
-}
-
-func (s *resumeOnlyStore) Close() error { return nil }
-
-func readyModel(t *testing.T) Model {
-	t.Helper()
-	// Isolate from user's global config in ~/.ion/app.toml
-	if home, err := os.UserHomeDir(); err == nil {
-		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") &&
-			!strings.Contains(home, "folders") &&
-			!strings.Contains(home, "/var/") {
-			t.Setenv("HOME", t.TempDir())
-		}
-	}
-	sess := &stubSession{events: make(chan session.Event)}
-	b := stubBackend{sess: sess}
-	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	return testModel(t, updated)
-}
-
-func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
-	t.Helper()
-	if home, err := os.UserHomeDir(); err == nil {
-		if !strings.Contains(home, "tmp") && !strings.Contains(home, "TempDir") &&
-			!strings.Contains(home, "folders") &&
-			!strings.Contains(home, "/var/") {
-			t.Setenv("HOME", t.TempDir())
-		}
-	}
-	oldSession := &stubSession{events: make(chan session.Event)}
-	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
-	model := New(
-		oldBackend,
-		nil,
-		nil,
-		"/tmp/test",
-		"main",
-		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (core.Backend, session.Session, session.Session, error) {
-			if observed != nil {
-				*observed = append(*observed, cfg.Model)
-			}
-			resolved := *cfg
-			newBackend := testutil.New()
-			newBackend.SetConfig(&resolved)
-			newStorage := &stubStorageSession{
-				id:     sessionID,
-				model:  cfg.Provider + "/" + cfg.Model,
-				branch: "main",
-			}
-			newBackend.SetSession(newStorage)
-			return newBackend, newBackend.Session(), newStorage, nil
-		},
-	)
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	return testModel(t, updated)
-}
-
-func withOpenRouterKey(t *testing.T) {
-	t.Helper()
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
-}
-
-func resolveModelPickerLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
-	t.Helper()
-	if cmd == nil {
-		return model
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	if nextCmd != nil {
-		t.Fatalf("model picker load returned unexpected command %T", nextCmd)
-	}
-	return testModel(t, updated)
-}
-
-func resolveProviderSelection(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return model, nil
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	return testModel(t, updated), nextCmd
-}
-
-func resolveProviderSelectionAndModelLoad(t *testing.T, model Model, cmd tea.Cmd) Model {
-	t.Helper()
-	model, nextCmd := resolveProviderSelection(t, model, cmd)
-	return resolveModelPickerLoad(t, model, nextCmd)
-}
-
-func resolveModelPickerSetup(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return model, nil
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	return testModel(t, updated), nextCmd
-}
-
-func resolveSetupPromptSave(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return model, nil
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	return testModel(t, updated), nextCmd
-}
-
-func resolveSettingsCommand(t *testing.T, model Model, cmd tea.Cmd) (Model, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return model, nil
-	}
-	msg := cmd()
-	updated, nextCmd := model.Update(msg)
-	return testModel(t, updated), nextCmd
-}
-
-func stubModelCatalog(
-	t *testing.T,
-	fn func(context.Context, *config.Config) ([]llm.ModelMetadata, error),
-) {
-	t.Helper()
-	oldListModelsForConfig := listModelsForConfig
-	oldCachedModelsForConfig := cachedModelsForConfig
-	listModelsForConfig = fn
-	cachedModelsForConfig = func(*config.Config) ([]llm.ModelMetadata, bool, bool) {
-		return nil, false, false
-	}
-	t.Cleanup(func() {
-		listModelsForConfig = oldListModelsForConfig
-		cachedModelsForConfig = oldCachedModelsForConfig
-	})
 }
