@@ -208,9 +208,9 @@ func EntryReasoning(e Entry) string {
 	return ""
 }
 
-// TestEntry is a test-only type that implements Entry with the same fields
-// as the old Entry struct. Use this in test code to create entries with
-// known role/title/content without going through the storage layer.
+
+// TestEntry is a test-only type that implements Entry with flat fields.
+// This makes tests simpler than constructing MessageEntry + Message.
 type TestEntry struct {
 	TestID       string
 	TestParentID string

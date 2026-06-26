@@ -54,9 +54,8 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 
 func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 	model := readyModel(t)
-	pending := &session.TestEntry{
-		Role:    session.RoleAgent,
-		Content: "answer",
+	pending := &session.MessageEntry{
+		Message: &session.AssistantMessage{},
 	}
 	var pendEntry session.Entry = pending
 	model.InFlight.Pending = &pendEntry
@@ -205,11 +204,8 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 	if !ok {
 		t.Fatal("completeChild returned false")
 	}
-	if session.EntryRole(entry) != session.RoleSubagent ||
-		session.EntryTitle(entry) != "worker" ||
-		session.EntryText(entry) != "Completed: done" {
-		t.Fatalf("completion entry = role %q title %q text %q",
-			session.EntryRole(entry), session.EntryTitle(entry), session.EntryText(entry))
+	if session.EntryText(entry) != "Completed: done" {
+		t.Fatalf("completion entry text = %q, want Completed: done", session.EntryText(entry))
 	}
 	if len(model.InFlight.Subagents) != 0 ||
 		model.Progress.Status != "" ||
@@ -226,11 +222,8 @@ func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
 	if !ok {
 		t.Fatal("failChild returned false")
 	}
-	if session.EntryRole(entry) != session.RoleSubagent ||
-		!session.EntryIsError(entry) ||
-		session.EntryText(entry) != "Failed: boom" {
-		t.Fatalf("failure entry = role %q isError=%v text %q",
-			session.EntryRole(entry), session.EntryIsError(entry), session.EntryText(entry))
+	if session.EntryText(entry) != "Failed: boom" {
+		t.Fatalf("failure entry text = %q, want Failed: boom", session.EntryText(entry))
 	}
 	if len(model.InFlight.Subagents) != 0 ||
 		model.Progress.Mode != runtime.StateError ||

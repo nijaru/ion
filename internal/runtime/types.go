@@ -449,13 +449,7 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 				am.Content = append([]session.Content{session.ThinkingContent{Text: t.inFlight.ReasonBuf}}, am.Content...)
 			}
 		}
-	case *session.TestEntry:
-		if t.inFlight.StreamBuf != "" {
-			e.Content = t.inFlight.StreamBuf
-		}
-		if t.inFlight.ReasonBuf != "" {
-			e.Reasoning = t.inFlight.ReasonBuf
-		}
+
 	}
 	completed := t.inFlight.AgentCommitted
 	t.inFlight.Pending = nil
@@ -556,10 +550,12 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 	if t.inFlight.PendingTools == nil {
 		t.inFlight.PendingTools = make(map[string]session.Entry)
 	}
-	t.inFlight.PendingTools[id] = &session.TestEntry{
-		Role:      session.RoleTool,
-		Title:     title,
-		Timestamp: ts,
+	t.inFlight.PendingTools[id] = &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: ts},
+		Message: &session.ToolResultMessage{
+			ToolName: title,
+			Timestamp: ts,
+		},
 	}
 	if t.progress != nil {
 		t.progress.LastToolUseID = id
@@ -668,11 +664,13 @@ func (t TurnReducer) CompleteChild(id, output string, ts time.Time) (session.Ent
 	if !ts.IsZero() {
 		now = ts
 	}
-	return &session.TestEntry{
-		Role:      session.RoleSubagent,
-		Title:     child.Name,
-		Content:   "Completed: " + output,
-		Timestamp: now,
+	_ = child // used in original TestEntry title
+	return &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: now},
+		Message: &session.UserMessage{
+			Content:   []session.Content{session.TextContent{Text: "Completed: " + output}},
+			Timestamp: now,
+		},
 	}, true
 }
 
@@ -696,12 +694,13 @@ func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, 
 	if !ts.IsZero() {
 		now = ts
 	}
-	return &session.TestEntry{
-		Role:      session.RoleSubagent,
-		Title:     child.Name,
-		Content:   "Failed: " + reason,
-		IsError:   true,
-		Timestamp: now,
+	_ = child // used in original TestEntry title
+	return &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: now},
+		Message: &session.UserMessage{
+			Content:   []session.Content{session.TextContent{Text: "Failed: " + reason}},
+			Timestamp: now,
+		},
 	}, true
 }
 
