@@ -704,3 +704,13 @@ func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, 
 		Timestamp: now,
 	}, true
 }
+
+// --- Agent type aliases (re-exported for dependent packages) ---
+
+type Bootstrap = agent.Bootstrap
+type Compactor = agent.Compactor
+type ToolSurface = agent.ToolSurface
+type ToolSummarizer = agent.ToolSummarizer
+
+// Runner is the agent runner interface.
+type Runner = agent.Runner

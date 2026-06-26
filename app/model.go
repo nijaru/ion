@@ -8,7 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
+	
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	"github.com/nijaru/ion/internal/gitwatch"
 	"github.com/nijaru/ion/internal/runtime"
@@ -54,8 +54,6 @@ const (
 )
 
 const pendingActionTimeout = 1500 * time.Millisecond
-
-
 type runtimeSwitchedMsg struct {
 	switchID      uint64
 	runtime       Accepted
@@ -228,8 +226,6 @@ const (
 	pickerPurposeProviderSetup // Tab-accessible provider setup (login/endpoint)
 )
 
-
-
 type pickerItem struct {
 	Label       string
 	Value       string
@@ -293,10 +289,6 @@ type setupPromptState struct {
 	saving       bool
 	request      uint64
 }
-
-
-
-
 // AppState holds general application and workspace metadata.
 type AppState struct {
 	Width             int
@@ -328,12 +320,10 @@ type ModelState struct {
 	originalPrimaryModel string
 	// Runner is the agent runner (Harness). When set, the TUI uses it
 	// instead of Backend + Session for turn execution and events.
-	Runner               agent.Runner
+	Runner               runtime.Runner
 }
 
 // SubagentProgress, InFlightState, ProgressState are aliases for core types.
-
-
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
@@ -617,7 +607,7 @@ func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 // WithRunner sets the agent runner (Harness) for the model.
 // When set, the TUI uses the Runner for turn execution and events
 // instead of Backend + Session directly.
-func (m Model) WithRunner(r agent.Runner) Model {
+func (m Model) WithRunner(r runtime.Runner) Model {
 	m.Model.Runner = r
 	if r != nil {
 		m.Model.Session = r.Session()

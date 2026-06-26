@@ -8,7 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/agent"
+	
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
@@ -67,7 +67,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	return m, submitTurnCmd(m.Model.Session, m.Model.Runner, text, draft)
 }
 
-func submitTurnCmd(sess session.Session, runner agent.Runner, text, draft string) tea.Cmd {
+func submitTurnCmd(sess session.Session, runner runtime.Runner, text, draft string) tea.Cmd {
 	return func() tea.Msg {
 		if runner != nil {
 			// Use the Runner (Harness) for turn execution.

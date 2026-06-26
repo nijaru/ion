@@ -3,15 +3,15 @@ package app
 import (
 	"strings"
 
-	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/internal/runtime"
 )
 
-// Re-export agent types so app/ code can use Backend, Bootstrap, etc.
-type Bootstrap = agent.Bootstrap
-type Backend = agent.Backend
-type Compactor = agent.Compactor
-type ToolSurface = agent.ToolSurface
-type ToolSummarizer = agent.ToolSummarizer
+// Re-export runtime types so app/ code can use Backend, Bootstrap, etc.
+type Bootstrap = runtime.Bootstrap
+type Backend = runtime.Backend
+type Compactor = runtime.Compactor
+type ToolSurface = runtime.ToolSurface
+type ToolSummarizer = runtime.ToolSummarizer
 
 func ToolEnvironmentLabel(value string) string {
 	switch strings.TrimSpace(value) {
