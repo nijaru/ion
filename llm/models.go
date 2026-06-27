@@ -472,13 +472,6 @@ func parseMillionCost(raw string) (float64, bool) {
 	return value * 1_000_000, true
 }
 
-func cachedFresh(updatedAt int64) bool {
-	return cachedFreshWithin(
-		updatedAt,
-		time.Duration(config.DefaultModelCacheTTLSeconds())*time.Second,
-	)
-}
-
 func cachedFreshForConfig(updatedAt int64, cfg *config.Config) bool {
 	return cachedFreshWithin(updatedAt, modelCacheTTL(cfg))
 }
