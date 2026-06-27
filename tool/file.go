@@ -140,10 +140,6 @@ func (t *FileTool) workspaceRelativePath(target string) (string, bool, error) {
 	return "", false, nil
 }
 
-func (t *FileTool) resolvePath(target string) (string, error) {
-	return t.absolutePath(target)
-}
-
 func (t *FileTool) readPath(target string) (string, error) {
 	absPath, err := t.absolutePath(target)
 	if err != nil {

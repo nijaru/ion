@@ -65,13 +65,6 @@ func (p EnvironmentPolicy) Summary() string {
 	return executorEnvironmentInherit
 }
 
-func newLocalExecutor(sandbox SandboxMode) *localExecutor {
-	return newLocalExecutorWithEnvironment(
-		sandbox,
-		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
-	)
-}
-
 func newLocalExecutorWithEnvironment(
 	sandbox SandboxMode,
 	environment EnvironmentPolicy,
@@ -80,18 +73,6 @@ func newLocalExecutorWithEnvironment(
 		sandbox:     sandbox,
 		environment: environment,
 		opts:        LocalOperations{},
-	}
-}
-
-func newLocalExecutorWithOperations(
-	sandbox SandboxMode,
-	environment EnvironmentPolicy,
-	opts Operations,
-) *localExecutor {
-	return &localExecutor{
-		sandbox:     sandbox,
-		environment: environment,
-		opts:        opts,
 	}
 }
 

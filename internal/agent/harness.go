@@ -60,7 +60,6 @@ const (
 
 type pendingWrite struct {
 	entryType string
-	entry     session.Entry
 }
 
 // HarnessConfig holds construction-time configuration for a Harness.
