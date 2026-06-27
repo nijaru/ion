@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -156,36 +155,6 @@ func (b stubBackend) Session() session.Session { return b.sess }
 func (b stubBackend) SetStore(_ session.Store)  {}
 func (b stubBackend) SetConfig(_ *config.Config) {}
 
-// --- configCaptureBackend ---
-
-type configCaptureBackend struct {
-	stubBackend
-	cfg *config.Config
-}
-
-func (b *configCaptureBackend) SetConfig(cfg *config.Config) {
-	if cfg == nil {
-		b.cfg = nil
-		return
-	}
-	copied := *cfg
-	b.cfg = &copied
-}
-
-// --- compactBackend ---
-
-type compactBackend struct {
-	stubBackend
-	compacted bool
-	err       error
-	called    bool
-}
-
-func (b *compactBackend) Compact(_ context.Context) (bool, error) {
-	b.called = true
-	return b.compacted, b.err
-}
-
 // --- readyModel creates a Model ready for testing ---
 
 func readyModel(t *testing.T) Model {
@@ -237,26 +206,6 @@ func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	}
 }
 
-func requireSequenceCmd(t *testing.T, cmd tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected command")
-	}
-	if got := fmt.Sprintf("%T", cmd()); got != "tea.sequenceMsg" {
-		t.Fatalf("command = %s, want tea.sequenceMsg", got)
-	}
-}
-
-func requireBatchCmd(t *testing.T, cmd tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected command")
-	}
-	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
-		t.Fatalf("command = %s, want tea.BatchMsg", got)
-	}
-}
-
 func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
 	if cmd == nil {
@@ -284,51 +233,6 @@ func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	}
 	return messages
 }
-
-func commandChildren(t *testing.T, msg tea.Msg) []tea.Cmd {
-	t.Helper()
-	value := reflect.ValueOf(msg)
-	cmdType := reflect.TypeOf(tea.Cmd(nil))
-	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType {
-		t.Fatalf("message = %T, want command batch/sequence", msg)
-	}
-	children := make([]tea.Cmd, 0, value.Len())
-	for i := range value.Len() {
-		child, ok := value.Index(i).Interface().(tea.Cmd)
-		if !ok {
-			t.Fatalf("command element %d = %T, want tea.Cmd", i, value.Index(i).Interface())
-		}
-		children = append(children, child)
-	}
-	return children
-}
-
-func runSequencePrefix(t *testing.T, cmd tea.Cmd, limit int) []tea.Msg {
-	t.Helper()
-	if cmd == nil || limit <= 0 {
-		return nil
-	}
-	msg := cmd()
-	if msg == nil {
-		return nil
-	}
-	value := reflect.ValueOf(msg)
-	cmdType := reflect.TypeOf(tea.Cmd(nil))
-	if value.Kind() != reflect.Slice || value.Type().Elem() != cmdType {
-		return []tea.Msg{msg}
-	}
-	var messages []tea.Msg
-	for i := 0; i < value.Len() && i < limit; i++ {
-		child, ok := value.Index(i).Interface().(tea.Cmd)
-		if !ok {
-			t.Fatalf("sequence element %d = %T, want tea.Cmd", i, value.Index(i).Interface())
-		}
-		messages = append(messages, runCommandTree(t, child)...)
-	}
-	return messages
-}
-
-// --- stubStorageSession tracks appends for persistence tests ---
 
 type stubStorageSession struct {
 	stubSession
@@ -382,19 +286,6 @@ func userMsgEntry(text string) *session.MessageEntry {
 	}
 }
 
-func containsSessionEvent[T session.Event](messages []tea.Msg) bool {
-	for _, msg := range messages {
-		eventMsg, ok := msg.(sessionEventMsg)
-		if !ok {
-			continue
-		}
-		if _, ok := eventMsg.event.(T); ok {
-			return true
-		}
-	}
-	return false
-}
-
 // entryFromRole creates a session.Entry from role-based fields (compatibility helper).
 // Used by tests that were written against the old session.Entry struct.
 func entryFromRole(role, title, content string, isError bool) session.Entry {
@@ -410,29 +301,6 @@ func entryFromRole(role, title, content string, isError bool) session.Entry {
 	}
 }
 
-// oldEntry is a compatibility struct that matches the old session.Entry fields.
-// Used to convert old-style struct literals to the new Entry interface.
-type oldEntry struct {
-	Role      string
-	Title     string
-	Content   string
-	Reasoning string
-	IsError   bool
-}
-
-// toEntry converts an oldEntry to a session.Entry interface.
-func (e oldEntry) toEntry() session.Entry {
-	switch e.Role {
-	case "tool":
-		return toolEntry(e.Title, e.Content, e.IsError)
-	case "user":
-		return userMsgEntry(e.Content)
-	case "agent":
-		return agentMsgEntry(e.Content)
-	default:
-		return sysEntry(e.Content)
-	}
-}
 
 // makeEntry creates a session.Entry from old-style fields (compatibility helper).
 func makeEntry(role, title, content, reasoning string, isError bool) session.Entry {
@@ -563,80 +431,4 @@ func sessionInfoEntryID(id, name string) session.SessionInfoEntry {
 		EntryBase: session.EntryBase{ID: id, Timestamp: time.Now()},
 		Name:      name,
 	}
-}
-
-// fakeBackend is a minimal backend stub for runtime controller tests.
-type fakeBackend struct {
-	provider string
-	model    string
-	status   string
-	sess     session.Session
-}
-
-func (b fakeBackend) Name() string                    { return b.provider + "/" + b.model }
-func (b fakeBackend) Provider() string                { return b.provider }
-func (b fakeBackend) Model() string                   { return b.model }
-func (b fakeBackend) ContextLimit() int               { return 128000 }
-func (b fakeBackend) Bootstrap() agent.Bootstrap      { return agent.Bootstrap{Status: b.status} }
-func (b fakeBackend) Session() session.Session         { return b.sess }
-func (b fakeBackend) SetConfig(_ *config.Config)      {}
-func (b fakeBackend) SetStore(_ session.Store)         {}
-
-// fakeSession is a minimal session stub for runtime controller tests.
-type fakeSession struct {
-	id      string
-	events  chan session.Event
-	entries []session.Entry
-}
-
-func (s *fakeSession) ID() string                       { return s.id }
-func (s *fakeSession) Meta() session.Metadata            { return session.Metadata{ID: s.id} }
-func (s *fakeSession) Events() <-chan session.Event {
-	if s.events == nil {
-		return make(chan session.Event)
-	}
-	return s.events
-}
-func (s *fakeSession) SubmitTurn(_ context.Context, _ string) error { return nil }
-func (s *fakeSession) CancelTurn(_ context.Context) error           { return nil }
-func (s *fakeSession) Close() error                                 { return nil }
-func (s *fakeSession) Append(_ context.Context, entry session.Entry) (string, error) {
-	s.entries = append(s.entries, entry)
-	return fmt.Sprintf("fake-%d", len(s.entries)), nil
-}
-func (s *fakeSession) GetEntry(_ context.Context, _ string) (session.Entry, error) { return nil, nil }
-func (s *fakeSession) Branch(_ context.Context) ([]session.Entry, error)          { return s.entries, nil }
-func (s *fakeSession) Entries(_ context.Context) ([]session.Entry, error)         { return s.entries, nil }
-func (s *fakeSession) GetLeafID() string                                          { return "" }
-func (s *fakeSession) SetLeafID(_ string) error                                   { return nil }
-func (s *fakeSession) GetMetadata() session.Metadata                              { return s.Meta() }
-func (s *fakeSession) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
-	return nil, nil
-}
-func (s *fakeSession) ListSessions(_ context.Context, _ string) ([]session.SessionInfoEntry, error) {
-	return nil, nil
-}
-func (s *fakeSession) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error { return nil }
-
-// fakeStorage is a minimal store stub for runtime controller tests.
-type fakeStorage struct {
-	fakeSession
-	branch      string
-	entriesErr  error
-}
-
-func (s *fakeStorage) Meta() session.Metadata {
-	return session.Metadata{ID: s.id, Branch: s.branch}
-}
-func (s *fakeStorage) Entries(_ context.Context) ([]session.Entry, error) {
-	if s.entriesErr != nil {
-		return nil, s.entriesErr
-	}
-	return append([]session.Entry(nil), s.entries...), nil
-}
-
-// pendingEntry is a helper to create a *session.Entry from a session.Entry.
-// Used for Pending assignments which require *session.Entry (pointer to interface).
-func pendingEntry(e session.Entry) *session.Entry {
-	return &e
 }
