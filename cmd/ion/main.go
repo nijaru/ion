@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
+	"time"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +15,8 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/ctxerr"
+	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"
 	"github.com/nijaru/ion/session"
 )
@@ -354,4 +359,304 @@ func runtimeHandlesForClose(
 		return model.Model.Session, model.Model.Storage
 	}
 	return fallbackAgent, fallbackSession
+}
+
+type printResult struct {
+	SessionID    string   `json:"session_id,omitempty"`
+	Response     string   `json:"response"`
+	InputTokens  int      `json:"input_tokens,omitempty"`
+	OutputTokens int      `json:"output_tokens,omitempty"`
+	Cost         float64  `json:"cost,omitempty"`
+	ToolCalls    []string `json:"tool_calls,omitempty"`
+}
+
+func resolvePrintFlags(
+	printFlag bool,
+	printShort bool,
+	promptLong string,
+	args []string,
+	output string,
+	jsonOutput bool,
+) (bool, string, string, error) {
+	output = strings.ToLower(strings.TrimSpace(output))
+	if output == "" {
+		output = "text"
+	}
+	if output != "text" && output != "json" {
+		return false, "", "", fmt.Errorf("unsupported print output %q (want text or json)", output)
+	}
+	if jsonOutput {
+		output = "json"
+	}
+
+	promptLong = strings.TrimSpace(promptLong)
+	prompt := promptLong
+
+	printRequested := printFlag || printShort || prompt != "" || jsonOutput
+	if printRequested && prompt == "" && len(args) > 0 {
+		prompt = strings.Join(args, " ")
+	}
+	if printRequested && prompt != "" && len(args) > 0 && promptLong != "" {
+		return false, "", "", fmt.Errorf(
+			"unexpected arguments after --prompt: %s",
+			strings.Join(args, " "),
+		)
+	}
+	if !printRequested && len(args) > 0 {
+		return false, "", "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
+	}
+
+	return printRequested, prompt, output, nil
+}
+
+func runPrintModeWithWriter(
+	ctx context.Context,
+	w io.Writer,
+	agent session.Session,
+	prompt string,
+	output string,
+) error {
+	result, err := runPromptTurn(ctx, agent, prompt)
+	if err != nil {
+		return err
+	}
+	return writePrintResult(w, result, output)
+}
+
+func runPromptTurn(
+	ctx context.Context,
+	agent session.Session,
+	prompt string,
+) (printResult, error) {
+	if err := agent.SubmitTurn(ctx, prompt); err != nil {
+		return printResult{}, fmt.Errorf("submit turn: %w", err)
+	}
+
+	var agentText strings.Builder
+	result := printResult{SessionID: agent.ID()}
+	seenTurnFinished := false
+
+	for {
+		select {
+		case ev, ok := <-agent.Events():
+			if !ok {
+				cancelPrintTurn(agent)
+				return printResult{}, fmt.Errorf("event stream closed before turn finished")
+			}
+			switch msg := ev.(type) {
+			case session.ToolExecStart:
+				result.ToolCalls = append(result.ToolCalls, msg.Name)
+			case session.MessageUpdate:
+				if msg.BlockType == "text" {
+					agentText.WriteString(session.DeltaText(msg.Delta))
+				}
+			case session.MessageEnd:
+				if session.MessageText(msg.Message) != "" {
+					agentText.Reset()
+					agentText.WriteString(session.MessageText(msg.Message))
+				}
+				if am, ok := msg.Message.(*session.AssistantMessage); ok {
+					result.InputTokens += am.Usage.Input
+					result.OutputTokens += am.Usage.Output
+					result.Cost += am.Usage.Cost.Total
+				}
+			case session.TurnEnd:
+				if msg.Error != nil {
+					cancelPrintTurn(agent)
+					return printResult{}, fmt.Errorf("session error: %w", msg.Error)
+				}
+				seenTurnFinished = true
+			}
+			if seenTurnFinished {
+				result.Response = agentText.String()
+				if strings.TrimSpace(result.Response) == "" {
+					return printResult{}, fmt.Errorf("turn finished without assistant response")
+				}
+				return result, nil
+			}
+		case <-ctx.Done():
+			cancelPrintTurn(agent)
+			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
+		}
+	}
+}
+
+func cancelPrintTurn(agent session.Session) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = agent.CancelTurn(ctx)
+}
+
+func writePrintResult(w io.Writer, result printResult, output string) error {
+	switch strings.ToLower(strings.TrimSpace(output)) {
+	case "", "text":
+		_, err := fmt.Fprintln(w, result.Response)
+		return err
+	case "json":
+		enc := json.NewEncoder(w)
+		return enc.Encode(result)
+	default:
+		return fmt.Errorf("unsupported print output %q (want text or json)", output)
+	}
+}
+
+func promptWithStdinContext(prompt, stdinText string) string {
+	if prompt == "-" {
+		return stdinText
+	}
+	if prompt == "" {
+		return stdinText
+	}
+	if strings.TrimSpace(stdinText) == "" {
+		return prompt
+	}
+	combined := prompt + "\n\n<stdin>\n" + stdinText
+	if !strings.HasSuffix(combined, "\n") {
+		combined += "\n"
+	}
+	combined += "</stdin>"
+	return combined
+}
+
+// runPrintModeWithTimeout wraps runPrintMode with a configurable timeout.
+func runPrintModeWithTimeout(
+	ctx context.Context,
+	w io.Writer,
+	agent session.Session,
+	prompt string,
+	timeout time.Duration,
+	output string,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	err := runPrintModeWithWriter(ctx, w, agent, prompt, output)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return ctxerr.Timeout("print mode", timeout, err)
+	}
+	return err
+}
+
+// isStdinPipe returns true if stdin is a pipe (not a terminal).
+func isStdinPipe() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) == 0
+}
+
+func runTopLevelCommand(args []string, stdout, stderr io.Writer) (bool, int) {
+	if len(args) == 0 || args[0] != "skill" {
+		return false, 0
+	}
+	if err := runSkillCommand(args[1:], stdout); err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return true, 1
+	}
+	return true, 0
+}
+
+func runSkillCommand(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New(skillCommandUsage())
+	}
+	switch args[0] {
+	case "list", "ls":
+		return runSkillList(args[1:], stdout)
+	case "install":
+		return runSkillInstall(args[1:], stdout)
+	default:
+		return errors.New(skillCommandUsage())
+	}
+}
+
+func runSkillList(args []string, stdout io.Writer) error {
+	dir, err := config.DefaultSkillsDir()
+	if err != nil {
+		return fmt.Errorf("resolve skills dir: %w", err)
+	}
+	out, err := ionskills.Notice([]string{dir}, strings.Join(args, " "))
+	if err != nil {
+		return fmt.Errorf("load skills: %w", err)
+	}
+	_, err = fmt.Fprintln(stdout, out)
+	return err
+}
+
+func runSkillInstall(args []string, stdout io.Writer) error {
+	source, confirm, err := parseSkillInstallArgs(args)
+	if err != nil {
+		return err
+	}
+	dir, err := config.DefaultSkillsDir()
+	if err != nil {
+		return fmt.Errorf("resolve skills dir: %w", err)
+	}
+	if !confirm {
+		preview, err := ionskills.PreviewInstall(source, dir)
+		if err != nil {
+			return err
+		}
+		printSkillInstallPreview(stdout, preview, false)
+		return nil
+	}
+	installed, err := ionskills.Install(source, dir)
+	if err != nil {
+		return err
+	}
+	printSkillInstallPreview(stdout, installed, true)
+	return nil
+}
+
+func parseSkillInstallArgs(args []string) (string, bool, error) {
+	var source string
+	var confirm bool
+	for _, arg := range args {
+		switch arg {
+		case "--confirm", "-y":
+			confirm = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("unknown skill install flag: %s", arg)
+			}
+			if source != "" {
+				return "", false, fmt.Errorf("usage: ion skill install [--confirm] <path>")
+			}
+			source = arg
+		}
+	}
+	if source == "" {
+		return "", false, fmt.Errorf("usage: ion skill install [--confirm] <path>")
+	}
+	return source, confirm, nil
+}
+
+func printSkillInstallPreview(out io.Writer, preview ionskills.InstallPreview, installed bool) {
+	title := "Skill install preview"
+	if installed {
+		title = "Skill installed"
+	}
+	fmt.Fprintln(out, title)
+	fmt.Fprintf(out, "name: %s\n", preview.Name)
+	if preview.Description != "" {
+		fmt.Fprintf(out, "description: %s\n", preview.Description)
+	}
+	if len(preview.AllowedTools) > 0 {
+		fmt.Fprintf(out, "allowed tools: %s\n", strings.Join(preview.AllowedTools, ", "))
+	}
+	fmt.Fprintf(out, "source: %s\n", preview.Source)
+	fmt.Fprintf(out, "target: %s\n", preview.Target)
+	fmt.Fprintf(out, "files: %d\n", preview.Files)
+	if !installed {
+		fmt.Fprintf(out, "run: ion skill install --confirm %s\n", preview.Source)
+	}
+}
+
+func skillCommandUsage() string {
+	return strings.Join([]string{
+		"usage:",
+		"  ion skill list [query]",
+		"  ion skill install [--confirm] <path>",
+	}, "\n")
 }
