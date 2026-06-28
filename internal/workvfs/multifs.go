@@ -177,7 +177,7 @@ type virtualDirEntry struct {
 func (e virtualDirEntry) Name() string               { return e.name }
 func (e virtualDirEntry) IsDir() bool                { return true }
 func (e virtualDirEntry) Type() fs.FileMode          { return os.ModeDir }
-func (e virtualDirEntry) Info() (fs.FileInfo, error) { return virtualFileInfo{name: e.name}, nil }
+func (e virtualDirEntry) Info() (fs.FileInfo, error) { return virtualFileInfo(e), nil }
 
 type virtualFileInfo struct {
 	name string

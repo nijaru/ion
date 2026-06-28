@@ -127,8 +127,8 @@ func numberedReadOutput(content string, offset, limit int) (string, error) {
 		)
 	}
 
-	maxEnd := len(lines)
 	userLimited := limit > 0
+	var maxEnd int
 	if limit > 0 {
 		maxEnd = min(start+limit, len(lines))
 	} else {

@@ -166,7 +166,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 
 	// Run the loop with overflow recovery.
 	var msgs []session.Message
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		msgs = RunLoop(ctx, prompts, TurnContext{
 			SystemPrompt: h.sysprompt,
 			Messages:     snap.Messages,

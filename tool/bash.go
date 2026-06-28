@@ -99,13 +99,10 @@ func (b *Bash) ExecuteStreamingUpdates(
 		go func() {
 			_, err := b.execute(streamCtx, args, func(update localOutputUpdate) error {
 				select {
-				case ch <- streamItem{update: StreamUpdate{
-					Text:     update.Text,
-					Snapshot: update.Snapshot,
-				}}:
-					return nil
-				case <-streamCtx.Done():
-					return streamCtx.Err()
+				case ch <- streamItem{update: StreamUpdate(update)}:
+				return nil
+			case <-streamCtx.Done():
+				return streamCtx.Err()
 				}
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {

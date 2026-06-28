@@ -198,7 +198,6 @@ func streamAssistantResponse(
 	defer stream.Close()
 
 	var acc llm.StreamAccumulator
-	var partialContent []session.Content
 	started := false
 
 	for {
@@ -211,8 +210,6 @@ func streamAssistantResponse(
 
 		// Build partial message from accumulator state.
 		partial := buildPartialMessage(acc, cfg.Model)
-		partialContent = append(partialContent, partial.Content...)
-
 		if !started {
 			emit(session.MessageStart{Message: &partial})
 			started = true

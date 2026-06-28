@@ -1,5 +1,10 @@
 package llm
 
+import (
+	"fmt"
+	"strings"
+)
+
 const missingToolResultContent = "No result provided."
 
 // TransformRequestForCapabilities adapts a unified request to a model's
@@ -43,4 +48,56 @@ func PrepareRequestForCapabilities(req *Request, caps Capabilities) (*Request, e
 		return nil, err
 	}
 	return prepared, nil
+}
+func rewriteSystemMessages(req *Request, targetRole Role) {
+	for i, m := range req.Messages {
+		if m.Role != RoleSystem {
+			continue
+		}
+		content := m.TextContent()
+		if targetRole == RoleUser {
+			content = fmt.Sprintf("Instructions:\n%s", content)
+		}
+		req.Messages[i] = Message{
+			Role:         targetRole,
+			Content:      content,
+			CacheControl: m.CacheControl,
+		}
+	}
+}
+
+func flattenUnsupportedThinking(messages []Message) {
+	for i := range messages {
+		msg := &messages[i]
+		if msg.Reasoning == "" && len(msg.ThinkingBlocks) == 0 {
+			continue
+		}
+		msg.Content = appendThinkingText(msg.Content, msg.Reasoning, msg.ThinkingBlocks)
+		msg.Reasoning = ""
+		msg.ThinkingBlocks = nil
+	}
+}
+
+func appendThinkingText(content, reasoning string, blocks []ThinkingBlock) string {
+	var parts []string
+	if reasoning != "" {
+		parts = append(parts, "<thinking>\n"+reasoning+"\n</thinking>")
+	}
+	for _, block := range blocks {
+		if block.Redacted {
+			// Redacted content is intentionally omitted when replaying across
+			// providers that do not support native thinking blocks.
+			continue
+		}
+		if block.Thinking != "" {
+			parts = append(parts, "<thinking>\n"+block.Thinking+"\n</thinking>")
+		}
+	}
+	if len(parts) == 0 {
+		return content
+	}
+	if content == "" {
+		return strings.Join(parts, "\n\n")
+	}
+	return content + "\n\n" + strings.Join(parts, "\n\n")
 }
