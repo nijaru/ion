@@ -212,10 +212,10 @@ func startupWarnStyle() lipgloss.Style {
 
 var (
 	errNoProviderConfigured = errors.New(
-		"No provider configured. Use /provider. Set ION_PROVIDER or --provider for scripts.",
+		"no provider configured; use /provider. Set ION_PROVIDER or --provider for scripts",
 	)
 	errNoModelConfigured = errors.New(
-		"No model configured. Use /model. Set ION_MODEL or --model for scripts.",
+		"no model configured; use /model. Set ION_MODEL or --model for scripts",
 	)
 )
 

@@ -60,9 +60,7 @@ func (t *FileTool) absolutePath(target string) (string, error) {
 
 func normalizeToolPathInput(target string) (string, error) {
 	target = normalizeUnicodeSpaces(strings.TrimSpace(target))
-	if strings.HasPrefix(target, "@") {
-		target = strings.TrimPrefix(target, "@")
-	}
+	target = strings.TrimPrefix(target, "@")
 	if !strings.HasPrefix(target, "file://") {
 		return target, nil
 	}

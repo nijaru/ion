@@ -161,7 +161,7 @@ func providerReadyForModelListing(cfg *config.Config, def llm.Definition) bool {
 	if llm.IsOpenAICompatible(def.ID) {
 		return strings.TrimSpace(cfg.Endpoint) != ""
 	}
-	return llm.RequiresAuth(cfg, def) == false || llm.ResolvedAuthToken(cfg, def) != ""
+	return !llm.RequiresAuth(cfg, def) || llm.ResolvedAuthToken(cfg, def) != ""
 }
 
 func (m Model) handleAllModelsLoaded(msg allModelsLoadedMsg) (Model, tea.Cmd) {

@@ -492,7 +492,7 @@ func (m Model) renderStructuredPickerLine(prefix string, item pickerItem, isSele
 
 	stylePrefix := m.st.dim
 	styleName := lipgloss.NewStyle()
-	styleVal := m.st.cyan
+	var styleVal lipgloss.Style
 	styleDesc := m.st.dim
 
 	if isSelected {

@@ -205,7 +205,7 @@ func settingsConfigUpdate(
 		notice = "Busy input: " + mode
 	default:
 		return config.Config{}, "", fmt.Errorf(
-			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy|reasoning] ...",
+			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy|reasoning]",
 		)
 	}
 	return updated, notice, nil
