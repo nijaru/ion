@@ -54,272 +54,65 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	switch commandInfo.Name {
 	case "/help":
-		return m, m.terminalCommit().Help(helpText())
-
+		return m.handleHelpCommand()
 	case "/hotkeys":
-		return m, m.terminalCommit().Help(hotkeysText())
-
+		return m.handleHotkeysCommand()
 	case "/reload":
 		return m.reloadConfig()
-
 	case "/scoped-models":
 		return m.showScopedModels()
-
 	case "/primary":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /primary")
-		}
-		return m.switchPresetCommand(runtime.PresetPrimary)
-
+		return m.handlePrimaryCommand(fields)
 	case "/fast":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /fast")
-		}
-		return m.switchPresetCommand(runtime.PresetFast)
-
+		return m.handleFastCommand(fields)
 	case "/resume":
-		if len(fields) < 2 {
-			return m.openSessionPicker()
-		}
-		return m.resumeStoredSessionByID(fields[1])
+		return m.handleResumeCommand(fields)
 	case "/model":
-		if len(fields) < 2 {
-			return m.openModelPicker()
-		}
-		name := strings.Join(fields[1:], " ")
-		cfg, err := m.commandConfig()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-		}
-		cfg = m.commandConfigWithActiveProvider(cfg)
-		currentCfg, err := m.runtimeConfigForActivePreset(cfg)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		if currentCfg.Provider != "" &&
-			strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
-			return m, nil
-		}
-		transition, runtimeCfg, err := m.modelSelectionTransition(
-			cfg,
-			m.activePreset(),
-			name,
-		)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		if runtimeCfg.Provider == "" {
-			return m, cmdError("cannot set model without an active provider; use /provider first")
-		}
-		return m.switchRuntimeCommand(
-			transition,
-			systemEntry("Model set to "+name),
-			m.currentMaterializedSessionID(),
-			false,
-		)
-
+		return m.handleModelCommand(fields)
 	case "/thinking":
-		if len(fields) < 2 {
-			return m.openThinkingPicker()
-		}
-		level := normalizeThinkingValue(fields[1])
-		cfg, err := m.commandConfig()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-		}
-		currentCfg, err := m.runtimeConfigForActivePreset(cfg)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		if currentCfg.Provider != "" &&
-			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
-			return m, nil
-		}
-		transition, _, err := m.thinkingSelectionTransition(
-			cfg,
-			m.activePreset(),
-			level,
-		)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		return m.beginRuntimeTransitionCommit(
-			transition,
-			systemEntry("Thinking set to "+thinkingDisplayName(level)),
-		)
-
+		return m.handleThinkingCommand(fields)
 	case "/provider":
-		if len(fields) < 2 {
-			return m.openProviderSetupPicker()
-		}
-		return m.handleProviderCommand(fields[1])
-
+		return m.handleProviderCommandDispatch(fields)
 	case "/login":
-		cfg, err := m.commandConfig()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-		}
-		provider := ""
-		if len(fields) >= 2 {
-			provider = fields[1]
-		} else {
-			provider = cfg.Provider
-		}
-		if strings.TrimSpace(provider) == "" {
-			return m.openProviderSetupPicker()
-		}
-		return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
-
+		return m.handleLoginCommand(fields)
 	case "/logout":
 		return m.logoutProvider()
-
 	case "/settings":
 		return m.handleSettingsCommand(fields)
-
 	case "/tools":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /tools")
-		}
-		summarizer, ok := m.Model.Backend.(ToolSummarizer)
-		if !ok {
-			return m, cmdError("tool summary unavailable for this backend")
-		}
-		surface := summarizer.ToolSurface()
-		return m, m.terminalCommit().Entries(
-			systemEntry(toolSurfaceSummary(surface)),
-		)
-
+		return m.handleToolsCommand(fields)
 	case "/status":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /status")
-		}
-		return m, m.terminalCommit().Entries(
-			systemEntry(runtimeStatusSummary(m)),
-		)
-
+		return m.handleStatusCommand(fields)
 	case "/changelog":
-		if len(fields) != 1 {
-			return m, cmdError("usage: /changelog")
-		}
-		content, err := os.ReadFile("CHANGELOG.md")
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to read CHANGELOG.md: %v", err))
-		}
-		return m, m.terminalCommit().Entries(systemEntry(string(content)))
-
+		return m.handleChangelogCommand(fields)
 	case "/skills":
-		dir, err := config.DefaultSkillsDir()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
-		}
-		query := strings.TrimSpace(strings.TrimPrefix(input, command))
-		out, err := ionskills.Notice([]string{dir}, query)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
-		}
-		return m, m.terminalCommit().Entries(systemEntry(out))
-
+		return m.handleSkillsCommand(input, command)
 	case "/new", "/clear":
-		cfg, err := m.commandConfig()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
-		}
-		runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		if runtimeCfg.Provider == "" {
-			runtimeCfg.Provider = m.runtimeProvider()
-		}
-		if runtimeCfg.Model == "" {
-			runtimeCfg.Model = m.runtimeModel()
-		}
-		if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
-			return m, cmdError("cannot " + command + " without an active provider and model")
-		}
-		appCfg := cfg
-		if appCfg == nil {
-			appCfg = &config.Config{}
-		}
-		if strings.TrimSpace(appCfg.Provider) == "" {
-			updated := *appCfg
-			updated.Provider = runtimeCfg.Provider
-			appCfg = &updated
-		}
-		if configuredModelForPreset(appCfg, m.activePreset()) == "" {
-			appCfg = updateModelForPreset(appCfg, runtimeCfg.Model, m.activePreset())
-		}
-		notice := "Started new session"
-		if command == "/clear" {
-			notice = "Started fresh session"
-		}
-		transition := newRuntimeTransition(appCfg, runtimeCfg, m.activePreset(), "")
-		return m.switchRuntimeCommand(
-			transition,
-			systemEntry(notice),
-			"",
-			false,
-		)
-
+		return m.handleNewSessionCommand(fields, command)
 	case "/cost":
 		return m, m.sessionCostCmd()
-
 	case "/session":
 		return m, m.sessionInfoCmd()
-
 	case "/compact":
-		if m.Model.Storage != nil && !runtime.IsMaterialized(m.Model.Storage) {
-			return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
-		}
-		compactor, ok := m.Model.Backend.(Compactor)
-		if !ok {
-			return m, cmdError("current backend does not support /compact")
-		}
-		m.progressReducer().beginCompaction()
-		return m, func() tea.Msg {
-			compacted, err := compactor.Compact(context.Background())
-			if err != nil {
-				return localErrorMsg{err: err}
-			}
-			if compacted {
-				return sessionCompactedMsg{notice: "Compacted current session context"}
-			}
-			return sessionCompactedMsg{notice: "Session is already within compaction limits"}
-		}
-
+		return m.handleCompactCommand()
 	case "/tree":
 		return m.showSessionTree()
-
 	case "/export":
 		return m.exportSession()
-
 	case "/export-html":
 		return m.exportSessionHTML()
-
 	case "/import":
-		if len(fields) < 2 {
-			return m, cmdError("usage: /import <filename>")
-		}
-		return m.importSession(fields[1])
-
+		return m.handleImportCommand(fields)
 	case "/name":
-		if len(fields) < 2 {
-			return m, cmdError("usage: /name <session-name>")
-		}
-		return m.nameSession(strings.Join(fields[1:], " "))
-
+		return m.handleNameCommand(fields)
 	case "/clone":
 		return m.cloneSession()
-
 	case "/copy":
 		return m.copyLastResponse()
-
 	case "/debug":
 		return m.handleDebugCommand()
-
 	case "/exit", "/quit":
-		return m, tea.Quit
-
+		return m.handleExitCommand()
 	default:
 		return m, cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
 	}
@@ -1022,4 +815,240 @@ func writeExternalEditorBuffer(content string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// === Extracted command handlers ===
+
+func (m Model) handleHelpCommand() (Model, tea.Cmd) {
+	return m, m.terminalCommit().Help(helpText())
+}
+
+func (m Model) handleHotkeysCommand() (Model, tea.Cmd) {
+	return m, m.terminalCommit().Help(hotkeysText())
+}
+
+func (m Model) handleExitCommand() (Model, tea.Cmd) {
+	return m, tea.Quit
+}
+
+func (m Model) handlePrimaryCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) != 1 {
+		return m, cmdError("usage: /primary")
+	}
+	return m.switchPresetCommand(runtime.PresetPrimary)
+}
+
+func (m Model) handleFastCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) != 1 {
+		return m, cmdError("usage: /fast")
+	}
+	return m.switchPresetCommand(runtime.PresetFast)
+}
+
+func (m Model) handleResumeCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m.openSessionPicker()
+	}
+	return m.resumeStoredSessionByID(fields[1])
+}
+
+func (m Model) handleModelCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m.openModelPicker()
+	}
+	name := strings.Join(fields[1:], " ")
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	cfg = m.commandConfigWithActiveProvider(cfg)
+	currentCfg, err := m.runtimeConfigForActivePreset(cfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	if currentCfg.Provider != "" &&
+		strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
+		return m, nil
+	}
+	transition, runtimeCfg, err := m.modelSelectionTransition(cfg, m.activePreset(), name)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	if runtimeCfg.Provider == "" {
+		return m, cmdError("cannot set model without an active provider; use /provider first")
+	}
+	return m.switchRuntimeCommand(transition,
+		systemEntry("Model set to "+name),
+		m.currentMaterializedSessionID(),
+		false,
+	)
+}
+
+func (m Model) handleThinkingCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m.openThinkingPicker()
+	}
+	level := normalizeThinkingValue(fields[1])
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	currentCfg, err := m.runtimeConfigForActivePreset(cfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	if currentCfg.Provider != "" &&
+		normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
+		return m, nil
+	}
+	transition, _, err := m.thinkingSelectionTransition(cfg, m.activePreset(), level)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	return m.beginRuntimeTransitionCommit(transition,
+		systemEntry("Thinking set to "+thinkingDisplayName(level)),
+	)
+}
+
+func (m Model) handleProviderCommandDispatch(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m.openProviderSetupPicker()
+	}
+	return m.handleProviderCommand(fields[1])
+}
+
+func (m Model) handleLoginCommand(fields []string) (Model, tea.Cmd) {
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	provider := cfg.Provider
+	if len(fields) >= 2 {
+		provider = fields[1]
+	}
+	if strings.TrimSpace(provider) == "" {
+		return m.openProviderSetupPicker()
+	}
+	return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
+}
+
+func (m Model) handleToolsCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) != 1 {
+		return m, cmdError("usage: /tools")
+	}
+	summarizer, ok := m.Model.Backend.(ToolSummarizer)
+	if !ok {
+		return m, cmdError("tool summary unavailable for this backend")
+	}
+	return m, m.terminalCommit().Entries(
+		systemEntry(toolSurfaceSummary(summarizer.ToolSurface())),
+	)
+}
+
+func (m Model) handleStatusCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) != 1 {
+		return m, cmdError("usage: /status")
+	}
+	return m, m.terminalCommit().Entries(systemEntry(runtimeStatusSummary(m)))
+}
+
+func (m Model) handleChangelogCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) != 1 {
+		return m, cmdError("usage: /changelog")
+	}
+	content, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to read CHANGELOG.md: %v", err))
+	}
+	return m, m.terminalCommit().Entries(systemEntry(string(content)))
+}
+
+func (m Model) handleSkillsCommand(input, command string) (Model, tea.Cmd) {
+	dir, err := config.DefaultSkillsDir()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
+	}
+	query := strings.TrimSpace(strings.TrimPrefix(input, command))
+	out, err := ionskills.Notice([]string{dir}, query)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
+	}
+	return m, m.terminalCommit().Entries(systemEntry(out))
+}
+
+func (m Model) handleNewSessionCommand(fields []string, command string) (Model, tea.Cmd) {
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	if runtimeCfg.Provider == "" {
+		runtimeCfg.Provider = m.runtimeProvider()
+	}
+	if runtimeCfg.Model == "" {
+		runtimeCfg.Model = m.runtimeModel()
+	}
+	if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
+		return m, cmdError("cannot " + command + " without an active provider and model")
+	}
+	appCfg := cfg
+	if appCfg == nil {
+		appCfg = &config.Config{}
+	}
+	if strings.TrimSpace(appCfg.Provider) == "" {
+		updated := *appCfg
+		updated.Provider = runtimeCfg.Provider
+		appCfg = &updated
+	}
+	if configuredModelForPreset(appCfg, m.activePreset()) == "" {
+		appCfg = updateModelForPreset(appCfg, runtimeCfg.Model, m.activePreset())
+	}
+	notice := "Started new session"
+	if command == "/clear" {
+		notice = "Started fresh session"
+	}
+	return m.switchRuntimeCommand(
+		newRuntimeTransition(appCfg, runtimeCfg, m.activePreset(), ""),
+		systemEntry(notice),
+		"",
+		false,
+	)
+}
+
+func (m Model) handleCompactCommand() (Model, tea.Cmd) {
+	if m.Model.Storage != nil && !runtime.IsMaterialized(m.Model.Storage) {
+		return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
+	}
+	compactor, ok := m.Model.Backend.(Compactor)
+	if !ok {
+		return m, cmdError("current backend does not support /compact")
+	}
+	m.progressReducer().beginCompaction()
+	return m, func() tea.Msg {
+		compacted, err := compactor.Compact(context.Background())
+		if err != nil {
+			return localErrorMsg{err: err}
+		}
+		if compacted {
+			return sessionCompactedMsg{notice: "Compacted current session context"}
+		}
+		return sessionCompactedMsg{notice: "Session is already within compaction limits"}
+	}
+}
+
+func (m Model) handleImportCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m, cmdError("usage: /import <filename>")
+	}
+	return m.importSession(fields[1])
+}
+
+func (m Model) handleNameCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) < 2 {
+		return m, cmdError("usage: /name <session-name>")
+	}
+	return m.nameSession(strings.Join(fields[1:], " "))
 }
