@@ -21,11 +21,6 @@ func NewSession(store Store, bufferSize int) Session {
 func (s *sessionImpl) ID() string   { return s.store.GetMetadata().ID }
 func (s *sessionImpl) Meta() Metadata { return s.store.GetMetadata() }
 func (s *sessionImpl) Close() error { return s.store.Close() }
-func (s *sessionImpl) GetLeafID() string { return s.store.GetLeafID() }
-func (s *sessionImpl) SetLeafID(id string) error { return s.store.SetLeafID(id) }
-func (s *sessionImpl) GetEntry(ctx context.Context, id string) (Entry, error) {
-	return s.store.GetEntry(ctx, id)
-}
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
@@ -74,17 +69,6 @@ func (s *sessionImpl) Usage(ctx context.Context) (Usage, error) {
 	return total, nil
 }
 
-// MoveTo navigates to a new leaf, optionally appending a branch summary.
-func (s *sessionImpl) MoveTo(ctx context.Context, leafID string, summary *BranchSummaryData) (string, error) {
-	if err := s.store.SetLeafID(leafID); err != nil {
-		return "", err
-	}
-	if summary == nil {
-		return "", nil
-	}
-	return s.AppendBranchSummary(ctx, *summary)
-}
-
 // --- typed append helpers ---
 
 func (s *sessionImpl) AppendMessage(ctx context.Context, msg Message) (string, error) {
@@ -103,28 +87,6 @@ func (s *sessionImpl) AppendMessage(ctx context.Context, msg Message) (string, e
 	return id, nil
 }
 
-func (s *sessionImpl) AppendModelChange(ctx context.Context, provider, modelID string) (string, error) {
-	return s.appendLeaf(ctx, &ModelChangeEntry{
-		EntryBase: s.newBase(ctx),
-		Provider:  provider,
-		ModelID:   modelID,
-	})
-}
-
-func (s *sessionImpl) AppendThinkingChange(ctx context.Context, level ThinkingLevel) (string, error) {
-	return s.appendLeaf(ctx, &ThinkingChangeEntry{
-		EntryBase: s.newBase(ctx),
-		Level:     level,
-	})
-}
-
-func (s *sessionImpl) AppendToolsChange(ctx context.Context, tools []string) (string, error) {
-	return s.appendLeaf(ctx, &ToolsChangeEntry{
-		EntryBase:   s.newBase(ctx),
-		ActiveTools: tools,
-	})
-}
-
 func (s *sessionImpl) AppendCompaction(ctx context.Context, data CompactionData) (string, error) {
 	return s.appendLeaf(ctx, &CompactionEntry{
 		EntryBase:    s.newBase(ctx),
@@ -140,14 +102,6 @@ func (s *sessionImpl) AppendBranchSummary(ctx context.Context, data BranchSummar
 		EntryBase: s.newBase(ctx),
 		Summary:   data.Summary,
 		Details:   data.Details,
-	})
-}
-
-func (s *sessionImpl) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
-	return s.appendLeaf(ctx, &LabelEntry{
-		EntryBase: s.newBase(ctx),
-		TargetID:  targetID,
-		Label:     label,
 	})
 }
 

@@ -21,12 +21,8 @@ type Session interface {
 
 	// Typed append methods — each creates the right entry kind.
 	AppendMessage(ctx context.Context, msg Message) (string, error)
-	AppendModelChange(ctx context.Context, provider, modelID string) (string, error)
-	AppendThinkingChange(ctx context.Context, level ThinkingLevel) (string, error)
-	AppendToolsChange(ctx context.Context, tools []string) (string, error)
 	AppendCompaction(ctx context.Context, data CompactionData) (string, error)
 	AppendBranchSummary(ctx context.Context, data BranchSummaryData) (string, error)
-	AppendLabel(ctx context.Context, targetID, label string) (string, error)
 	AppendSessionInfo(ctx context.Context, name string) (string, error)
 	AppendCustom(ctx context.Context, entry *CustomEntry) (string, error)
 	Append(ctx context.Context, entry Entry) (string, error)
@@ -34,12 +30,6 @@ type Session interface {
 	CancelTurn(ctx context.Context) error
 	Events() <-chan Event
 	EventSender() chan Event
-
-	// Tree navigation.
-	GetEntry(ctx context.Context, id string) (Entry, error)
-	GetLeafID() string
-	SetLeafID(id string) error
-	MoveTo(ctx context.Context, leafID string, summary *BranchSummaryData) (summaryID string, err error)
 
 	// Query.
 	Entries(ctx context.Context) ([]Entry, error)

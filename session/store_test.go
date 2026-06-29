@@ -209,44 +209,17 @@ func TestSessionTypedAppends(t *testing.T) {
 	store := newTestStore(t)
 	sess := NewSession(store, 64)
 
-	sess.AppendModelChange(ctx, "openai", "gpt-4")
-	sess.AppendThinkingChange(ctx, ThinkingHigh)
-	sess.AppendToolsChange(ctx, []string{"bash"})
 	sess.AppendSessionInfo(ctx, "test session")
+	sess.AppendMessage(ctx, NewUserText("hello", time.Now()))
 
 	entries, _ := store.Entries(ctx)
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
-	if _, ok := entries[0].(*ModelChangeEntry); !ok {
-		t.Fatalf("expected ModelChangeEntry, got %T", entries[0])
+	if _, ok := entries[0].(*SessionInfoEntry); !ok {
+		t.Fatalf("expected SessionInfoEntry, got %T", entries[0])
 	}
-	if _, ok := entries[1].(*ThinkingChangeEntry); !ok {
-		t.Fatalf("expected ThinkingChangeEntry, got %T", entries[1])
-	}
-	if _, ok := entries[2].(*ToolsChangeEntry); !ok {
-		t.Fatalf("expected ToolsChangeEntry, got %T", entries[2])
-	}
-	if _, ok := entries[3].(*SessionInfoEntry); !ok {
-		t.Fatalf("expected SessionInfoEntry, got %T", entries[3])
-	}
-}
-
-// INVARIANT: MoveTo navigates to a new leaf.
-func TestSessionMoveTo(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	sess := NewSession(store, 64)
-
-	sess.AppendMessage(ctx, NewUserText("a", time.Now()))
-	id2, _ := sess.AppendMessage(ctx, NewUserText("b", time.Now()))
-	sess.AppendMessage(ctx, NewUserText("c", time.Now()))
-
-	// Move back to id2.
-	if _, err := sess.MoveTo(ctx, id2, nil); err != nil {
-		t.Fatal(err)
-	}
-	if store.GetLeafID() != id2 {
-		t.Fatalf("leaf: want %q, got %q", id2, store.GetLeafID())
+	if _, ok := entries[1].(*MessageEntry); !ok {
+		t.Fatalf("expected MessageEntry, got %T", entries[1])
 	}
 }
