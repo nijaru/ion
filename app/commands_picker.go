@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/nijaru/ion/llm"
 	tea "charm.land/bubbletea/v2"
@@ -94,42 +93,26 @@ func loadAllModelPickerItems(requestID uint64, cfg *config.Config, preset Preset
 	}
 }
 
-// loadAllModelsParallel fetches models from all providers with API keys concurrently.
+// loadAllModelsParallel fetches models from all providers with API keys.
 func loadAllModelsParallel(ctx context.Context, cfg *config.Config) []pickerItem {
 	providers := allProvidersWithAuth(cfg)
 	if len(providers) == 0 {
 		return nil
 	}
 
-	type result struct {
-		items []pickerItem
-	}
-	results := make([]result, len(providers))
-
-	var wg sync.WaitGroup
-	for i, prov := range providers {
-		wg.Add(1)
-		go func(idx int, providerCfg *config.Config) {
-			defer wg.Done()
-			models, err := listModelsForConfig(ctx, providerCfg)
-			if err != nil {
-				return // skip providers that fail
-			}
-			displayName := providerDisplayName(providerCfg.Provider)
-			items := modelItemsFromMetadata(models)
-			for j := range items {
-				items[j].Provider = providerCfg.Provider
-				items[j].Group = displayName
-			}
-			results[idx].items = items
-		}(i, prov)
-	}
-	wg.Wait()
-
-	// Merge results preserving provider order
 	var all []pickerItem
-	for _, r := range results {
-		all = append(all, r.items...)
+	for _, prov := range providers {
+		models, err := listModelsForConfig(ctx, prov)
+		if err != nil {
+			continue // skip providers that fail
+		}
+		displayName := providerDisplayName(prov.Provider)
+		items := modelItemsFromMetadata(models)
+		for j := range items {
+			items[j].Provider = prov.Provider
+			items[j].Group = displayName
+		}
+		all = append(all, items...)
 	}
 	return all
 }

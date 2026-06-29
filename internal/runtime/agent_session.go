@@ -46,6 +46,7 @@ type AgentSession struct {
 	// Compaction
 	compaction    agent.CompactionSettings
 	contextWindow int
+	streamFn      func(ctx context.Context, req *llm.Request) (llm.Stream, error) // for compaction
 }
 
 // NewAgentSession creates a new AgentSession.
@@ -56,6 +57,7 @@ func NewAgentSession(cfg AgentSessionConfig) *AgentSession {
 		store:         cfg.Store,
 		config:        cfg.Config,
 		model:         cfg.Model,
+		streamFn:      cfg.StreamFn,
 		thinking:      cfg.Thinking,
 		activePreset:  cfg.ActivePreset,
 		compaction:    cfg.Compaction,
@@ -70,6 +72,7 @@ type AgentSessionConfig struct {
 	Store         session.Store
 	Config        *config.Config
 	Model         llm.Model
+	StreamFn      func(ctx context.Context, req *llm.Request) (llm.Stream, error) // for compaction
 	Thinking      session.ThinkingLevel
 	ActivePreset  Preset
 	Compaction    agent.CompactionSettings
@@ -206,7 +209,7 @@ func (a *AgentSession) Compact(ctx context.Context) error {
 		a.progress.Status = ""
 	}()
 
-	result, err := agent.Compact(ctx, a.session, nil, a.model.ID, a.compaction)
+	result, err := agent.Compact(ctx, a.session, a.streamFn, a.model.ID, a.compaction)
 	if err != nil {
 		return fmt.Errorf("compact: %w", err)
 	}

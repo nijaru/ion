@@ -28,18 +28,67 @@ func (s *sessionImpl) Entries(ctx context.Context) ([]Entry, error) {
 	return s.store.Entries(ctx)
 }
 
-// BuildContext reconstructs []Message by walking the branch and extracting MessageEntries.
+// BuildContext reconstructs []Message by walking the branch.
+//
+// Compaction-aware: if the branch contains a CompactionEntry, messages before
+// its FirstKeptID are replaced by a single system message containing the
+// compaction summary. If the branch contains a BranchSummaryEntry, a system
+// message is prepended with that summary.
 func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error) {
 	entries, err := s.store.Branch(ctx)
 	if err != nil {
 		return ContextSnapshot{}, err
 	}
+
+	// Find the most recent compaction and branch summary.
+	var lastCompaction *CompactionEntry
+	var branchSummary *BranchSummaryEntry
+	for i := len(entries) - 1; i >= 0; i-- {
+		switch e := entries[i].(type) {
+		case *CompactionEntry:
+			if lastCompaction == nil {
+				lastCompaction = e
+			}
+		case *BranchSummaryEntry:
+			if branchSummary == nil {
+				branchSummary = e
+			}
+		}
+		if lastCompaction != nil && branchSummary != nil {
+			break
+		}
+	}
+
+	// Determine the first index to include after the compaction cut.
+	startIdx := 0
+	if lastCompaction != nil {
+		for i, e := range entries {
+			if e.ID() == lastCompaction.FirstKeptID {
+				startIdx = i
+				break
+			}
+		}
+	}
+
 	var msgs []Message
-	for _, e := range entries {
+
+	// Prepend branch summary if present.
+	if branchSummary != nil && branchSummary.Summary != "" {
+		msgs = append(msgs, NewUserText(branchSummary.Summary, time.Now()))
+	}
+
+	// Prepend compaction summary if present.
+	if lastCompaction != nil && lastCompaction.Summary != "" {
+		msgs = append(msgs, NewUserText(lastCompaction.Summary, time.Now()))
+	}
+
+	// Extract messages from the kept portion of the branch.
+	for _, e := range entries[startIdx:] {
 		if me, ok := e.(*MessageEntry); ok {
 			msgs = append(msgs, me.Message)
 		}
 	}
+
 	return ContextSnapshot{Messages: msgs}, nil
 }
 
