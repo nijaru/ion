@@ -533,9 +533,9 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 			stored.appends,
 		)
 	}
-	system, ok := stored.appends[0].(runtime.StoreSystem)
-	if !ok || system.Content != "Canceled by user" {
-		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
+	system, ok := stored.appends[0].(*session.CustomEntry)
+	if !ok || system.Type != "store_system" {
+		t.Fatalf("append = %#v, want store_system CustomEntry", stored.appends[0])
 	}
 	if runner.aborts != 1 {
 		t.Fatalf("cancel count after command execution = %d, want 1", runner.aborts)

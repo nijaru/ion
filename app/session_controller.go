@@ -584,13 +584,20 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 }
 
 func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
-	// Convert runtime-specific entries the store doesn't know about.
-	if rd, ok := entry.(runtime.StoreRoutingDecision); ok {
-		data, _ := json.Marshal(rd)
-		entry = &session.CustomEntry{
-			Type: "routing_decision",
-			Data: data,
-		}
+	// Convert runtime-specific entries the SQLite store doesn't know about.
+	switch e := entry.(type) {
+	case runtime.StoreRoutingDecision:
+		data, _ := json.Marshal(e)
+		entry = &session.CustomEntry{Type: "routing_decision", Data: data}
+	case runtime.StoreSystem:
+		data, _ := json.Marshal(e)
+		entry = &session.CustomEntry{Type: "store_system", Data: data}
+	case runtime.StoreStatus:
+		data, _ := json.Marshal(e)
+		entry = &session.CustomEntry{Type: "store_status", Data: data}
+	case runtime.StoreTokenUsage:
+		data, _ := json.Marshal(e)
+		entry = &session.CustomEntry{Type: "store_token_usage", Data: data}
 	}
 	return m.persistenceController().appendEntry(action, entry)
 }
