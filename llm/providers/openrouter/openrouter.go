@@ -15,6 +15,13 @@ import (
 	sashaoai "github.com/sashabaranov/go-openai"
 )
 
+// openRouterProviderRouting configures OpenRouter's provider routing for a model.
+type openRouterProviderRouting struct {
+	Order          []string `json:"order,omitempty"`
+	Only           []string `json:"only,omitempty"`
+	AllowFallbacks bool     `json:"allow_fallbacks"`
+}
+
 // Provider implements the llm.Provider interface for OpenRouter.
 // It overrides Generate/Stream to use OpenRouter's nested reasoning format:
 //
@@ -24,10 +31,11 @@ import (
 // rejects with 422 for models that require the nested format.
 type Provider struct {
 	openai.Base
-	httpClient *http.Client
-	endpoint   string
-	apiKey     string
-	headers    map[string]string
+	httpClient   *http.Client
+	endpoint     string
+	apiKey       string
+	headers      map[string]string
+	modelRouting map[string]openRouterProviderRouting // model ID → routing config
 }
 
 // NewProvider creates a new OpenRouter provider from a provider configuration.
@@ -48,12 +56,22 @@ func NewProvider(cfg llm.ProviderConfig) *Provider {
 		apiKey = os.Getenv("OPENROUTER_API_KEY")
 	}
 
+	modelRouting := make(map[string]openRouterProviderRouting, len(cfg.ModelRouting))
+	for id, r := range cfg.ModelRouting {
+		modelRouting[id] = openRouterProviderRouting{
+			Order:          r.Order,
+			Only:           r.Only,
+			AllowFallbacks: r.AllowFallbacks,
+		}
+	}
+
 	return &Provider{
-		Base:       p.Base,
-		httpClient: &http.Client{},
-		endpoint:   strings.TrimRight(endpoint, "/"),
-		apiKey:     apiKey,
-		headers:    cfg.DefaultHeaders,
+		Base:         p.Base,
+		httpClient:   &http.Client{},
+		endpoint:     strings.TrimRight(endpoint, "/"),
+		apiKey:       apiKey,
+		headers:      cfg.DefaultHeaders,
+		modelRouting: modelRouting,
 	}
 }
 
@@ -170,7 +188,8 @@ type openRouterRequest struct {
 	Reasoning *openRouterReasoning `json:"reasoning,omitempty"`
 	// SessionID enables OpenRouter's sticky routing for consistent provider selection.
 	// See: https://openrouter.ai/docs/features/session-sticky-routing
-	SessionID string `json:"session_id,omitempty"`
+	SessionID string                       `json:"session_id,omitempty"`
+	Provider  *openRouterProviderRouting   `json:"provider,omitempty"`
 }
 
 type openRouterReasoning struct {
@@ -188,6 +207,12 @@ func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,
 		SessionID:             req.SessionID,
+	}
+
+	// Inject per-model provider routing if configured.
+	if routing, ok := p.modelRouting[req.Model]; ok {
+		r := routing // copy
+		orReq.Provider = &r
 	}
 
 	// Clear the top-level reasoning_effort since OpenRouter uses the nested format.

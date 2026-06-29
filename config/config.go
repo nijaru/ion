@@ -15,6 +15,14 @@ const (
 	DefaultReasoningEffort      = "auto"
 )
 
+// OpenRouterRouting configures OpenRouter's provider routing preferences for a
+// specific model. Order and Only are mutually exclusive; Order takes precedence.
+type OpenRouterRouting struct {
+	Order          []string `toml:"order,omitempty"`
+	Only           []string `toml:"only,omitempty"`
+	AllowFallbacks bool     `toml:"allow_fallbacks"`
+}
+
 type Config struct {
 	Provider               string            `toml:"provider,omitempty"`
 	Model                  string            `toml:"model,omitempty"`
@@ -23,7 +31,8 @@ type Config struct {
 	FastReasoningEffort    string            `toml:"fast_reasoning_effort,omitempty"`
 	SummaryModel           string            `toml:"summary_model,omitempty"`
 	SummaryReasoningEffort string            `toml:"summary_reasoning_effort,omitempty"`
-	Endpoint               string            `toml:"endpoint,omitempty"`
+	Endpoint               string                       `toml:"endpoint,omitempty"`
+	OpenRouterRouting      map[string]OpenRouterRouting `toml:"openrouter_routing,omitempty"`
 	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
 	ContextLimit           int               `toml:"context_limit,omitempty"`

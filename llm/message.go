@@ -470,6 +470,14 @@ type CompatFlags struct {
 	SupportsToolChoice      *bool `json:"supports_tool_choice,omitzero"      toml:"supports_tool_choice,omitzero"`
 }
 
+// ModelRouting configures OpenRouter provider routing for a specific model.
+// Order and Only are mutually exclusive; Order takes precedence.
+type ModelRouting struct {
+	Order          []string
+	Only           []string
+	AllowFallbacks bool
+}
+
 // ProviderConfig captures the shared endpoint/auth/model metadata used by
 // Ion's built-in provider adapters.
 type ProviderConfig struct {
@@ -478,4 +486,7 @@ type ProviderConfig struct {
 	APIEndpoint    string
 	DefaultHeaders map[string]string
 	Models         []Model
+	// ModelRouting maps model IDs to OpenRouter routing preferences.
+	// Only used by the OpenRouter provider; other providers ignore it.
+	ModelRouting map[string]ModelRouting
 }
