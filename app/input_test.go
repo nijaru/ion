@@ -128,8 +128,7 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 		nil,
 	)
 
-	updated, cmd := model.submitText("/help")
-	model = updated
+	_, cmd := model.submitText("/help")
 	if cmd == nil {
 		t.Fatal("expected input history command")
 	}

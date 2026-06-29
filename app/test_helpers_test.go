@@ -204,6 +204,7 @@ func testModel(t testing.TB, updated any) Model {
 	case *Model:
 		if next == nil {
 			t.Fatal("updated model is nil")
+			return Model{}
 		}
 		return *next
 	default:

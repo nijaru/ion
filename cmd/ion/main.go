@@ -463,8 +463,7 @@ func runPromptTurn(
 			if !ok {
 				// Channel closed before turn finished — wait for Prompt, then error.
 				if !promptDone {
-					outcome := <-outcomeCh
-					promptMsg = outcome.msg
+					<-outcomeCh
 					promptDone = true
 				}
 				_ = runner.Abort()

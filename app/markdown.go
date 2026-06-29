@@ -82,15 +82,15 @@ func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []str
 		case *ast.FencedCodeBlock:
 			lang := ""
 			if n.Info != nil {
-				info := strings.TrimSpace(string(n.Info.Text(source)))
+				info := strings.TrimSpace(string(n.Info.Value(source)))
 				if info != "" {
 					lang = info
 				}
 			}
-			lines = append(lines, m.renderMarkdownCodeBlockWithLang(n.Text(source), lang, depth)...)
+			lines = append(lines, m.renderMarkdownCodeBlockWithLang(n.Lines().Value(source), lang, depth)...)
 			lines = append(lines, "")
 		case *ast.CodeBlock:
-			lines = append(lines, m.renderMarkdownCodeBlock(n.Text(source), depth)...)
+			lines = append(lines, m.renderMarkdownCodeBlock(n.Lines().Value(source), depth)...)
 			lines = append(lines, "")
 		case *extensionast.Table:
 			lines = append(lines, m.renderMarkdownTable(n, source, depth)...)
