@@ -40,7 +40,7 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 		APIEndpoint:    endpoint,
 		DefaultHeaders: llm.ResolvedHeaders(cfg),
 		Models:         configModels(cfg),
-		ModelRouting:   convertRouting(cfg.OpenRouterRouting),
+		ModelRouting:   convertRouting(providerName, cfg.Providers),
 	}
 
 	switch def.Family {
@@ -91,13 +91,14 @@ func configModels(cfg *config.Config) []llm.Model {
 	return []llm.Model{model}
 }
 
-// convertRouting converts config.OpenRouterRouting entries to llm.ModelRouting.
-func convertRouting(routing map[string]config.OpenRouterRouting) map[string]llm.ModelRouting {
-	if len(routing) == 0 {
+// convertRouting extracts model routing for a provider from config.
+func convertRouting(providerName string, providers map[string]config.ProviderSettings) map[string]llm.ModelRouting {
+	ps, ok := providers[providerName]
+	if !ok || len(ps.ModelRouting) == 0 {
 		return nil
 	}
-	out := make(map[string]llm.ModelRouting, len(routing))
-	for id, r := range routing {
+	out := make(map[string]llm.ModelRouting, len(ps.ModelRouting))
+	for id, r := range ps.ModelRouting {
 		out[id] = llm.ModelRouting{
 			Order:          r.Order,
 			Only:           r.Only,

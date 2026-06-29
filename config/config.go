@@ -15,24 +15,29 @@ const (
 	DefaultReasoningEffort      = "auto"
 )
 
-// OpenRouterRouting configures OpenRouter's provider routing preferences for a
-// specific model. Order and Only are mutually exclusive; Order takes precedence.
-type OpenRouterRouting struct {
+// ModelRouting configures per-model provider routing (currently used by OpenRouter).
+// Order and Only are mutually exclusive; Order takes precedence.
+type ModelRouting struct {
 	Order          []string `toml:"order,omitempty"`
 	Only           []string `toml:"only,omitempty"`
 	AllowFallbacks bool     `toml:"allow_fallbacks"`
 }
 
+// ProviderSettings holds per-provider overrides.
+type ProviderSettings struct {
+	ModelRouting map[string]ModelRouting `toml:"model_routing,omitempty"`
+}
+
 type Config struct {
-	Provider               string            `toml:"provider,omitempty"`
-	Model                  string            `toml:"model,omitempty"`
-	ReasoningEffort        string            `toml:"reasoning_effort,omitempty"`
-	FastModel              string            `toml:"fast_model,omitempty"`
-	FastReasoningEffort    string            `toml:"fast_reasoning_effort,omitempty"`
-	SummaryModel           string            `toml:"summary_model,omitempty"`
-	SummaryReasoningEffort string            `toml:"summary_reasoning_effort,omitempty"`
-	Endpoint               string                       `toml:"endpoint,omitempty"`
-	OpenRouterRouting      map[string]OpenRouterRouting `toml:"openrouter_routing,omitempty"`
+	Provider               string                     `toml:"provider,omitempty"`
+	Model                  string                     `toml:"model,omitempty"`
+	ReasoningEffort        string                     `toml:"reasoning_effort,omitempty"`
+	FastModel              string                     `toml:"fast_model,omitempty"`
+	FastReasoningEffort    string                     `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           string                     `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort string                     `toml:"summary_reasoning_effort,omitempty"`
+	Endpoint               string                     `toml:"endpoint,omitempty"`
+	Providers              map[string]ProviderSettings `toml:"providers,omitempty"`
 	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
 	ContextLimit           int               `toml:"context_limit,omitempty"`
