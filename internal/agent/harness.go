@@ -33,9 +33,10 @@ type Harness struct {
 	nextTurn []session.Message
 
 	// single active run
-	phase   Phase
-	mu      sync.Mutex
-	runDone chan struct{}
+	phase     Phase
+	mu        sync.Mutex
+	runDone   chan struct{}
+	runCancel chan struct{} // closed to abort current run
 
 	// event channel for TUI
 	events chan session.Event
@@ -138,11 +139,14 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	}
 	h.phase = PhaseTurn
 	h.runDone = make(chan struct{})
+	h.runCancel = make(chan struct{})
+	cancel := h.runCancel
 	h.mu.Unlock()
 
 	defer func() {
 		h.mu.Lock()
 		h.phase = PhaseIdle
+		h.runCancel = nil
 		close(h.runDone)
 		h.runDone = nil
 		h.mu.Unlock()
@@ -170,7 +174,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		msgs = RunLoop(ctx, prompts, TurnContext{
 			SystemPrompt: h.sysprompt,
 			Messages:     snap.Messages,
-		}, cfg, h.handleEvent, nil)
+		}, cfg, h.handleEvent, cancel)
 
 		// Check for context overflow error.
 		if len(msgs) > 0 {
@@ -369,7 +373,17 @@ func (h *Harness) WaitForIdle() {
 
 // Abort cancels the current run.
 func (h *Harness) Abort() error {
-	// TODO: wire abort signal
+	h.mu.Lock()
+	cancel := h.runCancel
+	h.mu.Unlock()
+	if cancel != nil {
+		select {
+		case <-cancel:
+			// already closed
+		default:
+			close(cancel)
+		}
+	}
 	return nil
 }
 
