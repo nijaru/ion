@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -43,6 +44,9 @@ type Harness struct {
 	externalEvents bool
 	listeners      []func(session.Event)
 
+	// hook registry (Pi on/emitHook pattern)
+	hooks map[string][]HookHandler
+
 	// buffered session writes during a run
 	pending []pendingWrite
 
@@ -65,6 +69,19 @@ const (
 type pendingWrite struct {
 	apply func(ctx context.Context, s session.Session) error
 }
+
+// HookHandler is a function registered for a hook type. It receives a payload
+// and returns a patch (nil if no change) or an error.
+// Reference: Pi agent-harness.js hooks (line 944-960).
+type HookHandler func(payload any) (patch any, err error)
+
+// Hook type constants matching Pi's hook names.
+const (
+	HookBeforeProviderRequest = "before_provider_request"
+	HookBeforeProviderPayload = "before_provider_payload"
+	HookBeforeAgentStart      = "before_agent_start"
+	HookToolResult            = "tool_result"
+)
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
@@ -115,11 +132,51 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	if h.events == nil {
 		h.events = make(chan session.Event, 64)
 	}
+	if h.hooks == nil {
+		h.hooks = make(map[string][]HookHandler)
+	}
 	return h
 }
 
 // Events returns the channel the TUI subscribes to.
 func (h *Harness) Events() <-chan session.Event { return h.events }
+
+// On registers a handler for a hook type. Returns an unsubscribe function.
+// Reference: Pi agent-harness.js on (line 962).
+func (h *Harness) On(hookType string, handler HookHandler) func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.hooks[hookType] = append(h.hooks[hookType], handler)
+	ptr := &h.hooks[hookType][len(h.hooks[hookType])-1]
+	return func() {
+		h.mu.Lock()
+		*ptr = nil
+		h.mu.Unlock()
+	}
+}
+
+// emitHook fans out a payload to all handlers registered for hookType.
+// Returns collected patches. Uses snapshot-and-release to avoid reentry deadlock.
+func (h *Harness) emitHook(hookType string, payload any) (patches []any, err error) {
+	h.mu.Lock()
+	snapshot := make([]HookHandler, 0, len(h.hooks[hookType]))
+	for _, fn := range h.hooks[hookType] {
+		if fn != nil {
+			snapshot = append(snapshot, fn)
+		}
+	}
+	h.mu.Unlock()
+	for _, fn := range snapshot {
+		patch, fnErr := fn(payload)
+		if fnErr != nil {
+			return nil, fnErr
+		}
+		if patch != nil {
+			patches = append(patches, patch)
+		}
+	}
+	return patches, nil
+}
 
 // Subscribe registers a listener for all agent events.
 // Returns an unsubscribe function. Listeners are called on every emit.
@@ -194,6 +251,25 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	// Drain nextTurn queue and prepend to prompts.
 	prompts := h.drainNextTurn()
 	prompts = append(prompts, session.NewUserText(text, time.Now()))
+
+	// Emit before_agent_start hook — inject extra messages.
+	patches, err := h.emitHook(HookBeforeAgentStart, beforeAgentStartPayload{
+		Prompt:       text,
+		SystemPrompt: h.sysprompt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("before_agent_start hook: %w", err)
+	}
+	for _, p := range patches {
+		if bp, ok := p.(*BeforeAgentStartPatch); ok && bp != nil {
+			for _, msg := range bp.Messages {
+				prompts = append(prompts, msg)
+			}
+			if bp.SystemPrompt != "" {
+				h.sysprompt = bp.SystemPrompt
+			}
+		}
+	}
 
 	// Build tools for the loop.
 	tools := h.buildTools()
@@ -285,7 +361,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 		Model:    h.model,
 		Thinking: h.thinking,
 		Tools:    tools,
-		StreamFn: h.stream,
+		StreamFn: h.wrapStreamFn(),
 		Convert:  DefaultConvert,
 		Auth:     h.auth,
 		DrainSteer: func() []session.Message {
@@ -293,6 +369,41 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 		},
 		DrainFollowUp: func() []session.Message {
 			return h.drain(&h.followUp)
+		},
+		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
+			patches, err := h.emitHook(HookToolResult, toolResultPayload{
+				ToolCallID: ctx.ToolCall.ID,
+				ToolName:   ctx.ToolCall.Name,
+				Input:      ctx.Args,
+				Content:    ctx.Result.Content,
+				IsError:    ctx.Result.IsError,
+			})
+			if err != nil || len(patches) == 0 {
+				return nil
+			}
+			// Merge patches. Last non-nil wins per field.
+			var merged *ToolCallPatch
+			for _, p := range patches {
+				if tp, ok := p.(*ToolCallPatch); ok && tp != nil {
+					if merged == nil {
+						merged = tp
+					} else {
+						if len(tp.Content) > 0 {
+							merged.Content = tp.Content
+						}
+						if tp.Details != nil {
+							merged.Details = tp.Details
+						}
+						if tp.IsError != nil {
+							merged.IsError = tp.IsError
+						}
+						if tp.Terminate != nil {
+							merged.Terminate = tp.Terminate
+						}
+					}
+				}
+			}
+			return merged
 		},
 		PrepareNextTurn: func(ctx context.Context) *NextTurnSnapshot {
 			h.flushPending(ctx)
@@ -310,6 +421,101 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			}
 		},
 	}
+}
+
+// toolResultPayload is the payload for HookToolResult.
+type toolResultPayload struct {
+	ToolCallID string
+	ToolName   string
+	Input      json.RawMessage
+	Content    []session.Content
+	IsError    bool
+}
+
+// wrapStreamFn wraps the harness stream function to emit provider request/payload hooks.
+func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+	base := h.stream
+	return func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		// Emit before_provider_request hook — allows extensions to patch model headers.
+		patches, err := h.emitHook(HookBeforeProviderRequest, beforeProviderRequestPayload{
+			Model:     req.Model,
+			SessionID: req.SessionID,
+			Headers:   h.model.Headers,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("before_provider_request hook: %w", err)
+		}
+		for _, p := range patches {
+			if bp, ok := p.(*BeforeProviderRequestPatch); ok && bp != nil {
+				if bp.Headers != nil {
+					if h.model.Headers == nil {
+						h.model.Headers = make(map[string]string)
+					}
+					for k, v := range bp.Headers {
+						h.model.Headers[k] = v
+					}
+				}
+			}
+		}
+
+		// Emit before_provider_payload hook — transform the raw JSON payload.
+		rawPayload, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request for hook: %w", err)
+		}
+		payloadPatches, err := h.emitHook(HookBeforeProviderPayload, beforeProviderPayloadPayload{
+			Model:   req.Model,
+			Payload: rawPayload,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("before_provider_payload hook: %w", err)
+		}
+		for _, p := range payloadPatches {
+			if pp, ok := p.(*BeforeProviderPayloadPatch); ok && pp != nil && len(pp.Payload) > 0 {
+				if err := json.Unmarshal(pp.Payload, req); err != nil {
+					return nil, fmt.Errorf("apply payload patch: %w", err)
+				}
+			}
+		}
+
+		return base(ctx, req)
+	}
+}
+
+// BeforeProviderRequestPatch is returned by before_provider_request hooks.
+type BeforeProviderRequestPatch struct {
+	Headers map[string]string
+}
+
+// beforeProviderRequestPayload is the payload for HookBeforeProviderRequest.
+type beforeProviderRequestPayload struct {
+	Model     string
+	SessionID string
+	Headers   map[string]string
+}
+
+// BeforeProviderPayloadPatch is returned by before_provider_payload hooks.
+type BeforeProviderPayloadPatch struct {
+	Payload json.RawMessage
+}
+
+// beforeProviderPayloadPayload is the payload for HookBeforeProviderPayload.
+type beforeProviderPayloadPayload struct {
+	Model   string
+	Payload json.RawMessage
+}
+
+// BeforeAgentStartPatch is returned by before_agent_start hooks.
+type BeforeAgentStartPatch struct {
+	Messages     []session.Message
+	SystemPrompt string // override harness system prompt
+}
+
+// beforeAgentStartPayload is the payload for HookBeforeAgentStart.
+type beforeAgentStartPayload struct {
+	Prompt       string
+	Images       []any // TODO: image support
+	SystemPrompt string
 }
 
 // buildTools builds the Tool slice from the active tool names.
