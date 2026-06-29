@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"errors"
 	"strings"
@@ -583,6 +584,14 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 }
 
 func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
+	// Convert runtime-specific entries the store doesn't know about.
+	if rd, ok := entry.(runtime.StoreRoutingDecision); ok {
+		data, _ := json.Marshal(rd)
+		entry = &session.CustomEntry{
+			Type: "routing_decision",
+			Data: data,
+		}
+	}
 	return m.persistenceController().appendEntry(action, entry)
 }
 

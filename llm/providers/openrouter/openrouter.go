@@ -269,6 +269,7 @@ func (p *Provider) buildBlocks(content string, reasoning string, toolCalls []sas
 			ID:        tc.ID,
 			Name:      tc.Function.Name,
 			Arguments: tc.Function.Arguments,
+			Type:      string(tc.Type),
 		})
 	}
 	if len(blocks) == 0 {

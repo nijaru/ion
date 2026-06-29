@@ -96,6 +96,7 @@ type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments map[string]any
+	Type      string // e.g., "function"
 	Signature string // optional; provider thinking signature
 }
 

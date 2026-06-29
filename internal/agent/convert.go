@@ -69,7 +69,8 @@ func convertAssistant(m *session.AssistantMessage) llm.Message {
 		case *session.ToolCall:
 			args, _ := json.Marshal(c.Arguments)
 			msg.Calls = append(msg.Calls, llm.Call{
-				ID: c.ID,
+				ID:   c.ID,
+				Type: "function", // LLM API type, not the session's internal "tool_call" discriminator
 				Function: struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`

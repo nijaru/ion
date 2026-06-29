@@ -27,6 +27,7 @@ type ToolCallBlock struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string, not parsed
+	Type      string `json:"type"`       // e.g., "function"
 }
 
 func (ToolCallBlock) contentBlock() {}

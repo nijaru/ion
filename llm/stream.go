@@ -85,6 +85,7 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 				ID:        call.ID,
 				Name:      call.Function.Name,
 				Arguments: call.Function.Arguments,
+				Type:      call.Type,
 			})
 		}
 	}

@@ -366,6 +366,13 @@ func (h *Harness) handleEvent(e session.Event) {
 
 	case session.TurnEnd:
 		h.flushPending(ctx)
+		// Persist tool results so PrepareNextTurn's BuildContext sees them.
+		for _, tr := range e.ToolResults {
+			msg := tr // copy
+			if _, err := h.session.AppendMessage(ctx, &msg); err != nil {
+				h.emit(&session.Error{Err: fmt.Errorf("persist tool result: %w", err)})
+			}
+		}
 		// Auto-compaction check after turn ends.
 		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
 			if err := h.Compact(ctx); err != nil {
