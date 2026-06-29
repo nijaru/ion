@@ -172,8 +172,8 @@ func streamAssistantResponse(
 	for i, t := range cfg.Tools {
 		tools[i] = &llm.Spec{
 			Name:        t.Name,
-			Description: "", // TODO: add description to Tool type
-			Parameters:  nil, // TODO: add parameters to Tool type
+			Description: t.Description,
+			Parameters:  t.Parameters,
 		}
 	}
 

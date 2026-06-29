@@ -67,6 +67,8 @@ type LoopConfig struct {
 // Tool describes a tool the loop can execute.
 type Tool struct {
 	Name          string
+	Description   string
+	Parameters    any // JSON Schema for the tool's arguments
 	Execute       func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
 	ExecutionMode ExecMode
 	PrepareArgs   func(json.RawMessage) json.RawMessage

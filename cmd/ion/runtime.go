@@ -16,6 +16,7 @@ import (
 	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 func closeRuntimeHandles(
@@ -140,10 +141,47 @@ func openRuntime(
 
 	sess := session.NewSession(store, 64)
 	model := llm.Model{ID: runtimeCfg.Model}
+
+	// Register coding tools and convert to agent.Tool.
+	toolRegistry := tool.NewRegistry()
+	if err := tool.RegisterCodingTools(toolRegistry, tool.CodingToolsConfig{
+		Workdir: cwd,
+	}); err != nil {
+		// Non-fatal: start without tools if registration fails.
+		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)
+	}
+	var agentTools []agent.Tool
+	for _, entry := range toolRegistry.Entries() {
+		entry := entry // capture for closure
+		agentTools = append(agentTools, agent.Tool{
+			Name:        entry.Spec.Name,
+			Description: entry.Spec.Description,
+			Parameters:  entry.Spec.Parameters,
+			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+				result, execErr := entry.Tool.Execute(ctx, string(args))
+				if execErr != nil {
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   entry.Spec.Name,
+						Content:    []session.Content{session.TextContent{Text: execErr.Error()}},
+						IsError:    true,
+					}, nil
+				}
+				return session.ToolResultMessage{
+					ToolCallID: id,
+					ToolName:   entry.Spec.Name,
+					Content:    []session.Content{session.TextContent{Text: result}},
+				}, nil
+			},
+			ExecutionMode: agent.ExecParallel,
+		})
+	}
+
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    model,
+		Tools:    agentTools,
 		Events:   sess.EventSender(),
 		StreamFn: provider.Stream,
 	})
