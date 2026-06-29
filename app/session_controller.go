@@ -67,25 +67,17 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	return m, submitTurnCmd(m.Model.Session, m.Model.Runner, text, draft)
 }
 
-func submitTurnCmd(sess session.Session, runner runtime.Runner, text, draft string) tea.Cmd {
+func submitTurnCmd(_ session.Session, runner runtime.Runner, text, draft string) tea.Cmd {
 	return func() tea.Msg {
 		if runner != nil {
-			// Use the Runner (Harness) for turn execution.
-			// Prompt blocks until the turn completes and emits events.
 			_, err := runner.Prompt(context.Background(), text)
 			return turnSubmitResultMsg{text: text, draft: draft, err: err}
 		}
-		if sess == nil {
-			return turnSubmitResultMsg{
-				text:  text,
-				draft: draft,
-				err:   errors.New("session unavailable"),
-			}
+		return turnSubmitResultMsg{
+			text:  text,
+			draft: draft,
+			err:   errors.New("turn execution requires a configured provider and model"),
 		}
-		if err := sess.SubmitTurn(context.Background(), text); err != nil {
-			return turnSubmitResultMsg{text: text, draft: draft, err: err}
-		}
-		return turnSubmitResultMsg{text: text, draft: draft}
 	}
 }
 
@@ -218,16 +210,16 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 			Content: session.EntryText(entry),
 			TS:      now(),
 		}),
-		cancelTurnCmd(m.Model.Session),
+		cancelTurnCmd(m.Model.Runner),
 	)
 }
 
-func cancelTurnCmd(sess session.Session) tea.Cmd {
+func cancelTurnCmd(runner runtime.Runner) tea.Cmd {
 	return func() tea.Msg {
-		if sess == nil {
+		if runner == nil {
 			return turnCancelResultMsg{err: errors.New("session unavailable")}
 		}
-		if err := sess.CancelTurn(context.Background()); err != nil {
+		if err := runner.Abort(); err != nil {
 			return turnCancelResultMsg{err: err}
 		}
 		return turnCancelResultMsg{}

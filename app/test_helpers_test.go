@@ -12,6 +12,7 @@ import (
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/internal/runtime"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -118,6 +119,26 @@ func (s *stubSession) Close() error {
 	}
 	return nil
 }
+
+// --- stubRunner implements agent.Runner ---
+
+type stubRunner struct {
+	aborts int
+}
+
+func (r *stubRunner) Events() <-chan session.Event                         { return nil }
+func (r *stubRunner) Prompt(_ context.Context, _ string) (session.Message, error) { return nil, nil }
+func (r *stubRunner) Steer(_ string)                                       {}
+func (r *stubRunner) FollowUp(_ string)                                    {}
+func (r *stubRunner) NextTurn(_ string)                                    {}
+func (r *stubRunner) Abort() error                                         { r.aborts++; return nil }
+func (r *stubRunner) WaitForIdle()                                         {}
+func (r *stubRunner) Close() error                                         { return nil }
+func (r *stubRunner) Session() session.Session                             { return nil }
+func (r *stubRunner) SetModel(_ llm.Model)                                 {}
+func (r *stubRunner) SetThinking(_ session.ThinkingLevel)                  {}
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string)                  {}
+func (r *stubRunner) Compact(_ context.Context) error                      { return nil }
 
 // --- stubBackend implements agent.Backend ---
 

@@ -336,9 +336,9 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	// Pi parity: Ctrl+C clears editor, Escape cancels running turn.
 	// This test verifies Escape cancels running turn.
-	sess := &stubSession{events: make(chan session.Event)}
+	runner := &stubRunner{}
 	model := readyModel(t)
-	model.Model.Session = sess
+	model.Model.Runner = runner
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"follow up"}
 
@@ -350,8 +350,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should remain clear while running")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
+	if runner.aborts != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", runner.aborts)
 	}
 	if !model.InFlight.Thinking || !model.InFlight.Canceling {
 		t.Fatalf(
@@ -367,15 +367,15 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
 	}
 	runCommandTree(t, cmd)
-	if sess.cancels != 1 {
-		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
+	if runner.aborts != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", runner.aborts)
 	}
 }
 
 func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	runner := &stubRunner{}
 	model := readyModel(t)
-	model.Model.Session = sess
+	model.Model.Runner = runner
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("draft follow-up")
 
@@ -390,8 +390,8 @@ func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
 	if !model.InFlight.Thinking {
 		t.Fatal("turn should keep running after clearing draft")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	if runner.aborts != 0 {
+		t.Fatalf("cancel count = %d, want 0", runner.aborts)
 	}
 }
 
@@ -477,9 +477,9 @@ func TestCtrlDWithDraftEditsComposer(t *testing.T) {
 }
 
 func TestCtrlDIgnoredWhileRunning(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	runner := &stubRunner{}
 	model := readyModel(t)
-	model.Model.Session = sess
+	model.Model.Runner = runner
 	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
@@ -493,15 +493,16 @@ func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 	if !model.InFlight.Thinking {
 		t.Fatal("ctrl+d should not cancel running turn")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	if runner.aborts != 0 {
+		t.Fatalf("cancel count = %d, want 0", runner.aborts)
 	}
 }
 
 func TestEscCancelsRunningTurn(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
+	runner := &stubRunner{}
 	stored := &stubStorageSession{}
-	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
+	model := New(stubBackend{}, stored, nil, "/tmp/test", "main", "dev", nil)
+	model.Model.Runner = runner
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("draft")
 
@@ -510,8 +511,8 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("esc while running should print durable cancellation")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel count before command execution = %d, want 0", sess.cancels)
+	if runner.aborts != 0 {
+		t.Fatalf("cancel count before command execution = %d, want 0", runner.aborts)
 	}
 	if !model.InFlight.Thinking || !model.InFlight.Canceling {
 		t.Fatalf(
@@ -537,8 +538,8 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if !ok || system.Content != "Canceled by user" {
 		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}
-	if sess.cancels != 1 {
-		t.Fatalf("cancel count after command execution = %d, want 1", sess.cancels)
+	if runner.aborts != 1 {
+		t.Fatalf("cancel count after command execution = %d, want 1", runner.aborts)
 	}
 }
 
