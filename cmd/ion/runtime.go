@@ -3,18 +3,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"errors"
-	"fmt"
 
-	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/internal/runtime"
+	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -177,6 +178,14 @@ func openRuntime(
 		})
 	}
 
+	// Load skills text for system prompt.
+	skillsText := ""
+	if skillsDir, err := config.DefaultSkillsDir(); err == nil {
+		if text, err := ionskills.FormatSkillsForPrompt(skillsDir); err == nil {
+			skillsText = text
+		}
+	}
+
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:  sess,
 		Store:    store,
@@ -184,6 +193,7 @@ func openRuntime(
 		Tools:    agentTools,
 		Events:   sess.EventSender(),
 		StreamFn: provider.Stream,
+		SkillsText: skillsText,
 	})
 
 	return b, sess, harness, nil

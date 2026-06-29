@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,10 @@ type Harness struct {
 	model   llm.Model
 	thinking session.ThinkingLevel
 	sysprompt string
+
+	// resources (Pi: skills + prompt templates)
+	skillsText      string
+	promptTemplates map[string]string
 
 	stream func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	auth   func(model llm.Model) (apiKey string, headers map[string]string)
@@ -93,6 +98,8 @@ type HarnessConfig struct {
 	Model    llm.Model
 	Thinking session.ThinkingLevel
 	SysPrompt string
+	SkillsText string // pre-formatted skills XML for the system prompt
+	PromptTemplates map[string]string // name → template text
 	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	Auth     func(model llm.Model) (apiKey string, headers map[string]string)
 
@@ -121,6 +128,8 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		model:    cfg.Model,
 		thinking: cfg.Thinking,
 		sysprompt: cfg.SysPrompt,
+		skillsText: cfg.SkillsText,
+		promptTemplates: cfg.PromptTemplates,
 		stream:   cfg.StreamFn,
 		auth:     cfg.Auth,
 		phase: PhaseIdle,
@@ -297,7 +306,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	var msgs []session.Message
 	for range 2 {
 		msgs = RunLoop(ctx, prompts, TurnContext{
-			SystemPrompt: h.sysprompt,
+			SystemPrompt: h.systemPrompt(),
 			Messages:     snap.Messages,
 		}, cfg, h.handleEvent, cancel)
 
@@ -429,7 +438,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			}
 			return &NextTurnSnapshot{
 				Context: TurnContext{
-					SystemPrompt: h.sysprompt,
+					SystemPrompt: h.systemPrompt(),
 					Messages:     snap.Messages,
 				},
 				Model:    &h.model,
@@ -684,4 +693,27 @@ func (h *Harness) Compact(ctx context.Context) error {
 		return fmt.Errorf("compact: %w", err)
 	}
 	return nil
+}
+
+// systemPrompt returns the full system prompt with skills appended.
+func (h *Harness) systemPrompt() string {
+	if h.skillsText == "" {
+		return h.sysprompt
+	}
+	return h.sysprompt + h.skillsText
+}
+
+// PromptFromTemplate fills a prompt template with the given data.
+// Returns the filled template, or an empty string if the template doesn't exist.
+// Reference: Pi agent.js promptFromTemplate (line 98).
+func (h *Harness) PromptFromTemplate(name string, data map[string]string) string {
+	tmpl, ok := h.promptTemplates[name]
+	if !ok {
+		return ""
+	}
+	result := tmpl
+	for k, v := range data {
+		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
+	}
+	return result
 }
