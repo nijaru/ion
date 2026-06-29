@@ -38,9 +38,10 @@ type Harness struct {
 	runDone   chan struct{}
 	runCancel chan struct{} // closed to abort current run
 
-	// event channel for TUI
-	events chan session.Event
+	// event subscription
+	events         chan session.Event
 	externalEvents bool
+	listeners      []func(session.Event)
 
 	// buffered session writes during a run
 	pending []pendingWrite
@@ -59,8 +60,10 @@ const (
 	PhaseBranchNav   Phase = "branch_summary"
 )
 
+// pendingWrite is a buffered session mutation applied at turn boundary.
+// Pi reference: agent-harness.js pendSessionWrites (line 410-435).
 type pendingWrite struct {
-	entryType string
+	apply func(ctx context.Context, s session.Session) error
 }
 
 // HarnessConfig holds construction-time configuration for a Harness.
@@ -118,12 +121,42 @@ func NewHarness(cfg HarnessConfig) *Harness {
 // Events returns the channel the TUI subscribes to.
 func (h *Harness) Events() <-chan session.Event { return h.events }
 
-// emit sends an event to the TUI channel.
+// Subscribe registers a listener for all agent events.
+// Returns an unsubscribe function. Listeners are called on every emit.
+// Reference: Pi agent-harness.js subscribe (line 944).
+func (h *Harness) Subscribe(listener func(session.Event)) func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.listeners = append(h.listeners, listener)
+	// Capture a pointer to the backing array slot. Even if the slice grows and
+	// reallocates, we nil the original slot — no leak, just a harmless nil hole.
+	ptr := &h.listeners[len(h.listeners)-1]
+	return func() {
+		h.mu.Lock()
+		*ptr = nil
+		h.mu.Unlock()
+	}
+}
+
+// emit sends an event to the TUI channel and all subscribers.
+// Snapshot-and-release: grab listeners under the lock, then call them
+// without the lock to prevent reentry deadlocks.
 func (h *Harness) emit(e session.Event) {
 	select {
 	case h.events <- e:
 	default:
 		// channel full; drop event (non-blocking)
+	}
+	h.mu.Lock()
+	snapshot := make([]func(session.Event), 0, len(h.listeners))
+	for _, fn := range h.listeners {
+		if fn != nil {
+			snapshot = append(snapshot, fn)
+		}
+	}
+	h.mu.Unlock()
+	for _, fn := range snapshot {
+		fn(e)
 	}
 }
 
@@ -327,9 +360,7 @@ func (h *Harness) NextTurn(text string) {
 
 func (h *Harness) flushPending(ctx context.Context) {
 	for _, pw := range h.pending {
-		h.session.AppendCustom(ctx, &session.CustomEntry{
-			Type: pw.entryType,
-		})
+		_ = pw.apply(ctx, h.session)
 	}
 	h.pending = nil
 }
