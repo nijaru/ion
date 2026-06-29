@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
-// printSession is a minimal session.Session for testing print mode.
+// printSession implements both session.Session and agent.Runner for testing print mode.
 type printSession struct {
 	events    chan session.Event
 	cancelled int
@@ -85,6 +87,24 @@ func (s *printSession) Close() error {
 	s.closed++
 	return nil
 }
+
+// --- agent.Runner implementation ---
+
+func (s *printSession) Prompt(_ context.Context, _ string) (session.Message, error) {
+	if s.submitErr != nil {
+		return nil, s.submitErr
+	}
+	return nil, nil
+}
+func (s *printSession) Steer(_ string)                         {}
+func (s *printSession) FollowUp(_ string)                      {}
+func (s *printSession) NextTurn(_ string)                      {}
+func (s *printSession) Abort() error                           { s.cancelled++; return nil }
+func (s *printSession) SetModel(_ llm.Model)                   {}
+func (s *printSession) SetThinking(_ session.ThinkingLevel)    {}
+func (s *printSession) SetTools(_ []agent.Tool, _ []string)    {}
+func (s *printSession) Session() session.Session               { return s }
+func (s *printSession) Compact(_ context.Context) error        { return nil }
 
 func TestResolvePrintFlagsSupportsShortPrintWithPositionalPrompt(t *testing.T) {
 	requested, prompt, output, err := resolvePrintFlags(

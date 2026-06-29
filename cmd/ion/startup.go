@@ -371,11 +371,32 @@ func backendForProvider(provider string) (app.Backend, error) {
 		)
 	}
 	if def.Runtime == llm.RuntimeNative {
-		return nil, nil
+		return &configBackend{def: &def}, nil
 	}
 
 	return nil, fmt.Errorf("unsupported provider %q", provider)
 }
+
+// configBackend is a minimal agent.Backend for native providers.
+// It holds config and store, but does not own a Session (the harness does).
+type configBackend struct {
+	def   *llm.Definition
+	cfg   *config.Config
+	store session.Store
+}
+
+func (b *configBackend) Name() string              { return "ion" }
+func (b *configBackend) Provider() string           { if b.def != nil { return b.def.ID }; return "" }
+func (b *configBackend) Model() string              { if b.cfg != nil { return b.cfg.Model }; return "" }
+func (b *configBackend) ContextLimit() int          { if b.cfg != nil { return b.cfg.ContextLimit }; return 0 }
+func (b *configBackend) Bootstrap() app.Bootstrap {
+	entries, _ := b.store.Entries(context.Background())
+	return app.Bootstrap{Entries: entries,
+		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
+}
+func (b *configBackend) Session() session.Session       { return nil }
+func (b *configBackend) SetStore(s session.Store)       { b.store = s }
+func (b *configBackend) SetConfig(cfg *config.Config)   { b.cfg = cfg }
 
 func splitSessionModelName(value string) (string, string) {
 	value = strings.TrimSpace(value)

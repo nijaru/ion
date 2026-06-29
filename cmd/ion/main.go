@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"time"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/ctxerr"
+	"github.com/nijaru/ion/internal/agent"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"
 	"github.com/nijaru/ion/session"
@@ -232,20 +233,19 @@ func main() {
 	}
 	// Print mode: run a single turn and exit
 	if printRequested {
-		agent := b.Session()
-		if agent == nil {
+		if runner == nil {
 			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")
 			os.Exit(1)
 		}
 		runErr := runPrintModeWithTimeout(
 			ctx,
 			os.Stdout,
-			agent,
+			runner,
 			prompt,
 			cli.timeout(),
 			output,
 		)
-		closeErr := closeRuntimeHandles(agent, sess, store)
+		closeErr := closeRuntimeHandles(nil, sess, store)
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
 			os.Exit(1)
@@ -412,11 +412,11 @@ func resolvePrintFlags(
 func runPrintModeWithWriter(
 	ctx context.Context,
 	w io.Writer,
-	agent session.Session,
+	runner agent.Runner,
 	prompt string,
 	output string,
 ) error {
-	result, err := runPromptTurn(ctx, agent, prompt)
+	result, err := runPromptTurn(ctx, runner, prompt)
 	if err != nil {
 		return err
 	}
@@ -425,23 +425,51 @@ func runPrintModeWithWriter(
 
 func runPromptTurn(
 	ctx context.Context,
-	agent session.Session,
+	runner agent.Runner,
 	prompt string,
 ) (printResult, error) {
-	if err := agent.SubmitTurn(ctx, prompt); err != nil {
-		return printResult{}, fmt.Errorf("submit turn: %w", err)
+	events := runner.Events()
+	if events == nil {
+		events = make(chan session.Event) // dummy, never receives
 	}
 
 	var agentText strings.Builder
-	result := printResult{SessionID: agent.ID()}
-	seenTurnFinished := false
+	result := printResult{}
+	if sess := runner.Session(); sess != nil {
+		result.SessionID = sess.ID()
+	}
 
-	for {
+	// Start the agent turn in a goroutine.
+	type promptOutcome struct {
+		msg session.Message
+		err error
+	}
+	outcomeCh := make(chan promptOutcome, 1)
+	go func() {
+		msg, err := runner.Prompt(ctx, prompt)
+		outcomeCh <- promptOutcome{msg, err}
+	}()
+
+	// Wait for BOTH Prompt to return AND TurnEnd to be seen.
+	var (
+		promptDone  bool
+		promptMsg   session.Message
+		turnFinished bool
+	)
+
+	for !promptDone || !turnFinished {
 		select {
-		case ev, ok := <-agent.Events():
+		case ev, ok := <-events:
 			if !ok {
-				cancelPrintTurn(agent)
-				return printResult{}, fmt.Errorf("event stream closed before turn finished")
+				// Channel closed before turn finished — wait for Prompt, then error.
+				if !promptDone {
+					outcome := <-outcomeCh
+					promptMsg = outcome.msg
+					promptDone = true
+				}
+				_ = runner.Abort()
+				return printResult{},
+					fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
 			case session.ToolExecStart:
@@ -462,29 +490,33 @@ func runPromptTurn(
 				}
 			case session.TurnEnd:
 				if msg.Error != nil {
-					cancelPrintTurn(agent)
+					_ = runner.Abort()
 					return printResult{}, fmt.Errorf("session error: %w", msg.Error)
 				}
-				seenTurnFinished = true
+				turnFinished = true
 			}
-			if seenTurnFinished {
-				result.Response = agentText.String()
-				if strings.TrimSpace(result.Response) == "" {
-					return printResult{}, fmt.Errorf("turn finished without assistant response")
-				}
-				return result, nil
+		case outcome := <-outcomeCh:
+			promptMsg = outcome.msg
+			promptDone = true
+			if outcome.err != nil {
+				return printResult{}, fmt.Errorf("submit turn: %w", outcome.err)
 			}
 		case <-ctx.Done():
-			cancelPrintTurn(agent)
+			_ = runner.Abort()
 			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
 		}
 	}
-}
 
-func cancelPrintTurn(agent session.Session) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_ = agent.CancelTurn(ctx)
+	result.Response = agentText.String()
+	if strings.TrimSpace(result.Response) == "" {
+		if promptMsg != nil {
+			result.Response = session.MessageText(promptMsg)
+		}
+	}
+	if strings.TrimSpace(result.Response) == "" {
+		return printResult{}, fmt.Errorf("turn finished without assistant response")
+	}
+	return result, nil
 }
 
 func writePrintResult(w io.Writer, result printResult, output string) error {
@@ -522,7 +554,7 @@ func promptWithStdinContext(prompt, stdinText string) string {
 func runPrintModeWithTimeout(
 	ctx context.Context,
 	w io.Writer,
-	agent session.Session,
+	runner agent.Runner,
 	prompt string,
 	timeout time.Duration,
 	output string,
@@ -530,7 +562,7 @@ func runPrintModeWithTimeout(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	err := runPrintModeWithWriter(ctx, w, agent, prompt, output)
+	err := runPrintModeWithWriter(ctx, w, runner, prompt, output)
 	if err != nil && errors.Is(err, context.DeadlineExceeded) {
 		return ctxerr.Timeout("print mode", timeout, err)
 	}
