@@ -90,9 +90,6 @@ func (s *MockSession) Append(_ context.Context, _ session.Entry) (string, error)
 	return idOf(s.entries), nil
 }
 
-func (s *MockSession) SubmitTurn(_ context.Context, _ string) error { return nil }
-func (s *MockSession) CancelTurn(_ context.Context) error           { return nil }
-
 func (s *MockSession) Events() <-chan session.Event    { return s.events }
 func (s *MockSession) EventSender() chan session.Event  { return s.events }
 
