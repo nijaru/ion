@@ -4,7 +4,6 @@ import (
 	"context"
 )
 
-
 // Session is the live session handle. The harness is the only writer.
 // Translated from Pi's Session contract (agent-harness.js usage).
 type Session interface {
@@ -40,10 +39,10 @@ type Session interface {
 
 // ContextSnapshot is the result of BuildContext — what the loop needs to run a turn.
 type ContextSnapshot struct {
-	Messages     []Message
-	ActiveModel  string          // from most recent ModelChangeEntry
-	Thinking     ThinkingLevel   // from most recent ThinkingChangeEntry
-	ActiveTools  []string        // from most recent ToolsChangeEntry
+	Messages    []Message
+	ActiveModel string        // from most recent ModelChangeEntry
+	Thinking    ThinkingLevel // from most recent ThinkingChangeEntry
+	ActiveTools []string      // from most recent ToolsChangeEntry
 }
 
 // CompactionData holds the payload for a compaction entry.
@@ -61,7 +60,6 @@ type BranchSummaryData struct {
 }
 
 func (s *sessionImpl) Events() <-chan Event { return nil }
-
 
 // an interface for test fakes. The Session façade wraps this.
 type Store interface {
@@ -106,11 +104,11 @@ type Store interface {
 
 // Metadata holds session-level state.
 type Metadata struct {
-	CWD  string
+	CWD    string
 	Model  string
 	Branch string
-	ID   string // session identifier
-	Name string // user-facing name (set via AppendSessionInfo)
+	ID     string // session identifier
+	Name   string // user-facing name (set via AppendSessionInfo)
 }
 
 // ResumeSession loads an existing session by ID.
@@ -119,9 +117,8 @@ func ResumeSession(ctx context.Context, store Store, sessionID string) (Store, s
 	if err != nil {
 		return nil, "", err
 	}
+	if err := store.SetLeafID(sessionID); err != nil {
+		return nil, "", err
+	}
 	return store, sessionID, nil
 }
-
-
-
-

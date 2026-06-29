@@ -330,20 +330,28 @@ func firstNonEmpty(values ...string) string {
 func applySessionConfigFromMetadata(
 	ctx context.Context,
 	store session.Store,
+	cwd string,
 	sessionID string,
 	cfg *config.Config,
 ) error {
 	if store == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
-	resumedStore, _, err := session.ResumeSession(ctx, store, sessionID)
-	if err != nil {
+	if _, err := store.GetEntry(ctx, sessionID); err != nil {
 		return fmt.Errorf("failed to inspect session %s metadata: %w", sessionID, err)
 	}
-	defer func() {
-		_ = resumedStore.Close()
-	}()
-	provider, model := splitSessionModelName(resumedStore.GetMetadata().Model)
+	sessions, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		return fmt.Errorf("failed to list sessions: %w", err)
+	}
+	var storedModel string
+	for _, info := range sessions {
+		if info.ID() == sessionID {
+			storedModel = info.Model
+			break
+		}
+	}
+	provider, model := splitSessionModelName(storedModel)
 	if provider == "" {
 		return nil
 	}
@@ -385,18 +393,33 @@ type configBackend struct {
 	store session.Store
 }
 
-func (b *configBackend) Name() string              { return "ion" }
-func (b *configBackend) Provider() string           { if b.def != nil { return b.def.ID }; return "" }
-func (b *configBackend) Model() string              { if b.cfg != nil { return b.cfg.Model }; return "" }
-func (b *configBackend) ContextLimit() int          { if b.cfg != nil { return b.cfg.ContextLimit }; return 0 }
+func (b *configBackend) Name() string { return "ion" }
+func (b *configBackend) Provider() string {
+	if b.def != nil {
+		return b.def.ID
+	}
+	return ""
+}
+func (b *configBackend) Model() string {
+	if b.cfg != nil {
+		return b.cfg.Model
+	}
+	return ""
+}
+func (b *configBackend) ContextLimit() int {
+	if b.cfg != nil {
+		return b.cfg.ContextLimit
+	}
+	return 0
+}
 func (b *configBackend) Bootstrap() app.Bootstrap {
 	entries, _ := b.store.Entries(context.Background())
 	return app.Bootstrap{Entries: entries,
 		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
 }
-func (b *configBackend) Session() session.Session       { return nil }
-func (b *configBackend) SetStore(s session.Store)       { b.store = s }
-func (b *configBackend) SetConfig(cfg *config.Config)   { b.cfg = cfg }
+func (b *configBackend) Session() session.Session     { return nil }
+func (b *configBackend) SetStore(s session.Store)     { b.store = s }
+func (b *configBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
 
 func splitSessionModelName(value string) (string, string) {
 	value = strings.TrimSpace(value)

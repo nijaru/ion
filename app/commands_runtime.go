@@ -1,16 +1,16 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"fmt"
+	"github.com/nijaru/ion/config"
 	"os"
 	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/runtime"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -39,19 +39,21 @@ func (m Model) storedSessionConfig(
 	store session.Store,
 	sessionID string,
 ) (*config.Config, error) {
-	resumed, _, err := session.ResumeSession(ctx, m.Model.Store, sessionID)
+	if _, err := store.GetEntry(ctx, sessionID); err != nil {
+		return nil, fmt.Errorf("failed to find session %s: %w", sessionID, err)
+	}
+	sessions, err := store.ListSessions(ctx, m.App.Workdir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}
-	if resumed == nil {
-		return nil, fmt.Errorf("failed to resume session %s: missing session", sessionID)
+	var model string
+	for _, info := range sessions {
+		if info.ID() == sessionID {
+			model = info.Model
+			break
+		}
 	}
-	defer func() {
-		_ = resumed.Close()
-	}()
-
-	meta := resumed.Meta()
-	provider, modelName := splitStoredSessionModel(meta.Model)
+	provider, modelName := splitStoredSessionModel(model)
 	if provider == "" || modelName == "" {
 		return nil, fmt.Errorf("session %s is missing provider/model metadata", sessionID)
 	}

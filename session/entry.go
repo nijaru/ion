@@ -46,10 +46,10 @@ type ToolsChangeEntry struct {
 
 type CompactionEntry struct {
 	EntryBase
-	Summary       string
-	FirstKeptID   string
-	TokensBefore  int
-	Details       []byte
+	Summary      string
+	FirstKeptID  string
+	TokensBefore int
+	Details      []byte
 }
 
 type BranchSummaryEntry struct {
@@ -65,9 +65,10 @@ type LabelEntry struct {
 }
 
 type SessionInfoEntry struct {
-	Model      string
-	Branch     string
-	UpdatedAt  time.Time
+	Model     string
+	Branch    string
+	Workdir   string
+	UpdatedAt time.Time
 	EntryBase
 	Name        string
 	Summary     string
@@ -82,45 +83,45 @@ type CustomEntry struct {
 	Data []byte
 }
 
-func (e *MessageEntry) IsEntry()       {}
-func (e *ModelChangeEntry) IsEntry()   {}
+func (e *MessageEntry) IsEntry()        {}
+func (e *ModelChangeEntry) IsEntry()    {}
 func (e *ThinkingChangeEntry) IsEntry() {}
-func (e *ToolsChangeEntry) IsEntry()   {}
-func (e *CompactionEntry) IsEntry()    {}
-func (e *BranchSummaryEntry) IsEntry() {}
-func (e *LabelEntry) IsEntry()         {}
-func (e *SessionInfoEntry) IsEntry()   {}
-func (e *CustomEntry) IsEntry()        {}
+func (e *ToolsChangeEntry) IsEntry()    {}
+func (e *CompactionEntry) IsEntry()     {}
+func (e *BranchSummaryEntry) IsEntry()  {}
+func (e *LabelEntry) IsEntry()          {}
+func (e *SessionInfoEntry) IsEntry()    {}
+func (e *CustomEntry) IsEntry()         {}
 
-func (e *MessageEntry) ID() string       { return e.EntryBase.ID }
-func (e *ModelChangeEntry) ID() string   { return e.EntryBase.ID }
+func (e *MessageEntry) ID() string        { return e.EntryBase.ID }
+func (e *ModelChangeEntry) ID() string    { return e.EntryBase.ID }
 func (e *ThinkingChangeEntry) ID() string { return e.EntryBase.ID }
-func (e *ToolsChangeEntry) ID() string   { return e.EntryBase.ID }
-func (e *CompactionEntry) ID() string    { return e.EntryBase.ID }
-func (e *BranchSummaryEntry) ID() string { return e.EntryBase.ID }
-func (e *LabelEntry) ID() string         { return e.EntryBase.ID }
-func (e *SessionInfoEntry) ID() string   { return e.EntryBase.ID }
-func (e *CustomEntry) ID() string        { return e.EntryBase.ID }
+func (e *ToolsChangeEntry) ID() string    { return e.EntryBase.ID }
+func (e *CompactionEntry) ID() string     { return e.EntryBase.ID }
+func (e *BranchSummaryEntry) ID() string  { return e.EntryBase.ID }
+func (e *LabelEntry) ID() string          { return e.EntryBase.ID }
+func (e *SessionInfoEntry) ID() string    { return e.EntryBase.ID }
+func (e *CustomEntry) ID() string         { return e.EntryBase.ID }
 
-func (e *MessageEntry) ParentID() string       { return e.EntryBase.ParentID }
-func (e *ModelChangeEntry) ParentID() string   { return e.EntryBase.ParentID }
+func (e *MessageEntry) ParentID() string        { return e.EntryBase.ParentID }
+func (e *ModelChangeEntry) ParentID() string    { return e.EntryBase.ParentID }
 func (e *ThinkingChangeEntry) ParentID() string { return e.EntryBase.ParentID }
-func (e *ToolsChangeEntry) ParentID() string   { return e.EntryBase.ParentID }
-func (e *CompactionEntry) ParentID() string    { return e.EntryBase.ParentID }
-func (e *BranchSummaryEntry) ParentID() string { return e.EntryBase.ParentID }
-func (e *LabelEntry) ParentID() string         { return e.EntryBase.ParentID }
-func (e *SessionInfoEntry) ParentID() string   { return e.EntryBase.ParentID }
-func (e *CustomEntry) ParentID() string        { return e.EntryBase.ParentID }
+func (e *ToolsChangeEntry) ParentID() string    { return e.EntryBase.ParentID }
+func (e *CompactionEntry) ParentID() string     { return e.EntryBase.ParentID }
+func (e *BranchSummaryEntry) ParentID() string  { return e.EntryBase.ParentID }
+func (e *LabelEntry) ParentID() string          { return e.EntryBase.ParentID }
+func (e *SessionInfoEntry) ParentID() string    { return e.EntryBase.ParentID }
+func (e *CustomEntry) ParentID() string         { return e.EntryBase.ParentID }
 
-func (e *MessageEntry) When() time.Time       { return e.EntryBase.Timestamp }
-func (e *ModelChangeEntry) When() time.Time   { return e.EntryBase.Timestamp }
+func (e *MessageEntry) When() time.Time        { return e.EntryBase.Timestamp }
+func (e *ModelChangeEntry) When() time.Time    { return e.EntryBase.Timestamp }
 func (e *ThinkingChangeEntry) When() time.Time { return e.EntryBase.Timestamp }
-func (e *ToolsChangeEntry) When() time.Time   { return e.EntryBase.Timestamp }
-func (e *CompactionEntry) When() time.Time    { return e.EntryBase.Timestamp }
-func (e *BranchSummaryEntry) When() time.Time { return e.EntryBase.Timestamp }
-func (e *LabelEntry) When() time.Time         { return e.EntryBase.Timestamp }
-func (e *SessionInfoEntry) When() time.Time   { return e.EntryBase.Timestamp }
-func (e *CustomEntry) When() time.Time        { return e.EntryBase.Timestamp }
+func (e *ToolsChangeEntry) When() time.Time    { return e.EntryBase.Timestamp }
+func (e *CompactionEntry) When() time.Time     { return e.EntryBase.Timestamp }
+func (e *BranchSummaryEntry) When() time.Time  { return e.EntryBase.Timestamp }
+func (e *LabelEntry) When() time.Time          { return e.EntryBase.Timestamp }
+func (e *SessionInfoEntry) When() time.Time    { return e.EntryBase.Timestamp }
+func (e *CustomEntry) When() time.Time         { return e.EntryBase.Timestamp }
 
 // ThinkingLevel controls reasoning effort for a turn.
 type ThinkingLevel string
@@ -161,8 +162,6 @@ func EntrySystem(content string, ts time.Time) (*MessageEntry, error) {
 
 func (e *SessionInfoEntry) Title() string { return e.Name }
 
-
-
 // EntryIsError returns true if the entry is a tool result with an error.
 func EntryIsError(e Entry) bool {
 	if te, ok := e.(*TestEntry); ok {
@@ -195,7 +194,6 @@ func EntryReasoning(e Entry) string {
 	return ""
 }
 
-
 // TestEntry is a test-only type that implements Entry with flat fields.
 // This makes tests simpler than constructing MessageEntry + Message.
 type TestEntry struct {
@@ -209,7 +207,7 @@ type TestEntry struct {
 	Timestamp    time.Time
 }
 
-func (e *TestEntry) IsEntry()            {}
-func (e *TestEntry) ID() string          { return e.TestID }
-func (e *TestEntry) ParentID() string    { return e.TestParentID }
-func (e *TestEntry) When() time.Time     { return e.Timestamp }
+func (e *TestEntry) IsEntry()         {}
+func (e *TestEntry) ID() string       { return e.TestID }
+func (e *TestEntry) ParentID() string { return e.TestParentID }
+func (e *TestEntry) When() time.Time  { return e.Timestamp }

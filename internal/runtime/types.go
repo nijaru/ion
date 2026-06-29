@@ -14,7 +14,7 @@ import (
 type ProgressMode int
 
 const (
-	StateReady      ProgressMode = iota
+	StateReady ProgressMode = iota
 	StateIonizing
 	StateStreaming
 	StateWorking
@@ -180,7 +180,7 @@ func (t Transition) Persist(fn func(update config.RuntimeStateUpdate) error) err
 	}
 	return fn(config.RuntimeStateUpdate{})
 }
-func (t Transition) WithStatePersistence() Transition  { t.PersistState = true; return t }
+func (t Transition) WithStatePersistence() Transition     { t.PersistState = true; return t }
 func (t Transition) WithReasoningPersistence() Transition { t.PersistReasoning = true; return t }
 
 // Accepted wraps a Transition with resolved Handles.
@@ -290,7 +290,28 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 
 // Resume re-attaches to an existing session.
 func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
-	return SwitchResult{}, fmt.Errorf("resume not implemented")
+	if input.Switcher == nil {
+		return SwitchResult{}, fmt.Errorf("switcher not provided")
+	}
+	if input.SessionID == "" {
+		return SwitchResult{}, fmt.Errorf("session id is required")
+	}
+
+	cfg := input.Transition.Snapshot.BackendConfig
+	backend, sess, storage, err := input.Switcher(ctx, &cfg, input.SessionID)
+	if err != nil {
+		return SwitchResult{}, fmt.Errorf("resume: %w", err)
+	}
+
+	newHandles := Handles{Backend: backend, Session: sess, Storage: storage}
+	transition := input.Transition.WithHandles(newHandles)
+	if input.SaveState != nil {
+		_ = input.SaveState(config.RuntimeStateUpdate{Config: &cfg})
+	}
+	return SwitchResult{
+		Runtime:  NewAccepted(transition, newHandles),
+		Previous: input.Current,
+	}, nil
 }
 
 // CloseHandles releases resources.
@@ -389,7 +410,7 @@ func (t TurnReducer) StartSubmit() {
 		t.progress.Status = "Submitting..."
 	}
 }
-func (t TurnReducer) RejectSubmit(reason string) {}
+func (t TurnReducer) RejectSubmit(reason string)                                 {}
 func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {}
 
 func (t TurnReducer) QueueTurn(text string) {
@@ -439,8 +460,8 @@ func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) {
 	t.inFlight.StreamChunks = nil
 	return entry, true
 }
-func (t TurnReducer) FailTurn(msg string, now time.Time)              {}
-func (t TurnReducer) ClearLocalErrorIfIdle()                           {}
+func (t TurnReducer) FailTurn(msg string, now time.Time) {}
+func (t TurnReducer) ClearLocalErrorIfIdle()             {}
 
 // StatusChangedDecision holds the result of a status change.
 type StatusChangedDecision struct {
@@ -517,10 +538,10 @@ func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) {
 
 // TurnFinishedDispatch holds events to emit after a turn finishes.
 type TurnFinishedDispatch struct {
-	ReloadGitDiff    bool
-	AwaitNext        bool
-	Action           string
-	Text             string
+	ReloadGitDiff      bool
+	AwaitNext          bool
+	Action             string
+	Text               string
 	RearmSessionEvents bool
 }
 
@@ -560,7 +581,6 @@ func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {
 	t.inFlight.ReasonBuf += fmt.Sprint(delta)
 }
 
-
 func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
 	if t.inFlight == nil {
 		return nil, false
@@ -589,7 +609,7 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 	t.inFlight.PendingTools[id] = &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: ts},
 		Message: &session.ToolResultMessage{
-			ToolName: title,
+			ToolName:  title,
 			Timestamp: ts,
 		},
 	}

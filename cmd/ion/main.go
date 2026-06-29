@@ -201,7 +201,7 @@ func main() {
 		return
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
-		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
+		if err := applySessionConfigFromMetadata(ctx, store, cwd, sessionID, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
@@ -245,6 +245,9 @@ func main() {
 			cli.timeout(),
 			output,
 		)
+		if runErr == nil {
+			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
+		}
 		closeErr := closeRuntimeHandles(nil, sess, store)
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
@@ -452,8 +455,8 @@ func runPromptTurn(
 
 	// Wait for BOTH Prompt to return AND TurnEnd to be seen.
 	var (
-		promptDone  bool
-		promptMsg   session.Message
+		promptDone   bool
+		promptMsg    session.Message
 		turnFinished bool
 	)
 
@@ -515,7 +518,51 @@ func runPromptTurn(
 	if strings.TrimSpace(result.Response) == "" {
 		return printResult{}, fmt.Errorf("turn finished without assistant response")
 	}
+	if sess := runner.Session(); sess != nil {
+		result.SessionID = sess.ID()
+	}
 	return result, nil
+}
+
+func updatePrintSessionInfo(
+	ctx context.Context,
+	store session.Store,
+	runner agent.Runner,
+	cwd string,
+	branch string,
+	cfg *config.Config,
+	prompt string,
+) error {
+	if store == nil || runner == nil || runner.Session() == nil || cfg == nil {
+		return nil
+	}
+	id := runner.Session().ID()
+	if id == "" || id == "canto" {
+		return nil
+	}
+	preview := strings.TrimSpace(prompt)
+	if preview == "" {
+		return nil
+	}
+	now := time.Now()
+	return store.UpdateSession(ctx, session.SessionInfoEntry{
+		EntryBase:   session.EntryBase{ID: id, Timestamp: now},
+		Workdir:     cwd,
+		Model:       sessionModelName(cfg.Provider, cfg.Model),
+		Branch:      branch,
+		Name:        truncatePrintPreview(preview, 80),
+		LastPreview: truncatePrintPreview(preview, 120),
+		UpdatedAt:   now,
+	})
+}
+
+func truncatePrintPreview(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) <= max {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:max]) + "…"
 }
 
 func writePrintResult(w io.Writer, result printResult, output string) error {

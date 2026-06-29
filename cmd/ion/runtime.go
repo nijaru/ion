@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
-	"errors"
 
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
@@ -119,11 +119,9 @@ func openRuntime(
 	b.SetConfig(&runtimeCfg)
 
 	if sessionID != "" {
-		_, _, err := session.ResumeSession(ctx, store, sessionID)
-		if err != nil {
+		if _, _, err := session.ResumeSession(ctx, store, sessionID); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
-		return b, nil, nil, nil
 	}
 
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
@@ -187,12 +185,12 @@ func openRuntime(
 	}
 
 	harness := agent.NewHarness(agent.HarnessConfig{
-		Session:  sess,
-		Store:    store,
-		Model:    model,
-		Tools:    agentTools,
-		Events:   sess.EventSender(),
-		StreamFn: provider.Stream,
+		Session:    sess,
+		Store:      store,
+		Model:      model,
+		Tools:      agentTools,
+		Events:     sess.EventSender(),
+		StreamFn:   provider.Stream,
 		SkillsText: skillsText,
 	})
 

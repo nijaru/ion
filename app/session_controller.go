@@ -3,13 +3,13 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	
+
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
@@ -178,7 +178,6 @@ func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	}
 	return m.queueBusyInput(text)
 }
-
 
 func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().QueueTurn(text)
@@ -445,6 +444,9 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	if dispatch.ReloadGitDiff {
 		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
 	}
+	if cmd := m.persistCurrentSessionInfoCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if dispatch.AwaitNext {
 		cmds = append(cmds, m.awaitSessionEvent())
 	}
@@ -508,6 +510,7 @@ func (m Model) handleToolExecEnd(msg session.ToolExecEnd) (Model, tea.Cmd) {
 	}
 	return m, m.awaitSessionEvent()
 }
+
 // See ARCHITECTURE-PLAN.md Phase 1.
 
 type runtimeRequestController struct {
@@ -583,6 +586,104 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 	}
 }
 
+func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
+	if m.Model.Store == nil {
+		return nil
+	}
+	info, ok := m.currentSessionInfo(context.Background())
+	if !ok {
+		return nil
+	}
+	store := m.Model.Store
+	return func() tea.Msg {
+		if err := store.UpdateSession(context.Background(), info); err != nil {
+			return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}
+		}
+		return nil
+	}
+}
+
+func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry, bool) {
+	id := ""
+	if m.Model.Store != nil {
+		id = m.Model.Store.GetLeafID()
+	}
+	if id == "" && m.Model.Session != nil {
+		id = m.Model.Session.ID()
+	}
+	if id == "" || id == "canto" {
+		return session.SessionInfoEntry{}, false
+	}
+
+	var entries []session.Entry
+	var err error
+	if m.Model.Session != nil {
+		entries, err = m.Model.Session.Branch(ctx)
+	} else if m.Model.Store != nil {
+		entries, err = m.Model.Store.Branch(ctx)
+	}
+	if err != nil {
+		return session.SessionInfoEntry{}, false
+	}
+
+	firstUser := ""
+	lastUser := ""
+	for _, entry := range entries {
+		me, ok := entry.(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		if _, ok := me.Message.(*session.UserMessage); !ok {
+			continue
+		}
+		text := strings.TrimSpace(session.MessageText(me.Message))
+		if text == "" {
+			continue
+		}
+		if firstUser == "" {
+			firstUser = text
+		}
+		lastUser = text
+	}
+	if lastUser == "" {
+		return session.SessionInfoEntry{}, false
+	}
+
+	return session.SessionInfoEntry{
+		EntryBase:   session.EntryBase{ID: id, Timestamp: time.Now()},
+		Workdir:     m.App.Workdir,
+		Model:       m.currentSessionModelName(),
+		Branch:      m.App.Branch,
+		Name:        truncateRunes(firstUser, 80),
+		LastPreview: truncateRunes(lastUser, 120),
+		UpdatedAt:   time.Now(),
+	}, true
+}
+
+func (m Model) currentSessionModelName() string {
+	provider := ""
+	model := ""
+	if m.Model.Backend != nil {
+		provider = strings.TrimSpace(m.Model.Backend.Provider())
+		model = strings.TrimSpace(m.Model.Backend.Model())
+	}
+	if m.Model.Config != nil {
+		if provider == "" {
+			provider = strings.TrimSpace(m.Model.Config.Provider)
+		}
+		if model == "" {
+			model = strings.TrimSpace(m.Model.Config.Model)
+		}
+	}
+	if provider == "" {
+		return model
+	}
+	if model == "" {
+		return provider
+	}
+	return provider + "/" + model
+}
+
 func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
 	// Convert runtime-specific entries the SQLite store doesn't know about.
 	switch e := entry.(type) {
@@ -642,5 +743,3 @@ func entryUnix(timestamp time.Time) int64 {
 	}
 	return timestamp.UTC().Unix()
 }
-
-

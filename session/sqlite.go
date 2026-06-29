@@ -2,9 +2,9 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,9 +16,9 @@ import (
 // discriminated by type; message payload as JSON content blocks.
 // Tree structure via parent_id; leaf pointer via session_meta table.
 type SQLiteStore struct {
-	db    *sql.DB
-	meta  Metadata
-	leaf  string
+	db   *sql.DB
+	meta Metadata
+	leaf string
 }
 
 // Schema holds the SQL for creating the tables.
@@ -77,10 +77,10 @@ func (s *SQLiteStore) loadMeta() error {
 	return nil
 }
 
-func (s *SQLiteStore) GetLeafID() string      { return s.leaf }
-func (s *SQLiteStore) GetMetadata() Metadata   { return s.meta }
-func (s *SQLiteStore) Meta() Metadata            { return s.meta }
-func (s *SQLiteStore) Close() error            { return s.db.Close() }
+func (s *SQLiteStore) GetLeafID() string     { return s.leaf }
+func (s *SQLiteStore) GetMetadata() Metadata { return s.meta }
+func (s *SQLiteStore) Meta() Metadata        { return s.meta }
+func (s *SQLiteStore) Close() error          { return s.db.Close() }
 
 func (s *SQLiteStore) SetLeafID(id string) error {
 	_, err := s.db.Exec(
@@ -129,7 +129,7 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT session_id, model, branch, name, summary, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
+		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
 		workdir)
 	if err != nil {
 		return nil, err
@@ -137,17 +137,19 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 	defer rows.Close()
 	var sessions []SessionInfoEntry
 	for rows.Next() {
-		var sid, model, branch, name, summary string
+		var sid, wd, model, branch, name, summary, preview string
 		var updatedAt int64
-		if err := rows.Scan(&sid, &model, &branch, &name, &summary, &updatedAt); err != nil {
+		if err := rows.Scan(&sid, &wd, &model, &branch, &name, &summary, &preview, &updatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, SessionInfoEntry{
-			EntryBase: EntryBase{ID: sid, Timestamp: time.Unix(updatedAt, 0)},
-			Model:     model,
-			Branch:    branch,
-			Name:      name,
-			Summary:   summary,
+			EntryBase:   EntryBase{ID: sid, Timestamp: time.Unix(updatedAt, 0)},
+			Workdir:     wd,
+			Model:       model,
+			Branch:      branch,
+			Name:        name,
+			Summary:     summary,
+			LastPreview: preview,
 		})
 	}
 	return sessions, rows.Err()
@@ -195,6 +197,7 @@ func NewCantoStore(path string) (Store, error) {
 		branch     TEXT NOT NULL DEFAULT '',
 		name       TEXT NOT NULL DEFAULT '',
 		summary    TEXT NOT NULL DEFAULT '',
+		last_preview TEXT NOT NULL DEFAULT '',
 		updated_at INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_sessions_workdir ON sessions(workdir, updated_at);
@@ -211,6 +214,8 @@ func NewCantoStore(path string) (Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Best-effort migration for databases created before last_preview existed.
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN last_preview TEXT NOT NULL DEFAULT ''")
 	return &SQLiteStore{db: db, meta: Metadata{ID: "canto"}}, nil
 }
 
@@ -218,11 +223,19 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	if s.db == nil {
 		return nil
 	}
+	if info.ID() == "" {
+		return fmt.Errorf("session id is required")
+	}
+	updatedAt := info.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO sessions (session_id, workdir, model, branch, name, summary, updated_at) VALUES (?, '', ?, ?, ?, ?, ?)",
-		info.ID, info.Model, info.Branch, info.Name, info.Summary, info.UpdatedAt.Unix())
+		"INSERT OR REPLACE INTO sessions (session_id, workdir, model, branch, name, summary, last_preview, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		info.ID(), info.Workdir, info.Model, info.Branch, info.Name, info.Summary, info.LastPreview, updatedAt.Unix())
 	return err
 }
+
 // Append persists an entry to the store.
 func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	id := entry.ID()
@@ -391,11 +404,11 @@ type scannable interface {
 
 func scanEntry(s scannable) (Entry, error) {
 	var (
-		id        string
-		parentID  string
-		typ       string
-		ts        int64
-		payload   []byte
+		id       string
+		parentID string
+		typ      string
+		ts       int64
+		payload  []byte
 	)
 	if err := s.Scan(&id, &parentID, &typ, &ts, &payload); err != nil {
 		return nil, err

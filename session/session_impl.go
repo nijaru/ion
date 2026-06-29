@@ -18,9 +18,14 @@ func NewSession(store Store, bufferSize int) Session {
 	return &sessionImpl{store: store, events: make(chan Event, bufferSize)}
 }
 
-func (s *sessionImpl) ID() string   { return s.store.GetMetadata().ID }
+func (s *sessionImpl) ID() string {
+	if leaf := s.store.GetLeafID(); leaf != "" {
+		return leaf
+	}
+	return s.store.GetMetadata().ID
+}
 func (s *sessionImpl) Meta() Metadata { return s.store.GetMetadata() }
-func (s *sessionImpl) Close() error { return s.store.Close() }
+func (s *sessionImpl) Close() error   { return s.store.Close() }
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
@@ -233,7 +238,9 @@ func newID() string {
 
 func (s *sessionImpl) Append(ctx context.Context, entry Entry) (string, error) {
 	_, err := s.store.Append(ctx, entry)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	return entry.(interface{ ID() string }).ID(), nil
 }
 
