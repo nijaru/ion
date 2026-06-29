@@ -40,9 +40,12 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 		return ContextSnapshot{}, err
 	}
 
-	// Find the most recent compaction and branch summary.
+	// Find the most recent compaction, branch summary, and state changes.
 	var lastCompaction *CompactionEntry
 	var branchSummary *BranchSummaryEntry
+	var activeModel string
+	var activeThinking ThinkingLevel
+	var activeTools []string
 	for i := len(entries) - 1; i >= 0; i-- {
 		switch e := entries[i].(type) {
 		case *CompactionEntry:
@@ -53,8 +56,20 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 			if branchSummary == nil {
 				branchSummary = e
 			}
+		case *ModelChangeEntry:
+			if activeModel == "" {
+				activeModel = e.ModelID
+			}
+		case *ThinkingChangeEntry:
+			if activeThinking == "" {
+				activeThinking = e.Level
+			}
+		case *ToolsChangeEntry:
+			if activeTools == nil {
+				activeTools = e.ActiveTools
+			}
 		}
-		if lastCompaction != nil && branchSummary != nil {
+		if lastCompaction != nil && branchSummary != nil && activeModel != "" && activeThinking != "" && activeTools != nil {
 			break
 		}
 	}
@@ -89,7 +104,12 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 		}
 	}
 
-	return ContextSnapshot{Messages: msgs}, nil
+	return ContextSnapshot{
+		Messages:    msgs,
+		ActiveModel: activeModel,
+		Thinking:    activeThinking,
+		ActiveTools: activeTools,
+	}, nil
 }
 
 // Usage accumulates token counts from all AssistantMessages in the branch.
@@ -158,6 +178,28 @@ func (s *sessionImpl) AppendSessionInfo(ctx context.Context, name string) (strin
 	return s.appendLeaf(ctx, &SessionInfoEntry{
 		EntryBase: s.newBase(ctx),
 		Name:      name,
+	})
+}
+
+func (s *sessionImpl) AppendModelChange(ctx context.Context, provider string, modelID string) (string, error) {
+	return s.appendLeaf(ctx, &ModelChangeEntry{
+		EntryBase: s.newBase(ctx),
+		Provider:  provider,
+		ModelID:   modelID,
+	})
+}
+
+func (s *sessionImpl) AppendThinkingLevelChange(ctx context.Context, level ThinkingLevel) (string, error) {
+	return s.appendLeaf(ctx, &ThinkingChangeEntry{
+		EntryBase: s.newBase(ctx),
+		Level:     level,
+	})
+}
+
+func (s *sessionImpl) AppendActiveToolsChange(ctx context.Context, tools []string) (string, error) {
+	return s.appendLeaf(ctx, &ToolsChangeEntry{
+		EntryBase:   s.newBase(ctx),
+		ActiveTools: tools,
 	})
 }
 

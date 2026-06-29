@@ -23,6 +23,9 @@ type Session interface {
 	AppendCompaction(ctx context.Context, data CompactionData) (string, error)
 	AppendBranchSummary(ctx context.Context, data BranchSummaryData) (string, error)
 	AppendSessionInfo(ctx context.Context, name string) (string, error)
+	AppendModelChange(ctx context.Context, provider string, modelID string) (string, error)
+	AppendThinkingLevelChange(ctx context.Context, level ThinkingLevel) (string, error)
+	AppendActiveToolsChange(ctx context.Context, tools []string) (string, error)
 	AppendCustom(ctx context.Context, entry *CustomEntry) (string, error)
 	Append(ctx context.Context, entry Entry) (string, error)
 	Events() <-chan Event
@@ -37,7 +40,10 @@ type Session interface {
 
 // ContextSnapshot is the result of BuildContext — what the loop needs to run a turn.
 type ContextSnapshot struct {
-	Messages []Message
+	Messages     []Message
+	ActiveModel  string          // from most recent ModelChangeEntry
+	Thinking     ThinkingLevel   // from most recent ThinkingChangeEntry
+	ActiveTools  []string        // from most recent ToolsChangeEntry
 }
 
 // CompactionData holds the payload for a compaction entry.

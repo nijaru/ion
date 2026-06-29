@@ -35,10 +35,10 @@ func (s *printSession) AppendMessage(context.Context, session.Message) (string, 
 func (s *printSession) AppendModelChange(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (s *printSession) AppendThinkingChange(context.Context, session.ThinkingLevel) (string, error) {
+func (s *printSession) AppendThinkingLevelChange(context.Context, session.ThinkingLevel) (string, error) {
 	return "", nil
 }
-func (s *printSession) AppendToolsChange(context.Context, []string) (string, error) {
+func (s *printSession) AppendActiveToolsChange(context.Context, []string) (string, error) {
 	return "", nil
 }
 func (s *printSession) AppendCompaction(context.Context, session.CompactionData) (string, error) {

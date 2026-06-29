@@ -248,6 +248,22 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		return nil, fmt.Errorf("build context: %w", err)
 	}
 
+	// Restore active state from session tree (survives replay).
+	// If the session has recorded model/thinking/tool changes, they take precedence
+	// over the harness's current state (which may be from a fresh start).
+	h.mu.Lock()
+	if snap.ActiveModel != "" && snap.ActiveModel != h.model.ID {
+		// Model was changed mid-session — the session tree is authoritative.
+		// The harness's model at construction time was a starting point.
+	}
+	if snap.Thinking != "" {
+		h.thinking = snap.Thinking
+	}
+	if len(snap.ActiveTools) > 0 {
+		h.active = snap.ActiveTools
+	}
+	h.mu.Unlock()
+
 	// Drain nextTurn queue and prepend to prompts.
 	prompts := h.drainNextTurn()
 	prompts = append(prompts, session.NewUserText(text, time.Now()))
@@ -575,8 +591,16 @@ func (h *Harness) flushPending(ctx context.Context) {
 func (h *Harness) SetModel(model llm.Model) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	oldModel := h.model
 	h.model = model
-	// TODO: buffer if run is active, or persist immediately if idle
+	if model.ID != oldModel.ID {
+		h.pending = append(h.pending, pendingWrite{
+			apply: func(ctx context.Context, s session.Session) error {
+				_, err := s.AppendModelChange(ctx, model.Provider, model.ID)
+				return err
+			},
+		})
+	}
 }
 
 // SetThinking changes the thinking level.
@@ -584,6 +608,12 @@ func (h *Harness) SetThinking(level session.ThinkingLevel) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.thinking = level
+	h.pending = append(h.pending, pendingWrite{
+		apply: func(ctx context.Context, s session.Session) error {
+			_, err := s.AppendThinkingLevelChange(ctx, level)
+			return err
+		},
+	})
 }
 
 // SetTools changes the active tools.
@@ -596,6 +626,12 @@ func (h *Harness) SetTools(tools []Tool, active []string) {
 	}
 	h.tools = toolMap
 	h.active = active
+	h.pending = append(h.pending, pendingWrite{
+		apply: func(ctx context.Context, s session.Session) error {
+			_, err := s.AppendActiveToolsChange(ctx, active)
+			return err
+		},
+	})
 }
 
 // WaitForIdle blocks until the current run completes.

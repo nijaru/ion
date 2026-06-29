@@ -56,10 +56,10 @@ func (s *stubSession) AppendMessage(_ context.Context, msg session.Message) (str
 func (s *stubSession) AppendModelChange(_ context.Context, _, _ string) (string, error) {
 	return "mc-1", nil
 }
-func (s *stubSession) AppendThinkingChange(_ context.Context, _ session.ThinkingLevel) (string, error) {
+func (s *stubSession) AppendThinkingLevelChange(_ context.Context, _ session.ThinkingLevel) (string, error) {
 	return "tc-1", nil
 }
-func (s *stubSession) AppendToolsChange(_ context.Context, _ []string) (string, error) {
+func (s *stubSession) AppendActiveToolsChange(_ context.Context, _ []string) (string, error) {
 	return "tools-1", nil
 }
 func (s *stubSession) AppendCompaction(_ context.Context, _ session.CompactionData) (string, error) {

@@ -28,10 +28,10 @@ func (s *closeStorageSession) AppendMessage(context.Context, session.Message) (s
 func (s *closeStorageSession) AppendModelChange(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (s *closeStorageSession) AppendThinkingChange(context.Context, session.ThinkingLevel) (string, error) {
+func (s *closeStorageSession) AppendThinkingLevelChange(context.Context, session.ThinkingLevel) (string, error) {
 	return "", nil
 }
-func (s *closeStorageSession) AppendToolsChange(context.Context, []string) (string, error) {
+func (s *closeStorageSession) AppendActiveToolsChange(context.Context, []string) (string, error) {
 	return "", nil
 }
 func (s *closeStorageSession) AppendCompaction(context.Context, session.CompactionData) (string, error) {
