@@ -106,9 +106,7 @@ func openRuntime(
 ) (app.Backend, session.Session, agent.Runner, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		b := app.NewUnconfigured(&runtimeCfg, err)
-		b.SetStore(store)
-		return b, nil, nil, nil
+		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, nil
 	}
 
 	b, err := backendForProvider(runtimeCfg.Provider)

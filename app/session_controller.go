@@ -144,8 +144,9 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	if m.Model.Config != nil {
 		mode = m.Model.Config.BusyInputMode()
 	}
-	steering, supportsSteering := m.Model.Session.(runtime.SteeringSession)
-	queued, supportsFollowUp := m.Model.Session.(runtime.QueuedInputSession)
+	runner := m.Model.Runner
+	supportsSteering := runner != nil
+	supportsFollowUp := runner != nil
 
 	switch runtime.RouteBusyInput(runtime.BusyInputRouting{
 		Mode:             mode,
@@ -156,25 +157,23 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	}) {
 	case runtime.BusyInputRouteSteer:
 		m.resetComposerDraft()
-		return m, steerTurnCmd(steering, text)
+		runner.Steer(text)
+		return m, nil
 	case runtime.BusyInputRouteFollowUp:
-		priorFollowUpCount := len(m.InFlight.QueuedTurns)
 		m.resetComposerDraft()
-		return m, followUpTurnCmd(queued, text, priorFollowUpCount)
+		runner.FollowUp(text)
+		return m, nil
 	default:
 		return m.queueBusyInputLocal(text)
 	}
 }
 
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
-	if m.InFlight.Thinking && !m.Progress.Compacting {
-		if queued, ok := m.Model.Session.(runtime.QueuedInputSession); ok {
-			priorFollowUpCount := len(m.InFlight.QueuedTurns)
-			m.resetComposerDraft()
-			return m, followUpTurnCmd(queued, text, priorFollowUpCount)
-		}
+	if m.InFlight.Thinking && !m.Progress.Compacting && m.Model.Runner != nil {
+		m.resetComposerDraft()
+		m.Model.Runner.FollowUp(text)
+		return m, nil
 	}
-
 	return m.queueBusyInputLocal(text)
 }
 
@@ -187,53 +186,6 @@ func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	return m.queueBusyInput(text)
 }
 
-func steerTurnCmd(steering runtime.SteeringSession, text string) tea.Cmd {
-	return func() tea.Msg {
-		result, err := steering.SteerTurn(context.Background(), text)
-		return steeringResultMsg{text: text, result: result, err: err}
-	}
-}
-
-func (m Model) handleSteeringResult(msg steeringResultMsg) (Model, tea.Cmd) {
-	decision := runtime.DecideSteeringResult(msg.result, msg.err)
-	if decision.Action == runtime.BusyInputResultAccepted {
-		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
-		return m, m.terminalCommit().Entries(entry)
-	}
-	return m.queueBusyInput(msg.text)
-}
-
-func followUpTurnCmd(
-	queued runtime.QueuedInputSession,
-	text string,
-	priorFollowUpCount int,
-) tea.Cmd {
-	return func() tea.Msg {
-		result, err := queued.FollowUpTurn(context.Background(), text)
-		return followUpResultMsg{
-			text:               text,
-			priorFollowUpCount: priorFollowUpCount,
-			result:             result,
-			err:                err,
-		}
-	}
-}
-
-func (m Model) handleFollowUpResult(msg followUpResultMsg) (Model, tea.Cmd) {
-	decision := runtime.DecideFollowUpResult(runtime.FollowUpResultInput{
-		Text:               msg.text,
-		PriorFollowUpCount: msg.priorFollowUpCount,
-		CurrentFollowUp:    m.InFlight.QueuedTurns,
-		Result:             msg.result,
-		Err:                msg.err,
-	})
-	if decision.Action == runtime.BusyInputResultAccepted {
-		m.turnReducer().SetBackendQueuedInput(m.InFlight.QueuedSteering, decision.FollowUp)
-		entry, _ := session.EntrySystem(decision.NoticeContent, time.Time{})
-		return m, m.terminalCommit().Entries(entry)
-	}
-	return m.queueBusyInputLocal(msg.text)
-}
 
 func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 	m.turnReducer().QueueTurn(text)
@@ -253,22 +205,7 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.turnReducer().ClearQueuedTurns()
-	setDraft := m.setComposerDraft(decision.ComposerText)
-	if decision.ClearBackend {
-		if queuedInput, ok := m.Model.Session.(runtime.QueuedInputSession); ok {
-			return m, tea.Sequence(clearQueuedInputCmd(queuedInput), setDraft)
-		}
-	}
-	return m, setDraft
-}
-
-func clearQueuedInputCmd(queued runtime.QueuedInputSession) tea.Cmd {
-	return func() tea.Msg {
-		if _, err := queued.ClearQueuedInput(context.Background()); err != nil {
-			return queuedInputClearResultMsg{err: err}
-		}
-		return queuedInputClearResultMsg{}
-	}
+	return m, m.setComposerDraft(decision.ComposerText)
 }
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {

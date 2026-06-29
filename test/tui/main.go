@@ -208,11 +208,12 @@ func (b *smokeBackend) CancelTurn(context.Context) error {
 	return nil
 }
 
-func (b *smokeBackend) SteerTurn(ctx context.Context, text string) (runtime.SteeringResult, error) {
-	if strings.TrimSpace(text) == "" {
-		return runtime.SteeringResult{}, fmt.Errorf("steering text is empty")
-	}
-	return runtime.SteeringResult{}, nil
+func (b *smokeBackend) Steer(text string) {
+	// no-op: test backend
+}
+
+func (b *smokeBackend) FollowUp(text string) {
+	// no-op: test backend
 }
 
 func (b *smokeBackend) Close() error {

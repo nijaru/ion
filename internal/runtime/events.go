@@ -127,31 +127,6 @@ type BusyInputDecision struct {
 
 var BusyInputResultAccepted = "accepted"
 
-type SteeringResult struct{}
-type FollowUpResult struct{}
-
-type FollowUpResultInput struct {
-	Text               string
-	PriorFollowUpCount int
-	CurrentFollowUp    []string
-	Result             FollowUpResult
-	Err                error
-}
-
-func DecideSteeringResult(result SteeringResult, err error) BusyInputDecision {
-	if err != nil {
-		return BusyInputDecision{}
-	}
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Steering applied"}
-}
-
-func DecideFollowUpResult(input FollowUpResultInput) BusyInputDecision {
-	if input.Err != nil {
-		return BusyInputDecision{}
-	}
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Follow-up queued", FollowUp: []string{input.Text}}
-}
-
 type QueuedInputRecallInput struct {
 	Text         string
 	CurrentDraft string
@@ -385,16 +360,3 @@ var NoModelConfiguredStatus = "No model configured"
 
 // StoreEvent is an alias for session.Entry, used by persistence layer.
 type StoreEvent = session.Entry
-
-// --- Interfaces (moved from session/) ---
-
-// SteeringSession is the interface for sessions that support steering.
-type SteeringSession interface {
-	SteerTurn(ctx context.Context, text string) (SteeringResult, error)
-}
-
-// QueuedInputSession is the interface for sessions that support queued input.
-type QueuedInputSession interface {
-	FollowUpTurn(ctx context.Context, text string) (FollowUpResult, error)
-	ClearQueuedInput(ctx context.Context) (string, error)
-}

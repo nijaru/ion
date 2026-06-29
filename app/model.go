@@ -167,23 +167,6 @@ type turnSubmitResultMsg struct {
 	rearm bool
 }
 
-type steeringResultMsg struct {
-	text   string
-	result struct{}
-	err    error
-}
-
-type followUpResultMsg struct {
-	text               string
-	priorFollowUpCount int
-	result             struct{}
-	err                error
-}
-
-type queuedInputClearResultMsg struct {
-	err error
-}
-
 type turnCancelResultMsg struct {
 	err error
 }
