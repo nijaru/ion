@@ -54,12 +54,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m.cycleScopedModelCommand(false)
 
-	case "ctrl+t":
-		// Pi parity: Ctrl+T toggles thinking blocks visibility.
-		m.clearPendingAction()
-		m.ThinkingBlockExpanded = !m.ThinkingBlockExpanded
-		return m, nil
-
 	case "ctrl+o":
 		m.clearPendingAction()
 		m.ToolOutputExpanded = !m.ToolOutputExpanded

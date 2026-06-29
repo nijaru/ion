@@ -18,7 +18,6 @@ const (
 
 	// Thinking
 	ActionCycleThinking KeybindingAction = "thinking.cycle"
-	ActionToggleThinking KeybindingAction = "thinking.toggle"
 
 	// Editor
 	ActionExternalEditor KeybindingAction = "editor.external"
@@ -42,7 +41,6 @@ var DefaultKeybindings = map[KeybindingAction]string{
 	ActionCycleModelForward:  "ctrl+l",
 	ActionCycleModelBackward: "ctrl+shift+l",
 	ActionCycleThinking:      "shift+tab",
-	ActionToggleThinking:     "ctrl+t",
 	ActionExternalEditor:     "ctrl+g",
 	ActionToggleTools:        "ctrl+o",
 	ActionToggleNamedFilter:  "ctrl+n",

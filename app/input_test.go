@@ -579,29 +579,6 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
-func TestCtrlTTogglesThinkingBlocks(t *testing.T) {
-	// Pi parity: Ctrl+T toggles thinking blocks visibility.
-	model := readyModel(t)
-
-	if model.ThinkingBlockExpanded {
-		t.Fatal("thinking blocks should start collapsed")
-	}
-
-	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
-	model = testModel(t, updated)
-
-	if !model.ThinkingBlockExpanded {
-		t.Fatal("thinking blocks should be expanded after Ctrl+T")
-	}
-
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
-	model = testModel(t, updated)
-
-	if model.ThinkingBlockExpanded {
-		t.Fatal("thinking blocks should be collapsed after second Ctrl+T")
-	}
-}
-
 func TestExternalEditorFinishedUpdatesComposer(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("[paste #1 +12 lines]")

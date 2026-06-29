@@ -358,10 +358,6 @@ type Model struct {
 	// Toggled by Ctrl+O.
 	ToolOutputExpanded bool
 
-	// ThinkingBlockExpanded tracks whether thinking blocks are visible.
-	// Toggled by Ctrl+T (Pi parity: app.thinking.toggle).
-	ThinkingBlockExpanded bool
-
 	// Keybindings manages keybinding configuration.
 	Keybindings *KeybindingsManager
 
