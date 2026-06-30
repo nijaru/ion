@@ -160,6 +160,15 @@ func EntrySystem(content string, ts time.Time) (*MessageEntry, error) {
 	}, nil
 }
 
+// EntryCustom creates a custom entry for auxiliary persisted data.
+func EntryCustom(customType string, data []byte, ts time.Time) (*CustomEntry, error) {
+	return &CustomEntry{
+		EntryBase: EntryBase{Timestamp: ts},
+		Type:      customType,
+		Data:      data,
+	}, nil
+}
+
 func (e *SessionInfoEntry) Title() string { return e.Name }
 
 // EntryIsError returns true if the entry is a tool result with an error.

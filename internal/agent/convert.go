@@ -21,6 +21,8 @@ func DefaultConvert(msgs []session.Message) []llm.Message {
 			result = append(result, convertAssistant(m))
 		case *session.ToolResultMessage:
 			result = append(result, convertToolResult(m))
+		case *session.CustomMessage:
+			result = append(result, convertCustomMessage(m))
 		}
 	}
 	return result
@@ -86,6 +88,26 @@ func convertToolResult(m *session.ToolResultMessage) llm.Message {
 		Role:   llm.RoleTool,
 		ToolID: m.ToolCallID,
 		Name:   m.ToolName,
+	}
+	for _, c := range m.Content {
+		switch c := c.(type) {
+		case session.TextContent:
+			msg.Content += c.Text
+			msg.Parts = append(msg.Parts, llm.TextPart(c.Text))
+		case session.ImageContent:
+			msg.Parts = append(msg.Parts, llm.ContentPart{
+				Type:     llm.ContentPartImage,
+				MIMEType: c.MimeType,
+				Data:     base64.StdEncoding.EncodeToString(c.Data),
+			})
+		}
+	}
+	return msg
+}
+
+func convertCustomMessage(m *session.CustomMessage) llm.Message {
+	msg := llm.Message{
+		Role: llm.RoleUser,
 	}
 	for _, c := range m.Content {
 		switch c := c.(type) {

@@ -66,6 +66,28 @@ func NewUserText(text string, ts time.Time) *UserMessage {
 	return &UserMessage{Content: []Content{TextContent{Text: text}}, Timestamp: ts}
 }
 
+// CustomMessage wraps arbitrary content for display or auxiliary persistence.
+// Reference: Pi messages.js createCustomMessage (line 37).
+type CustomMessage struct {
+	CustomType string
+	Content    []Content
+	Display    string
+	Details    json.RawMessage
+	Timestamp  time.Time
+}
+
+func (CustomMessage) isMessage()                {}
+func (m CustomMessage) timestamp() time.Time     { return m.Timestamp }
+
+// NewCustomMessage creates a custom message of the given type.
+func NewCustomMessage(customType string, content string, ts time.Time) *CustomMessage {
+	return &CustomMessage{
+		CustomType: customType,
+		Content:    []Content{TextContent{Text: content}},
+		Timestamp:  ts,
+	}
+}
+
 // Content is a sealed union of content block kinds.
 type Content interface {
 	isContent()
@@ -223,6 +245,14 @@ func MessageText(msg Message) string {
 		}
 		return b.String()
 	case *UserMessage:
+		var b strings.Builder
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
+	case *CustomMessage:
 		var b strings.Builder
 		for _, c := range m.Content {
 			if tc, ok := c.(TextContent); ok {

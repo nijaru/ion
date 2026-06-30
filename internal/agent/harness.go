@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ type Harness struct {
 
 	stream func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	auth   func(model llm.Model) (apiKey string, headers map[string]string)
+	transport http.RoundTripper
+	timeout  time.Duration
 
 	// queues (Pi PendingMessageQueue x3)
 	steer    []session.Message
@@ -88,6 +91,16 @@ const (
 	HookToolResult            = "tool_result"
 )
 
+// QueueUpdate is emitted when steer/followUp/nextTurn queues change.
+// Reference: Pi agent-harness.js emitQueueUpdate (line 249).
+type QueueUpdate struct {
+	SteerCount    int
+	FollowUpCount int
+	NextTurnCount int
+}
+
+func (QueueUpdate) IsEvent() {}
+
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
 	Events chan session.Event
@@ -103,6 +116,12 @@ type HarnessConfig struct {
 	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	Auth     func(model llm.Model) (apiKey string, headers map[string]string)
 
+	// Transport is an optional HTTP transport for provider requests.
+	// When set, the BeforeProviderRequest hook can override it.
+	Transport http.RoundTripper
+	// Timeout is an optional per-request timeout.
+	Timeout time.Duration
+
 	// Compaction settings.
 	Compaction    CompactionSettings
 	ContextWindow int // model context window size in tokens
@@ -110,8 +129,14 @@ type HarnessConfig struct {
 
 // NewHarness creates a new Harness from the given configuration.
 func NewHarness(cfg HarnessConfig) *Harness {
+	// Validate tool names — Pi detects duplicates at construction time.
+	seen := make(map[string]bool, len(cfg.Tools))
 	toolMap := make(map[string]Tool, len(cfg.Tools))
 	for _, t := range cfg.Tools {
+		if seen[t.Name] {
+			panic(fmt.Sprintf("harness: duplicate tool name %q", t.Name))
+		}
+		seen[t.Name] = true
 		toolMap[t.Name] = t
 	}
 	active := cfg.Active
@@ -487,6 +512,12 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 						h.model.Headers[k] = v
 					}
 				}
+				if bp.Transport != nil {
+					h.transport = *bp.Transport
+				}
+				if bp.Timeout != nil {
+					h.timeout = *bp.Timeout
+				}
 			}
 		}
 
@@ -516,7 +547,9 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 
 // BeforeProviderRequestPatch is returned by before_provider_request hooks.
 type BeforeProviderRequestPatch struct {
-	Headers map[string]string
+	Headers   map[string]string
+	Transport *http.RoundTripper
+	Timeout   *time.Duration
 }
 
 // beforeProviderRequestPayload is the payload for HookBeforeProviderRequest.
@@ -578,6 +611,7 @@ func (h *Harness) Steer(text string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.steer = append(h.steer, session.NewUserText(text, time.Now()))
+	h.emitQueueUpdate()
 }
 
 // FollowUp queues a message to be processed after the agent would otherwise stop.
@@ -585,6 +619,7 @@ func (h *Harness) FollowUp(text string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.followUp = append(h.followUp, session.NewUserText(text, time.Now()))
+	h.emitQueueUpdate()
 }
 
 // NextTurn queues a message to be prepended to the next prompt.
@@ -592,6 +627,17 @@ func (h *Harness) NextTurn(text string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.nextTurn = append(h.nextTurn, session.NewUserText(text, time.Now()))
+	h.emitQueueUpdate()
+}
+
+// emitQueueUpdate notifies subscribers that queued input has changed.
+// Must be called with h.mu held.
+func (h *Harness) emitQueueUpdate() {
+	h.emit(&QueueUpdate{
+		SteerCount:    len(h.steer),
+		FollowUpCount: len(h.followUp),
+		NextTurnCount: len(h.nextTurn),
+	})
 }
 
 // --- buffered writes ---
@@ -723,4 +769,30 @@ func (h *Harness) PromptFromTemplate(name string, data map[string]string) string
 		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
 	}
 	return result
+}
+
+// GetModel returns the current model.
+func (h *Harness) GetModel() llm.Model { h.mu.Lock(); defer h.mu.Unlock(); return h.model }
+
+// GetThinkingLevel returns the current thinking level.
+func (h *Harness) GetThinkingLevel() session.ThinkingLevel { h.mu.Lock(); defer h.mu.Unlock(); return h.thinking }
+
+// GetTools returns the current tool map and active tool names.
+func (h *Harness) GetTools() (map[string]Tool, []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	tools := make(map[string]Tool, len(h.tools))
+	for k, v := range h.tools {
+		tools[k] = v
+	}
+	active := make([]string, len(h.active))
+	copy(active, h.active)
+	return tools, active
+}
+
+// AppendMessage appends a message directly to the session without running a turn.
+// Reference: Pi agent-harness.js appendMessage (line 614).
+func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error {
+	_, err := h.session.AppendMessage(ctx, msg)
+	return err
 }
