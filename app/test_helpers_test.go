@@ -137,10 +137,10 @@ type stubRunner struct {
 
 func (r *stubRunner) Events() <-chan session.Event                         { return nil }
 func (r *stubRunner) Prompt(_ context.Context, _ string) (session.Message, error) { return nil, nil }
-func (r *stubRunner) Steer(_ string)                                       {}
-func (r *stubRunner) FollowUp(_ string)                                    {}
+func (r *stubRunner) Steer(_ string) error                                { return nil }
+func (r *stubRunner) FollowUp(_ string) error                             { return nil }
 func (r *stubRunner) NextTurn(_ string)                                    {}
-func (r *stubRunner) Abort() error                                         { r.aborts++; return nil }
+func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) { r.aborts++; return nil, nil, nil }
 func (r *stubRunner) WaitForIdle()                                         {}
 func (r *stubRunner) Close() error                                         { return nil }
 func (r *stubRunner) Session() session.Session                             { return nil }

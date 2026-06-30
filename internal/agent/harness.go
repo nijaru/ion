@@ -44,6 +44,10 @@ type Harness struct {
 	followUp []session.Message
 	nextTurn []session.Message
 
+	// queue drain modes (Pi: one-at-a-time vs all)
+	steeringMode string // "one-at-a-time" | "all"
+	followUpMode string // "one-at-a-time" | "all"
+
 	// single active run
 	phase     Phase
 	mu        sync.Mutex
@@ -94,15 +98,8 @@ const (
 	HookToolResult            = "tool_result"
 )
 
-// QueueUpdate is emitted when steer/followUp/nextTurn queues change.
-// Reference: Pi agent-harness.js emitQueueUpdate (line 249).
-type QueueUpdate struct {
-	SteerCount    int
-	FollowUpCount int
-	NextTurnCount int
-}
-
-func (QueueUpdate) IsEvent() {}
+// QueueUpdate was moved to session/events.go as part of Phase B harness parity.
+// The session.QueueUpdate carries full []Message arrays, not just counts.
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
@@ -128,6 +125,11 @@ type HarnessConfig struct {
 	// Logger is used for structured logging throughout the harness lifecycle.
 	// When nil, logging is silent.
 	Logger *slog.Logger
+
+	// SteeringMode controls how steering messages are drained (default "one-at-a-time").
+	SteeringMode string
+	// FollowUpMode controls how follow-up messages are drained (default "one-at-a-time").
+	FollowUpMode string
 
 	// Metrics collects runtime statistics. When nil, metrics are not recorded.
 	Metrics *Metrics
@@ -174,6 +176,14 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		externalEvents: cfg.Events != nil,
 		compaction: cfg.Compaction,
 		contextWindow: cfg.ContextWindow,
+		steeringMode: cfg.SteeringMode,
+		followUpMode: cfg.FollowUpMode,
+	}
+	if h.steeringMode == "" {
+		h.steeringMode = "one-at-a-time"
+	}
+	if h.followUpMode == "" {
+		h.followUpMode = "one-at-a-time"
 	}
 	if h.events == nil {
 		h.events = make(chan session.Event, 64)
@@ -397,9 +407,12 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 //
 // Reference: Pi agent-harness.js handleAgentEvent (line 441).
 func (h *Harness) handleEvent(e session.Event) {
-	h.emit(e) // forward to TUI
-
 	ctx := context.Background()
+
+	// AgentEnd is forwarded last (after Settled) to avoid racing with TUI channel close.
+	if _, ok := e.(session.AgentEnd); !ok {
+		h.emit(e)
+	}
 
 	switch e := e.(type) {
 	case session.TurnStart:
@@ -441,6 +454,7 @@ func (h *Harness) handleEvent(e session.Event) {
 
 	case session.TurnEnd:
 		h.flushPending(ctx)
+		hadPending := len(h.pending) > 0
 		// Persist tool results so PrepareNextTurn's BuildContext sees them.
 		for _, tr := range e.ToolResults {
 			msg := tr // copy
@@ -448,6 +462,8 @@ func (h *Harness) handleEvent(e session.Event) {
 				h.emit(&session.Error{Err: fmt.Errorf("persist tool result: %w", err)})
 			}
 		}
+		// Emit SavePoint after durable writes (Pi: line ~480).
+		h.emit(&session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
 		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
 			if err := h.Compact(ctx); err != nil {
@@ -457,6 +473,11 @@ func (h *Harness) handleEvent(e session.Event) {
 
 	case session.AgentEnd:
 		h.flushPending(ctx)
+		// Emit Settled before forwarding AgentEnd so TUI sees lifecycle in order
+		// and we don't race with channel close.
+		h.emit(&session.Settled{NextTurnCount: len(h.nextTurn)})
+		h.phase = PhaseIdle
+		h.emit(e) // forward AgentEnd last
 	}
 }
 
@@ -472,10 +493,14 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 		Convert:  DefaultConvert,
 		Auth:     h.auth,
 		DrainSteer: func() []session.Message {
-			return h.drain(&h.steer)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.drainQueued(&h.steer, h.steeringMode)
 		},
 		DrainFollowUp: func() []session.Message {
-			return h.drain(&h.followUp)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.drainQueued(&h.followUp, h.followUpMode)
 		},
 		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
 			patches, err := h.emitHook(HookToolResult, toolResultPayload{
@@ -663,33 +688,59 @@ func (h *Harness) buildTools() []Tool {
 
 // --- queue management ---
 
-func (h *Harness) drain(queue *[]session.Message) []session.Message {
-	msgs := *queue
-	*queue = nil
+// drainQueued drains messages from a queue according to the drain mode.
+// "one-at-a-time" returns a single message; "all" returns the full queue.
+// Reference: Pi agent-harness.js drainQueuedMessages (line 345).
+func (h *Harness) drainQueued(queue *[]session.Message, mode string) []session.Message {
+	var msgs []session.Message
+	if mode == "all" {
+		msgs = *queue
+		*queue = nil
+	} else {
+		if len(*queue) == 0 {
+			return nil
+		}
+		msgs = []session.Message{(*queue)[0]}
+		*queue = (*queue)[1:]
+	}
+	if len(msgs) > 0 {
+		h.emitQueueUpdate()
+	}
 	return msgs
 }
 
+// drainNextTurn drains the nextTurn queue — always in "all" mode.
 func (h *Harness) drainNextTurn() []session.Message {
-	return h.drain(&h.nextTurn)
+	return h.drainQueued(&h.nextTurn, "all")
 }
 
 // Steer queues a message to be injected before the next assistant response.
-func (h *Harness) Steer(text string) {
+// Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
+func (h *Harness) Steer(text string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.phase == PhaseIdle {
+		return fmt.Errorf("cannot steer while idle")
+	}
 	h.steer = append(h.steer, session.NewUserText(text, time.Now()))
 	h.emitQueueUpdate()
+	return nil
 }
 
 // FollowUp queues a message to be processed after the agent would otherwise stop.
-func (h *Harness) FollowUp(text string) {
+// Returns an error if the harness is idle.
+func (h *Harness) FollowUp(text string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.phase == PhaseIdle {
+		return fmt.Errorf("cannot follow up while idle")
+	}
 	h.followUp = append(h.followUp, session.NewUserText(text, time.Now()))
 	h.emitQueueUpdate()
+	return nil
 }
 
-// NextTurn queues a message to be prepended to the next prompt.
+// NextTurn queues a message to be prepended to the next prompt (always allowed).
 func (h *Harness) NextTurn(text string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -698,12 +749,16 @@ func (h *Harness) NextTurn(text string) {
 }
 
 // emitQueueUpdate notifies subscribers that queued input has changed.
-// Must be called with h.mu held.
+// Carries full message arrays, not just counts.
 func (h *Harness) emitQueueUpdate() {
-	h.emit(&QueueUpdate{
-		SteerCount:    len(h.steer),
-		FollowUpCount: len(h.followUp),
-		NextTurnCount: len(h.nextTurn),
+	steer := make([]session.Message, len(h.steer))
+	copy(steer, h.steer)
+	followUp := make([]session.Message, len(h.followUp))
+	copy(followUp, h.followUp)
+	nextTurn := make([]session.Message, len(h.nextTurn))
+	copy(nextTurn, h.nextTurn)
+	h.emit(&session.QueueUpdate{
+		Steer: steer, FollowUp: followUp, NextTurn: nextTurn,
 	})
 }
 
@@ -781,20 +836,34 @@ func (h *Harness) WaitForIdle() {
 	}
 }
 
-// Abort cancels the current run.
-func (h *Harness) Abort() error {
+// Abort cancels the current run and clears steering/follow-up queues.
+// Emits an Abort event with the cleared messages (Pi: line ~905).
+func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 	h.mu.Lock()
+	clearedSteer := make([]session.Message, len(h.steer))
+	copy(clearedSteer, h.steer)
+	clearedFollowUp := make([]session.Message, len(h.followUp))
+	copy(clearedFollowUp, h.followUp)
+	h.steer = nil
+	h.followUp = nil
 	cancel := h.runCancel
 	h.mu.Unlock()
+
 	if cancel != nil {
 		select {
 		case <-cancel:
-			// already closed
 		default:
 			close(cancel)
 		}
 	}
-	return nil
+
+	h.emitQueueUpdate()
+	h.WaitForIdle()
+	h.emit(&session.Abort{
+		ClearedSteer:    clearedSteer,
+		ClearedFollowUp: clearedFollowUp,
+	})
+	return clearedSteer, clearedFollowUp, nil
 }
 
 // Close releases resources.

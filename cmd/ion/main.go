@@ -469,7 +469,7 @@ func runPromptTurn(
 					<-outcomeCh
 					promptDone = true
 				}
-				_ = runner.Abort()
+				_, _, _ = runner.Abort()
 				return printResult{},
 					fmt.Errorf("event stream closed before turn finished")
 			}
@@ -492,7 +492,7 @@ func runPromptTurn(
 				}
 			case session.TurnEnd:
 				if msg.Error != nil {
-					_ = runner.Abort()
+					_, _, _ = runner.Abort()
 					return printResult{}, fmt.Errorf("session error: %w", msg.Error)
 				}
 				turnFinished = true
@@ -504,7 +504,7 @@ func runPromptTurn(
 				return printResult{}, fmt.Errorf("submit turn: %w", outcome.err)
 			}
 		case <-ctx.Done():
-			_ = runner.Abort()
+			_, _, _ = runner.Abort()
 			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
 		}
 	}

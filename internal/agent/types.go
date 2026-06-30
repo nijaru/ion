@@ -160,16 +160,19 @@ type Runner interface {
 	Prompt(ctx context.Context, text string) (session.Message, error)
 
 	// Steer queues a steering message (mid-turn direction change).
-	Steer(text string)
+	// Returns an error if the harness is idle.
+	Steer(text string) error
 
 	// FollowUp queues a follow-up message for the next turn.
-	FollowUp(text string)
+	// Returns an error if the harness is idle.
+	FollowUp(text string) error
 
 	// NextTurn queues a message to start a new turn.
 	NextTurn(text string)
 
-	// Abort cancels the current turn.
-	Abort() error
+	// Abort cancels the current turn and clears steering/follow-up queues.
+	// Returns the cleared messages.
+	Abort() ([]session.Message, []session.Message, error)
 
 	// SetModel switches the active model.
 	SetModel(model llm.Model)

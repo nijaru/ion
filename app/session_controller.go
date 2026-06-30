@@ -150,11 +150,11 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	}) {
 	case runtime.BusyInputRouteSteer:
 		m.resetComposerDraft()
-		runner.Steer(text)
+		_ = runner.Steer(text) // ignore idle error; TUI can't fix harness state
 		return m, nil
 	case runtime.BusyInputRouteFollowUp:
 		m.resetComposerDraft()
-		runner.FollowUp(text)
+		_ = runner.FollowUp(text)
 		return m, nil
 	default:
 		return m.queueBusyInputLocal(text)
@@ -164,7 +164,7 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	if m.InFlight.Thinking && !m.Progress.Compacting && m.Model.Runner != nil {
 		m.resetComposerDraft()
-		m.Model.Runner.FollowUp(text)
+		_ = m.Model.Runner.FollowUp(text)
 		return m, nil
 	}
 	return m.queueBusyInputLocal(text)
@@ -219,7 +219,7 @@ func cancelTurnCmd(runner runtime.Runner) tea.Cmd {
 		if runner == nil {
 			return turnCancelResultMsg{err: errors.New("session unavailable")}
 		}
-		if err := runner.Abort(); err != nil {
+		if _, _, err := runner.Abort(); err != nil {
 			return turnCancelResultMsg{err: err}
 		}
 		return turnCancelResultMsg{}

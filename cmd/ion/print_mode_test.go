@@ -105,10 +105,10 @@ func (s *printSession) Prompt(_ context.Context, _ string) (session.Message, err
 	}
 	return nil, nil
 }
-func (s *printSession) Steer(_ string)                         {}
-func (s *printSession) FollowUp(_ string)                      {}
-func (s *printSession) NextTurn(_ string)                      {}
-func (s *printSession) Abort() error                           { s.cancelled++; return nil }
+func (s *printSession) Steer(_ string) error                                 { return nil }
+func (s *printSession) FollowUp(_ string) error                              { return nil }
+func (s *printSession) NextTurn(_ string)                                     {}
+func (s *printSession) Abort() ([]session.Message, []session.Message, error) { s.cancelled++; return nil, nil, nil }
 func (s *printSession) SetModel(_ llm.Model)                   {}
 func (s *printSession) SetThinking(_ session.ThinkingLevel)    {}
 func (s *printSession) SetTools(_ []agent.Tool, _ []string)    {}
