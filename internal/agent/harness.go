@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type Harness struct {
 	model   llm.Model
 	thinking session.ThinkingLevel
 	sysprompt string
+	log      *slog.Logger // structured logger, may be nil
 
 	// resources (Pi: skills + prompt templates)
 	skillsText      string
@@ -122,6 +124,10 @@ type HarnessConfig struct {
 	// Timeout is an optional per-request timeout.
 	Timeout time.Duration
 
+	// Logger is used for structured logging throughout the harness lifecycle.
+	// When nil, logging is silent.
+	Logger *slog.Logger
+
 	// Compaction settings.
 	Compaction    CompactionSettings
 	ContextWindow int // model context window size in tokens
@@ -153,6 +159,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		model:    cfg.Model,
 		thinking: cfg.Thinking,
 		sysprompt: cfg.SysPrompt,
+		log:      cfg.Logger,
 		skillsText: cfg.SkillsText,
 		promptTemplates: cfg.PromptTemplates,
 		stream:   cfg.StreamFn,
@@ -256,9 +263,11 @@ func (h *Harness) emit(e session.Event) {
 //
 // Reference: Pi agent-harness.js prompt (line 541).
 func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, error) {
+	turnStart := time.Now()
 	h.mu.Lock()
 	if h.phase != PhaseIdle {
 		h.mu.Unlock()
+		h.logf(slog.LevelWarn, "prompt rejected: harness busy", slog.String("phase", string(h.phase)))
 		return nil, fmt.Errorf("harness is busy (phase=%s)", h.phase)
 	}
 	h.phase = PhaseTurn
@@ -268,12 +277,14 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	h.mu.Unlock()
 
 	defer func() {
+		dur := time.Since(turnStart)
 		h.mu.Lock()
 		h.phase = PhaseIdle
 		h.runCancel = nil
 		close(h.runDone)
 		h.runDone = nil
 		h.mu.Unlock()
+		h.logf(slog.LevelInfo, "turn end", slog.Duration("duration", dur), slog.String("model", h.model.ID))
 	}()
 
 	// Build turn context from session.
@@ -383,9 +394,40 @@ func (h *Harness) handleEvent(e session.Event) {
 	ctx := context.Background()
 
 	switch e := e.(type) {
+	case session.TurnStart:
+		// Track turn start for duration logging.
+
 	case session.MessageEnd:
+		switch msg := e.Message.(type) {
+		case *session.UserMessage:
+			text := messageText(msg)
+			if len(text) > 80 {
+				text = text[:80] + "..."
+			}
+			h.logf(slog.LevelInfo, "prompt", slog.String("text", text))
+		case *session.AssistantMessage:
+			text := messageText(msg)
+			if len(text) > 120 {
+				text = text[:120] + "..."
+			}
+			h.logf(slog.LevelInfo, "response",
+				slog.String("stop_reason", string(msg.StopReason)),
+				slog.String("text", text),
+			)
+		case *session.ToolResultMessage:
+			text := messageText(msg)
+			if len(text) > 120 {
+				text = text[:120] + "..."
+			}
+			h.logf(slog.LevelInfo, "tool_result",
+				slog.String("tool", msg.ToolName),
+				slog.Bool("is_error", msg.IsError),
+				slog.String("text", text),
+			)
+		}
 		// Persist the message to the session.
 		if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
+			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
 			h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
 		}
 
@@ -667,6 +709,7 @@ func (h *Harness) flushPending(ctx context.Context) {
 	// individual Appends are atomic under SQLite WAL mode.
 	for _, pw := range h.pending {
 		if err := pw.apply(ctx, h.session); err != nil {
+			h.logf(slog.LevelError, "flush pending write failed", slog.String("error", err.Error()))
 			h.emit(&session.Error{Err: fmt.Errorf("flush pending write: %w", err)})
 		}
 	}
@@ -765,10 +808,14 @@ func (h *Harness) Store() session.Store { return h.store }
 //
 // Reference: Pi agent-harness.js compact (line 500)
 func (h *Harness) Compact(ctx context.Context) error {
+	h.logf(slog.LevelInfo, "compact start", slog.String("model", h.model.ID))
+	start := time.Now()
 	_, err := Compact(ctx, h.session, h.stream, h.model.ID, h.compaction)
 	if err != nil {
+		h.logf(slog.LevelError, "compact failed", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()))
 		return fmt.Errorf("compact: %w", err)
 	}
+	h.logf(slog.LevelInfo, "compact end", slog.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -778,6 +825,47 @@ func (h *Harness) systemPrompt() string {
 		return h.sysprompt
 	}
 	return h.sysprompt + h.skillsText
+}
+
+// messageText returns the combined text content of any message type.
+func messageText(msg session.Message) string {
+	var text string
+	switch m := msg.(type) {
+	case *session.UserMessage:
+		for _, c := range m.Content {
+			if tc, ok := c.(session.TextContent); ok {
+				text += tc.Text
+			}
+		}
+	case *session.AssistantMessage:
+		for _, c := range m.Content {
+			switch c := c.(type) {
+			case session.TextContent:
+				text += c.Text
+			case session.ThinkingContent:
+				// skip thinking — it's verbose
+			case *session.ToolCall:
+				text += fmt.Sprintf("<tool:%s>", c.Name)
+			}
+		}
+	case *session.ToolResultMessage:
+		for _, c := range m.Content {
+			if tc, ok := c.(session.TextContent); ok {
+				text += tc.Text
+			}
+		}
+	}
+	return text
+}
+
+// logf logs a structured message if the logger is set.
+func (h *Harness) logf(level slog.Level, msg string, attrs ...slog.Attr) {
+	if h.log == nil {
+		return
+	}
+	a := slog.Record{Time: time.Now(), Level: level, Message: msg}
+	a.AddAttrs(attrs...)
+	_ = h.log.Handler().Handle(context.Background(), a)
 }
 
 // PromptFromTemplate fills a prompt template with the given data.

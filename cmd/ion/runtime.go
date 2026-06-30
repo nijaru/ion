@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,6 +217,7 @@ func openRuntime(
 	// Load prompt templates from ~/.ion/prompts/.
 	promptTemplates := loadPromptTemplates()
 
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:         sess,
 		Store:           store,
@@ -225,6 +227,7 @@ func openRuntime(
 		StreamFn:        provider.Stream,
 		SkillsText:      skillsText,
 		PromptTemplates: promptTemplates,
+		Logger:          log,
 	})
 
 	return b, sess, harness, nil
