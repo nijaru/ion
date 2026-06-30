@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,7 @@ import (
 // Tree structure via parent_id; leaf pointer via session_meta table.
 type SQLiteStore struct {
 	db   *sql.DB
+	mu   sync.Mutex
 	meta Metadata
 	leaf string
 }
@@ -77,12 +79,29 @@ func (s *SQLiteStore) loadMeta() error {
 	return nil
 }
 
-func (s *SQLiteStore) GetLeafID() string     { return s.leaf }
-func (s *SQLiteStore) GetMetadata() Metadata { return s.meta }
-func (s *SQLiteStore) Meta() Metadata        { return s.meta }
-func (s *SQLiteStore) Close() error          { return s.db.Close() }
+func (s *SQLiteStore) GetLeafID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leaf
+}
+
+func (s *SQLiteStore) GetMetadata() Metadata {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
+}
+
+func (s *SQLiteStore) Meta() Metadata {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
+}
+
+func (s *SQLiteStore) Close() error { return s.db.Close() }
 
 func (s *SQLiteStore) SetLeafID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		id,
@@ -238,6 +257,8 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 
 // Append persists an entry to the store.
 func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	id := entry.ID()
 	parentID := entry.ParentID()
 	ts := entry.When().UnixMilli()
@@ -287,12 +308,21 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]strin
 
 // GetEntry returns a single entry by ID.
 func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getEntry(ctx, id)
+}
+
+// getEntry is the internal (unlocked) entry reader.
+func (s *SQLiteStore) getEntry(ctx context.Context, id string) (Entry, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT id,parent_id,type,timestamp,payload FROM entries WHERE id=?", id)
 	return scanEntry(row)
 }
 
 // Branch returns entries from root to the current leaf.
 func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.leaf == "" {
 		return nil, nil
 	}
@@ -317,7 +347,7 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	}
 	entries := make([]Entry, 0, len(ids))
 	for _, id := range ids {
-		e, err := s.GetEntry(ctx, id)
+		e, err := s.getEntry(ctx, id)
 		if err != nil {
 			return nil, err
 		}
