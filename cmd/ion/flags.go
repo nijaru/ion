@@ -8,24 +8,31 @@ import (
 )
 
 type cliFlags struct {
-	continueFlag      *bool
-	continueShortFlag *bool
-	sessionFlag       *string
-	noSessionFlag     *bool
-	resumeFlag        *string
-	resumeShortFlag   *string
-	providerFlag      *string
-	modelFlag         *string
-	modelShortFlag    *string
-	thinkingFlag      *string
-	printFlag         *bool
-	promptFlag        *string
-	printShortFlag    *bool
-	outputFlag        *string
-	jsonFlag          *bool
-	timeoutFlag       *time.Duration
-	exportSessionFlag *string
-	importSessionFlag *string
+	continueFlag         *bool
+	continueShortFlag    *bool
+	sessionFlag          *string
+	sessionIDFlag        *string
+	noSessionFlag        *bool
+	resumeFlag           *string
+	resumeShortFlag      *string
+	forkFlag             *bool
+	providerFlag         *string
+	modelFlag            *string
+	modelShortFlag       *string
+	thinkingFlag         *string
+	apiKeyFlag           *string
+	sessionDirFlag       *string
+	listModelsFlag       *bool
+	systemPromptFlag     *string
+	appendSystemPromptFlag *string
+	printFlag            *bool
+	promptFlag           *string
+	printShortFlag       *bool
+	outputFlag           *string
+	jsonFlag             *bool
+	timeoutFlag          *time.Duration
+	exportSessionFlag    *string
+	importSessionFlag    *string
 }
 
 func registerCLIFlags() cliFlags {
@@ -45,6 +52,11 @@ func registerCLIFlags() cliFlags {
 			"",
 			"Use a specific session by ID",
 		),
+		sessionIDFlag: flag.String(
+			"session-id",
+			"",
+			"Use a specific session by ID (Pi-equivalent alias)",
+		),
 		noSessionFlag: flag.Bool(
 			"no-session",
 			false,
@@ -52,6 +64,11 @@ func registerCLIFlags() cliFlags {
 		),
 		resumeFlag:      flag.String("resume", "", "Resume a specific session by ID"),
 		resumeShortFlag: flag.String("r", "", "Resume a specific session by ID"),
+		forkFlag: flag.Bool(
+			"fork",
+			false,
+			"Fork the current session into a new branch",
+		),
 		providerFlag:    flag.String("provider", "", "Provider to use"),
 		modelFlag:       flag.String("model", "", "Model to use"),
 		modelShortFlag:  flag.String("m", "", "Model to use"),
@@ -59,6 +76,31 @@ func registerCLIFlags() cliFlags {
 			"thinking",
 			"",
 			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
+		),
+		apiKeyFlag: flag.String(
+			"api-key",
+			"",
+			"API key for the selected provider (Pi parity)",
+		),
+		sessionDirFlag: flag.String(
+			"session-dir",
+			"",
+			"Directory path for session storage (Pi parity)",
+		),
+		listModelsFlag: flag.Bool(
+			"list-models",
+			false,
+			"List available models and exit (Pi parity)",
+		),
+		systemPromptFlag: flag.String(
+			"system-prompt",
+			"",
+			"Override the system prompt (Pi parity)",
+		),
+		appendSystemPromptFlag: flag.String(
+			"append-system-prompt",
+			"",
+			"Append to the system prompt (Pi parity)",
 		),
 		printFlag: flag.Bool(
 			"print",
@@ -88,7 +130,10 @@ func (f cliFlags) continueRequested() bool {
 }
 
 func (f cliFlags) sessionID() string {
-	return strings.TrimSpace(*f.sessionFlag)
+	if sid := strings.TrimSpace(*f.sessionFlag); sid != "" {
+		return sid
+	}
+	return strings.TrimSpace(*f.sessionIDFlag)
 }
 
 func (f cliFlags) noSessionRequested() bool {
@@ -103,6 +148,10 @@ func (f cliFlags) resumeShortID() string {
 	return *f.resumeShortFlag
 }
 
+func (f cliFlags) forkRequested() bool {
+	return *f.forkFlag
+}
+
 func (f cliFlags) providerOverride() string {
 	return strings.TrimSpace(*f.providerFlag)
 }
@@ -113,6 +162,26 @@ func (f cliFlags) modelOverride() string {
 
 func (f cliFlags) thinkingOverride() string {
 	return *f.thinkingFlag
+}
+
+func (f cliFlags) apiKeyOverride() string {
+	return strings.TrimSpace(*f.apiKeyFlag)
+}
+
+func (f cliFlags) sessionDirOverride() string {
+	return strings.TrimSpace(*f.sessionDirFlag)
+}
+
+func (f cliFlags) listModelsRequested() bool {
+	return *f.listModelsFlag
+}
+
+func (f cliFlags) systemPromptOverride() string {
+	return strings.TrimSpace(*f.systemPromptFlag)
+}
+
+func (f cliFlags) appendSystemPromptOverride() string {
+	return strings.TrimSpace(*f.appendSystemPromptFlag)
 }
 
 func (f cliFlags) printRequested() bool {
@@ -288,13 +357,20 @@ func ionKnownFlag(name string) bool {
 	case "continue",
 		"c",
 		"session",
+		"session-id",
 		"no-session",
 		"resume",
 		"r",
+		"fork",
 		"provider",
 		"model",
 		"m",
 		"thinking",
+		"api-key",
+		"session-dir",
+		"list-models",
+		"system-prompt",
+		"append-system-prompt",
 		"print",
 		"prompt",
 		"p",
@@ -314,10 +390,15 @@ func ionFlagNeedsValue(name string) bool {
 	case "resume",
 		"r",
 		"session",
+		"session-id",
 		"provider",
 		"model",
 		"m",
 		"thinking",
+		"api-key",
+		"session-dir",
+		"system-prompt",
+		"append-system-prompt",
 		"prompt",
 		"output",
 		"timeout",

@@ -50,9 +50,6 @@ func SaveAPIKey(provider, key string) error {
 	if provider == "" {
 		return fmt.Errorf("provider is required")
 	}
-	if key == "" {
-		return fmt.Errorf("API key cannot be empty")
-	}
 
 	file, err := LoadCredentials()
 	if err != nil {
@@ -61,6 +58,13 @@ func SaveAPIKey(provider, key string) error {
 	if file.Providers == nil {
 		file.Providers = map[string]CredentialProvider{}
 	}
+
+	// Pi: empty key deletes the credential (logout).
+	if key == "" {
+		delete(file.Providers, provider)
+		return SaveCredentials(file)
+	}
+
 	file.Providers[provider] = CredentialProvider{APIKey: key}
 	return SaveCredentials(file)
 }

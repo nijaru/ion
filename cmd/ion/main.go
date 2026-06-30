@@ -117,6 +117,12 @@ func main() {
 		}
 	}
 
+	// --list-models: print available models and exit (Pi parity, model listing deferred).
+	if cli.listModelsRequested() {
+		fmt.Fprintln(os.Stderr, "--list-models: model listing not yet wired (use TUI model picker)")
+		os.Exit(0)
+	}
+
 	if cli.importSessionPath() != "" {
 		imported, err := importSessionBundleFile(ctx, store, cli.importSessionPath())
 		closeErr := store.Close()

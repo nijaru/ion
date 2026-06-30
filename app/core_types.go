@@ -61,15 +61,38 @@ type SlashCommandDefinition struct {
 }
 
 var slashCommandDefs = []SlashCommandDefinition{
-	{Name: "/help", Description: "Show help"},
-	{Name: "/compact", Description: "Compact context"},
-	{Name: "/clear", Description: "Clear screen"},
+	{Name: "/help", Description: "Show help", Idle: -1},
+	{Name: "/hotkeys", Description: "Show hotkeys", Idle: -1},
+	{Name: "/reload", Description: "Reload configuration"},
+	{Name: "/scoped-models", Description: "Show scoped models", Idle: -1},
+	{Name: "/primary", Description: "Switch to primary preset"},
+	{Name: "/fast", Description: "Switch to fast preset"},
+	{Name: "/resume", Description: "Resume a session"},
 	{Name: "/model", Description: "Switch model"},
 	{Name: "/thinking", Description: "Toggle thinking"},
-	{Name: "/export-html", Description: "Export session as HTML"},
-	{Name: "/import-json", Description: "Import session from JSON"},
-	{Name: "/copy", Description: "Copy last response"},
-	{Name: "/tree", Description: "Show session tree"},
+	{Name: "/provider", Description: "Switch provider"},
+	{Name: "/login", Description: "Log in to a provider"},
+	{Name: "/logout", Description: "Log out of current provider"},
+	{Name: "/settings", Description: "Open settings", Idle: -1},
+	{Name: "/tools", Description: "Show tool surface", Idle: -1},
+	{Name: "/status", Description: "Show runtime status", Idle: -1},
+	{Name: "/changelog", Description: "Show changelog", Idle: -1},
+	{Name: "/skills", Description: "List or search skills", Idle: -1},
+	{Name: "/new", Description: "Start a new session"},
+	{Name: "/clear", Description: "Clear screen"},
+	{Name: "/cost", Description: "Show session cost", Idle: -1},
+	{Name: "/session", Description: "Show session info", Idle: -1},
+	{Name: "/compact", Description: "Compact context"},
+	{Name: "/tree", Description: "Show session tree", Idle: -1},
+	{Name: "/export", Description: "Export session as JSON", Idle: -1},
+	{Name: "/export-html", Description: "Export session as HTML", Idle: -1},
+	{Name: "/import", Description: "Import session from JSON"},
+	{Name: "/name", Description: "Name the current session"},
+	{Name: "/clone", Description: "Clone current session"},
+	{Name: "/copy", Description: "Copy last response", Idle: -1},
+	{Name: "/debug", Description: "Show debug info", Idle: -1},
+	{Name: "/exit", Description: "Exit ion"},
+	{Name: "/quit", Description: "Exit ion"},
 }
 
 func HelpText() string                       { return "Type /help for commands" }
@@ -87,7 +110,12 @@ func SlashCommands() []string {
 func SlashCommandDefinitions() []SlashCommandInfo {
 	out := make([]SlashCommandInfo, len(slashCommandDefs))
 	for i, d := range slashCommandDefs {
-		out[i] = SlashCommandInfo{Name: d.Name, Detail: d.Description}
+		out[i] = SlashCommandInfo{
+			Name:      d.Name,
+			Detail:    d.Description,
+			Available: true,
+			Idle:      d.Idle,
+		}
 	}
 	return out
 }
@@ -95,7 +123,12 @@ func SlashCommandDefinitions() []SlashCommandInfo {
 func ResolveSlashCommand(name string) (SlashCommandInfo, bool) {
 	for _, d := range slashCommandDefs {
 		if d.Name == name || d.Name == "/"+name {
-			return SlashCommandInfo{Name: d.Name, Detail: d.Description}, true
+			return SlashCommandInfo{
+				Name:      d.Name,
+				Detail:    d.Description,
+				Available: true,
+				Idle:      d.Idle,
+			}, true
 		}
 	}
 	return SlashCommandInfo{}, false
