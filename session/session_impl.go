@@ -35,6 +35,10 @@ func (s *sessionImpl) MoveTo(ctx context.Context, entryID string, summary *Branc
 	if _, err := s.store.GetEntry(ctx, entryID); err != nil {
 		return "", fmt.Errorf("moveTo: entry %q not found: %w", entryID, err)
 	}
+	// Record leaf movement as a LeafEntry (Pi: flushPendingSessionWrites records "leaf" type).
+	if _, err := s.AppendLeaf(ctx, entryID); err != nil {
+		return "", fmt.Errorf("moveTo: append leaf entry: %w", err)
+	}
 	if err := s.store.SetLeafID(entryID); err != nil {
 		return "", fmt.Errorf("moveTo: %w", err)
 	}
@@ -127,8 +131,20 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 
 	// Extract messages from the kept portion of the branch.
 	for _, e := range entries[startIdx:] {
-		if me, ok := e.(*MessageEntry); ok {
-			msgs = append(msgs, me.Message)
+		switch e := e.(type) {
+		case *MessageEntry:
+			msgs = append(msgs, e.Message)
+		case *CustomMessageEntry:
+			// Pi: custom_message entries project as CustomMessage in context.
+			msgs = append(msgs, &CustomMessage{
+				CustomType: e.CustomType,
+				Content:    e.Content,
+				Display:    e.Display,
+				Details:    e.Details,
+				Timestamp:  e.EntryBase.Timestamp,
+			})
+		case *LeafEntry:
+			// LeafEntry is metadata; skip in context projection.
 		}
 	}
 
@@ -234,6 +250,48 @@ func (s *sessionImpl) AppendActiveToolsChange(ctx context.Context, tools []strin
 func (s *sessionImpl) AppendCustom(ctx context.Context, custom *CustomEntry) (string, error) {
 	custom.EntryBase = s.newBase(ctx)
 	return s.appendLeaf(ctx, custom)
+}
+
+// AppendLeaf records a leaf position change as a LeafEntry.
+func (s *sessionImpl) AppendLeaf(ctx context.Context, targetID string) (string, error) {
+	return s.appendLeaf(ctx, &LeafEntry{
+		EntryBase: s.newBase(ctx),
+		TargetID:  targetID,
+	})
+}
+
+// AppendCustomMessage persists a CustomMessageEntry in the tree.
+func (s *sessionImpl) AppendCustomMessage(ctx context.Context, entry *CustomMessageEntry) (string, error) {
+	entry.EntryBase = s.newBase(ctx)
+	return s.appendLeaf(ctx, entry)
+}
+
+// AppendLabel attaches a label to a target entry (must exist).
+// Returns the LabelEntry ID.
+func (s *sessionImpl) AppendLabel(ctx context.Context, targetID string, label string) (string, error) {
+	if _, err := s.store.GetEntry(ctx, targetID); err != nil {
+		return "", fmt.Errorf("appendLabel: target entry %q not found: %w", targetID, err)
+	}
+	return s.appendLeaf(ctx, &LabelEntry{
+		EntryBase: s.newBase(ctx),
+		TargetID:  targetID,
+		Label:     label,
+	})
+}
+
+// GetLabel returns the most recent label on the branch for the given target entry.
+func (s *sessionImpl) GetLabel(ctx context.Context, targetID string) (string, error) {
+	entries, err := s.store.Branch(ctx)
+	if err != nil {
+		return "", err
+	}
+	// Walk in reverse; first match is most recent.
+	for i := len(entries) - 1; i >= 0; i-- {
+		if le, ok := entries[i].(*LabelEntry); ok && le.TargetID == targetID {
+			return le.Label, nil
+		}
+	}
+	return "", nil
 }
 
 // appendLeaf persists an entry and advances the leaf pointer.

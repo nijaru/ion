@@ -77,6 +77,15 @@ func (s *stubSession) AppendSessionInfo(_ context.Context, _ string) (string, er
 func (s *stubSession) AppendCustom(_ context.Context, _ *session.CustomEntry) (string, error) {
 	return "custom-1", nil
 }
+func (s *stubSession) AppendLeaf(_ context.Context, _ string) (string, error) {
+	return "leaf-1", nil
+}
+func (s *stubSession) AppendCustomMessage(_ context.Context, _ *session.CustomMessageEntry) (string, error) {
+	return "cm-1", nil
+}
+func (s *stubSession) GetLabel(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
 func (s *stubSession) Append(_ context.Context, _ session.Entry) (string, error) {
 	return "entry-1", nil
 }

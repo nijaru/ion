@@ -31,6 +31,8 @@ type Session interface {
 	AppendThinkingLevelChange(ctx context.Context, level ThinkingLevel) (string, error)
 	AppendActiveToolsChange(ctx context.Context, tools []string) (string, error)
 	AppendCustom(ctx context.Context, entry *CustomEntry) (string, error)
+	AppendLeaf(ctx context.Context, targetID string) (string, error)
+	AppendCustomMessage(ctx context.Context, entry *CustomMessageEntry) (string, error)
 	Append(ctx context.Context, entry Entry) (string, error)
 	Events() <-chan Event
 	EventSender() chan Event
@@ -38,6 +40,8 @@ type Session interface {
 	// Query.
 	Entries(ctx context.Context) ([]Entry, error)
 	Usage(ctx context.Context) (Usage, error)
+	AppendLabel(ctx context.Context, targetID string, label string) (string, error)
+	GetLabel(ctx context.Context, targetID string) (string, error)
 
 	Close() error
 }

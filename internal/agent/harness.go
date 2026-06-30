@@ -953,3 +953,13 @@ func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error 
 func (h *Harness) MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error) {
 	return h.session.MoveTo(ctx, entryID, summary)
 }
+
+// AppendLabel attaches a label to a target entry.
+func (h *Harness) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
+	return h.session.AppendLabel(ctx, targetID, label)
+}
+
+// GetLabel returns the most recent label for a target entry.
+func (h *Harness) GetLabel(ctx context.Context, targetID string) (string, error) {
+	return h.session.GetLabel(ctx, targetID)
+}

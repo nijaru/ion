@@ -49,6 +49,15 @@ func (s *closeStorageSession) AppendSessionInfo(context.Context, string) (string
 func (s *closeStorageSession) AppendCustom(context.Context, *session.CustomEntry) (string, error) {
 	return "", nil
 }
+func (s *closeStorageSession) AppendLeaf(context.Context, string) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) AppendCustomMessage(context.Context, *session.CustomMessageEntry) (string, error) {
+	return "", nil
+}
+func (s *closeStorageSession) GetLabel(context.Context, string) (string, error) {
+	return "", nil
+}
 func (s *closeStorageSession) Append(context.Context, session.Entry) (string, error) {
 	return "", nil
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -94,12 +95,15 @@ func TestEntryIsSealedUnion(t *testing.T) {
 		&LabelEntry{EntryBase: b, TargetID: "t", Label: "l"},
 		&SessionInfoEntry{EntryBase: b, Name: "n"},
 		&CustomEntry{EntryBase: b, Type: "status", Data: []byte("{}")},
+		&LeafEntry{EntryBase: b, TargetID: "t1"},
+		&CustomMessageEntry{EntryBase: b, CustomType: "x", Content: []Content{TextContent{Text: "y"}}},
 	}
 	seen := map[string]bool{}
 	for _, e := range entries {
 		switch e.(type) {
 		case *MessageEntry, *ModelChangeEntry, *ThinkingChangeEntry, *ToolsChangeEntry,
-			*CompactionEntry, *BranchSummaryEntry, *LabelEntry, *SessionInfoEntry, *CustomEntry:
+			*CompactionEntry, *BranchSummaryEntry, *LabelEntry, *SessionInfoEntry, *CustomEntry,
+			*LeafEntry, *CustomMessageEntry:
 		default:
 			t.Fatalf("entry %T not a sealed kind", e)
 		}
@@ -108,7 +112,7 @@ func TestEntryIsSealedUnion(t *testing.T) {
 		}
 		seen["ok"] = true
 	}
-	if len(entries) != 9 {
+	if len(entries) != 11 {
 		t.Fatalf("expected 9 entry kinds, got %d", len(entries))
 	}
 }
@@ -172,5 +176,143 @@ func TestToolCallArgumentsAreParsedJSON(t *testing.T) {
 	}
 	if string(b) != `{"path":"/tmp/x"}` {
 		t.Fatalf("expected parsed-json arguments, got %s", b)
+	}
+}
+
+// INVARIANT: AppendLabel creates a LabelEntry and GetLabel returns the latest label.
+func TestAppendLabelRoundTrip(t *testing.T) {
+	store, err := NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	msgID, err := sess.AppendMessage(ctx, NewUserText("hello", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sess.AppendLabel(ctx, msgID, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	label, err := sess.GetLabel(ctx, msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "first" {
+		t.Fatalf("GetLabel = %q, want \"first\"", label)
+	}
+}
+
+func TestGetLabelReturnsLatest(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	msgID, _ := sess.AppendMessage(ctx, NewUserText("hello", time.Now()))
+	sess.AppendLabel(ctx, msgID, "old")
+	sess.AppendLabel(ctx, msgID, "new")
+
+	label, _ := sess.GetLabel(ctx, msgID)
+	if label != "new" {
+		t.Fatalf("GetLabel = %q, want \"new\"", label)
+	}
+}
+
+func TestAppendLabelTargetNotFound(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	if _, err := sess.AppendLabel(ctx, "nonexistent", "x"); err == nil {
+		t.Fatal("expected error for nonexistent target")
+	}
+}
+
+func TestGetLabelNonexistentReturnsEmpty(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	label, _ := sess.GetLabel(ctx, "nonexistent")
+	if label != "" {
+		t.Fatalf("GetLabel = %q, want empty", label)
+	}
+}
+
+func TestMoveToAppendsLeafEntry(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	id1, _ := sess.AppendMessage(ctx, NewUserText("first", time.Now()))
+	sess.AppendMessage(ctx, NewUserText("second", time.Now()))
+
+	if _, err := sess.MoveTo(ctx, id1, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := sess.Entries(ctx)
+	found := false
+	for _, e := range entries {
+		if le, ok := e.(*LeafEntry); ok && le.TargetID == id1 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected LeafEntry with TargetID == first message ID")
+	}
+}
+
+func TestCustomMessageEntryInBuildContext(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	_, err := sess.AppendCustomMessage(ctx, &CustomMessageEntry{
+		CustomType: "status",
+		Content:    []Content{TextContent{Text: "Task completed"}},
+		Display:    "Status update",
+		Details:    []byte(`{"code": 200}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := sess.BuildContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, m := range snap.Messages {
+		if cm, ok := m.(*CustomMessage); ok && cm.CustomType == "status" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("CustomMessage not found in BuildContext")
+	}
+}
+
+func TestLeafEntryNotInBuildContext(t *testing.T) {
+	store, _ := NewEphemeralCantoStore()
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	id1, _ := sess.AppendMessage(ctx, NewUserText("msg", time.Now()))
+	sess.MoveTo(ctx, id1, nil)
+
+	snap, err := sess.BuildContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(snap.Messages) != 1 {
+		t.Fatalf("expected 1 msg in BuildContext, got %d (LeafEntry should not project)", len(snap.Messages))
 	}
 }

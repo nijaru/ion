@@ -378,6 +378,15 @@ type entryPayload struct {
 	// Custom fields
 	CustomType string          `json:"custom_type,omitempty"`
 	CustomData json.RawMessage `json:"custom_data,omitempty"`
+
+	// Leaf fields
+	LeafTargetID string `json:"leaf_target_id,omitempty"`
+
+	// CustomMessage fields
+	CustomMessageType    string          `json:"custom_message_type,omitempty"`
+	CustomMessageContent json.RawMessage `json:"custom_message_content,omitempty"`
+	CustomMessageDisplay string          `json:"custom_message_display,omitempty"`
+	CustomMessageDetails json.RawMessage `json:"custom_message_details,omitempty"`
 }
 
 // encodeEntry serializes an Entry to (type string, JSON payload bytes, error).
@@ -423,6 +432,19 @@ func encodeEntry(e Entry) (string, []byte, error) {
 		typ = "custom"
 		p.CustomType = e.Type
 		p.CustomData = e.Data
+	case *LeafEntry:
+		typ = "leaf"
+		p.LeafTargetID = e.TargetID
+	case *CustomMessageEntry:
+		typ = "custom_message"
+		p.CustomMessageType = e.CustomType
+		p.CustomMessageDisplay = e.Display
+		p.CustomMessageDetails = e.Details
+		contentBytes, err := json.Marshal(e.Content)
+		if err != nil {
+			return "", nil, fmt.Errorf("marshal custom_message content: %w", err)
+		}
+		p.CustomMessageContent = contentBytes
 	default:
 		return "", nil, fmt.Errorf("unknown entry type %T", e)
 	}
@@ -477,6 +499,26 @@ func scanEntry(s scannable) (Entry, error) {
 		return &SessionInfoEntry{EntryBase: base, Name: p.Name}, nil
 	case "custom":
 		return &CustomEntry{EntryBase: base, Type: p.CustomType, Data: p.CustomData}, nil
+	case "leaf":
+		return &LeafEntry{EntryBase: base, TargetID: p.LeafTargetID}, nil
+	case "custom_message":
+		// Unmarshal content from raw JSON.
+		var rawContent []json.RawMessage
+		if err := json.Unmarshal(p.CustomMessageContent, &rawContent); err != nil {
+			return nil, fmt.Errorf("unmarshal custom_message content: %w", err)
+		}
+		content := make([]Content, len(rawContent))
+		for i, rc := range rawContent {
+			// Heuristic: determine type from JSON shape.
+			var kind struct{ Text string `json:"text"` }
+			if err := json.Unmarshal(rc, &kind); err == nil && kind.Text != "" {
+				content[i] = TextContent{Text: kind.Text}
+			} else {
+				// Fallback: store as TextContent with raw JSON.
+				content[i] = TextContent{Text: string(rc)}
+			}
+		}
+		return &CustomMessageEntry{EntryBase: base, CustomType: p.CustomMessageType, Content: content, Display: p.CustomMessageDisplay, Details: p.CustomMessageDetails}, nil
 	default:
 		return nil, fmt.Errorf("unknown entry type %q", typ)
 	}

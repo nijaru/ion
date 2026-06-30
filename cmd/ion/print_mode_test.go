@@ -56,6 +56,15 @@ func (s *printSession) AppendSessionInfo(context.Context, string) (string, error
 func (s *printSession) AppendCustom(context.Context, *session.CustomEntry) (string, error) {
 	return "", nil
 }
+func (s *printSession) AppendLeaf(context.Context, string) (string, error) {
+	return "", nil
+}
+func (s *printSession) AppendCustomMessage(context.Context, *session.CustomMessageEntry) (string, error) {
+	return "", nil
+}
+func (s *printSession) GetLabel(context.Context, string) (string, error) {
+	return "", nil
+}
 func (s *printSession) Append(context.Context, session.Entry) (string, error) {
 	return "", nil
 }
