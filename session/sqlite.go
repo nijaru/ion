@@ -252,6 +252,39 @@ func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	return id, err
 }
 
+// AppendBatch persists multiple entries atomically using a SQLite transaction.
+func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	ids := make([]string, len(entries))
+	for i, entry := range entries {
+		id := entry.ID()
+		parentID := entry.ParentID()
+		ts := entry.When().UnixMilli()
+		typ, payload, err := encodeEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO entries(id,parent_id,type,timestamp,payload) VALUES(?,?,?,?,?)",
+			id, parentID, typ, ts, payload,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return ids, nil
+}
+
 // GetEntry returns a single entry by ID.
 func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (Entry, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT id,parent_id,type,timestamp,payload FROM entries WHERE id=?", id)

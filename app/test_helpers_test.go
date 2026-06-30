@@ -324,6 +324,13 @@ type resumeOnlyStore struct{}
 func (s *resumeOnlyStore) Append(ctx context.Context, entry session.Entry) (string, error) {
 	return "id-" + time.Now().Format("150405"), nil
 }
+func (s *resumeOnlyStore) AppendBatch(ctx context.Context, entries []session.Entry) ([]string, error) {
+	ids := make([]string, len(entries))
+	for i := range entries {
+		ids[i] = "id-" + time.Now().Format("150405")
+	}
+	return ids, nil
+}
 func (s *resumeOnlyStore) GetEntry(ctx context.Context, id string) (session.Entry, error) {
 	return nil, nil
 }

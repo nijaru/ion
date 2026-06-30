@@ -23,6 +23,9 @@ type testStore struct {
 func (s *testStore) Append(_ context.Context, _ session.Entry) (string, error) {
 	return "", nil
 }
+func (s *testStore) AppendBatch(_ context.Context, _ []session.Entry) ([]string, error) {
+	return nil, nil
+}
 func (s *testStore) GetEntry(_ context.Context, _ string) (session.Entry, error) {
 	return nil, os.ErrNotExist
 }

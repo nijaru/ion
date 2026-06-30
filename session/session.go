@@ -66,6 +66,10 @@ type Store interface {
 	// Append persists an entry. The entry's ID must be set.
 	Append(ctx context.Context, entry Entry) (string, error)
 
+	// AppendBatch persists multiple entries atomically. On failure, no entries
+	// are persisted (implementations that support transactions will roll back).
+	AppendBatch(ctx context.Context, entries []Entry) ([]string, error)
+
 	// GetEntry returns a single entry by ID.
 	GetEntry(ctx context.Context, id string) (Entry, error)
 

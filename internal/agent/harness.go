@@ -660,8 +660,15 @@ func (h *Harness) emitQueueUpdate() {
 // --- buffered writes ---
 
 func (h *Harness) flushPending(ctx context.Context) {
+	if len(h.pending) == 0 {
+		return
+	}
+	// Apply pending writes. Each pendingWrite.apply() appends to the session;
+	// individual Appends are atomic under SQLite WAL mode.
 	for _, pw := range h.pending {
-		_ = pw.apply(ctx, h.session)
+		if err := pw.apply(ctx, h.session); err != nil {
+			h.emit(&session.Error{Err: fmt.Errorf("flush pending write: %w", err)})
+		}
 	}
 	h.pending = nil
 }
