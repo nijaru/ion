@@ -168,6 +168,17 @@ func streamAssistantResponse(
 	}
 
 	llmMsgs := convert(msgs)
+
+	// Prepend system prompt as a system message if present.
+	// Pi stores systemPrompt in the context object; the model resolver layer
+	// injects it. Ion builds requests directly, so prepend here.
+	if snapshot.SystemPrompt != "" {
+		sysMsg := llm.Message{
+			Role:    llm.RoleSystem,
+			Content: snapshot.SystemPrompt,
+		}
+		llmMsgs = append([]llm.Message{sysMsg}, llmMsgs...)
+	}
 	tools := make([]*llm.Spec, len(cfg.Tools))
 	for i, t := range cfg.Tools {
 		tools[i] = &llm.Spec{
@@ -186,9 +197,20 @@ func streamAssistantResponse(
 	}
 
 	if cfg.Auth != nil {
-		key, _ := cfg.Auth(cfg.Model)
-		req.Model = cfg.Model.ID // auth may override
-		_ = key
+		key, headers := cfg.Auth(cfg.Model)
+		if key != "" {
+			if req.Headers == nil {
+				req.Headers = make(map[string]string)
+			}
+			req.Headers["Authorization"] = "Bearer " + key
+		}
+		for k, v := range headers {
+			if req.Headers == nil {
+				req.Headers = make(map[string]string)
+			}
+			req.Headers[k] = v
+		}
+		req.Model = cfg.Model.ID
 	}
 
 	stream, err := cfg.StreamFn(ctx, req)

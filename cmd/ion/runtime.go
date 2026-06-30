@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nijaru/ion/app"
@@ -36,6 +37,34 @@ func closeRuntimeHandles(
 		errs = append(errs, store.Close())
 	}
 	return errors.Join(errs...)
+}
+
+// loadPromptTemplates reads .md files from ~/.ion/prompts/ and returns a name→content map.
+// Filenames without extension become the template name.
+func loadPromptTemplates() map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Join(home, ".ion", "prompts")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	templates := make(map[string]string)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		templates[name] = string(data)
+	}
+	return templates
 }
 
 func recentSessionForContinue(
@@ -184,14 +213,18 @@ func openRuntime(
 		}
 	}
 
+	// Load prompt templates from ~/.ion/prompts/.
+	promptTemplates := loadPromptTemplates()
+
 	harness := agent.NewHarness(agent.HarnessConfig{
-		Session:    sess,
-		Store:      store,
-		Model:      model,
-		Tools:      agentTools,
-		Events:     sess.EventSender(),
-		StreamFn:   provider.Stream,
-		SkillsText: skillsText,
+		Session:         sess,
+		Store:           store,
+		Model:           model,
+		Tools:           agentTools,
+		Events:          sess.EventSender(),
+		StreamFn:        provider.Stream,
+		SkillsText:      skillsText,
+		PromptTemplates: promptTemplates,
 	})
 
 	return b, sess, harness, nil

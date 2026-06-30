@@ -91,6 +91,9 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		return nil, fmt.Errorf("openrouter: create request: %w", err)
 	}
 	p.setHeaders(httpReq)
+	for k, v := range req.Headers {
+		httpReq.Header.Set(k, v)
+	}
 
 	httpResp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -146,6 +149,9 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		return nil, fmt.Errorf("openrouter: create request: %w", err)
 	}
 	p.setHeaders(httpReq)
+	for k, v := range req.Headers {
+		httpReq.Header.Set(k, v)
+	}
 
 	httpResp, err := p.httpClient.Do(httpReq)
 	if err != nil {
