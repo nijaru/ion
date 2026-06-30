@@ -310,6 +310,7 @@ type PickerState struct {
 	Overlay            *pickerOverlayState
 	Session            *sessionPickerState
 	Setup              *setupPromptState
+	Tree               *treePickerState
 	ModelLoadRequest   uint64
 	SessionLoadRequest uint64
 	SetupSaveRequest   uint64

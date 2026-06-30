@@ -37,6 +37,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Picker.Setup != nil {
 		return m.handleSetupPromptKey(msg)
 	}
+	if m.Picker.Tree != nil {
+		return m.handleTreePickerKey(msg)
+	}
 	if m.Picker.Overlay != nil {
 		return m.handlePickerKey(msg)
 	}

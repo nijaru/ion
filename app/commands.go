@@ -96,7 +96,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/compact":
 		return m.handleCompactCommand()
 	case "/tree":
-		return m.showSessionTree()
+		return m.openTreePicker()
 	case "/export":
 		return m.exportSession()
 	case "/export-html":

@@ -94,6 +94,10 @@ func (m Model) View() tea.View {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
 		hasShellLeadIn = true
+	} else if m.Picker.Tree != nil {
+		b.WriteString(m.renderTreePicker())
+		b.WriteString("\n")
+		hasShellLeadIn = true
 	} else if m.Picker.Setup != nil {
 		b.WriteString(m.renderSetupPrompt())
 		b.WriteString("\n")
