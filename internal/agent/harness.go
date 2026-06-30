@@ -944,3 +944,12 @@ func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error 
 	_, err := h.session.AppendMessage(ctx, msg)
 	return err
 }
+
+// MoveTo switches the session leaf pointer to the given entry ID.
+// Optionally appends a branch summary entry. Returns the summary entry ID
+// if a summary was provided, "" otherwise.
+//
+// Reference: Pi session.js moveTo (line 191).
+func (h *Harness) MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error) {
+	return h.session.MoveTo(ctx, entryID, summary)
+}

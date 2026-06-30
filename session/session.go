@@ -17,6 +17,11 @@ type Session interface {
 	// Branch returns entries on the current leaf path.
 	Branch(ctx context.Context) ([]Entry, error)
 
+	// MoveTo switches the leaf pointer to the given entry ID.
+	// The entry must exist. Optionally appends a branch summary entry.
+	// Returns the branch summary entry ID if summary was provided, "" otherwise.
+	MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error)
+
 	// Typed append methods — each creates the right entry kind.
 	AppendMessage(ctx context.Context, msg Message) (string, error)
 	AppendCompaction(ctx context.Context, data CompactionData) (string, error)

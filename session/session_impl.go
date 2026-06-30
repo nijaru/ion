@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -28,6 +29,19 @@ func (s *sessionImpl) Meta() Metadata { return s.store.GetMetadata() }
 func (s *sessionImpl) Close() error   { return s.store.Close() }
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
+}
+func (s *sessionImpl) MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error) {
+	// Validate the entry exists.
+	if _, err := s.store.GetEntry(ctx, entryID); err != nil {
+		return "", fmt.Errorf("moveTo: entry %q not found: %w", entryID, err)
+	}
+	if err := s.store.SetLeafID(entryID); err != nil {
+		return "", fmt.Errorf("moveTo: %w", err)
+	}
+	if summary != nil {
+		return s.AppendBranchSummary(ctx, *summary)
+	}
+	return "", nil
 }
 func (s *sessionImpl) Entries(ctx context.Context) ([]Entry, error) {
 	return s.store.Entries(ctx)
