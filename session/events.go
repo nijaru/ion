@@ -169,11 +169,22 @@ func (Settled) IsEvent()     {}
 func (SavePoint) IsEvent()   {}
 func (Abort) IsEvent()       {}
 
+// AfterProviderResponse is emitted when the provider responds (HTTP response received).
+// Fires after before_provider_request/payload hooks and before the loop processes the
+// assistant stream. Status and Headers reflect the HTTP response when available;
+// both are zero/nil when the provider abstraction does not expose them.
+// Reference: Pi agent-harness.js streamSimple onResponse callback (line ~327).
+type AfterProviderResponse struct {
+	Status  int
+	Headers map[string]string
+}
+
 // Error reports a non-recoverable harness error (e.g., persistence failure).
 type Error struct {
 	Err error
 }
-func (*Error) IsEvent() {}
+func (AfterProviderResponse) IsEvent() {}
+func (*Error) IsEvent()              {}
 
 // --- Utility functions (stay in session/ as they access domain types). ---
 

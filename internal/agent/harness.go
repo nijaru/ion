@@ -92,10 +92,11 @@ type HookHandler func(payload any) (patch any, err error)
 
 // Hook type constants matching Pi's hook names.
 const (
-	HookBeforeProviderRequest = "before_provider_request"
-	HookBeforeProviderPayload = "before_provider_payload"
-	HookBeforeAgentStart      = "before_agent_start"
-	HookToolResult            = "tool_result"
+	HookBeforeProviderRequest  = "before_provider_request"
+	HookBeforeProviderPayload  = "before_provider_payload"
+	HookAfterProviderResponse  = "after_provider_response"
+	HookBeforeAgentStart       = "before_agent_start"
+	HookToolResult             = "tool_result"
 )
 
 // QueueUpdate was moved to session/events.go as part of Phase B harness parity.
@@ -463,7 +464,7 @@ func (h *Harness) handleEvent(e session.Event) {
 			}
 		}
 		// Emit SavePoint after durable writes (Pi: line ~480).
-		h.emit(&session.SavePoint{HadPendingMutations: hadPending})
+		h.emit(session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
 		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
 			if err := h.Compact(ctx); err != nil {
@@ -475,7 +476,7 @@ func (h *Harness) handleEvent(e session.Event) {
 		h.flushPending(ctx)
 		// Emit Settled before forwarding AgentEnd so TUI sees lifecycle in order
 		// and we don't race with channel close.
-		h.emit(&session.Settled{NextTurnCount: len(h.nextTurn)})
+		h.emit(session.Settled{NextTurnCount: len(h.nextTurn)})
 		h.phase = PhaseIdle
 		h.emit(e) // forward AgentEnd last
 	}
@@ -633,7 +634,17 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 			}
 		}
 
-		return base(ctx, req)
+		// Call the base stream function.
+		stream, err := base(ctx, req)
+
+		// Emit after_provider_response: subscriber event + hook for registered handlers.
+		// Pi reference: agent-harness.js createStreamFn streamSimple onResponse (line ~327).
+		h.emit(session.AfterProviderResponse{})
+		h.emitHook(HookAfterProviderResponse, afterProviderResponsePayload{
+			Model: h.model.ID,
+		})
+
+		return stream, err
 	}
 }
 
@@ -660,6 +671,12 @@ type BeforeProviderPayloadPatch struct {
 type beforeProviderPayloadPayload struct {
 	Model   string
 	Payload json.RawMessage
+}
+
+// afterProviderResponsePayload is the payload for HookAfterProviderResponse.
+// Reference: Pi agent-harness.js after_provider_response event (line ~327).
+type afterProviderResponsePayload struct {
+	Model string
 }
 
 // BeforeAgentStartPatch is returned by before_agent_start hooks.
@@ -859,7 +876,7 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 
 	h.emitQueueUpdate()
 	h.WaitForIdle()
-	h.emit(&session.Abort{
+	h.emit(session.Abort{
 		ClearedSteer:    clearedSteer,
 		ClearedFollowUp: clearedFollowUp,
 	})
