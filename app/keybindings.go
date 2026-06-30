@@ -28,6 +28,9 @@ const (
 	// Session
 	ActionToggleNamedFilter KeybindingAction = "session.toggleNamedFilter"
 
+	// Tree/Fork
+	ActionTreeFork KeybindingAction = "tree.fork"
+
 	// Message
 	ActionQueueFollowUp   KeybindingAction = "message.followUp"
 	ActionDequeueMessages KeybindingAction = "message.dequeue"
@@ -47,6 +50,7 @@ var DefaultKeybindings = map[KeybindingAction]string{
 	ActionQueueFollowUp:      "alt+enter",
 	ActionDequeueMessages:    "alt+up",
 	ActionPasteImage:         "ctrl+v",
+	ActionTreeFork:           "esc esc",
 }
 
 // KeybindingsManager manages keybindings with user overrides.

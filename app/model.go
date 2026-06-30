@@ -311,6 +311,7 @@ type PickerState struct {
 	Session            *sessionPickerState
 	Setup              *setupPromptState
 	Tree               *treePickerState
+	LastEscAt          time.Time
 	ModelLoadRequest   uint64
 	SessionLoadRequest uint64
 	SetupSaveRequest   uint64

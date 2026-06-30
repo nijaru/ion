@@ -105,6 +105,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "esc":
+		// Pi parity: double-Escape opens tree/fork when idle.
+		if !m.InFlight.Thinking && m.Input.Pending == pendingActionNone {
+			now := time.Now()
+			if !m.Picker.LastEscAt.IsZero() && now.Sub(m.Picker.LastEscAt) < 500*time.Millisecond {
+				m.Picker.LastEscAt = time.Time{}
+				return m.openTreePicker()
+			}
+			m.Picker.LastEscAt = now
+			return m, nil
+		}
 		if m.InFlight.Thinking {
 			if !m.Picker.OverlayClosedAt.IsZero() && time.Since(m.Picker.OverlayClosedAt) < 250*time.Millisecond {
 				m.clearPendingAction()
