@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nijaru/ion/llm"
@@ -415,12 +416,27 @@ func executeOneToolCall(
 		}
 	}
 
-	// Execute.
+	// Execute with panic recovery.
 	progress := func(p session.ToolPartial) {
 		emit(session.ToolExecUpdate{ToolCallID: tc.ID, Partial: p})
 	}
 
-	result, err := tool.Execute(ctx, tc.ID, args, signal, progress)
+	var result session.ToolResultMessage
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				result = session.ToolResultMessage{
+					ToolCallID: tc.ID,
+					ToolName:   tc.Name,
+					Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("tool panic: %v", r)}},
+					IsError:    true,
+					Timestamp:  time.Now(),
+				}
+			}
+		}()
+		result, err = tool.Execute(ctx, tc.ID, args, signal, progress)
+	}()
 	if err != nil {
 		result = session.ToolResultMessage{
 			ToolCallID: tc.ID,

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,5 +248,59 @@ func TestRunLoopToolExecution(t *testing.T) {
 	}
 	if !hasEnd {
 		t.Fatal("expected ToolExecEnd event")
+	}
+}
+
+// TestRunLoopToolPanicRecovery verifies a tool panic is caught and returned as an error result.
+func TestRunLoopToolPanicRecovery(t *testing.T) {
+	callCount := 0
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Calls: []llm.Call{{
+					ID: "tc1",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "panic_tool", Arguments: `{}`},
+				}}, StopReason: "toolUse"},
+			}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "recovered", StopReason: "stop"},
+		}}, nil
+	}
+
+	cfg := LoopConfig{
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		Tools: []Tool{{
+			Name: "panic_tool",
+			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+				panic("intentional test panic")
+			},
+		}},
+		Convert: DefaultConvert,
+	}
+
+	msgs := RunLoop(context.Background(), nil, TurnContext{}, cfg, func(e session.Event) {}, nil)
+
+	foundPanic := false
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case *session.ToolResultMessage:
+			for _, c := range m.Content {
+				if tc, ok := c.(session.TextContent); ok {
+					if strings.Contains(tc.Text, "tool panic") {
+						foundPanic = true
+					}
+				}
+			}
+		}
+	}
+
+	if !foundPanic {
+		t.Fatal("expected panic error in tool result message")
 	}
 }
