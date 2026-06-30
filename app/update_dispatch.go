@@ -171,6 +171,10 @@ func (m Model) dispatchPickerControllerMessage(msg tea.Msg) (Model, tea.Cmd, boo
 		next, cmd := m.handleTreePickerMove(msg)
 		return next, cmd, true
 
+	case replayBranchMsg:
+		next, cmd := m.handleReplayBranch(msg)
+		return next, cmd, true
+
 	case sessionExportedMsg:
 		next, cmd := m.handleSessionExported(msg)
 		return next, cmd, true

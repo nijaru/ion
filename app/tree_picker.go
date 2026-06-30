@@ -254,9 +254,43 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 		m.closeTreePicker()
 		return m, nil
 	}
-	// Refresh tree after successful move.
+	// Close tree picker and replay entries from the new branch position.
 	m.closeTreePicker()
-	return m.openTreePicker()
+	if m.Model.Session == nil {
+		return m, nil
+	}
+	return m, m.replayCurrentBranch()
+}
+
+// replayCurrentBranch loads entries from the current session branch and replays them.
+func (m Model) replayCurrentBranch() tea.Cmd {
+	sess := m.Model.Session
+	store := m.Model.Store
+	if sess == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		var entries []session.Entry
+		if store != nil {
+			entries, _ = store.Branch(context.Background())
+		}
+		return replayBranchMsg{entries: entries}
+	}
+}
+
+type replayBranchMsg struct {
+	entries []session.Entry
+}
+
+func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
+	var lines []string
+	lines = append(lines, "--- moved to branch ---")
+	if len(msg.entries) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, m.RenderEntries(msg.entries...)...)
+	}
+	m.terminalCommit().MarkPrinted()
+	return m, deferredTerminalCommitCmd(lines...)
 }
 
 // renderTreePicker renders the interactive tree selector.
