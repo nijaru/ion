@@ -135,6 +135,8 @@ func openRuntime(
 	cfg *config.Config,
 	sessionID string,
 	persistResumedSessionModel bool,
+	systemPromptOverride string,
+	appendSystemPromptOverride string,
 ) (app.Backend, session.Session, agent.Runner, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
@@ -218,6 +220,15 @@ func openRuntime(
 	promptTemplates := loadPromptTemplates()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Build system prompt: default (from instructions) + append override or full override.
+	sysPrompt := ""
+	if strings.TrimSpace(systemPromptOverride) != "" {
+		sysPrompt = systemPromptOverride
+	} else if strings.TrimSpace(appendSystemPromptOverride) != "" {
+		sysPrompt = appendSystemPromptOverride
+	}
+
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:         sess,
 		Store:           store,
@@ -227,6 +238,7 @@ func openRuntime(
 		StreamFn:        provider.Stream,
 		SkillsText:      skillsText,
 		PromptTemplates: promptTemplates,
+		SysPrompt:       sysPrompt,
 		Logger:          log,
 	})
 

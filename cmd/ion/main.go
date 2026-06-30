@@ -232,6 +232,8 @@ func main() {
 		runtimeCfg,
 		sessionID,
 		persistResumedSessionModel,
+		cli.systemPromptOverride(),
+		cli.appendSystemPromptOverride(),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
@@ -291,6 +293,8 @@ func main() {
 			cfg,
 			sessionID,
 			true,
+			"",
+			"",
 		)
 		if err != nil {
 			return nil, nil, nil, err
