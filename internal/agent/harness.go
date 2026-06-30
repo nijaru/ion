@@ -797,6 +797,31 @@ func (h *Harness) Close() error {
 	return h.session.Close()
 }
 
+// Shutdown attempts a graceful stop: abort any running turn, wait for completion
+// (up to the context deadline), flush pending writes, and close resources.
+func (h *Harness) Shutdown(ctx context.Context) error {
+	h.logf(slog.LevelInfo, "shutdown start")
+	h.Abort()
+
+	// Wait for the current turn to finish.
+	h.mu.Lock()
+	done := h.runDone
+	h.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			h.logf(slog.LevelWarn, "shutdown timed out waiting for turn")
+		}
+	}
+
+	// Final flush.
+	h.flushPending(context.Background())
+
+	h.logf(slog.LevelInfo, "shutdown complete")
+	return h.Close()
+}
+
 // Session returns the underlying session handle. Used by TUI for ID(), Usage(), Entries().
 func (h *Harness) Session() session.Session { return h.session }
 
