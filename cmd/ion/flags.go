@@ -148,9 +148,10 @@ func (f cliFlags) resumeShortID() string {
 	return *f.resumeShortFlag
 }
 
-func (f cliFlags) forkRequested() bool {
-	return *f.forkFlag
-}
+// reserved for fork/import parity (tk-qlpv)
+// func (f cliFlags) forkRequested() bool {
+// 	return *f.forkFlag
+// }
 
 func (f cliFlags) providerOverride() string {
 	return strings.TrimSpace(*f.providerFlag)
@@ -164,13 +165,14 @@ func (f cliFlags) thinkingOverride() string {
 	return *f.thinkingFlag
 }
 
-func (f cliFlags) apiKeyOverride() string {
-	return strings.TrimSpace(*f.apiKeyFlag)
-}
+// reserved for fork/import parity (tk-qlpv)
+// func (f cliFlags) apiKeyOverride() string {
+// 	return strings.TrimSpace(*f.apiKeyFlag)
+// }
 
-func (f cliFlags) sessionDirOverride() string {
-	return strings.TrimSpace(*f.sessionDirFlag)
-}
+// func (f cliFlags) sessionDirOverride() string {
+// 	return strings.TrimSpace(*f.sessionDirFlag)
+// }
 
 func (f cliFlags) listModelsRequested() bool {
 	return *f.listModelsFlag

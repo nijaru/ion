@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,10 +11,8 @@ type Metrics struct {
 	TurnCount   atomic.Int64
 	ErrorCount  atomic.Int64
 	TotalTokens atomic.Int64 // sum of prompt + completion tokens
-	TotalCost   float64      // estimated cost in USD (approximate)
 
 	latencyBuckets [10]atomic.Int64 // histogram: <100ms, <200ms, <400ms, <800ms, <1.6s, <3.2s, <6.4s, <12.8s, <25.6s, >25.6s
-	mu             sync.Mutex      // protects TotalCost updates
 }
 
 // RecordTurn increments the turn counter and records latency in the histogram.

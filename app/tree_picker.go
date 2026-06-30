@@ -12,12 +12,11 @@ import (
 
 // treePickerState holds the interactive session tree navigator state.
 type treePickerState struct {
-	tree     *runtime.SessionTree
-	cursor   int
-	entries  []treePickerEntry
-	loading  bool
-	err      string
-	rendered string
+	tree    *runtime.SessionTree
+	cursor  int
+	entries []treePickerEntry
+	loading bool
+	err     string
 }
 
 type treePickerEntry struct {

@@ -342,9 +342,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	}
 	for _, p := range patches {
 		if bp, ok := p.(*BeforeAgentStartPatch); ok && bp != nil {
-			for _, msg := range bp.Messages {
-				prompts = append(prompts, msg)
-			}
+			prompts = append(prompts, bp.Messages...)
 			if bp.SystemPrompt != "" {
 				h.sysprompt = bp.SystemPrompt
 			}

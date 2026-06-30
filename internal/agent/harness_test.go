@@ -143,7 +143,7 @@ func TestHarnessAfterProviderResponse(t *testing.T) {
 	for {
 		select {
 		case e := <-h.Events():
-			events = append(events, e)
+			_ = append(events, e)
 			switch e.(type) {
 			case session.AfterProviderResponse:
 				sawAfterProvider = true
