@@ -468,13 +468,18 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			if err != nil {
 				return nil
 			}
+			// Snapshot model and thinking under lock to avoid racing with SetModel/SetThinking.
+			h.mu.Lock()
+			m := h.model
+			t := h.thinking
+			h.mu.Unlock()
 			return &NextTurnSnapshot{
 				Context: TurnContext{
 					SystemPrompt: h.systemPrompt(),
 					Messages:     snap.Messages,
 				},
-				Model:    &h.model,
-				Thinking: &h.thinking,
+				Model:    &m,
+				Thinking: &t,
 			}
 		},
 	}
@@ -493,15 +498,26 @@ type toolResultPayload struct {
 func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 	base := h.stream
 	return func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		// Snapshot model headers under lock (concurrent-setters-proof).
+		h.mu.Lock()
+		modelHeaders := map[string]string{}
+		for k, v := range h.model.Headers {
+			modelHeaders[k] = v
+		}
+		h.mu.Unlock()
+
 		// Emit before_provider_request hook — allows extensions to patch model headers.
 		patches, err := h.emitHook(HookBeforeProviderRequest, beforeProviderRequestPayload{
 			Model:     req.Model,
 			SessionID: req.SessionID,
-			Headers:   h.model.Headers,
+			Headers:   modelHeaders,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("before_provider_request hook: %w", err)
 		}
+
+		// Apply patches under lock.
+		h.mu.Lock()
 		for _, p := range patches {
 			if bp, ok := p.(*BeforeProviderRequestPatch); ok && bp != nil {
 				if bp.Headers != nil {
@@ -520,6 +536,7 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 				}
 			}
 		}
+		h.mu.Unlock()
 
 		// Emit before_provider_payload hook — transform the raw JSON payload.
 		rawPayload, err := json.Marshal(req)
