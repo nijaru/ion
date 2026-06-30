@@ -28,6 +28,7 @@ type Harness struct {
 	thinking session.ThinkingLevel
 	sysprompt string
 	log      *slog.Logger // structured logger, may be nil
+	metrics  *Metrics     // runtime statistics, may be nil
 
 	// resources (Pi: skills + prompt templates)
 	skillsText      string
@@ -128,6 +129,9 @@ type HarnessConfig struct {
 	// When nil, logging is silent.
 	Logger *slog.Logger
 
+	// Metrics collects runtime statistics. When nil, metrics are not recorded.
+	Metrics *Metrics
+
 	// Compaction settings.
 	Compaction    CompactionSettings
 	ContextWindow int // model context window size in tokens
@@ -160,6 +164,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		thinking: cfg.Thinking,
 		sysprompt: cfg.SysPrompt,
 		log:      cfg.Logger,
+		metrics:  cfg.Metrics,
 		skillsText: cfg.SkillsText,
 		promptTemplates: cfg.PromptTemplates,
 		stream:   cfg.StreamFn,
@@ -284,6 +289,9 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		close(h.runDone)
 		h.runDone = nil
 		h.mu.Unlock()
+		if h.metrics != nil {
+			h.metrics.RecordTurn(dur)
+		}
 		h.logf(slog.LevelInfo, "turn end", slog.Duration("duration", dur), slog.String("model", h.model.ID))
 	}()
 
@@ -827,6 +835,9 @@ func (h *Harness) Session() session.Session { return h.session }
 
 // Store returns the underlying store. Used by TUI for export/tree operations.
 func (h *Harness) Store() session.Store { return h.store }
+
+// Metrics returns the runtime metrics collector (may be nil).
+func (h *Harness) Metrics() *Metrics { return h.metrics }
 
 // Compact triggers context compaction.
 // Compact performs context compaction on the session.
