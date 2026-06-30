@@ -99,9 +99,14 @@ func RunLoop(
 				toolResults = results
 				hasMoreToolCalls = !terminate
 
-				for _, result := range toolResults {
-					currentCtx.Messages = append(currentCtx.Messages, &result)
-					newMessages = append(newMessages, &result)
+				// Pi: emit message_start + message_end for each tool result message.
+				// Reference: Pi agent-loop.js emitToolResultMessage (line 514).
+				for i := range toolResults {
+					result := &toolResults[i]
+					emit(session.MessageStart{Message: result})
+					emit(session.MessageEnd{Message: result})
+					currentCtx.Messages = append(currentCtx.Messages, result)
+					newMessages = append(newMessages, result)
 				}
 			}
 
@@ -311,20 +316,30 @@ func executeToolCallsSequential(
 	signal <-chan struct{},
 ) ([]session.ToolResultMessage, bool) {
 	var results []session.ToolResultMessage
-	terminate := true
 
 	for _, tc := range toolCalls {
 		result := executeOneToolCall(ctx, snapshot, assistantMsg, tc, cfg, emit, signal)
 		results = append(results, result)
-		if !result.IsError {
-			terminate = false
-		}
 		if isAborted(signal) {
 			break
 		}
 	}
 
-	return results, terminate && len(results) > 0
+	// Pi: terminate when every finalized call has result.terminate === true.
+	// Reference: Pi agent-loop.js shouldTerminateToolBatch (line 345).
+	return results, shouldTerminateToolBatch(results)
+}
+
+func shouldTerminateToolBatch(results []session.ToolResultMessage) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		if !r.Terminate {
+			return false
+		}
+	}
+	return true
 }
 
 func executeToolCallsParallel(
@@ -349,16 +364,14 @@ func executeToolCallsParallel(
 	}
 
 	results := make([]session.ToolResultMessage, len(toolCalls))
-	terminate := true
 	for range toolCalls {
 		r := <-ch
 		results[r.index] = r.result
-		if !r.result.IsError {
-			terminate = false
-		}
 	}
 
-	return results, terminate && len(results) > 0
+	// Pi: terminate when every finalized call has result.terminate === true.
+	// Reference: Pi agent-loop.js shouldTerminateToolBatch (line 345).
+	return results, shouldTerminateToolBatch(results)
 }
 
 func executeOneToolCall(
@@ -387,33 +400,88 @@ func executeOneToolCall(
 			ToolName:   tc.Name,
 			Content:    []session.Content{session.TextContent{Text: "tool not found: " + tc.Name}},
 			IsError:    true,
+			Terminate:  true,
 			Timestamp:  time.Now(),
 		}
 		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 		return result
 	}
 
-	args, _ := json.Marshal(tc.Arguments)
+	// Pi: prepareToolCallArguments normalizes args before validation.
+	// Reference: Pi agent-loop.js prepareToolCallArguments (line 360).
+	args := tc.Arguments
+	if tool.PrepareArgs != nil {
+		raw, _ := json.Marshal(tc.Arguments)
+		prepared := tool.PrepareArgs(raw)
+		_ = json.Unmarshal(prepared, &args)
+	}
+
+	// Pi: validateToolArguments checks schema.
+	// Ion: Tools declare Parameters (JSON Schema); validate non-recursively.
+	if tool.Parameters != nil {
+		if err := validateArgs(tool.Parameters, args); err != nil {
+			result := session.ToolResultMessage{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("invalid arguments: %v", err)}},
+				IsError:    true,
+				Terminate:  true,
+				Timestamp:  time.Now(),
+			}
+			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+			return result
+		}
+	}
+
+	argsRaw, _ := json.Marshal(args)
 
 	// BeforeToolCall hook.
 	if cfg.BeforeToolCall != nil {
 		decision := cfg.BeforeToolCall(ToolCallContext{
 			AssistantMessage: assistantMsg,
 			ToolCall:         tc,
-			Args:             args,
+			Args:             argsRaw,
 			Context:          snapshot,
 		})
+		if isAborted(signal) {
+			result := session.ToolResultMessage{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
+				IsError:    true,
+				Terminate:  true,
+				Timestamp:  time.Now(),
+			}
+			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+			return result
+		}
 		if decision != nil && decision.Block {
 			result := session.ToolResultMessage{
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
 				Content:    []session.Content{session.TextContent{Text: decision.Reason}},
 				IsError:    true,
+				Terminate:  true,
 				Timestamp:  time.Now(),
 			}
 			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 			return result
 		}
+	}
+
+	// Pi: check abort after BeforeToolCall.
+	// Reference: Pi agent-loop.js prepareToolCall (line 398).
+	if isAborted(signal) {
+		result := session.ToolResultMessage{
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
+			IsError:    true,
+			Terminate:  true,
+			Timestamp:  time.Now(),
+		}
+		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+		return result
 	}
 
 	// Execute with panic recovery.
@@ -431,11 +499,12 @@ func executeOneToolCall(
 					ToolName:   tc.Name,
 					Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("tool panic: %v", r)}},
 					IsError:    true,
+					Terminate:  true,
 					Timestamp:  time.Now(),
 				}
 			}
 		}()
-		result, err = tool.Execute(ctx, tc.ID, args, signal, progress)
+		result, err = tool.Execute(ctx, tc.ID, argsRaw, signal, progress)
 	}()
 	if err != nil {
 		result = session.ToolResultMessage{
@@ -443,6 +512,7 @@ func executeOneToolCall(
 			ToolName:   tc.Name,
 			Content:    []session.Content{session.TextContent{Text: err.Error()}},
 			IsError:    true,
+			Terminate:  true,
 			Timestamp:  time.Now(),
 		}
 	}
@@ -451,7 +521,7 @@ func executeOneToolCall(
 	if cfg.AfterToolCall != nil {
 		patch := cfg.AfterToolCall(ToolCallResultContext{
 			ToolCall: tc,
-			Args:     args,
+			Args:     argsRaw,
 			Result:   result,
 		})
 		if patch != nil {
@@ -464,11 +534,71 @@ func executeOneToolCall(
 			if patch.IsError != nil {
 				result.IsError = *patch.IsError
 			}
+			if patch.Terminate != nil {
+				result.Terminate = *patch.Terminate
+			}
 		}
 	}
 
 	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 	return result
+}
+
+// validateArgs does a simple non-recursive JSON Schema validation against
+// the tool's declared parameters. Full schema validation can be done by
+// integrating gojsonschema or similar; this validates required fields and
+// basic type checks.
+func validateArgs(params any, args map[string]any) error {
+	ps, ok := params.(map[string]any)
+	if !ok {
+		return nil // no schema to validate against
+	}
+
+	// Check required properties.
+	if required, ok := ps["required"].([]any); ok {
+		for _, r := range required {
+			if name, ok := r.(string); ok {
+				if _, found := args[name]; !found {
+					return fmt.Errorf("missing required argument: %s", name)
+				}
+			}
+		}
+	}
+
+	// Basic type checks on properties.
+	props, _ := ps["properties"].(map[string]any)
+	for name, val := range args {
+		prop, ok := props[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch prop["type"] {
+		case "string":
+			if _, ok := val.(string); !ok {
+				return fmt.Errorf("argument %q must be a string", name)
+			}
+		case "number":
+			switch val.(type) {
+			case float64, int, int64, json.Number:
+			default:
+				return fmt.Errorf("argument %q must be a number", name)
+			}
+		case "boolean":
+			if _, ok := val.(bool); !ok {
+				return fmt.Errorf("argument %q must be a boolean", name)
+			}
+		case "array":
+			if _, ok := val.([]any); !ok {
+				return fmt.Errorf("argument %q must be an array", name)
+			}
+		case "object":
+			if _, ok := val.(map[string]any); !ok {
+				return fmt.Errorf("argument %q must be an object", name)
+			}
+		}
+	}
+
+	return nil
 }
 
 // --- helpers ---

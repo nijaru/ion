@@ -304,3 +304,80 @@ func TestRunLoopToolPanicRecovery(t *testing.T) {
 		t.Fatal("expected panic error in tool result message")
 	}
 }
+
+// INVARIANT: shouldTerminateToolBatch returns true only when every result has Terminate=true.
+func TestShouldTerminateToolBatch(t *testing.T) {
+	// Empty batch.
+	if shouldTerminateToolBatch(nil) {
+		t.Fatal("empty batch must not terminate")
+	}
+	// Single non-terminating result.
+	if shouldTerminateToolBatch([]session.ToolResultMessage{{Terminate: false}}) {
+		t.Fatal("single non-terminate must not terminate")
+	}
+	// Single terminating result.
+	if !shouldTerminateToolBatch([]session.ToolResultMessage{{Terminate: true}}) {
+		t.Fatal("single terminate must terminate")
+	}
+	// Mixed — one false means no termination.
+	if shouldTerminateToolBatch([]session.ToolResultMessage{{Terminate: true}, {Terminate: false}}) {
+		t.Fatal("mixed batch must not terminate")
+	}
+	// All terminating.
+	if !shouldTerminateToolBatch([]session.ToolResultMessage{{Terminate: true}, {Terminate: true}, {Terminate: true}}) {
+		t.Fatal("all-terminate batch must terminate")
+	}
+}
+
+// INVARIANT: tool result messages emit MessageStart+MessageEnd events.
+func TestRunLoopToolResultMessageEvents(t *testing.T) {
+	callCount := 0
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Calls: []llm.Call{{
+					ID: "tc1",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "test-tool", Arguments: `{"x":1}`},
+				}}, StopReason: "toolUse"},
+			}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "done", StopReason: "stop"},
+		}}, nil
+	}
+
+	var msEvents int
+	vars := RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: streamFn,
+			Tools: []Tool{{
+				Name: "test-tool",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ok"}}, Timestamp: time.Now()}, nil
+				},
+			}},
+		},
+		func(e session.Event) {
+			switch e.(type) {
+			case session.MessageStart:
+				msEvents++
+			case session.MessageEnd:
+				msEvents++
+			}
+		},
+		nil,
+	)
+	_ = vars
+
+	// Expect: prompt MessageStart+End(2) + assistant MessageStart+End(2) + tool-result MessageStart+End(2) = 6.
+	if msEvents < 6 {
+		t.Fatalf("expected at least 6 MessageStart/End events (prompt, assistant, tool-result), got %d", msEvents)
+	}
+}

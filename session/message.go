@@ -50,6 +50,7 @@ type ToolResultMessage struct {
 	Content    []Content // Text | Image
 	Details    json.RawMessage
 	IsError    bool
+	Terminate  bool    // Pi: result.terminate — when true, agent should stop after tool batch
 	Timestamp  time.Time
 }
 
@@ -65,6 +66,16 @@ func (m ToolResultMessage) timestamp() time.Time { return m.Timestamp }
 func NewUserText(text string, ts time.Time) *UserMessage {
 	return &UserMessage{Content: []Content{TextContent{Text: text}}, Timestamp: ts}
 }
+
+// Summary format constants — match Pi's harness/messages.js formatting so
+// LLM context is equivalent.
+// Reference: Pi harness/messages.js lines 1-12.
+const (
+	CompactionSummaryPrefix = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n"
+	CompactionSummarySuffix = "\n</summary>"
+	BranchSummaryPrefix     = "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n"
+	BranchSummarySuffix     = "</summary>"
+)
 
 // CustomMessage wraps arbitrary content for display or auxiliary persistence.
 // Reference: Pi messages.js createCustomMessage (line 37).

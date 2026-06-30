@@ -87,6 +87,13 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 			if activeTools == nil {
 				activeTools = e.ActiveTools
 			}
+		case *MessageEntry:
+			// Pi: assistant messages carry the authoritative provider/model,
+			// so the active model is recovered even without an explicit ModelChangeEntry.
+			// Reference: Pi session.js buildSessionContext line 15-16.
+			if am, ok := e.Message.(*AssistantMessage); ok && activeModel == "" && am.Model != "" {
+				activeModel = am.Model
+			}
 		}
 		if lastCompaction != nil && branchSummary != nil && activeModel != "" && activeThinking != "" && activeTools != nil {
 			break
@@ -106,14 +113,16 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 
 	var msgs []Message
 
-	// Prepend branch summary if present.
+	// Prepend branch summary if present (Pi: BRANCH_SUMMARY_PREFIX/SUFFIX wrapping).
 	if branchSummary != nil && branchSummary.Summary != "" {
-		msgs = append(msgs, NewUserText(branchSummary.Summary, time.Now()))
+		msgs = append(msgs, NewUserText(
+			BranchSummaryPrefix+branchSummary.Summary+BranchSummarySuffix, time.Now()))
 	}
 
-	// Prepend compaction summary if present.
+	// Prepend compaction summary if present (Pi: COMPACTION_SUMMARY_PREFIX/SUFFIX wrapping).
 	if lastCompaction != nil && lastCompaction.Summary != "" {
-		msgs = append(msgs, NewUserText(lastCompaction.Summary, time.Now()))
+		msgs = append(msgs, NewUserText(
+			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix, time.Now()))
 	}
 
 	// Extract messages from the kept portion of the branch.

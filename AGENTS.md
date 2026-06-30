@@ -4,7 +4,9 @@
 
 Ion is a terminal coding agent in Go, modeled on Pi (Node.js). Goal: a fast,
 native daily-driver coding agent. Pi is the **reference implementation** — read
-its source for behavior, but implement idiomatically in Go. Not strict parity.
+its source for behavior, but implement idiomatically in Go. Target **complete
+Pi parity in behavior and product capability**, expressed as the optimal Go
+implementation rather than a line-for-line port.
 
 Ion is `v0.0.0`. Clean breaks allowed. No shims, no compatibility layers, no v2
 files. Fix the actual code.
@@ -34,14 +36,20 @@ Update `ai/` as you work when state changes materially.
 
 ## Reference Posture
 
-**Pi is a reference, not a spec to copy line-by-line.** Pi source:
-`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`
+**Complete Pi parity + optimal Go implementation is the goal.** Pi is the
+behavior/product reference, not a spec to copy line-by-line. Pi source:
+`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`, plus
+`pi-coding-agent/dist/` and `pi-tui/dist/` for CLI/runtime/TUI behavior.
 
 1. Read Pi's source for the feature you're building
 2. Understand the invariant (what guarantee it provides)
-3. Express it idiomatically in Go (errors not exceptions, channels not
-   EventStream, defer not try/finally)
-4. Document intentional divergence
+3. Find the correct Ion owner first; refactor ownership if the current location
+   is wrong
+4. Express the invariant idiomatically in Go (errors not exceptions, channels
+   not EventStream, defer not try/finally)
+5. Delete obsolete/duplicate paths in the same change; no shims or compatibility
+   layers
+6. Document intentional divergence only when Go/product constraints justify it
 
 ## Implementation Rules
 
@@ -100,6 +108,12 @@ refactor optimizes locally and the whole drifts. These rules prevent relapse.
    ships. The D3 overflow-recovery regression was caught this way — review is
    load-bearing, not ceremonial.
 
+9. **Parity and cleanup are one track.** Do not patch Pi gaps onto messy code.
+   For every parity item: read Pi → state the invariant → identify the correct
+   Ion owner → refactor to that owner if needed → implement the behavior →
+   delete obsolete paths → add behavioral tests. If implementing parity would
+   make a package messier, stop and redesign the local ownership before coding.
+
 ## Verification
 
 ### What counts as evidence
@@ -116,11 +130,14 @@ refactor optimizes locally and the whole drifts. These rules prevent relapse.
 
 ### Done workflow
 1. Read Pi source for the feature
-2. Implement in Ion's actual code (no shims)
-3. Write behavioral test
-4. Run test, show output
-5. If substantial: spawn parallel reviewers for source comparison
-6. Only then claim done
+2. State the invariant and the correct Ion owner
+3. Refactor misplaced responsibility first if needed (no shims)
+4. Implement in Ion's actual code
+5. Delete obsolete/duplicate paths created by the old structure
+6. Write behavioral test
+7. Run test, show output
+8. If substantial: spawn parallel reviewers for source comparison and code quality
+9. Only then claim done
 
 ### Red flags — stop and re-audit
 - "Phase 1 is complete" (said 3 times, found bugs each time)
