@@ -926,13 +926,31 @@ func (h *Harness) Store() session.Store { return h.store }
 func (h *Harness) Metrics() *Metrics { return h.metrics }
 
 // Compact triggers context compaction.
-// Compact performs context compaction on the session.
-//
-// Reference: Pi agent-harness.js compact (line 500)
 func (h *Harness) Compact(ctx context.Context) error {
 	h.logf(slog.LevelInfo, "compact start", slog.String("model", h.model.ID))
 	start := time.Now()
-	_, err := Compact(ctx, h.session, h.stream, h.model.ID, h.compaction)
+
+	// Build auth from harness config.
+	h.mu.Lock()
+	model := h.model
+	thinking := h.thinking
+	h.mu.Unlock()
+
+	var apiKey string
+	var authHeaders map[string]string
+	if h.auth != nil {
+		apiKey, authHeaders = h.auth(model)
+	}
+
+	_, err := Compact(ctx, h.session, CompactOptions{
+		Model:          model.ID,
+		ModelMaxTokens: model.MaxTokens,
+		APIKey:         apiKey,
+		Headers:        authHeaders,
+		ThinkingLevel:  thinking,
+		Convert:        DefaultConvert,
+		StreamFn:       h.stream,
+	}, h.compaction)
 	if err != nil {
 		h.logf(slog.LevelError, "compact failed", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()))
 		return fmt.Errorf("compact: %w", err)
