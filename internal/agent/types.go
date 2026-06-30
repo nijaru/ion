@@ -54,6 +54,11 @@ type LoopConfig struct {
 	// ShouldStop is called after each turn to decide whether to stop.
 	ShouldStop func(ctx StopContext) bool
 
+	// MaxToolIterations is a safety cap on the inner tool execution loop.
+	// Prevents infinite loops if the LLM keeps requesting tools without terminating.
+	// Default: 25.
+	MaxToolIterations int
+
 	// DrainSteer returns queued steering messages (injected before next assistant response).
 	DrainSteer func() []session.Message
 

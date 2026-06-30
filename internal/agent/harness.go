@@ -357,37 +357,40 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 
 	// Run the loop with overflow recovery.
 	var msgs []session.Message
-	for range 2 {
+	for attempt := 0; attempt < 2; attempt++ {
 		msgs = RunLoop(ctx, prompts, TurnContext{
 			SystemPrompt: h.systemPrompt(),
 			Messages:     snap.Messages,
 		}, cfg, h.handleEvent, cancel)
 
-		// Check for context overflow error.
-		if len(msgs) > 0 {
-			if am, ok := msgs[len(msgs)-1].(*session.AssistantMessage); ok {
-				if am.StopReason == "error" {
-					// Check if it's a context overflow error.
-					for _, c := range am.Content {
-						if tc, ok := c.(session.TextContent); ok {
-							if IsContextOverflowError(fmt.Errorf("%s", tc.Text)) {
-								// Compact and retry.
-								if compactErr := h.Compact(ctx); compactErr != nil {
-									break // can't compact, give up
-								}
-								// Rebuild context after compaction.
-								snap, err = h.session.BuildContext(ctx)
-								if err != nil {
-									break
-								}
-								continue // retry
-							}
-						}
-					}
+		// Check for context overflow in the response.
+		if len(msgs) == 0 {
+			break
+		}
+		am, ok := msgs[len(msgs)-1].(*session.AssistantMessage)
+		if !ok {
+			break
+		}
+		overflow := false
+		for _, c := range am.Content {
+			if tc, ok := c.(session.TextContent); ok {
+				if IsContextOverflowError(fmt.Errorf("%s", tc.Text)) {
+					overflow = true
+					break
 				}
 			}
 		}
-		break // no overflow, done
+		if !overflow {
+			break // no overflow, done
+		}
+		// Compact and retry.
+		if compactErr := h.Compact(ctx); compactErr != nil {
+			break // can't compact, give up
+		}
+		snap, err = h.session.BuildContext(ctx)
+		if err != nil {
+			break
+		}
 	}
 
 	// Flush any remaining pending writes.

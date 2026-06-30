@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nijaru/ion/llm"
@@ -112,9 +113,7 @@ func TestHarnessIntegration_Streaming(t *testing.T) {
 
 // INTEGRATION: Tool calling — stream returns a tool call, harness
 // executes the tool, tool result is persisted.
-// SKIP: hangs in SQLite Branch() during PrepareNextTurn — needs investigation.
 func TestHarnessIntegration_ToolCalling(t *testing.T) {
-	t.Skip("hangs in SQLite Branch() during tool execution")
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
@@ -128,21 +127,31 @@ func TestHarnessIntegration_ToolCalling(t *testing.T) {
 				ToolCallID: id,
 				ToolName:   "echo",
 				Content:    []session.Content{session.TextContent{Text: "echo: " + string(args)}},
+				Terminate:  true, // stop tool loop after execution
 			}, nil
 		},
 	}
 
+	callNum := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callNum++
+		if callNum == 1 {
+			// First call: tool call request.
+			return &mockStream{chunks: []*llm.Chunk{
+				{Calls: []llm.Call{{
+					ID:   "call_1",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "echo", Arguments: `{"text":"hello"}`},
+				}}},
+				{StopReason: "stop"},
+			}}, nil
+		}
+		// Second call: final response after tool execution.
 		return &mockStream{chunks: []*llm.Chunk{
-			{Calls: []llm.Call{{
-				ID:   "call_1",
-				Type: "function",
-				Function: struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				}{Name: "echo", Arguments: `{"text":"hello"}`},
-			}}},
-			{StopReason: "stop"},
+			{Content: "done", StopReason: "stop"},
 		}}, nil
 	}
 
@@ -397,19 +406,39 @@ func TestHarnessIntegration_ConcurrentSubscribers(t *testing.T) {
 	wg.Wait()
 }
 
-// INTEGRATION: Context overflow recovery.
-// SKIP: needs pre-filled session to trigger overflow.
+// INTEGRATION: Context overflow recovery — when the model returns a
+// context overflow error, the harness compacts and retries.
 func TestHarnessIntegration_ContextOverflow(t *testing.T) {
-	t.Skip("needs pre-filled session to force token overflow")
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
-	callNum := 0
+	// Pre-fill session with messages to exceed the small context window.
+	// Use a single harness for all pre-fill turns.
+	func() {
+		h := NewHarness(HarnessConfig{
+			Session:  sess,
+			Model:    llm.Model{ID: "test"},
+			StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+				return &mockStream{chunks: []*llm.Chunk{
+					{Content: "filler", StopReason: "stop"},
+				}}, nil
+			},
+		})
+		for i := 0; i < 20; i++ {
+			_, err := h.Prompt(context.Background(), "fill")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	callNum := int32(0)
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		callNum++
-		if callNum == 1 {
+		n := atomic.AddInt32(&callNum, 1)
+		// First call: overflow. Subsequent calls: success.
+		if n == 1 {
 			return &mockStream{chunks: []*llm.Chunk{
-				{Content: "context window exceeded", StopReason: "stop"},
+				{Content: "context_length_exceeded: too many tokens", StopReason: "stop"},
 			}}, nil
 		}
 		return &mockStream{chunks: []*llm.Chunk{
@@ -421,8 +450,8 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 		Session:       sess,
 		Model:         llm.Model{ID: "test"},
 		StreamFn:      streamFn,
-		Compaction:    CompactionSettings{Enabled: true, ReserveTokens: 500, KeepRecentTokens: 200},
-		ContextWindow: 1000,
+		Compaction:    CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 10},
+		ContextWindow: 100,
 	})
 	defer h.Close()
 

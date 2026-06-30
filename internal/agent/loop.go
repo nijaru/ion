@@ -51,12 +51,27 @@ func RunLoop(
 	// Drain initial steering messages.
 	pending := drain(cfg.DrainSteer)
 
+	maxIter := cfg.MaxToolIterations
+	if maxIter <= 0 {
+		maxIter = 25 // safety default
+	}
+	innerIter := 0
+
 	// Outer loop: continues when follow-up messages arrive after agent would stop.
 	for {
 		hasMoreToolCalls := true
 
 		// Inner loop: process tool calls and steering messages.
 		for hasMoreToolCalls || len(pending) > 0 {
+			innerIter++
+			if innerIter > maxIter {
+				msg := failureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false)
+				emit(session.MessageStart{Message: &msg})
+				emit(session.MessageEnd{Message: &msg})
+				emit(session.TurnEnd{Message: msg})
+				emit(session.AgentEnd{Messages: newMessages})
+				return newMessages
+			}
 			if !firstTurn {
 				emit(session.TurnStart{})
 			}
