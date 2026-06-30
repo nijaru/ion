@@ -88,6 +88,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/export-html", Description: "Export session as HTML", Idle: -1},
 	{Name: "/import", Description: "Import session from JSON"},
 	{Name: "/name", Description: "Name the current session"},
+	{Name: "/label", Description: "Show or set label on current branch", Args: "[text]", Idle: SlashCommandIdleAlways},
 	{Name: "/clone", Description: "Clone current session"},
 	{Name: "/copy", Description: "Copy last response", Idle: -1},
 	{Name: "/debug", Description: "Show debug info", Idle: -1},

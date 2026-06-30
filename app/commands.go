@@ -105,6 +105,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleImportCommand(fields)
 	case "/name":
 		return m.handleNameCommand(fields)
+	case "/label":
+		return m.handleLabelCommand(fields)
 	case "/clone":
 		return m.cloneSession()
 	case "/copy":
@@ -981,4 +983,48 @@ func (m Model) handleNameCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError("usage: /name <session-name>")
 	}
 	return m.nameSession(strings.Join(fields[1:], " "))
+}
+
+func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
+	if m.Model.Session == nil {
+		return m, cmdError("no active session")
+	}
+	if m.Model.Store == nil {
+		return m, cmdError("no store available")
+	}
+	sess := m.Model.Session
+	store := m.Model.Store
+	leafID := store.GetLeafID()
+
+	if len(fields) < 2 {
+		// Show current label.
+		return m, func() tea.Msg {
+			label, err := sess.GetLabel(context.Background(), leafID)
+			return labelShowMsg{label: label, err: err}
+		}
+	}
+	// Set label.
+	text := strings.Join(fields[1:], " ")
+	return m, func() tea.Msg {
+		_, err := sess.AppendLabel(context.Background(), leafID, text)
+		return labelShowMsg{label: text, err: err}
+	}
+}
+
+type labelShowMsg struct {
+	label string
+	err   error
+}
+
+func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ label: %v", msg.err)))
+		return m, nil
+	}
+	if msg.label == "" {
+		m.terminalCommit().Entries(systemEntry("ℹ no label set on current branch"))
+	} else {
+		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("🏷 label: %s", msg.label)))
+	}
+	return m, nil
 }
