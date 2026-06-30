@@ -168,6 +168,18 @@ func streamAssistantResponse(
 	emit func(session.Event),
 	signal <-chan struct{},
 ) (*session.AssistantMessage, bool) {
+	// Derive a cancellable context from the signal channel so the
+	// provider stream is cancelled when the run is aborted.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-signal:
+			cancelStream()
+		case <-streamCtx.Done():
+		}
+	}()
+	defer cancelStream()
+
 	msgs := snapshot.Messages
 	if cfg.TransformCtx != nil {
 		msgs = cfg.TransformCtx(ctx, msgs)
@@ -219,9 +231,12 @@ func streamAssistantResponse(
 		req.Model = cfg.Model.ID
 	}
 
-	stream, err := cfg.StreamFn(ctx, req)
+	stream, err := cfg.StreamFn(streamCtx, req)
 	if err != nil {
-		return failureMessagePtr(cfg.Model, err, false), true
+		msg := failureMessage(cfg.Model, err, false)
+		emit(session.MessageStart{Message: &msg})
+		emit(session.MessageEnd{Message: &msg})
+		return &msg, true
 	}
 	defer stream.Close()
 
@@ -688,9 +703,4 @@ func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model) session.A
 		}
 	}
 	return msg
-}
-
-func failureMessagePtr(model llm.Model, err error, aborted bool) *session.AssistantMessage {
-	msg := failureMessage(model, err, aborted)
-	return &msg
 }
