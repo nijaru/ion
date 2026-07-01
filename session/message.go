@@ -221,8 +221,7 @@ func EntryText(e Entry) string {
 	return sb.String()
 }
 
-func (UserMessage) IsEvent() {}
-func (AssistantMessage) IsEvent() {}
+func (UserMessage) IsEvent()  {}
 
 // TokenUsage extracts usage info from a message if available.
 func TokenUsage(msg Message) (input int, output int, cost float64) {

@@ -331,11 +331,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.MessageUpdate:
 		return m.handleMessageUpdate(msg)
 
+	case session.AfterProviderResponse:
+		// Provider responded; extension point for cost tracking / header logging.
+		return m, m.awaitSessionEvent()
+
 	case session.MessageEnd:
 		return m.handleMessageEnd(msg)
-
-	case session.UserMessage:
-		return m.handleUserMessage(msg)
 
 	case session.ToolExecStart:
 		return m.handleToolExecStart(msg)
@@ -398,12 +399,7 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
-// handleUserMessage displays user messages in the terminal.
-func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
-	entry, _ := runtime.EntryUser(msg.Content[0].(session.TextContent).Text, msg.When())
-	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
-}
-
+// handleStreamClosed displays a stream-closed system entry.
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	var cmds []tea.Cmd

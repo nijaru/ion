@@ -335,7 +335,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	h.mu.Unlock()
 
 	// Drain nextTurn queue and prepend to prompts.
-	prompts := h.drainNextTurn()
+	prompts := h.drainNextTurn() // holds its own lock
 	prompts = append(prompts, session.NewUserText(text, time.Now()))
 
 	// Emit before_agent_start hook — inject extra messages.
@@ -490,7 +490,9 @@ func (h *Harness) handleEvent(e session.Event) {
 		// Emit Settled before forwarding AgentEnd so TUI sees lifecycle in order
 		// and we don't race with channel close.
 		h.emit(session.Settled{NextTurnCount: len(h.nextTurn)})
+		h.mu.Lock()
 		h.phase = PhaseIdle
+		h.mu.Unlock()
 		h.emit(e) // forward AgentEnd last
 	}
 }
@@ -746,7 +748,10 @@ func (h *Harness) drainQueued(queue *[]session.Message, mode string) []session.M
 }
 
 // drainNextTurn drains the nextTurn queue — always in "all" mode.
+// Holds h.mu to avoid racing with NextTurn().
 func (h *Harness) drainNextTurn() []session.Message {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return h.drainQueued(&h.nextTurn, "all")
 }
 
