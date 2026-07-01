@@ -476,6 +476,8 @@ func (h *Harness) handleEvent(e session.Event) {
 				h.emit(&session.Error{Err: fmt.Errorf("auto-compact: %w", err)})
 			}
 		}
+		// Forward TurnEnd to the TUI so it can call handleTurnFinished.
+		h.emit(e)
 
 	case session.AgentEnd:
 		h.flushPending(ctx)
