@@ -190,14 +190,7 @@ func (s *sessionImpl) AppendMessage(ctx context.Context, msg Message) (string, e
 		EntryBase: EntryBase{ID: id, ParentID: s.store.GetLeafID(), Timestamp: time.Now()},
 		Message:   msg,
 	}
-	_, err := s.store.Append(ctx, entry)
-	if err != nil {
-		return "", err
-	}
-	if err := s.store.SetLeafID(id); err != nil {
-		return "", err
-	}
-	return id, nil
+	return s.store.AppendLeafEntry(ctx, entry)
 }
 
 func (s *sessionImpl) AppendCompaction(ctx context.Context, data CompactionData) (string, error) {
@@ -296,15 +289,7 @@ func (s *sessionImpl) GetLabel(ctx context.Context, targetID string) (string, er
 
 // appendLeaf persists an entry and advances the leaf pointer.
 func (s *sessionImpl) appendLeaf(ctx context.Context, entry Entry) (string, error) {
-	id := entry.ID()
-	_, err := s.store.Append(ctx, entry)
-	if err != nil {
-		return "", err
-	}
-	if err := s.store.SetLeafID(id); err != nil {
-		return "", err
-	}
-	return id, nil
+	return s.store.AppendLeafEntry(ctx, entry)
 }
 
 func (s *sessionImpl) newBase(ctx context.Context) EntryBase {

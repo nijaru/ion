@@ -362,6 +362,9 @@ func (s *resumeOnlyStore) ListSessions(ctx context.Context, workdir string) ([]s
 func (s *resumeOnlyStore) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
 	return nil
 }
+func (s *resumeOnlyStore) AppendLeafEntry(ctx context.Context, entry session.Entry) (string, error) {
+	return s.Append(ctx, entry)
+}
 func (s *resumeOnlyStore) Close() error { return nil }
 func (s *resumeOnlyStore) AddInput(ctx context.Context, workdir string, input string) error {
 	return nil

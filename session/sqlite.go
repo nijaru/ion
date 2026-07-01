@@ -259,6 +259,11 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.append(ctx, entry)
+}
+
+// append is the internal (unlocked) entry writer.
+func (s *SQLiteStore) append(ctx context.Context, entry Entry) (string, error) {
 	id := entry.ID()
 	parentID := entry.ParentID()
 	ts := entry.When().UnixMilli()
@@ -271,6 +276,20 @@ func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 		id, parentID, typ, ts, payload,
 	)
 	return id, err
+}
+
+// AppendLeafEntry appends an entry and atomically updates the leaf pointer.
+// Both operations happen under one lock so concurrent AppendLeaf calls cannot
+// interleave GetLeafID → Append → SetLeafID.
+func (s *SQLiteStore) AppendLeafEntry(ctx context.Context, entry Entry) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, err := s.append(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	s.leaf = id
+	return id, nil
 }
 
 // AppendBatch persists multiple entries atomically using a SQLite transaction.

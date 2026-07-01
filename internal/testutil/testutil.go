@@ -169,6 +169,10 @@ func (s *MockStore) Append(_ context.Context, e session.Entry) (string, error) {
 	return id, nil
 }
 
+func (s *MockStore) AppendLeafEntry(ctx context.Context, entry session.Entry) (string, error) {
+	return s.Append(ctx, entry)
+}
+
 func (s *MockStore) GetEntry(_ context.Context, _ string) (session.Entry, error) {
 	return nil, nil
 }

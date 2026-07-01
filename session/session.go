@@ -79,6 +79,10 @@ type Store interface {
 	// are persisted (implementations that support transactions will roll back).
 	AppendBatch(ctx context.Context, entries []Entry) ([]string, error)
 
+	// AppendLeafEntry appends an entry and atomically updates the leaf pointer
+	// to the new entry's ID. Safe under concurrent use.
+	AppendLeafEntry(ctx context.Context, entry Entry) (string, error)
+
 	// GetEntry returns a single entry by ID.
 	GetEntry(ctx context.Context, id string) (Entry, error)
 
