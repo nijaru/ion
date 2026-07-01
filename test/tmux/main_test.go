@@ -13,6 +13,7 @@ type tmuxTest struct {
 	t       *testing.T
 	socket  string
 	session string
+	root    string
 }
 
 func newTmuxTest(t *testing.T) *tmuxTest {
@@ -20,7 +21,6 @@ func newTmuxTest(t *testing.T) *tmuxTest {
 	session := fmt.Sprintf("ion-test-%d", time.Now().UnixNano())
 	socket := fmt.Sprintf("/tmp/tmux-ion-%d.sock", time.Now().UnixNano())
 	cwd, _ := os.Getwd()
-	// Walk up to module root (go test sets cwd to package dir).
 	moduleRoot := cwd
 	for {
 		if _, err := os.Stat(moduleRoot + "/go.mod"); err == nil {
@@ -33,11 +33,9 @@ func newTmuxTest(t *testing.T) *tmuxTest {
 		moduleRoot = parent
 	}
 
-	// Start a detached tmux session with a shell that stays alive.
 	cmd := exec.Command("tmux", "-S", socket, "new-session", "-d", "-s", session,
 		"-x", "120", "-y", "40",
 		"--", "/bin/bash", "-c", "cd "+moduleRoot+" && exec bash")
-	// Unset TMUX to avoid nested tmux issues.
 	env := os.Environ()
 	var filtered []string
 	for _, e := range env {
@@ -50,26 +48,22 @@ func newTmuxTest(t *testing.T) *tmuxTest {
 	if err != nil {
 		t.Fatalf("tmux new-session: %v\n%s", err, out)
 	}
-
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify session exists.
 	if out, err := exec.Command("tmux", "-S", socket, "has-session", "-t", session).CombinedOutput(); err != nil {
 		t.Fatalf("session not found: %v\n%s", err, out)
 	}
 
-	tt := &tmuxTest{t: t, socket: socket, session: session}
-
+	tt := &tmuxTest{t: t, socket: socket, session: session, root: moduleRoot}
 	t.Cleanup(func() {
 		tt.tmuxSafe("kill-session", "-t", session)
 		tt.tmuxSafe("kill-server")
 		os.Remove(socket)
 	})
-
 	return tt
 }
 
-func (tt *tmuxTest) tmux(args ...string) string {
+func (tt *tmuxTest) tmux(args ...string) {
 	tt.t.Helper()
 	fullArgs := append([]string{"-S", tt.socket}, args...)
 	cmd := exec.Command("tmux", fullArgs...)
@@ -78,25 +72,24 @@ func (tt *tmuxTest) tmux(args ...string) string {
 	if err != nil {
 		tt.t.Fatalf("tmux %v: %v\n%s", args, err, out)
 	}
+	_ = out
+}
+
+func (tt *tmuxTest) tmuxSafe(args ...string) {
+	fullArgs := append([]string{"-S", tt.socket}, args...)
+	cmd := exec.Command("tmux", fullArgs...)
+	cmd.Env = os.Environ()
+	cmd.Run() // ignore errors
+}
+
+func (tt *tmuxTest) capture() string {
+	tt.t.Helper()
+	cmd := exec.Command("tmux", "-S", tt.socket, "capture-pane", "-t", tt.session, "-p")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
 	return string(out)
-}
-
-func (tt *tmuxTest) typeText(text string) {
-	tt.t.Helper()
-	// Escape special characters for tmux send-keys.
-	escaped := strings.NewReplacer(";", "\\;", "\"", "\\\"").Replace(text)
-	tt.tmux("send-keys", "-t", tt.session, "-l", escaped)
-}
-
-func (tt *tmuxTest) pressEnter() {
-	tt.t.Helper()
-	tt.tmux("send-keys", "-t", tt.session, "Enter")
-}
-
-func (tt *tmuxTest) send(text string) {
-	tt.t.Helper()
-	tt.typeText(text)
-	tt.pressEnter()
 }
 
 func (tt *tmuxTest) sendKeys(keys ...string) {
@@ -105,28 +98,21 @@ func (tt *tmuxTest) sendKeys(keys ...string) {
 	tt.tmux(args...)
 }
 
-func (tt *tmuxTest) captureRaw() (string, error) {
+func (tt *tmuxTest) typeText(text string) {
 	tt.t.Helper()
-	cmd := exec.Command("tmux", "-S", tt.socket, "capture-pane", "-t", tt.session, "-p")
-	out, err := cmd.Output()
-	return string(out), err
+	escaped := strings.NewReplacer(";", "\\;", "\"", "\\\"").Replace(text)
+	tt.tmux("send-keys", "-t", tt.session, "-l", escaped)
 }
 
-func (tt *tmuxTest) capture() string {
+func (tt *tmuxTest) enter() {
 	tt.t.Helper()
-	out, err := tt.captureRaw()
-	if err != nil {
-		return ""
-	}
-	return out
+	tt.tmux("send-keys", "-t", tt.session, "Enter")
 }
 
-func (tt *tmuxTest) tmuxSafe(args ...string) string {
-	fullArgs := append([]string{"-S", tt.socket}, args...)
-	cmd := exec.Command("tmux", fullArgs...)
-	cmd.Env = os.Environ()
-	out, _ := cmd.CombinedOutput()
-	return string(out)
+func (tt *tmuxTest) send(text string) {
+	tt.t.Helper()
+	tt.typeText(text)
+	tt.enter()
 }
 
 func (tt *tmuxTest) waitFor(substr string, timeout time.Duration) string {
@@ -148,34 +134,86 @@ func (tt *tmuxTest) waitFor(substr string, timeout time.Duration) string {
 	}
 }
 
-// TestTUIInteractive verifies Ion starts from bash, accepts input, and produces output.
+// waitForGone waits until substr disappears from the captured pane.
+func (tt *tmuxTest) waitForGone(substr string, timeout time.Duration) {
+	tt.t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case <-deadline:
+			tt.t.Fatalf("timeout waiting for %q to disappear after %v", substr, timeout)
+		default:
+			content := tt.capture()
+			if !strings.Contains(content, substr) {
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+// launchIon starts Ion with --no-session and waits for the composer prompt.
+func (tt *tmuxTest) launchIon() {
+	tt.t.Helper()
+	tt.typeText("./ion --no-session")
+	tt.enter()
+	tt.waitFor("Type a message", 15*time.Second)
+}
+
+// TestTUIInteractive verifies Ion starts and produces an assistant response.
 func TestTUIInteractive(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}
 
 	tt := newTmuxTest(t)
+	tt.launchIon()
+	t.Log("Ion started")
 
-	// Launch Ion inside the tmux session. The shell's cwd is the module root.
-	tt.typeText("./ion --no-session")
-	tt.pressEnter()
-
-	// Wait for Ion to initialize.
-	content := tt.waitFor("Type a message", 15*time.Second)
-	t.Logf("startup:\n%s", content)
-
-	// Send a prompt.
-	tt.send("Say exactly: HELLO-TMUX-TEST")
+	tt.send("Say the word BANANA exactly, nothing else.")
 	t.Log("sent prompt, waiting for response...")
 
-	content = tt.waitFor("HELLO-TMUX-TEST", 60*time.Second)
-	t.Logf("response:\n%s", content)
+	// Wait for submission to complete (composer reappears).
+	tt.waitFor("Submitting", 60*time.Second)
+	tt.waitForGone("Submitting", 60*time.Second)
 
-	if !strings.Contains(content, "HELLO-TMUX-TEST") {
-		t.Fatalf("response does not contain expected text\nContent:\n%s", content)
+	content := tt.capture()
+	t.Logf("full output after turn:\n%s", content)
+
+	if !strings.Contains(content, "BANANA") {
+		t.Fatalf("expected BANANA in terminal output")
 	}
 
-	// Quit.
+	tt.sendKeys("C-c")
+	time.Sleep(1 * time.Second)
+}
+
+// TestTUIToolCall verifies Ion can execute a Read tool and display the result.
+func TestTUIToolCall(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+
+	testFile := "/tmp/ion-tmux-test-readme.txt"
+	if err := os.WriteFile(testFile, []byte("ION-TMUX-FILE-CONTENT-42"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(testFile)
+
+	tt := newTmuxTest(t)
+	tt.launchIon()
+	t.Log("Ion started")
+
+	tt.send("Read the file " + testFile + " and tell me exactly what it contains. Say only the file content, nothing else.")
+	t.Log("sent read request, waiting for tool execution...")
+
+	content := tt.waitFor("ION-TMUX-FILE-CONTENT-42", 60*time.Second)
+	t.Logf("got response:\n%s", content)
+
+	if !strings.Contains(content, "ION-TMUX-FILE-CONTENT-42") {
+		t.Fatalf("expected ION-TMUX-FILE-CONTENT-42 in response")
+	}
+
 	tt.sendKeys("C-c")
 	time.Sleep(1 * time.Second)
 }

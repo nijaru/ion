@@ -305,6 +305,19 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		return m.handleTurnFinished()
 
+	case session.QueueUpdate:
+		return m.handleQueueUpdate(msg)
+
+	case session.Settled:
+		return m.handleSettled(msg)
+
+	case session.Abort:
+		return m.handleAbort(msg)
+
+	case session.SavePoint:
+		// Internal lifecycle — writes are durable. No user-visible effect needed.
+		return m, m.awaitSessionEvent()
+
 	case session.AgentStart:
 		return m, m.awaitSessionEvent()
 
@@ -336,6 +349,52 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
+// handleQueueUpdate shows queued messages in the terminal when steer/followUp change.
+func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
+	var parts []string
+	if len(msg.Steer) > 0 {
+		parts = append(parts, fmt.Sprintf("🧭 %d steered", len(msg.Steer)))
+	}
+	if len(msg.FollowUp) > 0 {
+		parts = append(parts, fmt.Sprintf("🔁 %d follow-up", len(msg.FollowUp)))
+	}
+	if len(msg.NextTurn) > 0 {
+		parts = append(parts, fmt.Sprintf("⏭️  %d next-turn", len(msg.NextTurn)))
+	}
+	if len(parts) == 0 {
+		return m, m.awaitSessionEvent()
+	}
+	entry, _ := session.EntrySystem(fmt.Sprintf("📋 %s", strings.Join(parts, " · ")), time.Now())
+	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+}
+
+// handleSettled marks the harness as idle — enables submit button and clears in-flight state.
+func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
+	m.InFlight.AgentCommitted = false
+	if msg.NextTurnCount > 0 {
+		entry, _ := session.EntrySystem(fmt.Sprintf("ℹ️  %d queued turn(s) remaining", msg.NextTurnCount), time.Now())
+		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+	}
+	return m, m.awaitSessionEvent()
+}
+
+// handleAbort shows what was cleared when a run is cancelled.
+func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
+	var parts []string
+	if len(msg.ClearedSteer) > 0 {
+		parts = append(parts, fmt.Sprintf("🧭 steered (%d)", len(msg.ClearedSteer)))
+	}
+	if len(msg.ClearedFollowUp) > 0 {
+		parts = append(parts, fmt.Sprintf("🔁 follow-up (%d)", len(msg.ClearedFollowUp)))
+	}
+	if len(parts) == 0 {
+		return m, m.awaitSessionEvent()
+	}
+	entry, _ := session.EntrySystem(fmt.Sprintf("🛑 Aborted: %s", strings.Join(parts, ", ")), time.Now())
+	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+}
+
+// handleUserMessage displays user messages in the terminal.
 func (m Model) handleUserMessage(msg session.UserMessage) (Model, tea.Cmd) {
 	entry, _ := runtime.EntryUser(msg.Content[0].(session.TextContent).Text, msg.When())
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
@@ -460,7 +519,11 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 
 func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 	// Token usage rides on MessageEnd (one per model call, including tool-use turns).
+	// Also commit the assistant to mark the turn as having an assistant response.
 	m.turnReducer().ApplyTokenUsage(msg.Message)
+	if _, isAssistant := msg.Message.(*session.AssistantMessage); isAssistant {
+		m.turnReducer().CommitAgentMessage(msg.Message)
+	}
 	var cmds []tea.Cmd
 	in, out, cost := session.TokenUsage(msg.Message)
 	if in > 0 || out > 0 || cost > 0 {
@@ -691,32 +754,36 @@ func (m Model) currentSessionModelName() string {
 
 func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
 	// Convert runtime-specific entries to session.CustomEntry for SQLite persistence.
+	// Each gets a unique ID (not the original entry's zero-valued ID) to avoid
+	// UNIQUE constraint failures when multiple entries have empty/identical IDs.
+	now := time.Now()
+	id := fmt.Sprintf("%s-%d", action, now.UnixNano())
 	switch e := entry.(type) {
 	case runtime.StoreRoutingDecision:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "routing_decision",
 			Data:      data,
 		}
 	case runtime.StoreSystem:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "store_system",
 			Data:      data,
 		}
 	case runtime.StoreStatus:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "store_status",
 			Data:      data,
 		}
 	case runtime.StoreTokenUsage:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "store_token_usage",
 			Data:      data,
 		}
