@@ -690,20 +690,36 @@ func (m Model) currentSessionModelName() string {
 }
 
 func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
-	// Convert runtime-specific entries the SQLite store doesn't know about.
+	// Convert runtime-specific entries to session.CustomEntry for SQLite persistence.
 	switch e := entry.(type) {
 	case runtime.StoreRoutingDecision:
 		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{Type: "routing_decision", Data: data}
+		entry = &session.CustomEntry{
+			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			Type:      "routing_decision",
+			Data:      data,
+		}
 	case runtime.StoreSystem:
 		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{Type: "store_system", Data: data}
+		entry = &session.CustomEntry{
+			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			Type:      "store_system",
+			Data:      data,
+		}
 	case runtime.StoreStatus:
 		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{Type: "store_status", Data: data}
+		entry = &session.CustomEntry{
+			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			Type:      "store_status",
+			Data:      data,
+		}
 	case runtime.StoreTokenUsage:
 		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{Type: "store_token_usage", Data: data}
+		entry = &session.CustomEntry{
+			EntryBase: session.EntryBase{ID: e.ID(), ParentID: e.ParentID(), Timestamp: e.When()},
+			Type:      "store_token_usage",
+			Data:      data,
+		}
 	}
 	return m.persistenceController().appendEntry(action, entry)
 }
