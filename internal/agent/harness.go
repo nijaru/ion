@@ -362,6 +362,10 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			SystemPrompt: h.systemPrompt(),
 			Messages:     snap.Messages,
 		}, cfg, h.handleEvent, cancel)
+		// After the first attempt, prompts have been persisted to the session tree.
+		// If the turn overflows and we compact + retry, the rebuilt context already
+		// contains the user message. Re-sending prompts would duplicate them.
+		prompts = nil
 
 		// Check for context overflow in the response.
 		if len(msgs) == 0 {
@@ -721,9 +725,6 @@ func (h *Harness) drainQueued(queue *[]session.Message, mode string) []session.M
 		msgs = []session.Message{(*queue)[0]}
 		*queue = (*queue)[1:]
 	}
-	if len(msgs) > 0 {
-		h.emitQueueUpdate()
-	}
 	return msgs
 }
 
@@ -736,12 +737,20 @@ func (h *Harness) drainNextTurn() []session.Message {
 // Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
 func (h *Harness) Steer(text string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.phase == PhaseIdle {
+		h.mu.Unlock()
 		return fmt.Errorf("cannot steer while idle")
 	}
 	h.steer = append(h.steer, session.NewUserText(text, time.Now()))
-	h.emitQueueUpdate()
+	steer := make([]session.Message, len(h.steer))
+	copy(steer, h.steer)
+	followUp := make([]session.Message, len(h.followUp))
+	copy(followUp, h.followUp)
+	nextTurn := make([]session.Message, len(h.nextTurn))
+	copy(nextTurn, h.nextTurn)
+	h.mu.Unlock()
+	// emit outside lock — emit() acquires h.mu internally for listener snapshot
+	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
@@ -749,25 +758,40 @@ func (h *Harness) Steer(text string) error {
 // Returns an error if the harness is idle.
 func (h *Harness) FollowUp(text string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.phase == PhaseIdle {
+		h.mu.Unlock()
 		return fmt.Errorf("cannot follow up while idle")
 	}
 	h.followUp = append(h.followUp, session.NewUserText(text, time.Now()))
-	h.emitQueueUpdate()
+	steer := make([]session.Message, len(h.steer))
+	copy(steer, h.steer)
+	followUp := make([]session.Message, len(h.followUp))
+	copy(followUp, h.followUp)
+	nextTurn := make([]session.Message, len(h.nextTurn))
+	copy(nextTurn, h.nextTurn)
+	h.mu.Unlock()
+	// emit outside lock — emit() acquires h.mu internally for listener snapshot
+	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
 // NextTurn queues a message to be prepended to the next prompt (always allowed).
 func (h *Harness) NextTurn(text string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.nextTurn = append(h.nextTurn, session.NewUserText(text, time.Now()))
-	h.emitQueueUpdate()
+	steer := make([]session.Message, len(h.steer))
+	copy(steer, h.steer)
+	followUp := make([]session.Message, len(h.followUp))
+	copy(followUp, h.followUp)
+	nextTurn := make([]session.Message, len(h.nextTurn))
+	copy(nextTurn, h.nextTurn)
+	h.mu.Unlock()
+	// emit outside lock — emit() acquires h.mu internally for listener snapshot
+	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 }
 
-// emitQueueUpdate notifies subscribers that queued input has changed.
-// Carries full message arrays, not just counts.
+// emitQueueUpdate emits a QueueUpdate event for tests and internal callers
+// that already hold h.mu. Must NOT be called under h.mu — emit() locks.
 func (h *Harness) emitQueueUpdate() {
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)

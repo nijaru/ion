@@ -326,6 +326,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleToolExecUpdate(msg)
 	case session.ToolExecEnd:
 		return m.handleToolExecEnd(msg)
+
+	case *session.Error:
+		// Background errors from harness (persist failures, flush writes, auto-compact).
+		entry, _ := session.EntrySystem(fmt.Sprintf("⚠️  %s", msg.Err.Error()), time.Now())
+		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 	}
 
 	return m, m.awaitSessionEvent()
