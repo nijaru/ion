@@ -46,6 +46,7 @@ type SubagentProgress struct {
 type InFlightState struct {
 	Pending                 *session.Entry
 	PendingTools            map[string]session.Entry
+	CommittedAssistant      *session.Entry // assistant entry that survived tool clearing
 	Subagents               map[string]*SubagentProgress
 	ReasonBuf               string
 	StreamBuf               string
@@ -371,6 +372,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	t.inFlight.Thinking = false
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
+	t.inFlight.CommittedAssistant = nil
 	t.inFlight.Subagents = nil
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
@@ -482,10 +484,21 @@ func (t TurnReducer) StopThinking() {
 }
 
 func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
-	if t.inFlight == nil || t.inFlight.Pending == nil {
+	if t.inFlight == nil {
 		return nil, false, false
 	}
-	entry := *t.inFlight.Pending
+	completed := t.inFlight.AgentCommitted
+	// Pending may have been cleared by CompleteToolResult. Use the committed
+	// assistant entry if available, falling back to Pending.
+	var entry session.Entry
+	if t.inFlight.Pending != nil {
+		entry = *t.inFlight.Pending
+	} else if t.inFlight.CommittedAssistant != nil {
+		entry = *t.inFlight.CommittedAssistant
+	}
+	if entry == nil {
+		return nil, completed, false
+	}
 	// Update the entry content from stream buffer if available.
 	switch e := entry.(type) {
 	case *session.MessageEntry:
@@ -499,8 +512,8 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 		}
 
 	}
-	completed := t.inFlight.AgentCommitted
 	t.inFlight.Pending = nil
+	t.inFlight.CommittedAssistant = nil
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
 	t.inFlight.StreamChunks = nil
@@ -593,6 +606,7 @@ func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
 		}
 		var e session.Entry = entry
 		t.inFlight.Pending = &e
+		t.inFlight.CommittedAssistant = &e
 		t.inFlight.AgentCommitted = true
 		return entry, true
 	}

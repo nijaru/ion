@@ -131,11 +131,8 @@ func RunLoop(
 			if cfg.PrepareNextTurn != nil {
 				snap := cfg.PrepareNextTurn(ctx, toolResults)
 				if snap != nil {
-					// Update system prompt from rebuilt context, but keep current
-					// messages (they already include the tool results the loop appended).
-					// BuildContext reads the session tree which races with async emit.
-					if snap.Context.SystemPrompt != "" {
-						currentCtx.SystemPrompt = snap.Context.SystemPrompt
+					if snap.Context.Messages != nil {
+						currentCtx = snap.Context
 					}
 					if snap.Model != nil {
 						cfg.Model = *snap.Model

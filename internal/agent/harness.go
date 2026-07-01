@@ -452,10 +452,14 @@ func (h *Harness) handleEvent(e session.Event) {
 				slog.String("text", text),
 			)
 		}
-		// Persist the message to the session.
-		if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
-			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
-			h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
+		// Persist messages to the session tree so they're visible on replay.
+		// ToolResultMessage is skipped here — PrepareNextTurn persists them
+		// synchronously before BuildContext to avoid a race with the non-blocking emit.
+		if _, ok := e.Message.(*session.ToolResultMessage); !ok {
+			if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
+				h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
+				h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
+			}
 		}
 
 	case session.TurnEnd:
@@ -539,6 +543,15 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			return merged
 		},
 		PrepareNextTurn: func(ctx context.Context, toolResults []session.ToolResultMessage) *NextTurnSnapshot {
+			// Persist tool results synchronously before BuildContext so they're visible
+			// in the rebuilt context. The harness's async emit is non-blocking, so
+			// the MessageEnd handler for tool results may not have run yet.
+			for i := range toolResults {
+				msg := &toolResults[i]
+				if _, err := h.session.AppendMessage(ctx, msg); err != nil {
+					h.emit(&session.Error{Err: fmt.Errorf("prepare-tool-persist: %w", err)})
+				}
+			}
 			h.flushPending(ctx)
 			snap, err := h.session.BuildContext(ctx)
 			if err != nil {
