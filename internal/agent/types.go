@@ -48,8 +48,10 @@ type LoopConfig struct {
 	AfterToolCall func(ctx ToolCallResultContext) *ToolCallPatch
 
 	// PrepareNextTurn is called between turns. The harness uses this to flush
-	// buffered session writes and rebuild the context.
-	PrepareNextTurn func(ctx context.Context) *NextTurnSnapshot
+	// buffered session writes, persist tool results, and rebuild the context before
+	// the next LLM call. The loop passes tool results so they can be persisted
+	// synchronously before BuildContext reads them.
+	PrepareNextTurn func(ctx context.Context, toolResults []session.ToolResultMessage) *NextTurnSnapshot
 
 	// ShouldStop is called after each turn to decide whether to stop.
 	ShouldStop func(ctx StopContext) bool
@@ -118,9 +120,10 @@ type ToolCallPatch struct {
 
 // NextTurnSnapshot is returned by PrepareNextTurn to rebuild the context.
 type NextTurnSnapshot struct {
-	Context  TurnContext
-	Model    *llm.Model
-	Thinking *session.ThinkingLevel
+	Context     TurnContext
+	Model       *llm.Model
+	Thinking    *session.ThinkingLevel
+	ToolResults []session.ToolResultMessage // persisted before BuildContext, not in snapshot.Context
 }
 
 // StopContext is passed to ShouldStop.

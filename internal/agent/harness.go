@@ -461,13 +461,6 @@ func (h *Harness) handleEvent(e session.Event) {
 	case session.TurnEnd:
 		h.flushPending(ctx)
 		hadPending := len(h.pending) > 0
-		// Persist tool results so PrepareNextTurn's BuildContext sees them.
-		for _, tr := range e.ToolResults {
-			msg := tr // copy
-			if _, err := h.session.AppendMessage(ctx, &msg); err != nil {
-				h.emit(&session.Error{Err: fmt.Errorf("persist tool result: %w", err)})
-			}
-		}
 		// Emit SavePoint after durable writes (Pi: line ~480).
 		h.emit(session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
@@ -545,7 +538,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			}
 			return merged
 		},
-		PrepareNextTurn: func(ctx context.Context) *NextTurnSnapshot {
+		PrepareNextTurn: func(ctx context.Context, toolResults []session.ToolResultMessage) *NextTurnSnapshot {
 			h.flushPending(ctx)
 			snap, err := h.session.BuildContext(ctx)
 			if err != nil {
