@@ -196,7 +196,13 @@ func NewHarness(cfg HarnessConfig) *Harness {
 }
 
 // Events returns the channel the TUI subscribes to.
-func (h *Harness) Events() <-chan session.Event { return h.events }
+// Always returns a valid channel; lazily initializes if called before Init.
+func (h *Harness) Events() <-chan session.Event {
+	if h.events == nil {
+		h.events = make(chan session.Event, 64)
+	}
+	return h.events
+}
 
 // On registers a handler for a hook type. Returns an unsubscribe function.
 // Reference: Pi agent-harness.js on (line 962).
@@ -416,8 +422,11 @@ func (h *Harness) handleEvent(e session.Event) {
 	ctx := context.Background()
 
 	// AgentEnd is forwarded last (after Settled) to avoid racing with TUI channel close.
+	// TurnEnd is forwarded inside its case body after persistence/compaction.
 	if _, ok := e.(session.AgentEnd); !ok {
-		h.emit(e)
+		if _, isTurnEnd := e.(session.TurnEnd); !isTurnEnd {
+			h.emit(e)
+		}
 	}
 
 	switch e := e.(type) {

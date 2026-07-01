@@ -299,6 +299,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnStart:
 		return m.handleTurnStarted(msg)
 
+	case session.MessageStart:
+		// Message boundary for scoping; current TUI delegates to MessageUpdate deltas.
+		return m, m.awaitSessionEvent()
+
 	case session.TurnEnd:
 		if msg.Error != nil {
 			return m.handleSessionError(msg.Error, true)
