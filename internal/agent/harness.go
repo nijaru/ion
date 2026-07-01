@@ -305,11 +305,12 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		h.runCancel = nil
 		close(h.runDone)
 		h.runDone = nil
+		modelID := h.model.ID
 		h.mu.Unlock()
 		if h.metrics != nil {
 			h.metrics.RecordTurn(dur)
 		}
-		h.logf(slog.LevelInfo, "turn end", slog.Duration("duration", dur), slog.String("model", h.model.ID))
+		h.logf(slog.LevelInfo, "turn end", slog.Duration("duration", dur), slog.String("model", modelID))
 	}()
 
 	// Build turn context from session.
@@ -501,9 +502,16 @@ func (h *Harness) handleEvent(e session.Event) {
 //
 // Reference: Pi agent-harness.js createLoopConfig (line 350).
 func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig {
+	// Snapshot mutable harness fields under lock to avoid racing with
+	// SetModel / SetThinking / SetTools from the TUI goroutine.
+	h.mu.Lock()
+	model := h.model
+	thinking := h.thinking
+	h.mu.Unlock()
+
 	return LoopConfig{
-		Model:    h.model,
-		Thinking: h.thinking,
+		Model:    model,
+		Thinking: thinking,
 		Tools:    tools,
 		StreamFn: h.wrapStreamFn(),
 		Convert:  DefaultConvert,
@@ -598,8 +606,9 @@ type toolResultPayload struct {
 func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 	base := h.stream
 	return func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		// Snapshot model headers under lock (concurrent-setters-proof).
+		// Snapshot model headers and ID under lock (concurrent-setters-proof).
 		h.mu.Lock()
+		modelID := h.model.ID
 		modelHeaders := map[string]string{}
 		for k, v := range h.model.Headers {
 			modelHeaders[k] = v
@@ -665,7 +674,7 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 		// Pi reference: agent-harness.js createStreamFn streamSimple onResponse (line ~327).
 		h.emit(session.AfterProviderResponse{})
 		h.emitHook(HookAfterProviderResponse, afterProviderResponsePayload{
-			Model: h.model.ID,
+			Model: modelID,
 		})
 
 		return stream, err
@@ -717,10 +726,21 @@ type beforeAgentStartPayload struct {
 }
 
 // buildTools builds the Tool slice from the active tool names.
+// Snapshots h.active and h.tools under lock to avoid racing with SetTools.
 func (h *Harness) buildTools() []Tool {
-	tools := make([]Tool, 0, len(h.active))
-	for _, name := range h.active {
-		if t, ok := h.tools[name]; ok {
+	h.mu.Lock()
+	active := make([]string, len(h.active))
+	copy(active, h.active)
+	// Snapshot tool map to avoid concurrent map read/write with SetTools.
+	toolMap := make(map[string]Tool, len(h.tools))
+	for k, v := range h.tools {
+		toolMap[k] = v
+	}
+	h.mu.Unlock()
+
+	tools := make([]Tool, 0, len(active))
+	for _, name := range active {
+		if t, ok := toolMap[name]; ok {
 			tools = append(tools, t)
 		}
 	}
@@ -974,13 +994,12 @@ func (h *Harness) Metrics() *Metrics { return h.metrics }
 
 // Compact triggers context compaction.
 func (h *Harness) Compact(ctx context.Context) error {
-	h.logf(slog.LevelInfo, "compact start", slog.String("model", h.model.ID))
 	start := time.Now()
-
 	// Build auth from harness config.
 	h.mu.Lock()
 	model := h.model
 	thinking := h.thinking
+	h.logf(slog.LevelInfo, "compact start", slog.String("model", model.ID))
 	h.mu.Unlock()
 
 	var apiKey string
