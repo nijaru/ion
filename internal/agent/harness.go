@@ -365,10 +365,26 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	// Run the loop with overflow recovery.
 	var msgs []session.Message
 	for attempt := 0; attempt < 2; attempt++ {
-		msgs = RunLoop(ctx, prompts, TurnContext{
-			SystemPrompt: h.systemPrompt(),
-			Messages:     snap.Messages,
-		}, cfg, h.handleEvent, cancel)
+		func() {
+			// Recover from panics in RunLoop: emit failure message + lifecycle events.
+			// Reference: Pi agent-harness.js emitRunFailure (line 471).
+			defer func() {
+				if r := recover(); r != nil {
+					err := fmt.Errorf("agent loop panic: %v", r)
+					failureMsg := createFailureMessage(h.model, err, false)
+					h.handleEvent(session.MessageStart{Message: failureMsg})
+					h.handleEvent(session.MessageEnd{Message: failureMsg})
+					h.handleEvent(session.TurnEnd{Message: *failureMsg})
+					h.handleEvent(session.AgentEnd{Messages: []session.Message{failureMsg}})
+					msgs = []session.Message{failureMsg}
+					h.logf(slog.LevelError, "loop panic recovered", slog.String("error", err.Error()))
+				}
+			}()
+			msgs = RunLoop(ctx, prompts, TurnContext{
+				SystemPrompt: h.systemPrompt(),
+				Messages:     snap.Messages,
+			}, cfg, h.handleEvent, cancel)
+		}()
 		// After the first attempt, prompts have been persisted to the session tree.
 		// If the turn overflows and we compact + retry, the rebuilt context already
 		// contains the user message. Re-sending prompts would duplicate them.
@@ -417,60 +433,33 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 }
 
 // handleEvent is the event reducer. Persists on message_end, flushes on turn_end/agent_end.
+// handleEvent processes a single session event from the agent loop.
+// It persists messages, flushes pending writes, handles compaction, and
+// forwards events to TUI subscribers.
 //
 // Reference: Pi agent-harness.js handleAgentEvent (line 441).
+// Pi invariant: message_end persists BEFORE emitting to subscribers so that
+// subsequent BuildContext calls (e.g., from PrepareNextTurn) see the message.
 func (h *Harness) handleEvent(e session.Event) {
 	ctx := context.Background()
 
-	// AgentEnd is forwarded last (after Settled) to avoid racing with TUI channel close.
-	// TurnEnd is forwarded inside its case body after persistence/compaction.
-	if _, ok := e.(session.AgentEnd); !ok {
-		if _, isTurnEnd := e.(session.TurnEnd); !isTurnEnd {
-			h.emit(e)
-		}
-	}
-
 	switch e := e.(type) {
 	case session.TurnStart:
-		// Track turn start for duration logging.
+		h.emit(e) // forward to TUI
+
+	case session.MessageStart:
+		h.emit(e)
 
 	case session.MessageEnd:
-		switch msg := e.Message.(type) {
-		case *session.UserMessage:
-			text := messageText(msg)
-			if len(text) > 80 {
-				text = text[:80] + "..."
-			}
-			h.logf(slog.LevelInfo, "prompt", slog.String("text", text))
-		case *session.AssistantMessage:
-			text := messageText(msg)
-			if len(text) > 120 {
-				text = text[:120] + "..."
-			}
-			h.logf(slog.LevelInfo, "response",
-				slog.String("stop_reason", string(msg.StopReason)),
-				slog.String("text", text),
-			)
-		case *session.ToolResultMessage:
-			text := messageText(msg)
-			if len(text) > 120 {
-				text = text[:120] + "..."
-			}
-			h.logf(slog.LevelInfo, "tool_result",
-				slog.String("tool", msg.ToolName),
-				slog.Bool("is_error", msg.IsError),
-				slog.String("text", text),
-			)
+		// Persist message to session tree BEFORE emitting to subscribers.
+		// Pi: orders appendMessage before emitAny so subscribers can BuildContext.
+		if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
+			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
+			h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
+		} else {
+			h.logMessage(e.Message)
 		}
-		// Persist messages to the session tree so they're visible on replay.
-		// ToolResultMessage is skipped here — PrepareNextTurn persists them
-		// synchronously before BuildContext to avoid a race with the non-blocking emit.
-		if _, ok := e.Message.(*session.ToolResultMessage); !ok {
-			if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
-				h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
-				h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
-			}
-		}
+		h.emit(e)
 
 	case session.TurnEnd:
 		h.flushPending(ctx)
@@ -495,6 +484,10 @@ func (h *Harness) handleEvent(e session.Event) {
 		h.phase = PhaseIdle
 		h.mu.Unlock()
 		h.emit(e) // forward AgentEnd last
+
+	default:
+		// Forward all other events (ToolExecStart, ToolExecEnd, etc.) to TUI.
+		h.emit(e)
 	}
 }
 
@@ -562,15 +555,8 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			return merged
 		},
 		PrepareNextTurn: func(ctx context.Context, toolResults []session.ToolResultMessage) *NextTurnSnapshot {
-			// Persist tool results synchronously before BuildContext so they're visible
-			// in the rebuilt context. The harness's async emit is non-blocking, so
-			// the MessageEnd handler for tool results may not have run yet.
-			for i := range toolResults {
-				msg := &toolResults[i]
-				if _, err := h.session.AppendMessage(ctx, msg); err != nil {
-					h.emit(&session.Error{Err: fmt.Errorf("prepare-tool-persist: %w", err)})
-				}
-			}
+			// Tool results are already persisted (handleEvent persists before emit).
+			// Flush any pending writes (model/thinking changes, custom entries).
 			h.flushPending(ctx)
 			snap, err := h.session.BuildContext(ctx)
 			if err != nil {
@@ -1031,6 +1017,56 @@ func (h *Harness) systemPrompt() string {
 		return h.sysprompt
 	}
 	return h.sysprompt + h.skillsText
+}
+
+// createFailureMessage creates an assistant failure message when the provider
+// stream errors or the turn is aborted.
+// Reference: Pi agent-harness.js createFailureMessage (line 20).
+func createFailureMessage(model llm.Model, err error, aborted bool) *session.AssistantMessage {
+	stopReason := session.StopReason("error")
+	if aborted {
+		stopReason = session.StopReason("aborted")
+	}
+	return &session.AssistantMessage{
+		API:        model.API,
+		Provider:   model.Provider,
+		Model:      model.ID,
+		StopReason: stopReason,
+		Error:      err.Error(),
+		Usage:      session.Usage{Cost: session.Cost{}},
+		Timestamp:  time.Now(),
+	}
+}
+
+// logMessage logs a message at the appropriate level based on its type.
+func (h *Harness) logMessage(msg session.Message) {
+	switch msg := msg.(type) {
+	case *session.UserMessage:
+		text := messageText(msg)
+		if len(text) > 80 {
+			text = text[:80] + "..."
+		}
+		h.logf(slog.LevelInfo, "prompt", slog.String("text", text))
+	case *session.AssistantMessage:
+		text := messageText(msg)
+		if len(text) > 120 {
+			text = text[:120] + "..."
+		}
+		h.logf(slog.LevelInfo, "response",
+			slog.String("stop_reason", string(msg.StopReason)),
+			slog.String("text", text),
+		)
+	case *session.ToolResultMessage:
+		text := messageText(msg)
+		if len(text) > 120 {
+			text = text[:120] + "..."
+		}
+		h.logf(slog.LevelInfo, "tool_result",
+			slog.String("tool", msg.ToolName),
+			slog.Bool("is_error", msg.IsError),
+			slog.String("text", text),
+		)
+	}
 }
 
 // messageText returns the combined text content of any message type.
