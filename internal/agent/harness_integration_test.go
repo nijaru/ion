@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -851,5 +852,88 @@ func msgTypeName(m session.Message) string {
 		return "tool_result"
 	default:
 		return "unknown"
+	}
+}
+
+func typeName(v interface{}) string {
+	switch v.(type) {
+	case *session.QueueUpdate:
+		return "QueueUpdate"
+	case session.QueueUpdate:
+		return "QueueUpdate"
+	case session.TurnStart:
+		return "TurnStart"
+	case session.TurnEnd:
+		return "TurnEnd"
+	case session.AgentEnd:
+		return "AgentEnd"
+	case session.MessageStart:
+		return "MessageStart"
+	case session.MessageEnd:
+		return "MessageEnd"
+	case *session.Error:
+		return "Error"
+	case session.ToolExecStart:
+		return "ToolExecStart"
+	case session.ToolExecEnd:
+		return "ToolExecEnd"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+// INTEGRATION: QueueDrainUpdate — QueueUpdate is emitted when the loop drains queues.
+// Pi: drainQueuedMessages emits queue update after draining (agent-harness.js:337).
+func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+
+	h := NewHarness(HarnessConfig{
+		Session: sess,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Content: "ok", StopReason: "stop"},
+			}}, nil
+		},
+	})
+	defer h.Close()
+
+	// Use Subscribe() listener to reliably capture events.
+	var events []string
+	var mu sync.Mutex
+	done := false
+	unsub := h.Subscribe(func(e session.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if done {
+			return
+		}
+		events = append(events, typeName(e))
+		if _, ok := e.(session.AgentEnd); ok {
+			done = true
+		}
+	})
+	defer unsub()
+
+	// Start turn.
+	msg, err := h.Prompt(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = msg
+
+	t.Logf("events: %v", events)
+
+	// At least one QueueUpdate should have been emitted.
+	foundQueueUpdate := false
+	for _, name := range events {
+		if name == "QueueUpdate" {
+			foundQueueUpdate = true
+			break
+		}
+	}
+	if !foundQueueUpdate {
+		t.Errorf("no QueueUpdate in %d events: %v", len(events), events)
 	}
 }

@@ -511,13 +511,19 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 		Auth:     h.auth,
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
-			defer h.mu.Unlock()
-			return h.drainQueued(&h.steer, h.steeringMode)
+			msgs := h.drainQueued(&h.steer, h.steeringMode)
+			h.mu.Unlock()
+			// Pi: emitQueueUpdate after draining (agent-harness.js:337).
+			// Must emit outside lock — emit() acquires h.mu for listener snapshot.
+			h.emitQueueUpdate()
+			return msgs
 		},
 		DrainFollowUp: func() []session.Message {
 			h.mu.Lock()
-			defer h.mu.Unlock()
-			return h.drainQueued(&h.followUp, h.followUpMode)
+			msgs := h.drainQueued(&h.followUp, h.followUpMode)
+			h.mu.Unlock()
+			h.emitQueueUpdate()
+			return msgs
 		},
 		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
 			patches, err := h.emitHook(HookToolResult, toolResultPayload{
@@ -737,7 +743,8 @@ func (h *Harness) buildTools() []Tool {
 
 // drainQueued drains messages from a queue according to the drain mode.
 // "one-at-a-time" returns a single message; "all" returns the full queue.
-// Reference: Pi agent-harness.js drainQueuedMessages (line 345).
+// Must be called under h.mu. Callers must emit QueueUpdate after releasing h.mu.
+// Reference: Pi agent-harness.js drainQueuedMessages (line 337).
 func (h *Harness) drainQueued(queue *[]session.Message, mode string) []session.Message {
 	var msgs []session.Message
 	if mode == "all" {
@@ -754,11 +761,13 @@ func (h *Harness) drainQueued(queue *[]session.Message, mode string) []session.M
 }
 
 // drainNextTurn drains the nextTurn queue — always in "all" mode.
-// Holds h.mu to avoid racing with NextTurn().
+// Holds h.mu to avoid racing with NextTurn(). Emits QueueUpdate after draining.
 func (h *Harness) drainNextTurn() []session.Message {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.drainQueued(&h.nextTurn, "all")
+	msgs := h.drainQueued(&h.nextTurn, "all")
+	h.mu.Unlock()
+	h.emitQueueUpdate()
+	return msgs
 }
 
 // Steer queues a message to be injected before the next assistant response.
