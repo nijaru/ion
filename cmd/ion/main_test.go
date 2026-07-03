@@ -18,6 +18,7 @@ type closeStorageSession struct {
 
 func (s *closeStorageSession) ID() string                                    { return s.id }
 func (s *closeStorageSession) Meta() session.Metadata                        { return session.Metadata{ID: s.id} }
+func (s *closeStorageSession) SessionName(context.Context) string             { return "" }
 func (s *closeStorageSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }

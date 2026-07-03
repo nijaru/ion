@@ -25,6 +25,7 @@ type printSession struct {
 
 func (s *printSession) ID() string                                    { return "print-test" }
 func (s *printSession) Meta() session.Metadata                        { return session.Metadata{} }
+func (s *printSession) SessionName(context.Context) string             { return "" }
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }

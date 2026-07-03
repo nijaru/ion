@@ -10,6 +10,10 @@ type Session interface {
 	ID() string
 	Meta() Metadata
 
+	// SessionName returns the user-facing name from the last session_info entry.
+	// Matches Pi's getSessionName() (harness/session/session.js:95).
+	SessionName(ctx context.Context) string
+
 	// Context projection — the loop consumes this.
 	// Reconstructs []Message by walking the branch and extracting MessageEntries.
 	BuildContext(ctx context.Context) (ContextSnapshot, error)

@@ -26,7 +26,12 @@ func (s *sessionImpl) ID() string {
 	return s.store.GetMetadata().ID
 }
 func (s *sessionImpl) Meta() Metadata { return s.store.GetMetadata() }
-func (s *sessionImpl) Close() error   { return s.store.Close() }
+func (s *sessionImpl) Close() error {
+	// Store lifecycle is owned by the caller. Closing here would double-close
+	// when closeRuntimeHandles also calls store.Close(), causing "database is
+	// closed" errors in --resume --print mode.
+	return nil
+}
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
@@ -209,6 +214,19 @@ func (s *sessionImpl) AppendBranchSummary(ctx context.Context, data BranchSummar
 		Summary:   data.Summary,
 		Details:   data.Details,
 	})
+}
+
+func (s *sessionImpl) SessionName(ctx context.Context) string {
+	entries, err := s.store.Branch(ctx)
+	if err != nil {
+		return ""
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if e, ok := entries[i].(*SessionInfoEntry); ok && e.Name != "" {
+			return e.Name
+		}
+	}
+	return ""
 }
 
 func (s *sessionImpl) AppendSessionInfo(ctx context.Context, name string) (string, error) {

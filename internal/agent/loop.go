@@ -65,7 +65,7 @@ func RunLoop(
 		for hasMoreToolCalls || len(pending) > 0 {
 			innerIter++
 			if innerIter > maxIter {
-				msg := failureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false)
+				msg := failureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false, cfg.Thinking)
 				emit(session.MessageStart{Message: &msg})
 				emit(session.MessageEnd{Message: &msg})
 				emit(session.TurnEnd{Message: msg})
@@ -248,7 +248,7 @@ func streamAssistantResponse(
 
 	stream, err := cfg.StreamFn(streamCtx, req)
 	if err != nil {
-		msg := failureMessage(cfg.Model, err, false)
+		msg := failureMessage(cfg.Model, err, false, cfg.Thinking)
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
 		return &msg, true
@@ -291,7 +291,7 @@ func streamAssistantResponse(
 	}
 
 	if err := stream.Err(); err != nil {
-		msg := failureMessage(cfg.Model, err, false)
+		msg := failureMessage(cfg.Model, err, false, cfg.Thinking)
 		if !started {
 			emit(session.MessageStart{Message: &msg})
 		}
@@ -300,7 +300,7 @@ func streamAssistantResponse(
 	}
 
 	// Build final message from accumulator.
-	final := buildAssistantMessage(acc, cfg.Model)
+	final := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
 	if !started {
 		emit(session.MessageStart{Message: &final})
 	}
@@ -547,27 +547,39 @@ func executeOneToolCall(
 		}
 	}
 
-	// AfterToolCall hook.
+	// AfterToolCall hook. Errors in the hook produce an error tool result rather
+	// than crashing the turn — matching Pi's finalizeExecutedToolCall try/catch.
+	// Reference: Pi agent-loop.js finalizeExecutedToolCall (line 450).
 	if cfg.AfterToolCall != nil {
-		patch := cfg.AfterToolCall(ToolCallResultContext{
-			ToolCall: tc,
-			Args:     argsRaw,
-			Result:   result,
-		})
-		if patch != nil {
-			if patch.Content != nil {
-				result.Content = patch.Content
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					result.IsError = true
+					result.Content = []session.Content{
+						session.TextContent{Text: fmt.Sprintf("afterToolCall hook panic: %v", r)},
+					}
+				}
+			}()
+			patch := cfg.AfterToolCall(ToolCallResultContext{
+				ToolCall: tc,
+				Args:     argsRaw,
+				Result:   result,
+			})
+			if patch != nil {
+				if patch.Content != nil {
+					result.Content = patch.Content
+				}
+				if patch.Details != nil {
+					result.Details = patch.Details
+				}
+				if patch.IsError != nil {
+					result.IsError = *patch.IsError
+				}
+				if patch.Terminate != nil {
+					result.Terminate = *patch.Terminate
+				}
 			}
-			if patch.Details != nil {
-				result.Details = patch.Details
-			}
-			if patch.IsError != nil {
-				result.IsError = *patch.IsError
-			}
-			if patch.Terminate != nil {
-				result.Terminate = *patch.Terminate
-			}
-		}
+		}()
 	}
 
 	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
@@ -649,18 +661,19 @@ func isAborted(signal <-chan struct{}) bool {
 	}
 }
 
-func failureMessage(model llm.Model, err error, aborted bool) session.AssistantMessage {
+func failureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) session.AssistantMessage {
 	stopReason := session.StopReasonError
 	if aborted {
 		stopReason = session.StopReasonAborted
 	}
 	return session.AssistantMessage{
-		API:        model.API,
-		Provider:   model.Provider,
-		Model:      model.ID,
-		StopReason: stopReason,
-		Error:      err.Error(),
-		Timestamp:  time.Now(),
+		API:           model.API,
+		Provider:      model.Provider,
+		Model:         model.ID,
+		StopReason:    stopReason,
+		Error:         err.Error(),
+		ThinkingLevel: thinking,
+		Timestamp:     time.Now(),
 	}
 }
 
@@ -686,7 +699,7 @@ func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.Ass
 	return msg
 }
 
-func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model) session.AssistantMessage {
+func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model, thinking session.ThinkingLevel) session.AssistantMessage {
 	resp := acc.Response()
 	msg := session.AssistantMessage{
 		API:           resp.API,
@@ -703,7 +716,8 @@ func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model) session.A
 			CacheWrite: resp.Usage.CacheCreationTokens,
 			TotalTokens: resp.Usage.TotalTokens,
 		},
-		Timestamp: time.Now(),
+		Timestamp:     time.Now(),
+		ThinkingLevel: thinking,
 	}
 	for _, b := range resp.Blocks {
 		switch b := b.(type) {

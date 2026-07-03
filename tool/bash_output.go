@@ -13,6 +13,40 @@ const (
 	bashTempFilePrefix = "ion-bash-"
 )
 
+// sanitizeBinaryOutput strips non-printable control characters from shell output,
+// keeping tab, newline, and carriage return. Matches Pi's sanitizeBinaryOutput in
+// utils/shell-output.js.
+func sanitizeBinaryOutput(s string) string {
+	// Fast path: most output is clean
+	needsSanitizing := false
+	for _, r := range s {
+		if r <= 0x1f && r != 0x09 && r != 0x0a && r != 0x0d {
+			needsSanitizing = true
+			break
+		}
+		if r >= 0xfff9 && r <= 0xfffb {
+			needsSanitizing = true
+			break
+		}
+	}
+	if !needsSanitizing {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r <= 0x1f && r != 0x09 && r != 0x0a && r != 0x0d {
+			continue
+		}
+		if r >= 0xfff9 && r <= 0xfffb {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 type bashOutputTruncation struct {
 	Content         string
 	Truncated       bool
@@ -79,7 +113,8 @@ func (a *bashOutputAccumulator) append(data []byte) error {
 }
 
 func (a *bashOutputAccumulator) snapshot(persistIfTruncated bool) (bashOutputSnapshot, error) {
-	truncation := truncateBashTail(a.snapshotText(), a.maxLines, a.maxBytes)
+	text := sanitizeBinaryOutput(a.snapshotText())
+	truncation := truncateBashTail(text, a.maxLines, a.maxBytes)
 	truncated := a.truncated()
 	truncatedBy := truncation.TruncatedBy
 	if truncated && truncatedBy == "" {

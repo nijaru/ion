@@ -371,7 +371,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			defer func() {
 				if r := recover(); r != nil {
 					err := fmt.Errorf("agent loop panic: %v", r)
-					failureMsg := createFailureMessage(h.model, err, false)
+					failureMsg := createFailureMessage(h.model, err, false, h.thinking)
 					h.handleEvent(session.MessageStart{Message: failureMsg})
 					h.handleEvent(session.MessageEnd{Message: failureMsg})
 					h.handleEvent(session.TurnEnd{Message: *failureMsg})
@@ -1031,19 +1031,20 @@ func (h *Harness) systemPrompt() string {
 // createFailureMessage creates an assistant failure message when the provider
 // stream errors or the turn is aborted.
 // Reference: Pi agent-harness.js createFailureMessage (line 20).
-func createFailureMessage(model llm.Model, err error, aborted bool) *session.AssistantMessage {
+func createFailureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) *session.AssistantMessage {
 	stopReason := session.StopReason("error")
 	if aborted {
 		stopReason = session.StopReason("aborted")
 	}
 	return &session.AssistantMessage{
-		API:        model.API,
-		Provider:   model.Provider,
-		Model:      model.ID,
-		StopReason: stopReason,
-		Error:      err.Error(),
-		Usage:      session.Usage{Cost: session.Cost{}},
-		Timestamp:  time.Now(),
+		API:           model.API,
+		Provider:      model.Provider,
+		Model:         model.ID,
+		StopReason:    stopReason,
+		Error:         err.Error(),
+		Usage:         session.Usage{Cost: session.Cost{}},
+		ThinkingLevel: thinking,
+		Timestamp:     time.Now(),
 	}
 }
 

@@ -38,6 +38,7 @@ type AssistantMessage struct {
 	Usage         Usage
 	StopReason    StopReason
 	Error         string // non-empty iff StopReason is error or aborted
+	ThinkingLevel ThinkingLevel // per-message thinking level; Pi tracks this on AssistantMessage
 	Timestamp     time.Time
 }
 
