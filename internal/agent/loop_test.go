@@ -305,6 +305,75 @@ func TestRunLoopToolPanicRecovery(t *testing.T) {
 	}
 }
 
+// INVARIANT: AfterToolCall hook panics produce error tool results, matching Pi's finalizeExecutedToolCall try/catch.
+func TestRunLoopAfterToolCallPanicRecovery(t *testing.T) {
+	callCount := 0
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Calls: []llm.Call{{
+					ID: "tc1",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "echo", Arguments: `{}`},
+				}}, StopReason: "toolUse"},
+			}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "after panic", StopReason: "stop"},
+		}}, nil
+	}
+
+	cfg := LoopConfig{
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		Tools: []Tool{{
+			Name: "echo",
+			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+				return session.ToolResultMessage{
+					ToolCallID: id,
+					ToolName:   "echo",
+					Content:    []session.Content{session.TextContent{Text: "ok"}},
+				}, nil
+			},
+		}},
+		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
+			panic("hook bug")
+		},
+		Convert: DefaultConvert,
+	}
+
+	msgs := RunLoop(context.Background(), nil, TurnContext{}, cfg, func(e session.Event) {}, nil)
+
+	// The tool result should be marked as error from the AfterToolCall panic.
+	foundHookError := false
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case *session.ToolResultMessage:
+			if m.ToolName == "echo" && m.IsError {
+				for _, c := range m.Content {
+					if tc, ok := c.(session.TextContent); ok {
+						if strings.Contains(tc.Text, "hook panic") {
+							foundHookError = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !foundHookError {
+		t.Fatal("expected AfterToolCall panic to produce error tool result")
+	}
+
+	// The turn should NOT crash — the assistant should continue with a second LLM call.
+	if callCount < 2 {
+		t.Fatal("turn should continue after AfterToolCall panic (expected >=2 LLM calls)")
+	}
+}
+
 // INVARIANT: shouldTerminateToolBatch returns true only when every result has Terminate=true.
 func TestShouldTerminateToolBatch(t *testing.T) {
 	// Empty batch.
