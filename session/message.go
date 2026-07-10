@@ -120,8 +120,8 @@ type ThinkingContent struct {
 
 // ImageContent is an image block (user input or tool output).
 type ImageContent struct {
-	Data     []byte
-	MimeType string
+	Data     []byte `json:"data"`
+	MimeType string `json:"mime_type"`
 }
 
 // ToolCall is a tool invocation requested by the assistant. Arguments are the parsed
@@ -221,8 +221,6 @@ func EntryText(e Entry) string {
 	}
 	return sb.String()
 }
-
-func (UserMessage) IsEvent()  {}
 
 // TokenUsage extracts usage info from a message if available.
 func TokenUsage(msg Message) (input int, output int, cost float64) {

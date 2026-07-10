@@ -225,10 +225,12 @@ func (b *smokeBackend) Events() <-chan session.Event { return b.events }
 
 func now() time.Time { return time.Now() }
 
-func userEvent(text string) session.UserMessage {
-	return session.UserMessage{
-		Content:   []session.Content{session.TextContent{Text: text}},
-		Timestamp: now(),
+func userEvent(text string) session.MessageStart {
+	return session.MessageStart{
+		Message: &session.UserMessage{
+			Content:   []session.Content{session.TextContent{Text: text}},
+			Timestamp: now(),
+		},
 	}
 }
 

@@ -450,3 +450,100 @@ func TestRunLoopToolResultMessageEvents(t *testing.T) {
 		t.Fatalf("expected at least 6 MessageStart/End events (prompt, assistant, tool-result), got %d", msEvents)
 	}
 }
+
+// REGRESSION: when the response is truncated by the output token limit
+// (stopReason "length"), streamed tool-call arguments are garbage, so the
+// loop must NOT execute them — it emits error tool results instead (Pi's
+// failToolCallsFromTruncatedMessage).
+func TestRunLoopStopReasonLengthFailsToolCalls(t *testing.T) {
+	executed := false
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{
+				Calls: []llm.Call{{
+					ID: "tc1",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "test-tool", Arguments: `{}`},
+				}},
+				StopReason: "length",
+			},
+		}}, nil
+	}
+
+	var toolEvents []session.Event
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: streamFn,
+			Tools: []Tool{{
+				Name: "test-tool",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					executed = true
+					return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ok"}}}, nil
+				},
+			}},
+		},
+		func(e session.Event) {
+			switch e.(type) {
+			case session.ToolExecStart, session.ToolExecEnd:
+				toolEvents = append(toolEvents, e)
+			}
+		},
+		nil,
+	)
+
+	if executed {
+		t.Fatal("tool must NOT execute when stopReason is length")
+	}
+	if len(toolEvents) != 2 {
+		t.Fatalf("expected 2 tool events (start + end error), got %d", len(toolEvents))
+	}
+	end, ok := toolEvents[1].(session.ToolExecEnd)
+	if !ok {
+		t.Fatalf("expected ToolExecEnd, got %T", toolEvents[1])
+	}
+	if !end.Result.IsError {
+		t.Fatal("truncated tool result must be an error")
+	}
+}
+
+// REGRESSION: a clean cancellation mid-stream (provider returns ok=false with a
+// nil stream error) must be classified as an aborted turn, not a completed one.
+// Previously the partial response was finalized and treated as success.
+func TestRunLoopAbortMidStreamClassified(t *testing.T) {
+	signal := make(chan struct{})
+	close(signal) // aborted at stream start
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "partial", StopReason: "stop"},
+		}}, nil
+	}
+
+	var turnEnd *session.TurnEnd
+	RunLoop(context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
+		func(e session.Event) {
+			if te, ok := e.(session.TurnEnd); ok {
+				turnEnd = &te
+			}
+		},
+		signal,
+	)
+
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	am, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok {
+		t.Fatalf("expected AssistantMessage in TurnEnd, got %T", turnEnd.Message)
+	}
+	if am.StopReason != session.StopReasonAborted {
+		t.Fatalf("expected aborted stop reason, got %q", am.StopReason)
+	}
+}

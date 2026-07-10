@@ -223,3 +223,86 @@ func TestSessionTypedAppends(t *testing.T) {
 		t.Fatalf("expected MessageEntry, got %T", entries[1])
 	}
 }
+
+// REGRESSION: AppendLeafEntry must persist the leaf pointer so a linear
+// session (one that never calls MoveTo) is reachable after reopening the
+// store. Previously the leaf was only tracked in memory, so Branch() returned
+// nil after restart and all history was silently lost.
+func TestStoreLeafPersistedOnAppend(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := dir + "/session.db"
+
+	s, err := NewSQLiteStore(path, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(s, 64)
+
+	if _, err := sess.AppendMessage(ctx, NewUserText("hi", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, &AssistantMessage{
+		Content:    []Content{TextContent{Text: "hello"}},
+		StopReason: StopReasonEndTurn,
+		Timestamp:  time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Close and reopen from the same file.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := NewSQLiteStore(path, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	branch, err := s2.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 2 {
+		t.Fatalf("expected 2 branch entries after reopen, got %d", len(branch))
+	}
+	if _, ok := branch[1].(*MessageEntry); !ok {
+		t.Fatalf("expected MessageEntry after reopen, got %T", branch[1])
+	}
+}
+
+// REGRESSION: CustomMessageEntry with non-text (image) content must round-trip.
+// Previously the decode used a text-only heuristic that dropped images and
+// corrupted any non-text block.
+func TestStoreCustomMessageImageRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	entry := &CustomMessageEntry{
+		EntryBase:  EntryBase{ID: "cm1", Timestamp: time.Now()},
+		CustomType: "image",
+		Content:    []Content{ImageContent{Data: []byte("png-bytes"), MimeType: "image/png"}},
+		Display:    "an image",
+	}
+	if _, err := s.Append(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetEntry(ctx, "cm1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ce, ok := got.(*CustomMessageEntry)
+	if !ok {
+		t.Fatalf("expected *CustomMessageEntry, got %T", got)
+	}
+	if len(ce.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(ce.Content))
+	}
+	img, ok := ce.Content[0].(ImageContent)
+	if !ok {
+		t.Fatalf("expected ImageContent, got %T", ce.Content[0])
+	}
+	if string(img.Data) != "png-bytes" || img.MimeType != "image/png" {
+		t.Fatalf("image content corrupted: %+v", img)
+	}
+}

@@ -937,3 +937,48 @@ func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
 		t.Errorf("no QueueUpdate in %d events: %v", len(events), events)
 	}
 }
+
+// REGRESSION: overflow recovery retries the run, but the harness must emit
+// exactly ONE terminal AgentEnd for the whole Prompt (DESIGN §1.3). Previously
+// each RunLoop emitted its own AgentEnd, producing a double AgentEnd on retry.
+func TestHarnessIntegration_SingleAgentEndOnOverflowRetry(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+
+	callNum := int32(0)
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		n := atomic.AddInt32(&callNum, 1)
+		// First call: overflow. Subsequent calls: success.
+		if n == 1 {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Content: "context_length_exceeded: too many tokens", StopReason: "stop"},
+			}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{
+			{Content: "recovered after compact", StopReason: "stop"},
+		}}, nil
+	}
+
+	h := NewHarness(HarnessConfig{
+		Session:       sess,
+		Model:         llm.Model{ID: "test"},
+		StreamFn:      streamFn,
+		Compaction:    CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 10},
+		ContextWindow: 100,
+	})
+	defer h.Close()
+
+	var agentEndCount int
+	h.Subscribe(func(e session.Event) {
+		if _, ok := e.(session.AgentEnd); ok {
+			agentEndCount++
+		}
+	})
+
+	if _, err := h.Prompt(context.Background(), "test overflow"); err != nil {
+		t.Fatal(err)
+	}
+	if agentEndCount != 1 {
+		t.Fatalf("expected exactly 1 AgentEnd across overflow retry, got %d", agentEndCount)
+	}
+}

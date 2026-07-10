@@ -362,8 +362,19 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	// Build LoopConfig.
 	cfg := h.buildLoopConfig(ctx, tools)
 
-	// Run the loop with overflow recovery.
+	// Run the loop with overflow recovery. The harness owns the single terminal
+	// AgentEnd (DESIGN §1.3): RunLoop still emits AgentEnd internally, but we
+	// capture and suppress it here and emit exactly ONE after the (possibly
+	// retried) run completes, so the TUI never sees a double AgentEnd.
 	var msgs []session.Message
+	var lastAgentEnd session.AgentEnd
+	emitWrap := func(e session.Event) {
+		if ae, ok := e.(session.AgentEnd); ok {
+			lastAgentEnd = ae
+			return // harness emits the single terminal AgentEnd below
+		}
+		h.handleEvent(e)
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		func() {
 			// Recover from panics in RunLoop: emit failure message + lifecycle events.
@@ -372,10 +383,10 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 				if r := recover(); r != nil {
 					err := fmt.Errorf("agent loop panic: %v", r)
 					failureMsg := createFailureMessage(h.model, err, false, h.thinking)
-					h.handleEvent(session.MessageStart{Message: failureMsg})
-					h.handleEvent(session.MessageEnd{Message: failureMsg})
-					h.handleEvent(session.TurnEnd{Message: *failureMsg})
-					h.handleEvent(session.AgentEnd{Messages: []session.Message{failureMsg}})
+					emitWrap(session.MessageStart{Message: failureMsg})
+					emitWrap(session.MessageEnd{Message: failureMsg})
+					emitWrap(session.TurnEnd{Message: *failureMsg})
+					emitWrap(session.AgentEnd{Messages: []session.Message{failureMsg}})
 					msgs = []session.Message{failureMsg}
 					h.logf(slog.LevelError, "loop panic recovered", slog.String("error", err.Error()))
 				}
@@ -383,27 +394,30 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			msgs = RunLoop(ctx, prompts, TurnContext{
 				SystemPrompt: h.systemPrompt(),
 				Messages:     snap.Messages,
-			}, cfg, h.handleEvent, cancel)
+			}, cfg, emitWrap, cancel)
 		}()
 		// After the first attempt, prompts have been persisted to the session tree.
 		// If the turn overflows and we compact + retry, the rebuilt context already
 		// contains the user message. Re-sending prompts would duplicate them.
 		prompts = nil
 
-		// Check for context overflow in the response.
-		if len(msgs) == 0 {
-			break
-		}
-		am, ok := msgs[len(msgs)-1].(*session.AssistantMessage)
-		if !ok {
-			break
-		}
+		// Overflow is surfaced by providers as a request error in
+		// AssistantMessage.Error with empty Content, but some paths surface it
+		// inline in the content text. Check both.
 		overflow := false
-		for _, c := range am.Content {
-			if tc, ok := c.(session.TextContent); ok {
-				if IsContextOverflowError(fmt.Errorf("%s", tc.Text)) {
+		if len(msgs) > 0 {
+			if am, ok := msgs[len(msgs)-1].(*session.AssistantMessage); ok {
+				check := am.Error
+				if check == "" {
+					for _, c := range am.Content {
+						if tc, ok := c.(session.TextContent); ok {
+							check = tc.Text
+							break
+						}
+					}
+				}
+				if check != "" && IsContextOverflowError(fmt.Errorf("%s", check)) {
 					overflow = true
-					break
 				}
 			}
 		}
@@ -419,6 +433,12 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			break
 		}
 	}
+
+	// Emit exactly one terminal AgentEnd for the whole run (DESIGN §1.3).
+	if lastAgentEnd.Messages == nil {
+		lastAgentEnd = session.AgentEnd{Messages: msgs}
+	}
+	h.handleEvent(lastAgentEnd)
 
 	// Flush any remaining pending writes.
 	h.flushPending(ctx)

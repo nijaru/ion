@@ -289,6 +289,14 @@ func (s *SQLiteStore) AppendLeafEntry(ctx context.Context, entry Entry) (string,
 		return "", err
 	}
 	s.leaf = id
+	// Persist the leaf pointer so the branch is reachable after restart.
+	// Pi writes the leaf on every append; without this, a linear session (no
+	// MoveTo) is unreachable after reopening the store (loadMeta reads it).
+	if _, err := s.db.ExecContext(ctx,
+		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		id); err != nil {
+		return id, err
+	}
 	return id, nil
 }
 
@@ -551,21 +559,16 @@ func scanEntry(s scannable) (Entry, error) {
 	case "leaf":
 		return &LeafEntry{EntryBase: base, TargetID: p.LeafTargetID}, nil
 	case "custom_message":
-		// Unmarshal content from raw JSON.
+		// Unmarshal content with the same typed dispatch as other messages
+		// (text/thinking/image/tool_call) so non-text blocks round-trip. The
+		// old text-only heuristic dropped images and corrupted other blocks.
 		var rawContent []json.RawMessage
 		if err := json.Unmarshal(p.CustomMessageContent, &rawContent); err != nil {
 			return nil, fmt.Errorf("unmarshal custom_message content: %w", err)
 		}
-		content := make([]Content, len(rawContent))
-		for i, rc := range rawContent {
-			// Heuristic: determine type from JSON shape.
-			var kind struct{ Text string `json:"text"` }
-			if err := json.Unmarshal(rc, &kind); err == nil && kind.Text != "" {
-				content[i] = TextContent{Text: kind.Text}
-			} else {
-				// Fallback: store as TextContent with raw JSON.
-				content[i] = TextContent{Text: string(rc)}
-			}
+		content, err := unmarshalContentSlice(rawContent)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal custom_message content: %w", err)
 		}
 		return &CustomMessageEntry{EntryBase: base, CustomType: p.CustomMessageType, Content: content, Display: p.CustomMessageDisplay, Details: p.CustomMessageDetails}, nil
 	default:

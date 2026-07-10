@@ -93,7 +93,7 @@ func RunLoop(
 
 			if aborted {
 				// Terminal: emit turn_end + agent_end and return.
-				emit(session.TurnEnd{Message: *assistantMsg})
+				emit(session.TurnEnd{Message: assistantMsg})
 				emit(session.AgentEnd{Messages: newMessages})
 				return newMessages
 			}
@@ -110,18 +110,39 @@ func RunLoop(
 			hasMoreToolCalls = false
 
 			if len(toolCalls) > 0 {
-				results, terminate := executeToolCalls(ctx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
-				toolResults = results
-				hasMoreToolCalls = !terminate
+				if assistantMsg.StopReason == session.StopReasonLength {
+					// Output token limit truncated the response, so streamed tool-call
+					// arguments are garbage. Fail them instead of executing — Pi's
+					// failToolCallsFromTruncatedMessage (agent-loop.js:383).
+					for _, tc := range toolCalls {
+						emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name})
+						res := session.ToolResultMessage{
+							ToolCallID: tc.ID,
+							ToolName:   tc.Name,
+							Content:    []session.Content{session.TextContent{Text: "The model response was truncated by the output token limit; tool call was not executed."}},
+							IsError:    true,
+							Terminate:  true,
+							Timestamp:  time.Now(),
+						}
+						emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: res})
+						toolResults = append(toolResults, res)
+						currentCtx.Messages = append(currentCtx.Messages, &res)
+						newMessages = append(newMessages, &res)
+					}
+				} else {
+					results, terminate := executeToolCalls(ctx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
+					toolResults = results
+					hasMoreToolCalls = !terminate
 
-				// Pi: emit message_start + message_end for each tool result message.
-				// Reference: Pi agent-loop.js emitToolResultMessage (line 514).
-				for i := range toolResults {
-					result := &toolResults[i]
-					emit(session.MessageStart{Message: result})
-					emit(session.MessageEnd{Message: result})
-					currentCtx.Messages = append(currentCtx.Messages, result)
-					newMessages = append(newMessages, result)
+					// Pi: emit message_start + message_end for each tool result message.
+					// Reference: Pi agent-loop.js emitToolResultMessage (line 514).
+					for i := range toolResults {
+						result := &toolResults[i]
+						emit(session.MessageStart{Message: result})
+						emit(session.MessageEnd{Message: result})
+						currentCtx.Messages = append(currentCtx.Messages, result)
+						newMessages = append(newMessages, result)
+					}
 				}
 			}
 
@@ -290,6 +311,18 @@ func streamAssistantResponse(
 		}
 	}
 
+	if isAborted(signal) {
+		// Cancellation may surface as ok=false with a nil stream error;
+		// treat it as an aborted turn, not a completed one. Pi agent-loop.js abort branch.
+		final := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
+		final.StopReason = session.StopReasonAborted
+		final.Error = "response aborted"
+		if !started {
+			emit(session.MessageStart{Message: &final})
+		}
+		emit(session.MessageEnd{Message: &final})
+		return &final, true
+	}
 	if err := stream.Err(); err != nil {
 		msg := failureMessage(cfg.Model, err, false, cfg.Thinking)
 		if !started {
@@ -413,7 +446,8 @@ func executeOneToolCall(
 	emit func(session.Event),
 	signal <-chan struct{},
 ) session.ToolResultMessage {
-	emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name})
+	argsJSON, _ := json.Marshal(tc.Arguments)
+	emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsJSON})
 
 	// Find the tool.
 	var tool *Tool
