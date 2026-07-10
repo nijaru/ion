@@ -19,22 +19,24 @@ func (m *UserMessage) MarshalJSON() ([]byte, error) {
 
 func (m *AssistantMessage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Role          string    `json:"role"`
-		Content       []Content `json:"content"`
-		API           string    `json:"api,omitempty"`
-		Provider      string    `json:"provider,omitempty"`
-		Model         string    `json:"model,omitempty"`
-		ResponseModel string    `json:"response_model,omitempty"`
-		ResponseID    string    `json:"response_id,omitempty"`
-		Usage         Usage     `json:"usage"`
-		StopReason    StopReason `json:"stop_reason"`
-		Error         string    `json:"error,omitempty"`
-		Timestamp     int64     `json:"timestamp"`
+		Role          string         `json:"role"`
+		Content       []Content      `json:"content"`
+		API           string         `json:"api,omitempty"`
+		Provider      string         `json:"provider,omitempty"`
+		Model         string         `json:"model,omitempty"`
+		ResponseModel string         `json:"response_model,omitempty"`
+		ResponseID    string         `json:"response_id,omitempty"`
+		Usage         Usage          `json:"usage"`
+		StopReason    StopReason     `json:"stop_reason"`
+		Error         string         `json:"error,omitempty"`
+		ThinkingLevel ThinkingLevel  `json:"thinking_level,omitempty"`
+		Timestamp     int64          `json:"timestamp"`
 	}{
 		Role: "assistant", Content: m.Content, API: m.API, Provider: m.Provider,
 		Model: m.Model, ResponseModel: m.ResponseModel, ResponseID: m.ResponseID,
 		Usage: m.Usage, StopReason: m.StopReason, Error: m.Error,
-		Timestamp: m.Timestamp.UnixMilli(),
+		ThinkingLevel: m.ThinkingLevel,
+		Timestamp:     m.Timestamp.UnixMilli(),
 	})
 }
 
@@ -88,6 +90,7 @@ func unmarshalMessage(b []byte) (Message, error) {
 			Usage         Usage             `json:"usage"`
 			StopReason    StopReason        `json:"stop_reason"`
 			Error         string            `json:"error"`
+			ThinkingLevel ThinkingLevel     `json:"thinking_level"`
 			Timestamp     int64             `json:"timestamp"`
 		}
 		if err := json.Unmarshal(b, &raw); err != nil {
@@ -101,7 +104,8 @@ func unmarshalMessage(b []byte) (Message, error) {
 			Content: content, API: raw.API, Provider: raw.Provider, Model: raw.Model,
 			ResponseModel: raw.ResponseModel, ResponseID: raw.ResponseID,
 			Usage: raw.Usage, StopReason: raw.StopReason, Error: raw.Error,
-			Timestamp: time.UnixMilli(raw.Timestamp),
+			ThinkingLevel: raw.ThinkingLevel,
+			Timestamp:     time.UnixMilli(raw.Timestamp),
 		}, nil
 	case "tool_result":
 		var raw struct {

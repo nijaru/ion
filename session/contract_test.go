@@ -299,6 +299,60 @@ func TestCustomMessageEntryInBuildContext(t *testing.T) {
 	}
 }
 
+// INVARIANT: AssistantMessage JSON round-trip preserves ThinkingLevel.
+// This was broken in b2257edb (field added to struct but not to MarshalJSON/unmarshalMessage).
+func TestAssistantMessageThinkingLevelRoundTrip(t *testing.T) {
+	m := &AssistantMessage{
+		Content:       []Content{TextContent{Text: "hello"}},
+		ThinkingLevel: ThinkingHigh,
+		StopReason:    StopReasonEndTurn,
+		Timestamp:     time.Now(),
+	}
+
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := unmarshalMessage(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	am, ok := got.(*AssistantMessage)
+	if !ok {
+		t.Fatalf("unmarshaled message is %T, want *AssistantMessage", got)
+	}
+	if am.ThinkingLevel != ThinkingHigh {
+		t.Fatalf("ThinkingLevel = %q, want %q", am.ThinkingLevel, ThinkingHigh)
+	}
+}
+
+func TestAssistantMessageThinkingLevelDefaultRoundTrip(t *testing.T) {
+	// Zero-value ThinkingLevel should survive as empty string.
+	m := &AssistantMessage{
+		Content:       []Content{TextContent{Text: "hello"}},
+		ThinkingLevel: ThinkingOff,
+		StopReason:    StopReasonEndTurn,
+		Timestamp:     time.Now(),
+	}
+
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := unmarshalMessage(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	am := got.(*AssistantMessage)
+	if am.ThinkingLevel != ThinkingOff {
+		t.Fatalf("ThinkingLevel = %q, want %q", am.ThinkingLevel, ThinkingOff)
+	}
+}
+
 func TestLeafEntryNotInBuildContext(t *testing.T) {
 	store, _ := NewEphemeralCantoStore()
 	sess := NewSession(store, 64)
