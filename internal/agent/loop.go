@@ -405,6 +405,94 @@ func shouldTerminateToolBatch(results []session.ToolResultMessage) bool {
 	return true
 }
 
+// preparedToolCall holds a tool call that has passed the sequential
+// preparation phase (find, prepareArgs, validate, beforeToolCall).
+// Only these are eligible for concurrent execution.
+type preparedToolCall struct {
+	index   int
+	tool    *Tool
+	tc      *session.ToolCall
+	argsRaw json.RawMessage
+}
+
+// prepareToolCall runs the sequential portion of tool preparation: find the
+// tool, normalize args, validate schema, and run the before_tool_call hook.
+// Returns the prepared call on success, or a non-nil result on failure.
+// Does NOT emit any events — the caller decides what to emit.
+func prepareToolCall(
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	tc *session.ToolCall,
+	cfg LoopConfig,
+	signal <-chan struct{},
+) (preparedToolCall, *session.ToolResultMessage) {
+	// Find the tool.
+	var tool *Tool
+	for i := range cfg.Tools {
+		if cfg.Tools[i].Name == tc.Name {
+			tool = &cfg.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		return preparedToolCall{}, &session.ToolResultMessage{
+			ToolCallID: tc.ID, ToolName: tc.Name,
+			Content:    []session.Content{session.TextContent{Text: "tool not found: " + tc.Name}},
+			IsError:    true, Terminate: true, Timestamp: time.Now(),
+		}
+	}
+
+	// Pi: prepareToolCallArguments normalizes args before validation.
+	// Reference: Pi agent-loop.js prepareToolCallArguments (line 360).
+	args := tc.Arguments
+	if tool.PrepareArgs != nil {
+		raw, _ := json.Marshal(tc.Arguments)
+		prepared := tool.PrepareArgs(raw)
+		_ = json.Unmarshal(prepared, &args)
+	}
+
+	// Pi: validateToolArguments checks schema.
+	if tool.Parameters != nil {
+		if err := validateArgs(tool.Parameters, args); err != nil {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("invalid arguments: %v", err)}},
+				IsError:    true, Terminate: true, Timestamp: time.Now(),
+			}
+		}
+	}
+
+	argsRaw, _ := json.Marshal(args)
+
+	// BeforeToolCall hook.
+	if cfg.BeforeToolCall != nil {
+		decision := cfg.BeforeToolCall(ToolCallContext{
+			AssistantMessage: assistantMsg, ToolCall: tc, Args: argsRaw, Context: snapshot,
+		})
+		if isAborted(signal) {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
+				IsError:    true, Terminate: true, Timestamp: time.Now(),
+			}
+		}
+		if decision != nil && decision.Block {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content:    []session.Content{session.TextContent{Text: decision.Reason}},
+				IsError:    true, Terminate: true, Timestamp: time.Now(),
+			}
+		}
+	}
+
+	return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
+}
+
+// executeToolCallsParallel executes multiple tool calls concurrently.
+// Preparation (tool resolution, validation, hooks) runs sequentially to avoid
+// races. Execution runs concurrently.
+//
+// Reference: Pi agent-loop.js (prepareToolCall sequential, execute concurrent).
 func executeToolCallsParallel(
 	ctx context.Context,
 	snapshot TurnContext,
@@ -419,15 +507,29 @@ func executeToolCallsParallel(
 		result session.ToolResultMessage
 	}
 
-	ch := make(chan indexedResult, len(toolCalls))
+	// Sequential preparation phase: find tools, validate args, run hooks.
+	// This is critical for hook safety — BeforeToolCall must not race.
+	var prepared []preparedToolCall
+	results := make([]session.ToolResultMessage, len(toolCalls))
 	for i, tc := range toolCalls {
-		go func(idx int, toolCall *session.ToolCall) {
-			ch <- indexedResult{idx, executeOneToolCall(ctx, snapshot, assistantMsg, toolCall, cfg, emit, signal)}
-		}(i, tc)
+		p, errResult := prepareToolCall(snapshot, assistantMsg, tc, cfg, signal)
+		if errResult != nil {
+			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: *errResult})
+			results[i] = *errResult
+		} else {
+			p.index = i
+			prepared = append(prepared, p)
+		}
 	}
 
-	results := make([]session.ToolResultMessage, len(toolCalls))
-	for range toolCalls {
+	// Concurrent execution phase.
+	ch := make(chan indexedResult, len(prepared))
+	for _, p := range prepared {
+		go func(pc preparedToolCall) {
+			ch <- indexedResult{pc.index, executePreparedToolCall(ctx, snapshot, assistantMsg, pc, cfg, emit, signal)}
+		}(p)
+	}
+	for range prepared {
 		r := <-ch
 		results[r.index] = r.result
 	}
@@ -435,6 +537,87 @@ func executeToolCallsParallel(
 	// Pi: terminate when every finalized call has result.terminate === true.
 	// Reference: Pi agent-loop.js shouldTerminateToolBatch (line 345).
 	return results, shouldTerminateToolBatch(results)
+}
+
+// executePreparedToolCall executes a tool that has already passed preparation.
+// Emits ToolExecStart → execute → AfterToolCall → ToolExecEnd.
+func executePreparedToolCall(
+	ctx context.Context,
+	snapshot TurnContext,
+	assistantMsg session.AssistantMessage,
+	p preparedToolCall,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) session.ToolResultMessage {
+	tc := p.tc
+	tool := p.tool
+	argsRaw := p.argsRaw
+
+	emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsRaw})
+
+	// Execute with panic recovery.
+	progress := func(p session.ToolPartial) {
+		emit(session.ToolExecUpdate{ToolCallID: tc.ID, Partial: p})
+	}
+
+	var result session.ToolResultMessage
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				result = session.ToolResultMessage{
+					ToolCallID: tc.ID, ToolName: tc.Name,
+					Content: []session.Content{session.TextContent{Text: fmt.Sprintf("tool panic: %v", r)}},
+					IsError: true, Terminate: true, Timestamp: time.Now(),
+				}
+			}
+		}()
+		result, err = tool.Execute(ctx, tc.ID, argsRaw, signal, progress)
+	}()
+	if err != nil {
+		result = session.ToolResultMessage{
+			ToolCallID: tc.ID, ToolName: tc.Name,
+			Content:    []session.Content{session.TextContent{Text: err.Error()}},
+			IsError:    true, Terminate: true, Timestamp: time.Now(),
+		}
+	}
+
+	// AfterToolCall hook. Errors in the hook produce an error tool result rather
+	// than crashing the turn — matching Pi's finalizeExecutedToolCall try/catch.
+	// Reference: Pi agent-loop.js finalizeExecutedToolCall (line 450).
+	if cfg.AfterToolCall != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					result.IsError = true
+					result.Content = []session.Content{
+						session.TextContent{Text: fmt.Sprintf("afterToolCall hook panic: %v", r)},
+					}
+				}
+			}()
+			patch := cfg.AfterToolCall(ToolCallResultContext{
+				ToolCall: tc, Args: argsRaw, Result: result,
+			})
+			if patch != nil {
+				if patch.Content != nil {
+					result.Content = patch.Content
+				}
+				if patch.Details != nil {
+					result.Details = patch.Details
+				}
+				if patch.IsError != nil {
+					result.IsError = *patch.IsError
+				}
+				if patch.Terminate != nil {
+					result.Terminate = *patch.Terminate
+				}
+			}
+		}()
+	}
+
+	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+	return result
 }
 
 func executeOneToolCall(

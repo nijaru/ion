@@ -1049,3 +1049,108 @@ func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
 		t.Fatalf("expected block reason in tool result, got %q", got)
 	}
 }
+
+func extractText(c session.ToolResultMessage) string {
+	var s string
+	for _, ct := range c.Content {
+		if tc, ok := ct.(session.TextContent); ok {
+			s += tc.Text
+		}
+	}
+	return s
+}
+
+// INTEGRATION: sequential tool preparation. When multiple tools are called in
+// one assistant message, the harness must prepare them sequentially (find,
+// validate, before_tool_call hook) before executing concurrently. This test
+// sends two tools and blocks one via the hook — the other must still execute.
+func TestHarnessIntegration_SequentialPrep_MixedBlockAllow(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+
+	var toolARan atomic.Bool
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{
+				Calls: []llm.Call{
+					{ID: "tc-block", Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "block-me", Arguments: `{}`}},
+					{ID: "tc-run", Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "run-me", Arguments: `{}`}},
+				},
+				StopReason: "toolUse",
+			},
+		}}, nil
+	}
+
+	h := NewHarness(HarnessConfig{
+		Session:  sess,
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		Tools: []Tool{
+			{
+				Name: "block-me",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					return session.ToolResultMessage{ToolCallID: id, ToolName: "block-me", Content: []session.Content{session.TextContent{Text: "should not run"}}, Timestamp: time.Now()}, nil
+				},
+			},
+			{
+				Name: "run-me",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					toolARan.Store(true)
+					return session.ToolResultMessage{ToolCallID: id, ToolName: "run-me", Content: []session.Content{session.TextContent{Text: "A ran ok"}}, Timestamp: time.Now()}, nil
+				},
+			},
+		},
+	})
+	defer h.Close()
+
+	// Hook blocks "block-me" but allows "run-me".
+	h.On(HookBeforeToolCall, func(payload any) (any, error) {
+		btc := payload.(beforeToolCallPayload)
+		if btc.ToolName == "block-me" {
+			return &ToolCallDecision{Block: true, Reason: "blocked by test"}, nil
+		}
+		return nil, nil
+	})
+
+	var blockResult, runResult session.ToolResultMessage
+	var mu sync.Mutex
+	h.Subscribe(func(e session.Event) {
+		if te, ok := e.(session.ToolExecEnd); ok {
+			mu.Lock()
+			defer mu.Unlock()
+			switch te.ToolCallID {
+			case "tc-block":
+				blockResult = te.Result
+			case "tc-run":
+				runResult = te.Result
+			}
+		}
+	})
+
+	_, err := h.Prompt(context.Background(), "use both tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !blockResult.IsError {
+		t.Fatal("block-me must be blocked")
+	}
+	if !strings.Contains(extractText(blockResult), "blocked by test") {
+		t.Fatalf("expected block reason, got %q", extractText(blockResult))
+	}
+	if !toolARan.Load() {
+		t.Fatal("run-me must execute even though block-me was blocked")
+	}
+	if runResult.IsError {
+		t.Fatalf("run-me must succeed, got error: %s", extractText(runResult))
+	}
+}
