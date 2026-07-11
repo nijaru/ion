@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -980,5 +981,71 @@ func TestHarnessIntegration_SingleAgentEndOnOverflowRetry(t *testing.T) {
 	}
 	if agentEndCount != 1 {
 		t.Fatalf("expected exactly 1 AgentEnd across overflow retry, got %d", agentEndCount)
+	}
+}
+
+// INTEGRATION: before_tool_call hook can block a tool. The harness must wire
+// LoopConfig.BeforeToolCall to the HookBeforeToolCall extension point (previously
+// dead — declared in the loop but never set in buildLoopConfig).
+func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+
+	executed := false
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{chunks: []*llm.Chunk{
+			{Calls: []llm.Call{{
+				ID: "tc1",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Name: "test-tool", Arguments: `{}`},
+			}}, StopReason: "toolUse"},
+		}}, nil
+	}
+
+	h := NewHarness(HarnessConfig{
+		Session:  sess,
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+		Tools: []Tool{{
+			Name: "test-tool",
+			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+				executed = true
+				return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ran"}}, Timestamp: time.Now()}, nil
+			},
+		}},
+	})
+	defer h.Close()
+
+	h.On(HookBeforeToolCall, func(payload any) (any, error) {
+		return &ToolCallDecision{Block: true, Reason: "blocked by test"}, nil
+	})
+
+	var blocked session.ToolResultMessage
+	h.Subscribe(func(e session.Event) {
+		if te, ok := e.(session.ToolExecEnd); ok {
+			blocked = te.Result
+		}
+	})
+
+	if _, err := h.Prompt(context.Background(), "use the tool"); err != nil {
+		t.Fatal(err)
+	}
+
+	if executed {
+		t.Fatal("tool must NOT execute when before_tool_call blocks")
+	}
+	if !blocked.IsError {
+		t.Fatal("blocked tool result must be an error")
+	}
+	var got string
+	for _, c := range blocked.Content {
+		if tc, ok := c.(session.TextContent); ok {
+			got += tc.Text
+		}
+	}
+	if !strings.Contains(got, "blocked by test") {
+		t.Fatalf("expected block reason in tool result, got %q", got)
 	}
 }

@@ -96,6 +96,7 @@ const (
 	HookBeforeProviderPayload  = "before_provider_payload"
 	HookAfterProviderResponse  = "after_provider_response"
 	HookBeforeAgentStart       = "before_agent_start"
+	HookBeforeToolCall         = "before_tool_call"
 	HookToolResult             = "tool_result"
 )
 
@@ -545,6 +546,22 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			h.emitQueueUpdate()
 			return msgs
 		},
+		BeforeToolCall: func(ctx ToolCallContext) *ToolCallDecision {
+			patches, err := h.emitHook(HookBeforeToolCall, beforeToolCallPayload{
+				ToolCallID: ctx.ToolCall.ID,
+				ToolName:   ctx.ToolCall.Name,
+				Args:       ctx.Args,
+			})
+			if err != nil || len(patches) == 0 {
+				return nil
+			}
+			for _, p := range patches {
+				if bp, ok := p.(*ToolCallDecision); ok && bp != nil {
+					return bp
+				}
+			}
+			return nil
+		},
 		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
 			patches, err := h.emitHook(HookToolResult, toolResultPayload{
 				ToolCallID: ctx.ToolCall.ID,
@@ -612,6 +629,13 @@ type toolResultPayload struct {
 	Input      json.RawMessage
 	Content    []session.Content
 	IsError    bool
+}
+
+// beforeToolCallPayload is the payload for HookBeforeToolCall.
+type beforeToolCallPayload struct {
+	ToolCallID string
+	ToolName   string
+	Args       json.RawMessage
 }
 
 // wrapStreamFn wraps the harness stream function to emit provider request/payload hooks.
