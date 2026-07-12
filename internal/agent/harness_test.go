@@ -92,7 +92,9 @@ func TestHarnessEmitsEvents(t *testing.T) {
 	})
 	defer h.Close()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		h.Prompt(context.Background(), "emit test")
 	}()
 
@@ -102,14 +104,23 @@ func TestHarnessEmitsEvents(t *testing.T) {
 		select {
 		case e := <-h.Events():
 			events = append(events, e)
-			if _, ok := e.(session.AgentEnd); ok {
-				goto done
+			// AgentEnd now precedes Settled (Pi parity), so wait for Settled or timeout after AgentEnd.
+			if _, ok := e.(session.Settled); ok {
+				goto afterSettled
 			}
-		case <-timeout:
-			t.Fatal("timeout waiting for AgentEnd")
+			if _, ok := e.(session.AgentEnd); ok {
+				// Keep draining for Settled after AgentEnd.
+				continue
+			}
+		case <-done:
+			// Prompt finished; allow one more drain cycle for buffered events.
+				timeout = time.After(100 * time.Millisecond)
+			case <-timeout:
+				t.Fatal("timeout waiting for AgentEnd/Settled")
 		}
 	}
-done:
+afterSettled:
+	<-done // ensure Prompt finished before Close
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events, got %d", len(events))
 	}
@@ -133,7 +144,9 @@ func TestHarnessAfterProviderResponse(t *testing.T) {
 	})
 	defer h.Close()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		h.Prompt(context.Background(), "test after provider")
 	}()
 
@@ -150,14 +163,21 @@ func TestHarnessAfterProviderResponse(t *testing.T) {
 			case session.MessageStart:
 				sawMessageStart = true
 			}
-			if _, ok := e.(session.AgentEnd); ok {
+			if _, ok := e.(session.Settled); ok {
 				goto done
 			}
+			if _, ok := e.(session.AgentEnd); ok {
+				// After AgentEnd comes Settled — keep draining.
+				continue
+			}
+		case <-done:
+			timeout = time.After(100 * time.Millisecond)
 		case <-timeout:
 			t.Fatal("timeout waiting for AgentEnd")
 		}
 	}
 done:
+	<-done
 	if !sawAfterProvider {
 		t.Fatal("expected AfterProviderResponse event, but none received")
 	}

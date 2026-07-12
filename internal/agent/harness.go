@@ -374,7 +374,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			lastAgentEnd = ae
 			return // harness emits the single terminal AgentEnd below
 		}
-		h.handleEvent(e)
+		h.handleEvent(ctx, e)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		func() {
@@ -440,7 +440,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	if lastAgentEnd.Messages == nil {
 		lastAgentEnd = session.AgentEnd{Messages: msgs}
 	}
-	h.handleEvent(lastAgentEnd)
+	h.handleEvent(ctx, lastAgentEnd)
 
 	// Flush any remaining pending writes.
 	h.flushPending(ctx)
@@ -455,15 +455,16 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 }
 
 // handleEvent is the event reducer. Persists on message_end, flushes on turn_end/agent_end.
-// handleEvent processes a single session event from the agent loop.
-// It persists messages, flushes pending writes, handles compaction, and
-// forwards events to TUI subscribers.
 //
 // Reference: Pi agent-harness.js handleAgentEvent (line 441).
 // Pi invariant: message_end persists BEFORE emitting to subscribers so that
 // subsequent BuildContext calls (e.g., from PrepareNextTurn) see the message.
-func (h *Harness) handleEvent(e session.Event) {
-	ctx := context.Background()
+// If persistence fails, an Error event is emitted BEFORE MessageEnd so consumers
+// can detect "final but not durable" by observing the preceding Error.
+func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	switch e := e.(type) {
 	case session.TurnStart:
@@ -484,9 +485,10 @@ func (h *Harness) handleEvent(e session.Event) {
 		h.emit(e)
 
 	case session.TurnEnd:
-		h.flushPending(ctx)
 		hadPending := len(h.pending) > 0
-		// Emit SavePoint after durable writes (Pi: line ~480).
+		h.flushPending(ctx)
+		// Emit SavePoint after durable writes (Pi: line ~480). HadPendingMutations
+		// must be captured BEFORE flush, otherwise always false.
 		h.emit(session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
 		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
@@ -499,13 +501,14 @@ func (h *Harness) handleEvent(e session.Event) {
 
 	case session.AgentEnd:
 		h.flushPending(ctx)
-		// Emit Settled before forwarding AgentEnd so TUI sees lifecycle in order
-		// and we don't race with channel close.
-		h.emit(session.Settled{NextTurnCount: len(h.nextTurn)})
 		h.mu.Lock()
 		h.phase = PhaseIdle
+		nextCount := len(h.nextTurn)
 		h.mu.Unlock()
-		h.emit(e) // forward AgentEnd last
+		// DESIGN says Settled after agent_end; Pi emits AgentEnd then settled.
+		// Emit AgentEnd first (terminal), then Settled (idle signal).
+		h.emit(e) // AgentEnd is terminal per DESIGN §1.3
+		h.emit(session.Settled{NextTurnCount: nextCount})
 
 	default:
 		// Forward all other events (ToolExecStart, ToolExecEnd, etc.) to TUI.

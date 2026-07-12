@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,23 +24,17 @@ import (
 func collectWithSubscribe(h *Harness, prompt string) ([]session.Event, error) {
 	var events []session.Event
 	var mu sync.Mutex
-	var done atomic.Bool
 	// Subscribe captures events that might be dropped on the 64-deep channel.
-	h.Subscribe(func(e session.Event) {
-		if done.Load() {
-			return
-		}
+	// Collect throughout Prompt, including Settled which now comes after AgentEnd.
+	unsub := h.Subscribe(func(e session.Event) {
 		mu.Lock()
 		events = append(events, e)
-		if _, ok := e.(session.AgentEnd); ok {
-			done.Store(true)
-		}
 		mu.Unlock()
 	})
 	_, err := h.Prompt(context.Background(), prompt)
+	unsub()
 	mu.Lock()
 	defer mu.Unlock()
-	// Return copy
 	out := make([]session.Event, len(events))
 	copy(out, events)
 	return out, err
@@ -472,11 +465,7 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 
 // ----- 1A-9: SavePoint HadPendingMutations bug documentation -----
 
-func TestLifecycle_SavePointHadPendingMutations_Bug(t *testing.T) {
-	// Documents current bug: TurnEnd calls flushPending then checks len(pending) => always false.
-	// This test will PASS currently (showing bug) and should be updated to FAIL after 1B fix,
-	// then we invert expectation.
-
+func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 	h := NewHarness(HarnessConfig{
@@ -490,16 +479,17 @@ func TestLifecycle_SavePointHadPendingMutations_Bug(t *testing.T) {
 	})
 	defer h.Close()
 
-	// Enqueue a pending write via SetModel before Prompt? Actually SetModel during idle
-	// writes immediately. We need to trigger pending during run. The easiest is to
-	// call SetModel during a run — but that is queued to pending. For this reproduction,
-	// we directly set pending before TurnEnd by calling h's internal?
+	// Force pending writes: SetModel before Prompt leaves a pendingWrite that
+	// TurnEnd should report via HadPendingMutations (fixed in 1B).
+	h.SetModel(llm.Model{ID: "new-model", Provider: "test"})
 
-	// Instead we test the existing behavior: even without pending, SavePoint appears.
 	var savePoints []session.SavePoint
+	var mu sync.Mutex
 	h.Subscribe(func(e session.Event) {
 		if sp, ok := e.(session.SavePoint); ok {
+			mu.Lock()
 			savePoints = append(savePoints, sp)
+			mu.Unlock()
 		}
 	})
 
@@ -511,29 +501,21 @@ func TestLifecycle_SavePointHadPendingMutations_Bug(t *testing.T) {
 	if len(savePoints) == 0 {
 		t.Fatal("no SavePoint emitted")
 	}
-	// Currently HadPendingMutations is always false due to bug.
-	// This test documents the bug; after 1B fix, this assertion should be updated
-	// to expect true when there were pending writes (or at least test the fixed logic).
-	for _, sp := range savePoints {
-		if sp.HadPendingMutations {
-			t.Logf("SavePoint had pending mutations (unexpected with current bug) — this may mean bug already fixed")
-		}
+	// After 1B fix, HadPendingMutations should be true because we queued SetModel.
+	if !savePoints[0].HadPendingMutations {
+		t.Fatalf("expected HadPendingMutations=true after SetModel pending write, got false; events: %v", eventNames(filterEvents(nil, func(e session.Event) bool { return true })))
 	}
-	// The test passes regardless of value for now, but logs. After 1B, we will make a
-	// proper behavioral test that forces a pending write and expects HadPendingMutations==true.
-	// See TODO in tk-nlzs.
-	if savePoints[0].HadPendingMutations {
-		t.Log("BUG APPEARS FIXED: HadPendingMutations was true at least once")
-	} else {
-		t.Log("BUG CONFIRMED: HadPendingMutations always false (flush then check len)")
-	}
+}
+
+func TestLifecycle_SavePointHadPendingMutations_Bug(t *testing.T) {
+	// Historical name wrapper.
+	TestLifecycle_SavePointHadPendingMutations(t)
 }
 
 // ----- 1A-10: Settled ordering bug documentation -----
 
-func TestLifecycle_SettledOrdering_Bug(t *testing.T) {
-	// Documents: Settled doc says after agent_end, but handleEvent emits Settled before AgentEnd.
-	// DESIGN requires one terminal AgentEnd per logical turn; Settled should be after.
+func TestLifecycle_SettledOrdering(t *testing.T) {
+	// After 1B fix: Settled after AgentEnd, matching Pi and events.go doc.
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 	h := NewHarness(HarnessConfig{
@@ -564,19 +546,20 @@ func TestLifecycle_SettledOrdering_Bug(t *testing.T) {
 		}
 	}
 	if settledIdx == -1 {
-		t.Fatal("no Settled seen")
+		t.Fatalf("no Settled seen; events: %v", eventNames(events))
 	}
 	if agentEndIdx == -1 {
 		t.Fatal("no AgentEnd seen")
 	}
 
 	if settledIdx < agentEndIdx {
-		t.Logf("BUG CONFIRMED: Settled at %d before AgentEnd at %d (doc says after)", settledIdx, agentEndIdx)
-	} else {
-		t.Logf("Settled at %d after AgentEnd at %d (doc-aligned)", settledIdx, agentEndIdx)
+		t.Fatalf("Settled at %d before AgentEnd at %d — expected after per events.go doc + Pi", settledIdx, agentEndIdx)
 	}
-	// Do not fail yet — this test documents current behavior. 1B will fix ordering
-	// and then update this to assert Settled after AgentEnd (or after, per final DESIGN decision).
+}
+
+func TestLifecycle_SettledOrdering_Bug(t *testing.T) {
+	// Historical name kept for backward reference, now asserts correct ordering.
+	TestLifecycle_SettledOrdering(t)
 }
 
 // helper: contains for event names
