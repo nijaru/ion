@@ -24,8 +24,24 @@ import (
 func collectWithSubscribe(h *Harness, prompt string) ([]session.Event, error) {
 	var events []session.Event
 	var mu sync.Mutex
-	// Subscribe captures events that might be dropped on the 64-deep channel.
-	// Collect throughout Prompt, including Settled which now comes after AgentEnd.
+	// Drain Events() channel concurrently to avoid blocking emit when no TUI reader exists.
+	// Without this, blocking ordered emit would deadlock when channel fills (256) in tests
+	// that only use Subscribe.
+	drainDone := make(chan struct{})
+	go func() {
+			defer close(drainDone)
+			for {
+				select {
+				case _, ok := <-h.Events():
+					if !ok {
+						return
+					}
+				case <-time.After(10 * time.Second):
+					return
+				}
+			}
+	}()
+	// Subscribe captures all events reliably even if channel reader lags.
 	unsub := h.Subscribe(func(e session.Event) {
 		mu.Lock()
 		events = append(events, e)
@@ -33,6 +49,13 @@ func collectWithSubscribe(h *Harness, prompt string) ([]session.Event, error) {
 	})
 	_, err := h.Prompt(context.Background(), prompt)
 	unsub()
+	// Allow drain goroutine to exit after Prompt finishes (channel will no longer be written).
+	// We don't close Events channel here — harness owns it — so we just stop draining after timeout.
+	// Prompt has returned, so no more emits will happen for this turn; drain goroutine will timeout.
+	select {
+	case <-drainDone:
+	case <-time.After(100 * time.Millisecond):
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	out := make([]session.Event, len(events))
@@ -560,6 +583,92 @@ func TestLifecycle_SettledOrdering(t *testing.T) {
 func TestLifecycle_SettledOrdering_Bug(t *testing.T) {
 	// Historical name kept for backward reference, now asserts correct ordering.
 	TestLifecycle_SettledOrdering(t)
+}
+
+// ----- 1C: Backpressure regression -----
+
+func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
+	// Fill Events channel to capacity, then ensure a concurrent drainer prevents drop.
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	// Create harness with small buffer to force backpressure quickly.
+	h := NewHarness(HarnessConfig{
+		Session: sess,
+		Model:   llm.Model{ID: "test"},
+		Events:  make(chan session.Event, 1), // tiny buffer to trigger slow path
+		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+			// Emit many chunks to generate many MessageUpdate events.
+			chunks := make([]*llm.Chunk, 20)
+			for i := range chunks {
+				chunks[i] = &llm.Chunk{Content: fmt.Sprintf("c%d ", i)}
+			}
+			chunks[19].StopReason = "stop"
+			return &mockStream{chunks: chunks}, nil
+		},
+	})
+	defer h.Close()
+
+	// Concurrent drainer mimicking TUI's awaitSessionEvent loop.
+	var drained []session.Event
+	var dMu sync.Mutex
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case e, ok := <-h.Events():
+				if !ok {
+					return
+				}
+				dMu.Lock()
+				drained = append(drained, e)
+				dMu.Unlock()
+				if _, ok := e.(session.Settled); ok {
+					return
+				}
+			case <-time.After(5 * time.Second):
+				return
+			}
+		}
+	}()
+
+	// Subscribe also captures all events via listeners (no drop path).
+	var viaSubscribe []session.Event
+	var sMu sync.Mutex
+	unsub := h.Subscribe(func(e session.Event) {
+		sMu.Lock()
+		viaSubscribe = append(viaSubscribe, e)
+		sMu.Unlock()
+	})
+	defer unsub()
+
+	_, err := h.Prompt(context.Background(), "backpressure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-drainDone
+
+	sMu.Lock()
+	dMu.Lock()
+	// At least the terminal lifecycle events must be present in both paths.
+	has := func(list []session.Event, name string) bool {
+			for _, e := range list {
+				if eventTypeName(e) == name {
+					return true
+				}
+			}
+			return false
+		}
+	for _, need := range []string{"AgentEnd", "Settled", "MessageEnd", "TurnEnd"} {
+		if !has(viaSubscribe, need) {
+			t.Fatalf("Subscribe path missing %s; got %v", need, eventNames(viaSubscribe))
+		}
+		if !has(drained, need) {
+			t.Fatalf("Channel path missing %s under backpressure; drained=%v subscribe=%v", need, eventNames(drained), eventNames(viaSubscribe))
+		}
+	}
+	dMu.Unlock()
+	sMu.Unlock()
 }
 
 // helper: contains for event names

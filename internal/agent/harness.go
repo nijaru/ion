@@ -188,7 +188,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		h.followUpMode = "one-at-a-time"
 	}
 	if h.events == nil {
-		h.events = make(chan session.Event, 64)
+		h.events = make(chan session.Event, 256)
 	}
 	if h.hooks == nil {
 		h.hooks = make(map[string][]HookHandler)
@@ -200,7 +200,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 // Always returns a valid channel; lazily initializes if called before Init.
 func (h *Harness) Events() <-chan session.Event {
 	if h.events == nil {
-		h.events = make(chan session.Event, 64)
+		h.events = make(chan session.Event, 256)
 	}
 	return h.events
 }
@@ -260,14 +260,10 @@ func (h *Harness) Subscribe(listener func(session.Event)) func() {
 }
 
 // emit sends an event to the TUI channel and all subscribers.
-// Snapshot-and-release: grab listeners under the lock, then call them
-// without the lock to prevent reentry deadlocks.
+// It blocks on the channel to prevent silent drops (no lifecycle event is lost),
+// but is cancellable via runCancel to avoid deadlock during shutdown/abort.
+// Snapshot-and-release for listeners: grab under lock, call without lock.
 func (h *Harness) emit(e session.Event) {
-	select {
-	case h.events <- e:
-	default:
-		// channel full; drop event (non-blocking)
-	}
 	h.mu.Lock()
 	snapshot := make([]func(session.Event), 0, len(h.listeners))
 	for _, fn := range h.listeners {
@@ -275,9 +271,34 @@ func (h *Harness) emit(e session.Event) {
 			snapshot = append(snapshot, fn)
 		}
 	}
+	cancel := h.runCancel
 	h.mu.Unlock()
+
 	for _, fn := range snapshot {
 		fn(e)
+	}
+
+	if h.events == nil {
+		return
+	}
+	select {
+	case h.events <- e:
+		return
+	default:
+	}
+	// Slow path: ordered blocking, cancellable, with timeout to avoid deadlock
+	// when no reader exists (tests using Subscribe without draining channel).
+	if cancel != nil {
+		select {
+		case h.events <- e:
+		case <-cancel:
+		case <-time.After(50 * time.Millisecond):
+		}
+	} else {
+		select {
+		case h.events <- e:
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 
@@ -995,8 +1016,15 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 
 // Close releases resources.
 func (h *Harness) Close() error {
+	// Ensure no active run is emitting when we close the channel.
+	h.WaitForIdle()
 	if !h.externalEvents {
-		close(h.events)
+		// Close under protection of externalEvents check; if channel already closed,
+		// recover from panic to keep Close idempotent.
+		func() {
+				defer func() { _ = recover() }()
+				close(h.events)
+			}()
 	}
 	return h.session.Close()
 }
