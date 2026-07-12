@@ -383,7 +383,8 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 			defer func() {
 				if r := recover(); r != nil {
 					err := fmt.Errorf("agent loop panic: %v", r)
-					failureMsg := createFailureMessage(h.model, err, false, h.thinking)
+					msg := newFailureMessage(h.model, err, false, h.thinking)
+					failureMsg := &msg
 					emitWrap(session.MessageStart{Message: failureMsg})
 					emitWrap(session.MessageEnd{Message: failureMsg})
 					emitWrap(session.TurnEnd{Message: *failureMsg})
@@ -1070,26 +1071,6 @@ func (h *Harness) systemPrompt() string {
 		return h.sysprompt
 	}
 	return h.sysprompt + h.skillsText
-}
-
-// createFailureMessage creates an assistant failure message when the provider
-// stream errors or the turn is aborted.
-// Reference: Pi agent-harness.js createFailureMessage (line 20).
-func createFailureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) *session.AssistantMessage {
-	stopReason := session.StopReason("error")
-	if aborted {
-		stopReason = session.StopReason("aborted")
-	}
-	return &session.AssistantMessage{
-		API:           model.API,
-		Provider:      model.Provider,
-		Model:         model.ID,
-		StopReason:    stopReason,
-		Error:         err.Error(),
-		Usage:         session.Usage{Cost: session.Cost{}},
-		ThinkingLevel: thinking,
-		Timestamp:     time.Now(),
-	}
 }
 
 // logMessage logs a message at the appropriate level based on its type.

@@ -733,8 +733,7 @@ func (t TurnReducer) CompleteChild(id, output string, ts time.Time) (session.Ent
 	if t.inFlight == nil || t.inFlight.Subagents == nil {
 		return nil, false
 	}
-	child, ok := t.inFlight.Subagents[id]
-	if !ok {
+	if _, ok := t.inFlight.Subagents[id]; !ok {
 		return nil, false
 	}
 	delete(t.inFlight.Subagents, id)
@@ -749,7 +748,6 @@ func (t TurnReducer) CompleteChild(id, output string, ts time.Time) (session.Ent
 	if !ts.IsZero() {
 		now = ts
 	}
-	_ = child // used in original TestEntry title
 	return &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: now},
 		Message: &session.UserMessage{
@@ -763,8 +761,7 @@ func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, 
 	if t.inFlight == nil || t.inFlight.Subagents == nil {
 		return nil, false
 	}
-	child, ok := t.inFlight.Subagents[id]
-	if !ok {
+	if _, ok := t.inFlight.Subagents[id]; !ok {
 		return nil, false
 	}
 	delete(t.inFlight.Subagents, id)
@@ -779,7 +776,6 @@ func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, 
 	if !ts.IsZero() {
 		now = ts
 	}
-	_ = child // used in original TestEntry title
 	return &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: now},
 		Message: &session.UserMessage{

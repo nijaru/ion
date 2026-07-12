@@ -17,7 +17,6 @@ type Tool interface {
 }
 
 // DetailedTool is a tool that can return structured details along with its result.
-// If a tool implements this interface, the details will be included in the AgentToolResult.
 type DetailedTool interface {
 	Tool
 	// ExecuteDetailed runs the tool and returns both content and structured details.

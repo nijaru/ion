@@ -10,7 +10,7 @@ import (
 
 func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	model := readyModel(t)
-	tool := &session.TestEntry{Role: session.RoleTool, Content: "partial"}
+	tool := testToolEntry("tool", "partial", false)
 	model.InFlight.Thinking = true
 	var toolEntry session.Entry = tool
 	model.InFlight.Pending = &toolEntry
@@ -88,7 +88,7 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 	model.Progress.LastError = ""
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"stale follow-up"}
-	pending := &session.TestEntry{Role: session.RoleAgent}
+	pending := testAgentEntry("", "")
 	var pendEntry session.Entry = pending
 	model.InFlight.Pending = &pendEntry
 
@@ -115,8 +115,8 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 
 func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	model := readyModel(t)
-	toolA := &session.TestEntry{Role: session.RoleTool, Content: "a partial"}
-	toolB := &session.TestEntry{Role: session.RoleTool, Content: "b partial"}
+	toolA := testToolEntry("a", "a partial", false)
+	toolB := testToolEntry("b", "b partial", false)
 	model.Progress.Mode = runtime.StateWorking
 	model.Progress.Status = "Running tools..."
 	model.Progress.ContextTokens = 456

@@ -88,17 +88,8 @@ type CustomMessage struct {
 	Timestamp  time.Time
 }
 
-func (CustomMessage) isMessage()                {}
-func (m CustomMessage) timestamp() time.Time     { return m.Timestamp }
-
-// NewCustomMessage creates a custom message of the given type.
-func NewCustomMessage(customType string, content string, ts time.Time) *CustomMessage {
-	return &CustomMessage{
-		CustomType: customType,
-		Content:    []Content{TextContent{Text: content}},
-		Timestamp:  ts,
-	}
-}
+func (CustomMessage) isMessage()            {}
+func (m CustomMessage) timestamp() time.Time { return m.Timestamp }
 
 // Content is a sealed union of content block kinds.
 type Content interface {
@@ -171,9 +162,6 @@ const (
 
 // EntryRole returns the role of a message entry.
 func EntryRole(e Entry) string {
-	if te, ok := e.(*TestEntry); ok {
-		return te.Role
-	}
 	me, ok := e.(*MessageEntry)
 	if !ok {
 		return ""
@@ -191,9 +179,6 @@ func EntryRole(e Entry) string {
 
 // EntryText returns the text content of a message entry.
 func EntryText(e Entry) string {
-	if te, ok := e.(*TestEntry); ok {
-		return te.Content
-	}
 	me, ok := e.(*MessageEntry)
 	if !ok {
 		return ""

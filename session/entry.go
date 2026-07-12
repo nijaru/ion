@@ -162,9 +162,6 @@ const (
 
 // EntryTitle returns a display name for an entry, or empty string.
 func EntryTitle(e Entry) string {
-	if te, ok := e.(*TestEntry); ok {
-		return te.Title
-	}
 	if le, ok := e.(*LabelEntry); ok {
 		return le.Label
 	}
@@ -187,22 +184,10 @@ func EntrySystem(content string, ts time.Time) (*MessageEntry, error) {
 	}, nil
 }
 
-// EntryCustom creates a custom entry for auxiliary persisted data.
-func EntryCustom(customType string, data []byte, ts time.Time) (*CustomEntry, error) {
-	return &CustomEntry{
-		EntryBase: EntryBase{Timestamp: ts},
-		Type:      customType,
-		Data:      data,
-	}, nil
-}
-
 func (e *SessionInfoEntry) Title() string { return e.Name }
 
 // EntryIsError returns true if the entry is a tool result with an error.
 func EntryIsError(e Entry) bool {
-	if te, ok := e.(*TestEntry); ok {
-		return te.IsError
-	}
 	if me, ok := e.(*MessageEntry); ok {
 		if tr, ok := me.Message.(*ToolResultMessage); ok {
 			return tr.IsError
@@ -215,9 +200,6 @@ func EntryIsError(e Entry) bool {
 func EntryContent(e Entry) string { return EntryText(e) }
 
 func EntryReasoning(e Entry) string {
-	if te, ok := e.(*TestEntry); ok {
-		return te.Reasoning
-	}
 	if me, ok := e.(*MessageEntry); ok {
 		if am, ok := me.Message.(*AssistantMessage); ok {
 			for _, c := range am.Content {
@@ -229,21 +211,3 @@ func EntryReasoning(e Entry) string {
 	}
 	return ""
 }
-
-// TestEntry is a test-only type that implements Entry with flat fields.
-// This makes tests simpler than constructing MessageEntry + Message.
-type TestEntry struct {
-	TestID       string
-	TestParentID string
-	Role         string
-	Title        string
-	Content      string
-	Reasoning    string
-	IsError      bool
-	Timestamp    time.Time
-}
-
-func (e *TestEntry) IsEntry()         {}
-func (e *TestEntry) ID() string       { return e.TestID }
-func (e *TestEntry) ParentID() string { return e.TestParentID }
-func (e *TestEntry) When() time.Time  { return e.Timestamp }

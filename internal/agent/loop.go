@@ -65,7 +65,7 @@ func RunLoop(
 		for hasMoreToolCalls || len(pending) > 0 {
 			innerIter++
 			if innerIter > maxIter {
-				msg := failureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false, cfg.Thinking)
+				msg := newFailureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false, cfg.Thinking)
 				emit(session.MessageStart{Message: &msg})
 				emit(session.MessageEnd{Message: &msg})
 				emit(session.TurnEnd{Message: msg})
@@ -269,7 +269,7 @@ func streamAssistantResponse(
 
 	stream, err := cfg.StreamFn(streamCtx, req)
 	if err != nil {
-		msg := failureMessage(cfg.Model, err, false, cfg.Thinking)
+		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
 		return &msg, true
@@ -324,7 +324,7 @@ func streamAssistantResponse(
 		return &final, true
 	}
 	if err := stream.Err(); err != nil {
-		msg := failureMessage(cfg.Model, err, false, cfg.Thinking)
+		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		if !started {
 			emit(session.MessageStart{Message: &msg})
 		}
@@ -878,7 +878,8 @@ func isAborted(signal <-chan struct{}) bool {
 	}
 }
 
-func failureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) session.AssistantMessage {
+// newFailureMessage is the canonical failure constructor; callers adapt pointer/value.
+func newFailureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) session.AssistantMessage {
 	stopReason := session.StopReasonError
 	if aborted {
 		stopReason = session.StopReasonAborted
