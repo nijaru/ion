@@ -30,8 +30,7 @@ type Harness struct {
 	log      *slog.Logger // structured logger, may be nil
 	metrics  *Metrics     // runtime statistics, may be nil
 
-	// resources (Pi: skills + prompt templates)
-	skillsText      string
+	// resources (Pi: prompt templates; system prompt is preassembled at startup)
 	promptTemplates map[string]string
 
 	stream func(ctx context.Context, req *llm.Request) (llm.Stream, error)
@@ -113,7 +112,6 @@ type HarnessConfig struct {
 	Model    llm.Model
 	Thinking session.ThinkingLevel
 	SysPrompt string
-	SkillsText string // pre-formatted skills XML for the system prompt
 	PromptTemplates map[string]string // name → template text
 	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	Auth     func(model llm.Model) (apiKey string, headers map[string]string)
@@ -169,7 +167,6 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		sysprompt: cfg.SysPrompt,
 		log:      cfg.Logger,
 		metrics:  cfg.Metrics,
-		skillsText: cfg.SkillsText,
 		promptTemplates: cfg.PromptTemplates,
 		stream:   cfg.StreamFn,
 		auth:     cfg.Auth,
@@ -415,7 +412,7 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 				}
 			}()
 			msgs = RunLoop(ctx, prompts, TurnContext{
-				SystemPrompt: h.systemPrompt(),
+				SystemPrompt: h.sysprompt,
 				Messages:     snap.Messages,
 			}, cfg, emitWrap, cancel)
 		}()
@@ -637,7 +634,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 			h.mu.Unlock()
 			return &NextTurnSnapshot{
 				Context: TurnContext{
-					SystemPrompt: h.systemPrompt(),
+					SystemPrompt: h.sysprompt,
 					Messages:     snap.Messages,
 				},
 				Model:    &m,
@@ -1094,14 +1091,6 @@ func (h *Harness) Compact(ctx context.Context) error {
 	}
 	h.logf(slog.LevelInfo, "compact end", slog.Duration("duration", time.Since(start)))
 	return nil
-}
-
-// systemPrompt returns the full system prompt with skills appended.
-func (h *Harness) systemPrompt() string {
-	if h.skillsText == "" {
-		return h.sysprompt
-	}
-	return h.sysprompt + h.skillsText
 }
 
 // logMessage logs a message at the appropriate level based on its type.

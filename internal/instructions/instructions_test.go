@@ -7,6 +7,105 @@ import (
 	"testing"
 )
 
+func TestBasePromptContainsOperatingPolicy(t *testing.T) {
+	prompt := BasePrompt()
+	for _, want := range []string{
+		"You are ion, a terminal coding agent.",
+		"Treat project instruction files as authoritative within their scope.",
+		"Inspect the relevant context first.",
+		"After editing files, run relevant verification commands when feasible.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("base prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
+func TestBuildSystemPromptUsesDefaultContextAndRuntimeMetadata(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rules"), 0o644); err != nil {
+		t.Fatalf("write AGENTS: %v", err)
+	}
+
+	prompt, err := BuildSystemPrompt("", "", "<available_skills>\nskill\n</available_skills>", root)
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"You are ion, a terminal coding agent.",
+		"<project_context>",
+		"project rules",
+		"<available_skills>\nskill\n</available_skills>",
+		"Current date: ",
+		"Current working directory: " + filepath.ToSlash(root),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q: %q", want, prompt)
+		}
+	}
+	if strings.Index(prompt, "You are ion") > strings.Index(prompt, "<project_context>") {
+		t.Fatalf("project context appears before base prompt: %q", prompt)
+	}
+	if strings.Index(prompt, "<project_context>") > strings.Index(prompt, "<available_skills>") {
+		t.Fatalf("skills appear before project context: %q", prompt)
+	}
+	if strings.Index(prompt, "<available_skills>") > strings.Index(prompt, "Current date:") {
+		t.Fatalf("runtime metadata appears before skills: %q", prompt)
+	}
+}
+
+func TestBuildSystemPromptOverrideKeepsAppendAndProjectContext(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("trusted project rules"), 0o644); err != nil {
+		t.Fatalf("write AGENTS: %v", err)
+	}
+
+	prompt, err := BuildSystemPrompt("custom policy", "extra policy", "", root)
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	for _, want := range []string{"custom policy", "extra policy", "trusted project rules"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q: %q", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "You are ion, a terminal coding agent.") {
+		t.Fatalf("custom prompt unexpectedly contains default policy: %q", prompt)
+	}
+	if strings.Index(prompt, "extra policy") > strings.Index(prompt, "<project_context>") {
+		t.Fatalf("project context should follow custom append: %q", prompt)
+	}
+}
+
+func TestBuildSystemPromptReadsPromptFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root := t.TempDir()
+	overridePath := filepath.Join(root, "system.md")
+	appendPath := filepath.Join(root, "append.md")
+	if err := os.WriteFile(overridePath, []byte("file policy\n"), 0o644); err != nil {
+		t.Fatalf("write override: %v", err)
+	}
+	if err := os.WriteFile(appendPath, []byte("file append\n"), 0o644); err != nil {
+		t.Fatalf("write append: %v", err)
+	}
+
+	prompt, err := BuildSystemPrompt(overridePath, appendPath, "", root)
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(prompt, "file policy") || !strings.Contains(prompt, "file append") {
+		t.Fatalf("prompt missing file contents: %q", prompt)
+	}
+	if strings.Contains(prompt, overridePath) || strings.Contains(prompt, appendPath) {
+		t.Fatalf("prompt used file paths instead of contents: %q", prompt)
+	}
+}
+
 func TestLoadInstructionLayersWalksAncestorsToCWD(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

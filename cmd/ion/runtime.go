@@ -14,6 +14,7 @@ import (
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/internal/instructions"
 	"github.com/nijaru/ion/internal/runtime"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
@@ -208,12 +209,18 @@ func openRuntime(
 		})
 	}
 
-	// Load skills text for system prompt.
+	// Pi only advertises invocable skills when the read tool is available.
 	skillsText := ""
-	if skillsDir, err := config.DefaultSkillsDir(); err == nil {
-		if text, err := ionskills.FormatSkillsForPrompt(skillsDir); err == nil {
-			skillsText = text
+	for _, registered := range agentTools {
+		if registered.Name != "read" {
+			continue
 		}
+		if skillsDir, err := config.DefaultSkillsDir(); err == nil {
+			if text, err := ionskills.FormatSkillsForPrompt(skillsDir); err == nil {
+				skillsText = text
+			}
+		}
+		break
 	}
 
 	// Load prompt templates from ~/.ion/prompts/.
@@ -221,12 +228,17 @@ func openRuntime(
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// Build system prompt: default (from instructions) + append override or full override.
-	sysPrompt := ""
-	if strings.TrimSpace(systemPromptOverride) != "" {
-		sysPrompt = systemPromptOverride
-	} else if strings.TrimSpace(appendSystemPromptOverride) != "" {
-		sysPrompt = appendSystemPromptOverride
+	// Build the complete system prompt once at startup. The instructions package
+	// owns base policy, project-context layering, resources, and runtime metadata;
+	// the harness receives one immutable prompt snapshot for each runtime.
+	sysPrompt, err := instructions.BuildSystemPrompt(
+		systemPromptOverride,
+		appendSystemPromptOverride,
+		skillsText,
+		cwd,
+	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build system prompt: %w", err)
 	}
 
 	harness := agent.NewHarness(agent.HarnessConfig{
@@ -236,7 +248,6 @@ func openRuntime(
 		Tools:           agentTools,
 		Events:          sess.EventSender(),
 		StreamFn:        provider.Stream,
-		SkillsText:      skillsText,
 		PromptTemplates: promptTemplates,
 		SysPrompt:       sysPrompt,
 		Logger:          log,

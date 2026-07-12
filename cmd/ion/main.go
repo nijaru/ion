@@ -293,8 +293,8 @@ func main() {
 			cfg,
 			sessionID,
 			true,
-			"",
-			"",
+			cli.systemPromptOverride(),
+			cli.appendSystemPromptOverride(),
 		)
 		if err != nil {
 			return nil, nil, nil, err
