@@ -56,6 +56,7 @@ type Harness struct {
 	// event subscription
 	events         chan session.Event
 	externalEvents bool
+	delivery       *eventDelivery
 	listeners      []func(session.Event)
 
 	// hook registry (Pi on/emitHook pattern)
@@ -187,20 +188,15 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	if h.events == nil {
 		h.events = make(chan session.Event, 256)
 	}
+	h.delivery = newEventDelivery(h.events, !h.externalEvents)
 	if h.hooks == nil {
 		h.hooks = make(map[string][]HookHandler)
 	}
 	return h
 }
 
-// Events returns the channel the TUI subscribes to.
-// Always returns a valid channel; lazily initializes if called before Init.
-func (h *Harness) Events() <-chan session.Event {
-	if h.events == nil {
-		h.events = make(chan session.Event, 256)
-	}
-	return h.events
-}
+// Events returns the ordered channel the TUI subscribes to.
+func (h *Harness) Events() <-chan session.Event { return h.events }
 
 // On registers a handler for a hook type. Returns an unsubscribe function.
 // Reference: Pi agent-harness.js on (line 962).
@@ -245,21 +241,20 @@ func (h *Harness) emitHook(hookType string, payload any) (patches []any, err err
 func (h *Harness) Subscribe(listener func(session.Event)) func() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	index := len(h.listeners)
 	h.listeners = append(h.listeners, listener)
-	// Capture a pointer to the backing array slot. Even if the slice grows and
-	// reallocates, we nil the original slot — no leak, just a harmless nil hole.
-	ptr := &h.listeners[len(h.listeners)-1]
 	return func() {
 		h.mu.Lock()
-		*ptr = nil
+		if index < len(h.listeners) {
+			h.listeners[index] = nil
+		}
 		h.mu.Unlock()
 	}
 }
 
-// emit sends an event to the TUI channel and all subscribers.
-// It blocks on the channel to prevent silent drops (no lifecycle event is lost),
-// but is cancellable via runCancel to avoid deadlock during shutdown/abort.
-// Snapshot-and-release for listeners: grab under lock, call without lock.
+// emit snapshots listeners without holding h.mu, then enqueues the event on
+// the single ordered delivery path. The dispatcher invokes listeners before it
+// sends the same event to the consumer channel.
 func (h *Harness) emit(e session.Event) {
 	h.mu.Lock()
 	snapshot := make([]func(session.Event), 0, len(h.listeners))
@@ -268,34 +263,11 @@ func (h *Harness) emit(e session.Event) {
 			snapshot = append(snapshot, fn)
 		}
 	}
-	cancel := h.runCancel
+	delivery := h.delivery
 	h.mu.Unlock()
 
-	for _, fn := range snapshot {
-		fn(e)
-	}
-
-	if h.events == nil {
-		return
-	}
-	select {
-	case h.events <- e:
-		return
-	default:
-	}
-	// Slow path: ordered blocking, cancellable, with timeout to avoid deadlock
-	// when no reader exists (tests using Subscribe without draining channel).
-	if cancel != nil {
-		select {
-		case h.events <- e:
-		case <-cancel:
-		case <-time.After(50 * time.Millisecond):
-		}
-	} else {
-		select {
-		case h.events <- e:
-		case <-time.After(50 * time.Millisecond):
-		}
+	if delivery != nil {
+		delivery.enqueue(e, snapshot)
 	}
 }
 
@@ -1013,15 +985,10 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 
 // Close releases resources.
 func (h *Harness) Close() error {
-	// Ensure no active run is emitting when we close the channel.
+	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()
-	if !h.externalEvents {
-		// Close under protection of externalEvents check; if channel already closed,
-		// recover from panic to keep Close idempotent.
-		func() {
-				defer func() { _ = recover() }()
-				close(h.events)
-			}()
+	if h.delivery != nil {
+		h.delivery.close()
 	}
 	return h.session.Close()
 }
