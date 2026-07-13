@@ -1,9 +1,11 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
 )
 
@@ -210,6 +212,83 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 		model.Progress.Status != "" ||
 		model.Progress.Mode != StateIonizing {
 		t.Fatalf("settled state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
+	}
+}
+
+func TestSessionAssistantStreamUpdatesPlaneB(t *testing.T) {
+	model := readyModel(t)
+	now := time.Now()
+	model, _ = model.handleSessionEvent(session.TurnStart{Timestamp: now})
+	model, _ = model.handleSessionEvent(session.MessageStart{Message: &session.AssistantMessage{Timestamp: now}})
+	model, _ = model.handleSessionEvent(session.MessageUpdate{
+		Message: &session.AssistantMessage{
+			Content:   []session.Content{session.TextContent{Text: "hello from stream"}},
+			Timestamp: now,
+		},
+		Delta:     session.TextDelta{Text: "hello from stream"},
+		Timestamp: now,
+	})
+	got := ansi.Strip(model.renderPlaneB())
+	if !strings.Contains(got, "hello from stream") {
+		t.Fatalf("plane B = %q, want streamed text", got)
+	}
+	if strings.Contains(got, "{Text:") {
+		t.Fatalf("plane B rendered a Go delta struct: %q", got)
+	}
+}
+
+func TestTurnReducerStartAndUpdateAssistantMessageKeepsTypedContent(t *testing.T) {
+	model := readyModel(t)
+	started := &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "hello"}}}
+	model.turnReducer().StartAssistantMessage(started)
+	if got := model.turnReducer().AgentStreamContent(); got != "hello" {
+		t.Fatalf("initial stream = %q, want hello", got)
+	}
+	updated := &session.AssistantMessage{Content: []session.Content{
+		session.ThinkingContent{Text: "think"},
+		session.TextContent{Text: "hello world"},
+	}}
+	model.turnReducer().UpdateAssistantMessage(updated)
+	if got := model.turnReducer().AgentStreamContent(); got != "hello world" {
+		t.Fatalf("updated stream = %q, want hello world", got)
+	}
+	if got := model.InFlight.ReasonBuf; got != "think" {
+		t.Fatalf("reasoning = %q, want think", got)
+	}
+	if model.InFlight.Pending == nil || session.EntryText(*model.InFlight.Pending) != "hello world" {
+		t.Fatalf("pending = %#v, want updated assistant", model.InFlight.Pending)
+	}
+}
+
+func TestTurnReducerTypedDeltaFallbackDoesNotStringifyStructs(t *testing.T) {
+	model := readyModel(t)
+	model.turnReducer().AppendAgentDelta("", session.TextDelta{Text: "hello"}, time.Now())
+	model.turnReducer().AppendThinkingDelta("", session.ThinkingDelta{Text: "think"})
+	if got := model.InFlight.StreamBuf; got != "hello" {
+		t.Fatalf("stream = %q, want hello", got)
+	}
+	if got := model.InFlight.ReasonBuf; got != "think" {
+		t.Fatalf("reasoning = %q, want think", got)
+	}
+	if model.InFlight.Pending == nil || session.EntryText(*model.InFlight.Pending) != "hello" {
+		t.Fatalf("fallback pending = %#v, want hello assistant", model.InFlight.Pending)
+	}
+}
+
+func TestTurnReducerStartTurnAndDispatchManageBusyLifecycle(t *testing.T) {
+	model := readyModel(t)
+	now := time.Now()
+	model.turnReducer().StartTurn(now, now)
+	if !model.InFlight.Thinking || model.Progress.Mode != StateStreaming {
+		t.Fatalf("turn state = inFlight=%#v progress=%#v, want active streaming", model.InFlight, model.Progress)
+	}
+	model.turnReducer().QueueTurn("follow up")
+	dispatch := model.turnReducer().FinishTurnDispatch()
+	if dispatch.Action != TurnFinishedDispatchSubmitLocal || dispatch.Text != "follow up" || !dispatch.RearmSessionEvents {
+		t.Fatalf("dispatch = %#v, want local follow-up submit", dispatch)
+	}
+	if got := model.turnReducer().FinishTurnDispatch(); !got.AwaitNext {
+		t.Fatalf("empty dispatch = %#v, want await", got)
 	}
 }
 

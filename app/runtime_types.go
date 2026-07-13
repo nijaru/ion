@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nijaru/ion/config"
@@ -360,7 +361,12 @@ func NewTurnReducer(inFlight *InFlightState, progress *ProgressState) TurnReduce
 	return TurnReducer{inFlight: inFlight, progress: progress}
 }
 
-func (t TurnReducer) AgentStreamContent() string { return "" }
+func (t TurnReducer) AgentStreamContent() string {
+	if t.inFlight == nil {
+		return ""
+	}
+	return t.inFlight.StreamBuf
+}
 
 func (t TurnReducer) ClearActiveState(full bool) {
 	if t.inFlight == nil {
@@ -409,8 +415,19 @@ func (t TurnReducer) StartSubmit() {
 		t.progress.Status = "Submitting..."
 	}
 }
-func (t TurnReducer) RejectSubmit(reason string)                                 {}
-func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {}
+func (t TurnReducer) RejectSubmit(reason string) {}
+func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {
+	if t.inFlight == nil {
+		return
+	}
+	if !t.inFlight.QueuedTurnsBackendOwned && len(steering) == 0 && len(followUp) == 0 {
+		// An empty backend snapshot must not erase a locally queued turn.
+		return
+	}
+	t.inFlight.QueuedSteering = append([]string(nil), steering...)
+	t.inFlight.QueuedTurns = append([]string(nil), followUp...)
+	t.inFlight.QueuedTurnsBackendOwned = true
+}
 
 func (t TurnReducer) QueueTurn(text string) {
 	if t.inFlight != nil {
@@ -424,7 +441,9 @@ func (t TurnReducer) ClearQueuedTurns() {
 	}
 }
 
-func (t TurnReducer) DrainingUntilTurnStarted() bool { return false }
+func (t TurnReducer) DrainingUntilTurnStarted() bool {
+	return t.inFlight != nil && t.inFlight.DrainUntilTurnStarted
+}
 
 // CancelDecision holds the result of a cancel attempt.
 type CancelDecision struct {
@@ -473,7 +492,21 @@ func (t TurnReducer) ApplyStatusChangedInput(msg interface{}) StatusChangedDecis
 	return StatusChangedDecision{}
 }
 
-func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {}
+func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {
+	if t.inFlight != nil {
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+	}
+	if t.progress != nil {
+		t.progress.Mode = StateStreaming
+		t.progress.Status = "Streaming..."
+		t.progress.TurnStartedAt = now
+		t.progress.CurrentTurnInput = 0
+		t.progress.CurrentTurnOutput = 0
+		t.progress.CurrentTurnCost = 0
+		t.progress.StatusUpdatedAt = ts
+	}
+}
 func (t TurnReducer) StopThinking() {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = false
@@ -558,7 +591,19 @@ type TurnFinishedDispatch struct {
 var TurnFinishedDispatchSubmitLocal = "submit_local"
 
 func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
-	return TurnFinishedDispatch{}
+	if t.inFlight == nil {
+		return TurnFinishedDispatch{AwaitNext: true}
+	}
+	if !t.inFlight.QueuedTurnsBackendOwned {
+		if text := t.PopQueuedTurn(); text != "" {
+			return TurnFinishedDispatch{
+				Action:             TurnFinishedDispatchSubmitLocal,
+				Text:               text,
+				RearmSessionEvents: true,
+			}
+		}
+	}
+	return TurnFinishedDispatch{AwaitNext: true}
 }
 
 func (t TurnReducer) ApplyTokenUsage(msg interface{}) {
@@ -580,15 +625,110 @@ func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time
 	if t.inFlight == nil {
 		return
 	}
-	t.inFlight.StreamChunks = append(t.inFlight.StreamChunks, fmt.Sprint(delta))
-	t.inFlight.StreamBuf += fmt.Sprint(delta)
+	var text string
+	switch d := delta.(type) {
+	case session.TextDelta:
+		text = d.Text
+	case *session.TextDelta:
+		if d != nil {
+			text = d.Text
+		}
+	}
+	if text == "" {
+		return
+	}
+	t.inFlight.StreamChunks = append(t.inFlight.StreamChunks, text)
+	t.inFlight.StreamBuf += text
+	t.syncFallbackAssistant(ts)
 }
 
 func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {
 	if t.inFlight == nil {
 		return
 	}
-	t.inFlight.ReasonBuf += fmt.Sprint(delta)
+	switch d := delta.(type) {
+	case session.ThinkingDelta:
+		t.inFlight.ReasonBuf += d.Text
+	case *session.ThinkingDelta:
+		if d != nil {
+			t.inFlight.ReasonBuf += d.Text
+		}
+	}
+	if t.inFlight.ReasonBuf != "" {
+		t.syncFallbackAssistant(time.Now())
+	}
+}
+
+func (t TurnReducer) syncFallbackAssistant(ts time.Time) {
+	if t.inFlight == nil {
+		return
+	}
+	var assistant *session.AssistantMessage
+	if t.inFlight.Pending != nil {
+		if entry, ok := (*t.inFlight.Pending).(*session.MessageEntry); ok {
+			assistant, _ = entry.Message.(*session.AssistantMessage)
+		}
+	}
+	if assistant == nil {
+		assistant = &session.AssistantMessage{Timestamp: ts}
+		entry := &session.MessageEntry{
+			EntryBase: session.EntryBase{Timestamp: ts},
+			Message:   assistant,
+		}
+		var e session.Entry = entry
+		t.inFlight.Pending = &e
+	}
+	content := make([]session.Content, 0, 2)
+	if t.inFlight.ReasonBuf != "" {
+		content = append(content, session.ThinkingContent{Text: t.inFlight.ReasonBuf})
+	}
+	if t.inFlight.StreamBuf != "" {
+		content = append(content, session.TextContent{Text: t.inFlight.StreamBuf})
+	}
+	assistant.Content = content
+}
+
+func (t TurnReducer) StartAssistantMessage(msg session.Message) {
+	am, ok := msg.(*session.AssistantMessage)
+	if !ok || t.inFlight == nil {
+		return
+	}
+	entry := &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: am.Timestamp},
+		Message:   am,
+	}
+	var e session.Entry = entry
+	t.inFlight.Pending = &e
+	t.inFlight.StreamBuf = session.MessageText(am)
+	t.inFlight.ReasonBuf = assistantReasoning(am)
+}
+
+func (t TurnReducer) UpdateAssistantMessage(msg session.Message) {
+	am, ok := msg.(*session.AssistantMessage)
+	if !ok || t.inFlight == nil {
+		return
+	}
+	if t.inFlight.Pending == nil || session.EntryRole(*t.inFlight.Pending) != session.RoleAgent {
+		t.StartAssistantMessage(am)
+		return
+	}
+	entry, ok := (*t.inFlight.Pending).(*session.MessageEntry)
+	if !ok {
+		return
+	}
+	entry.Message = am
+	t.inFlight.StreamBuf = session.MessageText(am)
+	t.inFlight.ReasonBuf = assistantReasoning(am)
+}
+
+func assistantReasoning(msg *session.AssistantMessage) string {
+	var b strings.Builder
+	for _, content := range msg.Content {
+		if thinking, ok := content.(session.ThinkingContent); ok {
+			b.WriteString(thinking.Text)
+		}
+	}
+	return b.String()
 }
 
 func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
@@ -626,6 +766,8 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 	}
 	if t.progress != nil {
 		t.progress.LastToolUseID = id
+		t.progress.Mode = StateWorking
+		t.progress.Status = "Working..."
 	}
 }
 

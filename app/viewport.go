@@ -85,6 +85,24 @@ func (m Model) agentStreamContent() string {
 	return m.turnReducer().AgentStreamContent()
 }
 
+func pendingToolCalls(e session.Entry) []*session.ToolCall {
+	me, ok := e.(*session.MessageEntry)
+	if !ok {
+		return nil
+	}
+	am, ok := me.Message.(*session.AssistantMessage)
+	if !ok {
+		return nil
+	}
+	calls := make([]*session.ToolCall, 0, len(am.Content))
+	for _, content := range am.Content {
+		if call, ok := content.(*session.ToolCall); ok && call != nil {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
 // renderPendingEntry renders an in-flight entry for Plane B.
 func (m Model) renderPendingEntry(e session.Entry) string {
 	toolVerbosity := m.verbosity("tool")
@@ -92,6 +110,18 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	switch session.EntryRole(e) {
 	case session.RoleAgent:
 		if session.EntryContent(e) == "" {
+			if calls := pendingToolCalls(e); len(calls) > 0 {
+				var b strings.Builder
+				for _, call := range calls {
+					label := m.normalizeToolTitle(call.Name)
+					if label == "" {
+						label = "tool"
+					}
+					b.WriteString(m.renderToolLabel(label, false))
+					b.WriteString("\n")
+				}
+				return strings.TrimSuffix(b.String(), "\n")
+			}
 			return m.planeBLine(m.st.dim, 2, "• ...")
 		}
 		return m.renderLiveAgentContent(session.EntryContent(e))

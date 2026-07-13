@@ -306,7 +306,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleTurnStarted(msg)
 
 	case session.MessageStart:
-		// Message boundary for scoping; current TUI delegates to MessageUpdate deltas.
+		// Keep the assistant's partial message in Plane B so streaming text is
+		// visible before MessageEnd commits it to the transcript.
+		m.turnReducer().StartAssistantMessage(msg.Message)
 		return m, m.awaitSessionEvent()
 
 	case session.TurnEnd:
@@ -550,12 +552,19 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 }
 
 func (m Model) handleMessageUpdate(msg session.MessageUpdate) (Model, tea.Cmd) {
-	// Route based on block_type (Pi model: single message_update event)
-	switch msg.BlockType {
-	case "thinking":
-		m.turnReducer().AppendThinkingDelta(msg.AgentID, msg.Delta)
-	default:
-		m.turnReducer().AppendAgentDelta(msg.AgentID, msg.Delta, msg.When())
+	// The partial assistant message is authoritative: it contains the full
+	// accumulated content, unlike the event delta which is only one chunk.
+	m.turnReducer().UpdateAssistantMessage(msg.Message)
+	// Keep the delta fallback for providers that omit the partial message.
+	switch delta := msg.Delta.(type) {
+	case session.ThinkingDelta, *session.ThinkingDelta:
+		if msg.Message == nil {
+			m.turnReducer().AppendThinkingDelta(msg.AgentID, delta)
+		}
+	case session.TextDelta, *session.TextDelta:
+		if msg.Message == nil {
+			m.turnReducer().AppendAgentDelta(msg.AgentID, delta, msg.When())
+		}
 	}
 	return m, m.awaitSessionEvent()
 }

@@ -96,7 +96,26 @@ type BudgetStopInput struct {
 
 // --- Busy-input routing ---
 
-func RouteBusyInput(input BusyInputRouting) string { return input.Route }
+func RouteBusyInput(input BusyInputRouting) string {
+	if input.Compacting || !input.Thinking {
+		return ""
+	}
+	mode := input.Mode
+	if mode == "" {
+		mode = BusyInputRouteSteer
+	}
+	switch mode {
+	case BusyInputRouteSteer:
+		if input.SupportsSteering {
+			return BusyInputRouteSteer
+		}
+	case BusyInputRouteFollowUp:
+		if input.SupportsFollowUp {
+			return BusyInputRouteFollowUp
+		}
+	}
+	return ""
+}
 
 type BusyInputRouting struct {
 	Mode             string
