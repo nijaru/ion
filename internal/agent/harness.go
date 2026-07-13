@@ -2,8 +2,8 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,23 +22,23 @@ import (
 //
 // Reference: Pi agent-harness.js AgentHarness (line 125).
 type Harness struct {
-	session session.Session
-	store   session.Store
-	tools   map[string]Tool
-	active  []string // active tool names
-	model   llm.Model
-	thinking session.ThinkingLevel
+	session   session.Session
+	store     session.Store
+	tools     map[string]Tool
+	active    []string // active tool names
+	model     llm.Model
+	thinking  session.ThinkingLevel
 	sysprompt string
-	log      *slog.Logger // structured logger, may be nil
-	metrics  *Metrics     // runtime statistics, may be nil
+	log       *slog.Logger // structured logger, may be nil
+	metrics   *Metrics     // runtime statistics, may be nil
 
 	// resources (Pi: prompt templates; system prompt is preassembled at startup)
 	promptTemplates map[string]string
 
-	stream func(ctx context.Context, req *llm.Request) (llm.Stream, error)
-	auth   func(model llm.Model) (apiKey string, headers map[string]string)
+	stream    func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	auth      func(model llm.Model) (apiKey string, headers map[string]string)
 	transport http.RoundTripper
-	timeout  time.Duration
+	timeout   time.Duration
 
 	// queues (Pi PendingMessageQueue x3)
 	steer    []session.Message
@@ -70,17 +70,17 @@ type Harness struct {
 	pending []pendingWrite
 
 	// compaction settings
-	compaction CompactionSettings
+	compaction    CompactionSettings
 	contextWindow int
 }
 
 type Phase string
 
 const (
-	PhaseIdle        Phase = "idle"
-	PhaseTurn        Phase = "turn"
-	PhaseCompaction  Phase = "compaction"
-	PhaseBranchNav   Phase = "branch_summary"
+	PhaseIdle       Phase = "idle"
+	PhaseTurn       Phase = "turn"
+	PhaseCompaction Phase = "compaction"
+	PhaseBranchNav  Phase = "branch_summary"
 )
 
 // pendingWrite is a buffered session mutation applied at turn boundary.
@@ -97,12 +97,12 @@ type HookHandler func(payload any) (patch any, err error)
 
 // Hook type constants matching Pi's hook names.
 const (
-	HookBeforeProviderRequest  = "before_provider_request"
-	HookBeforeProviderPayload  = "before_provider_payload"
-	HookAfterProviderResponse  = "after_provider_response"
-	HookBeforeAgentStart       = "before_agent_start"
-	HookBeforeToolCall         = "before_tool_call"
-	HookToolResult             = "tool_result"
+	HookBeforeProviderRequest = "before_provider_request"
+	HookBeforeProviderPayload = "before_provider_payload"
+	HookAfterProviderResponse = "after_provider_response"
+	HookBeforeAgentStart      = "before_agent_start"
+	HookBeforeToolCall        = "before_tool_call"
+	HookToolResult            = "tool_result"
 )
 
 // QueueUpdate was moved to session/events.go as part of Phase B harness parity.
@@ -110,17 +110,17 @@ const (
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
-	Events chan session.Event
-	Session  session.Session
-	Store    session.Store
-	Tools    []Tool
-	Active   []string // active tool names (subset of Tools); nil = all
-	Model    llm.Model
-	Thinking session.ThinkingLevel
-	SysPrompt string
+	Events          chan session.Event
+	Session         session.Session
+	Store           session.Store
+	Tools           []Tool
+	Active          []string // active tool names (subset of Tools); nil = all
+	Model           llm.Model
+	Thinking        session.ThinkingLevel
+	SysPrompt       string
 	PromptTemplates map[string]string // name → template text
-	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
-	Auth     func(model llm.Model) (apiKey string, headers map[string]string)
+	StreamFn        func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	Auth            func(model llm.Model) (apiKey string, headers map[string]string)
 
 	// Transport is an optional HTTP transport for provider requests.
 	// When set, the BeforeProviderRequest hook can override it.
@@ -164,26 +164,26 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		}
 	}
 	h := &Harness{
-		session:  cfg.Session,
-		store:    cfg.Store,
-		tools:    toolMap,
-		active:   active,
-		model:    cfg.Model,
-		thinking: cfg.Thinking,
-		sysprompt: cfg.SysPrompt,
-		log:      cfg.Logger,
-		metrics:  cfg.Metrics,
+		session:         cfg.Session,
+		store:           cfg.Store,
+		tools:           toolMap,
+		active:          active,
+		model:           cfg.Model,
+		thinking:        cfg.Thinking,
+		sysprompt:       cfg.SysPrompt,
+		log:             cfg.Logger,
+		metrics:         cfg.Metrics,
 		promptTemplates: cfg.PromptTemplates,
-		stream:   cfg.StreamFn,
-		auth:     cfg.Auth,
-		phase: PhaseIdle,
-		events:   cfg.Events,
-		externalEvents: cfg.Events != nil,
-		done:     make(chan struct{}),
-		compaction: cfg.Compaction,
-		contextWindow: cfg.ContextWindow,
-		steeringMode: cfg.SteeringMode,
-		followUpMode: cfg.FollowUpMode,
+		stream:          cfg.StreamFn,
+		auth:            cfg.Auth,
+		phase:           PhaseIdle,
+		events:          cfg.Events,
+		externalEvents:  cfg.Events != nil,
+		done:            make(chan struct{}),
+		compaction:      cfg.Compaction,
+		contextWindow:   cfg.ContextWindow,
+		steeringMode:    cfg.SteeringMode,
+		followUpMode:    cfg.FollowUpMode,
 	}
 	if h.steeringMode == "" {
 		h.steeringMode = "one-at-a-time"
@@ -307,8 +307,11 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		h.mu.Lock()
 		h.phase = PhaseIdle
 		h.runCancel = nil
-		close(h.runDone)
-		h.runDone = nil
+		done := h.runDone
+		if done != nil {
+			close(done)
+			h.runDone = nil
+		}
 		modelID := h.model.ID
 		h.mu.Unlock()
 		if h.metrics != nil {
@@ -505,7 +508,6 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
 	case session.AgentEnd:
 		h.flushPending(ctx)
 		h.mu.Lock()
-		h.phase = PhaseIdle
 		nextCount := len(h.nextTurn)
 		h.mu.Unlock()
 		// DESIGN says Settled after agent_end; Pi emits AgentEnd then settled.
@@ -996,18 +998,16 @@ func (h *Harness) WaitForIdle() {
 	}
 }
 
-// Abort cancels the current run and clears steering/follow-up queues.
-// Emits an Abort event with the cleared messages (Pi: line ~905).
-func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
+// cancelActiveRun clears pending queues and signals the current run without
+// waiting for its provider or tools to return. The caller chooses the wait policy.
+func (h *Harness) cancelActiveRun() ([]session.Message, []session.Message, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return nil, nil, errors.New("harness is closed")
 	}
-	clearedSteer := make([]session.Message, len(h.steer))
-	copy(clearedSteer, h.steer)
-	clearedFollowUp := make([]session.Message, len(h.followUp))
-	copy(clearedFollowUp, h.followUp)
+	clearedSteer := append([]session.Message(nil), h.steer...)
+	clearedFollowUp := append([]session.Message(nil), h.followUp...)
 	h.steer = nil
 	h.followUp = nil
 	cancel := h.runCancel
@@ -1020,7 +1020,16 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 			close(cancel)
 		}
 	}
+	return clearedSteer, clearedFollowUp, nil
+}
 
+// Abort cancels the current run and clears steering/follow-up queues.
+// Emits an Abort event with the cleared messages (Pi: line ~905).
+func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
+	clearedSteer, clearedFollowUp, err := h.cancelActiveRun()
+	if err != nil {
+		return nil, nil, err
+	}
 	h.emitQueueUpdate()
 	h.WaitForIdle()
 	h.emit(session.Abort{
@@ -1030,7 +1039,8 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 	return clearedSteer, clearedFollowUp, nil
 }
 
-// Close releases resources.
+// Close releases resources. Active work is cancelled before waiting for its
+// completion so providers and tools that honor the run signal can terminate.
 func (h *Harness) Close() error {
 	h.mu.Lock()
 	if h.closed {
@@ -1039,8 +1049,16 @@ func (h *Harness) Close() error {
 	}
 	h.closed = true
 	close(h.done)
+	cancel := h.runCancel
 	h.mu.Unlock()
 
+	if cancel != nil {
+		select {
+		case <-cancel:
+		default:
+			close(cancel)
+		}
+	}
 	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()
 	h.flushPending(context.Background())
@@ -1053,10 +1071,15 @@ func (h *Harness) Close() error {
 // Shutdown attempts a graceful stop: abort any running turn, wait for completion
 // (up to the context deadline), flush pending writes, and close resources.
 func (h *Harness) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	h.logf(slog.LevelInfo, "shutdown start")
-	h.Abort()
+	if _, _, err := h.cancelActiveRun(); err != nil {
+		return err
+	}
+	h.emitQueueUpdate()
 
-	// Wait for the current turn to finish.
 	h.mu.Lock()
 	done := h.runDone
 	h.mu.Unlock()
@@ -1065,12 +1088,11 @@ func (h *Harness) Shutdown(ctx context.Context) error {
 		case <-done:
 		case <-ctx.Done():
 			h.logf(slog.LevelWarn, "shutdown timed out waiting for turn")
+			return ctx.Err()
 		}
 	}
 
-	// Final flush.
 	h.flushPending(context.Background())
-
 	h.logf(slog.LevelInfo, "shutdown complete")
 	return h.Close()
 }
@@ -1243,7 +1265,11 @@ func (h *Harness) PromptFromTemplate(name string, data map[string]string) string
 func (h *Harness) GetModel() llm.Model { h.mu.Lock(); defer h.mu.Unlock(); return h.model }
 
 // GetThinkingLevel returns the current thinking level.
-func (h *Harness) GetThinkingLevel() session.ThinkingLevel { h.mu.Lock(); defer h.mu.Unlock(); return h.thinking }
+func (h *Harness) GetThinkingLevel() session.ThinkingLevel {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.thinking
+}
 
 // GetTools returns the current tool map and active tool names.
 func (h *Harness) GetTools() (map[string]Tool, []string) {
