@@ -201,27 +201,17 @@ func openRuntime(
 	var agentTools []agent.Tool
 	for _, entry := range toolRegistry.Entries() {
 		entry := entry // capture for closure
+		executionMode := executionModeFor(entry.Metadata)
 		agentTools = append(agentTools, agent.Tool{
 			Name:        entry.Spec.Name,
 			Description: entry.Spec.Description,
 			Parameters:  entry.Spec.Parameters,
 			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				result, execErr := entry.Tool.Execute(ctx, string(args))
-				if execErr != nil {
-					return session.ToolResultMessage{
-						ToolCallID: id,
-						ToolName:   entry.Spec.Name,
-						Content:    []session.Content{session.TextContent{Text: execErr.Error()}},
-						IsError:    true,
-					}, nil
-				}
-				return session.ToolResultMessage{
-					ToolCallID: id,
-					ToolName:   entry.Spec.Name,
-					Content:    []session.Content{session.TextContent{Text: result}},
-				}, nil
+				toolCtx, cancel := contextWithToolSignal(ctx, signal)
+				defer cancel()
+				return executeRegisteredTool(toolCtx, entry, id, args, progress), nil
 			},
-			ExecutionMode: agent.ExecParallel,
+			ExecutionMode: executionMode,
 		})
 	}
 
