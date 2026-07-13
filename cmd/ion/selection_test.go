@@ -40,7 +40,6 @@ func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
 }
 func (s *testStore) GetLeafID() string            { return s.leafID }
 func (s *testStore) SetLeafID(id string) error     { s.leafID = id; return nil }
-func (s *testStore) GetMetadata() session.Metadata  { return s.meta }
 func (s *testStore) Meta() session.Metadata         { return s.meta }
 func (s *testStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil

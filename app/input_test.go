@@ -75,9 +75,13 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
+	inputStore, ok := store.(inputHistoryStore)
+	if !ok {
+		t.Fatal("store does not support input history")
+	}
 	cwd := t.TempDir()
 	for _, input := range []string{"first prompt", "second prompt"} {
-		if err := store.AddInput(ctx, cwd, input); err != nil {
+		if err := inputStore.AddInput(ctx, cwd, input); err != nil {
 			t.Fatalf("add input: %v", err)
 		}
 	}
@@ -113,6 +117,10 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
+	inputStore, ok := store.(inputHistoryStore)
+	if !ok {
+		t.Fatal("store does not support input history")
+	}
 	cwd := t.TempDir()
 	model := New(
 		stubBackend{
@@ -134,7 +142,7 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	}
 	runCommandTree(t, cmd)
 
-	inputs, err := store.GetInputs(ctx, cwd, 1)
+	inputs, err := inputStore.GetInputs(ctx, cwd, 1)
 	if err != nil {
 		t.Fatalf("get inputs: %v", err)
 	}

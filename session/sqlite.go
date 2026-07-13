@@ -85,12 +85,6 @@ func (s *SQLiteStore) GetLeafID() string {
 	return s.leaf
 }
 
-func (s *SQLiteStore) GetMetadata() Metadata {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.meta
-}
-
 func (s *SQLiteStore) Meta() Metadata {
 	s.mu.Lock()
 	defer s.mu.Unlock()

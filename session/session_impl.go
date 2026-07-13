@@ -23,9 +23,9 @@ func (s *sessionImpl) ID() string {
 	if leaf := s.store.GetLeafID(); leaf != "" {
 		return leaf
 	}
-	return s.store.GetMetadata().ID
+	return s.store.Meta().ID
 }
-func (s *sessionImpl) Meta() Metadata { return s.store.GetMetadata() }
+func (s *sessionImpl) Meta() Metadata { return s.store.Meta() }
 func (s *sessionImpl) Close() error {
 	// Store lifecycle is owned by the caller. Closing here would double-close
 	// when closeRuntimeHandles also calls store.Close(), causing "database is

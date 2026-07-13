@@ -127,7 +127,11 @@ func startupSessionID(
 	if !continueRequested {
 		return "", nil
 	}
-	recent, err := recentSessionForContinue(ctx, store, cwd)
+	catalog, ok := store.(sessionCatalogReader)
+	if !ok {
+		return "", fmt.Errorf("session store does not support session catalog")
+	}
+	recent, err := recentSessionForContinue(ctx, catalog, cwd)
 	if err != nil {
 		return "", fmt.Errorf("failed to find recent session: %w", err)
 	}

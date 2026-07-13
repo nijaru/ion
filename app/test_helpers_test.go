@@ -353,7 +353,6 @@ func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) 
 }
 func (s *resumeOnlyStore) GetLeafID() string                     { return "" }
 func (s *resumeOnlyStore) SetLeafID(id string) error             { return nil }
-func (s *resumeOnlyStore) GetMetadata() session.Metadata         { return session.Metadata{} }
 func (s *resumeOnlyStore) Meta() session.Metadata                 { return session.Metadata{} }
 func (s *resumeOnlyStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
 	return nil, nil

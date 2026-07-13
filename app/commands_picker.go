@@ -341,7 +341,9 @@ func (m Model) startupPickerCmd() tea.Cmd {
 		sessionPicker.loading &&
 		sessionPicker.request != 0 &&
 		m.Model.Store != nil {
-		return loadSessionPickerItems(sessionPicker.request, m.Model.Store, m.App.Workdir)
+		if store, ok := m.Model.Store.(sessionCatalogReader); ok {
+			return loadSessionPickerItems(sessionPicker.request, store, m.App.Workdir)
+		}
 	}
 
 	return nil

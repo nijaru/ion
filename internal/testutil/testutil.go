@@ -187,7 +187,6 @@ func (s *MockStore) Entries(_ context.Context) ([]session.Entry, error) {
 
 func (s *MockStore) GetLeafID() string            { return "" }
 func (s *MockStore) SetLeafID(_ string) error     { return nil }
-func (s *MockStore) GetMetadata() session.Metadata { return session.Metadata{} }
 func (s *MockStore) Meta() session.Metadata        { return session.Metadata{} }
 
 func (s *MockStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {

@@ -42,7 +42,11 @@ func (m Model) storedSessionConfig(
 	if _, err := store.GetEntry(ctx, sessionID); err != nil {
 		return nil, fmt.Errorf("failed to find session %s: %w", sessionID, err)
 	}
-	sessions, err := store.ListSessions(ctx, m.App.Workdir)
+	catalog, ok := store.(sessionCatalogReader)
+	if !ok {
+		return nil, fmt.Errorf("session store does not support session catalog")
+	}
+	sessions, err := catalog.ListSessions(ctx, m.App.Workdir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}

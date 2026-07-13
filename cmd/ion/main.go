@@ -536,7 +536,7 @@ func runPromptTurn(
 
 func updatePrintSessionInfo(
 	ctx context.Context,
-	store sessionCatalogWriter,
+	store session.Store,
 	runner agent.Runner,
 	cwd string,
 	branch string,
@@ -554,8 +554,12 @@ func updatePrintSessionInfo(
 	if preview == "" {
 		return nil
 	}
+	catalog, ok := store.(sessionCatalogWriter)
+	if !ok {
+		return fmt.Errorf("session store does not support session catalog")
+	}
 	now := time.Now()
-	return store.UpdateSession(ctx, session.SessionInfoEntry{
+	return catalog.UpdateSession(ctx, session.SessionInfoEntry{
 		EntryBase:   session.EntryBase{ID: id, Timestamp: now},
 		Workdir:     cwd,
 		Model:       sessionModelName(cfg.Provider, cfg.Model),

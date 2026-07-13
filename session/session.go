@@ -103,21 +103,8 @@ type Store interface {
 	// SetLeafID moves the leaf pointer.
 	SetLeafID(id string) error
 
-	// GetMetadata returns session-level metadata.
-	GetMetadata() Metadata
+	// Meta returns session-level metadata.
 	Meta() Metadata
-
-	// GetInputs returns queued user inputs.
-	GetInputs(ctx context.Context, workdir string, n int) ([]string, error)
-
-	// ListSessions returns all sessions for the picker.
-	ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error)
-
-	// UpdateSession updates session metadata.
-	UpdateSession(ctx context.Context, info SessionInfoEntry) error
-
-	// AddInput adds a queued user input.
-	AddInput(ctx context.Context, workdir string, input string) error
 
 	// Close releases resources.
 	Close() error
