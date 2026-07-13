@@ -1,11 +1,9 @@
-
 package app
 
 import (
 	"errors"
 	"testing"
 
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -16,7 +14,7 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 
 	applied := model.pickerReducer().applySessionLoad(staleRequest, []session.SessionInfoEntry{
 		{
-			EntryBase: session.EntryBase{ID: "stale"},
+			EntryBase:   session.EntryBase{ID: "stale"},
 			Name:        "stale session",
 			LastPreview: "old",
 		},
@@ -32,7 +30,7 @@ func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 
 	applied = model.pickerReducer().applySessionLoad(currentRequest, []session.SessionInfoEntry{
 		{
-			EntryBase: session.EntryBase{ID: "current"},
+			EntryBase:   session.EntryBase{ID: "current"},
 			Name:        "current session",
 			LastPreview: "recent",
 		},
@@ -68,12 +66,12 @@ func TestPickerReducerSessionQueryFiltersAndClampsIndex(t *testing.T) {
 	model.Picker.Session = &sessionPickerState{
 		items: []sessionPickerItem{
 			{info: session.SessionInfoEntry{
-				EntryBase: session.EntryBase{ID: "sess-alpha"},
+				EntryBase:   session.EntryBase{ID: "sess-alpha"},
 				Name:        "alpha plan",
 				LastPreview: "review tests",
 			}},
 			{info: session.SessionInfoEntry{
-				EntryBase: session.EntryBase{ID: "sess-beta"},
+				EntryBase:   session.EntryBase{ID: "sess-beta"},
 				Name:        "beta resume",
 				LastPreview: "continue reducer work",
 			}},
@@ -254,7 +252,7 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
-	model.Picker.Setup = &setupPromptState{kind: runtime.SetupPromptAPIKey}
+	model.Picker.Setup = &setupPromptState{kind: SetupPromptAPIKey}
 
 	model.pickerReducer().closeAll()
 
@@ -288,7 +286,7 @@ func TestPickerReducerSetupPromptEditingAndSaveSettlement(t *testing.T) {
 	model := readyModel(t)
 	model.pickerReducer().openOverlay(pickerOverlayState{purpose: pickerPurposeProviderSetup})
 	model.pickerReducer().openSetup(setupPromptState{
-		kind:  runtime.SetupPromptEndpoint,
+		kind:  SetupPromptEndpoint,
 		value: "fedora",
 		err:   "old error",
 	})

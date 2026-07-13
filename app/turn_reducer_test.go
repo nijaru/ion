@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -83,7 +82,7 @@ func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 
 func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateWorking
+	model.Progress.Mode = StateWorking
 	model.Progress.Status = "Running bash..."
 	model.Progress.LastError = ""
 	model.InFlight.Thinking = true
@@ -101,7 +100,7 @@ func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 		t.Fatalf("entry = role %q text %q, want system error",
 			session.EntryRole(entry), session.EntryText(entry))
 	}
-	if model.Progress.Mode != runtime.StateError ||
+	if model.Progress.Mode != StateError ||
 		model.Progress.LastError != "turn finished without assistant response" ||
 		model.Progress.Status != "" {
 		t.Fatalf("progress = %#v, want terminal error", model.Progress)
@@ -117,7 +116,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	model := readyModel(t)
 	toolA := testToolEntry("a", "a partial", false)
 	toolB := testToolEntry("b", "b partial", false)
-	model.Progress.Mode = runtime.StateWorking
+	model.Progress.Mode = StateWorking
 	model.Progress.Status = "Running tools..."
 	model.Progress.ContextTokens = 456
 	var toolAEntry session.Entry = toolA
@@ -147,7 +146,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	if model.InFlight.Pending == nil || session.EntryText(*model.InFlight.Pending) != "b partial" {
 		t.Fatalf("pending = %#v, want tool-b promoted", model.InFlight.Pending)
 	}
-	if model.Progress.Mode != runtime.StateWorking ||
+	if model.Progress.Mode != StateWorking ||
 		model.Progress.Status != "Running tools..." ||
 		model.Progress.ContextTokens != 456 {
 		t.Fatalf("progress changed before final tool finished: %#v", model.Progress)
@@ -168,7 +167,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	}
 	if model.InFlight.Pending != nil ||
 		len(model.InFlight.PendingTools) != 0 ||
-		model.Progress.Mode != runtime.StateIonizing ||
+		model.Progress.Mode != StateIonizing ||
 		model.Progress.Status != "" ||
 		model.Progress.ContextTokens != 0 {
 		t.Fatalf(
@@ -186,7 +185,7 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 	child := model.turnReducer().RequestChild("worker", "inspect")
 	if child.Name != "worker" ||
 		child.Intent != "inspect" ||
-		model.Progress.Mode != runtime.StateWorking {
+		model.Progress.Mode != StateWorking {
 		t.Fatalf("requested child = %#v progress=%#v", child, model.Progress)
 	}
 
@@ -209,7 +208,7 @@ func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
 	}
 	if len(model.InFlight.Subagents) != 0 ||
 		model.Progress.Status != "" ||
-		model.Progress.Mode != runtime.StateIonizing {
+		model.Progress.Mode != StateIonizing {
 		t.Fatalf("settled state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
 	}
 }
@@ -226,7 +225,7 @@ func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
 		t.Fatalf("failure entry text = %q, want Failed: boom", session.EntryText(entry))
 	}
 	if len(model.InFlight.Subagents) != 0 ||
-		model.Progress.Mode != runtime.StateError ||
+		model.Progress.Mode != StateError ||
 		model.Progress.LastError != "Subagent failed: boom" {
 		t.Fatalf("failure state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
 	}

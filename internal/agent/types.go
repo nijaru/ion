@@ -112,9 +112,9 @@ type ToolCallResultContext struct {
 
 // ToolCallPatch is returned by AfterToolCall to modify the result.
 type ToolCallPatch struct {
-	Content  []session.Content
-	Details  json.RawMessage
-	IsError  *bool
+	Content   []session.Content
+	Details   json.RawMessage
+	IsError   *bool
 	Terminate *bool
 }
 
@@ -132,10 +132,6 @@ type StopContext struct {
 	ToolResults []session.ToolResultMessage
 	Context     TurnContext
 }
-
-
-
-
 
 // Runner is the interface app/ uses to drive the agent.
 // The Harness implements this. It replaces the old Backend + Session pattern.
@@ -173,6 +169,13 @@ type Runner interface {
 
 	// Session returns the underlying session for auxiliary reads.
 	Session() session.Session
+
+	// Append persists an auxiliary entry through the harness-owned session.
+	PersistEntry(ctx context.Context, entry session.Entry) error
+	AppendSessionInfo(ctx context.Context, name string) (string, error)
+	MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error)
+	AppendLabel(ctx context.Context, targetID, label string) (string, error)
+	GetLabel(ctx context.Context, targetID string) (string, error)
 
 	// Compact triggers context compaction.
 	Compact(ctx context.Context) error

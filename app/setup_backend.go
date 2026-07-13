@@ -21,14 +21,27 @@ func NewSetupBackend(cfg *config.Config, store session.Store, msg string) *setup
 	return &setupBackend{cfg: cfg, store: store, msg: msg}
 }
 
-func (b *setupBackend) Name() string              { return "setup" }
-func (b *setupBackend) Provider() string           { if b.cfg != nil { return b.cfg.Provider }; return "" }
-func (b *setupBackend) Model() string              { if b.cfg != nil { return b.cfg.Model }; return "" }
-func (b *setupBackend) ContextLimit() int          { if b.cfg != nil { return b.cfg.ContextLimit }; return 0 }
-func (b *setupBackend) Session() session.Session   { return nil }
-func (b *setupBackend) SetStore(s session.Store)   { b.store = s }
+func (b *setupBackend) Name() string { return "setup" }
+func (b *setupBackend) Provider() string {
+	if b.cfg != nil {
+		return b.cfg.Provider
+	}
+	return ""
+}
+func (b *setupBackend) Model() string {
+	if b.cfg != nil {
+		return b.cfg.Model
+	}
+	return ""
+}
+func (b *setupBackend) ContextLimit() int {
+	if b.cfg != nil {
+		return b.cfg.ContextLimit
+	}
+	return 0
+}
+func (b *setupBackend) SetStore(s session.Store)     { b.store = s }
 func (b *setupBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
-func (b *setupBackend) SetSession(session.Session) {}
 
 func (b *setupBackend) Bootstrap() Bootstrap {
 	entries := []session.Entry{}

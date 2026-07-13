@@ -14,7 +14,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/llm"
-	rt "github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -126,11 +125,11 @@ func isConfigurationStatus(status string) bool {
 }
 
 func noProviderConfiguredStatus() string {
-	return rt.NoProviderConfiguredStatus
+	return NoProviderConfiguredStatus
 }
 
 func noModelConfiguredStatus() string {
-	return rt.NoModelConfiguredStatus
+	return NoModelConfiguredStatus
 }
 
 func toolSurfaceSummary(surface ToolSurface) string {
@@ -229,7 +228,6 @@ func isIdleStatus(status string) bool {
 		return false
 	}
 }
-
 
 func fitLine(line string, width int) string {
 	if width <= 0 {

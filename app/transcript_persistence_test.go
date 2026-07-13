@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/nijaru/ion/internal/runtime"
 )
 
 func TestTerminalCommitMarksPrintedTranscript(t *testing.T) {
@@ -49,11 +47,11 @@ func TestEntriesAndRuntimeReplayUseTerminalCommit(t *testing.T) {
 }
 
 func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
-	storageSess := &stubStorageSession{stubSession: *newStubSession("storage")}
+	runner := &stubRunner{}
 	model := readyModel(t)
-	model.Model.Storage = storageSess
+	model.Model.Runner = runner
 
-	cmd := model.persistenceController().appendEntry("persist test", runtime.StoreSystem{
+	cmd := model.persistenceController().appendEntry("persist test", StoreSystem{
 		Type:    "system",
 		Content: "hello",
 	})
@@ -63,12 +61,12 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	if msg := cmd(); msg != nil {
 		t.Fatalf("appendEntry message = %#v, want nil", msg)
 	}
-	if len(storageSess.appends) != 1 {
-		t.Fatalf("appends = %#v, want one append", storageSess.appends)
+	if len(runner.appends) != 1 {
+		t.Fatalf("appends = %#v, want one append", runner.appends)
 	}
 
-	storageSess.appendErr = errors.New("disk full")
-	cmd = model.persistenceController().appendEntry("persist test", runtime.StoreSystem{
+	runner.appendErr = errors.New("disk full")
+	cmd = model.persistenceController().appendEntry("persist test", StoreSystem{
 		Type:    "system",
 		Content: "failed",
 	})
@@ -82,11 +80,11 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	}
 }
 
-func TestPersistenceControllerReturnsNilWithoutStorage(t *testing.T) {
+func TestPersistenceControllerReturnsNilWithoutRunner(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Storage = nil
+	model.Model.Runner = nil
 
-	if cmd := model.persistenceController().appendEntry("persist test", runtime.StoreSystem{}); cmd != nil {
+	if cmd := model.persistenceController().appendEntry("persist test", StoreSystem{}); cmd != nil {
 		t.Fatalf("appendEntry command = %#v, want nil without storage", cmd)
 	}
 }

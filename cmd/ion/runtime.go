@@ -14,8 +14,8 @@ import (
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/internal/instructions"
-	"github.com/nijaru/ion/internal/runtime"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
@@ -32,15 +32,15 @@ type sessionCatalogWriter interface {
 }
 
 func closeRuntimeHandles(
-	agent session.Session,
+	runner agent.Runner,
 	sess session.Session,
 	store session.Store,
 ) error {
 	var errs []error
-	if agent != nil {
-		errs = append(errs, agent.Close())
+	if runner != nil {
+		errs = append(errs, runner.Close())
 	}
-	if sess != nil {
+	if runner == nil && sess != nil {
 		errs = append(errs, sess.Close())
 	}
 	if store != nil {
@@ -87,7 +87,7 @@ func recentSessionForContinue(
 		return nil, err
 	}
 	for i := range sessions {
-		if !runtime.IsConversationSessionInfo(&sessions[i]) {
+		if !app.IsConversationSessionInfo(&sessions[i]) {
 			continue
 		}
 		return &sessions[i], nil
@@ -275,17 +275,24 @@ func openRuntime(
 func closeRuntimeOpenError(
 	label string,
 	err error,
-	agent session.Session,
+	runner agent.Runner,
 	sess session.Session,
 ) error {
-	if closeErr := closeRuntimeHandles(agent, sess, nil); closeErr != nil {
+	var closeErrs []error
+	if runner != nil {
+		closeErrs = append(closeErrs, runner.Close())
+	}
+	if sess != nil {
+		closeErrs = append(closeErrs, sess.Close())
+	}
+	if closeErr := errors.Join(closeErrs...); closeErr != nil {
 		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))
 	}
 	return fmt.Errorf("%s: %w", label, err)
 }
 
 type exportedSessionBundle struct {
-	Bundle runtime.SessionBundle
+	Bundle ionexport.SessionBundle
 	Path   string
 }
 
@@ -295,7 +302,7 @@ func exportSessionBundleFile(
 	sessionID string,
 	path string,
 ) (exportedSessionBundle, error) {
-	exporter, ok := store.(runtime.SessionBundleExporter)
+	exporter, ok := store.(ionexport.SessionBundleExporter)
 	if !ok {
 		return exportedSessionBundle{}, fmt.Errorf("session store does not support export")
 	}
@@ -323,7 +330,7 @@ func importSessionBundleFile(
 	store session.Store,
 	path string,
 ) ([]session.SessionInfoEntry, error) {
-	importer, ok := store.(runtime.SessionBundleImporter)
+	importer, ok := store.(ionexport.SessionBundleImporter)
 	if !ok {
 		return nil, fmt.Errorf("session store does not support import")
 	}
@@ -335,7 +342,7 @@ func importSessionBundleFile(
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	var bundle runtime.SessionBundle
+	var bundle ionexport.SessionBundle
 	if err := json.Unmarshal(raw, &bundle); err != nil {
 		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
 	}

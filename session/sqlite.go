@@ -76,9 +76,9 @@ func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if path == ":memory:" {
-		db.SetMaxOpenConns(1)
-	}
+	// Serialize SQLite connections: the harness and TUI may persist auxiliary
+	// entries concurrently, and a single connection avoids SQLITE_BUSY races.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(Schema); err != nil {
 		db.Close()
 		return nil, err

@@ -1,21 +1,20 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nijaru/ion/config"
 	"os"
 	"os/exec"
 	"strings"
 
-	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/internal/runtime"
-	"github.com/nijaru/ion/session"
 	tea "charm.land/bubbletea/v2"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
+	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -185,14 +184,14 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
+	exporter, ok := m.Model.Store.(ionexport.SessionBundleExporter)
 	if !ok {
 		return m, cmdError("store does not support export")
 	}
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.Model.Session.ID()
+	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
 		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
 		if err != nil {
@@ -214,14 +213,14 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
+	exporter, ok := m.Model.Store.(ionexport.SessionBundleExporter)
 	if !ok {
 		return m, cmdError("store does not support export")
 	}
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.Model.Session.ID()
+	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
 		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
 		if err != nil {
@@ -239,6 +238,11 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	}
 }
 
+type sessionBundleTransport interface {
+	ionexport.SessionBundleExporter
+	ionexport.SessionBundleImporter
+}
+
 type sessionExportedMsg struct {
 	filename string
 }
@@ -249,23 +253,20 @@ func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) importSession(filename string) (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		return m, cmdError("no store available")
-	}
-	importer, ok := m.Model.Store.(runtime.SessionBundleImporter)
+	transport, ok := m.Model.Runner.(sessionBundleTransport)
 	if !ok {
-		return m, cmdError("store does not support import")
+		return m, cmdError("active runtime does not support import")
 	}
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(filename)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		var bundle runtime.SessionBundle
+		var bundle ionexport.SessionBundle
 		if err := json.Unmarshal(data, &bundle); err != nil {
 			return localErrorMsg{err: err}
 		}
-		imported, err := importer.ImportSessionBundle(context.Background(), bundle)
+		imported, err := transport.ImportSessionBundle(context.Background(), bundle)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -275,7 +276,7 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 
 type sessionImportedMsg struct {
 	sessionID string
-	filename string
+	filename  string
 }
 
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
@@ -285,12 +286,12 @@ func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) nameSession(name string) (Model, tea.Cmd) {
-	if m.Model.Storage == nil {
+	if m.Model.Runner == nil {
 		return m, cmdError("no active session")
 	}
-	storage := m.Model.Storage
+	runner := m.Model.Runner
 	return m, func() tea.Msg {
-		_, err := storage.AppendSessionInfo(context.Background(), name)
+		_, err := runner.AppendSessionInfo(context.Background(), name)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -350,30 +351,23 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 }
 
 func (m Model) cloneSession() (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		return m, cmdError("no store available")
-	}
-	exporter, ok := m.Model.Store.(runtime.SessionBundleExporter)
+	transport, ok := m.Model.Runner.(sessionBundleTransport)
 	if !ok {
-		return m, cmdError("store does not support session export")
+		return m, cmdError("active runtime does not support clone")
 	}
-	importer, ok := m.Model.Store.(runtime.SessionBundleImporter)
-	if !ok {
-		return m, cmdError("store does not support session import")
-	}
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.Model.Session.ID()
+	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
 		ctx := context.Background()
-		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
+		bundle, err := transport.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("export session: %w", err)}
 		}
 		// Clear the root session ID so import creates a new session
 		bundle.RootSessionID = ""
-		imported, err := importer.ImportSessionBundle(ctx, bundle)
+		imported, err := transport.ImportSessionBundle(ctx, bundle)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("import session: %w", err)}
 		}
@@ -441,10 +435,10 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	return m, m.terminalCommit().Help(b.String())
 }
 
-func helpText() string                                 { return HelpText() }
-func hotkeysText() string                              { return HotkeysText() }
-func slashCommands() []string                          { return SlashCommands() }
-func deferredFeatureMessage(f string) string           { return DeferredFeatureMessage(f) }
+func helpText() string                       { return HelpText() }
+func hotkeysText() string                    { return HotkeysText() }
+func slashCommands() []string                { return SlashCommands() }
+func deferredFeatureMessage(f string) string { return DeferredFeatureMessage(f) }
 func resolveSlashCommand(name string) (SlashCommandInfo, bool) {
 	return ResolveSlashCommand(name)
 }
@@ -511,7 +505,7 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, sess session.Session) tea.Cmd {
+func loadSessionUsageCmd(generation uint64, sess persistenceAdapter) tea.Cmd {
 	if sess == nil {
 		return nil
 	}
@@ -580,11 +574,11 @@ func (m Model) sessionInfoNotice() (string, error) {
 		sessionID = m.Model.Runtime.SessionID
 	}
 	if m.Model.Storage != nil {
-		if sessionID == "" && runtime.IsMaterialized(m.Model.Storage) {
+		if sessionID == "" {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
 		}
-	} else if m.Model.Session != nil {
-		sessionID = strings.TrimSpace(m.Model.Session.ID())
+	} else if m.activeSession() != nil {
+		sessionID = strings.TrimSpace(m.activeSession().ID())
 	}
 	if sessionID == "" {
 		sessionID = "none"
@@ -659,6 +653,7 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	}
 	return counts
 }
+
 type externalEditorFinishedMsg struct {
 	content string
 	err     error
@@ -767,14 +762,14 @@ func (m Model) handlePrimaryCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) != 1 {
 		return m, cmdError("usage: /primary")
 	}
-	return m.switchPresetCommand(runtime.PresetPrimary)
+	return m.switchPresetCommand(PresetPrimary)
 }
 
 func (m Model) handleFastCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) != 1 {
 		return m, cmdError("usage: /fast")
 	}
-	return m.switchPresetCommand(runtime.PresetFast)
+	return m.switchPresetCommand(PresetFast)
 }
 
 func (m Model) handleResumeCommand(fields []string) (Model, tea.Cmd) {
@@ -951,9 +946,6 @@ func (m Model) handleNewSessionCommand(fields []string, command string) (Model, 
 }
 
 func (m Model) handleCompactCommand() (Model, tea.Cmd) {
-	if m.Model.Storage != nil && !runtime.IsMaterialized(m.Model.Storage) {
-		return m, m.terminalCommit().Entries(systemEntry("No active session to compact yet"))
-	}
 	compactor, ok := m.Model.Backend.(Compactor)
 	if !ok {
 		return m, cmdError("current backend does not support /compact")
@@ -986,27 +978,27 @@ func (m Model) handleNameCommand(fields []string) (Model, tea.Cmd) {
 }
 
 func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	sess := m.Model.Session
+	runner := m.Model.Runner
 	store := m.Model.Store
 	leafID := store.GetLeafID()
 
 	if len(fields) < 2 {
 		// Show current label.
 		return m, func() tea.Msg {
-			label, err := sess.GetLabel(context.Background(), leafID)
+			label, err := runner.GetLabel(context.Background(), leafID)
 			return labelShowMsg{label: label, err: err}
 		}
 	}
 	// Set label.
 	text := strings.Join(fields[1:], " ")
 	return m, func() tea.Msg {
-		_, err := sess.AppendLabel(context.Background(), leafID, text)
+		_, err := runner.AppendLabel(context.Background(), leafID, text)
 		return labelShowMsg{label: text, err: err}
 	}
 }

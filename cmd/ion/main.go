@@ -256,7 +256,7 @@ func main() {
 		if runErr == nil {
 			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
 		}
-		closeErr := closeRuntimeHandles(nil, sess, store)
+		closeErr := closeRuntimeHandles(runner, nil, store)
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
 			os.Exit(1)
@@ -284,8 +284,8 @@ func main() {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, session.Session, session.Session, error) {
-		switchedBackend, switchedSession, _, err := openRuntime(
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, agent.Runner, session.Session, error) {
+		switchedBackend, switchedSession, switchedRunner, err := openRuntime(
 			ctx,
 			store,
 			cwd,
@@ -299,7 +299,7 @@ func main() {
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		return switchedBackend, switchedBackend.Session(), switchedSession, nil
+		return switchedBackend, switchedRunner, switchedSession, nil
 	}
 
 	width, height, err := term.GetSize(os.Stdout.Fd())
@@ -335,8 +335,8 @@ func main() {
 	timing.Print()
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
-	agentToClose, sessionToClose := runtimeHandlesForClose(finalModel, b.Session(), sess)
-	closeErr := closeRuntimeHandles(agentToClose, sessionToClose, store)
+	agentToClose := runtimeHandlesForClose(finalModel, runner)
+	closeErr := closeRuntimeHandles(agentToClose, nil, store)
 	if runErr != nil {
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
@@ -365,13 +365,12 @@ func startupModelMissing(b app.Backend) bool {
 
 func runtimeHandlesForClose(
 	finalModel tea.Model,
-	fallbackAgent session.Session,
-	fallbackSession session.Session,
-) (session.Session, session.Session) {
+	fallbackRunner agent.Runner,
+) agent.Runner {
 	if model, ok := finalModel.(*app.Model); ok && model != nil {
-		return model.Model.Session, model.Model.Storage
+		return model.Model.Runner
 	}
-	return fallbackAgent, fallbackSession
+	return fallbackRunner
 }
 
 type printResult struct {

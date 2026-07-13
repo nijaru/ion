@@ -18,7 +18,6 @@ type Backend interface {
 	Model() string
 	ContextLimit() int
 	Bootstrap() Bootstrap
-	Session() session.Session
 	SetStore(session.Store)
 	SetConfig(*config.Config)
 }

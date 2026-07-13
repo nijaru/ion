@@ -1,14 +1,13 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
-	"time"
-	"github.com/nijaru/ion/internal/runtime"
-	"github.com/nijaru/ion/session"
 	"fmt"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/session"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -846,7 +845,7 @@ func (r pickerReducer) applySessionLoad(
 	}
 	items := make([]sessionPickerItem, 0, len(sessions))
 	for _, info := range sessions {
-		if !runtime.IsConversationSessionInfo(&info) {
+		if !IsConversationSessionInfo(&info) {
 			continue
 		}
 		items = append(items, sessionPickerItem{info: info})

@@ -10,11 +10,11 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
-	
+
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	"github.com/nijaru/ion/internal/gitwatch"
-	"github.com/nijaru/ion/internal/runtime"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/session"
 )
@@ -57,6 +57,7 @@ const (
 )
 
 const pendingActionTimeout = 1500 * time.Millisecond
+
 type runtimeSwitchedMsg struct {
 	switchID      uint64
 	runtime       Accepted
@@ -182,15 +183,15 @@ type sessionPickerLoadedMsg struct {
 }
 
 type sessionPickerState struct {
-	items    []sessionPickerItem
-	filtered []sessionPickerItem
-	index    int
-	query    string
-	err      string
-	loading  bool
-	request  uint64
-	namedOnly bool // Pi parity: filter to named sessions only
-	sortMode sessionSortMode // Pi parity: sort mode for session list
+	items     []sessionPickerItem
+	filtered  []sessionPickerItem
+	index     int
+	query     string
+	err       string
+	loading   bool
+	request   uint64
+	namedOnly bool            // Pi parity: filter to named sessions only
+	sortMode  sessionSortMode // Pi parity: sort mode for session list
 }
 
 // sessionSortMode represents the sort mode for the session picker.
@@ -269,6 +270,7 @@ type setupPromptState struct {
 	saving       bool
 	request      uint64
 }
+
 // AppState holds general application and workspace metadata.
 type AppState struct {
 	Width             int
@@ -282,11 +284,19 @@ type AppState struct {
 	PrintedTranscript bool
 }
 
-// ModelState holds the core backend, session, and storage handles.
+// persistenceAdapter is the narrow TUI capability for display-only session writes
+// and reads. The harness remains the owner of the active session and turn state.
+type persistenceAdapter interface {
+	ID() string
+	Meta() session.Metadata
+	Entries(context.Context) ([]session.Entry, error)
+	Usage(context.Context) (session.Usage, error)
+}
+
+// ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
 	Backend              Backend
-	Session              session.Session
-	Storage              session.Session
+	Storage              persistenceAdapter
 	Store                session.Store
 	Switcher             Switcher
 	Config               *config.Config
@@ -300,10 +310,8 @@ type ModelState struct {
 	originalPrimaryModel string
 	// Runner is the agent runner (Harness). When set, the TUI uses it
 	// instead of Backend + Session for turn execution and events.
-	Runner               runtime.Runner
+	Runner agent.Runner
 }
-
-// SubagentProgress, InFlightState, ProgressState are aliases for core types.
 
 // PickerState holds state for the various overlay pickers.
 type PickerState struct {
@@ -399,10 +407,8 @@ func New(
 	spt.Style = st.cyan
 
 	var boot Bootstrap
-	var sess session.Session
 	if b != nil {
 		boot = b.Bootstrap()
-		sess = b.Session()
 	}
 	var checkpoints *ionworkspace.CheckpointStore
 	if checkpointPath, err := ionworkspace.DefaultCheckpointPath(); err == nil {
@@ -414,11 +420,10 @@ func New(
 			Workdir:      workdir,
 			Branch:       branch,
 			Version:      version,
-			ActivePreset: runtime.PresetPrimary,
+			ActivePreset: PresetPrimary,
 		},
 		Model: ModelState{
 			Backend:     b,
-			Session:     sess,
 			Storage:     s,
 			Store:       store,
 			Switcher:    switcher,
@@ -480,7 +485,7 @@ func (m Model) Init() tea.Cmd {
 		loadGitDiffStats(m.App.Workdir),
 		m.startupPickerCmd(),
 	}
-	if m.Model.Session != nil {
+	if m.Model.Runner != nil {
 		cmds = append(cmds, m.awaitSessionEvent())
 	}
 	// Start git branch watcher
@@ -585,11 +590,8 @@ func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
 // WithRunner sets the agent runner (Harness) for the model.
 // When set, the TUI uses the Runner for turn execution and events
 // instead of Backend + Session directly.
-func (m Model) WithRunner(r runtime.Runner) Model {
+func (m Model) WithRunner(r agent.Runner) Model {
 	m.Model.Runner = r
-	if r != nil {
-		m.Model.Session = r.Session()
-	}
 	return m
 }
 func (m Model) configurationStatus() string {
@@ -600,20 +602,20 @@ func (m Model) configurationStatus() string {
 	return decision.Reason
 }
 
-func (m Model) submitPreflightWithoutBudget() runtime.SubmitPreflightDecision {
-	return runtime.DecideSubmitPreflight(runtime.SubmitPreflightInput{
+func (m Model) submitPreflightWithoutBudget() SubmitPreflightDecision {
+	return DecideSubmitPreflight(SubmitPreflightInput{
 		RuntimeRequired: m.Model.Backend != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
 	})
 }
 
-func (m Model) submitPreflight() runtime.SubmitPreflightDecision {
+func (m Model) submitPreflight() SubmitPreflightDecision {
 	var maxSessionCost float64
 	if m.Model.Config != nil {
 		maxSessionCost = m.Model.Config.MaxSessionCost
 	}
-	return runtime.DecideSubmitPreflight(runtime.SubmitPreflightInput{
+	return DecideSubmitPreflight(SubmitPreflightInput{
 		RuntimeRequired: m.Model.Backend != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
@@ -673,7 +675,7 @@ func (m Model) costBudgetLabel(cost float64) string {
 	return fmt.Sprintf("$%.3f/$%.3f", cost, m.Model.Config.MaxSessionCost)
 }
 
-func (m Model) routingDecision(decision, reason, stopReason string) runtime.StoreRoutingDecision {
+func (m Model) routingDecision(decision, reason, stopReason string) StoreRoutingDecision {
 	provider := m.runtimeProvider()
 	model := m.runtimeModel()
 	var maxSessionCost, maxTurnCost float64
@@ -681,7 +683,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) runtime.Stor
 		maxSessionCost = m.Model.Config.MaxSessionCost
 		maxTurnCost = m.Model.Config.MaxTurnCost
 	}
-	return runtime.StoreRoutingDecision{
+	return StoreRoutingDecision{
 		Type:           "routing_decision",
 		Decision:       decision,
 		Reason:         reason,
@@ -705,7 +707,6 @@ func (m Model) runtimeHeaderLine(_ Backend) string {
 	}
 	return "ion " + version
 }
-
 
 var saveRuntimeState = config.SaveRuntimeState
 
@@ -828,18 +829,18 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKi
 		llm.ResolvedAuthToken(cfg, def) == ""
 	if def.ID == llm.OpenAICompatibleID {
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
-			return runtime.SetupPromptAPIKey, nil
+			return SetupPromptAPIKey, nil
 		}
 		if err := ensureProviderReadyForSelection(ctx, cfg); err != nil {
-			return runtime.SetupPromptEndpoint, nil
+			return SetupPromptEndpoint, nil
 		}
 		if missingAuth {
-			return runtime.SetupPromptAPIKey, nil
+			return SetupPromptAPIKey, nil
 		}
 		return 0, nil
 	}
 	if missingAuth {
-		return runtime.SetupPromptAPIKey, nil
+		return SetupPromptAPIKey, nil
 	}
 	return 0, nil
 }
@@ -878,7 +879,7 @@ func resumeSelectionTransition(cfg *config.Config) Transition {
 	return newRuntimeTransition(
 		cfg,
 		cfg,
-		runtime.PresetPrimary,
+		PresetPrimary,
 		"",
 	).WithActivePresetPersistence()
 }
@@ -911,10 +912,17 @@ func (m *Model) refreshRuntimeSessionSnapshot() {
 	m.Model.Runtime.Materialized = materialized
 }
 
+func (m Model) activeSession() session.Session {
+	if m.Model.Runner == nil {
+		return nil
+	}
+	return m.Model.Runner.Session()
+}
+
 func (m Model) Handles() Handles {
 	return Handles{
 		Backend: m.Model.Backend,
-		Session: m.Model.Session,
+		Runner:  m.Model.Runner,
 		Storage: m.Model.Storage,
 	}
 }

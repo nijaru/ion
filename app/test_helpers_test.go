@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -19,16 +18,16 @@ import (
 // --- stubSession implements session.Session ---
 
 type stubSession struct {
-	id         string
-	name       string
-	events     chan session.Event
-	submits    []string
-	cancels    int
-	submitErr  error
-	closed     bool
-	messages   []session.Message
-	entries    []session.Entry
-	leafID     string
+	id        string
+	name      string
+	events    chan session.Event
+	submits   []string
+	cancels   int
+	submitErr error
+	closed    bool
+	messages  []session.Message
+	entries   []session.Entry
+	leafID    string
 }
 
 func newStubSession(id string) *stubSession {
@@ -38,8 +37,8 @@ func newStubSession(id string) *stubSession {
 	}
 }
 
-func (s *stubSession) ID() string              { return s.id }
-func (s *stubSession) Meta() session.Metadata   { return session.Metadata{ID: s.id} }
+func (s *stubSession) ID() string                         { return s.id }
+func (s *stubSession) Meta() session.Metadata             { return session.Metadata{ID: s.id} }
 func (s *stubSession) SessionName(context.Context) string { return s.name }
 
 func (s *stubSession) BuildContext(_ context.Context) (session.ContextSnapshot, error) {
@@ -105,13 +104,13 @@ func (s *stubSession) CancelTurn(_ context.Context) error {
 	return nil
 }
 
-func (s *stubSession) Events() <-chan session.Event   { return s.events }
+func (s *stubSession) Events() <-chan session.Event    { return s.events }
 func (s *stubSession) EventSender() chan session.Event { return s.events }
 
 func (s *stubSession) GetEntry(_ context.Context, _ string) (session.Entry, error) {
 	return nil, nil
 }
-func (s *stubSession) GetLeafID() string       { return s.leafID }
+func (s *stubSession) GetLeafID() string         { return s.leafID }
 func (s *stubSession) SetLeafID(id string) error { s.leafID = id; return nil }
 func (s *stubSession) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
 	return "", nil
@@ -134,22 +133,42 @@ func (s *stubSession) Close() error {
 // --- stubRunner implements agent.Runner ---
 
 type stubRunner struct {
-	aborts int
+	aborts    int
+	appends   []session.Entry
+	appendErr error
 }
 
-func (r *stubRunner) Events() <-chan session.Event                         { return nil }
+func (r *stubRunner) Events() <-chan session.Event                                { return nil }
 func (r *stubRunner) Prompt(_ context.Context, _ string) (session.Message, error) { return nil, nil }
-func (r *stubRunner) Steer(_ string) error                                { return nil }
-func (r *stubRunner) FollowUp(_ string) error                             { return nil }
-func (r *stubRunner) NextTurn(_ string)                                    {}
-func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) { r.aborts++; return nil, nil, nil }
-func (r *stubRunner) WaitForIdle()                                         {}
-func (r *stubRunner) Close() error                                         { return nil }
-func (r *stubRunner) Session() session.Session                             { return nil }
-func (r *stubRunner) SetModel(_ llm.Model)                                 {}
-func (r *stubRunner) SetThinking(_ session.ThinkingLevel)                  {}
-func (r *stubRunner) SetTools(_ []agent.Tool, _ []string)                  {}
-func (r *stubRunner) Compact(_ context.Context) error                      { return nil }
+func (r *stubRunner) Steer(_ string) error                                        { return nil }
+func (r *stubRunner) FollowUp(_ string) error                                     { return nil }
+func (r *stubRunner) NextTurn(_ string)                                           {}
+func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
+	r.aborts++
+	return nil, nil, nil
+}
+func (r *stubRunner) WaitForIdle()                        {}
+func (r *stubRunner) Close() error                        { return nil }
+func (r *stubRunner) Session() session.Session            { return nil }
+func (r *stubRunner) SetModel(_ llm.Model)                {}
+func (r *stubRunner) SetThinking(_ session.ThinkingLevel) {}
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) {}
+func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error {
+	if r.appendErr != nil {
+		return r.appendErr
+	}
+	r.appends = append(r.appends, entry)
+	return nil
+}
+func (r *stubRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
+func (r *stubRunner) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (r *stubRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
+func (r *stubRunner) Compact(_ context.Context) error                  { return nil }
 
 // --- stubBackend implements agent.Backend ---
 
@@ -183,8 +202,8 @@ func (b stubBackend) Bootstrap() agent.Bootstrap {
 		Status:  "ready",
 	}
 }
-func (b stubBackend) Session() session.Session { return b.sess }
-func (b stubBackend) SetStore(_ session.Store)  {}
+func (b stubBackend) Session() session.Session   { return b.sess }
+func (b stubBackend) SetStore(_ session.Store)   {}
 func (b stubBackend) SetConfig(_ *config.Config) {}
 
 // --- readyModel creates a Model ready for testing ---
@@ -269,10 +288,10 @@ func runCommandTree(t *testing.T, cmd tea.Cmd) []tea.Msg {
 
 type stubStorageSession struct {
 	stubSession
-	appends    []session.Entry
-	appendErr  error
-	storageID  string
-	storageModel string
+	appends       []session.Entry
+	appendErr     error
+	storageID     string
+	storageModel  string
 	storageBranch string
 }
 
@@ -299,8 +318,8 @@ func toolEntry(title, content string, isError bool) *session.MessageEntry {
 	}
 }
 
-func sysEntry(content string) runtime.StoreSystem {
-	return runtime.StoreSystem{Type: "system", Content: content}
+func sysEntry(content string) StoreSystem {
+	return StoreSystem{Type: "system", Content: content}
 }
 
 // agentMsgEntry creates a MessageEntry wrapping an AssistantMessage.
@@ -318,11 +337,11 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 	t.Helper()
 	sess := newStubSession("stub")
 	b := stubBackend{sess: sess, provider: "openai", model: "gpt-4.1"}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
 		*observed = append(*observed, cfg.Model)
 		newSess := newStubSession(sessionID)
 		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}
-		return newBackend, newSess, newSess, nil
+		return newBackend, nil, newSess, nil
 	}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", switcher)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -351,9 +370,9 @@ func (s *resumeOnlyStore) Branch(ctx context.Context) ([]session.Entry, error) {
 func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
-func (s *resumeOnlyStore) GetLeafID() string                     { return "" }
-func (s *resumeOnlyStore) SetLeafID(id string) error             { return nil }
-func (s *resumeOnlyStore) Meta() session.Metadata                 { return session.Metadata{} }
+func (s *resumeOnlyStore) GetLeafID() string         { return "" }
+func (s *resumeOnlyStore) SetLeafID(id string) error { return nil }
+func (s *resumeOnlyStore) Meta() session.Metadata    { return session.Metadata{} }
 func (s *resumeOnlyStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
 	return nil, nil
 }

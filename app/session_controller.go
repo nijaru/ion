@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/runtime"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -65,10 +65,10 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	m.turnReducer().StartSubmit()
 	m.resetComposerDraft()
-	return m, submitTurnCmd(m.Model.Session, m.Model.Runner, text, draft)
+	return m, submitTurnCmd(m.Model.Runner, text, draft)
 }
 
-func submitTurnCmd(_ session.Session, runner runtime.Runner, text, draft string) tea.Cmd {
+func submitTurnCmd(runner agent.Runner, text, draft string) tea.Cmd {
 	return func() tea.Msg {
 		if runner != nil {
 			_, err := runner.Prompt(context.Background(), text)
@@ -141,18 +141,18 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	supportsSteering := runner != nil
 	supportsFollowUp := runner != nil
 
-	switch runtime.RouteBusyInput(runtime.BusyInputRouting{
+	switch RouteBusyInput(BusyInputRouting{
 		Mode:             mode,
 		Thinking:         m.InFlight.Thinking,
 		Compacting:       m.Progress.Compacting,
 		SupportsSteering: supportsSteering,
 		SupportsFollowUp: supportsFollowUp,
 	}) {
-	case runtime.BusyInputRouteSteer:
+	case BusyInputRouteSteer:
 		m.resetComposerDraft()
 		_ = runner.Steer(text) // ignore idle error; TUI can't fix harness state
 		return m, nil
-	case runtime.BusyInputRouteFollowUp:
+	case BusyInputRouteFollowUp:
 		m.resetComposerDraft()
 		_ = runner.FollowUp(text)
 		return m, nil
@@ -187,7 +187,7 @@ func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	decision := runtime.DecideQueuedInputRecall(runtime.QueuedInputRecallInput{
+	decision := DecideQueuedInputRecall(QueuedInputRecallInput{
 		CurrentDraft: m.Input.Composer.Value(),
 		Steering:     m.InFlight.QueuedSteering,
 		FollowUp:     m.InFlight.QueuedTurns,
@@ -205,7 +205,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
-		m.persistEntryCmd("persist cancellation", runtime.StoreSystem{
+		m.persistEntryCmd("persist cancellation", StoreSystem{
 			Type:    "system",
 			Content: session.EntryText(entry),
 			TS:      now(),
@@ -214,7 +214,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	)
 }
 
-func cancelTurnCmd(runner runtime.Runner) tea.Cmd {
+func cancelTurnCmd(runner agent.Runner) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
 			return turnCancelResultMsg{err: errors.New("session unavailable")}
@@ -247,10 +247,12 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
 	var events <-chan session.Event
+	var done <-chan struct{}
 	if m.Model.Runner != nil {
 		events = m.Model.Runner.Events()
-	} else if m.Model.Session != nil {
-		events = m.Model.Session.Events()
+		if source, ok := m.Model.Runner.(interface{ Done() <-chan struct{} }); ok {
+			done = source.Done()
+		}
 	}
 	if events == nil {
 		return func() tea.Msg {
@@ -264,11 +266,15 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		ev, ok := <-events
-		if !ok {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return streamClosedMsg{generation: generation}
+			}
+			return sessionEventMsg{generation: generation, event: ev}
+		case <-done:
 			return streamClosedMsg{generation: generation}
 		}
-		return sessionEventMsg{generation: generation, event: ev}
 	}
 }
 
@@ -276,12 +282,12 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	turn := m.turnReducer()
 	if turn.DrainingUntilTurnStarted() {
-		decision := runtime.DecideEventDrain(runtime.EventDrainInput{
+		decision := DecideEventDrain(EventDrainInput{
 			Active:         m.InFlight.DrainUntilTurnStarted,
 			DrainStartedAt: m.InFlight.DrainStartedAt,
 			Event:          ev,
 		})
-		if decision.Action == runtime.EventDrainAwait {
+		if decision.Action == EventDrainAwait {
 			return m, m.awaitSessionEvent()
 		}
 		if decision.FinishDrain {
@@ -290,10 +296,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	switch msg := ev.(type) {
-	case runtime.StatusChange:
+	case StatusChange:
 		return m.handleStatusChanged(msg)
 
-	case runtime.QueuedInputUpdate:
+	case QueuedInputUpdate:
 		return m.handleQueuedInputUpdated(msg)
 
 	case session.TurnStart:
@@ -376,6 +382,10 @@ func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
 // handleSettled marks the harness as idle — enables submit button and clears in-flight state.
 func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
 	m.InFlight.AgentCommitted = false
+	m.InFlight.Thinking = false
+	m.InFlight.Canceling = false
+	m.Progress.Mode = StateReady
+	m.Progress.Status = ""
 	if msg.NextTurnCount > 0 {
 		entry, _ := session.EntrySystem(fmt.Sprintf("ℹ️  %d queued turn(s) remaining", msg.NextTurnCount), time.Now())
 		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
@@ -404,7 +414,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.terminalCommit().Entries(entryIf))
-	cmds = append(cmds, m.persistEntryCmd("persist stream close error", runtime.StoreSystem{
+	cmds = append(cmds, m.persistEntryCmd("persist stream close error", StoreSystem{
 		Type:    "system",
 		Content: session.EntryText(entryIf),
 		TS:      now(),
@@ -413,7 +423,7 @@ func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	decision := runtime.DecideErrorSettlement(runtime.ErrorSettlementInput{
+	decision := DecideErrorSettlement(ErrorSettlementInput{
 		Err:           err,
 		AwaitTerminal: awaitTerminal,
 	})
@@ -436,7 +446,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.turnReducer().FailTurn(decision.DisplayError, time.Now())
 	if decision.PersistSystem {
-		cmds = append(cmds, m.persistEntryCmd("persist session error", runtime.StoreSystem{
+		cmds = append(cmds, m.persistEntryCmd("persist session error", StoreSystem{
 			Type:    "system",
 			Content: session.EntryText(entry),
 			TS:      now(),
@@ -459,20 +469,20 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(entry)
 }
 
-func (m Model) handleStatusChanged(msg runtime.StatusChange) (Model, tea.Cmd) {
+func (m Model) handleStatusChanged(msg StatusChange) (Model, tea.Cmd) {
 	decision := m.turnReducer().ApplyStatusChangedInput(msg)
 	persistTimestamp := msg.When()
 	if decision.Root {
 		persistTimestamp = decision.PersistTimestamp
 	}
-	return m, batchCmds(m.persistEntryCmd("persist status", runtime.StoreStatus{
+	return m, batchCmds(m.persistEntryCmd("persist status", StoreStatus{
 		Type:   "status",
 		Status: msg.Status,
 		TS:     entryUnix(persistTimestamp),
 	}), m.awaitSessionEvent())
 }
 
-func (m Model) handleQueuedInputUpdated(msg runtime.QueuedInputUpdate) (Model, tea.Cmd) {
+func (m Model) handleQueuedInputUpdated(msg QueuedInputUpdate) (Model, tea.Cmd) {
 	m.turnReducer().SetBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
 	return m, m.awaitSessionEvent()
 }
@@ -496,7 +506,7 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	m.turnReducer().RecordFinishedTurnSummary(time.Now())
 
 	dispatch := m.turnReducer().FinishTurnDispatch()
-	if dispatch.Action == runtime.TurnFinishedDispatchSubmitLocal {
+	if dispatch.Action == TurnFinishedDispatchSubmitLocal {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{
 				text:               dispatch.Text,
@@ -527,7 +537,7 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	in, out, cost := session.TokenUsage(msg.Message)
 	if in > 0 || out > 0 || cost > 0 {
-		cmds = append(cmds, m.persistEntryCmd("persist token usage", runtime.StoreTokenUsage{
+		cmds = append(cmds, m.persistEntryCmd("persist token usage", StoreTokenUsage{
 			Type:   "token_usage",
 			Input:  in,
 			Output: out,
@@ -590,7 +600,7 @@ func (m *Model) runtimeRequest() runtimeRequestController {
 }
 
 func (c runtimeRequestController) begin(status string) uint64 {
-	decision := runtime.BeginRuntimeRequest(runtime.RuntimeRequestBeginInput{
+	decision := BeginRuntimeRequest(RuntimeRequestBeginInput{
 		Current: c.model.Model.RuntimeSwitchRequest,
 		Status:  status,
 	})
@@ -602,11 +612,11 @@ func (c runtimeRequestController) begin(status string) uint64 {
 }
 
 func (c runtimeRequestController) matches(requestID uint64) bool {
-	return runtime.RuntimeRequestMatches(c.model.Model.RuntimeSwitchRequest, requestID)
+	return RuntimeRequestMatches(c.model.Model.RuntimeSwitchRequest, requestID)
 }
 
 func (c runtimeRequestController) finish(requestID uint64) bool {
-	decision := runtime.FinishRuntimeRequest(c.model.Model.RuntimeSwitchRequest, requestID)
+	decision := FinishRuntimeRequest(c.model.Model.RuntimeSwitchRequest, requestID)
 	if !decision.Matched {
 		return false
 	}
@@ -618,7 +628,7 @@ func (c runtimeRequestController) finish(requestID uint64) bool {
 }
 
 func (c runtimeRequestController) clear() {
-	decision := runtime.ClearRuntimeRequest()
+	decision := ClearRuntimeRequest()
 	c.model.Model.RuntimeSwitchRequest = decision.Active
 	if decision.ClearLocalStatus {
 		c.model.progressReducer().clearLocalBusyStatus()
@@ -626,19 +636,19 @@ func (c runtimeRequestController) clear() {
 }
 
 type persistenceController struct {
-	storage session.Session
+	runner agent.Runner
 }
 
 func (m Model) persistenceController() persistenceController {
-	return persistenceController{storage: m.Model.Storage}
+	return persistenceController{runner: m.Model.Runner}
 }
 
 func (c persistenceController) appendEntry(action string, entry session.Entry) tea.Cmd {
-	if c.storage == nil {
+	if c.runner == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		if _, err := c.storage.Append(context.Background(), entry); err != nil {
+		if err := c.runner.PersistEntry(context.Background(), entry); err != nil {
 			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
 		}
 		return nil
@@ -679,8 +689,8 @@ func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry
 	if m.Model.Store != nil {
 		id = m.Model.Store.GetLeafID()
 	}
-	if id == "" && m.Model.Session != nil {
-		id = m.Model.Session.ID()
+	if id == "" && m.activeSession() != nil {
+		id = m.activeSession().ID()
 	}
 	if id == "" || id == "canto" {
 		return session.SessionInfoEntry{}, false
@@ -688,8 +698,8 @@ func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry
 
 	var entries []session.Entry
 	var err error
-	if m.Model.Session != nil {
-		entries, err = m.Model.Session.Branch(ctx)
+	if m.activeSession() != nil {
+		entries, err = m.activeSession().Branch(ctx)
 	} else if m.Model.Store != nil {
 		entries, err = m.Model.Store.Branch(ctx)
 	}
@@ -755,35 +765,35 @@ func (m Model) currentSessionModelName() string {
 	return provider + "/" + model
 }
 
-func (m Model) persistEntryCmd(action string, entry runtime.StoreEvent) tea.Cmd {
+func (m Model) persistEntryCmd(action string, entry session.Entry) tea.Cmd {
 	// Convert runtime-specific entries to session.CustomEntry for SQLite persistence.
 	// Each gets a unique ID (not the original entry's zero-valued ID) to avoid
 	// UNIQUE constraint failures when multiple entries have empty/identical IDs.
 	now := time.Now()
 	id := fmt.Sprintf("%s-%d", action, now.UnixNano())
 	switch e := entry.(type) {
-	case runtime.StoreRoutingDecision:
+	case StoreRoutingDecision:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
 			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "routing_decision",
 			Data:      data,
 		}
-	case runtime.StoreSystem:
+	case StoreSystem:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
 			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "store_system",
 			Data:      data,
 		}
-	case runtime.StoreStatus:
+	case StoreStatus:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
 			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
 			Type:      "store_status",
 			Data:      data,
 		}
-	case runtime.StoreTokenUsage:
+	case StoreTokenUsage:
 		data, _ := json.Marshal(e)
 		entry = &session.CustomEntry{
 			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},

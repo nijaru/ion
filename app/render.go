@@ -1,13 +1,12 @@
 package app
 
 import (
-	"github.com/nijaru/ion/internal/runtime"
-	"github.com/nijaru/ion/session"
-	"github.com/nijaru/ion/config"
 	"fmt"
-	"time"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -379,10 +378,10 @@ func (m Model) renderSetupPrompt() string {
 	help := "Enter save • Esc cancel"
 	value := prompt.value
 	switch prompt.kind {
-	case runtime.SetupPromptAPIKey:
+	case SetupPromptAPIKey:
 		title = "Enter API key for " + prompt.providerName
 		value = strings.Repeat("•", len([]rune(prompt.value)))
-	case runtime.SetupPromptEndpoint:
+	case SetupPromptEndpoint:
 		title = "OpenAI-compatible endpoint"
 		help = "Enter save • Esc cancel"
 	default:
@@ -393,7 +392,7 @@ func (m Model) renderSetupPrompt() string {
 	b.WriteString("\n")
 	b.WriteString(m.cardTopBorder(title))
 	b.WriteString("\n")
-	if prompt.kind == runtime.SetupPromptEndpoint {
+	if prompt.kind == SetupPromptEndpoint {
 		b.WriteString(m.cardPaddedLine(m.st.dim, "  Example: http://127.0.0.1:11434/v1"))
 		b.WriteString("\n")
 	}
@@ -747,8 +746,8 @@ func (r progressReducer) completeCompaction() {
 }
 
 func (r progressReducer) clearError() {
-	if r.progress.Mode == runtime.StateError {
-		r.progress.Mode = runtime.StateReady
+	if r.progress.Mode == StateError {
+		r.progress.Mode = StateReady
 	}
 	r.progress.LastError = ""
 }
@@ -765,7 +764,7 @@ func (r progressReducer) applyRuntimeSnapshot(snapshot Snapshot) {
 }
 
 func (r progressReducer) markRuntimeReady() {
-	r.progress.Mode = runtime.StateReady
+	r.progress.Mode = StateReady
 }
 
 func (r progressReducer) resetSessionUsage() {
@@ -843,7 +842,7 @@ func (m Model) progressLine() string {
 		return fitLine(strings.TrimRight(line, " "), m.shellWidth())
 	}
 	switch m.Progress.Mode {
-	case runtime.StateIonizing, runtime.StateStreaming, runtime.StateWorking:
+	case StateIonizing, StateStreaming, StateWorking:
 		status := retryCountdownStatus(
 			m.Progress.Status,
 			m.Progress.StatusUpdatedAt,
@@ -851,11 +850,11 @@ func (m Model) progressLine() string {
 		)
 		if isIdleStatus(status) || isConfigurationStatus(status) {
 			switch m.Progress.Mode {
-			case runtime.StateIonizing:
+			case StateIonizing:
 				status = "Ionizing..."
-			case runtime.StateStreaming:
+			case StateStreaming:
 				status = "Streaming..."
-			case runtime.StateWorking:
+			case StateWorking:
 				if len(m.InFlight.Subagents) > 0 {
 					for _, k := range sortedKeys(m.InFlight.Subagents) {
 						status = "Waiting for " + m.InFlight.Subagents[k].Name + "..."
@@ -870,19 +869,19 @@ func (m Model) progressLine() string {
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += m.renderProgressStats(stats)
 		}
-	case runtime.StateComplete:
+	case StateComplete:
 		line = m.st.success.Render("✓") + " Complete"
 		if stats := m.completedProgressParts(); len(stats) > 0 {
 			line += m.renderProgressStats(stats)
 		}
-	case runtime.StateCancelled:
+	case StateCancelled:
 		line = m.st.warn.Render("⚠ Canceled")
 		if reason := strings.TrimSpace(m.Progress.BudgetStopReason); reason != "" {
 			line += " • " + reason
 		}
-	case runtime.StateBlocked:
+	case StateBlocked:
 		line = m.st.warn.Render("⚠ Subagent blocked")
-	case runtime.StateError:
+	case StateError:
 		if m.suppressTerminalErrorProgress() {
 			return ""
 		}
@@ -1177,6 +1176,7 @@ func (m Model) toolTitleOptions() tool.Options {
 		Width:   width,
 	}
 }
+
 const (
 	printSubmitHoldThreshold = 12
 	printSubmitHoldBase      = 150 * time.Millisecond

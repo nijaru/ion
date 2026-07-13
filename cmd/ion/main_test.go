@@ -16,9 +16,9 @@ type closeStorageSession struct {
 	events chan session.Event
 }
 
-func (s *closeStorageSession) ID() string                                    { return s.id }
-func (s *closeStorageSession) Meta() session.Metadata                        { return session.Metadata{ID: s.id} }
-func (s *closeStorageSession) SessionName(context.Context) string             { return "" }
+func (s *closeStorageSession) ID() string                         { return s.id }
+func (s *closeStorageSession) Meta() session.Metadata             { return session.Metadata{ID: s.id} }
+func (s *closeStorageSession) SessionName(context.Context) string { return "" }
 func (s *closeStorageSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
@@ -62,15 +62,15 @@ func (s *closeStorageSession) GetLabel(context.Context, string) (string, error) 
 func (s *closeStorageSession) Append(context.Context, session.Entry) (string, error) {
 	return "", nil
 }
-func (s *closeStorageSession) SubmitTurn(context.Context, string) error    { return nil }
-func (s *closeStorageSession) CancelTurn(context.Context) error            { return nil }
-func (s *closeStorageSession) Events() <-chan session.Event                 { return s.events }
-func (s *closeStorageSession) EventSender() chan session.Event              { return s.events }
+func (s *closeStorageSession) SubmitTurn(context.Context, string) error { return nil }
+func (s *closeStorageSession) CancelTurn(context.Context) error         { return nil }
+func (s *closeStorageSession) Events() <-chan session.Event             { return s.events }
+func (s *closeStorageSession) EventSender() chan session.Event          { return s.events }
 func (s *closeStorageSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
-func (s *closeStorageSession) GetLeafID() string          { return "" }
-func (s *closeStorageSession) SetLeafID(string) error     { return nil }
+func (s *closeStorageSession) GetLeafID() string      { return "" }
+func (s *closeStorageSession) SetLeafID(string) error { return nil }
 func (s *closeStorageSession) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
@@ -88,10 +88,10 @@ type providerBackend struct {
 	model    string
 }
 
-func (b providerBackend) Name() string              { return "provider-test" }
-func (b providerBackend) Provider() string          { return b.provider }
-func (b providerBackend) Model() string             { return b.model }
-func (b providerBackend) ContextLimit() int         { return 0 }
+func (b providerBackend) Name() string               { return "provider-test" }
+func (b providerBackend) Provider() string           { return b.provider }
+func (b providerBackend) Model() string              { return b.model }
+func (b providerBackend) ContextLimit() int          { return 0 }
 func (b providerBackend) Bootstrap() agent.Bootstrap { return agent.Bootstrap{} }
 func (b providerBackend) Session() session.Session   { return nil }
 func (b providerBackend) SetStore(session.Store)     {}
@@ -100,34 +100,25 @@ func (b providerBackend) SetConfig(*config.Config)   {}
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 	startupAgent := &printSession{events: make(chan session.Event)}
 	currentAgent := &printSession{events: make(chan session.Event)}
-	startupStorage := &closeStorageSession{id: "startup", events: make(chan session.Event)}
 	currentStorage := &closeStorageSession{id: "current", events: make(chan session.Event)}
 	final := app.Model{
 		Model: app.ModelState{
-			Session: currentAgent,
+			Runner:  currentAgent,
 			Storage: currentStorage,
 		},
 	}
 
-	agent, storageSession := runtimeHandlesForClose(&final, startupAgent, startupStorage)
+	agent := runtimeHandlesForClose(&final, startupAgent)
 	if agent != currentAgent {
 		t.Fatalf("agent = %#v, want current runtime agent", agent)
-	}
-	if storageSession != currentStorage {
-		t.Fatalf("storage = %#v, want current runtime storage", storageSession)
 	}
 }
 
 func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
 	startupAgent := &printSession{events: make(chan session.Event)}
-	startupStorage := &closeStorageSession{id: "startup", events: make(chan session.Event)}
-
-	agent, storageSession := runtimeHandlesForClose(nil, startupAgent, startupStorage)
+	agent := runtimeHandlesForClose(nil, startupAgent)
 	if agent != startupAgent {
 		t.Fatalf("agent = %#v, want fallback agent", agent)
-	}
-	if storageSession != startupStorage {
-		t.Fatalf("storage = %#v, want fallback storage", storageSession)
 	}
 }
 

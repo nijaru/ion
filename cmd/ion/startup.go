@@ -421,7 +421,6 @@ func (b *configBackend) Bootstrap() app.Bootstrap {
 	return app.Bootstrap{Entries: entries,
 		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
 }
-func (b *configBackend) Session() session.Session     { return nil }
 func (b *configBackend) SetStore(s session.Store)     { b.store = s }
 func (b *configBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
 

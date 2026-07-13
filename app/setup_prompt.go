@@ -1,14 +1,13 @@
 package app
 
 import (
-	"github.com/nijaru/ion/internal/runtime"
-	"github.com/nijaru/ion/config"
 	"fmt"
+	"github.com/nijaru/ion/config"
 	"net/url"
 	"strings"
 
-	"github.com/nijaru/ion/llm"
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/llm"
 )
 
 var (
@@ -36,7 +35,7 @@ func (m Model) openAPIKeyPrompt(
 	cfgCopy := *cfg
 	cfgCopy.Provider = def.ID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         runtime.SetupPromptAPIKey,
+		kind:         SetupPromptAPIKey,
 		provider:     def.ID,
 		providerName: def.DisplayName,
 		preset:       preset,
@@ -61,7 +60,7 @@ func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea
 	cfgCopy := *cfg
 	cfgCopy.Provider = llm.OpenAICompatibleID
 	m.pickerReducer().openSetup(setupPromptState{
-		kind:         runtime.SetupPromptEndpoint,
+		kind:         SetupPromptEndpoint,
 		provider:     llm.OpenAICompatibleID,
 		providerName: llm.DisplayName(llm.OpenAICompatibleID),
 		value:        strings.TrimSpace(cfgCopy.Endpoint),
@@ -121,7 +120,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m, cmdError(message)
 	}
 	switch prompt.kind {
-	case runtime.SetupPromptAPIKey:
+	case SetupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
 		if key == "" {
 			m.pickerReducer().setSetupError("API key cannot be empty")
@@ -144,7 +143,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 				err:       err,
 			}
 		}
-	case runtime.SetupPromptEndpoint:
+	case SetupPromptEndpoint:
 		endpoint, err := normalizeOpenAICompatibleEndpoint(prompt.value)
 		if err != nil {
 			m.pickerReducer().setSetupError(err.Error())

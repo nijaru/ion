@@ -13,7 +13,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/runtime"
+	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -88,7 +89,9 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	fmt.Println(cwd + " • smoke")
 	fmt.Println()
 
+	runner := &smokeRunner{backend: smoke, sess: sess}
 	model := app.New(smoke, sess, store, cwd, "smoke", "v0.0.0", nil).
+		WithRunner(runner).
 		WithConfig(cfg)
 	if mode == "session-picker" {
 		model = model.WithSessionPicker()
@@ -104,11 +107,11 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 			return fmt.Errorf("startup view missing ready shell markers")
 		}
 		fmt.Println("startup-check: ready shell rendered")
-		smoke.Close()
+		_ = runner.Close()
 		return nil
 	}
 	_, err = tea.NewProgram(&model).Run()
-	smoke.Close()
+	_ = runner.Close()
 	return err
 }
 
@@ -176,8 +179,6 @@ func (b *smokeBackend) Bootstrap() app.Bootstrap {
 	return app.Bootstrap{Status: "[smoke] ready"}
 }
 
-func (b *smokeBackend) Session() session.Session { return nil }
-
 func (b *smokeBackend) SetStore(session.Store) {}
 
 func (b *smokeBackend) SetConfig(cfg *config.Config) {
@@ -227,6 +228,43 @@ func (b *smokeBackend) Close() error {
 
 func (b *smokeBackend) Events() <-chan session.Event { return b.events }
 
+type smokeRunner struct {
+	backend *smokeBackend
+	sess    session.Session
+}
+
+func (r *smokeRunner) Events() <-chan session.Event { return r.backend.Events() }
+func (r *smokeRunner) Prompt(ctx context.Context, text string) (session.Message, error) {
+	return nil, r.backend.SubmitTurn(ctx, text)
+}
+func (r *smokeRunner) Steer(text string) error {
+	r.backend.Steer(text)
+	return nil
+}
+func (r *smokeRunner) FollowUp(text string) error {
+	r.backend.FollowUp(text)
+	return nil
+}
+func (r *smokeRunner) NextTurn(string) {}
+func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
+	return nil, nil, r.backend.CancelTurn(context.Background())
+}
+func (r *smokeRunner) SetModel(llm.Model)                                        {}
+func (r *smokeRunner) SetThinking(session.ThinkingLevel)                         {}
+func (r *smokeRunner) SetTools([]agent.Tool, []string)                           {}
+func (r *smokeRunner) Session() session.Session                                  { return r.sess }
+func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }
+func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
+func (r *smokeRunner) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (r *smokeRunner) AppendLabel(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (r *smokeRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
+func (r *smokeRunner) Compact(context.Context) error                    { return nil }
+func (r *smokeRunner) Close() error                                     { return r.backend.Close() }
+
 func now() time.Time { return time.Now() }
 
 func userEvent(text string) session.MessageStart {
@@ -259,12 +297,12 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "cancel":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, runtime.StatusChange{Status: "[smoke] waiting for cancel"})
+		b.emit(ctx, app.StatusChange{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, runtime.StatusChange{Status: "[smoke] active before error"})
+		b.emit(ctx, app.StatusChange{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
@@ -278,7 +316,7 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	default:
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, runtime.StatusChange{Status: "[smoke] active progress"})
+		b.emit(ctx, app.StatusChange{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
@@ -314,13 +352,14 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		}
 		b.emit(ctx, agentEndEvent("done"))
 		b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
+		b.emit(ctx, session.Settled{})
 	}
 }
 
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, runtime.StatusChange{Status: "[smoke] markdown stream"})
+	b.emit(ctx, app.StatusChange{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -360,7 +399,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, runtime.StatusChange{Status: "[smoke] active controls"})
+	b.emit(ctx, app.StatusChange{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
@@ -371,7 +410,7 @@ func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, runtime.StatusChange{Status: "[smoke] file tool rows"})
+	b.emit(ctx, app.StatusChange{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}

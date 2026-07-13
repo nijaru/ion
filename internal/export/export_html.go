@@ -1,14 +1,35 @@
 package export
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"strings"
 	"time"
 
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
+
+// SessionBundle is the transport format for explicit session export/import.
+// It is owned by the export boundary rather than the TUI runtime.
+type SessionBundle struct {
+	RootSessionID string
+	Sessions      []SessionBundleRecord
+	ExportedAt    time.Time
+}
+
+type SessionBundleRecord struct {
+	Info   session.Session
+	Events []session.Entry
+}
+
+type SessionBundleExporter interface {
+	ExportSessionBundle(ctx context.Context, leafID string) (SessionBundle, error)
+}
+
+type SessionBundleImporter interface {
+	ImportSessionBundle(ctx context.Context, bundle SessionBundle) (string, error)
+}
 
 // SessionData holds the data needed to export a session to HTML.
 type SessionData struct {
@@ -226,7 +247,7 @@ func extractThinking(content []session.Content) string {
 }
 
 // BundleToHTML converts a SessionBundle to HTML string.
-func BundleToHTML(bundle runtime.SessionBundle) (string, error) {
+func BundleToHTML(bundle SessionBundle) (string, error) {
 	data := SessionData{
 		SessionID: bundle.RootSessionID,
 		Exported:  bundle.ExportedAt,

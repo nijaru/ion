@@ -1,4 +1,4 @@
-package runtime
+package app
 
 import (
 	"context"
@@ -164,8 +164,8 @@ func (t Transition) NeedsPersistence() bool { return t.PersistState || t.Persist
 func (t Transition) WithHandles(h Handles) Transition {
 	t.Snapshot.SessionID = ""
 	t.Snapshot.Materialized = false
-	if h.Session != nil {
-		t.Snapshot.SessionID = h.Session.ID()
+	if id, ok := GetSessionState(h); ok {
+		t.Snapshot.SessionID = id
 		t.Snapshot.Materialized = true
 	}
 	return t
@@ -205,12 +205,12 @@ const (
 // Handles holds resolved runtime references.
 type Handles struct {
 	Backend Backend
-	Session session.Session
-	Storage session.Session
+	Runner  agent.Runner
+	Storage persistenceAdapter
 }
 
-// Switcher creates a new backend and sessions for model switching.
-type Switcher func(context.Context, *config.Config, string) (Backend, session.Session, session.Session, error)
+// Switcher creates a new backend, harness, and storage session for model switching.
+type Switcher func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error)
 
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
@@ -261,14 +261,14 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		cfg = &appCfg
 	}
 
-	backend, sess, storage, err := input.Switcher(ctx, cfg, input.TargetSessionID)
+	backend, runner, storage, err := input.Switcher(ctx, cfg, input.TargetSessionID)
 	if err != nil {
 		return SwitchResult{}, fmt.Errorf("switch: %w", err)
 	}
 
 	newHandles := Handles{
 		Backend: backend,
-		Session: sess,
+		Runner:  runner,
 		Storage: storage,
 	}
 
@@ -299,12 +299,12 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 	}
 
 	cfg := input.Transition.Snapshot.BackendConfig
-	backend, sess, storage, err := input.Switcher(ctx, &cfg, input.SessionID)
+	backend, runner, storage, err := input.Switcher(ctx, &cfg, input.SessionID)
 	if err != nil {
 		return SwitchResult{}, fmt.Errorf("resume: %w", err)
 	}
 
-	newHandles := Handles{Backend: backend, Session: sess, Storage: storage}
+	newHandles := Handles{Backend: backend, Runner: runner, Storage: storage}
 	transition := input.Transition.WithHandles(newHandles)
 	if input.SaveState != nil {
 		_ = input.SaveState(config.RuntimeStateUpdate{Config: &cfg})
@@ -316,21 +316,18 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 }
 
 // CloseHandles releases resources.
-func CloseHandles(handles Handles) {}
-
-// GetSessionState returns the session ID if available.
-func GetSessionState(h Handles) (string, bool) {
-	if h.Session == nil {
-		return "", false
+func CloseHandles(handles Handles) {
+	if handles.Runner != nil {
+		_ = handles.Runner.Close()
 	}
-	return h.Session.ID(), true
 }
 
-// SessionStateInfo summarizes session state.
-type SessionStateInfo struct {
-	Backend Backend
-	Session session.Session
-	Store   session.Store
+// GetSessionState returns the active harness session ID if available.
+func GetSessionState(h Handles) (string, bool) {
+	if h.Runner == nil || h.Runner.Session() == nil {
+		return "", false
+	}
+	return h.Runner.Session().ID(), true
 }
 
 // IsLocalBusyStatus returns true if the status indicates local activity.
@@ -791,6 +788,3 @@ type Bootstrap = agent.Bootstrap
 type Compactor = agent.Compactor
 type ToolSurface = agent.ToolSurface
 type ToolSummarizer = agent.ToolSummarizer
-
-// Runner is the agent runner interface.
-type Runner = agent.Runner

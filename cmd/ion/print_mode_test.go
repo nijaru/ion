@@ -23,9 +23,9 @@ type printSession struct {
 	submitErr error
 }
 
-func (s *printSession) ID() string                                    { return "print-test" }
-func (s *printSession) Meta() session.Metadata                        { return session.Metadata{} }
-func (s *printSession) SessionName(context.Context) string             { return "" }
+func (s *printSession) ID() string                         { return "print-test" }
+func (s *printSession) Meta() session.Metadata             { return session.Metadata{} }
+func (s *printSession) SessionName(context.Context) string { return "" }
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
@@ -79,13 +79,13 @@ func (s *printSession) CancelTurn(context.Context) error {
 	s.cancelled++
 	return nil
 }
-func (s *printSession) Events() <-chan session.Event { return s.events }
+func (s *printSession) Events() <-chan session.Event    { return s.events }
 func (s *printSession) EventSender() chan session.Event { return s.events }
 func (s *printSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
-func (s *printSession) GetLeafID() string              { return "" }
-func (s *printSession) SetLeafID(string) error         { return nil }
+func (s *printSession) GetLeafID() string      { return "" }
+func (s *printSession) SetLeafID(string) error { return nil }
 func (s *printSession) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
@@ -106,15 +106,19 @@ func (s *printSession) Prompt(_ context.Context, _ string) (session.Message, err
 	}
 	return nil, nil
 }
-func (s *printSession) Steer(_ string) error                                 { return nil }
-func (s *printSession) FollowUp(_ string) error                              { return nil }
-func (s *printSession) NextTurn(_ string)                                     {}
-func (s *printSession) Abort() ([]session.Message, []session.Message, error) { s.cancelled++; return nil, nil, nil }
-func (s *printSession) SetModel(_ llm.Model)                   {}
-func (s *printSession) SetThinking(_ session.ThinkingLevel)    {}
-func (s *printSession) SetTools(_ []agent.Tool, _ []string)    {}
-func (s *printSession) Session() session.Session               { return s }
-func (s *printSession) Compact(_ context.Context) error        { return nil }
+func (s *printSession) Steer(_ string) error    { return nil }
+func (s *printSession) FollowUp(_ string) error { return nil }
+func (s *printSession) NextTurn(_ string)       {}
+func (s *printSession) Abort() ([]session.Message, []session.Message, error) {
+	s.cancelled++
+	return nil, nil, nil
+}
+func (s *printSession) SetModel(_ llm.Model)                              {}
+func (s *printSession) SetThinking(_ session.ThinkingLevel)               {}
+func (s *printSession) SetTools(_ []agent.Tool, _ []string)               {}
+func (s *printSession) Session() session.Session                          { return s }
+func (s *printSession) PersistEntry(context.Context, session.Entry) error { return nil }
+func (s *printSession) Compact(_ context.Context) error                   { return nil }
 
 func TestResolvePrintFlagsSupportsShortPrintWithPositionalPrompt(t *testing.T) {
 	requested, prompt, output, err := resolvePrintFlags(
@@ -417,7 +421,7 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 	sess.events <- session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Content: []session.Content{session.TextContent{Text: "done"}},
-			Usage: session.Usage{Input: 12, Output: 3, Cost: session.Cost{Total: 0.25}},
+			Usage:   session.Usage{Input: 12, Output: 3, Cost: session.Cost{Total: 0.25}},
 		},
 	}
 	sess.events <- session.TurnEnd{Base: session.BaseNow()}

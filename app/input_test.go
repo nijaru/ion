@@ -1,9 +1,10 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"context"
 	"errors"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +15,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/testutil"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -244,7 +244,7 @@ func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
 func TestEnterDuringRuntimeSwitchLeavesDraftAndOldSessionAlone(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
-	model.Model.Session = sess
+	model.Model.Storage = sess
 	model.Model.RuntimeSwitchRequest = 1
 	model.Input.Composer.SetValue("run this after the switch")
 
@@ -361,8 +361,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 			model.InFlight.Canceling,
 		)
 	}
-	if model.Progress.Mode != runtime.StateCancelled {
-		t.Fatalf("progress mode = %v, want runtime.StateCancelled", model.Progress.Mode)
+	if model.Progress.Mode != StateCancelled {
+		t.Fatalf("progress mode = %v, want StateCancelled", model.Progress.Mode)
 	}
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
@@ -525,19 +525,19 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
 	}
-	if len(stored.appends) != 0 {
-		t.Fatalf("appends before command execution = %#v, want none", stored.appends)
+	if len(runner.appends) != 0 {
+		t.Fatalf("appends before command execution = %#v, want none", runner.appends)
 	}
 	runCommandTree(t, cmd)
-	if len(stored.appends) != 1 {
+	if len(runner.appends) != 1 {
 		t.Fatalf(
 			"appends after command execution = %#v, want one cancellation entry",
-			stored.appends,
+			runner.appends,
 		)
 	}
-	system, ok := stored.appends[0].(*session.CustomEntry)
+	system, ok := runner.appends[0].(*session.CustomEntry)
 	if !ok || system.Type != "store_system" {
-		t.Fatalf("append = %#v, want store_system CustomEntry", stored.appends[0])
+		t.Fatalf("append = %#v, want store_system CustomEntry", runner.appends[0])
 	}
 	if runner.aborts != 1 {
 		t.Fatalf("cancel count after command execution = %d, want 1", runner.aborts)
@@ -769,7 +769,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := testutil.New()
@@ -780,7 +780,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 				storageBranch: "main",
 			}
 			newBackend.SetSession(newStorage)
-			return newBackend, newBackend.Session(), newStorage, nil
+			return newBackend, nil, newStorage, nil
 		},
 	)
 
@@ -797,7 +797,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
 	// With available model cycling, preset stays primary but model changes
-	if model.App.ActivePreset != runtime.PresetPrimary {
+	if model.App.ActivePreset != PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
@@ -816,7 +816,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	}
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
-	if model.App.ActivePreset != runtime.PresetPrimary {
+	if model.App.ActivePreset != PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
@@ -836,7 +836,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, session.Session, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},
@@ -859,7 +859,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 	if oldSession.cancels != 0 {
 		t.Fatalf("cancels = %d, want 0", oldSession.cancels)
 	}
-	if model.App.ActivePreset != runtime.PresetPrimary {
+	if model.App.ActivePreset != PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
 }
@@ -999,10 +999,6 @@ func TestPickScopedModel(t *testing.T) {
 		t.Fatal("empty scoped models should not cycle")
 	}
 }
-
-
-
-
 
 func TestBuildAvailableModels(t *testing.T) {
 	model := readyModel(t)

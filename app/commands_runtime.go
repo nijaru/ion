@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -85,7 +84,7 @@ func (m Model) configForStoredSession(provider, model string) (*config.Config, e
 	if err != nil {
 		return nil, err
 	}
-	return updateModelForPreset(cfg, model, runtime.PresetPrimary), nil
+	return updateModelForPreset(cfg, model, PresetPrimary), nil
 }
 
 func (m Model) switchPresetCommand(preset Preset) (Model, tea.Cmd) {
@@ -130,7 +129,7 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	updated := *cfg
 	updated.Provider = next.Provider
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		updated.FastModel = next.Model
 		if next.Thinking != "" {
 			updated.FastReasoningEffort = next.Thinking
@@ -165,14 +164,14 @@ func (m Model) cyclePresetFallback(
 	available := m.buildAvailableModels(cfg)
 	if len(available) <= 1 {
 		// Only one model available — open picker to configure fast
-		return m.openModelPickerForPreset(cfg, runtime.PresetFast)
+		return m.openModelPickerForPreset(cfg, PresetFast)
 	}
 
 	// Find current model in available list
 	currentProvider := cfg.Provider
 	var currentModel string
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		currentModel = cfg.FastModel
 	default:
 		currentModel = cfg.Model
@@ -203,7 +202,7 @@ func (m Model) cyclePresetFallback(
 	updated := *cfg
 	updated.Provider = next.Provider
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		updated.FastModel = next.Model
 	default:
 		updated.Model = next.Model
@@ -378,14 +377,11 @@ func (m Model) currentMaterializedSessionID() string {
 	if id != "" {
 		return id
 	}
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return ""
 	}
 	if m.Model.Storage == nil {
-		return m.Model.Session.ID()
-	}
-	if !runtime.IsMaterialized(m.Model.Storage) {
-		return ""
+		return m.activeSession().ID()
 	}
 	return strings.TrimSpace(m.Model.Storage.ID())
 }
@@ -488,7 +484,7 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.runtimeRequest().clear()
 	m.Model.Backend = msg.runtime.Handles.Backend
-	m.Model.Session = msg.runtime.Handles.Session
+	m.Model.Runner = msg.runtime.Handles.Runner
 	m.Model.Storage = msg.runtime.Handles.Storage
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
 	closeRuntimeHandles(msg.previous)
@@ -542,7 +538,7 @@ func closeRuntimeHandles(handles Handles) {
 	CloseHandles(handles)
 }
 
-func currentBranchName(defaultBranch string, sess session.Session) string {
+func currentBranchName(defaultBranch string, sess persistenceAdapter) string {
 	if sess == nil {
 		return defaultBranch
 	}
@@ -565,10 +561,10 @@ func splitStoredSessionModel(value string) (string, string) {
 }
 func (m Model) activePreset() Preset {
 	switch m.App.ActivePreset {
-	case runtime.PresetFast:
-		return runtime.PresetFast
+	case PresetFast:
+		return PresetFast
 	default:
-		return runtime.PresetPrimary
+		return PresetPrimary
 	}
 }
 
@@ -578,7 +574,7 @@ func (m Model) activePresetTitle() string {
 
 func presetTitle(preset Preset) string {
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		return "fast"
 	default:
 		return "primary"
@@ -668,7 +664,7 @@ func updateModelForPreset(
 	updated := *cfg
 	model = strings.TrimSpace(model)
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		updated.FastModel = model
 	default:
 		updated.Model = model
@@ -687,7 +683,7 @@ func updateThinkingForPreset(
 	updated := *cfg
 	effort = strings.TrimSpace(effort)
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		updated.FastReasoningEffort = effort
 	default:
 		updated.ReasoningEffort = effort
@@ -700,7 +696,7 @@ func configuredModelForPreset(cfg *config.Config, preset Preset) string {
 		return ""
 	}
 	switch preset {
-	case runtime.PresetFast:
+	case PresetFast:
 		return strings.TrimSpace(cfg.FastModel)
 	default:
 		return strings.TrimSpace(cfg.Model)

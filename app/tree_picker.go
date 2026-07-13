@@ -6,13 +6,12 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
 // treePickerState holds the interactive session tree navigator state.
 type treePickerState struct {
-	tree    *runtime.SessionTree
+	tree    *SessionTree
 	cursor  int
 	entries []treePickerEntry
 	loading bool
@@ -30,7 +29,7 @@ type treePickerEntry struct {
 
 // treePickerLoadedMsg carries the loaded session tree.
 type treePickerLoadedMsg struct {
-	tree runtime.SessionTree
+	tree SessionTree
 	err  error
 }
 
@@ -44,16 +43,16 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 		m.showTreeUnavailable()
 		return m, nil
 	}
-	reader, ok := m.Model.Store.(runtime.SessionTreeReader)
+	reader, ok := m.Model.Store.(SessionTreeReader)
 	if !ok {
 		m.showTreeUnavailable()
 		return m, nil
 	}
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		m.showTreeUnavailable()
 		return m, nil
 	}
-	sessionID := m.Model.Session.ID()
+	sessionID := m.activeSession().ID()
 
 	m.Picker.Tree = &treePickerState{loading: true}
 
@@ -217,11 +216,11 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+r":
 		// Refresh tree from store.
 		if m.Model.Store != nil {
-			reader, ok := m.Model.Store.(runtime.SessionTreeReader)
-			if ok && m.Model.Session != nil {
+			reader, ok := m.Model.Store.(SessionTreeReader)
+			if ok && m.activeSession() != nil {
 				m.Picker.Tree.loading = true
 				return m, func() tea.Msg {
-					tree, err := reader.SessionTree(context.Background(), m.Model.Session.ID())
+					tree, err := reader.SessionTree(context.Background(), m.activeSession().ID())
 					return treePickerLoadedMsg{tree: tree, err: err}
 				}
 			}
@@ -233,15 +232,15 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 // moveToTreeEntry navigates the session to the selected tree entry.
 func (m Model) moveToTreeEntry(entryID string) (Model, tea.Cmd) {
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, nil
 	}
 
-	sess := m.Model.Session
+	runner := m.Model.Runner
 
 	return m, func() tea.Msg {
 		// MoveTo with no branch summary.
-		_, err := sess.MoveTo(context.Background(), entryID, nil)
+		_, err := runner.MoveTo(context.Background(), entryID, nil)
 		return treePickerMoveMsg{err: err}
 	}
 }
@@ -255,7 +254,7 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	}
 	// Close tree picker and replay entries from the new branch position.
 	m.closeTreePicker()
-	if m.Model.Session == nil {
+	if m.activeSession() == nil {
 		return m, nil
 	}
 	return m, m.replayCurrentBranch()
@@ -263,7 +262,7 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 
 // replayCurrentBranch loads entries from the current session branch and replays them.
 func (m Model) replayCurrentBranch() tea.Cmd {
-	sess := m.Model.Session
+	sess := m.activeSession()
 	store := m.Model.Store
 	if sess == nil {
 		return nil

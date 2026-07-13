@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"fmt"
+	"github.com/nijaru/ion/config"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/runtime"
 	"github.com/nijaru/ion/session"
 )
 
@@ -184,7 +183,7 @@ func renderedComposerRows(t *testing.T, model Model) []string {
 func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 28
-	model.Progress.Mode = runtime.StateError
+	model.Progress.Mode = StateError
 	model.Progress.LastError = strings.Repeat(
 		"connection refused while reconnecting to the backend ",
 		3,
@@ -203,7 +202,7 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 func TestViewSuppressesIdleReadyAfterPrintedTranscript(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
-	model.Progress.Mode = runtime.StateReady
+	model.Progress.Mode = StateReady
 
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "• Ready") {
@@ -220,7 +219,7 @@ func TestViewSuppressesIdleReadyAfterPrintedTranscript(t *testing.T) {
 func TestViewKeepsTerminalProgressAfterPrintedTranscript(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
-	model.Progress.Mode = runtime.StateComplete
+	model.Progress.Mode = StateComplete
 
 	view := ansi.Strip(model.View().Content)
 	if !strings.HasPrefix(view, "✓ Complete\n") {
@@ -232,7 +231,7 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
 	model = testModel(t, updated)
-	model.Progress.Mode = runtime.StateReady
+	model.Progress.Mode = StateReady
 
 	view := ansi.Strip(model.View().Content)
 	wantWidth := model.shellWidth()
@@ -263,7 +262,7 @@ func TestViewShellRowsFitVeryNarrowTerminal(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 12, Height: 24})
 	model = testModel(t, updated)
-	model.Progress.Mode = runtime.StateStreaming
+	model.Progress.Mode = StateStreaming
 	model.Progress.Status = "Running a very long status message"
 	model.InFlight.QueuedTurns = []string{strings.Repeat("queued ", 8)}
 	model.Input.Composer.SetValue(strings.Repeat("composer ", 8))
@@ -291,7 +290,7 @@ func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	model = testModel(t, updated)
-	model.Progress.Mode = runtime.StateReady
+	model.Progress.Mode = StateReady
 
 	view := ansi.Strip(model.View().Content)
 	wantWidth := model.shellWidth()
@@ -373,7 +372,7 @@ func TestPickerRowsFitShellWidthAfterResize(t *testing.T) {
 
 func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateWorking
+	model.Progress.Mode = StateWorking
 	model.Progress.Status = "Running bash..."
 	model.InFlight.PendingTools = map[string]session.Entry{
 		"bash-1": toolEntry("Bash(go test ./...)", "", false),
@@ -398,21 +397,21 @@ func TestViewKeepsShellTopSeparatorDuringActiveProgress(t *testing.T) {
 		{
 			name: "ionizing",
 			configure: func(m *Model) {
-				m.Progress.Mode = runtime.StateIonizing
+				m.Progress.Mode = StateIonizing
 			},
 			want: "Ionizing...",
 		},
 		{
 			name: "streaming",
 			configure: func(m *Model) {
-				m.Progress.Mode = runtime.StateStreaming
+				m.Progress.Mode = StateStreaming
 			},
 			want: "Streaming...",
 		},
 		{
 			name: "working",
 			configure: func(m *Model) {
-				m.Progress.Mode = runtime.StateWorking
+				m.Progress.Mode = StateWorking
 				m.Progress.Status = "Running bash..."
 			},
 			want: "Running bash...",
@@ -450,7 +449,7 @@ func lineAfterContainsOnly(view, needle, chars string) bool {
 
 func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateStreaming
+	model.Progress.Mode = StateStreaming
 	model.InFlight.QueuedTurns = []string{"what happened?"}
 
 	view := ansi.Strip(model.View().Content)
@@ -462,7 +461,7 @@ func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
 
 func TestErrorProgressLineUsesCompactStateCopy(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateError
+	model.Progress.Mode = StateError
 	model.Progress.LastError = "backend failed"
 
 	if got := ansi.Strip(model.progressLine()); got != "× Error" {
@@ -473,7 +472,7 @@ func TestErrorProgressLineUsesCompactStateCopy(t *testing.T) {
 func TestErrorProgressLineSuppressesDuplicateAfterTranscriptPrint(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
-	model.Progress.Mode = runtime.StateError
+	model.Progress.Mode = StateError
 	model.Progress.LastError = "backend failed"
 
 	if got := ansi.Strip(model.progressLine()); got != "" {
@@ -498,7 +497,7 @@ func TestRetryCountdownStatusUsesStatusTimestamp(t *testing.T) {
 
 func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateStreaming
+	model.Progress.Mode = StateStreaming
 	model.Progress.TurnStartedAt = time.Now().Add(-2 * time.Second)
 	model.Progress.CurrentTurnInput = 3000
 	model.Progress.CurrentTurnOutput = 84
@@ -522,7 +521,7 @@ func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 
 func TestRunningProgressLineUsesCyanSpinner(t *testing.T) {
 	model := readyModel(t)
-	model.Progress.Mode = runtime.StateStreaming
+	model.Progress.Mode = StateStreaming
 
 	line := model.progressLine()
 	want := model.st.cyan.Render(model.Input.Spinner.Spinner.Frames[0])
@@ -644,7 +643,7 @@ func TestStatusLineMarksFastPresetOnModelSegment(t *testing.T) {
 		t.Fatalf("primary status line should not show fast marker: %q", line)
 	}
 
-	model.App.ActivePreset = runtime.PresetFast
+	model.App.ActivePreset = PresetFast
 	line = ansi.Strip(model.statusLine())
 	if strings.Contains(line, "[FAST]") {
 		t.Fatalf("status line should not render fast as a mode label: %q", line)

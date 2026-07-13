@@ -1,13 +1,7 @@
-// Package runtime provides the integration layer between the agent harness
-// and the TUI/CLI. It owns runtime state management, preflight decisions,
-// busy-input routing, event drain, error settlement, and session bundle operations.
-//
-// Pi equivalent: pi-coding-agent/core/agent-session.js
-package runtime
+package app
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -70,9 +64,9 @@ func ClearRuntimeRequest() ClearRuntimeRequestDecision {
 // --- Preflight / budget ---
 
 type SubmitPreflightDecision struct {
-	Allowed    bool
+	Allowed      bool
 	ShouldSubmit bool
-	Reason     string
+	Reason       string
 }
 
 type SubmitPreflightInput struct {
@@ -117,12 +111,12 @@ var BusyInputRouteSteer = "steer"
 var BusyInputRouteFollowUp = "follow_up"
 
 type BusyInputDecision struct {
-	Recall       bool
-	ComposerText string
-	ClearBackend bool
-	Action       string
+	Recall        bool
+	ComposerText  string
+	ClearBackend  bool
+	Action        string
 	NoticeContent string
-	FollowUp     []string
+	FollowUp      []string
 }
 
 var BusyInputResultAccepted = "accepted"
@@ -147,9 +141,9 @@ type QueuedSnapshot struct {
 // --- Event drain ---
 
 type EventDrainInput struct {
-	Active        bool
+	Active         bool
 	DrainStartedAt time.Time
-	Event         session.Event
+	Event          session.Event
 }
 
 type EventDrainDecision struct {
@@ -198,7 +192,7 @@ type StatusChange struct {
 	Status string
 }
 
-func (StatusChange) IsEvent()     {}
+func (StatusChange) IsEvent()          {}
 func (s StatusChange) When() time.Time { return s.EntryBase.Timestamp }
 
 // QueuedInputUpdate reports queued input changes.
@@ -227,11 +221,11 @@ type StoreRoutingDecision struct {
 	TS             time.Time
 }
 
-func (StoreRoutingDecision) IsEvent() {}
-func (StoreRoutingDecision) IsEntry() {}
-func (e StoreRoutingDecision) ID() string        { return e.EntryBase.ID }
-func (e StoreRoutingDecision) ParentID() string   { return e.EntryBase.ParentID }
-func (e StoreRoutingDecision) When() time.Time    { return e.EntryBase.Timestamp }
+func (StoreRoutingDecision) IsEvent()           {}
+func (StoreRoutingDecision) IsEntry()           {}
+func (e StoreRoutingDecision) ID() string       { return e.EntryBase.ID }
+func (e StoreRoutingDecision) ParentID() string { return e.EntryBase.ParentID }
+func (e StoreRoutingDecision) When() time.Time  { return e.EntryBase.Timestamp }
 
 // --- Store persistence entries ---
 
@@ -242,10 +236,10 @@ type StoreSystem struct {
 	TS      int64
 }
 
-func (StoreSystem) IsEntry()                   {}
-func (s StoreSystem) ID() string               { return s.EntryBase.ID }
-func (s StoreSystem) ParentID() string         { return s.EntryBase.ParentID }
-func (s StoreSystem) When() time.Time          { return s.EntryBase.Timestamp }
+func (StoreSystem) IsEntry()           {}
+func (s StoreSystem) ID() string       { return s.EntryBase.ID }
+func (s StoreSystem) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreSystem) When() time.Time  { return s.EntryBase.Timestamp }
 
 type StoreStatus struct {
 	Status string
@@ -255,10 +249,10 @@ type StoreStatus struct {
 	TS      int64
 }
 
-func (StoreStatus) IsEntry()                   {}
-func (s StoreStatus) ID() string               { return s.EntryBase.ID }
-func (s StoreStatus) ParentID() string         { return s.EntryBase.ParentID }
-func (s StoreStatus) When() time.Time          { return s.EntryBase.Timestamp }
+func (StoreStatus) IsEntry()           {}
+func (s StoreStatus) ID() string       { return s.EntryBase.ID }
+func (s StoreStatus) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreStatus) When() time.Time  { return s.EntryBase.Timestamp }
 
 type StoreTokenUsage struct {
 	session.EntryBase
@@ -269,31 +263,10 @@ type StoreTokenUsage struct {
 	TS     int64
 }
 
-func (StoreTokenUsage) IsEntry()                   {}
-func (s StoreTokenUsage) ID() string               { return s.EntryBase.ID }
-func (s StoreTokenUsage) ParentID() string         { return s.EntryBase.ParentID }
-func (s StoreTokenUsage) When() time.Time          { return s.EntryBase.Timestamp }
-
-// --- Session bundle ---
-
-type SessionBundle struct {
-	RootSessionID string
-	Sessions      []SessionBundleRecord
-	ExportedAt    time.Time
-}
-
-type SessionBundleRecord struct {
-	Info   session.Session
-	Events []session.Entry
-}
-
-type SessionBundleExporter interface {
-	ExportSessionBundle(ctx context.Context, leafID string) (SessionBundle, error)
-}
-
-type SessionBundleImporter interface {
-	ImportSessionBundle(ctx context.Context, bundle SessionBundle) (string, error)
-}
+func (StoreTokenUsage) IsEntry()           {}
+func (s StoreTokenUsage) ID() string       { return s.EntryBase.ID }
+func (s StoreTokenUsage) ParentID() string { return s.EntryBase.ParentID }
+func (s StoreTokenUsage) When() time.Time  { return s.EntryBase.Timestamp }
 
 // --- Session tree ---
 
@@ -322,8 +295,6 @@ type SessionHandle interface {
 
 // --- Helpers ---
 
-func IsMaterialized(s session.Session) bool { return true }
-
 func IsConversationSessionInfo(e *session.SessionInfoEntry) bool {
 	if e == nil {
 		return false
@@ -343,20 +314,7 @@ func IsConversationSessionInfo(e *session.SessionInfoEntry) bool {
 	return true
 }
 
-// EntryUser creates a user MessageEntry from content and timestamp.
-func EntryUser(content string, ts time.Time) (*session.MessageEntry, string) {
-	id := fmt.Sprintf("%d", ts.UnixNano())
-	return &session.MessageEntry{
-		EntryBase: session.EntryBase{ID: id, Timestamp: ts},
-		Message:   session.NewUserText(content, ts),
-	}, id
-}
-
-var NoProviderConfiguredStatus = "No provider configured"
-var NoModelConfiguredStatus = "No model configured"
-
-
-// --- Type aliases ---
-
-// StoreEvent is an alias for session.Entry, used by persistence layer.
-type StoreEvent = session.Entry
+const (
+	NoProviderConfiguredStatus = "No provider configured"
+	NoModelConfiguredStatus    = "No model configured"
+)

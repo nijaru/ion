@@ -1,41 +1,6 @@
 package app
 
-import (
-	"strings"
-
-	"github.com/nijaru/ion/internal/runtime"
-)
-
-// Re-export runtime types so app/ code can use them without runtime.X prefix.
-type SubagentProgress = runtime.SubagentProgress
-type InFlightState = runtime.InFlightState
-type ProgressState = runtime.ProgressState
-type Preset = runtime.Preset
-type Snapshot = runtime.Snapshot
-type Transition = runtime.Transition
-type Accepted = runtime.Accepted
-type SetupPromptKind = runtime.SetupPromptKind
-type Handles = runtime.Handles
-type Switcher = runtime.Switcher
-type SwitchInput = runtime.SwitchInput
-type ResumeInput = runtime.ResumeInput
-type ProviderSelection = runtime.ProviderSelection
-type TurnReducer = runtime.TurnReducer
-
-// Re-export runtime functions
-var (
-	PresetFromString   = runtime.PresetFromString
-	NewSnapshot        = runtime.NewSnapshot
-	NewTransition      = runtime.NewTransition
-	NewAccepted        = runtime.NewAccepted
-	Switch             = runtime.Switch
-	Resume             = runtime.Resume
-	CloseHandles       = runtime.CloseHandles
-	GetSessionState    = runtime.GetSessionState
-	IsLocalBusyStatus  = runtime.IsLocalBusyStatus
-	IsCompactingStatus = runtime.IsCompactingStatus
-	NewTurnReducer     = runtime.NewTurnReducer
-)
+import "strings"
 
 // --- TUI-specific types ---
 
@@ -135,15 +100,8 @@ func ResolveSlashCommand(name string) (SlashCommandInfo, bool) {
 	return SlashCommandInfo{}, false
 }
 
-func SlashCommandCatalog() []SlashCommandInfo              { return SlashCommandDefinitions() }
+func SlashCommandCatalog() []SlashCommandInfo                 { return SlashCommandDefinitions() }
 func LookupSlashCommand(name string) (SlashCommandInfo, bool) { return ResolveSlashCommand(name) }
-
-// Re-export backend types.
-type Bootstrap = runtime.Bootstrap
-type Backend = runtime.Backend
-type Compactor = runtime.Compactor
-type ToolSurface = runtime.ToolSurface
-type ToolSummarizer = runtime.ToolSummarizer
 
 func ToolEnvironmentLabel(value string) string {
 	switch strings.TrimSpace(value) {

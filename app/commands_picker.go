@@ -1,15 +1,14 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/runtime"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nijaru/ion/config"
 	"strings"
 
-	"github.com/nijaru/ion/llm"
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/llm"
 )
 
 func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
@@ -378,9 +377,9 @@ func (m Model) handleModelPickerSetupResolved(
 	}
 	cfg := msg.cfg
 	switch msg.setup {
-	case runtime.SetupPromptAPIKey:
+	case SetupPromptAPIKey:
 		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
-	case runtime.SetupPromptEndpoint:
+	case SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
 	default:
 		return m.openModelPickerForPreset(&cfg, msg.preset)
@@ -419,10 +418,10 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 }
 
 func togglePreset(p Preset) Preset {
-	if p == runtime.PresetFast {
-		return runtime.PresetPrimary
+	if p == PresetFast {
+		return PresetPrimary
 	}
-	return runtime.PresetFast
+	return PresetFast
 }
 
 func normalizeThinkingValue(value string) string {
@@ -744,13 +743,13 @@ func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerIt
 
 func (p *pickerOverlayState) Preset() Preset {
 	if p == nil {
-		return runtime.PresetPrimary
+		return PresetPrimary
 	}
 	switch p.preset {
-	case runtime.PresetFast:
-		return runtime.PresetFast
+	case PresetFast:
+		return PresetFast
 	default:
-		return runtime.PresetPrimary
+		return PresetPrimary
 	}
 }
 
@@ -781,4 +780,3 @@ func (m Model) handleProviderCommand(name string) (Model, tea.Cmd) {
 	// Provider ready — open model picker for it
 	return m.openModelPickerForPreset(updated, m.activePreset())
 }
-

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -49,6 +51,7 @@ type Harness struct {
 
 	// single active run
 	phase     Phase
+	closed    bool
 	mu        sync.Mutex
 	runDone   chan struct{}
 	runCancel chan struct{} // closed to abort current run
@@ -57,6 +60,7 @@ type Harness struct {
 	events         chan session.Event
 	externalEvents bool
 	delivery       *eventDelivery
+	done           chan struct{}
 	listeners      []func(session.Event)
 
 	// hook registry (Pi on/emitHook pattern)
@@ -82,7 +86,8 @@ const (
 // pendingWrite is a buffered session mutation applied at turn boundary.
 // Pi reference: agent-harness.js pendSessionWrites (line 410-435).
 type pendingWrite struct {
-	apply func(ctx context.Context, s session.Session) error
+	apply      func(ctx context.Context, s session.Session) error
+	applyStore func(ctx context.Context, store session.Store) error
 }
 
 // HookHandler is a function registered for a hook type. It receives a payload
@@ -174,6 +179,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		phase: PhaseIdle,
 		events:   cfg.Events,
 		externalEvents: cfg.Events != nil,
+		done:     make(chan struct{}),
 		compaction: cfg.Compaction,
 		contextWindow: cfg.ContextWindow,
 		steeringMode: cfg.SteeringMode,
@@ -197,6 +203,9 @@ func NewHarness(cfg HarnessConfig) *Harness {
 
 // Events returns the ordered channel the TUI subscribes to.
 func (h *Harness) Events() <-chan session.Event { return h.events }
+
+// Done is closed when the harness is no longer a valid event source.
+func (h *Harness) Done() <-chan struct{} { return h.done }
 
 // On registers a handler for a hook type. Returns an unsubscribe function.
 // Reference: Pi agent-harness.js on (line 962).
@@ -278,6 +287,10 @@ func (h *Harness) emit(e session.Event) {
 func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, error) {
 	turnStart := time.Now()
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, errors.New("harness is closed")
+	}
 	if h.phase != PhaseIdle {
 		h.mu.Unlock()
 		h.logf(slog.LevelWarn, "prompt rejected: harness busy", slog.String("phase", string(h.phase)))
@@ -812,6 +825,10 @@ func (h *Harness) drainNextTurn() []session.Message {
 // Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
 func (h *Harness) Steer(text string) error {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errors.New("harness is closed")
+	}
 	if h.phase == PhaseIdle {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot steer while idle")
@@ -833,6 +850,10 @@ func (h *Harness) Steer(text string) error {
 // Returns an error if the harness is idle.
 func (h *Harness) FollowUp(text string) error {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errors.New("harness is closed")
+	}
 	if h.phase == PhaseIdle {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot follow up while idle")
@@ -853,6 +874,10 @@ func (h *Harness) FollowUp(text string) error {
 // NextTurn queues a message to be prepended to the next prompt (always allowed).
 func (h *Harness) NextTurn(text string) {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
 	h.nextTurn = append(h.nextTurn, session.NewUserText(text, time.Now()))
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
@@ -882,24 +907,36 @@ func (h *Harness) emitQueueUpdate() {
 // --- buffered writes ---
 
 func (h *Harness) flushPending(ctx context.Context) {
-	if len(h.pending) == 0 {
+	h.mu.Lock()
+	pending := h.pending
+	h.pending = nil
+	h.mu.Unlock()
+	if len(pending) == 0 {
 		return
 	}
 	// Apply pending writes. Each pendingWrite.apply() appends to the session;
 	// individual Appends are atomic under SQLite WAL mode.
-	for _, pw := range h.pending {
-		if err := pw.apply(ctx, h.session); err != nil {
+	for _, pw := range pending {
+		var err error
+		if pw.applyStore != nil {
+			err = pw.applyStore(ctx, h.store)
+		} else {
+			err = pw.apply(ctx, h.session)
+		}
+		if err != nil {
 			h.logf(slog.LevelError, "flush pending write failed", slog.String("error", err.Error()))
 			h.emit(&session.Error{Err: fmt.Errorf("flush pending write: %w", err)})
 		}
 	}
-	h.pending = nil
 }
 
 // SetModel changes the model. If a run is active, buffered until next turn boundary.
 func (h *Harness) SetModel(model llm.Model) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
 	oldModel := h.model
 	h.model = model
 	if model.ID != oldModel.ID {
@@ -916,6 +953,9 @@ func (h *Harness) SetModel(model llm.Model) {
 func (h *Harness) SetThinking(level session.ThinkingLevel) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
 	h.thinking = level
 	h.pending = append(h.pending, pendingWrite{
 		apply: func(ctx context.Context, s session.Session) error {
@@ -929,6 +969,9 @@ func (h *Harness) SetThinking(level session.ThinkingLevel) {
 func (h *Harness) SetTools(tools []Tool, active []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
 	toolMap := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		toolMap[t.Name] = t
@@ -957,6 +1000,10 @@ func (h *Harness) WaitForIdle() {
 // Emits an Abort event with the cleared messages (Pi: line ~905).
 func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, nil, errors.New("harness is closed")
+	}
 	clearedSteer := make([]session.Message, len(h.steer))
 	copy(clearedSteer, h.steer)
 	clearedFollowUp := make([]session.Message, len(h.followUp))
@@ -985,8 +1032,18 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 
 // Close releases resources.
 func (h *Harness) Close() error {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil
+	}
+	h.closed = true
+	close(h.done)
+	h.mu.Unlock()
+
 	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()
+	h.flushPending(context.Background())
 	if h.delivery != nil {
 		h.delivery.close()
 	}
@@ -1021,8 +1078,39 @@ func (h *Harness) Shutdown(ctx context.Context) error {
 // Session returns the underlying session handle. Used by TUI for ID(), Usage(), Entries().
 func (h *Harness) Session() session.Session { return h.session }
 
-// Store returns the underlying store. Used by TUI for export/tree operations.
+// Store returns the underlying store. Used by TUI for tree reads.
 func (h *Harness) Store() session.Store { return h.store }
+
+// ExportSessionBundle performs explicit transport through the harness owner.
+func (h *Harness) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return ionexport.SessionBundle{}, errors.New("harness is closed")
+	}
+	exporter, ok := h.store.(ionexport.SessionBundleExporter)
+	if !ok {
+		return ionexport.SessionBundle{}, errors.New("session store does not support export")
+	}
+	return exporter.ExportSessionBundle(ctx, sessionID)
+}
+
+// ImportSessionBundle performs explicit transport through the harness owner.
+func (h *Harness) ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
+	importer, ok := h.store.(ionexport.SessionBundleImporter)
+	if !ok {
+		return "", errors.New("session store does not support import")
+	}
+	return importer.ImportSessionBundle(ctx, bundle)
+}
 
 // Metrics returns the runtime metrics collector (may be nil).
 func (h *Harness) Metrics() *Metrics { return h.metrics }
@@ -1032,6 +1120,10 @@ func (h *Harness) Compact(ctx context.Context) error {
 	start := time.Now()
 	// Build auth from harness config.
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errors.New("harness is closed")
+	}
 	model := h.model
 	thinking := h.thinking
 	h.logf(slog.LevelInfo, "compact start", slog.String("model", model.ID))
@@ -1169,8 +1261,55 @@ func (h *Harness) GetTools() (map[string]Tool, []string) {
 // AppendMessage appends a message directly to the session without running a turn.
 // Reference: Pi agent-harness.js appendMessage (line 614).
 func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return errors.New("harness is closed")
+	}
 	_, err := h.session.AppendMessage(ctx, msg)
 	return err
+}
+
+func appendRunnerEntry(ctx context.Context, store session.Store, entry session.Entry) error {
+	if custom, ok := entry.(*session.CustomEntry); ok && custom.ParentID() == "" {
+		copy := *custom
+		copy.EntryBase.ParentID = store.GetLeafID()
+		entry = &copy
+	}
+	_, err := store.AppendLeafEntry(ctx, entry)
+	return err
+}
+
+// PersistEntry persists an auxiliary entry through the harness-owned session.
+func (h *Harness) PersistEntry(ctx context.Context, entry session.Entry) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return errors.New("harness is closed")
+	}
+	if h.store == nil {
+		return errors.New("harness has no session store")
+	}
+	if h.phase != PhaseIdle {
+		h.pending = append(h.pending, pendingWrite{applyStore: func(ctx context.Context, store session.Store) error {
+			return appendRunnerEntry(ctx, store, entry)
+		}})
+		return nil
+	}
+	return appendRunnerEntry(ctx, h.store, entry)
+}
+
+// AppendSessionInfo persists the session display name.
+func (h *Harness) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
+	return h.session.AppendSessionInfo(ctx, name)
 }
 
 // MoveTo switches the session leaf pointer to the given entry ID.
@@ -1179,15 +1318,39 @@ func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error 
 //
 // Reference: Pi session.js moveTo (line 191).
 func (h *Harness) MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
 	return h.session.MoveTo(ctx, entryID, summary)
 }
 
 // AppendLabel attaches a label to a target entry.
 func (h *Harness) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
 	return h.session.AppendLabel(ctx, targetID, label)
 }
 
 // GetLabel returns the most recent label for a target entry.
 func (h *Harness) GetLabel(ctx context.Context, targetID string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
 	return h.session.GetLabel(ctx, targetID)
 }
