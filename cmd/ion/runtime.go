@@ -164,7 +164,11 @@ func openRuntime(
 	b.SetConfig(&runtimeCfg)
 
 	if sessionID != "" {
-		if _, _, err := session.ResumeSession(ctx, store, sessionID); err != nil {
+		sqliteStore, ok := store.(*session.SQLiteStore)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
+		}
+		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
 	}

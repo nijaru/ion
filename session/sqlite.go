@@ -138,6 +138,23 @@ func (s *SQLiteStore) SetLeafID(id string) error {
 	return err
 }
 
+// ResumeSession validates an existing entry and makes it the current leaf.
+func (s *SQLiteStore) ResumeSession(ctx context.Context, entryID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.getEntry(ctx, entryID); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		entryID,
+	)
+	if err == nil {
+		s.leaf = entryID
+	}
+	return err
+}
+
 func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
 	if s.db == nil {
 		return nil, nil

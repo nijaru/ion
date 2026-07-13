@@ -76,6 +76,13 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leaf := store2.GetLeafID()
+	if leaf == "" {
+		t.Fatal("reopened store has no persisted leaf")
+	}
+	if err := store2.ResumeSession(ctx, leaf); err != nil {
+		t.Fatalf("resume persisted leaf: %v", err)
+	}
 	sess2 := session.NewSession(store2, 64)
 	snapshot, err := sess2.BuildContext(ctx)
 	if err != nil {

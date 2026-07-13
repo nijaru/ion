@@ -118,15 +118,3 @@ type Metadata struct {
 	ID     string // session identifier
 	Name   string // user-facing name (set via AppendSessionInfo)
 }
-
-// ResumeSession loads an existing session by ID.
-func ResumeSession(ctx context.Context, store Store, sessionID string) (Store, string, error) {
-	_, err := store.GetEntry(ctx, sessionID)
-	if err != nil {
-		return nil, "", err
-	}
-	if err := store.SetLeafID(sessionID); err != nil {
-		return nil, "", err
-	}
-	return store, sessionID, nil
-}

@@ -352,3 +352,27 @@ func TestSQLiteCatalogRoundTrip(t *testing.T) {
 		t.Fatalf("sessions = %#v, want persisted catalog row", sessions)
 	}
 }
+
+func TestSQLiteResumeSession(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	entry := &MessageEntry{
+		EntryBase: EntryBase{ID: "resume-entry", Timestamp: time.Now()},
+		Message:   NewUserText("resume", time.Now()),
+	}
+	if _, err := s.Append(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResumeSession(ctx, "resume-entry"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetLeafID(); got != "resume-entry" {
+		t.Fatalf("leaf = %q, want resume-entry", got)
+	}
+	if err := s.ResumeSession(ctx, "missing-entry"); err == nil {
+		t.Fatal("expected missing resume entry to fail")
+	}
+	if got := s.GetLeafID(); got != "resume-entry" {
+		t.Fatalf("leaf changed after failed resume: %q", got)
+	}
+}
