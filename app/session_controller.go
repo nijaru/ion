@@ -662,7 +662,10 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	store := m.Model.Store
+	store, ok := m.Model.Store.(sessionCatalogWriter)
+	if !ok {
+		return nil
+	}
 	return func() tea.Msg {
 		if err := store.UpdateSession(context.Background(), info); err != nil {
 			return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}

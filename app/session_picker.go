@@ -15,17 +15,30 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+type sessionCatalogReader interface {
+	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
+}
+
+type sessionCatalogWriter interface {
+	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
+}
+
 func (m Model) openSessionPicker() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		m.pickerReducer().showSessionUnavailable()
 		return m, nil
 	}
 
+	store, ok := m.Model.Store.(sessionCatalogReader)
+	if !ok {
+		m.pickerReducer().showSessionUnavailable()
+		return m, nil
+	}
 	requestID := m.pickerReducer().beginSessionLoad()
-	return m, loadSessionPickerItems(requestID, m.Model.Store, m.App.Workdir)
+	return m, loadSessionPickerItems(requestID, store, m.App.Workdir)
 }
 
-func loadSessionPickerItems(requestID uint64, store session.Store, workdir string) tea.Cmd {
+func loadSessionPickerItems(requestID uint64, store sessionCatalogReader, workdir string) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := store.ListSessions(context.Background(), workdir)
 		return sessionPickerLoadedMsg{requestID: requestID, sessions: sessions, err: err}

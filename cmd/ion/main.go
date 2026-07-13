@@ -536,7 +536,7 @@ func runPromptTurn(
 
 func updatePrintSessionInfo(
 	ctx context.Context,
-	store session.Store,
+	store sessionCatalogWriter,
 	runner agent.Runner,
 	cwd string,
 	branch string,

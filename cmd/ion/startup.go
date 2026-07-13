@@ -340,7 +340,11 @@ func applySessionConfigFromMetadata(
 	if _, err := store.GetEntry(ctx, sessionID); err != nil {
 		return fmt.Errorf("failed to inspect session %s metadata: %w", sessionID, err)
 	}
-	sessions, err := store.ListSessions(ctx, cwd)
+	catalog, ok := store.(sessionCatalogReader)
+	if !ok {
+		return fmt.Errorf("session store does not support session catalog")
+	}
+	sessions, err := catalog.ListSessions(ctx, cwd)
 	if err != nil {
 		return fmt.Errorf("failed to list sessions: %w", err)
 	}

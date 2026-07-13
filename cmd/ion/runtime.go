@@ -23,6 +23,14 @@ import (
 	"github.com/nijaru/ion/tool"
 )
 
+type sessionCatalogReader interface {
+	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
+}
+
+type sessionCatalogWriter interface {
+	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
+}
+
 func closeRuntimeHandles(
 	agent session.Session,
 	sess session.Session,
@@ -71,7 +79,7 @@ func loadPromptTemplates() map[string]string {
 
 func recentSessionForContinue(
 	ctx context.Context,
-	store session.Store,
+	store sessionCatalogReader,
 	cwd string,
 ) (*session.SessionInfoEntry, error) {
 	sessions, err := store.ListSessions(ctx, cwd)

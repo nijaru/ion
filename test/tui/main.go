@@ -112,7 +112,11 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	return err
 }
 
-func seedSmokeSessionPicker(ctx context.Context, store session.Store, cwd string) error {
+type sessionCatalogWriter interface {
+	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
+}
+
+func seedSmokeSessionPicker(ctx context.Context, store sessionCatalogWriter, cwd string) error {
 	_ = cwd
 	fixtures := []struct {
 		id    string
