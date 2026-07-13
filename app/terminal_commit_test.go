@@ -28,7 +28,7 @@ func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
 		if entry.IsDir() ||
 			!strings.HasSuffix(name, ".go") ||
 			strings.HasSuffix(name, "_test.go") ||
-			name == "render.go" {
+			(name == "render.go" || name == "terminal_commit.go") {
 			continue
 		}
 		path := filepath.Join(dir, name)
