@@ -23,6 +23,8 @@ type SQLiteStore struct {
 	leaf string
 }
 
+var _ Store = (*SQLiteStore)(nil)
+
 // Schema holds the SQL for creating the tables.
 const Schema = `
 CREATE TABLE IF NOT EXISTS entries (
@@ -39,13 +41,43 @@ CREATE TABLE IF NOT EXISTS session_meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS input_history (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	workdir   TEXT NOT NULL,
+	input     TEXT NOT NULL,
+	timestamp INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_input_workdir ON input_history(workdir, timestamp);
+
+CREATE TABLE IF NOT EXISTS sessions (
+	session_id   TEXT PRIMARY KEY,
+	workdir      TEXT NOT NULL,
+	model        TEXT NOT NULL DEFAULT '',
+	branch       TEXT NOT NULL DEFAULT '',
+	name         TEXT NOT NULL DEFAULT '',
+	summary      TEXT NOT NULL DEFAULT '',
+	last_preview TEXT NOT NULL DEFAULT '',
+	updated_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_workdir ON sessions(workdir, updated_at);
 `
 
-// NewSQLiteStore opens (or creates) a session store at the given path.
+// NewSQLiteStore opens or creates the complete Ion SQLite store. If path names
+// a directory, ion.db is created inside it; ":memory:" remains in-memory.
 func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
+	if path != ":memory:" {
+		info, err := os.Stat(path)
+		if err == nil && info.IsDir() {
+			path = filepath.Join(path, "ion.db")
+		}
+	}
 	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, err
+	}
+	if path == ":memory:" {
+		db.SetMaxOpenConns(1)
 	}
 	if _, err := db.Exec(Schema); err != nil {
 		db.Close()
@@ -166,70 +198,6 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 		})
 	}
 	return sessions, rows.Err()
-}
-
-// NewEphemeralCantoStore creates an in-memory CantoStore for testing.
-func NewEphemeralCantoStore() (Store, error) { return NewCantoStore(":memory:") }
-
-// NewCantoStore creates a SQLite-backed store with input history support.
-// If path is a directory, "canto.db" is appended automatically.
-func NewCantoStore(path string) (Store, error) {
-	if path != ":memory:" {
-		info, err := os.Stat(path)
-		if err == nil && info.IsDir() {
-			path = filepath.Join(path, "canto.db")
-		}
-	}
-	const cantoSchema = `CREATE TABLE IF NOT EXISTS entries (
-		id         TEXT PRIMARY KEY,
-		parent_id  TEXT NOT NULL DEFAULT '',
-		type       TEXT NOT NULL,
-		timestamp  INTEGER NOT NULL,
-		payload    BLOB NOT NULL DEFAULT '{}'
-	);
-	CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id);
-	CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
-
-	CREATE TABLE IF NOT EXISTS session_meta (
-		key   TEXT PRIMARY KEY,
-		value TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS input_history (
-		id        INTEGER PRIMARY KEY AUTOINCREMENT,
-		workdir   TEXT NOT NULL,
-		input     TEXT NOT NULL,
-		timestamp INTEGER NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_input_workdir ON input_history(workdir, timestamp);
-
-	CREATE TABLE IF NOT EXISTS sessions (
-		session_id TEXT PRIMARY KEY,
-		workdir    TEXT NOT NULL,
-		model      TEXT NOT NULL DEFAULT '',
-		branch     TEXT NOT NULL DEFAULT '',
-		name       TEXT NOT NULL DEFAULT '',
-		summary    TEXT NOT NULL DEFAULT '',
-		last_preview TEXT NOT NULL DEFAULT '',
-		updated_at INTEGER NOT NULL DEFAULT 0
-	);
-	CREATE INDEX IF NOT EXISTS idx_sessions_workdir ON sessions(workdir, updated_at);
-	`
-
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
-	if err != nil {
-		return nil, err
-	}
-	if path == ":memory:" {
-		db.SetMaxOpenConns(1)
-	}
-	if _, err := db.Exec(cantoSchema); err != nil {
-		db.Close()
-		return nil, err
-	}
-	// Best-effort migration for databases created before last_preview existed.
-	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN last_preview TEXT NOT NULL DEFAULT ''")
-	return &SQLiteStore{db: db, meta: Metadata{ID: "canto"}}, nil
 }
 
 func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) error {

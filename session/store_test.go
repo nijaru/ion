@@ -306,3 +306,49 @@ func TestStoreCustomMessageImageRoundTrip(t *testing.T) {
 		t.Fatalf("image content corrupted: %+v", img)
 	}
 }
+
+func TestSQLiteCatalogRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewSQLiteStore(dir, "catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddInput(ctx, "/repo", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddInput(ctx, "/repo", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSession(ctx, SessionInfoEntry{
+		EntryBase: EntryBase{ID: "session-1"},
+		Workdir:   "/repo",
+		Model:     "openrouter/test",
+		Name:      "catalog test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err = NewSQLiteStore(dir, "catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	inputs, err := s.GetInputs(ctx, "/repo", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 2 || inputs[0] != "second" || inputs[1] != "first" {
+		t.Fatalf("inputs = %#v, want newest-first history", inputs)
+	}
+	sessions, err := s.ListSessions(ctx, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID() != "session-1" || sessions[0].Model != "openrouter/test" {
+		t.Fatalf("sessions = %#v, want persisted catalog row", sessions)
+	}
+}

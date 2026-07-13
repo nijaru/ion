@@ -95,15 +95,15 @@ func recentSessionForContinue(
 	return nil, nil
 }
 
-func openStartupStore(noSession bool) (session.Store, error) {
+func openStartupStore(noSession bool) (*session.SQLiteStore, error) {
 	if noSession {
-		return session.NewEphemeralCantoStore()
+		return session.NewSQLiteStore(":memory:", "canto")
 	}
 	dataDir, err := config.DefaultDataDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve data dir: %w", err)
 	}
-	return session.NewCantoStore(dataDir)
+	return session.NewSQLiteStore(dataDir, "canto")
 }
 
 func startupSessionID(

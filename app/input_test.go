@@ -70,15 +70,12 @@ func TestComposerAcceptsTypedText(t *testing.T) {
 func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := session.NewCantoStore(t.TempDir())
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "ion.db"), "input-test")
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
-	inputStore, ok := store.(inputHistoryStore)
-	if !ok {
-		t.Fatal("store does not support input history")
-	}
+	var inputStore inputHistoryStore = store
 	cwd := t.TempDir()
 	for _, input := range []string{"first prompt", "second prompt"} {
 		if err := inputStore.AddInput(ctx, cwd, input); err != nil {
@@ -112,15 +109,12 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 func TestSubmitTextPersistsInputHistory(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := session.NewCantoStore(t.TempDir())
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "ion.db"), "input-test")
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
-	inputStore, ok := store.(inputHistoryStore)
-	if !ok {
-		t.Fatal("store does not support input history")
-	}
+	var inputStore inputHistoryStore = store
 	cwd := t.TempDir()
 	model := New(
 		stubBackend{

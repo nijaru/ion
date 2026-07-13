@@ -181,7 +181,7 @@ func TestToolCallArgumentsAreParsedJSON(t *testing.T) {
 
 // INVARIANT: AppendLabel creates a LabelEntry and GetLabel returns the latest label.
 func TestAppendLabelRoundTrip(t *testing.T) {
-	store, err := NewEphemeralCantoStore()
+	store, err := NewSQLiteStore(":memory:", "contract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestAppendLabelRoundTrip(t *testing.T) {
 }
 
 func TestGetLabelReturnsLatest(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
@@ -222,7 +222,7 @@ func TestGetLabelReturnsLatest(t *testing.T) {
 }
 
 func TestAppendLabelTargetNotFound(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
@@ -232,7 +232,7 @@ func TestAppendLabelTargetNotFound(t *testing.T) {
 }
 
 func TestGetLabelNonexistentReturnsEmpty(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
@@ -243,7 +243,7 @@ func TestGetLabelNonexistentReturnsEmpty(t *testing.T) {
 }
 
 func TestMoveToAppendsLeafEntry(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
@@ -268,7 +268,7 @@ func TestMoveToAppendsLeafEntry(t *testing.T) {
 }
 
 func TestCustomMessageEntryInBuildContext(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
@@ -354,7 +354,7 @@ func TestAssistantMessageThinkingLevelDefaultRoundTrip(t *testing.T) {
 }
 
 func TestLeafEntryNotInBuildContext(t *testing.T) {
-	store, _ := NewEphemeralCantoStore()
+	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)
 	ctx := context.Background()
 
