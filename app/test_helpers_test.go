@@ -134,6 +134,7 @@ func (s *stubSession) Close() error {
 
 type stubRunner struct {
 	aborts    int
+	compacts  int
 	appends   []session.Entry
 	appendErr error
 }
@@ -168,7 +169,10 @@ func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error
 	return "", nil
 }
 func (r *stubRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
-func (r *stubRunner) Compact(_ context.Context) error                  { return nil }
+func (r *stubRunner) Compact(_ context.Context) error {
+	r.compacts++
+	return nil
+}
 
 // --- stubBackend implements agent.Backend ---
 

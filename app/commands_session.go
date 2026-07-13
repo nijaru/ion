@@ -445,20 +445,16 @@ func (m Model) handleNewSessionCommand(fields []string, command string) (Model, 
 }
 
 func (m Model) handleCompactCommand() (Model, tea.Cmd) {
-	compactor, ok := m.Model.Backend.(Compactor)
-	if !ok {
-		return m, cmdError("current backend does not support /compact")
+	runner := m.Model.Runner
+	if runner == nil {
+		return m, cmdError("no active runner")
 	}
 	m.progressReducer().beginCompaction()
 	return m, func() tea.Msg {
-		compacted, err := compactor.Compact(context.Background())
-		if err != nil {
+		if err := runner.Compact(context.Background()); err != nil {
 			return localErrorMsg{err: err}
 		}
-		if compacted {
-			return sessionCompactedMsg{notice: "Compacted current session context"}
-		}
-		return sessionCompactedMsg{notice: "Session is already within compaction limits"}
+		return sessionCompactedMsg{notice: "Compacted current session context"}
 	}
 }
 
