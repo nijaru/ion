@@ -116,6 +116,7 @@ func (s *printSession) Abort() ([]session.Message, []session.Message, error) {
 func (s *printSession) SetModel(_ llm.Model)                              {}
 func (s *printSession) SetThinking(_ session.ThinkingLevel)               {}
 func (s *printSession) SetTools(_ []agent.Tool, _ []string)               {}
+func (s *printSession) ActivateTools(context.Context, []string) error     { return nil }
 func (s *printSession) Session() session.Session                          { return s }
 func (s *printSession) PersistEntry(context.Context, session.Entry) error { return nil }
 func (s *printSession) Compact(_ context.Context) error                   { return nil }

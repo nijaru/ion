@@ -148,12 +148,13 @@ func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
 	return nil, nil, nil
 }
-func (r *stubRunner) WaitForIdle()                        {}
-func (r *stubRunner) Close() error                        { return nil }
-func (r *stubRunner) Session() session.Session            { return nil }
-func (r *stubRunner) SetModel(_ llm.Model)                {}
-func (r *stubRunner) SetThinking(_ session.ThinkingLevel) {}
-func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) {}
+func (r *stubRunner) WaitForIdle()                                  {}
+func (r *stubRunner) Close() error                                  { return nil }
+func (r *stubRunner) Session() session.Session                      { return nil }
+func (r *stubRunner) SetModel(_ llm.Model)                          {}
+func (r *stubRunner) SetThinking(_ session.ThinkingLevel)           {}
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string)           {}
+func (r *stubRunner) ActivateTools(context.Context, []string) error { return nil }
 func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error {
 	if r.appendErr != nil {
 		return r.appendErr

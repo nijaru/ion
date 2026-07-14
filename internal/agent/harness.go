@@ -1095,6 +1095,69 @@ func (h *Harness) SetTools(tools []Tool, active []string) {
 	h.mu.Unlock()
 }
 
+// ActivateTools adds registered tools to the active set without replacing the
+// registry or already-active tools. It is intentionally harness-owned: the
+// registry defines tools, while the harness controls provider visibility and
+// session persistence.
+func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errors.New("harness is closed")
+	}
+
+	active := make(map[string]struct{}, len(h.active)+len(names))
+	for _, name := range h.active {
+		active[name] = struct{}{}
+	}
+	for _, name := range names {
+		if _, ok := h.tools[name]; !ok {
+			h.mu.Unlock()
+			return fmt.Errorf("tool not found: %s", name)
+		}
+	}
+
+	updated := append([]string(nil), h.active...)
+	for _, name := range names {
+		if _, ok := active[name]; ok {
+			continue
+		}
+		active[name] = struct{}{}
+		updated = append(updated, name)
+	}
+	if len(updated) == len(h.active) {
+		h.mu.Unlock()
+		return nil
+	}
+
+	// Idle mutations are durable before the in-memory state changes. Prompt
+	// restores the session snapshot at turn start, so buffering this write
+	// would otherwise discard an activation made immediately before Prompt.
+	if h.phase == PhaseIdle {
+		if _, err := h.session.AppendActiveToolsChange(ctx, updated); err != nil {
+			h.mu.Unlock()
+			return fmt.Errorf("persist active tools: %w", err)
+		}
+	} else {
+		persistActive := append([]string(nil), updated...)
+		h.pending = append(h.pending, pendingWrite{
+			apply: func(ctx context.Context, s session.Session) error {
+				_, err := s.AppendActiveToolsChange(ctx, persistActive)
+				return err
+			},
+		})
+	}
+
+	previous := append([]string(nil), h.active...)
+	h.active = updated
+	h.emitLocked(session.ToolsUpdate{
+		Active:   append([]string(nil), updated...),
+		Previous: previous,
+	})
+	h.mu.Unlock()
+	return nil
+}
+
 // WaitForIdle blocks until the current run completes.
 func (h *Harness) WaitForIdle() {
 	h.mu.Lock()

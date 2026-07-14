@@ -252,6 +252,7 @@ func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 func (r *smokeRunner) SetModel(llm.Model)                                        {}
 func (r *smokeRunner) SetThinking(session.ThinkingLevel)                         {}
 func (r *smokeRunner) SetTools([]agent.Tool, []string)                           {}
+func (r *smokeRunner) ActivateTools(context.Context, []string) error             { return nil }
 func (r *smokeRunner) Session() session.Session                                  { return r.sess }
 func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }
 func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }

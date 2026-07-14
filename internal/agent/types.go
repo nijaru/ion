@@ -170,8 +170,12 @@ type Runner interface {
 	// SetThinking changes the thinking level.
 	SetThinking(level session.ThinkingLevel)
 
-	// SetTools updates the active tool set.
+	// SetTools updates the complete tool registry and active tool set.
 	SetTools(tools []Tool, active []string)
+
+	// ActivateTools adds registered tools to the active set for the next turn.
+	// Unknown names fail closed and do not mutate the harness.
+	ActivateTools(ctx context.Context, names []string) error
 
 	// Session returns the underlying session for auxiliary reads.
 	Session() session.Session
