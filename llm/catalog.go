@@ -215,6 +215,12 @@ func ResolvedAuthToken(cfg *config.Config, def Definition) string {
 	if def.AuthKind == AuthLocal || def.AuthKind == AuthACP {
 		return ""
 	}
+	if cfg != nil {
+		if override := strings.TrimSpace(cfg.APIKeyOverride); override != "" &&
+			ResolveID(cfg.Provider) == ResolveID(cfg.APIKeyOverrideProvider) {
+			return override
+		}
+	}
 	for _, envVar := range authEnvVars(cfg, def) {
 		if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
 			return value

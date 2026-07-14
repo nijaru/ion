@@ -29,16 +29,19 @@ type ProviderSettings struct {
 }
 
 type Config struct {
-	Provider               string                     `toml:"provider,omitempty"`
-	Model                  string                     `toml:"model,omitempty"`
-	ReasoningEffort        string                     `toml:"reasoning_effort,omitempty"`
-	FastModel              string                     `toml:"fast_model,omitempty"`
-	FastReasoningEffort    string                     `toml:"fast_reasoning_effort,omitempty"`
-	SummaryModel           string                     `toml:"summary_model,omitempty"`
-	SummaryReasoningEffort string                     `toml:"summary_reasoning_effort,omitempty"`
-	Endpoint               string                     `toml:"endpoint,omitempty"`
+	Provider               string                      `toml:"provider,omitempty"`
+	Model                  string                      `toml:"model,omitempty"`
+	ReasoningEffort        string                      `toml:"reasoning_effort,omitempty"`
+	FastModel              string                      `toml:"fast_model,omitempty"`
+	FastReasoningEffort    string                      `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           string                      `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort string                      `toml:"summary_reasoning_effort,omitempty"`
+	Endpoint               string                      `toml:"endpoint,omitempty"`
 	Providers              map[string]ProviderSettings `toml:"providers,omitempty"`
-	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
+	AuthEnvVar             string                      `toml:"auth_env_var,omitempty"`
+	// APIKeyOverride and APIKeyOverrideProvider are runtime-only CLI state.
+	APIKeyOverride         string            `toml:"-"`
+	APIKeyOverrideProvider string            `toml:"-"`
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
 	ContextLimit           int               `toml:"context_limit,omitempty"`
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
@@ -66,10 +69,10 @@ type Config struct {
 }
 
 type ScopedModel struct {
-	Provider  string `toml:"provider,omitempty" json:"provider,omitempty"`
-	Model     string `toml:"model,omitempty" json:"model,omitempty"`
-	Pattern   string `toml:"pattern,omitempty" json:"pattern,omitempty"`
-	Thinking  string `toml:"thinking,omitempty" json:"thinking,omitempty"`
+	Provider string `toml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string `toml:"model,omitempty" json:"model,omitempty"`
+	Pattern  string `toml:"pattern,omitempty" json:"pattern,omitempty"`
+	Thinking string `toml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 type ModelDef struct {

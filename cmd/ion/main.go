@@ -19,6 +19,7 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -57,6 +58,17 @@ func main() {
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
+	cfg.APIKeyOverride = cli.apiKeyOverride()
+	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
+	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
+		cli.resumeShortID() != "" || cli.continueRequested() || openResumePicker
+	if cfg.APIKeyOverride != "" && firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel) == "" &&
+		!selectionRequested && cli.exportSessionPath() == "" && cli.importSessionPath() == "" {
+		if err := validateAPIKeyOverride(cfg.APIKeyOverride, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
@@ -211,6 +223,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
+	}
+	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
+	if err := validateAPIKeyOverride(cfg.APIKeyOverride, firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel)); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
 	}
 	runtimeCfg, activePreset, err := startupRuntimeConfig(
 		ctx,

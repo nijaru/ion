@@ -165,10 +165,9 @@ func (f cliFlags) thinkingOverride() string {
 	return *f.thinkingFlag
 }
 
-// reserved for fork/import parity (tk-qlpv)
-// func (f cliFlags) apiKeyOverride() string {
-// 	return strings.TrimSpace(*f.apiKeyFlag)
-// }
+func (f cliFlags) apiKeyOverride() string {
+	return strings.TrimSpace(*f.apiKeyFlag)
+}
 
 func (f cliFlags) sessionDirOverride() string {
 	return strings.TrimSpace(*f.sessionDirFlag)

@@ -38,9 +38,9 @@ func (s *testStore) Branch(_ context.Context) ([]session.Entry, error) {
 func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
-func (s *testStore) GetLeafID() string            { return s.leafID }
-func (s *testStore) SetLeafID(id string) error     { s.leafID = id; return nil }
-func (s *testStore) Meta() session.Metadata         { return s.meta }
+func (s *testStore) GetLeafID() string         { return s.leafID }
+func (s *testStore) SetLeafID(id string) error { s.leafID = id; return nil }
+func (s *testStore) Meta() session.Metadata    { return s.meta }
 func (s *testStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil
 }
@@ -54,7 +54,7 @@ func (s *testStore) UpdateSession(_ context.Context, _ session.SessionInfoEntry)
 	return nil
 }
 func (s *testStore) AddInput(_ context.Context, _ string, _ string) error { return nil }
-func (s *testStore) Close() error                                          { return nil }
+func (s *testStore) Close() error                                         { return nil }
 
 func sessionInfoForTest(id, lastPreview string) session.SessionInfoEntry {
 	return session.SessionInfoEntry{
@@ -103,6 +103,29 @@ func TestNormalizeFlagArgsKeepsSessionPolicyFlags(t *testing.T) {
 	want := []string{"--session", "abc123", "-p", "hello"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateAPIKeyOverride(t *testing.T) {
+	if err := validateAPIKeyOverride("secret", ""); err == nil {
+		t.Fatal("expected missing model error")
+	}
+	if err := validateAPIKeyOverride("secret", "gpt-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAPIKeyOverride("secret", "fast-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAPIKeyOverride("", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCLIAPIKeyOverrideAccessor(t *testing.T) {
+	value := " secret "
+	flags := cliFlags{apiKeyFlag: &value}
+	if got := flags.apiKeyOverride(); got != "secret" {
+		t.Fatalf("apiKeyOverride = %q, want secret", got)
 	}
 }
 

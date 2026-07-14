@@ -243,6 +243,13 @@ func resolveStartupConfig(cfg *config.Config) error {
 	return nil
 }
 
+func validateAPIKeyOverride(apiKey, model string) error {
+	if strings.TrimSpace(apiKey) != "" && strings.TrimSpace(model) == "" {
+		return errors.New("--api-key requires --model or an effective configured model")
+	}
+	return nil
+}
+
 func applyCLIConfigOverrides(
 	cfg *config.Config,
 	providerOverride, modelOverride, thinkingOverride string,

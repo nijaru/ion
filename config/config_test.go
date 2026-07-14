@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestRuntimeAPIKeyOverrideIsNotPersisted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := Save(&Config{Provider: "openai", Model: "test", APIKeyOverride: "runtime-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "runtime-secret") || strings.Contains(string(data), "api_key_override") {
+		t.Fatalf("runtime API key leaked into config: %s", data)
+	}
+}
+
 func TestLoadReadsConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

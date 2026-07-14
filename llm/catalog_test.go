@@ -266,6 +266,23 @@ func TestCredentialEnvVarsIncludesCatalogAndCustomAuth(t *testing.T) {
 	}
 }
 
+func TestResolvedAuthTokenPrefersRuntimeOverride(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "environment-key")
+	def := mustLookup(t, "openai")
+	cfg := &config.Config{
+		Provider:               "openai",
+		APIKeyOverride:         "runtime-key",
+		APIKeyOverrideProvider: "openai",
+	}
+	if got := ResolvedAuthToken(cfg, def); got != "runtime-key" {
+		t.Fatalf("auth token = %q, want runtime-key", got)
+	}
+	cfg.Provider = "openrouter"
+	if got := ResolvedAuthToken(cfg, def); got != "environment-key" {
+		t.Fatalf("cross-provider override token = %q, want environment-key", got)
+	}
+}
+
 func TestCredentialStateUsesStoredProviderCredential(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
