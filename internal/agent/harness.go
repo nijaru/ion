@@ -176,6 +176,8 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		promptTemplates: cfg.PromptTemplates,
 		stream:          cfg.StreamFn,
 		auth:            cfg.Auth,
+		transport:       cfg.Transport,
+		timeout:         cfg.Timeout,
 		phase:           PhaseIdle,
 		events:          cfg.Events,
 		externalEvents:  cfg.Events != nil,
@@ -686,6 +688,16 @@ type beforeToolCallPayload struct {
 	Args       json.RawMessage
 }
 
+type cancelOnCloseStream struct {
+	llm.Stream
+	cancel context.CancelFunc
+}
+
+func (s *cancelOnCloseStream) Close() error {
+	s.cancel()
+	return s.Stream.Close()
+}
+
 // wrapStreamFn wraps the harness stream function to emit provider request/payload hooks.
 func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 	base := h.stream
@@ -697,39 +709,37 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 		for k, v := range h.model.Headers {
 			modelHeaders[k] = v
 		}
+		timeout := h.timeout
 		h.mu.Unlock()
 
-		// Emit before_provider_request hook — allows extensions to patch model headers.
+		effectiveHeaders := modelHeaders
+		for k, v := range req.Headers {
+			effectiveHeaders[k] = v
+		}
+		req.Headers = effectiveHeaders
+
+		// Emit before_provider_request hook — allows extensions to patch request headers.
 		patches, err := h.emitHook(HookBeforeProviderRequest, beforeProviderRequestPayload{
 			Model:     req.Model,
 			SessionID: req.SessionID,
-			Headers:   modelHeaders,
+			Headers:   effectiveHeaders,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("before_provider_request hook: %w", err)
 		}
 
-		// Apply patches under lock.
-		h.mu.Lock()
+		// Apply patches to this request only. Pi's before_provider_request
+		// options are per-call; they must not mutate future model requests.
 		for _, p := range patches {
 			if bp, ok := p.(*BeforeProviderRequestPatch); ok && bp != nil {
-				if bp.Headers != nil {
-					if h.model.Headers == nil {
-						h.model.Headers = make(map[string]string)
-					}
-					for k, v := range bp.Headers {
-						h.model.Headers[k] = v
-					}
-				}
-				if bp.Transport != nil {
-					h.transport = *bp.Transport
+				for k, v := range bp.Headers {
+					req.Headers[k] = v
 				}
 				if bp.Timeout != nil {
-					h.timeout = *bp.Timeout
+					timeout = *bp.Timeout
 				}
 			}
 		}
-		h.mu.Unlock()
 
 		// Emit before_provider_payload hook — transform the raw JSON payload.
 		rawPayload, err := json.Marshal(req)
@@ -751,8 +761,20 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 			}
 		}
 
-		// Call the base stream function.
-		stream, err := base(ctx, req)
+		// Call the base stream function with the effective per-request timeout.
+		streamCtx := ctx
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			streamCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		stream, err := base(streamCtx, req)
+		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
+		} else if cancel != nil {
+			stream = &cancelOnCloseStream{Stream: stream, cancel: cancel}
+		}
 
 		// Emit after_provider_response: subscriber event + hook for registered handlers.
 		// Pi reference: agent-harness.js createStreamFn streamSimple onResponse (line ~327).
