@@ -316,8 +316,9 @@ type Request struct {
 	// adapters ignore it; prompt cache helpers use it to place provider-neutral
 	// cache markers.
 	CachePrefixMessages int `json:"-"`
-	// ReasoningEffort controls the depth of internal reasoning for OpenAI o-series
-	// models. Accepted values: "low", "medium", "high". Empty means provider default.
+	// ReasoningEffort controls internal reasoning depth. Generic values are
+	// "off", "minimal", "low", "medium", "high", and "xhigh"; providers may
+	// accept additional values. Empty means provider default.
 	ReasoningEffort string `json:"reasoning_effort,omitzero"`
 	// ThinkingBudget, when > 0, enables Anthropic extended thinking with the given
 	// token budget (minimum 1024, must be less than MaxTokens).

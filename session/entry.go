@@ -154,10 +154,12 @@ func (e *CustomMessageEntry) When() time.Time { return e.EntryBase.Timestamp }
 type ThinkingLevel string
 
 const (
-	ThinkingOff    ThinkingLevel = "off"
-	ThinkingLow    ThinkingLevel = "low"
-	ThinkingMedium ThinkingLevel = "medium"
-	ThinkingHigh   ThinkingLevel = "high"
+	ThinkingOff     ThinkingLevel = "off"
+	ThinkingMinimal ThinkingLevel = "minimal"
+	ThinkingLow     ThinkingLevel = "low"
+	ThinkingMedium  ThinkingLevel = "medium"
+	ThinkingHigh    ThinkingLevel = "high"
+	ThinkingXHigh   ThinkingLevel = "xhigh"
 )
 
 // EntryTitle returns a display name for an entry, or empty string.

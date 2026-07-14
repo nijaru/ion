@@ -141,6 +141,14 @@ func startupSessionID(
 	return recent.ID(), nil
 }
 
+func thinkingLevelForRuntime(value string) session.ThinkingLevel {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == config.DefaultReasoningEffort {
+		return ""
+	}
+	return session.ThinkingLevel(value)
+}
+
 func openRuntime(
 	ctx context.Context,
 	store session.Store,
@@ -251,6 +259,7 @@ func openRuntime(
 		Session:         sess,
 		Store:           store,
 		Model:           model,
+		Thinking:        thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:           agentTools,
 		Events:          sess.EventSender(),
 		StreamFn:        provider.Stream,
