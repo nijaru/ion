@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -264,6 +265,60 @@ func TestMoveToAppendsLeafEntry(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected LeafEntry with TargetID == first message ID")
+	}
+}
+
+func TestBranchSummaryProjectsAtTreePositionAndReplays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.db")
+	ctx := context.Background()
+	store, err := NewSQLiteStore(path, "branch-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(store, 64)
+	a, err := sess.AppendMessage(ctx, NewUserText("A", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, NewUserText("B", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.MoveTo(ctx, a, &BranchSummaryData{Summary: "returned from branch"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, NewUserText("C", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	assertBranchSummaryContext(t, sess)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewSQLiteStore(path, "branch-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertBranchSummaryContext(t, NewSession(reopened, 64))
+}
+
+func assertBranchSummaryContext(t *testing.T, sess Session) {
+	t.Helper()
+	snap, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Messages) != 3 {
+		t.Fatalf("context messages = %d, want 3", len(snap.Messages))
+	}
+	if got := MessageText(snap.Messages[0]); got != "A" {
+		t.Fatalf("message 0 = %q, want A", got)
+	}
+	if got := MessageText(snap.Messages[1]); got != BranchSummaryPrefix+"returned from branch"+BranchSummarySuffix {
+		t.Fatalf("message 1 = %q, want branch summary", got)
+	}
+	if got := MessageText(snap.Messages[2]); got != "C" {
+		t.Fatalf("message 2 = %q, want C", got)
 	}
 }
 

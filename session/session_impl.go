@@ -60,17 +60,15 @@ func (s *sessionImpl) Entries(ctx context.Context) ([]Entry, error) {
 //
 // Compaction-aware: if the branch contains a CompactionEntry, messages before
 // its FirstKeptID are replaced by a single system message containing the
-// compaction summary. If the branch contains a BranchSummaryEntry, a system
-// message is prepended with that summary.
+// compaction summary. Branch summaries are projected at their tree position.
 func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error) {
 	entries, err := s.store.Branch(ctx)
 	if err != nil {
 		return ContextSnapshot{}, err
 	}
 
-	// Find the most recent compaction, branch summary, and state changes.
+	// Find the most recent compaction and state changes.
 	var lastCompaction *CompactionEntry
-	var branchSummary *BranchSummaryEntry
 	var activeModel string
 	var activeThinking ThinkingLevel
 	var activeTools []string
@@ -79,10 +77,6 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 		case *CompactionEntry:
 			if lastCompaction == nil {
 				lastCompaction = e
-			}
-		case *BranchSummaryEntry:
-			if branchSummary == nil {
-				branchSummary = e
 			}
 		case *ModelChangeEntry:
 			if activeModel == "" {
@@ -104,7 +98,7 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 				activeModel = am.Model
 			}
 		}
-		if lastCompaction != nil && branchSummary != nil && activeModel != "" && activeThinking != "" && activeTools != nil {
+		if lastCompaction != nil && activeModel != "" && activeThinking != "" && activeTools != nil {
 			break
 		}
 	}
@@ -122,12 +116,6 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 
 	var msgs []Message
 
-	// Prepend branch summary if present (Pi: BRANCH_SUMMARY_PREFIX/SUFFIX wrapping).
-	if branchSummary != nil && branchSummary.Summary != "" {
-		msgs = append(msgs, NewUserText(
-			BranchSummaryPrefix+branchSummary.Summary+BranchSummarySuffix, time.Now()))
-	}
-
 	// Prepend compaction summary if present (Pi: COMPACTION_SUMMARY_PREFIX/SUFFIX wrapping).
 	if lastCompaction != nil && lastCompaction.Summary != "" {
 		msgs = append(msgs, NewUserText(
@@ -139,6 +127,11 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 		switch e := e.(type) {
 		case *MessageEntry:
 			msgs = append(msgs, e.Message)
+		case *BranchSummaryEntry:
+			if e.Summary != "" {
+				msgs = append(msgs, NewUserText(
+					BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp))
+			}
 		case *CustomMessageEntry:
 			// Pi: custom_message entries project as CustomMessage in context.
 			msgs = append(msgs, &CustomMessage{
