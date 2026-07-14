@@ -28,7 +28,10 @@ type TurnContext struct {
 type LoopConfig struct {
 	Model    llm.Model
 	Thinking session.ThinkingLevel
-	Tools    []Tool
+	// SessionID is the stable session identity for provider-side caching/routing.
+	// It is distinct from the changing session-tree leaf ID.
+	SessionID string
+	Tools     []Tool
 
 	// StreamFn calls the LLM provider. The loop constructs an llm.Request
 	// and passes it here. The harness wraps this with auth/hooks.

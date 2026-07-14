@@ -568,12 +568,13 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 	h.mu.Unlock()
 
 	return LoopConfig{
-		Model:    model,
-		Thinking: thinking,
-		Tools:    tools,
-		StreamFn: h.wrapStreamFn(),
-		Convert:  DefaultConvert,
-		Auth:     h.auth,
+		Model:     model,
+		Thinking:  thinking,
+		SessionID: h.session.Meta().ID,
+		Tools:     tools,
+		StreamFn:  h.wrapStreamFn(),
+		Convert:   DefaultConvert,
+		Auth:      h.auth,
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
 			msgs := h.drainQueued(&h.steer, h.steeringMode)

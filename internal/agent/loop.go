@@ -263,7 +263,7 @@ func streamAssistantResponse(
 		Messages:        llmMsgs,
 		Tools:           tools,
 		ReasoningEffort: string(cfg.Thinking),
-		SessionID:       "", // set by harness
+		SessionID:       cfg.SessionID,
 	}
 
 	if cfg.Auth != nil {
