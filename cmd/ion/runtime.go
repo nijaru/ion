@@ -49,30 +49,44 @@ func closeRuntimeHandles(
 	return errors.Join(errs...)
 }
 
-// loadPromptTemplates reads .md files from ~/.ion/prompts/ and returns a name→content map.
-// Filenames without extension become the template name.
-func loadPromptTemplates() map[string]string {
+// loadPromptTemplates reads global and project-local .md prompt templates.
+// Global templates are loaded first and retain precedence on name collisions.
+func loadPromptTemplates(cwd string) map[string]string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	dir := filepath.Join(home, ".ion", "prompts")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+	dirs := []string{filepath.Join(home, ".ion", "prompts")}
+	if cwd != "" {
+		dirs = append(dirs, filepath.Join(cwd, ".ion", "prompts"))
 	}
-	templates := make(map[string]string)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+	return loadPromptTemplatesFromDirs(dirs)
+}
+
+func loadPromptTemplatesFromDirs(dirs []string) map[string]string {
+	var templates map[string]string
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
-		name := strings.TrimSuffix(e.Name(), ".md")
-		templates[name] = string(data)
+		if templates == nil {
+			templates = make(map[string]string)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".md")
+			if _, exists := templates[name]; exists {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			templates[name] = string(data)
+		}
 	}
 	return templates
 }
@@ -263,8 +277,8 @@ func openRuntime(
 		break
 	}
 
-	// Load prompt templates from ~/.ion/prompts/.
-	promptTemplates := loadPromptTemplates()
+	// Load global and project-local prompt templates; global names win collisions.
+	promptTemplates := loadPromptTemplates(cwd)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
