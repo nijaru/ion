@@ -703,25 +703,37 @@ func executePreparedToolCall(
 			patch := cfg.AfterToolCall(ToolCallResultContext{
 				ToolCall: tc, Args: argsRaw, Result: result,
 			})
-			if patch != nil {
-				if patch.Content != nil {
-					result.Content = patch.Content
-				}
-				if patch.Details != nil {
-					result.Details = patch.Details
-				}
-				if patch.IsError != nil {
-					result.IsError = *patch.IsError
-				}
-				if patch.Terminate != nil {
-					result.Terminate = *patch.Terminate
-				}
-			}
+			applyToolCallPatch(&result, patch)
 		}()
 	}
 
 	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 	return result
+}
+
+func applyToolCallPatch(result *session.ToolResultMessage, patch *ToolCallPatch) {
+	if patch == nil {
+		return
+	}
+	if patch.Error != nil {
+		result.Content = []session.Content{
+			session.TextContent{Text: fmt.Sprintf("afterToolCall hook error: %v", patch.Error)},
+		}
+		result.IsError = true
+		return
+	}
+	if patch.Content != nil {
+		result.Content = patch.Content
+	}
+	if patch.Details != nil {
+		result.Details = patch.Details
+	}
+	if patch.IsError != nil {
+		result.IsError = *patch.IsError
+	}
+	if patch.Terminate != nil {
+		result.Terminate = *patch.Terminate
+	}
 }
 
 func executeOneToolCall(
@@ -910,20 +922,7 @@ func executeOneToolCall(
 				Args:     argsRaw,
 				Result:   result,
 			})
-			if patch != nil {
-				if patch.Content != nil {
-					result.Content = patch.Content
-				}
-				if patch.Details != nil {
-					result.Details = patch.Details
-				}
-				if patch.IsError != nil {
-					result.IsError = *patch.IsError
-				}
-				if patch.Terminate != nil {
-					result.Terminate = *patch.Terminate
-				}
-			}
+			applyToolCallPatch(&result, patch)
 		}()
 	}
 

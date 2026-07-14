@@ -115,6 +115,9 @@ type ToolCallResultContext struct {
 
 // ToolCallPatch is returned by AfterToolCall to modify the result.
 type ToolCallPatch struct {
+	// Error carries an AfterToolCall hook failure back to the loop. The loop
+	// turns it into an error ToolResultMessage instead of silently discarding it.
+	Error     error
 	Content   []session.Content
 	Details   json.RawMessage
 	IsError   *bool

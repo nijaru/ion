@@ -234,16 +234,18 @@ func (h *Harness) emitHook(hookType string, payload any) (patches []any, err err
 		}
 	}
 	h.mu.Unlock()
+	var hookErrors []error
 	for _, fn := range snapshot {
 		patch, fnErr := fn(payload)
 		if fnErr != nil {
-			return nil, fnErr
+			hookErrors = append(hookErrors, fnErr)
+			continue
 		}
 		if patch != nil {
 			patches = append(patches, patch)
 		}
 	}
-	return patches, nil
+	return patches, errors.Join(hookErrors...)
 }
 
 // Subscribe registers a listener for all agent events.
@@ -632,7 +634,10 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 				Content:    ctx.Result.Content,
 				IsError:    ctx.Result.IsError,
 			})
-			if err != nil || len(patches) == 0 {
+			if err != nil {
+				return &ToolCallPatch{Error: err}
+			}
+			if len(patches) == 0 {
 				return nil
 			}
 			// Merge patches. Last non-nil wins per field.
