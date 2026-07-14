@@ -23,6 +23,7 @@ func RegisterCodingTools(registry *Registry, cfg CodingToolsConfig) error {
 	registry.Register(&List{FileTool: *fileTool})
 	registry.Register(&Grep{fileSearchBase: *searchTool})
 	registry.Register(&Find{fileSearchBase: *searchTool})
+	registry.Register(NewSearchTool(registry))
 	if len(cfg.SkillDirs) > 0 {
 		registry.Register(NewReadSkill(cfg.SkillDirs))
 	}

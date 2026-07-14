@@ -15,9 +15,13 @@ func TestRegisterCodingToolsOwnsDefaultSurface(t *testing.T) {
 		t.Fatalf("RegisterCodingTools error = %v", err)
 	}
 
-	want := []string{"bash", "edit", "find", "grep", "ls", "read", "read_skill", "write"}
+	want := []string{"bash", "edit", "find", "grep", "ls", "read", "read_skill", "search_tools", "write"}
 	if got := registry.Names(); !slices.Equal(got, want) {
 		t.Fatalf("registered tools = %#v, want %#v", got, want)
+	}
+	metadata, ok := registry.Metadata(SearchToolName)
+	if !ok || metadata.Category != "meta" {
+		t.Fatalf("search_tools metadata = %#v, want meta tool", metadata)
 	}
 }
 
