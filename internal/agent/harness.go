@@ -730,7 +730,12 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 			modelHeaders[k] = v
 		}
 		timeout := h.timeout
+		transport := h.transport
 		h.mu.Unlock()
+
+		// Transport is request-scoped: start from the harness snapshot and let
+		// ordered hook patches override only this request.
+		req.Transport = transport
 
 		effectiveHeaders := modelHeaders
 		for k, v := range req.Headers {
@@ -754,6 +759,10 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 			if bp, ok := p.(*BeforeProviderRequestPatch); ok && bp != nil {
 				for k, v := range bp.Headers {
 					req.Headers[k] = v
+				}
+				if bp.Transport != nil {
+					transport = *bp.Transport
+					req.Transport = transport
 				}
 				if bp.Timeout != nil {
 					timeout = *bp.Timeout

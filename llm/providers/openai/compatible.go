@@ -58,11 +58,26 @@ func NewCompatibleProvider(cfg llm.ProviderConfig, spec CompatibleSpec) *Provide
 		}
 	}
 
+	client := sashaoai.NewClientWithConfig(config)
+	factory := func(transport http.RoundTripper) *sashaoai.Client {
+		requestConfig := config
+		requestTransport := transport
+		if len(cfg.DefaultHeaders) > 0 {
+			requestTransport = &headerTransport{
+				RoundTripper: transport,
+				headers:      cfg.DefaultHeaders,
+			}
+		}
+		requestConfig.HTTPClient = &http.Client{Transport: requestTransport}
+		return sashaoai.NewClientWithConfig(requestConfig)
+	}
+
 	return &Provider{
 		Base: Base{
-			Client:    sashaoai.NewClientWithConfig(config),
-			Config:    cfg,
-			ModelCaps: spec.ModelCaps,
+			Client:        client,
+			Config:        cfg,
+			ModelCaps:     spec.ModelCaps,
+			clientFactory: factory,
 		},
 	}
 }

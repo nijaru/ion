@@ -1,6 +1,9 @@
 package llm
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 // Role defines the role of a message in the conversation.
 type Role string
@@ -325,6 +328,8 @@ type Request struct {
 	ThinkingBudget int `json:"thinking_budget,omitzero"`
 	// Headers are additional HTTP headers for this request.
 	Headers map[string]string `json:"-"`
+	// Transport overrides the provider's HTTP transport for this request only.
+	Transport http.RoundTripper `json:"-"`
 	// SessionID is forwarded to providers for cache-aware backends.
 	SessionID string `json:"session_id,omitzero"`
 }

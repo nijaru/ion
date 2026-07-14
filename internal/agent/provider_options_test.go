@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,10 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 	var mu sync.Mutex
 	var headers []map[string]string
 	var deadlines []time.Duration
+	var transports []http.RoundTripper
 	var hookCalls int
+	configuredTransport := http.RoundTripper(http.DefaultTransport)
+	hookTransport := http.RoundTripper(&http.Transport{})
 	h := NewHarness(HarnessConfig{
 		Session: sess,
 		Store:   store,
@@ -27,7 +31,8 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 				"X-Override": "model",
 			},
 		},
-		Timeout: time.Second,
+		Timeout:   time.Second,
+		Transport: configuredTransport,
 		Auth: func(llm.Model) (string, map[string]string) {
 			return "token", map[string]string{"X-Auth": "auth", "X-Override": "auth"}
 		},
@@ -42,6 +47,7 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 				copied[key] = value
 			}
 			mu.Lock()
+			transports = append(transports, req.Transport)
 			headers = append(headers, copied)
 			if !hasDeadline {
 				remaining = -1
@@ -59,8 +65,9 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 		hookCalls++
 		if hookCalls == 1 {
 			return &BeforeProviderRequestPatch{
-				Headers: map[string]string{"X-Hook": "first", "X-Override": "hook"},
-				Timeout: &shortTimeout,
+				Headers:   map[string]string{"X-Hook": "first", "X-Override": "hook"},
+				Transport: &hookTransport,
+				Timeout:   &shortTimeout,
 			}, nil
 		}
 		return nil, nil
@@ -75,8 +82,11 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(headers) != 2 || len(deadlines) != 2 {
-		t.Fatalf("requests = %d, deadlines = %d, want 2", len(headers), len(deadlines))
+	if len(headers) != 2 || len(deadlines) != 2 || len(transports) != 2 {
+		t.Fatalf("requests = %d, deadlines = %d, transports = %d, want 2", len(headers), len(deadlines), len(transports))
+	}
+	if transports[0] != hookTransport || transports[1] != configuredTransport {
+		t.Fatalf("transport snapshots = %#v, want hook override then configured transport", transports)
 	}
 	if deadlines[0] <= 0 || deadlines[0] > 500*time.Millisecond || deadlines[1] < 500*time.Millisecond {
 		t.Fatalf("provider timeout windows = %#v, want first short and second configured", deadlines)

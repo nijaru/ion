@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"net/http"
 	"os"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -65,6 +66,9 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	if prepared.ThinkingBudget > 0 {
 		opts = append(opts, option.WithHeader("anthropic-beta", "interleaved-thinking-2025-05-14"))
 	}
+	if prepared.Transport != nil {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: prepared.Transport}))
+	}
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
 		return nil, err
@@ -123,6 +127,9 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 	var opts []option.RequestOption
 	if prepared.ThinkingBudget > 0 {
 		opts = append(opts, option.WithHeader("anthropic-beta", "interleaved-thinking-2025-05-14"))
+	}
+	if prepared.Transport != nil {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: prepared.Transport}))
 	}
 	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
 

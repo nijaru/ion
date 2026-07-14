@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/sashabaranov/go-openai"
@@ -11,8 +12,9 @@ import (
 // Base implements the core OpenAI-compatible provider logic.
 // Providers like Ollama, OpenRouter, and OpenAI itself can embed or wrap this.
 type Base struct {
-	Client *openai.Client
-	Config llm.ProviderConfig
+	Client        *openai.Client
+	Config        llm.ProviderConfig
+	clientFactory func(http.RoundTripper) *openai.Client
 	// ModelCaps holds per-model capability overrides. Capabilities(model) looks
 	// up this map before falling back to DefaultCapabilities. Populate with
 	// DefaultModelCaps() to get known reasoning model entries.
@@ -74,7 +76,11 @@ func (b *Base) Generate(ctx context.Context, req *llm.Request) (*llm.Response, e
 		return nil, err
 	}
 
-	resp, err := b.Client.CreateChatCompletion(ctx, b.ConvertRequest(prepared))
+	client := b.Client
+	if prepared.Transport != nil && b.clientFactory != nil {
+		client = b.clientFactory(prepared.Transport)
+	}
+	resp, err := client.CreateChatCompletion(ctx, b.ConvertRequest(prepared))
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +110,11 @@ func (b *Base) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error)
 		return nil, err
 	}
 
-	stream, err := b.Client.CreateChatCompletionStream(ctx, b.ConvertRequest(prepared))
+	client := b.Client
+	if prepared.Transport != nil && b.clientFactory != nil {
+		client = b.clientFactory(prepared.Transport)
+	}
+	stream, err := client.CreateChatCompletionStream(ctx, b.ConvertRequest(prepared))
 	if err != nil {
 		return nil, err
 	}

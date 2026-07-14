@@ -95,7 +95,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		httpReq.Header.Set(k, v)
 	}
 
-	httpResp, err := p.httpClient.Do(httpReq)
+	httpResp, err := p.client(prepared).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		httpReq.Header.Set(k, v)
 	}
 
-	httpResp, err := p.httpClient.Do(httpReq)
+	httpResp, err := p.client(prepared).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +171,13 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		ctx:      ctx,
 		model:    prepared.Model,
 	}, nil
+}
+
+func (p *Provider) client(req *llm.Request) *http.Client {
+	if req.Transport != nil {
+		return &http.Client{Transport: req.Transport}
+	}
+	return p.httpClient
 }
 
 func (p *Provider) setHeaders(req *http.Request) {
@@ -194,8 +201,8 @@ type openRouterRequest struct {
 	Reasoning *openRouterReasoning `json:"reasoning,omitempty"`
 	// SessionID enables OpenRouter's sticky routing for consistent provider selection.
 	// See: https://openrouter.ai/docs/features/session-sticky-routing
-	SessionID string                       `json:"session_id,omitempty"`
-	Provider  *openRouterProviderRouting   `json:"provider,omitempty"`
+	SessionID string                     `json:"session_id,omitempty"`
+	Provider  *openRouterProviderRouting `json:"provider,omitempty"`
 }
 
 type openRouterReasoning struct {
