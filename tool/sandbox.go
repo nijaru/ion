@@ -160,21 +160,16 @@ func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
 
 func seatbeltProfile(cwd string) string {
 	quoted := strconv.Quote(cwd)
+	// macOS system processes may resolve dependencies outside a finite list of
+	// stable paths (for example, through dyld caches and private framework paths).
+	// A filtered read rule aborts sandbox-exec on those resolutions, so keep reads
+	// unrestricted while retaining the write and network restrictions below.
 	return fmt.Sprintf(`(version 1)
 (deny default)
 (allow process*)
 (allow signal (target self))
-(allow file-read*
-  (subpath "/bin")
-  (subpath "/usr/bin")
-  (subpath "/usr/lib")
-  (subpath "/System")
-  (subpath "/Library")
-  (subpath "/etc")
-  (subpath "/private/etc")
-  (subpath "/tmp")
-  (subpath "/private/tmp")
-  (subpath %s))
+(allow file-read*)
+(allow file-read* (subpath %s))
 (allow file-write*
   (subpath "/tmp")
   (subpath "/private/tmp")
