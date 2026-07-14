@@ -687,6 +687,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 				},
 				Model:    &m,
 				Thinking: &t,
+				Tools:    h.buildTools(),
 			}
 		},
 	}

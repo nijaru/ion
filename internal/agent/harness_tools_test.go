@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -129,6 +130,56 @@ func TestHarnessActivateToolsDuringRunPersistsForNextTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := h.Prompt(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || !slices.Equal(requests[0], []string{"search_tools"}) ||
+		!slices.Equal(requests[1], []string{"search_tools", "deferred"}) {
+		t.Fatalf("provider tool snapshots = %#v", requests)
+	}
+}
+
+func TestHarnessSearchActivationUpdatesToolsWithinRun(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendActiveToolsChange(context.Background(), []string{"search_tools"}); err != nil {
+		t.Fatal(err)
+	}
+	var harness *Harness
+	var requests [][]string
+	search := Tool{
+		Name: "search_tools",
+		Execute: func(ctx context.Context, _ string, _ json.RawMessage, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			if err := harness.ActivateTools(ctx, []string{"deferred"}); err != nil {
+				return session.ToolResultMessage{}, err
+			}
+			return session.ToolResultMessage{ToolName: "search_tools", Content: []session.Content{session.TextContent{Text: "deferred"}}}, nil
+		},
+	}
+	harness = NewHarness(HarnessConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{ID: "test"},
+		Tools: []Tool{
+			search,
+			{Name: "deferred"},
+		},
+		Active: []string{"search_tools"},
+		StreamFn: func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			requests = append(requests, toolNamesFromSpecs(req.Tools))
+			if len(requests) == 1 {
+				return &mockStream{chunks: []*llm.Chunk{{Calls: []llm.Call{{
+					ID: "call-search", Type: "function", Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "search_tools", Arguments: `{}`},
+				}}, StopReason: "tool_use"}}}, nil
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		},
+	})
+	defer harness.Close()
+
+	if _, err := harness.Prompt(context.Background(), "discover"); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || !slices.Equal(requests[0], []string{"search_tools"}) ||

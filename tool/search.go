@@ -14,6 +14,7 @@ const SearchToolName = "search_tools"
 // injecting the full registry into every request.
 type SearchTool struct {
 	Registry *Registry
+	Activate func(context.Context, []string) error
 }
 
 // NewSearchTool creates the framework search_tools meta-tool for a registry.
@@ -21,10 +22,16 @@ func NewSearchTool(reg *Registry) *SearchTool {
 	return &SearchTool{Registry: reg}
 }
 
+// SetActivator connects discovery to the harness-owned active tool set.
+// A nil activator keeps search as a read-only registry query.
+func (s *SearchTool) SetActivator(activate func(context.Context, []string) error) {
+	s.Activate = activate
+}
+
 func (s *SearchTool) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        SearchToolName,
-		Description: "Search available tools by capability, keyword, category, or exact name. Returns matching tool specifications so you can call them in later tool uses.",
+		Description: "Search available tools by capability, keyword, category, or exact name. Matching tools are activated and their specifications are returned for subsequent calls.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -46,7 +53,7 @@ func (s *SearchTool) Metadata() Metadata {
 	}
 }
 
-func (s *SearchTool) Execute(_ context.Context, args string) (string, error) {
+func (s *SearchTool) Execute(ctx context.Context, args string) (string, error) {
 	var input struct {
 		Query string `json:"query"`
 	}
@@ -61,12 +68,19 @@ func (s *SearchTool) Execute(_ context.Context, args string) (string, error) {
 
 	entries := s.Registry.Entries()
 	matches := make([]llm.Spec, 0, len(entries))
+	matchNames := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Name == SearchToolName {
 			continue
 		}
 		if searchMatches(entry, query) {
 			matches = append(matches, entry.Spec)
+			matchNames = append(matchNames, entry.Name)
+		}
+	}
+	if s.Activate != nil && len(matchNames) > 0 {
+		if err := s.Activate(ctx, matchNames); err != nil {
+			return "", err
 		}
 	}
 

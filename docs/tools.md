@@ -12,10 +12,11 @@ Normal coding mode exposes the Pi-style active subset to the provider:
 bash, edit, read, write
 ```
 
-The read-only discovery tools `find`, `grep`, and `ls` are available through
-read/all tool modes, but they are not active by default. This keeps normal
-coding turns close to Pi while preserving typed discovery when a user selects
-that mode.
+The read-only discovery tools `find`, `grep`, and `ls` are registered but not
+active by default. The always-active `search_tools` meta-tool searches the full
+registry, activates matching names, and exposes them on the next provider
+request. This keeps normal coding turns close to Pi while preserving typed
+discovery when the model needs it.
 
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
 surfaces are deferred or hidden from the default tool surface. `/compact`

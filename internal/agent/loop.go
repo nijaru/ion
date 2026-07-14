@@ -169,6 +169,9 @@ func RunLoop(
 					if snap.Thinking != nil {
 						cfg.Thinking = *snap.Thinking
 					}
+					if snap.Tools != nil {
+						cfg.Tools = snap.Tools
+					}
 				}
 			}
 

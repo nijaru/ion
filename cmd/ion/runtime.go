@@ -149,6 +149,17 @@ func thinkingLevelForRuntime(value string) session.ThinkingLevel {
 	return session.ThinkingLevel(value)
 }
 
+func defaultActiveToolNames(registry *tool.Registry) []string {
+	preferred := []string{"bash", "edit", "read", tool.SearchToolName, "write"}
+	active := make([]string, 0, len(preferred))
+	for _, name := range preferred {
+		if _, ok := registry.Get(name); ok {
+			active = append(active, name)
+		}
+	}
+	return active
+}
+
 func openRuntime(
 	ctx context.Context,
 	store session.Store,
@@ -222,6 +233,9 @@ func openRuntime(
 			ExecutionMode: executionMode,
 		})
 	}
+	activeToolNames := defaultActiveToolNames(toolRegistry)
+	registeredSearch, _ := toolRegistry.Get(tool.SearchToolName)
+	searchTool, _ := registeredSearch.(*tool.SearchTool)
 
 	// Pi only advertises invocable skills when the read tool is available.
 	skillsText := ""
@@ -261,12 +275,16 @@ func openRuntime(
 		Model:           model,
 		Thinking:        thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:           agentTools,
+		Active:          activeToolNames,
 		Events:          sess.EventSender(),
 		StreamFn:        provider.Stream,
 		PromptTemplates: promptTemplates,
 		SysPrompt:       sysPrompt,
 		Logger:          log,
 	})
+	if searchTool != nil {
+		searchTool.SetActivator(harness.ActivateTools)
+	}
 
 	return b, sess, harness, nil
 }

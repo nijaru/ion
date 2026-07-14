@@ -129,6 +129,7 @@ type NextTurnSnapshot struct {
 	Context     TurnContext
 	Model       *llm.Model
 	Thinking    *session.ThinkingLevel
+	Tools       []Tool
 	ToolResults []session.ToolResultMessage // persisted before BuildContext, not in snapshot.Context
 }
 
