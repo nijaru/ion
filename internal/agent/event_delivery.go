@@ -84,6 +84,18 @@ func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Ev
 	}
 }
 
+// enqueueAsync preserves queue order without waiting for listeners. It is used
+// by setters while the harness mutex is held so a reentrant listener can safely
+// call back into the harness.
+func (d *eventDelivery) enqueueAsync(event session.Event, listeners []func(session.Event)) {
+	d.mu.Lock()
+	if !d.closed {
+		d.queue = append(d.queue, queuedEvent{event: event, listeners: listeners, listenersDone: make(chan struct{})})
+		d.cond.Signal()
+	}
+	d.mu.Unlock()
+}
+
 func (d *eventDelivery) dispatch() {
 	defer close(d.stopped)
 	for {

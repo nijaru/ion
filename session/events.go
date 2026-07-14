@@ -136,6 +136,30 @@ func (AgentEnd) IsEvent()      {}
 
 // --- Harness lifecycle events (Pi-aligned). ---
 
+// UpdateSource identifies why a harness setting changed.
+type UpdateSource string
+
+const UpdateSourceSet UpdateSource = "set"
+
+// ModelUpdate is emitted when the active model changes.
+type ModelUpdate struct {
+	Model    string
+	Previous string
+	Source   UpdateSource
+}
+
+// ThinkingUpdate is emitted when the active thinking level changes.
+type ThinkingUpdate struct {
+	Level    ThinkingLevel
+	Previous ThinkingLevel
+}
+
+// ToolsUpdate is emitted when the available or active tool names change.
+type ToolsUpdate struct {
+	Active   []string
+	Previous []string
+}
+
 // QueueUpdate is emitted when steer/followUp/nextTurn queues change.
 // Carries full queued messages, not just counts.
 // Reference: Pi agent-harness.js emitQueueUpdate (line 249).
@@ -164,10 +188,13 @@ type Abort struct {
 	ClearedFollowUp []Message
 }
 
-func (QueueUpdate) IsEvent() {}
-func (Settled) IsEvent()     {}
-func (SavePoint) IsEvent()   {}
-func (Abort) IsEvent()       {}
+func (ModelUpdate) IsEvent()    {}
+func (ThinkingUpdate) IsEvent() {}
+func (ToolsUpdate) IsEvent()    {}
+func (QueueUpdate) IsEvent()    {}
+func (Settled) IsEvent()        {}
+func (SavePoint) IsEvent()      {}
+func (Abort) IsEvent()          {}
 
 // AfterProviderResponse is emitted when the provider responds (HTTP response received).
 // Fires after before_provider_request/payload hooks and before the loop processes the
@@ -183,6 +210,7 @@ type AfterProviderResponse struct {
 type Error struct {
 	Err error
 }
+
 func (AfterProviderResponse) IsEvent() {}
 func (*Error) IsEvent()              {}
 

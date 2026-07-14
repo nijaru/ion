@@ -282,6 +282,21 @@ func (h *Harness) emit(e session.Event) {
 	}
 }
 
+// emitLocked enqueues an event while h.mu is already held. It does not wait for
+// listeners, which keeps setter event ordering tied to state mutation and lets
+// a listener reenter the harness safely.
+func (h *Harness) emitLocked(e session.Event) {
+	snapshot := make([]func(session.Event), 0, len(h.listeners))
+	for _, fn := range h.listeners {
+		if fn != nil {
+			snapshot = append(snapshot, fn)
+		}
+	}
+	if h.delivery != nil {
+		h.delivery.enqueueAsync(e, snapshot)
+	}
+}
+
 // Prompt submits a user message and runs the agent turn.
 // Returns the final assistant message. Blocks until the turn completes.
 //
@@ -999,13 +1014,13 @@ func (h *Harness) flushPending(ctx context.Context) error {
 // SetModel changes the model. If a run is active, buffered until next turn boundary.
 func (h *Harness) SetModel(model llm.Model) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return
 	}
 	oldModel := h.model
 	h.model = model
-	if model.ID != oldModel.ID {
+	if model.Provider != oldModel.Provider || model.ID != oldModel.ID {
 		h.pending = append(h.pending, pendingWrite{
 			apply: func(ctx context.Context, s session.Session) error {
 				_, err := s.AppendModelChange(ctx, model.Provider, model.ID)
@@ -1013,15 +1028,22 @@ func (h *Harness) SetModel(model llm.Model) {
 			},
 		})
 	}
+	h.emitLocked(session.ModelUpdate{
+		Model:    model.ID,
+		Previous: oldModel.ID,
+		Source:   session.UpdateSourceSet,
+	})
+	h.mu.Unlock()
 }
 
 // SetThinking changes the thinking level.
 func (h *Harness) SetThinking(level session.ThinkingLevel) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return
 	}
+	previous := h.thinking
 	h.thinking = level
 	h.pending = append(h.pending, pendingWrite{
 		apply: func(ctx context.Context, s session.Session) error {
@@ -1029,27 +1051,34 @@ func (h *Harness) SetThinking(level session.ThinkingLevel) {
 			return err
 		},
 	})
+	h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
+	h.mu.Unlock()
 }
 
 // SetTools changes the active tools.
 func (h *Harness) SetTools(tools []Tool, active []string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return
 	}
 	toolMap := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		toolMap[t.Name] = t
 	}
+	previous := append([]string(nil), h.active...)
 	h.tools = toolMap
-	h.active = active
+	h.active = append([]string(nil), active...)
+	persistActive := append([]string(nil), active...)
+	eventActive := append([]string(nil), active...)
 	h.pending = append(h.pending, pendingWrite{
 		apply: func(ctx context.Context, s session.Session) error {
-			_, err := s.AppendActiveToolsChange(ctx, active)
+			_, err := s.AppendActiveToolsChange(ctx, persistActive)
 			return err
 		},
 	})
+	h.emitLocked(session.ToolsUpdate{Active: eventActive, Previous: previous})
+	h.mu.Unlock()
 }
 
 // WaitForIdle blocks until the current run completes.

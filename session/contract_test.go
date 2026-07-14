@@ -124,6 +124,7 @@ func TestEventUnionIsClosed(t *testing.T) {
 	events := []Event{
 		AgentStart{}, TurnStart{}, MessageStart{}, MessageUpdate{}, MessageEnd{},
 		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{}, TurnEnd{}, AgentEnd{},
+		ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{}, QueueUpdate{}, Settled{}, SavePoint{},
 		&Error{},
 	}
 	for _, e := range events {
