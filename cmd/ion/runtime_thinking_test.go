@@ -30,6 +30,31 @@ func TestThinkingLevelForRuntime(t *testing.T) {
 	}
 }
 
+func TestActiveToolNamesForMode(t *testing.T) {
+	registry := tool.NewRegistry()
+	for _, name := range []string{"bash", "edit", "read", "search_tools", "write", "find", "grep", "ls", "read_skill"} {
+		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+			return "", nil
+		}))
+	}
+	tests := []struct {
+		mode string
+		want []string
+	}{
+		{mode: "coding", want: []string{"bash", "edit", "read", "search_tools", "write"}},
+		{mode: "read", want: []string{"find", "grep", "ls", "read", "search_tools"}},
+		{mode: "all", want: []string{"bash", "edit", "find", "grep", "ls", "read", "read_skill", "search_tools", "write"}},
+		{mode: "unknown", want: []string{"bash", "edit", "read", "search_tools", "write"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			if got := activeToolNamesForMode(registry, tt.mode); !slices.Equal(got, tt.want) {
+				t.Fatalf("activeToolNamesForMode(%q) = %#v, want %#v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultActiveToolNamesKeepsDiscoveryMetaTool(t *testing.T) {
 	registry := tool.NewRegistry()
 	for _, name := range []string{"bash", "edit", "read", "search_tools", "write", "find", "grep"} {

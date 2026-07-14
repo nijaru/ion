@@ -150,7 +150,19 @@ func thinkingLevelForRuntime(value string) session.ThinkingLevel {
 }
 
 func defaultActiveToolNames(registry *tool.Registry) []string {
-	preferred := []string{"bash", "edit", "read", tool.SearchToolName, "write"}
+	return activeToolNamesForMode(registry, "coding")
+}
+
+func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
+	var preferred []string
+	switch config.NormalizeToolMode(mode) {
+	case "all":
+		return registry.Names()
+	case "read":
+		preferred = []string{"find", "grep", "ls", "read", tool.SearchToolName}
+	default:
+		preferred = []string{"bash", "edit", "read", tool.SearchToolName, "write"}
+	}
 	active := make([]string, 0, len(preferred))
 	for _, name := range preferred {
 		if _, ok := registry.Get(name); ok {
@@ -233,7 +245,7 @@ func openRuntime(
 			ExecutionMode: executionMode,
 		})
 	}
-	activeToolNames := defaultActiveToolNames(toolRegistry)
+	activeToolNames := activeToolNamesForMode(toolRegistry, runtimeCfg.ActiveToolMode())
 	registeredSearch, _ := toolRegistry.Get(tool.SearchToolName)
 	searchTool, _ := registeredSearch.(*tool.SearchTool)
 
