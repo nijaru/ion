@@ -366,21 +366,39 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 	// Build tools for the loop.
 	tools := h.buildTools()
 
-	// Build LoopConfig.
-	cfg := h.buildLoopConfig(ctx, tools)
-
 	// Run the loop with overflow recovery. The harness owns the single terminal
 	// AgentEnd (DESIGN §1.3): RunLoop still emits AgentEnd internally, but we
 	// capture and suppress it here and emit exactly ONE after the (possibly
 	// retried) run completes, so the TUI never sees a double AgentEnd.
 	var msgs []session.Message
 	var lastAgentEnd session.AgentEnd
+	var persistErr error
+	recordPersistErr := func(err error) {
+		if err == nil || persistErr != nil {
+			return
+		}
+		persistErr = err
+		h.emit(&session.Error{Err: err})
+		select {
+		case <-cancel:
+		default:
+			close(cancel)
+		}
+	}
+	// Build LoopConfig after the persistence failure callback exists so
+	// PrepareNextTurn can stop the run when a buffered write fails.
+	cfg := h.buildLoopConfig(ctx, tools, recordPersistErr)
 	emitWrap := func(e session.Event) {
 		if ae, ok := e.(session.AgentEnd); ok {
 			lastAgentEnd = ae
 			return // harness emits the single terminal AgentEnd below
 		}
-		h.handleEvent(ctx, e)
+		if persistErr != nil {
+			return
+		}
+		if err := h.handleEvent(ctx, e); err != nil {
+			recordPersistErr(err)
+		}
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		func() {
@@ -404,6 +422,10 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 				Messages:     snap.Messages,
 			}, cfg, emitWrap, cancel)
 		}()
+		if persistErr != nil {
+			break
+		}
+
 		// After the first attempt, prompts have been persisted to the session tree.
 		// If the turn overflows and we compact + retry, the rebuilt context already
 		// contains the user message. Re-sending prompts would duplicate them.
@@ -442,14 +464,22 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 		}
 	}
 
+	if persistErr != nil {
+		return nil, persistErr
+	}
+
 	// Emit exactly one terminal AgentEnd for the whole run (DESIGN §1.3).
 	if lastAgentEnd.Messages == nil {
 		lastAgentEnd = session.AgentEnd{Messages: msgs}
 	}
-	h.handleEvent(ctx, lastAgentEnd)
+	if err := h.handleEvent(ctx, lastAgentEnd); err != nil {
+		recordPersistErr(err)
+		return nil, persistErr
+	}
 
-	// Flush any remaining pending writes.
-	h.flushPending(ctx)
+	// handleEvent(AgentEnd) flushes pending writes before terminal lifecycle
+	// events. Do not flush again after AgentEnd: a concurrent setter may queue
+	// a mutation after the terminal boundary, which belongs to the next turn.
 
 	// Return the last assistant message.
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -465,9 +495,9 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 // Reference: Pi agent-harness.js handleAgentEvent (line 441).
 // Pi invariant: message_end persists BEFORE emitting to subscribers so that
 // subsequent BuildContext calls (e.g., from PrepareNextTurn) see the message.
-// If persistence fails, an Error event is emitted BEFORE MessageEnd so consumers
-// can detect "final but not durable" by observing the preceding Error.
-func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
+// If persistence fails, handleEvent returns before MessageEnd; Prompt emits
+// an Error and cancels the run instead of acknowledging a non-durable turn.
+func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -483,16 +513,18 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
 		// Persist message to session tree BEFORE emitting to subscribers.
 		// Pi: orders appendMessage before emitAny so subscribers can BuildContext.
 		if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
+			err = fmt.Errorf("persist message: %w", err)
 			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
-			h.emit(&session.Error{Err: fmt.Errorf("persist message: %w", err)})
-		} else {
-			h.logMessage(e.Message)
+			return err
 		}
+		h.logMessage(e.Message)
 		h.emit(e)
 
 	case session.TurnEnd:
 		hadPending := len(h.pending) > 0
-		h.flushPending(ctx)
+		if err := h.flushPending(ctx); err != nil {
+			return err
+		}
 		// Emit SavePoint after durable writes (Pi: line ~480). HadPendingMutations
 		// must be captured BEFORE flush, otherwise always false.
 		h.emit(session.SavePoint{HadPendingMutations: hadPending})
@@ -506,7 +538,9 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
 		h.emit(e)
 
 	case session.AgentEnd:
-		h.flushPending(ctx)
+		if err := h.flushPending(ctx); err != nil {
+			return err
+		}
 		h.mu.Lock()
 		nextCount := len(h.nextTurn)
 		h.mu.Unlock()
@@ -519,12 +553,13 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) {
 		// Forward all other events (ToolExecStart, ToolExecEnd, etc.) to TUI.
 		h.emit(e)
 	}
+	return nil
 }
 
 // buildLoopConfig constructs the per-turn LoopConfig.
 //
 // Reference: Pi agent-harness.js createLoopConfig (line 350).
-func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig {
+func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersistenceError func(error)) LoopConfig {
 	// Snapshot mutable harness fields under lock to avoid racing with
 	// SetModel / SetThinking / SetTools from the TUI goroutine.
 	h.mu.Lock()
@@ -609,7 +644,10 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool) LoopConfig 
 		PrepareNextTurn: func(ctx context.Context, toolResults []session.ToolResultMessage) *NextTurnSnapshot {
 			// Tool results are already persisted (handleEvent persists before emit).
 			// Flush any pending writes (model/thinking changes, custom entries).
-			h.flushPending(ctx)
+			if err := h.flushPending(ctx); err != nil {
+				onPersistenceError(err)
+				return nil
+			}
 			snap, err := h.session.BuildContext(ctx)
 			if err != nil {
 				return nil
@@ -908,28 +946,31 @@ func (h *Harness) emitQueueUpdate() {
 
 // --- buffered writes ---
 
-func (h *Harness) flushPending(ctx context.Context) {
+func (h *Harness) flushPending(ctx context.Context) error {
 	h.mu.Lock()
 	pending := h.pending
 	h.pending = nil
 	h.mu.Unlock()
-	if len(pending) == 0 {
-		return
-	}
-	// Apply pending writes. Each pendingWrite.apply() appends to the session;
-	// individual Appends are atomic under SQLite WAL mode.
-	for _, pw := range pending {
+	for i, pw := range pending {
 		var err error
 		if pw.applyStore != nil {
 			err = pw.applyStore(ctx, h.store)
 		} else {
 			err = pw.apply(ctx, h.session)
 		}
-		if err != nil {
-			h.logf(slog.LevelError, "flush pending write failed", slog.String("error", err.Error()))
-			h.emit(&session.Error{Err: fmt.Errorf("flush pending write: %w", err)})
+		if err == nil {
+			continue
 		}
+		err = fmt.Errorf("flush pending write: %w", err)
+		h.mu.Lock()
+		// Keep the failed write and everything after it ahead of writes queued
+		// concurrently, preserving retry order without losing mutations.
+		h.pending = append(pending[i:], h.pending...)
+		h.mu.Unlock()
+		h.logf(slog.LevelError, "flush pending write failed", slog.String("error", err.Error()))
+		return err
 	}
+	return nil
 }
 
 // SetModel changes the model. If a run is active, buffered until next turn boundary.
@@ -1061,11 +1102,11 @@ func (h *Harness) Close() error {
 	}
 	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()
-	h.flushPending(context.Background())
+	flushErr := h.flushPending(context.Background())
 	if h.delivery != nil {
 		h.delivery.close()
 	}
-	return h.session.Close()
+	return errors.Join(flushErr, h.session.Close())
 }
 
 // Shutdown attempts a graceful stop: abort any running turn, wait for completion
@@ -1092,7 +1133,10 @@ func (h *Harness) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	h.flushPending(context.Background())
+	if err := h.flushPending(context.Background()); err != nil {
+		h.logf(slog.LevelError, "shutdown pending write failed", slog.String("error", err.Error()))
+		return errors.Join(err, h.Close())
+	}
 	h.logf(slog.LevelInfo, "shutdown complete")
 	return h.Close()
 }
