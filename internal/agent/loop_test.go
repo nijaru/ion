@@ -26,7 +26,7 @@ func (s *mockStream) Next() (*llm.Chunk, bool) {
 	s.idx++
 	return c, true
 }
-func (s *mockStream) Err() error  { return nil }
+func (s *mockStream) Err() error   { return nil }
 func (s *mockStream) Close() error { return nil }
 
 // --- Loop contract tests ---
@@ -179,6 +179,22 @@ func TestRunLoopAbort(t *testing.T) {
 	}
 }
 
+func TestRunLoopPreCancelledSignalSkipsProvider(t *testing.T) {
+	called := false
+	signal := make(chan struct{})
+	close(signal)
+	RunLoop(context.Background(), []session.Message{session.NewUserText("cancel", time.Now())}, TurnContext{}, LoopConfig{
+		Model: llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			called = true
+			return nil, nil
+		},
+	}, func(session.Event) {}, signal)
+	if called {
+		t.Fatal("provider called for pre-cancelled run")
+	}
+}
+
 // INVARIANT: RunLoop is stateless — no fields, no persistence.
 // This is a compile-time invariant enforced by rg guard, but we verify
 // the function signature takes all inputs as args.
@@ -248,6 +264,118 @@ func TestRunLoopToolExecution(t *testing.T) {
 	}
 	if !hasEnd {
 		t.Fatal("expected ToolExecEnd event")
+	}
+}
+
+func TestPrepareToolCallRecoversBeforeHookPanic(t *testing.T) {
+	tool := Tool{Name: "hook-panic"}
+	_, result := prepareToolCall(TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
+		ID: "call-hook-panic", Name: "hook-panic", Arguments: map[string]any{},
+	}, LoopConfig{
+		Tools: []Tool{tool},
+		BeforeToolCall: func(ToolCallContext) *ToolCallDecision {
+			panic("bad hook")
+		},
+	}, nil)
+	if result == nil || !result.IsError {
+		t.Fatalf("result = %#v, want recovered hook error", result)
+	}
+}
+
+func TestPrepareToolArgumentsRejectsTrailingJSON(t *testing.T) {
+	tool := &Tool{
+		Name: "trailing-prepare",
+		PrepareArgs: func(json.RawMessage) json.RawMessage {
+			return json.RawMessage(`{"ok":true} {"ignored":true}`)
+		},
+	}
+	_, err := prepareToolArguments(tool, map[string]any{})
+	if err == nil {
+		t.Fatal("trailing prepared JSON accepted")
+	}
+}
+
+func TestPrepareToolArgumentsRecoversPanics(t *testing.T) {
+	tool := &Tool{
+		Name: "panic-prepare",
+		PrepareArgs: func(json.RawMessage) json.RawMessage {
+			panic("bad preparation")
+		},
+	}
+	prepared, result := prepareToolCall(TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
+		ID: "call-panic", Name: "panic-prepare", Arguments: map[string]any{},
+	}, LoopConfig{Tools: []Tool{*tool}}, nil)
+	if prepared.tool != nil || result == nil || !result.IsError {
+		t.Fatalf("prepared=%#v result=%#v, want recovered preparation error", prepared, result)
+	}
+}
+
+func TestParallelPreparationHonorsPreCancelledSignalWithoutHook(t *testing.T) {
+	called := false
+	signal := make(chan struct{})
+	close(signal)
+	tool := Tool{
+		Name: "cancelled-tool",
+		Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			called = true
+			return session.ToolResultMessage{}, nil
+		},
+	}
+	results, _ := executeToolCallsParallel(
+		context.Background(), TurnContext{}, session.AssistantMessage{},
+		[]*session.ToolCall{
+			{ID: "call-cancelled", Name: "cancelled-tool", Arguments: map[string]any{}},
+			{ID: "call-skipped", Name: "cancelled-tool", Arguments: map[string]any{}},
+		},
+		LoopConfig{Tools: []Tool{tool}}, func(session.Event) {}, signal,
+	)
+	if called {
+		t.Fatal("cancelled parallel tool executed")
+	}
+	if len(results) != 1 || !results[0].IsError || results[0].ToolCallID != "call-cancelled" {
+		t.Fatalf("results = %#v, want one finalized cancellation error", results)
+	}
+}
+
+func TestParallelInvalidToolCallsHaveStartBeforeEnd(t *testing.T) {
+	var events []session.Event
+	tool := Tool{
+		Name:       "required-tool",
+		Parameters: `{"type":"object","required":["path"]}`,
+	}
+	calls := []*session.ToolCall{
+		{ID: "call-a", Name: "required-tool", Arguments: map[string]any{}},
+		{ID: "call-b", Name: "missing", Arguments: map[string]any{}},
+	}
+	results, _ := executeToolCallsParallel(
+		context.Background(),
+		TurnContext{},
+		session.AssistantMessage{},
+		calls,
+		LoopConfig{Tools: []Tool{tool}},
+		func(event session.Event) { events = append(events, event) },
+		nil,
+	)
+	if len(results) != len(calls) {
+		t.Fatalf("results = %d, want %d", len(results), len(calls))
+	}
+	for _, call := range calls {
+		start, end := -1, -1
+		for i, event := range events {
+			switch event := event.(type) {
+			case session.ToolExecStart:
+				if event.ToolCallID == call.ID {
+					start = i
+				}
+			case session.ToolExecEnd:
+				if event.ToolCallID == call.ID {
+					end = i
+				}
+			}
+		}
+		if start < 0 || end < 0 || start >= end {
+			t.Fatalf("events for %s = %#v, want start before end", call.ID, events)
+		}
 	}
 }
 
@@ -424,7 +552,7 @@ func TestRunLoopToolResultMessageEvents(t *testing.T) {
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{
-			Model: llm.Model{ID: "test"},
+			Model:    llm.Model{ID: "test"},
 			StreamFn: streamFn,
 			Tools: []Tool{{
 				Name: "test-tool",
@@ -477,7 +605,7 @@ func TestRunLoopStopReasonLengthFailsToolCalls(t *testing.T) {
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{
-			Model: llm.Model{ID: "test"},
+			Model:    llm.Model{ID: "test"},
 			StreamFn: streamFn,
 			Tools: []Tool{{
 				Name: "test-tool",
