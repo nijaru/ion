@@ -62,13 +62,6 @@ func main() {
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
 
-	store, err := openStartupStore(cli.noSessionRequested())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
-		os.Exit(1)
-	}
-	timing.Record("store-open")
-
 	printRequested, prompt, output, err := resolvePrintFlags(
 		cli.printRequested(),
 		cli.printShortRequested(),
@@ -122,6 +115,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--list-models: model listing not yet wired (use TUI model picker)")
 		os.Exit(0)
 	}
+
+	store, err := openStartupStore(cli.noSessionRequested(), cli.sessionDirOverride())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
+		os.Exit(1)
+	}
+	timing.Record("store-open")
 
 	if cli.importSessionPath() != "" {
 		imported, err := importSessionBundleFile(ctx, store, cli.importSessionPath())

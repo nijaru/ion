@@ -109,13 +109,31 @@ func recentSessionForContinue(
 	return nil, nil
 }
 
-func openStartupStore(noSession bool) (*session.SQLiteStore, error) {
+func resolveSessionDir(override string) (string, error) {
+	override = strings.TrimSpace(override)
+	if override == "" {
+		return config.DefaultDataDir()
+	}
+	if override == "~" || strings.HasPrefix(override, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		override = filepath.Join(home, strings.TrimPrefix(override, "~/"))
+	}
+	return filepath.Clean(override), nil
+}
+
+func openStartupStore(noSession bool, sessionDirOverride string) (*session.SQLiteStore, error) {
 	if noSession {
 		return session.NewSQLiteStore(":memory:", "canto")
 	}
-	dataDir, err := config.DefaultDataDir()
+	dataDir, err := resolveSessionDir(sessionDirOverride)
 	if err != nil {
-		return nil, fmt.Errorf("resolve data dir: %w", err)
+		return nil, fmt.Errorf("resolve session directory: %w", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 	return session.NewSQLiteStore(dataDir, "canto")
 }

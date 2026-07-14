@@ -8,31 +8,31 @@ import (
 )
 
 type cliFlags struct {
-	continueFlag         *bool
-	continueShortFlag    *bool
-	sessionFlag          *string
-	sessionIDFlag        *string
-	noSessionFlag        *bool
-	resumeFlag           *string
-	resumeShortFlag      *string
-	forkFlag             *bool
-	providerFlag         *string
-	modelFlag            *string
-	modelShortFlag       *string
-	thinkingFlag         *string
-	apiKeyFlag           *string
-	sessionDirFlag       *string
-	listModelsFlag       *bool
-	systemPromptFlag     *string
+	continueFlag           *bool
+	continueShortFlag      *bool
+	sessionFlag            *string
+	sessionIDFlag          *string
+	noSessionFlag          *bool
+	resumeFlag             *string
+	resumeShortFlag        *string
+	forkFlag               *bool
+	providerFlag           *string
+	modelFlag              *string
+	modelShortFlag         *string
+	thinkingFlag           *string
+	apiKeyFlag             *string
+	sessionDirFlag         *string
+	listModelsFlag         *bool
+	systemPromptFlag       *string
 	appendSystemPromptFlag *string
-	printFlag            *bool
-	promptFlag           *string
-	printShortFlag       *bool
-	outputFlag           *string
-	jsonFlag             *bool
-	timeoutFlag          *time.Duration
-	exportSessionFlag    *string
-	importSessionFlag    *string
+	printFlag              *bool
+	promptFlag             *string
+	printShortFlag         *bool
+	outputFlag             *string
+	jsonFlag               *bool
+	timeoutFlag            *time.Duration
+	exportSessionFlag      *string
+	importSessionFlag      *string
 }
 
 func registerCLIFlags() cliFlags {
@@ -69,9 +69,9 @@ func registerCLIFlags() cliFlags {
 			false,
 			"Fork the current session into a new branch",
 		),
-		providerFlag:    flag.String("provider", "", "Provider to use"),
-		modelFlag:       flag.String("model", "", "Model to use"),
-		modelShortFlag:  flag.String("m", "", "Model to use"),
+		providerFlag:   flag.String("provider", "", "Provider to use"),
+		modelFlag:      flag.String("model", "", "Model to use"),
+		modelShortFlag: flag.String("m", "", "Model to use"),
 		thinkingFlag: flag.String(
 			"thinking",
 			"",
@@ -170,9 +170,9 @@ func (f cliFlags) thinkingOverride() string {
 // 	return strings.TrimSpace(*f.apiKeyFlag)
 // }
 
-// func (f cliFlags) sessionDirOverride() string {
-// 	return strings.TrimSpace(*f.sessionDirFlag)
-// }
+func (f cliFlags) sessionDirOverride() string {
+	return strings.TrimSpace(*f.sessionDirFlag)
+}
 
 func (f cliFlags) listModelsRequested() bool {
 	return *f.listModelsFlag
@@ -251,6 +251,10 @@ func validateSessionSelection(
 	if sessionID != "" &&
 		(resumeID != "" || resumeShortID != "" || continueRequested || openResumePicker) {
 		return fmt.Errorf("--session cannot be combined with other session selection flags")
+	}
+	if exportPath != "" && sessionID == "" && resumeID == "" && resumeShortID == "" &&
+		!continueRequested && !openResumePicker {
+		return fmt.Errorf("--export-session requires --session <id>, --resume <id>, or --continue")
 	}
 	return nil
 }

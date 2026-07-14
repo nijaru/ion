@@ -390,6 +390,10 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "--session cannot be combined") {
 		t.Fatalf("session/continue error = %v", err)
 	}
+	if err := validateSessionSelection(false, "", "", "", false, false, "bundle.json", ""); err == nil ||
+		!strings.Contains(err.Error(), "--export-session requires") {
+		t.Fatalf("export without selection error = %v", err)
+	}
 }
 
 // TestPrintModeRejectsUnexpectedApprovalRequest removed — ApprovalRequest event type deleted.
