@@ -82,7 +82,11 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 		hasShellLeadIn = true
 	} else if m.Picker.Tree != nil {
-		b.WriteString(m.renderTreePicker())
+		if m.Picker.BranchSummary != nil {
+			b.WriteString(m.renderBranchSummaryPrompt())
+		} else {
+			b.WriteString(m.renderTreePicker())
+		}
 		b.WriteString("\n")
 		hasShellLeadIn = true
 	} else if m.Picker.Setup != nil {

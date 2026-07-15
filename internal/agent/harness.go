@@ -1512,23 +1512,6 @@ func (h *Harness) AppendSessionInfo(ctx context.Context, name string) (string, e
 	return h.session.AppendSessionInfo(ctx, name)
 }
 
-// MoveTo switches the session leaf pointer to the given entry ID.
-// Optionally appends a branch summary entry. Returns the summary entry ID
-// if a summary was provided, "" otherwise.
-//
-// Reference: Pi session.js moveTo (line 191).
-func (h *Harness) MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
-	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
-	return h.session.MoveTo(ctx, entryID, summary)
-}
-
 // AppendLabel attaches a label to a target entry.
 func (h *Harness) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
 	h.mu.Lock()

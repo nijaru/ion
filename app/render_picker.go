@@ -193,6 +193,57 @@ func (m Model) renderSetupPrompt() string {
 	return b.String()
 }
 
+func (m Model) renderBranchSummaryPrompt() string {
+	prompt := m.Picker.BranchSummary
+	if prompt == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	if prompt.navigating {
+		b.WriteString(m.cardTopBorder("Session Tree"))
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Summarizing branch… (Esc to cancel)"))
+		b.WriteString("\n")
+		b.WriteString(m.cardBottomBorder())
+		return b.String()
+	}
+	if prompt.custom {
+		b.WriteString(m.cardTopBorder("Custom branch summary instructions"))
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Add a focus for the generated summary (optional)"))
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(lipgloss.NewStyle(), "  > "+prompt.value))
+		b.WriteString("\n")
+		b.WriteString(m.cardDivider())
+		b.WriteString("\n")
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Enter summarize • Esc back"))
+		b.WriteString("\n")
+		b.WriteString(m.cardBottomBorder())
+		return b.String()
+	}
+
+	b.WriteString(m.cardTopBorder("Summarize branch?"))
+	b.WriteString("\n")
+	choices := []string{"No summary", "Summarize", "Summarize with custom instructions"}
+	for i, choice := range choices {
+		line := "    " + choice
+		style := m.st.dim
+		if i == prompt.choice {
+			line = "  › " + choice
+			style = m.st.cyan.Bold(true)
+		}
+		b.WriteString(m.cardPaddedLine(style, line))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
+	b.WriteString(m.cardPaddedLine(m.st.dim, "  ↑/↓ move • Enter select • Esc cancel"))
+	b.WriteString("\n")
+	b.WriteString(m.cardBottomBorder())
+	return b.String()
+}
+
 func (m Model) cardTopBorder(title string) string {
 	width := m.shellWidth()
 	if width <= 6 {

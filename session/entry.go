@@ -54,6 +54,8 @@ type CompactionEntry struct {
 
 type BranchSummaryEntry struct {
 	EntryBase
+	// FromID identifies the abandoned branch leaf summarized by this entry.
+	FromID  string
 	Summary string
 	Details []byte
 }
@@ -111,8 +113,8 @@ func (e *BranchSummaryEntry) IsEntry()  {}
 func (e *LabelEntry) IsEntry()          {}
 func (e *SessionInfoEntry) IsEntry()    {}
 func (e *CustomEntry) IsEntry()         {}
-func (e *LeafEntry) IsEntry()          {}
-func (e *CustomMessageEntry) IsEntry() {}
+func (e *LeafEntry) IsEntry()           {}
+func (e *CustomMessageEntry) IsEntry()  {}
 
 func (e *MessageEntry) ID() string        { return e.EntryBase.ID }
 func (e *ModelChangeEntry) ID() string    { return e.EntryBase.ID }
@@ -123,8 +125,8 @@ func (e *BranchSummaryEntry) ID() string  { return e.EntryBase.ID }
 func (e *LabelEntry) ID() string          { return e.EntryBase.ID }
 func (e *SessionInfoEntry) ID() string    { return e.EntryBase.ID }
 func (e *CustomEntry) ID() string         { return e.EntryBase.ID }
-func (e *LeafEntry) ID() string          { return e.EntryBase.ID }
-func (e *CustomMessageEntry) ID() string { return e.EntryBase.ID }
+func (e *LeafEntry) ID() string           { return e.EntryBase.ID }
+func (e *CustomMessageEntry) ID() string  { return e.EntryBase.ID }
 
 func (e *MessageEntry) ParentID() string        { return e.EntryBase.ParentID }
 func (e *ModelChangeEntry) ParentID() string    { return e.EntryBase.ParentID }
@@ -135,8 +137,8 @@ func (e *BranchSummaryEntry) ParentID() string  { return e.EntryBase.ParentID }
 func (e *LabelEntry) ParentID() string          { return e.EntryBase.ParentID }
 func (e *SessionInfoEntry) ParentID() string    { return e.EntryBase.ParentID }
 func (e *CustomEntry) ParentID() string         { return e.EntryBase.ParentID }
-func (e *LeafEntry) ParentID() string          { return e.EntryBase.ParentID }
-func (e *CustomMessageEntry) ParentID() string { return e.EntryBase.ParentID }
+func (e *LeafEntry) ParentID() string           { return e.EntryBase.ParentID }
+func (e *CustomMessageEntry) ParentID() string  { return e.EntryBase.ParentID }
 
 func (e *MessageEntry) When() time.Time        { return e.EntryBase.Timestamp }
 func (e *ModelChangeEntry) When() time.Time    { return e.EntryBase.Timestamp }
@@ -147,8 +149,8 @@ func (e *BranchSummaryEntry) When() time.Time  { return e.EntryBase.Timestamp }
 func (e *LabelEntry) When() time.Time          { return e.EntryBase.Timestamp }
 func (e *SessionInfoEntry) When() time.Time    { return e.EntryBase.Timestamp }
 func (e *CustomEntry) When() time.Time         { return e.EntryBase.Timestamp }
-func (e *LeafEntry) When() time.Time          { return e.EntryBase.Timestamp }
-func (e *CustomMessageEntry) When() time.Time { return e.EntryBase.Timestamp }
+func (e *LeafEntry) When() time.Time           { return e.EntryBase.Timestamp }
+func (e *CustomMessageEntry) When() time.Time  { return e.EntryBase.Timestamp }
 
 // ThinkingLevel controls reasoning effort for a turn.
 type ThinkingLevel string

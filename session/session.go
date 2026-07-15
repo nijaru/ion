@@ -20,6 +20,10 @@ type Session interface {
 
 	// Branch returns entries on the current leaf path.
 	Branch(ctx context.Context) ([]Entry, error)
+	// GetEntry returns one persisted tree entry by ID.
+	GetEntry(ctx context.Context, id string) (Entry, error)
+	// GetLeafID returns the current durable leaf pointer.
+	GetLeafID() string
 
 	// MoveTo switches the leaf pointer to the given entry ID.
 	// The entry must exist. Optionally appends a branch summary entry.
@@ -68,6 +72,8 @@ type CompactionData struct {
 
 // BranchSummaryData holds the payload for a branch summary entry.
 type BranchSummaryData struct {
+	// FromID identifies the leaf being left when the summary was created.
+	FromID  string
 	Summary string
 	Details []byte
 }

@@ -271,6 +271,15 @@ type setupPromptState struct {
 	request      uint64
 }
 
+type branchSummaryPromptState struct {
+	targetID   string
+	choice     int
+	custom     bool
+	value      string
+	navigating bool
+	err        string
+}
+
 // AppState holds general application and workspace metadata.
 type AppState struct {
 	Width             int
@@ -318,6 +327,7 @@ type PickerState struct {
 	Overlay            *pickerOverlayState
 	Session            *sessionPickerState
 	Setup              *setupPromptState
+	BranchSummary      *branchSummaryPromptState
 	Tree               *treePickerState
 	LastEscAt          time.Time
 	ModelLoadRequest   uint64

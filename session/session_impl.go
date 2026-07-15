@@ -35,6 +35,10 @@ func (s *sessionImpl) Close() error {
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
+func (s *sessionImpl) GetEntry(ctx context.Context, id string) (Entry, error) {
+	return s.store.GetEntry(ctx, id)
+}
+func (s *sessionImpl) GetLeafID() string { return s.store.GetLeafID() }
 func (s *sessionImpl) MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error) {
 	// Validate the entry exists.
 	if _, err := s.store.GetEntry(ctx, entryID); err != nil {
@@ -204,6 +208,7 @@ func (s *sessionImpl) AppendCompaction(ctx context.Context, data CompactionData)
 func (s *sessionImpl) AppendBranchSummary(ctx context.Context, data BranchSummaryData) (string, error) {
 	return s.appendLeaf(ctx, &BranchSummaryEntry{
 		EntryBase: s.newBase(ctx),
+		FromID:    data.FromID,
 		Summary:   data.Summary,
 		Details:   data.Details,
 	})

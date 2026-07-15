@@ -173,11 +173,9 @@ func TestTUIInteractive(t *testing.T) {
 	tt.send("Say the word BANANA exactly, nothing else.")
 	t.Log("sent prompt, waiting for response...")
 
-	// Wait for submission to complete (composer reappears).
-	tt.waitFor("Submitting", 60*time.Second)
-	tt.waitForGone("Submitting", 60*time.Second)
-
-	content := tt.capture()
+	// Wait for the durable assistant response. The transient Submitting status
+	// may be shorter than the capture polling interval with a fast provider.
+	content := tt.waitFor("BANANA", 60*time.Second)
 	t.Logf("full output after turn:\n%s", content)
 
 	if !strings.Contains(content, "BANANA") {

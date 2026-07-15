@@ -184,7 +184,7 @@ type Runner interface {
 	// Append persists an auxiliary entry through the harness-owned session.
 	PersistEntry(ctx context.Context, entry session.Entry) error
 	AppendSessionInfo(ctx context.Context, name string) (string, error)
-	MoveTo(ctx context.Context, entryID string, summary *session.BranchSummaryData) (string, error)
+	NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (NavigateResult, error)
 	AppendLabel(ctx context.Context, targetID, label string) (string, error)
 	GetLabel(ctx context.Context, targetID string) (string, error)
 
@@ -193,4 +193,16 @@ type Runner interface {
 
 	// Close releases resources.
 	Close() error
+}
+
+// NavigateOptions controls optional context preservation when moving to another
+// point in the session tree.
+type NavigateOptions struct {
+	Summarize          bool
+	CustomInstructions string
+}
+
+// NavigateResult reports the durable entry created by branch summarization.
+type NavigateResult struct {
+	SummaryEntryID string
 }

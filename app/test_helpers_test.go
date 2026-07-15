@@ -133,10 +133,14 @@ func (s *stubSession) Close() error {
 // --- stubRunner implements agent.Runner ---
 
 type stubRunner struct {
-	aborts    int
-	compacts  int
-	appends   []session.Entry
-	appendErr error
+	aborts       int
+	compacts     int
+	appends      []session.Entry
+	appendErr    error
+	navigates    int
+	navigateID   string
+	navigateOpts agent.NavigateOptions
+	navigateErr  error
 }
 
 func (r *stubRunner) Events() <-chan session.Event                                { return nil }
@@ -163,8 +167,11 @@ func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error 
 	return nil
 }
 func (r *stubRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
-func (r *stubRunner) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
-	return "", nil
+func (r *stubRunner) NavigateTree(_ context.Context, targetID string, opts agent.NavigateOptions) (agent.NavigateResult, error) {
+	r.navigates++
+	r.navigateID = targetID
+	r.navigateOpts = opts
+	return agent.NavigateResult{}, r.navigateErr
 }
 func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil

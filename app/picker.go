@@ -674,6 +674,7 @@ func (r pickerReducer) closeAll() {
 	r.picker.Overlay = nil
 	r.picker.Session = nil
 	r.picker.Setup = nil
+	r.picker.BranchSummary = nil
 	r.picker.OverlayClosedAt = time.Now()
 }
 

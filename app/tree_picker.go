@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,9 +34,10 @@ type treePickerLoadedMsg struct {
 	err  error
 }
 
-// treePickerMoveMsg confirms that a MoveTo navigation completed.
+// treePickerMoveMsg confirms that a NavigateTree operation completed.
 type treePickerMoveMsg struct {
-	err error
+	err       error
+	cancelled bool
 }
 
 func (m Model) openTreePicker() (Model, tea.Cmd) {
@@ -64,6 +66,7 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 
 func (m Model) closeTreePicker() Model {
 	m.Picker.Tree = nil
+	m.Picker.BranchSummary = nil
 	return m
 }
 
@@ -210,7 +213,7 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				// Already at current position — no-op.
 				break
 			}
-			return m.moveToTreeEntry(selected.id)
+			return m.openBranchSummaryPrompt(selected.id)
 		}
 
 	case "ctrl+r":
@@ -230,30 +233,21 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// moveToTreeEntry navigates the session to the selected tree entry.
-func (m Model) moveToTreeEntry(entryID string) (Model, tea.Cmd) {
-	if m.activeSession() == nil {
-		return m, nil
-	}
-
-	runner := m.Model.Runner
-
-	return m, func() tea.Msg {
-		// MoveTo with no branch summary.
-		_, err := runner.MoveTo(context.Background(), entryID, nil)
-		return treePickerMoveMsg{err: err}
-	}
-}
-
 // handleTreePickerMove processes a tree navigation result.
 func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
+	if msg.cancelled || errors.Is(msg.err, context.Canceled) {
+		m.Picker.BranchSummary = nil
+		m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
+		return m, nil
+	}
 	if msg.err != nil {
 		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err)))
-		m.closeTreePicker()
+		m.Picker.BranchSummary = nil
+		m = m.closeTreePicker()
 		return m, nil
 	}
 	// Close tree picker and replay entries from the new branch position.
-	m.closeTreePicker()
+	m = m.closeTreePicker()
 	if m.activeSession() == nil {
 		return m, nil
 	}

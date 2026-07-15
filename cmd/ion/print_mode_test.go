@@ -89,6 +89,9 @@ func (s *printSession) SetLeafID(string) error { return nil }
 func (s *printSession) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+func (s *printSession) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
+	return agent.NavigateResult{}, nil
+}
 func (s *printSession) Entries(context.Context) ([]session.Entry, error) { return nil, nil }
 func (s *printSession) Usage(context.Context) (session.Usage, error) {
 	return session.Usage{}, nil

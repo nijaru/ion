@@ -256,6 +256,10 @@ func (m Model) dispatchInputMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 			next, cmd := m.handleSetupPromptPaste(msg)
 			return next, cmd, true
 		}
+		if m.Picker.BranchSummary != nil {
+			next, cmd := m.handleBranchSummaryPaste(msg)
+			return next, cmd, true
+		}
 		if m.Picker.Overlay != nil {
 			next, cmd := m.handlePickerPaste(msg)
 			return next, cmd, true

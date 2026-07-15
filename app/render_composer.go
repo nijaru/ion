@@ -34,6 +34,8 @@ func (m Model) renderComposerCompletions() string {
 	if m.Picker.Overlay != nil ||
 		m.Picker.Session != nil ||
 		m.Picker.Setup != nil ||
+		m.Picker.BranchSummary != nil ||
+		m.Picker.Tree != nil ||
 		m.Input.Completion == nil ||
 		len(m.Input.Completion.items) == 0 {
 		return ""

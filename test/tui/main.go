@@ -256,8 +256,8 @@ func (r *smokeRunner) ActivateTools(context.Context, []string) error            
 func (r *smokeRunner) Session() session.Session                                  { return r.sess }
 func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }
 func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
-func (r *smokeRunner) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
-	return "", nil
+func (r *smokeRunner) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
+	return agent.NavigateResult{}, nil
 }
 func (r *smokeRunner) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil

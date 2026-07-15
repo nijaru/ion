@@ -284,7 +284,7 @@ func TestBranchSummaryProjectsAtTreePositionAndReplays(t *testing.T) {
 	if _, err := sess.AppendMessage(ctx, NewUserText("B", time.Now())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sess.MoveTo(ctx, a, &BranchSummaryData{Summary: "returned from branch"}); err != nil {
+	if _, err := sess.MoveTo(ctx, a, &BranchSummaryData{FromID: "old-leaf", Summary: "returned from branch"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sess.AppendMessage(ctx, NewUserText("C", time.Now())); err != nil {
@@ -321,6 +321,19 @@ func assertBranchSummaryContext(t *testing.T, sess Session) {
 	if got := MessageText(snap.Messages[2]); got != "C" {
 		t.Fatalf("message 2 = %q, want C", got)
 	}
+	entries, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if summary, ok := entry.(*BranchSummaryEntry); ok && summary.Summary == "returned from branch" {
+			if summary.FromID != "old-leaf" {
+				t.Fatalf("branch summary from ID = %q, want old-leaf", summary.FromID)
+			}
+			return
+		}
+	}
+	t.Fatal("branch summary entry not found")
 }
 
 func TestCustomMessageEntryInBuildContext(t *testing.T) {

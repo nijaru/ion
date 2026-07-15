@@ -402,6 +402,7 @@ type entryPayload struct {
 	TokensBefore int    `json:"tokens_before,omitempty"`
 
 	// BranchSummary fields
+	FromID  string `json:"from_id,omitempty"`
 	Details []byte `json:"details,omitempty"`
 
 	// Label fields
@@ -455,6 +456,7 @@ func encodeEntry(e Entry) (string, []byte, error) {
 		p.Details = e.Details
 	case *BranchSummaryEntry:
 		typ = "branch_summary"
+		p.FromID = e.FromID
 		p.Summary = e.Summary
 		p.Details = e.Details
 	case *LabelEntry:
@@ -528,7 +530,7 @@ func scanEntry(s scannable) (Entry, error) {
 	case "compaction":
 		return &CompactionEntry{EntryBase: base, Summary: p.Summary, FirstKeptID: p.FirstKeptID, TokensBefore: p.TokensBefore, Details: p.Details}, nil
 	case "branch_summary":
-		return &BranchSummaryEntry{EntryBase: base, Summary: p.Summary, Details: p.Details}, nil
+		return &BranchSummaryEntry{EntryBase: base, FromID: p.FromID, Summary: p.Summary, Details: p.Details}, nil
 	case "label":
 		return &LabelEntry{EntryBase: base, TargetID: p.TargetID, Label: p.Label}, nil
 	case "session_info":

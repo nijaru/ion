@@ -85,8 +85,8 @@ func TestRunnerMutationsRejectAfterClose(t *testing.T) {
 	if _, err := h.AppendSessionInfo(ctx, "late"); err == nil {
 		t.Fatal("session info append after close succeeded")
 	}
-	if _, err := h.MoveTo(ctx, "missing", nil); err == nil {
-		t.Fatal("move after close succeeded")
+	if _, err := h.NavigateTree(ctx, "missing", NavigateOptions{}); err == nil {
+		t.Fatal("tree navigation after close succeeded")
 	}
 	if _, err := h.AppendLabel(ctx, "missing", "late"); err == nil {
 		t.Fatal("label append after close succeeded")
