@@ -16,7 +16,7 @@ import (
 type FileTool struct {
 	cwd        string
 	checkpoint *ionworkspace.CheckpointStore
-	opts       Operations
+	opts       FileReader
 }
 
 func NewFileTool(cwd string) *FileTool {
@@ -27,7 +27,7 @@ func NewFileTool(cwd string) *FileTool {
 	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path), opts: LocalOperations{}}
 }
 
-func NewFileToolWithOperations(cwd string, opts Operations) *FileTool {
+func NewFileToolWithOperations(cwd string, opts FileReader) *FileTool {
 	path, err := ionworkspace.DefaultCheckpointPath()
 	if err != nil {
 		return &FileTool{cwd: cwd, opts: opts}

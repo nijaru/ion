@@ -30,7 +30,7 @@ const (
 type localExecutor struct {
 	sandbox     SandboxMode
 	environment EnvironmentPolicy
-	opts        Operations
+	opts        commandOperations
 }
 
 type EnvironmentPolicy struct {
