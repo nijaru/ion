@@ -348,53 +348,19 @@ func Save(cfg *Config) error {
 	}
 
 	out := *cfg
-	out.Provider = normalizeProviderID(out.Provider)
-	out.Model = strings.TrimSpace(out.Model)
-	out.ReasoningEffort = normalizeReasoningEffort(out.ReasoningEffort)
+	normalizeConfig(&out)
 	if out.ReasoningEffort == DefaultReasoningEffort {
 		out.ReasoningEffort = ""
 	}
-	out.FastModel = strings.TrimSpace(out.FastModel)
-	out.FastReasoningEffort = normalizeOptionalReasoningEffort(out.FastReasoningEffort)
-	out.SummaryModel = strings.TrimSpace(out.SummaryModel)
-	out.SummaryReasoningEffort = normalizeOptionalReasoningEffort(out.SummaryReasoningEffort)
-	out.Endpoint = strings.TrimSpace(out.Endpoint)
-	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
-	out.ExtraHeaders = normalizeStringMap(out.ExtraHeaders)
-	out.TelemetryOTLPEndpoint = strings.TrimSpace(out.TelemetryOTLPEndpoint)
-	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
-	out.SubagentsPath = expandUserPath(strings.TrimSpace(out.SubagentsPath))
-	if out.ContextLimit < 0 {
-		out.ContextLimit = 0
-	}
-	if out.MaxSessionCost < 0 {
-		out.MaxSessionCost = 0
-	}
-	if out.MaxTurnCost < 0 {
-		out.MaxTurnCost = 0
-	}
-	if out.SessionRetentionDays <= 0 {
-		out.SessionRetentionDays = DefaultSessionRetentionDays
-	}
-	out.ToolVerbosity = normalizeVerbosity(out.ToolVerbosity)
-	out.ReadOutput = normalizeReadOutput(out.ReadOutput)
-	out.WriteOutput = normalizeWriteOutput(out.WriteOutput)
-	out.BashOutput = normalizeBashOutput(out.BashOutput)
-	out.ThinkingVerbosity = normalizeVerbosity(out.ThinkingVerbosity)
-	out.BusyInput = normalizeBusyInput(out.BusyInput)
-	out.SkillTools = normalizeSkillTools(out.SkillTools)
 	if out.SkillTools == "off" {
 		out.SkillTools = ""
 	}
-	out.SubagentTools = normalizeSubagentTools(out.SubagentTools)
 	if out.SubagentTools == "off" {
 		out.SubagentTools = ""
 	}
-	out.ToolMode = normalizeToolMode(out.ToolMode)
 	if out.ToolMode == "coding" {
 		out.ToolMode = ""
 	}
-	out.ToolEnv = normalizeToolEnv(out.ToolEnv)
 	if out.ToolEnv == "inherit" {
 		out.ToolEnv = ""
 	}

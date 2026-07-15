@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,37 @@ func TestSaveAPIKeyWritesPrivateCredentialFile(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("credentials perm = %o, want 0600", perm)
+	}
+}
+
+func TestSaveAPIKeyReplacesCredentialsAtomically(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveAPIKey("openai", "first-key"); err != nil {
+		t.Fatalf("save first api key: %v", err)
+	}
+	if err := SaveAPIKey("openai", "second-key"); err != nil {
+		t.Fatalf("save replacement api key: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "credentials.toml"))
+	if err != nil {
+		t.Fatalf("read credentials: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "second-key") {
+		t.Fatalf("credentials missing replacement key:\n%s", got)
+	}
+	if strings.Contains(got, "first-key") {
+		t.Fatalf("credentials retained stale key:\n%s", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(home, ".ion", ".credentials.toml.tmp-*"))
+	if err != nil {
+		t.Fatalf("glob temporary credentials: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary credentials files left behind: %v", matches)
 	}
 }
 

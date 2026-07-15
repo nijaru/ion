@@ -682,6 +682,32 @@ func TestSaveUsesAtomicReplace(t *testing.T) {
 	}
 }
 
+func TestSaveUsesLoadNormalizationForRetryBounds(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Save(&Config{
+		Provider:         "openai",
+		Model:            "gpt-4o",
+		MaxRetries:       99,
+		RetryBaseDelayMs: 60001,
+	}); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "max_retries = 10") {
+		t.Fatalf("config wrote non-canonical max retries:\n%s", got)
+	}
+	if !strings.Contains(got, "retry_base_delay_ms = 60000") {
+		t.Fatalf("config wrote non-canonical retry delay:\n%s", got)
+	}
+}
+
 func TestSaveStateUsesAtomicReplace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
