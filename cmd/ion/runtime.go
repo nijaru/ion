@@ -363,15 +363,11 @@ func exportSessionBundleFile(
 	sessionID string,
 	path string,
 ) (exportedSessionBundle, error) {
-	exporter, ok := store.(ionexport.SessionBundleExporter)
-	if !ok {
-		return exportedSessionBundle{}, fmt.Errorf("session store does not support export")
-	}
 	path = strings.TrimSpace(path)
 	if path == "" || path == "-" {
 		return exportedSessionBundle{}, fmt.Errorf("export path must be a file")
 	}
-	bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
+	bundle, err := ionexport.ExportSessionBundle(ctx, store, sessionID)
 	if err != nil {
 		return exportedSessionBundle{}, err
 	}
@@ -391,10 +387,6 @@ func importSessionBundleFile(
 	store session.Store,
 	path string,
 ) ([]session.SessionInfoEntry, error) {
-	importer, ok := store.(ionexport.SessionBundleImporter)
-	if !ok {
-		return nil, fmt.Errorf("session store does not support import")
-	}
 	path = strings.TrimSpace(path)
 	if path == "" || path == "-" {
 		return nil, fmt.Errorf("import path must be a file")
@@ -403,11 +395,12 @@ func importSessionBundleFile(
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	var bundle ionexport.SessionBundle
-	if err := json.Unmarshal(raw, &bundle); err != nil {
+	bundle, err := ionexport.DecodeSessionBundle(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
 	}
-	id, err := importer.ImportSessionBundle(ctx, bundle)
+	bundle.RootSessionID = ""
+	id, err := ionexport.ImportSessionBundle(ctx, store, bundle)
 	if err != nil {
 		return nil, err
 	}

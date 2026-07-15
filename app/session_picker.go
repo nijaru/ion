@@ -18,6 +18,10 @@ type sessionCatalogReader interface {
 	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
 }
 
+type sessionCatalogLookup interface {
+	GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error)
+}
+
 type sessionCatalogWriter interface {
 	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
 }
@@ -403,21 +407,17 @@ func truncateRunes(s string, max int) string {
 }
 
 func (m Model) forkSessionFromPicker(parentID string) (Model, tea.Cmd) {
-	store := m.Model.Store
-	if store == nil {
+	if m.Model.Runner == nil {
 		return m, nil
 	}
-	forker, ok := store.(SessionForker)
-	if !ok {
-		return m, nil
-	}
+	runner := m.Model.Runner
 	m.pickerReducer().closeSession()
 	return m, func() tea.Msg {
-		handle, err := forker.ForkSession(context.Background(), parentID, SessionForkOptions{})
+		sessionID, err := runner.ForkSession(context.Background(), parentID)
 		if err != nil {
 			return sessionForkedMsg{err: err}
 		}
-		return sessionForkedMsg{sessionID: handle.ID()}
+		return sessionForkedMsg{sessionID: sessionID}
 	}
 }
 

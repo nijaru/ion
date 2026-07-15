@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -184,6 +185,8 @@ type Runner interface {
 	// Append persists an auxiliary entry through the harness-owned session.
 	PersistEntry(ctx context.Context, entry session.Entry) error
 	AppendSessionInfo(ctx context.Context, name string) (string, error)
+	ForkSession(ctx context.Context, sourceID string) (string, error)
+	ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error)
 	NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (NavigateResult, error)
 	AppendLabel(ctx context.Context, targetID, label string) (string, error)
 	GetLabel(ctx context.Context, targetID string) (string, error)

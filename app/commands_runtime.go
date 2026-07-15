@@ -41,19 +41,27 @@ func (m Model) storedSessionConfig(
 	if _, err := store.GetEntry(ctx, sessionID); err != nil {
 		return nil, fmt.Errorf("failed to find session %s: %w", sessionID, err)
 	}
-	catalog, ok := store.(sessionCatalogReader)
-	if !ok {
-		return nil, fmt.Errorf("session store does not support session catalog")
-	}
-	sessions, err := catalog.ListSessions(ctx, m.App.Workdir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list sessions: %w", err)
-	}
 	var model string
-	for _, info := range sessions {
-		if info.ID() == sessionID {
+	if lookup, ok := store.(sessionCatalogLookup); ok {
+		info, err := lookup.GetSessionInfo(ctx, sessionID)
+		if err == nil {
 			model = info.Model
-			break
+		}
+	}
+	if model == "" {
+		catalog, ok := store.(sessionCatalogReader)
+		if !ok {
+			return nil, fmt.Errorf("session store does not support session catalog")
+		}
+		sessions, err := catalog.ListSessions(ctx, m.App.Workdir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list sessions: %w", err)
+		}
+		for _, info := range sessions {
+			if info.ID() == sessionID {
+				model = info.Model
+				break
+			}
 		}
 	}
 	provider, modelName := splitStoredSessionModel(model)
@@ -482,6 +490,9 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
+	// Replacement is live before the previous runner is closed. This is the
+	// after-switch lifecycle boundary; Switch/Resume deliberately do not run
+	// teardown on construction failure.
 	m.runtimeRequest().clear()
 	m.Model.Backend = msg.runtime.Handles.Backend
 	m.Model.Runner = msg.runtime.Handles.Runner

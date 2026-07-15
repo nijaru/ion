@@ -246,6 +246,24 @@ func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 	}
 }
 
+func TestValidateForkSelectionRequiresAndExclusivelyUsesSessionSelection(t *testing.T) {
+	if err := validateForkSelection(true, false, false, false, "", "", "", false, false, "", ""); err == nil {
+		t.Fatal("fork without a source selection succeeded")
+	}
+	if err := validateForkSelection(true, true, false, false, "source", "", "", false, false, "", ""); err == nil {
+		t.Fatal("fork with --no-session succeeded")
+	}
+	if err := validateForkSelection(true, false, true, false, "source", "", "", false, false, "", ""); err == nil {
+		t.Fatal("fork with print mode succeeded")
+	}
+	if err := validateForkSelection(true, false, false, false, "source", "", "", false, false, "", ""); err != nil {
+		t.Fatalf("valid fork selection rejected: %v", err)
+	}
+	if err := validateForkSelection(true, false, false, false, "", "", "", false, true, "", ""); err != nil {
+		t.Fatalf("interactive fork selection rejected: %v", err)
+	}
+}
+
 func TestSessionModelName(t *testing.T) {
 	cases := []struct {
 		provider, model, want string

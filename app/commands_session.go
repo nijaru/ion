@@ -19,16 +19,12 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(ionexport.SessionBundleExporter)
-	if !ok {
-		return m, cmdError("store does not support export")
-	}
 	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
 	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
-		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		bundle, err := ionexport.ExportSessionBundle(context.Background(), m.Model.Store, sessionID)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -48,16 +44,12 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
 		return m, cmdError("no store available")
 	}
-	exporter, ok := m.Model.Store.(ionexport.SessionBundleExporter)
-	if !ok {
-		return m, cmdError("store does not support export")
-	}
 	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
 	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
-		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		bundle, err := ionexport.ExportSessionBundle(context.Background(), m.Model.Store, sessionID)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -73,11 +65,6 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	}
 }
 
-type sessionBundleTransport interface {
-	ionexport.SessionBundleExporter
-	ionexport.SessionBundleImporter
-}
-
 type sessionExportedMsg struct {
 	filename string
 }
@@ -88,20 +75,21 @@ func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) importSession(filename string) (Model, tea.Cmd) {
-	transport, ok := m.Model.Runner.(sessionBundleTransport)
-	if !ok {
+	if m.Model.Runner == nil {
 		return m, cmdError("active runtime does not support import")
 	}
+	runner := m.Model.Runner
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(filename)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		var bundle ionexport.SessionBundle
-		if err := json.Unmarshal(data, &bundle); err != nil {
+		bundle, err := ionexport.DecodeSessionBundle(data)
+		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		imported, err := transport.ImportSessionBundle(context.Background(), bundle)
+		bundle.RootSessionID = ""
+		imported, err := runner.ImportSessionBundle(context.Background(), bundle)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -116,8 +104,9 @@ type sessionImportedMsg struct {
 
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
 	notice := fmt.Sprintf("Imported %d session(s) from %s", 1, msg.filename)
-	m.terminalCommit().Entries(systemEntry(notice))
-	return m, nil
+	commit := m.terminalCommit().Entries(systemEntry(notice))
+	resumeModel, resumeCmd := m.resumeStoredSessionByID(msg.sessionID)
+	return resumeModel, tea.Sequence(commit, resumeCmd)
 }
 
 func (m Model) nameSession(name string) (Model, tea.Cmd) {
@@ -170,23 +159,23 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 }
 
 func (m Model) cloneSession() (Model, tea.Cmd) {
-	transport, ok := m.Model.Runner.(sessionBundleTransport)
-	if !ok {
+	if m.Model.Runner == nil {
 		return m, cmdError("active runtime does not support clone")
 	}
 	if m.activeSession() == nil {
 		return m, cmdError("no active session")
 	}
 	sessionID := m.activeSession().ID()
+	runner := m.Model.Runner
 	return m, func() tea.Msg {
 		ctx := context.Background()
-		bundle, err := transport.ExportSessionBundle(ctx, sessionID)
+		bundle, err := ionexport.ExportSessionBundle(ctx, m.Model.Store, sessionID)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("export session: %w", err)}
 		}
 		// Clear the root session ID so import creates a new session
 		bundle.RootSessionID = ""
-		imported, err := transport.ImportSessionBundle(ctx, bundle)
+		imported, err := runner.ImportSessionBundle(ctx, bundle)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("import session: %w", err)}
 		}
@@ -202,7 +191,9 @@ type sessionClonedMsg struct {
 }
 
 func (m Model) handleSessionCloned(msg sessionClonedMsg) (Model, tea.Cmd) {
-	return m, m.terminalCommit().Entries(systemEntry("Cloned session " + msg.newSessionID))
+	cmd := m.terminalCommit().Entries(systemEntry("Cloned session " + msg.newSessionID))
+	resumeModel, resumeCmd := m.resumeStoredSessionByID(msg.newSessionID)
+	return resumeModel, tea.Sequence(cmd, resumeCmd)
 }
 
 func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64) string {

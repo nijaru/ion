@@ -1284,11 +1284,10 @@ func (h *Harness) ExportSessionBundle(ctx context.Context, sessionID string) (io
 	if h.closed {
 		return ionexport.SessionBundle{}, errors.New("harness is closed")
 	}
-	exporter, ok := h.store.(ionexport.SessionBundleExporter)
-	if !ok {
+	if h.store == nil {
 		return ionexport.SessionBundle{}, errors.New("session store does not support export")
 	}
-	return exporter.ExportSessionBundle(ctx, sessionID)
+	return ionexport.ExportSessionBundle(ctx, h.store, sessionID)
 }
 
 // ImportSessionBundle performs explicit transport through the harness owner.
@@ -1301,11 +1300,27 @@ func (h *Harness) ImportSessionBundle(ctx context.Context, bundle ionexport.Sess
 	if h.phase != PhaseIdle {
 		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
 	}
-	importer, ok := h.store.(ionexport.SessionBundleImporter)
-	if !ok {
+	if h.store == nil {
 		return "", errors.New("session store does not support import")
 	}
-	return importer.ImportSessionBundle(ctx, bundle)
+	return ionexport.ImportSessionBundle(ctx, h.store, bundle)
+}
+
+// ForkSession copies a branch into an independent durable session. The
+// harness owns the idle gate so the active turn cannot race the tree copy.
+func (h *Harness) ForkSession(ctx context.Context, sourceID string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return "", errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
+	}
+	if h.store == nil {
+		return "", errors.New("harness has no session store")
+	}
+	return ionexport.ForkSession(ctx, h.store, sourceID)
 }
 
 // Metrics returns the runtime metrics collector (may be nil).

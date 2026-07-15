@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"time"
 
@@ -293,19 +292,6 @@ type SessionTree struct {
 	Current  session.Entry
 	Lineage  []session.Entry
 	Children []session.Entry
-}
-
-// --- Session fork (future feature) ---
-
-type SessionForkOptions struct{}
-
-type SessionForker interface {
-	ForkSession(ctx context.Context, parentID string, opts SessionForkOptions) (SessionHandle, error)
-}
-
-type SessionHandle interface {
-	ID() string
-	Session() session.Session
 }
 
 // --- Helpers ---

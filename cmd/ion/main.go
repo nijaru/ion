@@ -17,6 +17,7 @@ import (
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/ctxerr"
 	"github.com/nijaru/ion/internal/agent"
+	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"
 	"github.com/nijaru/ion/llm"
@@ -62,6 +63,7 @@ func main() {
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
 	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
 		cli.resumeShortID() != "" || cli.continueRequested() || openResumePicker
+	forkRequested := cli.forkRequested()
 	if cfg.APIKeyOverride != "" && firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel) == "" &&
 		!selectionRequested && cli.exportSessionPath() == "" && cli.importSessionPath() == "" &&
 		!cli.listModelsRequested() {
@@ -110,6 +112,22 @@ func main() {
 	}
 	if err := validateSessionSelection(
 		cli.noSessionRequested(),
+		cli.sessionID(),
+		cli.resumeID(),
+		cli.resumeShortID(),
+		cli.continueRequested(),
+		openResumePicker,
+		cli.exportSessionPath(),
+		cli.importSessionPath(),
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
+	if err := validateForkSelection(
+		forkRequested,
+		cli.noSessionRequested(),
+		printRequested,
+		cli.listModelsRequested(),
 		cli.sessionID(),
 		cli.resumeID(),
 		cli.resumeShortID(),
@@ -233,6 +251,15 @@ func main() {
 		}
 		printSessionBundleExport(os.Stdout, exported)
 		return
+	}
+	if forkRequested {
+		forkedID, err := ionexport.ForkSession(ctx, store, sessionID)
+		if err != nil {
+			store.Close()
+			fmt.Fprintf(os.Stderr, "failed to fork session %s: %v\n", sessionID, err)
+			os.Exit(1)
+		}
+		sessionID = forkedID
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, cwd, sessionID, cfg); err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -264,7 +265,13 @@ func (r *smokeRunner) AppendLabel(context.Context, string, string) (string, erro
 }
 func (r *smokeRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
 func (r *smokeRunner) Compact(context.Context) error                    { return nil }
-func (r *smokeRunner) Close() error                                     { return r.backend.Close() }
+func (r *smokeRunner) ForkSession(context.Context, string) (string, error) {
+	return "", fmt.Errorf("fork unsupported in smoke runner")
+}
+func (r *smokeRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
+	return "", fmt.Errorf("import unsupported in smoke runner")
+}
+func (r *smokeRunner) Close() error { return r.backend.Close() }
 
 func now() time.Time { return time.Now() }
 

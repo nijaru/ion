@@ -234,6 +234,33 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	return err
 }
 
+// GetSessionInfo returns one catalog record by its session/leaf ID.
+// It is a concrete catalog lookup for transport boundaries; Store intentionally
+// remains focused on the active tree and does not grow a catalog interface.
+func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInfoEntry, error) {
+	var info SessionInfoEntry
+	var updatedAt int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE session_id = ?",
+		id,
+	).Scan(
+		&info.EntryBase.ID,
+		&info.Workdir,
+		&info.Model,
+		&info.Branch,
+		&info.Name,
+		&info.Summary,
+		&info.LastPreview,
+		&updatedAt,
+	)
+	if err != nil {
+		return SessionInfoEntry{}, err
+	}
+	info.EntryBase.Timestamp = time.Unix(updatedAt, 0)
+	info.UpdatedAt = info.EntryBase.Timestamp
+	return info, nil
+}
+
 // Append persists an entry to the store.
 func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	s.mu.Lock()
@@ -281,6 +308,9 @@ func (s *SQLiteStore) AppendLeafEntry(ctx context.Context, entry Entry) (string,
 
 // AppendBatch persists multiple entries atomically using a SQLite transaction.
 func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -506,7 +536,10 @@ func scanEntry(s scannable) (Entry, error) {
 	if err := s.Scan(&id, &parentID, &typ, &ts, &payload); err != nil {
 		return nil, err
 	}
-	base := EntryBase{ID: id, ParentID: parentID, Timestamp: time.UnixMilli(ts)}
+	return decodeEntry(EntryBase{ID: id, ParentID: parentID, Timestamp: time.UnixMilli(ts)}, typ, payload)
+}
+
+func decodeEntry(base EntryBase, typ string, payload []byte) (Entry, error) {
 	var p entryPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, err

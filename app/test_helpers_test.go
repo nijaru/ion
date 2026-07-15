@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -167,6 +168,10 @@ func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error 
 	return nil
 }
 func (r *stubRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
+func (r *stubRunner) ForkSession(context.Context, string) (string, error)       { return "", nil }
+func (r *stubRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
+	return "", nil
+}
 func (r *stubRunner) NavigateTree(_ context.Context, targetID string, opts agent.NavigateOptions) (agent.NavigateResult, error) {
 	r.navigates++
 	r.navigateID = targetID

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/agent"
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -122,7 +123,13 @@ func (s *printSession) SetTools(_ []agent.Tool, _ []string)               {}
 func (s *printSession) ActivateTools(context.Context, []string) error     { return nil }
 func (s *printSession) Session() session.Session                          { return s }
 func (s *printSession) PersistEntry(context.Context, session.Entry) error { return nil }
-func (s *printSession) Compact(_ context.Context) error                   { return nil }
+func (s *printSession) ForkSession(context.Context, string) (string, error) {
+	return "", nil
+}
+func (s *printSession) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
+	return "", nil
+}
+func (s *printSession) Compact(_ context.Context) error { return nil }
 
 func TestResolvePrintFlagsSupportsShortPrintWithPositionalPrompt(t *testing.T) {
 	requested, prompt, output, err := resolvePrintFlags(

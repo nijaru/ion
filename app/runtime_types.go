@@ -250,7 +250,10 @@ type ResumeInput struct {
 	SessionID  string
 }
 
-// Switch performs a model switch.
+// Switch constructs the replacement runtime but does not close input.Current.
+// The UI applies the accepted result and closes the previous runner only after
+// the replacement is ready; a failed switch therefore leaves the old runtime
+// usable.
 func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 	if input.Switcher == nil {
 		return SwitchResult{}, fmt.Errorf("switcher not provided")
@@ -290,7 +293,8 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 	return result, nil
 }
 
-// Resume re-attaches to an existing session.
+// Resume constructs a runtime attached to an existing session. As with Switch,
+// the caller owns the post-acceptance close of input.Current.
 func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 	if input.Switcher == nil {
 		return SwitchResult{}, fmt.Errorf("switcher not provided")

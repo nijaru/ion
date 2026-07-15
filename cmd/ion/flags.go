@@ -148,10 +148,9 @@ func (f cliFlags) resumeShortID() string {
 	return *f.resumeShortFlag
 }
 
-// reserved for fork/import parity (tk-qlpv)
-// func (f cliFlags) forkRequested() bool {
-// 	return *f.forkFlag
-// }
+func (f cliFlags) forkRequested() bool {
+	return *f.forkFlag
+}
 
 func (f cliFlags) providerOverride() string {
 	return strings.TrimSpace(*f.providerFlag)
@@ -240,6 +239,30 @@ func validatePrintSelection(printRequested, openResumePicker bool) error {
 func validateSessionBundleSelection(exportPath, importPath string) error {
 	if exportPath != "" && importPath != "" {
 		return fmt.Errorf("--export-session and --import-session cannot be used together")
+	}
+	return nil
+}
+
+func validateForkSelection(
+	fork, noSession, printRequested, listModels bool,
+	sessionID, resumeID, resumeShortID string,
+	continueRequested, openResumePicker bool,
+	exportPath, importPath string,
+) error {
+	if !fork {
+		return nil
+	}
+	if noSession {
+		return fmt.Errorf("--fork cannot be combined with --no-session")
+	}
+	if printRequested || listModels {
+		return fmt.Errorf("--fork cannot be combined with print or model-list mode")
+	}
+	if exportPath != "" || importPath != "" {
+		return fmt.Errorf("--fork cannot be combined with session import/export")
+	}
+	if sessionID == "" && resumeID == "" && resumeShortID == "" && !continueRequested && !openResumePicker {
+		return fmt.Errorf("--fork requires --session, --resume, --continue, or an interactive resume selection")
 	}
 	return nil
 }
