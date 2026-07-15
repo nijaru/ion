@@ -1,8 +1,8 @@
 package llm
 
 import (
-	"github.com/nijaru/ion/ctxerr"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +18,49 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/ctxerr"
 )
 
 type providerModelsCache struct {
 	UpdatedAt int64           `json:"updated_at"`
 	Models    []ModelMetadata `json:"models"`
+}
+
+// ModelListResult describes the source used for a provider model query.
+// Stale is true when the provider could not be reached and the result came
+// from the persisted cache. Callers must surface that state when freshness
+// matters; the cache is a resilience mechanism, not a silent success.
+type ModelListResult struct {
+	Models    []ModelMetadata
+	UpdatedAt time.Time
+	Stale     bool
+}
+
+// ModelCatalogQuery selects providers for an aggregate available-model query.
+// An empty Providers list means all native providers with model-list support.
+// Config supplies the selected provider's endpoint, auth, headers, and runtime
+// API-key override. Other providers receive only their own ambient credentials.
+type ModelCatalogQuery struct {
+	Config                 *config.Config
+	Providers              []string
+	IncludeUnauthenticated bool
+}
+
+// ModelCatalogStatus records the outcome for one provider in an aggregate
+// query. A provider error does not discard successful results from others.
+type ModelCatalogStatus struct {
+	Provider string
+	Models   int
+	Stale    bool
+	Err      error
+}
+
+// ModelCatalogResult is the provider-neutral result consumed by model-listing
+// surfaces. Partial results are valid; Status contains per-provider failures.
+type ModelCatalogResult struct {
+	Models []ModelMetadata
+	Status []ModelCatalogStatus
+	Stale  bool
 }
 
 type modelsDevCache struct {
@@ -36,14 +74,18 @@ var (
 	providerModelsCacheMap map[string]providerModelsCache
 	modelsDevMu            sync.RWMutex
 	modelsDevMeta          modelsDevCache
-	providerCatalogFetcher = fetchModels
-	modelsDevFetcher       = fetchModelsDevCreated
-	openAIFetcher          = fetchOpenAIModels
-	anthropicFetcher       = fetchAnthropicModels
-	openRouterFetcher      = fetchOpenRouterModels
-	geminiFetcher          = fetchGeminiModels
-	ollamaFetcher          = fetchOllamaModels
+	providerCatalogFetcher providerCatalogFetcherFunc = fetchModels
+	modelsDevFetcher                                  = fetchModelsDevCreated
+	openAIFetcher          providerModelFetcher       = fetchOpenAIModels
+	anthropicFetcher       providerModelFetcher       = fetchAnthropicModels
+	openRouterFetcher      providerModelFetcher       = fetchOpenRouterModels
+	geminiFetcher          providerModelFetcher       = fetchGeminiModels
+	ollamaFetcher          providerModelFetcher       = fetchOllamaModels
+	modelListHTTPClient                               = http.DefaultClient
 )
+
+type providerModelFetcher func(context.Context, *config.Config) ([]ModelMetadata, error)
+type providerCatalogFetcherFunc func(context.Context, string, *config.Config) ([]ModelMetadata, error)
 
 const (
 	modelListRequestTimeout = 10 * time.Second
@@ -68,14 +110,25 @@ func CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
 	if !ok {
 		return nil, false, false
 	}
-	models := append([]ModelMetadata(nil), cached.Models...)
+	models := cloneModelMetadataSlice(cached.Models)
 	sortModels(models)
 	return models, cachedFreshForConfig(cached.UpdatedAt, cfg), true
 }
 
 func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	result, err := QueryModelsForConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return result.Models, nil
+}
+
+// QueryModelsForConfig lists one provider and exposes whether a stale cache was
+// used. ListModelsForConfig is the convenience form for callers that do not
+// need freshness information.
+func QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListResult, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("model provider config is required")
+		return ModelListResult{}, fmt.Errorf("model provider config is required")
 	}
 	ctx, cancel, timeout := withModelListTimeout(ctx)
 	defer cancel()
@@ -87,27 +140,142 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 	cached, ok := providerModelsCacheMap[key]
 	providerModelsMu.RUnlock()
 	if ok && cachedFreshForConfig(cached.UpdatedAt, cfg) {
-		return append([]ModelMetadata(nil), cached.Models...), nil
+		return ModelListResult{
+			Models:    cloneModelMetadataSlice(cached.Models),
+			UpdatedAt: time.Unix(cached.UpdatedAt, 0),
+		}, nil
 	}
 
 	fetched, err := providerCatalogFetcher(ctx, cfg.Provider, cfg)
 	if err == nil {
 		sortModels(fetched)
+		updatedAt := time.Now()
 		providerModelsMu.Lock()
 		providerModelsCacheMap[key] = providerModelsCache{
-			UpdatedAt: time.Now().Unix(),
-			Models:    append([]ModelMetadata(nil), fetched...),
+			UpdatedAt: updatedAt.Unix(),
+			Models:    cloneModelMetadataSlice(fetched),
 		}
 		saveProviderModelsCache()
 		providerModelsMu.Unlock()
-		return fetched, nil
+		return ModelListResult{
+			Models:    cloneModelMetadataSlice(fetched),
+			UpdatedAt: updatedAt,
+		}, nil
 	}
 
 	if ok {
-		return append([]ModelMetadata(nil), cached.Models...), nil
+		return ModelListResult{
+			Models:    cloneModelMetadataSlice(cached.Models),
+			UpdatedAt: time.Unix(cached.UpdatedAt, 0),
+			Stale:     true,
+		}, nil
 	}
 
-	return nil, wrapModelListError(cfg, timeout, err)
+	return ModelListResult{}, wrapModelListError(cfg, timeout, err)
+}
+
+// QueryAvailableModels queries all configured, listable native providers and
+// returns the successful union. Providers without credentials are omitted by
+// default, matching Pi's getAvailable behavior; set IncludeUnauthenticated to
+// probe every requested provider and receive explicit failures in Status.
+func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCatalogResult, error) {
+	base := query.Config
+	if base == nil {
+		base = &config.Config{}
+	}
+
+	providers := query.Providers
+	if len(providers) == 0 {
+		for _, def := range Native() {
+			if def.SupportsModelListing {
+				providers = append(providers, def.ID)
+			}
+		}
+	}
+
+	result := ModelCatalogResult{
+		Models: make([]ModelMetadata, 0),
+		Status: make([]ModelCatalogStatus, 0, len(providers)),
+	}
+	seenProviders := make(map[string]struct{}, len(providers))
+	for _, rawProvider := range providers {
+		provider := ResolveID(rawProvider)
+		if provider == "" {
+			continue
+		}
+		if _, seen := seenProviders[provider]; seen {
+			continue
+		}
+		seenProviders[provider] = struct{}{}
+
+		def, ok := Lookup(provider)
+		if !ok || def.Runtime != RuntimeNative || !def.SupportsModelListing {
+			result.Status = append(result.Status, ModelCatalogStatus{
+				Provider: provider,
+				Err:      fmt.Errorf("no model listing available for provider %s", provider),
+			})
+			continue
+		}
+
+		cfg := catalogConfigForProvider(base, provider)
+		if !query.IncludeUnauthenticated && !catalogProviderConfigured(base, cfg, def) {
+			continue
+		}
+
+		listed, err := QueryModelsForConfig(ctx, cfg)
+		status := ModelCatalogStatus{
+			Provider: provider,
+			Models:   len(listed.Models),
+			Stale:    listed.Stale,
+			Err:      err,
+		}
+		result.Status = append(result.Status, status)
+		if err != nil {
+			continue
+		}
+		result.Models = append(result.Models, listed.Models...)
+		result.Stale = result.Stale || listed.Stale
+	}
+
+	sortCatalogModels(result.Models)
+	if len(result.Models) == 0 {
+		for _, status := range result.Status {
+			if status.Err != nil {
+				return result, fmt.Errorf("no available models: %w", status.Err)
+			}
+		}
+	}
+	return result, nil
+}
+
+func catalogConfigForProvider(base *config.Config, provider string) *config.Config {
+	clone := *base
+	clone.Provider = provider
+	if ResolveID(base.Provider) != provider {
+		clone.Endpoint = ""
+		clone.AuthEnvVar = ""
+		clone.ExtraHeaders = nil
+	}
+	return &clone
+}
+
+func catalogProviderConfigured(base, cfg *config.Config, def Definition) bool {
+	switch def.AuthKind {
+	case AuthLocal:
+		return ResolveID(base.Provider) == def.ID || strings.TrimSpace(os.Getenv("OLLAMA_HOST")) != ""
+	case AuthOptional:
+		return ResolveID(base.Provider) == def.ID && strings.TrimSpace(cfg.Endpoint) != ""
+	}
+	return ResolvedAuthToken(cfg, def) != ""
+}
+
+func sortCatalogModels(models []ModelMetadata) {
+	slices.SortFunc(models, func(a, b ModelMetadata) int {
+		if provider := strings.Compare(strings.ToLower(a.Provider), strings.ToLower(b.Provider)); provider != 0 {
+			return provider
+		}
+		return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
+	})
 }
 
 func withModelListTimeout(ctx context.Context) (context.Context, context.CancelFunc, time.Duration) {
@@ -144,25 +312,26 @@ func fetchModels(
 	provider = ResolveID(provider)
 	switch provider {
 	case "anthropic":
-		return anthropicFetcher(ctx)
+		return anthropicFetcher(ctx, cfg)
 	case "openai":
-		return openAIFetcher(ctx)
+		return openAIFetcher(ctx, cfg)
 	case "openrouter":
-		return openRouterFetcher(ctx)
+		return openRouterFetcher(ctx, cfg)
 	case "gemini":
-		return geminiFetcher(ctx)
+		return geminiFetcher(ctx, cfg)
 	case "ollama":
-		if endpoint := ResolvedEndpoint(cfg); endpoint != "" &&
-			endpoint != "http://localhost:11434/v1" {
+		if cfg != nil && strings.TrimSpace(cfg.Endpoint) != "" {
+			endpoint := ResolvedEndpointContext(ctx, cfg)
+			def, _ := Lookup(provider)
 			return fetchOpenAICompatibleModels(
 				ctx,
 				provider,
-				ResolvedEndpoint(cfg),
-				"",
-				nil,
+				endpoint,
+				ResolvedAuthToken(cfg, def),
+				ResolvedHeaders(cfg),
 			)
 		}
-		return ollamaFetcher(ctx)
+		return ollamaFetcher(ctx, cfg)
 	case OpenAICompatibleID:
 		endpoint := ResolvedEndpointContext(ctx, cfg)
 		if endpoint == "" {
@@ -204,7 +373,8 @@ type openAIModelsResponse struct {
 }
 
 type openAIModel struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	Created int64  `json:"created"`
 }
 
 type anthropicModelsResponse struct {
@@ -218,12 +388,14 @@ type anthropicModel struct {
 }
 
 type openRouterModel struct {
-	ID                  string             `json:"id"`
-	Name                string             `json:"name"`
-	ContextLength       int64              `json:"context_length"`
-	Pricing             openRouterPricing  `json:"pricing"`
-	TopProvider         openRouterProvider `json:"top_provider"`
-	SupportedParameters []string           `json:"supported_parameters"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	ContextLength       int64                  `json:"context_length"`
+	Pricing             openRouterPricing      `json:"pricing"`
+	TopProvider         openRouterProvider     `json:"top_provider"`
+	Architecture        openRouterArchitecture `json:"architecture"`
+	Created             int64                  `json:"created"`
+	SupportedParameters []string               `json:"supported_parameters"`
 }
 
 type openRouterPricing struct {
@@ -232,7 +404,12 @@ type openRouterPricing struct {
 }
 
 type openRouterProvider struct {
-	ContextLength int64 `json:"context_length"`
+	ContextLength       int64 `json:"context_length"`
+	MaxCompletionTokens int64 `json:"max_completion_tokens"`
+}
+
+type openRouterArchitecture struct {
+	InputModalities []string `json:"input_modalities"`
 }
 
 type geminiModelsResponse struct {
@@ -243,7 +420,9 @@ type geminiModelsResponse struct {
 type geminiModel struct {
 	Name                       string   `json:"name"`
 	BaseModelID                string   `json:"baseModelId"`
+	DisplayName                string   `json:"displayName"`
 	InputTokenLimit            int      `json:"inputTokenLimit"`
+	OutputTokenLimit           int      `json:"outputTokenLimit"`
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 }
 
@@ -255,16 +434,18 @@ type ollamaModel struct {
 	Name string `json:"name"`
 }
 
-func fetchOpenAIModels(ctx context.Context) ([]ModelMetadata, error) {
-	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+func fetchOpenAIModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	def, _ := Lookup("openai")
+	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY not set")
+		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
+	endpoint := catalogBaseURL(ctx, cfg, "https://api.openai.com/v1")
+	headers := catalogHeaders(cfg)
+	headers["Authorization"] = "Bearer " + apiKey
 
 	var payload openAIModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, "https://api.openai.com/v1/models", map[string]string{
-		"Authorization": "Bearer " + apiKey,
-	}, &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch openai models: %w", err)
 	}
 
@@ -277,6 +458,8 @@ func fetchOpenAIModels(ctx context.Context) ([]ModelMetadata, error) {
 		models = append(models, ModelMetadata{
 			ID:        id,
 			Provider:  "openai",
+			Name:      id,
+			Created:   model.Created,
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
@@ -284,17 +467,19 @@ func fetchOpenAIModels(ctx context.Context) ([]ModelMetadata, error) {
 	return sortModels(models), nil
 }
 
-func fetchAnthropicModels(ctx context.Context) ([]ModelMetadata, error) {
-	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+func fetchAnthropicModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	def, _ := Lookup("anthropic")
+	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
+	endpoint := catalogBaseURL(ctx, cfg, "https://api.anthropic.com/v1")
+	headers := catalogHeaders(cfg)
+	headers["X-Api-Key"] = apiKey
+	headers["anthropic-version"] = "2023-06-01"
 
 	var payload anthropicModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, "https://api.anthropic.com/v1/models?limit=1000", map[string]string{
-		"X-Api-Key":         apiKey,
-		"anthropic-version": "2023-06-01",
-	}, &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models?limit=1000", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch anthropic models: %w", err)
 	}
 
@@ -307,6 +492,7 @@ func fetchAnthropicModels(ctx context.Context) ([]ModelMetadata, error) {
 		models = append(models, ModelMetadata{
 			ID:           id,
 			Provider:     "anthropic",
+			Name:         strings.TrimSpace(model.DisplayName),
 			ContextLimit: model.MaxInputTokens,
 			UpdatedAt:    time.Now().Unix(),
 		})
@@ -315,9 +501,18 @@ func fetchAnthropicModels(ctx context.Context) ([]ModelMetadata, error) {
 	return sortModels(models), nil
 }
 
-func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
+func fetchOpenRouterModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	def, _ := Lookup("openrouter")
+	apiKey := ResolvedAuthToken(cfg, def)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
+	}
+	endpoint := catalogBaseURL(ctx, cfg, "https://openrouter.ai/api/v1")
+	headers := catalogHeaders(cfg)
+	headers["Authorization"] = "Bearer " + apiKey
+
 	var payload openRouterModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, "https://openrouter.ai/api/v1/models", nil, &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch openrouter models: %w", err)
 	}
 
@@ -338,12 +533,16 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 		}
 		models = append(models, ModelMetadata{
 			ID:               model.ID,
+			Name:             model.Name,
 			Provider:         "openrouter",
 			ContextLimit:     contextLimit,
+			MaxTokens:        int(model.TopProvider.MaxCompletionTokens),
+			Input:            append([]string(nil), model.Architecture.InputModalities...),
 			InputPrice:       inputPrice,
 			OutputPrice:      outputPrice,
 			InputPriceKnown:  inputKnown,
 			OutputPriceKnown: outputKnown,
+			Created:          model.Created,
 			UpdatedAt:        time.Now().Unix(),
 			Reasoning:        isReasoning,
 		})
@@ -353,16 +552,15 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 	return sortModels(models), nil
 }
 
-func fetchGeminiModels(ctx context.Context) ([]ModelMetadata, error) {
-	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+func fetchGeminiModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	def, _ := Lookup("gemini")
+	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("GOOGLE_API_KEY"))
-	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
 
 	base := "https://generativelanguage.googleapis.com/v1beta/models"
+	headers := catalogHeaders(cfg)
 	models := make([]ModelMetadata, 0, 128)
 	pageToken := ""
 	for {
@@ -372,7 +570,7 @@ func fetchGeminiModels(ctx context.Context) ([]ModelMetadata, error) {
 		}
 
 		var payload geminiModelsResponse
-		if err := fetchJSON(ctx, http.MethodGet, endpoint, nil, &payload); err != nil {
+		if err := fetchJSON(ctx, http.MethodGet, endpoint, headers, &payload); err != nil {
 			return nil, fmt.Errorf("fetch gemini models: %w", err)
 		}
 
@@ -389,8 +587,10 @@ func fetchGeminiModels(ctx context.Context) ([]ModelMetadata, error) {
 			}
 			models = append(models, ModelMetadata{
 				ID:           id,
+				Name:         strings.TrimSpace(model.DisplayName),
 				Provider:     "gemini",
 				ContextLimit: model.InputTokenLimit,
+				MaxTokens:    model.OutputTokenLimit,
 				UpdatedAt:    time.Now().Unix(),
 			})
 		}
@@ -405,8 +605,12 @@ func fetchGeminiModels(ctx context.Context) ([]ModelMetadata, error) {
 	return sortModels(models), nil
 }
 
-func fetchOllamaModels(ctx context.Context) ([]ModelMetadata, error) {
+func fetchOllamaModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	base := normalizeOllamaBaseURL(strings.TrimSpace(os.Getenv("OLLAMA_HOST")))
+	if cfg != nil && strings.TrimSpace(cfg.Endpoint) != "" {
+		base = strings.TrimRight(cfg.Endpoint, "/")
+		base = strings.TrimSuffix(base, "/v1")
+	}
 	var payload ollamaTagsResponse
 	if err := fetchJSON(ctx, http.MethodGet, base+"/api/tags", nil, &payload); err != nil {
 		return nil, fmt.Errorf("fetch ollama models: %w", err)
@@ -420,7 +624,9 @@ func fetchOllamaModels(ctx context.Context) ([]ModelMetadata, error) {
 		}
 		models = append(models, ModelMetadata{
 			ID:        id,
+			Name:      id,
 			Provider:  "ollama",
+			Input:     []string{"text"},
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
@@ -453,11 +659,32 @@ func fetchOpenAICompatibleModels(
 		}
 		models = append(models, ModelMetadata{
 			ID:        id,
+			Name:      id,
 			Provider:  provider,
+			Input:     []string{"text"},
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
 	return sortModels(models), nil
+}
+
+func catalogBaseURL(ctx context.Context, cfg *config.Config, fallback string) string {
+	if cfg != nil {
+		if def, ok := Lookup(cfg.Provider); ok && def.SupportsCustomEndpoint {
+			if endpoint := ResolvedEndpointContext(ctx, cfg); endpoint != "" {
+				return endpoint
+			}
+		}
+	}
+	return fallback
+}
+
+func catalogHeaders(cfg *config.Config) map[string]string {
+	headers := cloneHeaders(ResolvedHeaders(cfg))
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	return headers
 }
 
 func parseMillionCost(raw string) (float64, bool) {
@@ -545,7 +772,7 @@ func fetchJSON(
 		req.Header.Set(key, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelListHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -814,9 +1041,39 @@ func providerCacheKey(cfg *config.Config) string {
 	provider := ResolveID(cfg.Provider)
 	endpoint := ResolvedEndpointContext(context.Background(), cfg)
 	authEnv := ResolvedAuthEnvVar(cfg)
+	def, _ := Lookup(provider)
+	auth := ResolvedAuthToken(cfg, def)
+	headers := ResolvedHeaders(cfg)
+	headerKeys := make([]string, 0, len(headers))
+	for key := range headers {
+		headerKeys = append(headerKeys, key)
+	}
+	slices.Sort(headerKeys)
+	fingerprintInput := strings.Builder{}
+	fingerprintInput.WriteString(auth)
+	for _, key := range headerKeys {
+		fingerprintInput.WriteString("\x00")
+		fingerprintInput.WriteString(key)
+		fingerprintInput.WriteString("=")
+		fingerprintInput.WriteString(headers[key])
+	}
+	digest := sha256.Sum256([]byte(fingerprintInput.String()))
 	return strings.Join([]string{
 		provider,
 		strings.ToLower(strings.TrimSpace(endpoint)),
 		strings.TrimSpace(authEnv),
+		fmt.Sprintf("%x", digest[:8]),
 	}, "|")
+}
+
+func cloneModelMetadataSlice(models []ModelMetadata) []ModelMetadata {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]ModelMetadata, len(models))
+	copy(out, models)
+	for i := range out {
+		out[i].Input = slices.Clone(models[i].Input)
+	}
+	return out
 }

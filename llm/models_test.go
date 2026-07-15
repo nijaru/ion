@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,6 +68,150 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".ion", "data", "models_cache.json")); err != nil {
 		t.Fatalf("expected cache file: %v", err)
 	}
+}
+
+func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldFetcher := providerCatalogFetcher
+	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	calls := 0
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		calls++
+		if calls == 1 {
+			return []ModelMetadata{{ID: "cached-model", Provider: provider}}, nil
+		}
+		return nil, errors.New("catalog offline")
+	}
+
+	cfg := &config.Config{Provider: "openrouter"}
+	first, err := QueryModelsForConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if first.Stale {
+		t.Fatal("fresh catalog was marked stale")
+	}
+
+	providerModelsMu.Lock()
+	key := providerCacheKey(cfg)
+	cached := providerModelsCacheMap[key]
+	cached.UpdatedAt = time.Now().Add(-2 * time.Hour).Unix()
+	providerModelsCacheMap[key] = cached
+	providerModelsMu.Unlock()
+
+	second, err := QueryModelsForConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("stale query: %v", err)
+	}
+	if !second.Stale {
+		t.Fatal("offline query did not report stale cache")
+	}
+	if len(second.Models) != 1 || second.Models[0].ID != "cached-model" {
+		t.Fatalf("stale models = %#v", second.Models)
+	}
+}
+
+func TestFetchOpenAIModelsUsesResolvedRuntimeAPIKey(t *testing.T) {
+	oldClient := modelListHTTPClient
+	t.Cleanup(func() { modelListHTTPClient = oldClient })
+	oldModelsDevFetcher := modelsDevFetcher
+	t.Cleanup(func() { modelsDevFetcher = oldModelsDevFetcher })
+	modelsDevFetcher = func(context.Context) (map[string]int64, error) {
+		return map[string]int64{}, nil
+	}
+	modelListHTTPClient = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if got, want := req.URL.String(), "https://api.openai.com/v1/models"; got != want {
+			t.Fatalf("catalog URL = %q, want %q", got, want)
+		}
+		if got, want := req.Header.Get("Authorization"), "Bearer runtime-key"; got != want {
+			t.Fatalf("authorization = %q, want %q", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-runtime","created":123}]}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	models, err := fetchModels(t.Context(), "openai", &config.Config{
+		Provider:               "openai",
+		APIKeyOverride:         "runtime-key",
+		APIKeyOverrideProvider: "openai",
+	})
+	if err != nil {
+		t.Fatalf("fetch openai models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-runtime" || models[0].Name != "gpt-runtime" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestFetchOpenAICompatibleModelsUsesCustomAuthEnvEndpointAndHeaders(t *testing.T) {
+	t.Setenv("ION_TEST_CATALOG_KEY", "env-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer env-key"; got != want {
+			t.Fatalf("authorization = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("X-Catalog-Test"), "present"; got != want {
+			t.Fatalf("custom header = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"custom-model"}]}`)
+	}))
+	defer server.Close()
+
+	models, err := fetchModels(t.Context(), OpenAICompatibleID, &config.Config{
+		Provider:   OpenAICompatibleID,
+		Endpoint:   server.URL + "/v1",
+		AuthEnvVar: "ION_TEST_CATALOG_KEY",
+		ExtraHeaders: map[string]string{
+			"X-Catalog-Test": "present",
+		},
+	})
+	if err != nil {
+		t.Fatalf("fetch custom models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "custom-model" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestQueryAvailableModelsFiltersUnconfiguredProviders(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "configured")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldFetcher := providerCatalogFetcher
+	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		return []ModelMetadata{{ID: provider + "-model", Provider: provider}}, nil
+	}
+
+	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+		Providers: []string{"openai", "openrouter"},
+	})
+	if err != nil {
+		t.Fatalf("query available models: %v", err)
+	}
+	if len(result.Models) != 1 || result.Models[0].Provider != "openai" {
+		t.Fatalf("models = %#v, want only configured openai model", result.Models)
+	}
+	if len(result.Status) != 1 || result.Status[0].Provider != "openai" {
+		t.Fatalf("status = %#v, want only configured provider", result.Status)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
@@ -134,7 +279,7 @@ func TestCachedFreshForConfigExpiresLocalCatalogsSooner(t *testing.T) {
 func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 	tests := []struct {
 		provider string
-		target   *func(context.Context) ([]ModelMetadata, error)
+		target   *providerModelFetcher
 	}{
 		{provider: "anthropic", target: &anthropicFetcher},
 		{provider: "openai", target: &openAIFetcher},
@@ -147,7 +292,7 @@ func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 		t.Run(tc.provider, func(t *testing.T) {
 			called := false
 			original := *tc.target
-			*tc.target = func(ctx context.Context) ([]ModelMetadata, error) {
+			*tc.target = func(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 				called = true
 				return []ModelMetadata{{ID: tc.provider + "-model"}}, nil
 			}

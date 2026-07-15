@@ -14,16 +14,19 @@ import (
 )
 
 type ModelMetadata struct {
-	ID               string  `json:"id"`
-	Provider         string  `json:"provider"`
-	ContextLimit     int     `json:"context_limit"`
-	InputPrice       float64 `json:"input_price"`  // per 1M tokens
-	OutputPrice      float64 `json:"output_price"` // per 1M tokens
-	InputPriceKnown  bool    `json:"input_price_known"`
-	OutputPriceKnown bool    `json:"output_price_known"`
-	Created          int64   `json:"created"`
-	UpdatedAt        int64   `json:"updated_at"`
-	Reasoning        bool    `json:"reasoning"`
+	ID               string   `json:"id"`
+	Provider         string   `json:"provider"`
+	Name             string   `json:"name,omitempty"`
+	ContextLimit     int      `json:"context_limit"`
+	MaxTokens        int      `json:"max_tokens"`
+	Input            []string `json:"input,omitempty"`
+	InputPrice       float64  `json:"input_price"`  // per 1M tokens
+	OutputPrice      float64  `json:"output_price"` // per 1M tokens
+	InputPriceKnown  bool     `json:"input_price_known"`
+	OutputPriceKnown bool     `json:"output_price_known"`
+	Created          int64    `json:"created"`
+	UpdatedAt        int64    `json:"updated_at"`
+	Reasoning        bool     `json:"reasoning"`
 }
 
 var (
