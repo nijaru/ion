@@ -395,9 +395,9 @@ func importSessionBundleFile(
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	bundle, err := ionexport.DecodeSessionBundle(raw)
-	if err != nil {
-		return nil, fmt.Errorf("decode session bundle %s: %w", path, err)
+	var bundle ionexport.SessionBundle
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		return nil, fmt.Errorf("decode Ion session bundle %s: %w", path, err)
 	}
 	bundle.RootSessionID = ""
 	id, err := ionexport.ImportSessionBundle(ctx, store, bundle)

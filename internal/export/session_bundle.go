@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -221,16 +219,6 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	return newLeafID, nil
 }
 
-// DecodeSessionBundle accepts Ion's JSON bundle and Pi-style JSONL session
-// files. JSONL imports always become a fresh Ion session, avoiding ID clashes.
-func DecodeSessionBundle(data []byte) (SessionBundle, error) {
-	var bundle SessionBundle
-	if err := json.Unmarshal(data, &bundle); err == nil && len(bundle.Sessions) > 0 {
-		return bundle, nil
-	}
-	return decodeJSONL(data)
-}
-
 func branchAt(ctx context.Context, store session.Store, leafID string) ([]session.Entry, error) {
 	entries, err := store.Entries(ctx)
 	if err != nil {
@@ -432,165 +420,4 @@ func sessionInfoEntry(info SessionBundleInfo) session.SessionInfoEntry {
 		LastPreview: info.LastPreview,
 		UpdatedAt:   info.UpdatedAt,
 	}
-}
-
-func decodeJSONL(data []byte) (SessionBundle, error) {
-	lines := strings.Split(string(data), "\n")
-	var info SessionBundleInfo
-	var events []json.RawMessage
-	var sawLine bool
-	for lineNumber, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		sawLine = true
-		var raw map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			return SessionBundle{}, fmt.Errorf("decode JSONL line %d: %w", lineNumber+1, err)
-		}
-		typ := stringField(raw, "type")
-		if typ == "session" {
-			info.ID = stringField(raw, "id")
-			info.Workdir = stringField(raw, "cwd")
-			info.UpdatedAt = timeField(raw["timestamp"])
-			if info.UpdatedAt.IsZero() {
-				info.UpdatedAt = time.Now()
-			}
-			continue
-		}
-		converted, err := convertJSONLLine(raw)
-		if err != nil {
-			return SessionBundle{}, fmt.Errorf("convert JSONL line %d: %w", lineNumber+1, err)
-		}
-		events = append(events, converted)
-	}
-	if !sawLine || len(events) == 0 {
-		return SessionBundle{}, errors.New("input is neither a session bundle nor a non-empty JSONL session")
-	}
-	for _, raw := range events {
-		entry, err := session.UnmarshalEntry(raw)
-		if err != nil {
-			return SessionBundle{}, fmt.Errorf("decode converted JSONL entry: %w", err)
-		}
-		if model, ok := entry.(*session.ModelChangeEntry); ok {
-			info.Model = model.Provider + "/" + model.ModelID
-		}
-		if named, ok := entry.(*session.SessionInfoEntry); ok && strings.TrimSpace(named.Name) != "" {
-			info.Name = named.Name
-		}
-	}
-	if info.UpdatedAt.IsZero() {
-		info.UpdatedAt = time.Now()
-	}
-	return SessionBundle{
-		Version:    sessionBundleVersion,
-		Sessions:   []SessionBundleRecord{{Info: info, Events: events}},
-		ExportedAt: time.Now(),
-	}, nil
-}
-
-func convertJSONLLine(raw map[string]json.RawMessage) (json.RawMessage, error) {
-	if _, ok := raw["payload"]; ok && stringField(raw, "id") != "" {
-		encoded, err := json.Marshal(raw)
-		return encoded, err
-	}
-	typ := stringField(raw, "type")
-	id := stringField(raw, "id")
-	if typ == "" || id == "" {
-		return nil, errors.New("entry requires type and id")
-	}
-	payload := make(map[string]json.RawMessage)
-	copyField := func(destination, source string) {
-		if value, ok := raw[source]; ok {
-			payload[destination] = value
-		}
-	}
-	switch typ {
-	case "message":
-		copyField("message", "message")
-	case "model_change":
-		copyField("provider", "provider")
-		copyField("model_id", "modelId")
-	case "thinking_level_change":
-		typ = "thinking_change"
-		copyField("level", "thinkingLevel")
-	case "active_tools_change":
-		typ = "tools_change"
-		copyField("active_tools", "activeToolNames")
-	case "compaction":
-		copyField("summary", "summary")
-		copyField("first_kept_id", "firstKeptEntryId")
-		copyField("tokens_before", "tokensBefore")
-		copyJSONBytesField(payload, "details", raw, "details")
-	case "branch_summary":
-		copyField("from_id", "fromId")
-		copyField("summary", "summary")
-		copyJSONBytesField(payload, "details", raw, "details")
-	case "label":
-		copyField("target_id", "targetId")
-		copyField("label", "label")
-	case "session_info":
-		copyField("name", "name")
-	case "custom":
-		copyField("custom_type", "customType")
-		copyField("custom_data", "data")
-	case "leaf":
-		copyField("leaf_target_id", "targetId")
-	case "custom_message":
-		copyField("custom_message_type", "customType")
-		copyField("custom_message_content", "content")
-		copyField("custom_message_display", "display")
-		copyJSONBytesField(payload, "custom_message_details", raw, "details")
-	default:
-		return nil, fmt.Errorf("unsupported entry type %q", typ)
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	envelope := map[string]any{
-		"id":        id,
-		"parent_id": stringField(raw, "parentId"),
-		"type":      typ,
-		"timestamp": timeField(raw["timestamp"]).UnixMilli(),
-		"payload":   json.RawMessage(payloadJSON),
-	}
-	return json.Marshal(envelope)
-}
-
-func copyJSONBytesField(destinationPayload map[string]json.RawMessage, destination string, raw map[string]json.RawMessage, source string) {
-	value, ok := raw[source]
-	if !ok || string(value) == "null" {
-		return
-	}
-	encoded := base64.StdEncoding.EncodeToString(value)
-	destinationPayload[destination], _ = json.Marshal(encoded)
-}
-
-func stringField(raw map[string]json.RawMessage, name string) string {
-	value, ok := raw[name]
-	if !ok || string(value) == "null" {
-		return ""
-	}
-	var result string
-	_ = json.Unmarshal(value, &result)
-	return result
-}
-
-func timeField(raw json.RawMessage) time.Time {
-	if len(raw) == 0 || string(raw) == "null" {
-		return time.Time{}
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
-			return parsed
-		}
-	}
-	number, err := strconv.ParseInt(strings.Trim(string(raw), `"`), 10, 64)
-	if err == nil {
-		return time.UnixMilli(number)
-	}
-	return time.Time{}
 }

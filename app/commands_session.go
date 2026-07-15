@@ -84,9 +84,9 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
-		bundle, err := ionexport.DecodeSessionBundle(data)
-		if err != nil {
-			return localErrorMsg{err: err}
+		var bundle ionexport.SessionBundle
+		if err := json.Unmarshal(data, &bundle); err != nil {
+			return localErrorMsg{err: fmt.Errorf("decode Ion session bundle: %w", err)}
 		}
 		bundle.RootSessionID = ""
 		imported, err := runner.ImportSessionBundle(context.Background(), bundle)
