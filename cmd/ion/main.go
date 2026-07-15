@@ -63,7 +63,8 @@ func main() {
 	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
 		cli.resumeShortID() != "" || cli.continueRequested() || openResumePicker
 	if cfg.APIKeyOverride != "" && firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel) == "" &&
-		!selectionRequested && cli.exportSessionPath() == "" && cli.importSessionPath() == "" {
+		!selectionRequested && cli.exportSessionPath() == "" && cli.importSessionPath() == "" &&
+		!cli.listModelsRequested() {
 		if err := validateAPIKeyOverride(cfg.APIKeyOverride, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(2)
@@ -74,11 +75,24 @@ func main() {
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
 
+	listModelsSearch, err := resolveListModelsSearch(cli.listModelsRequested(), flag.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
+	printArgs := flag.Args()
+	if cli.listModelsRequested() {
+		printArgs = nil
+		if cli.printRequested() || cli.printShortRequested() || cli.prompt() != "" || cli.jsonRequested() {
+			fmt.Fprintln(os.Stderr, "--list-models cannot be combined with print-mode flags")
+			os.Exit(2)
+		}
+	}
 	printRequested, prompt, output, err := resolvePrintFlags(
 		cli.printRequested(),
 		cli.printShortRequested(),
 		cli.prompt(),
-		flag.Args(),
+		printArgs,
 		cli.output(),
 		cli.jsonRequested(),
 	)
@@ -122,10 +136,12 @@ func main() {
 		}
 	}
 
-	// --list-models: print available models and exit (Pi parity, model listing deferred).
 	if cli.listModelsRequested() {
-		fmt.Fprintln(os.Stderr, "--list-models: model listing not yet wired (use TUI model picker)")
-		os.Exit(0)
+		if err := runListModels(ctx, os.Stdout, os.Stderr, cfg, listModelsSearch); err != nil {
+			fmt.Fprintf(os.Stderr, "--list-models: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	store, err := openStartupStore(cli.noSessionRequested(), cli.sessionDirOverride())

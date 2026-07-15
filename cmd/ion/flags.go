@@ -177,6 +177,19 @@ func (f cliFlags) listModelsRequested() bool {
 	return *f.listModelsFlag
 }
 
+func resolveListModelsSearch(requested bool, args []string) (string, error) {
+	if !requested {
+		return "", nil
+	}
+	if len(args) > 1 {
+		return "", fmt.Errorf("--list-models accepts at most one search pattern")
+	}
+	if len(args) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(args[0]), nil
+}
+
 func (f cliFlags) systemPromptOverride() string {
 	return strings.TrimSpace(*f.systemPromptFlag)
 }
