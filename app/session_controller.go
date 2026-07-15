@@ -501,6 +501,10 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
 	if printAssistant {
 		cmds = append(cmds, m.terminalCommit().Entries(assistant))
+		if errText := assistantErrorText(assistant); errText != "" {
+			notice, _ := session.EntrySystem("Error: "+errText, time.Now())
+			cmds = append(cmds, m.terminalCommit().Entries(notice))
+		}
 	}
 	if entry, ok := m.turnReducer().FinishTurnMode(assistantCompleted); ok {
 		cmds = append(cmds, m.terminalCommit().Entries(entry))
@@ -527,6 +531,18 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 		cmds = append(cmds, m.awaitSessionEvent())
 	}
 	return m, tea.Sequence(cmds...)
+}
+
+func assistantErrorText(entry session.Entry) string {
+	messageEntry, ok := entry.(*session.MessageEntry)
+	if !ok {
+		return ""
+	}
+	assistant, ok := messageEntry.Message.(*session.AssistantMessage)
+	if !ok || assistant.StopReason != session.StopReasonError {
+		return ""
+	}
+	return strings.TrimSpace(assistant.Error)
 }
 
 func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {

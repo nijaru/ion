@@ -295,10 +295,6 @@ type SessionTree struct {
 	Children []session.Entry
 }
 
-type SessionTreeReader interface {
-	SessionTree(ctx context.Context, leafID string) (SessionTree, error)
-}
-
 // --- Session fork (future feature) ---
 
 type SessionForkOptions struct{}

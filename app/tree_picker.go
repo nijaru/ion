@@ -45,23 +45,73 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 		m.showTreeUnavailable()
 		return m, nil
 	}
-	reader, ok := m.Model.Store.(SessionTreeReader)
-	if !ok {
-		m.showTreeUnavailable()
-		return m, nil
-	}
 	if m.activeSession() == nil {
 		m.showTreeUnavailable()
 		return m, nil
 	}
-	sessionID := m.activeSession().ID()
+	leafID := m.Model.Store.GetLeafID()
+	if leafID == "" {
+		m.showTreeUnavailable()
+		return m, nil
+	}
 
 	m.Picker.Tree = &treePickerState{loading: true}
 
 	return m, func() tea.Msg {
-		tree, err := reader.SessionTree(context.Background(), sessionID)
+		tree, err := loadSessionTree(context.Background(), m.Model.Store, leafID)
 		return treePickerLoadedMsg{tree: tree, err: err}
 	}
+}
+
+// loadSessionTree projects the persisted entry graph into the picker view.
+// Store owns the graph; app owns this display projection. Keeping the
+// projection here avoids adding a UI-shaped interface to session or making
+// SQLite import app types.
+func loadSessionTree(ctx context.Context, store session.Store, leafID string) (SessionTree, error) {
+	entries, err := store.Entries(ctx)
+	if err != nil {
+		return SessionTree{}, err
+	}
+
+	byID := make(map[string]session.Entry, len(entries))
+	for _, entry := range entries {
+		if entry != nil {
+			byID[entry.ID()] = entry
+		}
+	}
+	current, ok := byID[leafID]
+	if !ok {
+		return SessionTree{}, fmt.Errorf("session tree leaf %q not found", leafID)
+	}
+
+	var reverseLineage []session.Entry
+	seen := map[string]bool{leafID: true}
+	for parentID := current.ParentID(); parentID != ""; {
+		if seen[parentID] {
+			return SessionTree{}, fmt.Errorf("session tree contains a parent cycle at %q", parentID)
+		}
+		seen[parentID] = true
+		parent, ok := byID[parentID]
+		if !ok {
+			return SessionTree{}, fmt.Errorf("session tree parent %q not found", parentID)
+		}
+		reverseLineage = append(reverseLineage, parent)
+		parentID = parent.ParentID()
+	}
+
+	lineage := make([]session.Entry, len(reverseLineage))
+	for i := range reverseLineage {
+		lineage[len(reverseLineage)-1-i] = reverseLineage[i]
+	}
+
+	children := make([]session.Entry, 0)
+	for _, entry := range entries {
+		if entry != nil && entry.ParentID() == leafID {
+			children = append(children, entry)
+		}
+	}
+
+	return SessionTree{Current: current, Lineage: lineage, Children: children}, nil
 }
 
 func (m Model) closeTreePicker() Model {
@@ -219,11 +269,11 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+r":
 		// Refresh tree from store.
 		if m.Model.Store != nil {
-			reader, ok := m.Model.Store.(SessionTreeReader)
-			if ok && m.activeSession() != nil {
+			if m.activeSession() != nil {
 				m.Picker.Tree.loading = true
+				leafID := m.Model.Store.GetLeafID()
 				return m, func() tea.Msg {
-					tree, err := reader.SessionTree(context.Background(), m.activeSession().ID())
+					tree, err := loadSessionTree(context.Background(), m.Model.Store, leafID)
 					return treePickerLoadedMsg{tree: tree, err: err}
 				}
 			}
