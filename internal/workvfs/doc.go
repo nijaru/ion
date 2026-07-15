@@ -8,4 +8,4 @@
 // WorkspaceFS is the first-class rooted filesystem capability. Root currently
 // implements it, and WorkspaceFS-backed search indexing plus ESCALATE.md
 // parsing build on the same rooted substrate.
-package workspace
+package workvfs

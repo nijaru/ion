@@ -5,15 +5,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nijaru/ion/internal/workvfs"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/tool"
-	"github.com/nijaru/ion/internal/workvfs"
 )
 
 // FilePolicy applies workspace validation and sensitive-path detection to MCP
 // tools that look like file operations.
 type FilePolicy struct {
-	Validator      *workspace.Validator
+	Validator      *workvfs.Validator
 	ProtectedPaths []string
 }
 

@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/internal/workvfs"
+	"github.com/nijaru/ion/llm"
 )
 
 type fakeClientSession struct {
@@ -200,7 +200,7 @@ func TestWrapperExecuteRejectsInvalidJSON(t *testing.T) {
 
 func TestWrapperExecuteNormalizesMCPFilePaths(t *testing.T) {
 	root := t.TempDir()
-	validator, err := workspace.NewValidator(root)
+	validator, err := workvfs.NewValidator(root)
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestWrapperExecuteNormalizesMCPFilePaths(t *testing.T) {
 
 func TestWrapperApprovalRequirementUsesProtectedMCPPath(t *testing.T) {
 	root := t.TempDir()
-	validator, err := workspace.NewValidator(root)
+	validator, err := workvfs.NewValidator(root)
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
 	}
