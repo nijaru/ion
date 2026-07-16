@@ -29,17 +29,17 @@ func collectWithSubscribe(h *Harness, prompt string) ([]session.Event, error) {
 	// that only use Subscribe.
 	drainDone := make(chan struct{})
 	go func() {
-			defer close(drainDone)
-			for {
-				select {
-				case _, ok := <-h.Events():
-					if !ok {
-						return
-					}
-				case <-time.After(10 * time.Second):
+		defer close(drainDone)
+		for {
+			select {
+			case _, ok := <-h.Events():
+				if !ok {
 					return
 				}
+			case <-time.After(10 * time.Second):
+				return
 			}
+		}
 	}()
 	// Subscribe captures all events reliably even if channel reader lags.
 	unsub := h.Subscribe(func(e session.Event) {
@@ -82,6 +82,10 @@ func eventTypeName(e session.Event) string {
 		return "ToolExecUpdate"
 	case session.ToolExecEnd:
 		return "ToolExecEnd"
+	case session.ApprovalRequest:
+		return "ApprovalRequest"
+	case session.ApprovalResolution:
+		return "ApprovalResolution"
 	case session.TurnEnd:
 		return "TurnEnd"
 	case session.AgentEnd:
@@ -405,6 +409,8 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 		session.ToolExecStart{},
 		session.ToolExecUpdate{},
 		session.ToolExecEnd{},
+		session.ApprovalRequest{},
+		session.ApprovalResolution{},
 		session.TurnEnd{},
 		session.AgentEnd{},
 		session.QueueUpdate{},
@@ -429,6 +435,8 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 			session.ToolExecStart,
 			session.ToolExecUpdate,
 			session.ToolExecEnd,
+			session.ApprovalRequest,
+			session.ApprovalResolution,
 			session.TurnEnd,
 			session.AgentEnd,
 			session.QueueUpdate,
@@ -652,13 +660,13 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	dMu.Lock()
 	// At least the terminal lifecycle events must be present in both paths.
 	has := func(list []session.Event, name string) bool {
-			for _, e := range list {
-				if eventTypeName(e) == name {
-					return true
-				}
+		for _, e := range list {
+			if eventTypeName(e) == name {
+				return true
 			}
-			return false
 		}
+		return false
+	}
 	for _, need := range []string{"AgentEnd", "Settled", "MessageEnd", "TurnEnd"} {
 		if !has(viaSubscribe, need) {
 			t.Fatalf("Subscribe path missing %s; got %v", need, eventNames(viaSubscribe))

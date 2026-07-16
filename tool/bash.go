@@ -92,6 +92,24 @@ func (b *Bash) Spec() llm.Spec {
 	}
 }
 
+// ApprovalRequirement treats every foreground/background shell command as a
+// potentially mutating operation. Job inspection and cancellation are
+// runtime management, not shell execution, and do not require approval.
+func (b *Bash) ApprovalRequirement(args string) (Requirement, bool, error) {
+	input, err := parseBashInput(args)
+	if err != nil {
+		return Requirement{}, false, err
+	}
+	if input.Action != "run" {
+		return Requirement{}, false, nil
+	}
+	return Requirement{
+		Category:  "execute",
+		Operation: "bash",
+		Resource:  input.Command,
+	}, true, nil
+}
+
 func (b *Bash) Execute(ctx context.Context, args string) (string, error) {
 	return b.execute(ctx, args, nil)
 }

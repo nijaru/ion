@@ -481,6 +481,7 @@ func prepareToolArguments(tool *Tool, arguments map[string]any) (args map[string
 // Returns the prepared call on success, or a non-nil result on failure.
 // Does NOT emit any events — the caller decides what to emit.
 func prepareToolCall(
+	ctx context.Context,
 	snapshot TurnContext,
 	assistantMsg session.AssistantMessage,
 	tc *session.ToolCall,
@@ -539,6 +540,7 @@ func prepareToolCall(
 	// BeforeToolCall hook.
 	if cfg.BeforeToolCall != nil {
 		decision, hookErr := invokeBeforeToolCall(cfg, ToolCallContext{
+			RunContext:       ctx,
 			AssistantMessage: assistantMsg, ToolCall: tc, Args: argsRaw, Context: snapshot,
 		})
 		if hookErr != nil {
@@ -601,7 +603,7 @@ func executeToolCallsParallel(
 	for i, tc := range toolCalls {
 		argsRaw, _ := json.Marshal(tc.Arguments)
 		emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsRaw})
-		p, errResult := prepareToolCall(snapshot, assistantMsg, tc, cfg, signal)
+		p, errResult := prepareToolCall(ctx, snapshot, assistantMsg, tc, cfg, signal)
 		if errResult != nil {
 			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: *errResult})
 			results[i] = *errResult
@@ -818,6 +820,7 @@ func executeOneToolCall(
 	// BeforeToolCall hook.
 	if cfg.BeforeToolCall != nil {
 		decision, hookErr := invokeBeforeToolCall(cfg, ToolCallContext{
+			RunContext:       ctx,
 			AssistantMessage: assistantMsg,
 			ToolCall:         tc,
 			Args:             argsRaw,

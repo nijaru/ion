@@ -123,7 +123,8 @@ func TestEntryIsSealedUnion(t *testing.T) {
 func TestEventUnionIsClosed(t *testing.T) {
 	events := []Event{
 		AgentStart{}, TurnStart{}, MessageStart{}, MessageUpdate{}, MessageEnd{},
-		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{}, TurnEnd{}, AgentEnd{},
+		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{},
+		ApprovalRequest{}, ApprovalResolution{}, TurnEnd{}, AgentEnd{},
 		ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{}, QueueUpdate{}, Settled{}, SavePoint{},
 		&Error{},
 	}

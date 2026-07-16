@@ -381,6 +381,16 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.ToolExecEnd:
 		return m.handleToolExecEnd(msg)
 
+	case session.ApprovalRequest:
+		m.Picker.Approval = &approvalPromptState{request: msg}
+		return m, m.awaitSessionEvent()
+
+	case session.ApprovalResolution:
+		if m.Picker.Approval != nil && m.Picker.Approval.request.ID == msg.ID {
+			m.Picker.Approval = nil
+		}
+		return m, m.awaitSessionEvent()
+
 	case *session.Error:
 		// Background errors from harness (persist failures, flush writes, auto-compact).
 		entry, _ := session.EntrySystem(fmt.Sprintf("⚠️  %s", msg.Err.Error()), time.Now())

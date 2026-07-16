@@ -72,6 +72,7 @@ type Harness struct {
 	// compaction settings
 	compaction    CompactionSettings
 	contextWindow int
+	approvals     *ApprovalBroker
 }
 
 type Phase string
@@ -143,6 +144,12 @@ type HarnessConfig struct {
 	// Compaction settings.
 	Compaction    CompactionSettings
 	ContextWindow int // model context window size in tokens
+
+	// ApprovalMode controls requirement-bearing tool calls. Confirm is
+	// interactive only when ApprovalInteractive is true; otherwise it denies
+	// requests immediately (the print-mode fail-closed behavior).
+	ApprovalMode        ApprovalMode
+	ApprovalInteractive bool
 }
 
 // NewHarness creates a new Harness from the given configuration.
@@ -200,6 +207,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	if h.hooks == nil {
 		h.hooks = make(map[string][]HookHandler)
 	}
+	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
 	return h
 }
 
@@ -641,15 +649,52 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 				ToolName:   ctx.ToolCall.Name,
 				Args:       ctx.Args,
 			})
-			if err != nil || len(patches) == 0 {
+			if err != nil {
 				return nil
 			}
 			for _, p := range patches {
-				if bp, ok := p.(*ToolCallDecision); ok && bp != nil {
+				if bp, ok := p.(*ToolCallDecision); ok && bp != nil && bp.Block {
 					return bp
 				}
 			}
-			return nil
+			h.mu.Lock()
+			registered, ok := h.tools[ctx.ToolCall.Name]
+			h.mu.Unlock()
+			if !ok || registered.ApprovalRequirement == nil {
+				return nil
+			}
+			requirement, required, err := registered.ApprovalRequirement(ctx.Args)
+			if err != nil {
+				return &ToolCallDecision{
+					Block:  true,
+					Reason: fmt.Sprintf("tool approval: %v", err),
+				}
+			}
+			if !required {
+				return nil
+			}
+			if h.approvals == nil {
+				return &ToolCallDecision{
+					Block:  true,
+					Reason: "tool approval is unavailable in this runtime",
+				}
+			}
+			outcome := h.approvals.Request(ctx.RunContext, session.ApprovalRequest{
+				ToolCallID: ctx.ToolCall.ID,
+				ToolName:   ctx.ToolCall.Name,
+				Category:   requirement.Category,
+				Operation:  requirement.Operation,
+				Resource:   requirement.Resource,
+			})
+			if outcome.decision == session.ApprovalAllow ||
+				outcome.decision == session.ApprovalAlways {
+				return nil
+			}
+			reason := outcome.reason
+			if reason == "" {
+				reason = "tool call denied by user"
+			}
+			return &ToolCallDecision{Block: true, Reason: reason}
 		},
 		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
 			patches, err := h.emitHook(HookToolResult, toolResultPayload{
@@ -1235,6 +1280,15 @@ func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
 	return clearedSteer, clearedFollowUp, nil
 }
 
+// ResolveApproval supplies the host's decision for one pending tool call.
+// It is intentionally a small optional runner capability used by the TUI.
+func (h *Harness) ResolveApproval(id string, decision session.ApprovalDecision) error {
+	if h == nil || h.approvals == nil {
+		return errors.New("approval broker is unavailable")
+	}
+	return h.approvals.Resolve(id, decision)
+}
+
 // Close releases resources. Active work is cancelled before waiting for its
 // completion so providers and tools that honor the run signal can terminate.
 func (h *Harness) Close() error {
@@ -1254,6 +1308,9 @@ func (h *Harness) Close() error {
 		default:
 			close(cancel)
 		}
+	}
+	if h.approvals != nil {
+		_ = h.approvals.Close()
 	}
 	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()

@@ -39,6 +39,10 @@ type clearPendingMsg struct {
 
 type deferredEnterMsg struct{}
 
+type approvalResolveMsg struct {
+	err error
+}
+
 type fileReferenceCompletionMsg struct {
 	requestID uint64
 	text      string
@@ -281,6 +285,11 @@ type branchSummaryPromptState struct {
 	err        string
 }
 
+type approvalPromptState struct {
+	request   session.ApprovalRequest
+	resolving bool
+}
+
 // AppState holds general application and workspace metadata.
 type AppState struct {
 	Width             int
@@ -330,6 +339,7 @@ type PickerState struct {
 	Session            *sessionPickerState
 	Setup              *setupPromptState
 	BranchSummary      *branchSummaryPromptState
+	Approval           *approvalPromptState
 	Tree               *treePickerState
 	LastEscAt          time.Time
 	ModelLoadRequest   uint64

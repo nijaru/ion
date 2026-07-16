@@ -269,7 +269,7 @@ func TestRunLoopToolExecution(t *testing.T) {
 
 func TestPrepareToolCallRecoversBeforeHookPanic(t *testing.T) {
 	tool := Tool{Name: "hook-panic"}
-	_, result := prepareToolCall(TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
+	_, result := prepareToolCall(context.Background(), TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
 		ID: "call-hook-panic", Name: "hook-panic", Arguments: map[string]any{},
 	}, LoopConfig{
 		Tools: []Tool{tool},
@@ -302,7 +302,7 @@ func TestPrepareToolArgumentsRecoversPanics(t *testing.T) {
 			panic("bad preparation")
 		},
 	}
-	prepared, result := prepareToolCall(TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
+	prepared, result := prepareToolCall(context.Background(), TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
 		ID: "call-panic", Name: "panic-prepare", Arguments: map[string]any{},
 	}, LoopConfig{Tools: []Tool{*tool}}, nil)
 	if prepared.tool != nil || result == nil || !result.IsError {

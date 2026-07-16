@@ -77,12 +77,24 @@ type LoopConfig struct {
 
 // Tool describes a tool the loop can execute.
 type Tool struct {
-	Name          string
-	Description   string
-	Parameters    any // JSON Schema for the tool's arguments
-	Execute       func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
-	ExecutionMode ExecMode
-	PrepareArgs   func(json.RawMessage) json.RawMessage
+	Name        string
+	Description string
+	Parameters  any // JSON Schema for the tool's arguments
+	// ApprovalRequirement classifies a prepared argument payload. A nil
+	// function means the tool is trusted without an interactive decision.
+	ApprovalRequirement func(json.RawMessage) (ApprovalRequirement, bool, error)
+	Execute             func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
+	ExecutionMode       ExecMode
+	PrepareArgs         func(json.RawMessage) json.RawMessage
+}
+
+// ApprovalRequirement describes the user-visible scope of a tool operation.
+// Tool implementations own classification; the harness owns the decision.
+type ApprovalRequirement struct {
+	Category  string
+	Operation string
+	Resource  string
+	Metadata  map[string]any
 }
 
 // ExecMode controls how multiple tool calls in one assistant message are executed.
@@ -95,6 +107,7 @@ const (
 
 // ToolCallContext is passed to BeforeToolCall.
 type ToolCallContext struct {
+	RunContext       context.Context
 	AssistantMessage session.AssistantMessage
 	ToolCall         *session.ToolCall
 	Args             json.RawMessage

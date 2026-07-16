@@ -25,6 +25,14 @@ func (e *Edit) Spec() llm.Spec {
 	}
 }
 
+func (e *Edit) ApprovalRequirement(args string) (Requirement, bool, error) {
+	input, err := decodeToolArgs[editInput]("edit", args)
+	if err != nil {
+		return Requirement{}, false, err
+	}
+	return Requirement{Category: "write", Operation: "edit", Resource: input.Path}, true, nil
+}
+
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	// Extract file path for queue key before full decode
 	input, err := decodeToolArgs[editInput]("edit", args)

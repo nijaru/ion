@@ -57,9 +57,11 @@ func main() {
 	modelOverride := cli.modelOverride()
 	explicitRuntimeOverride := providerOverride != "" ||
 		strings.TrimSpace(modelOverride) != "" ||
+		cli.trustModeOverride() != "" ||
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
+	applyCLITrustModeOverride(cfg, cli.trustModeOverride())
 	cfg.APIKeyOverride = cli.apiKeyOverride()
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
 	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
@@ -297,6 +299,7 @@ func main() {
 		persistResumedSessionModel,
 		cli.systemPromptOverride(),
 		cli.appendSystemPromptOverride(),
+		!printRequested,
 	)
 	if err != nil {
 		if printRequested || b == nil || b.Name() != "setup" {
@@ -384,6 +387,7 @@ func main() {
 			true,
 			cli.systemPromptOverride(),
 			cli.appendSystemPromptOverride(),
+			true,
 		)
 		if err != nil {
 			return nil, nil, nil, err

@@ -60,6 +60,7 @@ type Config struct {
 	BashOutput             string            `toml:"bash_output,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 	BusyInput              string            `toml:"busy_input,omitempty"`
+	TrustMode              string            `toml:"trust_mode,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
 	SubagentTools          string            `toml:"subagent_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
@@ -204,6 +205,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.BashOutput = normalizeBashOutput(cfg.BashOutput)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
+	cfg.TrustMode = normalizeTrustMode(cfg.TrustMode)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
 	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
 	cfg.ToolMode = normalizeToolMode(cfg.ToolMode)
@@ -748,6 +750,28 @@ func NormalizeBusyInput(value string) string {
 	default:
 		return ""
 	}
+}
+
+// NormalizeTrustMode returns the host's tool trust policy. Unknown values
+// fail closed to confirm; an empty value retains Ion's trusted-local default.
+func NormalizeTrustMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "confirm", "approval", "approvals", "ask":
+		return "confirm"
+	case "", "trusted", "trust", "local":
+		return "trusted"
+	default:
+		return "confirm"
+	}
+}
+
+func normalizeTrustMode(value string) string { return NormalizeTrustMode(value) }
+
+func (c *Config) ToolTrustMode() string {
+	if c == nil {
+		return "trusted"
+	}
+	return NormalizeTrustMode(c.TrustMode)
 }
 
 func normalizeBusyInput(value string) string {

@@ -406,8 +406,8 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 	}
 }
 
-// TestPrintModeRejectsUnexpectedApprovalRequest removed — ApprovalRequest event type deleted.
-// See ARCHITECTURE-PLAN.md Phase 1.
+// Print mode is non-interactive; requirement-bearing tools are denied by the
+// harness approval broker and persist a recoverable tool error.
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 3)}

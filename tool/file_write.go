@@ -23,6 +23,14 @@ func (w *Write) Spec() llm.Spec {
 	}
 }
 
+func (w *Write) ApprovalRequirement(args string) (Requirement, bool, error) {
+	input, err := decodeToolArgs[writeInput]("write", args)
+	if err != nil {
+		return Requirement{}, false, err
+	}
+	return Requirement{Category: "write", Operation: "write", Resource: input.Path}, true, nil
+}
+
 func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	input, err := decodeToolArgs[writeInput]("write", args)
 	if err != nil {

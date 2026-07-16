@@ -174,6 +174,18 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 	})
 }
 
+func TestApplyCLITrustModeOverride(t *testing.T) {
+	cfg := &config.Config{}
+	applyCLITrustModeOverride(cfg, "confirm")
+	if got := cfg.ToolTrustMode(); got != "confirm" {
+		t.Fatalf("trust mode = %q, want confirm", got)
+	}
+	applyCLITrustModeOverride(cfg, "unknown")
+	if got := cfg.ToolTrustMode(); got != "confirm" {
+		t.Fatalf("unknown trust mode = %q, want fail-closed confirm", got)
+	}
+}
+
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
 	store := &testStore{sessions: []session.SessionInfoEntry{
 		sessionInfoForTest("empty", ""),

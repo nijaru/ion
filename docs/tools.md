@@ -63,8 +63,15 @@ Long native `bash` output uses tail semantics: Ion keeps the last 2000 lines or
 file referenced in the tool result. This preserves final test summaries and
 compiler errors instead of returning only the command's head.
 
-Native execution is trusted by default. Approval tiers, persistent policy files,
-and sandbox permission UX are deferred until the core loop and TUI are stable.
+Native execution is trusted by default. For an interactive confirmation gate,
+set `trust_mode = "confirm"` in `~/.ion/config.toml` or pass
+`--trust-mode confirm`. Requirement-bearing mutating tools pause in the TUI
+until the user chooses allow, allow for the rest of the runtime, or deny.
+Denying produces a recoverable error result in the session rather than running
+the tool. Print mode and shutdown fail closed because they cannot host a
+decision prompt. Persistent approval policy is intentionally not part of the
+runtime contract; future external tools must use the same broker before they
+are exposed.
 
 Native `read` returns model-visible text file contents with line numbers. For
 supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an

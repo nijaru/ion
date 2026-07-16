@@ -31,6 +31,9 @@ func keyTextInput(msg tea.KeyPressMsg) (string, bool) {
 
 // handleKey is the source of truth for core TUI hotkey semantics.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.Picker.Approval != nil {
+		return m.handleApprovalKey(msg)
+	}
 	if m.Picker.Session != nil {
 		return m.handleSessionPickerKey(msg)
 	}

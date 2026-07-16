@@ -2,11 +2,16 @@ package session
 
 import "time"
 
-// Event is the closed union of events the agent loop and harness emit.
-// Matches Pi's 10 events from agent-loop.js:
-//   agent_start, turn_start, message_start, message_update, message_end,
-//   tool_execution_start, tool_execution_update, tool_execution_end,
-//   turn_end, agent_end
+// Event is the closed union of events the agent loop and harness emit. The
+// core lifecycle follows a provider-independent agent contract; runtime
+// control events extend it for host interaction and persistence projection:
+//
+//	agent_start, turn_start, message_start, message_update, message_end,
+//	tool_execution_start, tool_execution_update, tool_execution_end,
+//	turn_end, agent_end
+//
+// ApprovalRequest and ApprovalResolution are runtime-only control events; the
+// resulting tool result is the durable session record.
 //
 // message_update carries a Delta union (text/thinking/toolcall).
 type Event interface {
@@ -62,6 +67,37 @@ type ToolExecUpdate struct {
 type ToolExecEnd struct {
 	ToolCallID string
 	Result     ToolResultMessage
+}
+
+// ApprovalDecision is the outcome of an interactive tool trust request.
+// Decisions are runtime-only control events; the resulting ToolResultMessage
+// is what enters the session tree.
+type ApprovalDecision string
+
+const (
+	ApprovalAllow  ApprovalDecision = "allow"
+	ApprovalDeny   ApprovalDecision = "deny"
+	ApprovalAlways ApprovalDecision = "always"
+)
+
+// ApprovalRequest pauses a requirement-bearing tool call until the host
+// resolves it. ID is unique within the active harness runtime.
+type ApprovalRequest struct {
+	ID         string
+	ToolCallID string
+	ToolName   string
+	Category   string
+	Operation  string
+	Resource   string
+	Timestamp  time.Time
+}
+
+// ApprovalResolution closes one ApprovalRequest exactly once.
+type ApprovalResolution struct {
+	ID        string
+	Decision  ApprovalDecision
+	Reason    string
+	Timestamp time.Time
 }
 
 // TurnEnd closes a turn.
@@ -123,16 +159,18 @@ type ToolPartial = any
 
 // --- Sealing. ---
 
-func (AgentStart) IsEvent()    {}
-func (TurnStart) IsEvent()     {}
-func (MessageStart) IsEvent()  {}
-func (MessageUpdate) IsEvent() {}
-func (MessageEnd) IsEvent()    {}
-func (ToolExecStart) IsEvent() {}
-func (ToolExecUpdate) IsEvent(){}
-func (ToolExecEnd) IsEvent()   {}
-func (TurnEnd) IsEvent()       {}
-func (AgentEnd) IsEvent()      {}
+func (AgentStart) IsEvent()         {}
+func (TurnStart) IsEvent()          {}
+func (MessageStart) IsEvent()       {}
+func (MessageUpdate) IsEvent()      {}
+func (MessageEnd) IsEvent()         {}
+func (ToolExecStart) IsEvent()      {}
+func (ToolExecUpdate) IsEvent()     {}
+func (ToolExecEnd) IsEvent()        {}
+func (ApprovalRequest) IsEvent()    {}
+func (ApprovalResolution) IsEvent() {}
+func (TurnEnd) IsEvent()            {}
+func (AgentEnd) IsEvent()           {}
 
 // --- Harness lifecycle events (Pi-aligned). ---
 
@@ -212,7 +250,7 @@ type Error struct {
 }
 
 func (AfterProviderResponse) IsEvent() {}
-func (*Error) IsEvent()              {}
+func (*Error) IsEvent()                {}
 
 // --- Utility functions (stay in session/ as they access domain types). ---
 

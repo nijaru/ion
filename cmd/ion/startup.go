@@ -287,6 +287,13 @@ func applyCLIConfigOverrides(
 	}
 }
 
+func applyCLITrustModeOverride(cfg *config.Config, override string) {
+	if cfg == nil || strings.TrimSpace(override) == "" {
+		return
+	}
+	cfg.TrustMode = config.NormalizeTrustMode(override)
+}
+
 func clearProviderScopedPresets(cfg *config.Config) {
 	cfg.FastModel = ""
 	cfg.FastReasoningEffort = ""

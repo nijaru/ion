@@ -944,6 +944,28 @@ func TestNormalizeSubagentTools(t *testing.T) {
 	}
 }
 
+func TestNormalizeTrustMode(t *testing.T) {
+	for input, want := range map[string]string{
+		"":           "trusted",
+		"trusted":    "trusted",
+		"local":      "trusted",
+		"confirm":    "confirm",
+		"approval":   "confirm",
+		"ask":        "confirm",
+		"unexpected": "confirm",
+	} {
+		if got := NormalizeTrustMode(input); got != want {
+			t.Fatalf("NormalizeTrustMode(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := (&Config{}).ToolTrustMode(); got != "trusted" {
+		t.Fatalf("default trust mode = %q, want trusted", got)
+	}
+	if got := (&Config{TrustMode: "confirm"}).ToolTrustMode(); got != "confirm" {
+		t.Fatalf("configured trust mode = %q, want confirm", got)
+	}
+}
+
 func TestNormalizeToolMode(t *testing.T) {
 	for input, want := range map[string]string{
 		"":          "coding",

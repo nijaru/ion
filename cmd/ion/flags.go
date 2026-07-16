@@ -19,6 +19,7 @@ type cliFlags struct {
 	modelFlag              *string
 	modelShortFlag         *string
 	thinkingFlag           *string
+	trustModeFlag          *string
 	apiKeyFlag             *string
 	sessionDirFlag         *string
 	listModelsFlag         *bool
@@ -70,6 +71,11 @@ func registerCLIFlags() cliFlags {
 			"thinking",
 			"",
 			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
+		),
+		trustModeFlag: flag.String(
+			"trust-mode",
+			"",
+			"Tool trust mode: trusted or confirm",
 		),
 		apiKeyFlag: flag.String(
 			"api-key",
@@ -153,6 +159,10 @@ func (f cliFlags) modelOverride() string {
 
 func (f cliFlags) thinkingOverride() string {
 	return *f.thinkingFlag
+}
+
+func (f cliFlags) trustModeOverride() string {
+	return strings.TrimSpace(*f.trustModeFlag)
 }
 
 func (f cliFlags) apiKeyOverride() string {
@@ -397,6 +407,7 @@ func ionKnownFlag(name string) bool {
 		"model",
 		"m",
 		"thinking",
+		"trust-mode",
 		"api-key",
 		"session-dir",
 		"list-models",
@@ -425,6 +436,7 @@ func ionFlagNeedsValue(name string) bool {
 		"model",
 		"m",
 		"thinking",
+		"trust-mode",
 		"api-key",
 		"session-dir",
 		"system-prompt",

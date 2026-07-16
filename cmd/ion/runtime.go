@@ -214,7 +214,12 @@ func openRuntime(
 	persistResumedSessionModel bool,
 	systemPromptOverride string,
 	appendSystemPromptOverride string,
+	approvalInteractive ...bool,
 ) (app.Backend, session.Session, agent.Runner, error) {
+	interactive := true
+	if len(approvalInteractive) > 0 {
+		interactive = approvalInteractive[0]
+	}
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, nil
@@ -273,10 +278,26 @@ func openRuntime(
 	for _, entry := range toolRegistry.Entries() {
 		entry := entry // capture for closure
 		executionMode := executionModeFor(entry.Metadata)
+		var approvalRequirement func(json.RawMessage) (agent.ApprovalRequirement, bool, error)
+		if provider, ok := entry.Tool.(tool.RequirementProvider); ok {
+			approvalRequirement = func(args json.RawMessage) (agent.ApprovalRequirement, bool, error) {
+				requirement, required, err := provider.ApprovalRequirement(string(args))
+				if err != nil {
+					return agent.ApprovalRequirement{}, false, err
+				}
+				return agent.ApprovalRequirement{
+					Category:  requirement.Category,
+					Operation: requirement.Operation,
+					Resource:  requirement.Resource,
+					Metadata:  requirement.Metadata,
+				}, required, nil
+			}
+		}
 		agentTools = append(agentTools, agent.Tool{
-			Name:        entry.Spec.Name,
-			Description: entry.Spec.Description,
-			Parameters:  entry.Spec.Parameters,
+			Name:                entry.Spec.Name,
+			Description:         entry.Spec.Description,
+			Parameters:          entry.Spec.Parameters,
+			ApprovalRequirement: approvalRequirement,
 			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
 				toolCtx, cancel := contextWithToolSignal(ctx, signal)
 				defer cancel()
@@ -322,17 +343,19 @@ func openRuntime(
 	}
 
 	harness := agent.NewHarness(agent.HarnessConfig{
-		Session:         sess,
-		Store:           store,
-		Model:           model,
-		Thinking:        thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
-		Tools:           agentTools,
-		Active:          activeToolNames,
-		Events:          sess.EventSender(),
-		StreamFn:        provider.Stream,
-		PromptTemplates: promptTemplates,
-		SysPrompt:       sysPrompt,
-		Logger:          log,
+		Session:             sess,
+		Store:               store,
+		Model:               model,
+		Thinking:            thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
+		Tools:               agentTools,
+		Active:              activeToolNames,
+		Events:              sess.EventSender(),
+		StreamFn:            provider.Stream,
+		PromptTemplates:     promptTemplates,
+		SysPrompt:           sysPrompt,
+		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
+		ApprovalInteractive: interactive,
+		Logger:              log,
 	})
 	if searchTool != nil {
 		searchTool.SetActivator(harness.ActivateTools)

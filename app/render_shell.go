@@ -77,7 +77,11 @@ func (m Model) View() tea.View {
 	}
 
 	// Selection overlay
-	if m.Picker.Session != nil {
+	if m.Picker.Approval != nil {
+		b.WriteString(m.renderApprovalPrompt())
+		b.WriteString("\n")
+		hasShellLeadIn = true
+	} else if m.Picker.Session != nil {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
 		hasShellLeadIn = true
