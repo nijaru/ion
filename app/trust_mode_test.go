@@ -1,4 +1,3 @@
-
 package app
 
 import (
@@ -21,7 +20,7 @@ func TestShiftTabDoesNothingDuringCoreStabilization(t *testing.T) {
 func TestModeCommandsAreRemovedFromTUI(t *testing.T) {
 	model := readyModel(t)
 
-	for _, command := range []string{"/mode", "/read", "/edit", "/auto", "/yolo"} {
+	for _, command := range []string{"/mode", "/read", "/edit", "/auto", "/yolo", "/jobs"} {
 		t.Run(command, func(t *testing.T) {
 			_, cmd := model.handleCommand(command)
 			if cmd == nil {

@@ -472,7 +472,7 @@ assert_not_contains "eager"
 assert_not_contains "verify"
 
 send_line "/jobs"
-assert_contains "/jobs is deferred until its roadmap phase"
+assert_contains "unknown command: /jobs"
 
 send_line "/settings"
 assert_contains "Settings"
