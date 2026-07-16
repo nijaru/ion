@@ -10,6 +10,7 @@ The explicit host command is available in the TUI:
 /memory
 /memory search <query>
 /memory all
+/memory audit
 /memory forget <memory-id>
 /memory restore <memory-id>
 ```
@@ -17,7 +18,7 @@ The explicit host command is available in the TUI:
 `/memory` uses the current workspace and stores notes in
 `~/.ion/data/memory.db`. Deletion is a soft delete. The store retains an audit
 record for add, delete, and restore operations, and `all` shows deleted notes so
-they can be restored.
+they can be restored. `audit` shows the retained operation history explicitly.
 
 Model-visible memory tools are opt-in through `~/.ion/config.toml`:
 

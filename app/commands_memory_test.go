@@ -23,6 +23,10 @@ func (s *stubMemoryController) Search(_ context.Context, query string, includeDe
 	return append([]MemoryRecord(nil), s.records...), s.err
 }
 
+func (s *stubMemoryController) Audit(context.Context, int) ([]MemoryAuditRecord, error) {
+	return nil, s.err
+}
+
 func (s *stubMemoryController) Delete(_ context.Context, id string) error {
 	s.deleted = append(s.deleted, id)
 	return s.err
@@ -44,25 +48,60 @@ func TestMemoryCommandUsesExplicitOperations(t *testing.T) {
 	}
 	model := readyModel(t).WithMemory(controller)
 
-	_, cmd := model.handleCommand("/memory search session tree")
-	if cmd == nil || len(controller.queries) != 1 || controller.queries[0] != "session tree" {
-		t.Fatalf("search command = cmd %v, queries %#v", cmd != nil, controller.queries)
+	model, cmd := model.handleCommand("/memory search session tree")
+	if cmd == nil {
+		t.Fatal("search command returned no command")
+	}
+	if model.Model.MemoryRequest != 1 {
+		t.Fatalf("memory request = %d, want 1", model.Model.MemoryRequest)
+	}
+	searchResult := cmd()
+	if _, ok := searchResult.(memorySearchMsg); !ok {
+		t.Fatalf("search result = %T, want memorySearchMsg", searchResult)
+	}
+	if len(controller.queries) != 1 || controller.queries[0] != "session tree" {
+		t.Fatalf("queries %#v", controller.queries)
 	}
 	if controller.includeDeleted[0] {
 		t.Fatal("search unexpectedly included deleted memory")
 	}
 
-	_, cmd = model.handleCommand("/memory forget mem_1")
-	if cmd == nil || len(controller.deleted) != 1 || controller.deleted[0] != "mem_1" {
-		t.Fatalf("forget command = cmd %v, deleted %#v", cmd != nil, controller.deleted)
+	model, cmd = model.handleCommand("/memory forget mem_1")
+	if cmd == nil {
+		t.Fatal("forget command returned no command")
 	}
-	_, cmd = model.handleCommand("/memory restore mem_1")
-	if cmd == nil || len(controller.restored) != 1 || controller.restored[0] != "mem_1" {
-		t.Fatalf("restore command = cmd %v, restored %#v", cmd != nil, controller.restored)
+	if result, ok := cmd().(memoryActionMsg); !ok || result.action != "forgot" || result.id != "mem_1" {
+		t.Fatalf("forget result = %#v", result)
 	}
-	_, cmd = model.handleCommand("/memory all")
-	if cmd == nil || len(controller.queries) != 2 || !controller.includeDeleted[1] {
-		t.Fatalf("all command = cmd %v, queries %#v, includeDeleted %#v", cmd != nil, controller.queries, controller.includeDeleted)
+	if len(controller.deleted) != 1 || controller.deleted[0] != "mem_1" {
+		t.Fatalf("deleted %#v", controller.deleted)
+	}
+	model, cmd = model.handleCommand("/memory restore mem_1")
+	if cmd == nil {
+		t.Fatal("restore command returned no command")
+	}
+	if result, ok := cmd().(memoryActionMsg); !ok || result.action != "restored" || result.id != "mem_1" {
+		t.Fatalf("restore result = %#v", result)
+	}
+	if len(controller.restored) != 1 || controller.restored[0] != "mem_1" {
+		t.Fatalf("restored %#v", controller.restored)
+	}
+	model, cmd = model.handleCommand("/memory all")
+	if cmd == nil {
+		t.Fatal("all command returned no command")
+	}
+	if result, ok := cmd().(memorySearchMsg); !ok || !result.includeDeleted {
+		t.Fatalf("all result = %#v", result)
+	}
+	if len(controller.queries) != 2 || !controller.includeDeleted[1] {
+		t.Fatalf("queries %#v, includeDeleted %#v", controller.queries, controller.includeDeleted)
+	}
+	model, cmd = model.handleCommand("/memory audit")
+	if cmd == nil {
+		t.Fatal("audit command returned no command")
+	}
+	if result, ok := cmd().(memoryAuditMsg); !ok {
+		t.Fatalf("audit result = %T, want memoryAuditMsg", result)
 	}
 }
 
@@ -82,17 +121,33 @@ func TestMemoryCommandReportsUnavailableAndUsageErrors(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("invalid memory usage returned no error")
 	}
-	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "usage: /memory [search <query>|forget <id>|restore <id>|all]" {
+	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "usage: /memory [search <query>|audit|forget <id>|restore <id>|all]" {
 		t.Fatalf("usage error = %v", err)
 	}
 
 	controller.err = errors.New("memory unavailable")
-	_, cmd = model.handleCommand("/memory search note")
+	model, cmd = model.handleCommand("/memory search note")
 	if cmd == nil {
 		t.Fatal("memory backend error returned no command")
 	}
-	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "memory unavailable" {
+	updated, resultCmd := model.update(cmd())
+	_ = updated
+	if err := localErrorFromMsg(t, resultCmd()); err == nil || err.Error() != "memory unavailable" {
 		t.Fatalf("backend error = %v", err)
+	}
+}
+
+func TestMemoryOutputEscapesTerminalControls(t *testing.T) {
+	got := formatMemoryRecords([]MemoryRecord{{
+		ID:      "mem_1",
+		Tags:    "tag\x1b]52;c;secret\a",
+		Content: "safe\x1b[31m red\x1b[0m\nnext",
+	}}, false)
+	if strings.ContainsAny(got, "\x1b\a") {
+		t.Fatalf("memory output contains terminal controls: %q", got)
+	}
+	if !strings.Contains(got, `\u001b`) || !strings.Contains(got, `\u0007`) {
+		t.Fatalf("memory output did not visibly escape controls: %q", got)
 	}
 }
 

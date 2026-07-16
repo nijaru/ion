@@ -326,6 +326,7 @@ type ModelState struct {
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
+	MemoryRequest        uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string

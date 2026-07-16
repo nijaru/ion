@@ -58,6 +58,33 @@ func (c tuiMemoryController) Delete(ctx context.Context, id string) error {
 	return c.transition(ctx, id, true)
 }
 
+func (c tuiMemoryController) Audit(ctx context.Context, limit int) ([]app.MemoryAuditRecord, error) {
+	store, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := store.Audit(ctx, c.scope, limit)
+	closeErr := store.Close()
+	if err != nil {
+		return nil, errors.Join(err, closeErr)
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	result := make([]app.MemoryAuditRecord, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, app.MemoryAuditRecord{
+			Sequence:  entry.Sequence,
+			MemoryID:  entry.MemoryID,
+			Operation: entry.Operation,
+			Content:   entry.Content,
+			Tags:      entry.Tags,
+			At:        entry.At,
+		})
+	}
+	return result, nil
+}
+
 func (c tuiMemoryController) Restore(ctx context.Context, id string) error {
 	return c.transition(ctx, id, false)
 }

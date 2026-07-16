@@ -91,11 +91,18 @@ func (b *ApprovalBroker) request(ctx context.Context, req session.ApprovalReques
 
 	key := approvalKey(req)
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return approvalOutcome{
+			decision: session.ApprovalDeny,
+			reason:   "tool approval is unavailable in this runtime",
+		}
+	}
 	if _, ok := b.always[key]; ok {
 		b.mu.Unlock()
 		return approvalOutcome{decision: session.ApprovalAlways}
 	}
-	if b.closed || !b.interactive {
+	if !b.interactive {
 		b.mu.Unlock()
 		return approvalOutcome{
 			decision: session.ApprovalDeny,

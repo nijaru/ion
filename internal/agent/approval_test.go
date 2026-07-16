@@ -238,6 +238,34 @@ func TestApprovalBrokerAlwaysIsRuntimeScoped(t *testing.T) {
 	}
 }
 
+func TestApprovalBrokerShutdownOverridesCachedAlways(t *testing.T) {
+	broker := NewApprovalBroker(ApprovalConfirm, true, nil)
+	events := make(chan session.Event, 2)
+	broker.emit = func(event session.Event) { events <- event }
+	result := make(chan approvalOutcome, 1)
+	go func() {
+		result <- broker.Request(context.Background(), session.ApprovalRequest{
+			ToolName: "remember_memory", Operation: "remember_memory", Resource: "/workspace",
+		})
+	}()
+	request := (<-events).(session.ApprovalRequest)
+	if err := broker.Resolve(request.ID, session.ApprovalAlways); err != nil {
+		t.Fatalf("Resolve always: %v", err)
+	}
+	if outcome := <-result; outcome.decision != session.ApprovalAlways {
+		t.Fatalf("initial outcome = %#v, want always", outcome)
+	}
+	if err := broker.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	outcome := broker.Request(context.Background(), session.ApprovalRequest{
+		ToolName: "remember_memory", Operation: "remember_memory", Resource: "/workspace",
+	})
+	if outcome.decision != session.ApprovalDeny {
+		t.Fatalf("post-shutdown cached outcome = %#v, want deny", outcome)
+	}
+}
+
 func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

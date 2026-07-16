@@ -99,6 +99,18 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleLocalEntries(msg)
 		return next, cmd, true
 
+	case memorySearchMsg:
+		next, cmd := m.handleMemorySearch(msg)
+		return next, cmd, true
+
+	case memoryAuditMsg:
+		next, cmd := m.handleMemoryAudit(msg)
+		return next, cmd, true
+
+	case memoryActionMsg:
+		next, cmd := m.handleMemoryAction(msg)
+		return next, cmd, true
+
 	case terminalCommitLinesMsg:
 		return m, terminalCommitFlushCmd(msg.lines...), true
 
