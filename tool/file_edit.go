@@ -2,13 +2,8 @@ package tool
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -79,16 +74,7 @@ func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 		return "", toolContextErr("edit", err)
 	}
 
-	tmpPath, err := writeEditTempFile(absPath, []byte(newContent), info.Mode().Perm())
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", toolContextErr("edit", err)
-	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := replaceFile(ctx, "edit", absPath, []byte(newContent), info.Mode().Perm()); err != nil {
 		return "", err
 	}
 
@@ -114,36 +100,6 @@ type matchedReplacement struct {
 	start     int
 	end       int
 	newString string
-}
-
-func writeEditTempFile(path string, data []byte, mode os.FileMode) (string, error) {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	for attempt := 0; attempt < 16; attempt++ {
-		suffix, err := randomHexSuffix()
-		if err != nil {
-			return "", err
-		}
-		name := filepath.Join(dir, "."+base+"."+suffix+".tmp")
-		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-		if errors.Is(err, os.ErrExist) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if _, err := file.Write(data); err != nil {
-			_ = file.Close()
-			_ = os.Remove(name)
-			return "", err
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(name)
-			return "", err
-		}
-		return name, nil
-	}
-	return "", fmt.Errorf("could not create temporary file for %s", path)
 }
 
 func applyEditReplacements(
@@ -285,14 +241,6 @@ func replacementIndexes(content, oldString string, replaceAll bool) []int {
 		}
 		start = absolute + len(oldString)
 	}
-}
-
-func randomHexSuffix() (string, error) {
-	var buf [8]byte
-	if _, err := io.ReadFull(rand.Reader, buf[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf[:]), nil
 }
 
 func detectLineEnding(content string) string {

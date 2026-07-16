@@ -259,6 +259,14 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		})
 		assertCanceled(t, err)
 		assertFileContent(t, tmpDir, "multi.txt", "before\n")
+
+		matches, err := filepath.Glob(filepath.Join(tmpDir, ".*.tmp"))
+		if err != nil {
+			t.Fatalf("glob canceled mutation temporary files: %v", err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("canceled mutation left temporary files: %v", matches)
+		}
 	})
 }
 

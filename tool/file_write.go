@@ -67,16 +67,7 @@ func (w *Write) execute(ctx context.Context, args string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", toolContextErr("write", err)
 	}
-	tmpPath, err := writeEditTempFile(absPath, []byte(input.Content), mode)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", toolContextErr("write", err)
-	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := replaceFile(ctx, "write", absPath, []byte(input.Content), mode); err != nil {
 		return "", err
 	}
 
