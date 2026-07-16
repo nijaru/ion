@@ -585,14 +585,16 @@ func runPromptTurn(
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				// Channel closed before turn finished — wait for Prompt, then error.
-				if !promptDone {
-					<-outcomeCh
-					promptDone = true
+				// Abort first: a runner may need the abort signal to release Prompt.
+				// Waiting for Prompt before aborting can deadlock print mode when the
+				// event producer fails while the provider call is still active.
+				if _, _, abortErr := runner.Abort(); abortErr != nil {
+					return printResult{}, fmt.Errorf(
+						"event stream closed before turn finished: abort turn: %w",
+						abortErr,
+					)
 				}
-				_, _, _ = runner.Abort()
-				return printResult{},
-					fmt.Errorf("event stream closed before turn finished")
+				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
 			case session.ToolExecStart:

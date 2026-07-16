@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,23 @@ type printSession struct {
 	cancelled int
 	closed    int
 	submitErr error
+}
+
+type abortReleasingPrintSession struct {
+	*printSession
+	unblock chan struct{}
+	once    sync.Once
+}
+
+func (s *abortReleasingPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
+	<-s.unblock
+	return nil, errors.New("prompt aborted")
+}
+
+func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Message, error) {
+	s.once.Do(func() { close(s.unblock) })
+	s.cancelled++
+	return nil, nil, nil
 }
 
 func (s *printSession) ID() string                         { return "print-test" }
@@ -586,6 +604,33 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
+func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) {
+	base := &printSession{events: make(chan session.Event)}
+	sess := &abortReleasingPrintSession{
+		printSession: base,
+		unblock:      make(chan struct{}),
+	}
+	close(base.events)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runPromptTurn(context.Background(), sess, "hello")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
+			t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runPromptTurn waited for Prompt before aborting the runner")
+	}
+	if base.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", base.cancelled)
 	}
 }
 
