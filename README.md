@@ -116,6 +116,7 @@ Common TUI commands:
 /thinking   choose reasoning effort
 /status     show runtime status
 /jobs       list or stop background shell jobs
+/rewind     preview or restore a workspace checkpoint
 /resume     resume a previous session
 /compact    compact the current session
 /clone      duplicate the current session

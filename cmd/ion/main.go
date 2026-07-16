@@ -20,6 +20,7 @@ import (
 	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
@@ -404,6 +405,10 @@ func main() {
 	if memoryPathErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: workspace memory unavailable: %v\n", memoryPathErr)
 	}
+	checkpointPath, checkpointPathErr := ionworkspace.DefaultCheckpointPath()
+	if checkpointPathErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: workspace checkpoints unavailable: %v\n", checkpointPathErr)
+	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithRunner(runner).
@@ -411,6 +416,9 @@ func main() {
 		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
 		WithSize(width, height)
+	if checkpointPathErr == nil {
+		model = model.WithCheckpoints(tuiCheckpointController{path: checkpointPath, workspace: cwd})
+	}
 	if openResumePicker {
 		model = model.WithSessionPicker()
 	} else if startupSetupRequired(b) || startupProviderMissing(b) {

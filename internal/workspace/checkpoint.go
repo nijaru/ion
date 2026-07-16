@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"github.com/nijaru/ion/ctxerr"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nijaru/ion/ctxerr"
 )
 
 const checkpointManifestName = "manifest.json"
@@ -28,6 +28,15 @@ type Checkpoint struct {
 	Workspace string            `json:"workspace"`
 	CreatedAt time.Time         `json:"created_at"`
 	Entries   []CheckpointEntry `json:"entries"`
+}
+
+// CheckpointSummary is the bounded projection used by the host UI. The full
+// checkpoint manifest remains an internal restore detail.
+type CheckpointSummary struct {
+	ID        string
+	Workspace string
+	CreatedAt time.Time
+	PathCount int
 }
 
 type CheckpointEntry struct {
@@ -147,7 +156,8 @@ func (s *CheckpointStore) Create(
 
 func (s *CheckpointStore) Load(id string) (Checkpoint, error) {
 	id = strings.TrimSpace(id)
-	if id == "" || strings.Contains(id, "/") || strings.Contains(id, `\`) {
+	if id == "" || id == "." || id == ".." ||
+		strings.Contains(id, "/") || strings.Contains(id, `\`) {
 		return Checkpoint{}, fmt.Errorf("checkpoint id is invalid")
 	}
 	data, err := os.ReadFile(filepath.Join(s.path, id, checkpointManifestName))
@@ -162,6 +172,96 @@ func (s *CheckpointStore) Load(id string) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("checkpoint manifest id mismatch")
 	}
 	return cp, nil
+}
+
+// LoadForWorkspace loads a checkpoint only when it belongs to workspacePath.
+// This prevents a host command from restoring a manifest selected from a
+// different workspace, even if the checkpoint ID is valid.
+func (s *CheckpointStore) LoadForWorkspace(id, workspacePath string) (Checkpoint, error) {
+	rootPath, err := normalizePath(workspacePath)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	cp, err := s.Load(id)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	cpWorkspace, err := normalizePath(cp.Workspace)
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint %q has invalid workspace: %w", id, err)
+	}
+	if cpWorkspace != rootPath {
+		return Checkpoint{}, fmt.Errorf("checkpoint %q belongs to a different workspace", id)
+	}
+	return cp, nil
+}
+
+// List returns recent checkpoints belonging to workspacePath. Missing
+// checkpoint storage is an empty result, which keeps the host command useful
+// on workspaces that have not mutated files yet.
+func (s *CheckpointStore) List(
+	ctx context.Context,
+	workspacePath string,
+	limit int,
+) ([]CheckpointSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, ctxerr.WrapContext("list checkpoints", err)
+	}
+	if strings.TrimSpace(s.path) == "" {
+		return nil, fmt.Errorf("checkpoint store path is required")
+	}
+	rootPath, err := normalizePath(workspacePath)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read checkpoint store: %w", err)
+	}
+
+	result := make([]CheckpointSummary, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return result, ctxerr.WrapContext("list checkpoints", err)
+		}
+		if !entry.IsDir() {
+			continue
+		}
+		cp, err := s.Load(entry.Name())
+		if err != nil {
+			return result, fmt.Errorf("load checkpoint %q: %w", entry.Name(), err)
+		}
+		cpWorkspace, err := normalizePath(cp.Workspace)
+		if err != nil {
+			return result, fmt.Errorf("checkpoint %q has invalid workspace: %w", cp.ID, err)
+		}
+		if cpWorkspace != rootPath {
+			continue
+		}
+		result = append(result, CheckpointSummary{
+			ID:        cp.ID,
+			Workspace: cpWorkspace,
+			CreatedAt: cp.CreatedAt,
+			PathCount: len(cp.Entries),
+		})
+	}
+
+	slices.SortFunc(result, func(a, b CheckpointSummary) int {
+		if a.CreatedAt.After(b.CreatedAt) {
+			return -1
+		}
+		if a.CreatedAt.Before(b.CreatedAt) {
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (RestorePlan, error) {

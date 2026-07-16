@@ -78,6 +78,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleJobsCommand(fields)
 	case "/memory":
 		return m.handleMemoryCommand(fields)
+	case "/rewind":
+		return m.handleRewindCommand(fields)
 	case "/status":
 		return m.handleStatusCommand(fields)
 	case "/changelog":

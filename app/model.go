@@ -15,7 +15,6 @@ import (
 
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	"github.com/nijaru/ion/internal/gitwatch"
-	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/session"
 )
 
@@ -318,15 +317,16 @@ type ModelState struct {
 	Storage              persistenceAdapter
 	Jobs                 JobController
 	Memory               MemoryController
+	Checkpoints          CheckpointController
 	Store                session.Store
 	Switcher             Switcher
 	Config               *config.Config
 	Runtime              Snapshot
-	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
 	MemoryRequest        uint64
+	CheckpointRequest    uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
@@ -435,11 +435,6 @@ func New(
 	if b != nil {
 		boot = b.Bootstrap()
 	}
-	var checkpoints *ionworkspace.CheckpointStore
-	if checkpointPath, err := ionworkspace.DefaultCheckpointPath(); err == nil {
-		checkpoints = ionworkspace.NewCheckpointStore(checkpointPath)
-	}
-
 	m := Model{
 		App: AppState{
 			Workdir:      workdir,
@@ -448,11 +443,10 @@ func New(
 			ActivePreset: PresetPrimary,
 		},
 		Model: ModelState{
-			Backend:     b,
-			Storage:     s,
-			Store:       store,
-			Switcher:    switcher,
-			Checkpoints: checkpoints,
+			Backend:  b,
+			Storage:  s,
+			Store:    store,
+			Switcher: switcher,
 		},
 		InFlight: InFlightState{},
 		Progress: ProgressState{
@@ -638,8 +632,10 @@ func (m Model) WithModelPicker() Model {
 	return m
 }
 
-func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
-	m.Model.Checkpoints = store
+// WithCheckpoints installs the workspace recovery projection used by
+// /rewind. The controller owns checkpoint storage and restore policy.
+func (m Model) WithCheckpoints(checkpoints CheckpointController) Model {
+	m.Model.Checkpoints = checkpoints
 	return m
 }
 

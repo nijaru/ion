@@ -6,6 +6,8 @@ All notable changes to Ion are documented in this file.
 
 ### Added
 
+- `/rewind` — list, preview, and explicitly restore workspace checkpoints
+
 #### Commands
 - `/debug` — write debug diagnostics to `~/.ion/debug.log`
 - `/export-html` — export session as self-contained HTML

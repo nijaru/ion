@@ -42,6 +42,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/tools", Description: "Show tool surface", Idle: -1},
 	{Name: "/jobs", Description: "List or stop background jobs", Args: "[stop <job-id>]", Idle: -1},
 	{Name: "/memory", Description: "List, search, audit, forget, or restore workspace memory", Args: "[search <query>|audit|forget <id>|restore <id>|all]", Idle: -1},
+	{Name: "/rewind", Description: "Preview or restore a workspace checkpoint", Args: "[checkpoint-id [--apply]]", Idle: SlashCommandIdleAlways},
 	{Name: "/status", Description: "Show runtime status", Idle: -1},
 	{Name: "/changelog", Description: "Show changelog", Idle: -1},
 	{Name: "/skills", Description: "List or search skills", Idle: -1},

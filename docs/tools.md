@@ -20,8 +20,9 @@ when the model needs it.
 
 Memory tools are opt-in through `memory_tools = "on"`; they are hidden from the
 default model-visible surface otherwise. The host `/memory` command is always
-explicit and operates outside session persistence. Subagent tools, model-visible
-compaction, and rewind/checkpoint control surfaces remain deferred or hidden.
+explicit and operates outside session persistence. Subagent tools and
+model-visible compaction remain deferred or hidden. `/rewind` is an explicit
+host-only checkpoint recovery command described below.
 MCP is an explicit runtime-only external-tool capability described below.
 `/compact` remains a host command because context survival is reliability work.
 Skill
@@ -152,9 +153,12 @@ model-visible at all. Ion's current `/skills` command is read-only discovery,
 not activation.
 
 Native `write` and `edit` create pre-change checkpoints before they mutate
-files. Checkpoints are kept as recovery metadata, but `/rewind` polish is
-deferred and should not be treated as part of the default model-visible tool
-surface.
+files. Checkpoints are kept as recovery metadata and are scoped to the
+canonical workspace. Use `/rewind` to list recent checkpoints, then
+`/rewind <checkpoint-id>` to preview the paths that would change. Restoration
+requires the explicit `/rewind <checkpoint-id> --apply` command. Rewind changes
+files only; it does not erase or rewrite session history, and it refuses
+checkpoints from another workspace.
 
 Structured edits require exact `old_string` matches inside `edits[]`, paired
 with `new_string`. `replace_all` and `expected_replacements` control repeated

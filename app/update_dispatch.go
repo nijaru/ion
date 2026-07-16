@@ -111,6 +111,18 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleMemoryAction(msg)
 		return next, cmd, true
 
+	case checkpointListMsg:
+		next, cmd := m.handleCheckpointList(msg)
+		return next, cmd, true
+
+	case checkpointPlanMsg:
+		next, cmd := m.handleCheckpointPlan(msg)
+		return next, cmd, true
+
+	case checkpointRestoredMsg:
+		next, cmd := m.handleCheckpointRestored(msg)
+		return next, cmd, true
+
 	case terminalCommitLinesMsg:
 		return m, terminalCommitFlushCmd(msg.lines...), true
 
