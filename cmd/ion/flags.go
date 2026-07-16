@@ -80,27 +80,27 @@ func registerCLIFlags() cliFlags {
 		apiKeyFlag: flag.String(
 			"api-key",
 			"",
-			"API key for the selected provider (Pi parity)",
+			"API key for the selected provider",
 		),
 		sessionDirFlag: flag.String(
 			"session-dir",
 			"",
-			"Directory path for session storage (Pi parity)",
+			"Directory path for session storage",
 		),
 		listModelsFlag: flag.Bool(
 			"list-models",
 			false,
-			"List available models and exit (Pi parity)",
+			"List available models and exit",
 		),
 		systemPromptFlag: flag.String(
 			"system-prompt",
 			"",
-			"Override the system prompt (Pi parity)",
+			"Override the system prompt",
 		),
 		appendSystemPromptFlag: flag.String(
 			"append-system-prompt",
 			"",
-			"Append to the system prompt (Pi parity)",
+			"Append to the system prompt",
 		),
 		printFlag: flag.Bool(
 			"print",
