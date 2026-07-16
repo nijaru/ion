@@ -5,7 +5,8 @@ import (
 )
 
 // Capabilities returns the feature set for the given model.
-// It consults ModelCaps first, then b.Config.Models, then falls back to Canto's default model capability registry.
+// It consults ModelCaps first, then b.Config.Models, then falls back to Ion's
+// default model capability registry.
 func (b *Base) Capabilities(model string) llm.Capabilities {
 	if b.ModelCaps != nil {
 		if caps, ok := b.ModelCaps[model]; ok {

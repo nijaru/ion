@@ -660,7 +660,7 @@ func updatePrintSessionInfo(
 		return nil
 	}
 	id := runner.Session().ID()
-	if id == "" || id == "canto" {
+	if id == "" || id == "ion" {
 		return nil
 	}
 	preview := strings.TrimSpace(prompt)

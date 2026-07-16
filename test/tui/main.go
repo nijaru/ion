@@ -405,7 +405,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	summary := strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
-		"## Canto (`../canto/ai/STATUS.md`)",
+		"## Ion project status",
 		"",
 		"**Key facts:**",
 	}, "\n")
@@ -422,7 +422,7 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	finalText := strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
-		"## Canto (`../canto/ai/STATUS.md`)",
+		"## Ion project status",
 		"",
 		"**Key facts:**",
 		"",

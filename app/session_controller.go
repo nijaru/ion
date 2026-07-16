@@ -774,7 +774,7 @@ func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry
 	if id == "" && m.activeSession() != nil {
 		id = m.activeSession().ID()
 	}
-	if id == "" || id == "canto" {
+	if id == "" || id == "ion" {
 		return session.SessionInfoEntry{}, false
 	}
 

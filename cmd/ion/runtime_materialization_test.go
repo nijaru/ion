@@ -13,7 +13,7 @@ import (
 func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
-	store, err := session.NewSQLiteStore(":memory:", "canto")
+	store, err := session.NewSQLiteStore(":memory:", "ion")
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}

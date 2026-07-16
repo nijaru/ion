@@ -132,9 +132,9 @@ shutdown, and runtime switching.
 
 Native `read` returns model-visible text file contents with line numbers. For
 supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an
-image content part through Canto so vision-capable providers can inspect the
-image. The TUI still compacts read rows by default, but the model receives
-stable line references for follow-up edits.
+image content part through Ion's provider conversion so vision-capable providers
+can inspect the image. The TUI still compacts read rows by default, but the
+model receives stable line references for follow-up edits.
 
 File and search tool path inputs normalize common terminal/model output: leading
 `@` is stripped, Unicode space variants are normalized to ASCII spaces, and
@@ -167,17 +167,15 @@ every replacement against the original file content, rejects overlapping edits,
 checkpoints once, writes one temporary file, and finalizes with one rename.
 Cross-file changes should be emitted as separate serialized tool calls.
 
-Ion keeps its model-visible tool wrappers rather than directly exposing
-Canto's stable `coding` package tools. Canto remains the framework substrate;
-Ion's wrappers own product-level names, line-numbered reads, ripgrep search,
-checkpoints, compact TUI display, and edit error messages tuned for
-coding-agent recovery.
+Ion keeps its model-visible tool wrappers as the native coding-tool boundary.
+Those wrappers own product-level names, line-numbered reads, ripgrep search,
+checkpoints, compact TUI display, and edit error messages tuned for coding-agent
+recovery.
 
-The same boundary applies to Canto's skill primitives. Canto can provide a
-validated skill registry plus `read_skill` and `manage_skill` primitives, but
-Ion owns install UX, trust policy, prompt exposure, and whether those tools are
-model-visible at all. Ion's current `/skills` command is read-only discovery,
-not activation.
+The same boundary applies to Ion's skill primitives. Ion uses a validated skill
+registry plus `read_skill`; it owns install UX, trust policy, prompt exposure,
+and whether skill tools are model-visible at all. Ion's current `/skills`
+command is read-only discovery, not activation.
 
 Native `write` and `edit` create pre-change checkpoints before they mutate
 files. Checkpoints are kept as recovery metadata and are scoped to the

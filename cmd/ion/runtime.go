@@ -128,7 +128,7 @@ func resolveSessionDir(override string) (string, error) {
 
 func openStartupStore(noSession bool, sessionDirOverride string) (*session.SQLiteStore, error) {
 	if noSession {
-		return session.NewSQLiteStore(":memory:", "canto")
+		return session.NewSQLiteStore(":memory:", "ion")
 	}
 	dataDir, err := resolveSessionDir(sessionDirOverride)
 	if err != nil {
@@ -137,7 +137,7 @@ func openStartupStore(noSession bool, sessionDirOverride string) (*session.SQLit
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
-	return session.NewSQLiteStore(dataDir, "canto")
+	return session.NewSQLiteStore(dataDir, "ion")
 }
 
 func startupSessionID(

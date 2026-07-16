@@ -12,7 +12,7 @@ import (
 func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := session.NewSQLiteStore(dir, "canto")
+	store, err := session.NewSQLiteStore(dir, "ion")
 	if err != nil {
 		t.Fatal(err)
 	}
