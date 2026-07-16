@@ -404,9 +404,32 @@ func (m Model) switchRuntimeCommand(
 	sessionID string,
 	preserveSession bool,
 ) (Model, tea.Cmd) {
+	return m.switchRuntimeCommandWithOptions(
+		transition,
+		notice,
+		sessionID,
+		preserveSession,
+		runtimeSwitchOptions{},
+	)
+}
+
+type runtimeSwitchOptions struct {
+	keybindings *KeybindingsManager
+}
+
+func (m Model) switchRuntimeCommandWithOptions(
+	transition Transition,
+	notice session.Entry,
+	sessionID string,
+	preserveSession bool,
+	options runtimeSwitchOptions,
+) (Model, tea.Cmd) {
 	transition = transition.WithActivePresetPersistence(m.App.ActivePreset)
 
 	if m.Model.Switcher == nil {
+		if options.keybindings != nil {
+			m.Keybindings = options.keybindings
+		}
 		return m.beginRuntimeTransitionCommit(transition, notice)
 	}
 
@@ -427,11 +450,12 @@ func (m Model) switchRuntimeCommand(
 			return runtimeSwitchErrorMsg{switchID: requestID, err: err}
 		}
 		return runtimeSwitchedMsg{
-			switchID:   requestID,
-			runtime:    result.Runtime,
-			previous:   result.Previous,
-			notice:     session.EntryText(notice),
-			showStatus: preserveSession,
+			switchID:    requestID,
+			runtime:     result.Runtime,
+			previous:    result.Previous,
+			keybindings: options.keybindings,
+			notice:      session.EntryText(notice),
+			showStatus:  preserveSession,
 		}
 	}
 }
@@ -498,6 +522,9 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Model.Runner = msg.runtime.Handles.Runner
 	m.Model.Storage = msg.runtime.Handles.Storage
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
+	if msg.keybindings != nil {
+		m.Keybindings = msg.keybindings
+	}
 	closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
 	m.pickerReducer().closeAll()

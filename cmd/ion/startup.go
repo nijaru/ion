@@ -294,6 +294,31 @@ func applyCLITrustModeOverride(cfg *config.Config, override string) {
 	cfg.TrustMode = config.NormalizeTrustMode(override)
 }
 
+func loadEffectiveConfigForReload(
+	load func() (*config.Config, error),
+	providerOverride string,
+	modelOverride string,
+	thinkingOverride string,
+	trustModeOverride string,
+	apiKeyOverride string,
+) (*config.Config, error) {
+	if load == nil {
+		load = config.Load
+	}
+	cfg, err := load()
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, errors.New("config loader returned nil configuration")
+	}
+	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, thinkingOverride)
+	applyCLITrustModeOverride(cfg, trustModeOverride)
+	cfg.APIKeyOverride = apiKeyOverride
+	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
+	return cfg, nil
+}
+
 func clearProviderScopedPresets(cfg *config.Config) {
 	cfg.FastModel = ""
 	cfg.FastReasoningEffort = ""

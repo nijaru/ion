@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,19 +12,80 @@ import (
 )
 
 func (m Model) reloadConfig() (Model, tea.Cmd) {
-	// Reload keybindings
-	km, err := LoadKeybindings()
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("reloading configuration"))
+	}
+
+	requestID := m.runtimeRequest().begin("Reloading configuration...")
+	loadConfig := ConfigLoader(config.Load)
+	if m.Model.ConfigLoader != nil {
+		loadConfig = m.Model.ConfigLoader
+	}
+	return m, func() tea.Msg {
+		km, err := LoadKeybindings()
+		if err != nil {
+			return reloadConfigLoadedMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("reload keybindings: %w", err),
+			}
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			return reloadConfigLoadedMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("reload config: %w", err),
+			}
+		}
+		return reloadConfigLoadedMsg{
+			requestID:   requestID,
+			keybindings: km,
+			cfg:         cfg,
+		}
+	}
+}
+
+func (m Model) handleReloadConfigLoaded(msg reloadConfigLoadedMsg) (Model, tea.Cmd) {
+	if !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.runtimeRequest().finish(msg.requestID)
+		return m.handleLocalError(msg.err)
+	}
+	if msg.cfg == nil || msg.keybindings == nil {
+		m.runtimeRequest().finish(msg.requestID)
+		return m.handleLocalError(errors.New("reload returned incomplete configuration"))
+	}
+
+	runtimeCfg, err := m.runtimeConfigForActivePreset(msg.cfg)
 	if err != nil {
-		return m, cmdError(fmt.Sprintf("reload keybindings: %v", err))
+		m.runtimeRequest().finish(msg.requestID)
+		return m.handleLocalError(fmt.Errorf("reload active preset: %w", err))
 	}
-	m.Keybindings = km
-
-	// Reload model config
-	if cfg, err := config.Load(); err == nil {
-		m.Model.Config = cfg
+	if m.Model.Switcher == nil && m.Model.Runner != nil {
+		m.runtimeRequest().finish(msg.requestID)
+		return m.handleLocalError(errors.New("reload runtime switcher is unavailable"))
 	}
 
-	return m, m.terminalCommit().Entries(systemEntry("Configuration reloaded"))
+	transition := newRuntimeTransition(msg.cfg, runtimeCfg, m.activePreset(), "")
+	if m.Model.Switcher == nil {
+		m.runtimeRequest().finish(msg.requestID)
+		var commitErr error
+		m, commitErr = m.commitRuntimeTransition(transition)
+		if commitErr != nil {
+			return m, TransitionErrorCmd(commitErr)
+		}
+		m.Keybindings = msg.keybindings
+		return m, m.terminalCommit().Entries(systemEntry("Configuration reloaded"))
+	}
+
+	return m.switchRuntimeCommandWithOptions(
+		transition,
+		systemEntry("Configuration reloaded"),
+		m.currentMaterializedSessionID(),
+		false,
+		runtimeSwitchOptions{keybindings: msg.keybindings},
+	)
 }
 
 func (m Model) showScopedModels() (Model, tea.Cmd) {

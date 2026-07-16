@@ -127,7 +127,7 @@ Common TUI commands:
 /tree       show session lineage and children
 /name       set session display name
 /logout     clear provider API key
-/reload     reload keybindings and model config
+/reload     reload keybindings and the active runtime configuration
 /scoped-models  show configured scoped models
 /changelog   show changelog entries
 /debug       write debug diagnostics to log file

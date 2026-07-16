@@ -140,6 +140,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 		next, cmd := m.handleRuntimeSwitched(msg)
 		return next, cmd, true
 
+	case reloadConfigLoadedMsg:
+		next, cmd := m.handleReloadConfigLoaded(msg)
+		return next, cmd, true
+
 	case TransitionCommittedMsg:
 		next, cmd := m.handleRuntimeTransitionCommitted(msg)
 		return next, cmd, true

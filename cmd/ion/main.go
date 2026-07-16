@@ -395,6 +395,19 @@ func main() {
 		}
 		return switchedBackend, switchedRunner, switchedSession, nil
 	}
+	reloadConfig := func() (*config.Config, error) {
+		// Startup flags are process-lifetime authority. Reapply them after
+		// loading disk/state/env so /reload cannot silently discard --provider,
+		// --model, --thinking, --trust-mode, or --api-key.
+		return loadEffectiveConfigForReload(
+			config.Load,
+			providerOverride,
+			modelOverride,
+			cli.thinkingOverride(),
+			cli.trustModeOverride(),
+			cli.apiKeyOverride(),
+		)
+	}
 
 	width, height, err := term.GetSize(os.Stdout.Fd())
 	if err != nil || width <= 0 {
@@ -414,6 +427,7 @@ func main() {
 		WithRunner(runner).
 		WithJobs(tuiJobController{manager: jobs}).
 		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
+		WithConfigLoader(reloadConfig).
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
 		WithSize(width, height)
 	if checkpointPathErr == nil {

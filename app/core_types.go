@@ -28,7 +28,7 @@ type SlashCommandDefinition struct {
 var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/help", Description: "Show help", Idle: -1},
 	{Name: "/hotkeys", Description: "Show hotkeys", Idle: -1},
-	{Name: "/reload", Description: "Reload configuration"},
+	{Name: "/reload", Description: "Reload keybindings and active runtime", Idle: SlashCommandIdleAlways},
 	{Name: "/scoped-models", Description: "Show scoped models", Idle: -1},
 	{Name: "/primary", Description: "Switch to primary preset"},
 	{Name: "/fast", Description: "Switch to fast preset"},

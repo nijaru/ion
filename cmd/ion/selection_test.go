@@ -186,6 +186,36 @@ func TestApplyCLITrustModeOverride(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveConfigForReloadPreservesProcessOverrides(t *testing.T) {
+	loaded := &config.Config{
+		Provider:        "anthropic",
+		Model:           "disk-model",
+		TrustMode:       "confirm",
+		ReasoningEffort: "low",
+	}
+
+	cfg, err := loadEffectiveConfigForReload(
+		func() (*config.Config, error) { return loaded, nil },
+		"openai",
+		"cli-model",
+		"high",
+		"trusted",
+		"cli-key",
+	)
+	if err != nil {
+		t.Fatalf("loadEffectiveConfigForReload() error = %v", err)
+	}
+	if cfg.Provider != "openai" || cfg.Model != "cli-model" {
+		t.Fatalf("provider/model = %q/%q, want openai/cli-model", cfg.Provider, cfg.Model)
+	}
+	if cfg.ReasoningEffort != "high" || cfg.ToolTrustMode() != "trusted" {
+		t.Fatalf("process overrides = reasoning %q, trust %q", cfg.ReasoningEffort, cfg.ToolTrustMode())
+	}
+	if cfg.APIKeyOverride != "cli-key" || cfg.APIKeyOverrideProvider != "openai" {
+		t.Fatalf("API key override = %q/%q, want cli-key/openai", cfg.APIKeyOverride, cfg.APIKeyOverrideProvider)
+	}
+}
+
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
 	store := &testStore{sessions: []session.SessionInfoEntry{
 		sessionInfoForTest("empty", ""),

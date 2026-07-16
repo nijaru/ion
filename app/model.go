@@ -66,10 +66,18 @@ type runtimeSwitchedMsg struct {
 	switchID      uint64
 	runtime       Accepted
 	previous      Handles
+	keybindings   *KeybindingsManager
 	printLines    []string
 	replayEntries []session.Entry
 	notice        string
 	showStatus    bool
+}
+
+type reloadConfigLoadedMsg struct {
+	requestID   uint64
+	keybindings *KeybindingsManager
+	cfg         *config.Config
+	err         error
 }
 
 type TransitionCommittedMsg struct {
@@ -312,6 +320,11 @@ type persistenceAdapter interface {
 	Usage(context.Context) (session.Usage, error)
 }
 
+// ConfigLoader loads the effective process configuration for /reload. The
+// command host may inject process-lifetime overrides (for example CLI flags)
+// while app retains config.Load as the standalone default.
+type ConfigLoader func() (*config.Config, error)
+
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
 	Backend              Backend
@@ -321,6 +334,7 @@ type ModelState struct {
 	Checkpoints          CheckpointController
 	Store                session.Store
 	Switcher             Switcher
+	ConfigLoader         ConfigLoader
 	Config               *config.Config
 	Runtime              Snapshot
 	EventGeneration      uint64
@@ -491,6 +505,14 @@ func New(
 // replace or persist process state.
 func (m Model) WithJobs(jobs JobController) Model {
 	m.Model.Jobs = jobs
+	return m
+}
+
+// WithConfigLoader installs the process-owned effective config loader used by
+// /reload. It keeps CLI/runtime overrides in the host layer without making the
+// TUI know how startup flags are represented.
+func (m Model) WithConfigLoader(loader ConfigLoader) Model {
+	m.Model.ConfigLoader = loader
 	return m
 }
 
