@@ -100,9 +100,9 @@ func (b *Bash) ExecuteStreamingUpdates(
 			_, err := b.execute(streamCtx, args, func(update localOutputUpdate) error {
 				select {
 				case ch <- streamItem{update: StreamUpdate(update)}:
-				return nil
-			case <-streamCtx.Done():
-				return streamCtx.Err()
+					return nil
+				case <-streamCtx.Done():
+					return streamCtx.Err()
 				}
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
@@ -171,6 +171,9 @@ func parseBashInput(args string) (bashInput, error) {
 	var input bashInput
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return bashInput{}, err
+	}
+	if input.Timeout < 0 {
+		return bashInput{}, fmt.Errorf("timeout must be non-negative")
 	}
 
 	action := strings.ToLower(strings.TrimSpace(input.Action))

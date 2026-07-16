@@ -63,6 +63,14 @@ func TestBashRejectsDeferredBackgroundJobArgs(t *testing.T) {
 	}
 }
 
+func TestBashRejectsNegativeTimeout(t *testing.T) {
+	b := tool.NewBash(t.TempDir())
+	_, err := b.Execute(t.Context(), `{"command":"echo should-not-run","timeout":-1}`)
+	if err == nil || !strings.Contains(err.Error(), "timeout must be non-negative") {
+		t.Fatalf("negative timeout error = %v, want non-negative validation", err)
+	}
+}
+
 func TestBashCancellationKillsProcessGroup(t *testing.T) {
 	tmpDir := t.TempDir()
 	b := tool.NewBash(tmpDir)
