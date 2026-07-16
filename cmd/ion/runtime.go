@@ -188,14 +188,26 @@ func defaultActiveToolNames(registry *tool.Registry) []string {
 }
 
 func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
+	return activeToolNamesForModeWithSkills(registry, mode, false)
+}
+
+func activeToolNamesForModeWithSkills(
+	registry *tool.Registry,
+	mode string,
+	skillsEnabled bool,
+) []string {
 	var preferred []string
-	switch config.NormalizeToolMode(mode) {
+	normalizedMode := config.NormalizeToolMode(mode)
+	switch normalizedMode {
 	case "all":
 		return registry.Names()
 	case "read":
 		preferred = []string{"find", "grep", "ls", "read", tool.SearchToolName}
 	default:
 		preferred = []string{"bash", "edit", "read", tool.SearchToolName, "write"}
+	}
+	if skillsEnabled {
+		preferred = append(preferred, "read_skill")
 	}
 	// Configured external tools are explicit user additions, so expose them in
 	// every normal mode. The model can still discover the complete registry via
@@ -217,6 +229,32 @@ func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
 		}
 	}
 	return active
+}
+
+func runtimeCodingToolsConfig(
+	cfg *config.Config,
+	cwd string,
+	jobs *tool.JobManager,
+) (tool.CodingToolsConfig, error) {
+	if cfg == nil {
+		return tool.CodingToolsConfig{}, errors.New("runtime config is nil")
+	}
+
+	var skillDirs []string
+	if cfg.SkillToolMode() == "read" || cfg.ActiveToolMode() == "all" {
+		dir, err := config.DefaultSkillsDir()
+		if err != nil {
+			return tool.CodingToolsConfig{}, fmt.Errorf("resolve skills dir: %w", err)
+		}
+		skillDirs = []string{dir}
+	}
+
+	return tool.CodingToolsConfig{
+		Workdir:     cwd,
+		Environment: tool.NewEnvironmentPolicy(cfg.ToolEnvMode(), llm.CredentialEnvVars(cfg)),
+		SkillDirs:   skillDirs,
+		Jobs:        jobs,
+	}, nil
 }
 
 func openMCPRuntime(
@@ -341,12 +379,16 @@ func openRuntime(
 	sess := session.NewSession(store, 64)
 	model := llm.Model{ID: runtimeCfg.Model}
 
-	// Register coding tools and convert to agent.Tool.
+	// Register coding tools and convert to agent.Tool. Runtime policy belongs
+	// here so the shell and optional skill surface cannot silently diverge from
+	// the normalized config used to build the provider.
 	toolRegistry := tool.NewRegistry()
-	if err := tool.RegisterCodingTools(toolRegistry, tool.CodingToolsConfig{
-		Workdir: cwd,
-		Jobs:    jobs,
-	}); err != nil {
+	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, jobs)
+	if err != nil {
+		_ = closeRuntimeResources()
+		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+	}
+	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
 		// Non-fatal: start without tools if registration fails.
 		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)
 	}
@@ -397,7 +439,11 @@ func openRuntime(
 			ExecutionMode: executionMode,
 		})
 	}
-	activeToolNames := activeToolNamesForMode(toolRegistry, runtimeCfg.ActiveToolMode())
+	activeToolNames := activeToolNamesForModeWithSkills(
+		toolRegistry,
+		runtimeCfg.ActiveToolMode(),
+		runtimeCfg.SkillToolMode() == "read",
+	)
 	if backend, ok := b.(*configBackend); ok {
 		backend.surface = app.ToolSurface{
 			Count:       len(toolRegistry.Names()),

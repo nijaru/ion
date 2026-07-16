@@ -43,6 +43,17 @@ current registered and active tool names. Sandbox execution is selected by
 `ION_SANDBOX`; the default is trusted local execution, while configured macOS
 seatbelt or Linux bubblewrap modes fail closed when unavailable.
 
+Shell environment inheritance is controlled by `tool_env` in
+`~/.ion/config.toml`. The default `inherit` passes the process environment to
+native Bash. `inherit_without_provider_keys` removes the provider credential
+environment variables known to Ion, plus a configured `auth_env_var`, while
+preserving normal development variables such as `PATH`.
+
+Skill tools are runtime-configured rather than silently enabled. Set
+`skill_tools = "read"` to register and expose `read_skill`; `tool_mode =
+"all"` also includes it in the complete tool surface. With the default skill
+mode, `/skills` and `ion skill list` remain host-side discovery only.
+
 Background commands are managed by runtime-owned jobs. They are useful for dev
 servers, watchers, and long builds without blocking the agent turn:
 
