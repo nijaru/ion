@@ -154,9 +154,10 @@ func (p *Provider) Models(ctx context.Context) ([]llm.Model, error) {
 	return p.config.Models, nil
 }
 
-// CountTokens estimates tokens using per-message overhead heuristic.
-// Accurate counting requires passing system + tools + messages to the
-// Anthropic count_tokens API — deferred until Provider Capabilities are added.
+// CountTokens estimates tokens from provider-neutral messages using a local
+// heuristic. The Provider interface does not carry the complete request's
+// system and tool definitions, so a remote count_tokens call would not be a
+// faithful replacement for this estimate.
 func (p *Provider) CountTokens(_ context.Context, _ string, messages []llm.Message) (int, error) {
 	total := 3 // reply priming
 	for _, m := range messages {

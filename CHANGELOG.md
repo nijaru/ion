@@ -43,7 +43,7 @@ All notable changes to Ion are documented in this file.
 
 #### Hotkeys
 - `Ctrl+L` / `Ctrl+Shift+L` — cycle model forward/backward (scoped models or primary/fast fallback)
-- `Ctrl+G` — open external editor (Pi parity)
+- `Ctrl+G` — open external editor
 - `Ctrl+T` — toggle thinking blocks visibility
 - `Ctrl+O` — toggle tool output
 - `Shift+Tab` — cycle thinking level
