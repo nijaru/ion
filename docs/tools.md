@@ -73,6 +73,31 @@ decision prompt. Persistent approval policy is intentionally not part of the
 runtime contract; future external tools must use the same broker before they
 are exposed.
 
+## MCP servers
+
+Ion can attach named MCP servers over stdio from `~/.ion/config.toml`:
+
+```toml
+[[mcp_servers]]
+name = "workspace"
+command = "npx"
+args = ["-y", "@example/mcp-server"]
+directory = "."
+
+[mcp_servers.env]
+EXAMPLE_TOKEN = "literal-value-for-the-server"
+```
+
+Configured servers connect and discover tools atomically during runtime
+startup. External tools are exposed under `mcp_<server>_<tool>` names, are
+active in normal tool modes, and remain outside session persistence. Ion
+validates remote names/descriptions, applies the configured workspace file
+policy, and rejects malformed servers, discovery failures, and tool-name
+collisions instead of materializing a partial runtime. Every MCP call is an
+approval requirement in `confirm` mode, including tools that do not expose a
+file path. Server subprocesses close with the harness during cancellation,
+shutdown, and runtime switching.
+
 Native `read` returns model-visible text file contents with line numbers. For
 supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an
 image content part through Canto so vision-capable providers can inspect the

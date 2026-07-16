@@ -13,8 +13,9 @@ import (
 // FilePolicy applies workspace validation and sensitive-path detection to MCP
 // tools that look like file operations.
 type FilePolicy struct {
-	Validator      *workvfs.Validator
-	ProtectedPaths []string
+	Validator       *workvfs.Validator
+	ProtectedPaths  []string
+	RequireApproval bool
 }
 
 // category is the type of file operation.
@@ -77,6 +78,13 @@ func (p *FilePolicy) approvalRequirement(
 		return Requirement{}, false, err
 	}
 	if intent == nil || len(intent.paths) == 0 {
+		if p != nil && p.RequireApproval {
+			return Requirement{
+				Category:  "external",
+				Operation: spec.Name,
+				Resource:  "external tool",
+			}, true, nil
+		}
 		return Requirement{}, false, nil
 	}
 	intent.paths = extractPathLikeValues(normalized)

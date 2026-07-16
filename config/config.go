@@ -28,6 +28,17 @@ type ProviderSettings struct {
 	ModelRouting map[string]ModelRouting `toml:"model_routing,omitempty"`
 }
 
+// MCPServerConfig describes one Ion-managed stdio MCP server. The server is
+// connected for the active runtime only; its tools are never session data.
+type MCPServerConfig struct {
+	Name           string            `toml:"name,omitempty"`
+	Command        string            `toml:"command,omitempty"`
+	Args           []string          `toml:"args,omitempty"`
+	Directory      string            `toml:"directory,omitempty"`
+	Env            map[string]string `toml:"env,omitempty"`
+	ProtectedPaths []string          `toml:"protected_paths,omitempty"`
+}
+
 type Config struct {
 	Provider               string                      `toml:"provider,omitempty"`
 	Model                  string                      `toml:"model,omitempty"`
@@ -61,6 +72,7 @@ type Config struct {
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 	BusyInput              string            `toml:"busy_input,omitempty"`
 	TrustMode              string            `toml:"trust_mode,omitempty"`
+	MCPServers             []MCPServerConfig `toml:"mcp_servers,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
 	SubagentTools          string            `toml:"subagent_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
@@ -206,6 +218,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
 	cfg.TrustMode = normalizeTrustMode(cfg.TrustMode)
+	cfg.MCPServers = normalizeMCPServers(cfg.MCPServers)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
 	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
 	cfg.ToolMode = normalizeToolMode(cfg.ToolMode)
@@ -234,6 +247,39 @@ func normalizeConfig(cfg *Config) {
 	if cfg.SessionRetentionDays <= 0 {
 		cfg.SessionRetentionDays = DefaultSessionRetentionDays
 	}
+}
+
+func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
+	if len(servers) == 0 {
+		return nil
+	}
+	normalized := make([]MCPServerConfig, 0, len(servers))
+	for _, server := range servers {
+		server.Name = strings.TrimSpace(server.Name)
+		server.Command = strings.TrimSpace(server.Command)
+		server.Directory = strings.TrimSpace(server.Directory)
+		server.Args = normalizeStringSlice(server.Args)
+		server.Env = normalizeStringMap(server.Env)
+		server.ProtectedPaths = normalizeStringSlice(server.ProtectedPaths)
+		normalized = append(normalized, server)
+	}
+	return normalized
+}
+
+func normalizeStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func NormalizeVerbosity(value string) string {

@@ -966,6 +966,57 @@ func TestNormalizeTrustMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeMCPServers(t *testing.T) {
+	cfg := &Config{MCPServers: []MCPServerConfig{{
+		Name:           "  files  ",
+		Command:        "  mcp-server  ",
+		Args:           []string{" --stdio ", ""},
+		Directory:      "  ./workspace  ",
+		Env:            map[string]string{" TOKEN ": " secret ", "": "ignored"},
+		ProtectedPaths: []string{" .env ", ""},
+	}}}
+	normalizeConfig(cfg)
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("MCPServers = %#v, want one server", cfg.MCPServers)
+	}
+	server := cfg.MCPServers[0]
+	if server.Name != "files" || server.Command != "mcp-server" || server.Directory != "./workspace" {
+		t.Fatalf("normalized MCP server = %#v", server)
+	}
+	if len(server.Args) != 1 || server.Args[0] != "--stdio" {
+		t.Fatalf("normalized args = %#v", server.Args)
+	}
+	if server.Env["TOKEN"] != "secret" || len(server.Env) != 1 {
+		t.Fatalf("normalized env = %#v", server.Env)
+	}
+	if len(server.ProtectedPaths) != 1 || server.ProtectedPaths[0] != ".env" {
+		t.Fatalf("normalized protected paths = %#v", server.ProtectedPaths)
+	}
+}
+
+func TestMCPServersRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := Save(&Config{
+		Provider: "openai",
+		Model:    "test",
+		MCPServers: []MCPServerConfig{{
+			Name:    "workspace",
+			Command: "mcp-server",
+			Args:    []string{"--stdio"},
+		}},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.MCPServers) != 1 || loaded.MCPServers[0].Name != "workspace" ||
+		loaded.MCPServers[0].Command != "mcp-server" {
+		t.Fatalf("loaded MCP servers = %#v", loaded.MCPServers)
+	}
+}
+
 func TestNormalizeToolMode(t *testing.T) {
 	for input, want := range map[string]string{
 		"":          "coding",

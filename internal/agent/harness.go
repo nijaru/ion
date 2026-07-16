@@ -70,9 +70,10 @@ type Harness struct {
 	pending []pendingWrite
 
 	// compaction settings
-	compaction    CompactionSettings
-	contextWindow int
-	approvals     *ApprovalBroker
+	compaction     CompactionSettings
+	contextWindow  int
+	approvals      *ApprovalBroker
+	closeResources []func() error
 }
 
 type Phase string
@@ -150,6 +151,10 @@ type HarnessConfig struct {
 	// requests immediately (the print-mode fail-closed behavior).
 	ApprovalMode        ApprovalMode
 	ApprovalInteractive bool
+
+	// CloseResources are runtime-owned services that close with the harness,
+	// such as external tool clients.
+	CloseResources []func() error
 }
 
 // NewHarness creates a new Harness from the given configuration.
@@ -208,6 +213,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		h.hooks = make(map[string][]HookHandler)
 	}
 	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
+	h.closeResources = append([]func() error(nil), cfg.CloseResources...)
 	return h
 }
 
@@ -1318,7 +1324,11 @@ func (h *Harness) Close() error {
 	if h.delivery != nil {
 		h.delivery.close()
 	}
-	return errors.Join(flushErr, h.session.Close())
+	var resourceErr error
+	for i := len(h.closeResources) - 1; i >= 0; i-- {
+		resourceErr = errors.Join(resourceErr, h.closeResources[i]())
+	}
+	return errors.Join(flushErr, resourceErr, h.session.Close())
 }
 
 // Shutdown attempts a graceful stop: abort any running turn, wait for completion

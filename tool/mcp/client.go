@@ -78,6 +78,10 @@ func (c *Client) WithFilePolicy(policy *FilePolicy) *Client {
 // DiscoverTools fetches available tools from the MCP server and returns them
 // as tool.Tool values that can be registered in a tool.Registry.
 func (c *Client) DiscoverTools(ctx context.Context) ([]tool.Tool, error) {
+	return c.discoverTools(ctx, "")
+}
+
+func (c *Client) discoverTools(ctx context.Context, namespace string) ([]tool.Tool, error) {
 	if c == nil || c.session == nil {
 		return nil, fmt.Errorf("mcp: nil client session")
 	}
@@ -90,15 +94,28 @@ func (c *Client) DiscoverTools(ctx context.Context) ([]tool.Tool, error) {
 		if remoteTool == nil {
 			return nil, fmt.Errorf("mcp tools/list: nil tool")
 		}
-		spec := llm.Spec{
-			Name:        remoteTool.Name,
+		remoteName := remoteTool.Name
+		remoteSpec := llm.Spec{
+			Name:        remoteName,
 			Description: remoteTool.Description,
 			Parameters:  normalizeSchema(remoteTool.InputSchema),
+		}
+		if err := Validate(remoteSpec); err != nil {
+			return nil, err
+		}
+		effectiveName := remoteName
+		if namespace != "" {
+			effectiveName = namespacedToolName(namespace, remoteName)
+		}
+		spec := llm.Spec{
+			Name:        effectiveName,
+			Description: remoteSpec.Description,
+			Parameters:  remoteSpec.Parameters,
 		}
 		if err := Validate(spec); err != nil {
 			return nil, err
 		}
-		tools = append(tools, &wrapper{client: c, spec: spec})
+		tools = append(tools, &wrapper{client: c, spec: spec, remoteName: remoteName})
 	}
 	return tools, nil
 }
@@ -138,8 +155,9 @@ func (c *Client) CallTool(
 
 // wrapper implements the tool.Tool interface for an MCP tool.
 type wrapper struct {
-	client *Client
-	spec   llm.Spec
+	client     *Client
+	spec       llm.Spec
+	remoteName string
 }
 
 func (w *wrapper) Spec() llm.Spec {
@@ -165,7 +183,11 @@ func (w *wrapper) Execute(ctx context.Context, args string) (string, error) {
 			return "", err
 		}
 	}
-	return w.client.CallTool(ctx, w.spec.Name, parsedArgs)
+	remoteName := w.remoteName
+	if remoteName == "" {
+		remoteName = w.spec.Name
+	}
+	return w.client.CallTool(ctx, remoteName, parsedArgs)
 }
 
 func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {

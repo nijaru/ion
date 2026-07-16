@@ -276,6 +276,23 @@ func TestWrapperApprovalRequirementReturnsFalseForNonFileTools(t *testing.T) {
 	}
 }
 
+func TestWrapperApprovalRequirementCanRequireOpaqueExternalTools(t *testing.T) {
+	w := &wrapper{
+		client: (&Client{session: &fakeClientSession{}}).WithFilePolicy(&FilePolicy{
+			RequireApproval: true,
+		}),
+		spec: llmSpec("remote_action"),
+	}
+
+	req, ok, err := w.ApprovalRequirement(`{"msg":"hello"}`)
+	if err != nil {
+		t.Fatalf("ApprovalRequirement: %v", err)
+	}
+	if !ok || req.Category != "external" || req.Operation != "remote_action" {
+		t.Fatalf("approval = %#v, ok=%v; want opaque external requirement", req, ok)
+	}
+}
+
 func TestNewClient_ConnectsOverOfficialTransport(t *testing.T) {
 	srv, _ := newTestServer()
 	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()

@@ -66,3 +66,23 @@ func TestDefaultActiveToolNamesKeepsDiscoveryMetaTool(t *testing.T) {
 		t.Fatalf("default active tools = %#v", got)
 	}
 }
+
+func TestActiveToolNamesIncludesConfiguredMCPTools(t *testing.T) {
+	registry := tool.NewRegistry()
+	for _, name := range []string{"bash", "edit", "read", "search_tools", "write"} {
+		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+			return "", nil
+		}))
+	}
+	registry.Register(tool.FuncWithMetadata(
+		"mcp_workspace_echo",
+		"remote echo",
+		map[string]any{"type": "object"},
+		tool.Metadata{Category: "mcp"},
+		func(context.Context, string) (string, error) { return "", nil },
+	))
+	got := activeToolNamesForMode(registry, "coding")
+	if !slices.Equal(got, []string{"bash", "edit", "read", "search_tools", "write", "mcp_workspace_echo"}) {
+		t.Fatalf("active MCP tools = %#v", got)
+	}
+}

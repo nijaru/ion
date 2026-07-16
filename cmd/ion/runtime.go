@@ -21,6 +21,7 @@ import (
 	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
+	ionmcp "github.com/nijaru/ion/tool/mcp"
 )
 
 type sessionCatalogReader interface {
@@ -195,6 +196,14 @@ func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
 	default:
 		preferred = []string{"bash", "edit", "read", tool.SearchToolName, "write"}
 	}
+	// Configured external tools are explicit user additions, so expose them in
+	// every normal mode. The model can still discover the complete registry via
+	// search_tools when a session's persisted ActiveTools narrows the surface.
+	for _, entry := range registry.Entries() {
+		if entry.Metadata.Category == "mcp" {
+			preferred = append(preferred, entry.Spec.Name)
+		}
+	}
 	active := make([]string, 0, len(preferred))
 	for _, name := range preferred {
 		if _, ok := registry.Get(name); ok {
@@ -202,6 +211,36 @@ func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
 		}
 	}
 	return active
+}
+
+func openMCPRuntime(
+	ctx context.Context,
+	workdir string,
+	configs []config.MCPServerConfig,
+) (*ionmcp.Runtime, error) {
+	servers := make([]ionmcp.ServerConfig, 0, len(configs))
+	for _, server := range configs {
+		servers = append(servers, ionmcp.ServerConfig{
+			Name:           server.Name,
+			Command:        server.Command,
+			Args:           append([]string(nil), server.Args...),
+			Directory:      server.Directory,
+			Env:            cloneStringMap(server.Env),
+			ProtectedPaths: append([]string(nil), server.ProtectedPaths...),
+		})
+	}
+	return ionmcp.Open(ctx, workdir, servers)
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func openRuntime(
@@ -249,15 +288,22 @@ func openRuntime(
 			fmt.Errorf("initialize provider: %w", err)
 	}
 
+	mcpRuntime, err := openMCPRuntime(ctx, cwd, runtimeCfg.MCPServers)
+	if err != nil {
+		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+	}
+
 	// Provider construction is side-effect free with respect to the session
 	// tree, so do it before moving a shared store to a requested resume leaf.
 	// A failed provider must leave the current runtime's session untouched.
 	if sessionID != "" {
 		sqliteStore, ok := store.(*session.SQLiteStore)
 		if !ok {
+			_ = mcpRuntime.Close()
 			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
 		}
 		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
+			_ = mcpRuntime.Close()
 			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
 	}
@@ -273,6 +319,14 @@ func openRuntime(
 	}); err != nil {
 		// Non-fatal: start without tools if registration fails.
 		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)
+	}
+	for _, external := range mcpRuntime.Tools() {
+		if _, exists := toolRegistry.Get(external.Spec().Name); exists {
+			_ = mcpRuntime.Close()
+			err := fmt.Errorf("MCP tool name %q collides with an existing tool", external.Spec().Name)
+			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		}
+		toolRegistry.Register(external)
 	}
 	var agentTools []agent.Tool
 	for _, entry := range toolRegistry.Entries() {
@@ -307,6 +361,14 @@ func openRuntime(
 		})
 	}
 	activeToolNames := activeToolNamesForMode(toolRegistry, runtimeCfg.ActiveToolMode())
+	if backend, ok := b.(*configBackend); ok {
+		backend.surface = app.ToolSurface{
+			Count:       len(toolRegistry.Names()),
+			Names:       toolRegistry.Names(),
+			ActiveNames: append([]string(nil), activeToolNames...),
+			Mode:        runtimeCfg.ActiveToolMode(),
+		}
+	}
 	registeredSearch, _ := toolRegistry.Get(tool.SearchToolName)
 	searchTool, _ := registeredSearch.(*tool.SearchTool)
 
@@ -339,6 +401,7 @@ func openRuntime(
 		cwd,
 	)
 	if err != nil {
+		_ = mcpRuntime.Close()
 		return nil, nil, nil, fmt.Errorf("build system prompt: %w", err)
 	}
 
@@ -355,6 +418,7 @@ func openRuntime(
 		SysPrompt:           sysPrompt,
 		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
 		ApprovalInteractive: interactive,
+		CloseResources:      []func() error{mcpRuntime.Close},
 		Logger:              log,
 	})
 	if searchTool != nil {

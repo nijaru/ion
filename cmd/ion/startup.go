@@ -400,6 +400,7 @@ type configBackend struct {
 	def   *llm.Definition
 	cfg   *config.Config
 	store session.Store
+	surface app.ToolSurface
 }
 
 func (b *configBackend) Name() string { return "ion" }
@@ -428,6 +429,12 @@ func (b *configBackend) Bootstrap() app.Bootstrap {
 }
 func (b *configBackend) SetStore(s session.Store)     { b.store = s }
 func (b *configBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
+func (b *configBackend) ToolSurface() app.ToolSurface {
+	surface := b.surface
+	surface.Names = append([]string(nil), surface.Names...)
+	surface.ActiveNames = append([]string(nil), surface.ActiveNames...)
+	return surface
+}
 
 func splitSessionModelName(value string) (string, string) {
 	value = strings.TrimSpace(value)

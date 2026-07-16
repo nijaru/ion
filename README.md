@@ -72,6 +72,10 @@ auth_env_var = "CUSTOM_API_KEY"
 Runtime choices made in the TUI are stored in `~/.ion/state.toml`. API keys
 entered in Ion are stored in `~/.ion/credentials.toml`.
 
+Configured MCP stdio servers are declared in `~/.ion/config.toml` with
+`[[mcp_servers]]` entries. See [docs/tools.md](docs/tools.md#mcp-servers) for
+the server lifecycle, namespacing, workspace policy, and approval behavior.
+
 Per-run overrides are also supported:
 
 ```sh

@@ -333,3 +333,26 @@ func TestDeniedApprovalPersistsRecoverableToolResult(t *testing.T) {
 		t.Fatal("final assistant response was not persisted")
 	}
 }
+
+func TestHarnessClosesRuntimeResourcesExactlyOnce(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	closed := 0
+	h := NewHarness(HarnessConfig{
+		Session: sess,
+		Store:   store,
+		CloseResources: []func() error{func() error {
+			closed++
+			return nil
+		}},
+	})
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("resource close count = %d, want 1", closed)
+	}
+}
