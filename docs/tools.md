@@ -6,7 +6,7 @@ Ion registers a small native tool universe:
 bash, edit, find, grep, ls, read, write
 ```
 
-Normal coding mode exposes the Pi-style active subset to the provider:
+Normal coding mode exposes the default active subset to the provider:
 
 ```text
 bash, edit, read, write
@@ -15,8 +15,8 @@ bash, edit, read, write
 The read-only discovery tools `find`, `grep`, and `ls` are registered but not
 active by default. The always-active `search_tools` meta-tool searches the full
 registry, activates matching names, and exposes them on the next provider
-request. This keeps normal coding turns close to Pi while preserving typed
-discovery when the model needs it.
+request. This keeps normal coding turns small while preserving typed discovery
+when the model needs it.
 
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
 surfaces are deferred or hidden from the default tool surface. `/compact`
@@ -38,23 +38,22 @@ current registered and active tool names. Sandbox execution is parked while
 the native core loop stabilizes; the default bash tool runs foreground commands
 directly in the workspace.
 
-Background jobs are deferred. The native Pi-parity tool path only runs
-foreground commands; `/jobs` and `/stop` stay hidden until async process UX is
-designed as a coherent later feature.
+Background jobs are deferred. The native tool path only runs foreground
+commands; `/jobs` and `/stop` stay hidden until async process UX is designed as
+a coherent later feature.
 
 Native `bash` accepts `command` plus an optional per-command `timeout` in
 seconds. There is no default timeout; normal turns are bounded by user/provider
 cancellation and explicit tool/provider timeouts rather than a hidden whole-turn
 deadline.
 
-Long native `bash` output follows Pi-style tail semantics: Ion keeps the last
-2000 lines or 50KB for provider-visible context and writes the full truncated
-output to a temp file referenced in the tool result. This preserves final test
-summaries and compiler errors instead of returning only the command's head.
+Long native `bash` output uses tail semantics: Ion keeps the last 2000 lines or
+50KB for provider-visible context and writes the full truncated output to a temp
+file referenced in the tool result. This preserves final test summaries and
+compiler errors instead of returning only the command's head.
 
-Native Pi-parity execution is trusted by default. Approval tiers, persistent
-policy files, and sandbox permission UX are deferred until the core loop and
-TUI are stable.
+Native execution is trusted by default. Approval tiers, persistent policy files,
+and sandbox permission UX are deferred until the core loop and TUI are stable.
 
 Native `read` returns model-visible text file contents with line numbers. For
 supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an
@@ -62,12 +61,12 @@ image content part through Canto so vision-capable providers can inspect the
 image. The TUI still compacts read rows by default, but the model receives
 stable line references for follow-up edits.
 
-File and search tool path inputs follow Pi-style normalization for common
-model output: leading `@` is stripped, Unicode space variants are normalized to
-ASCII spaces, and local `file://` URLs are accepted. Non-local `file://host/...`
-URLs are rejected. For `read`, Ion also retries common macOS filename variants
-when the normalized path is missing: screenshot AM/PM narrow spaces, NFD
-Unicode filenames, and straight apostrophes typed for curly apostrophes.
+File and search tool path inputs normalize common terminal/model output: leading
+`@` is stripped, Unicode space variants are normalized to ASCII spaces, and
+local `file://` URLs are accepted. Non-local `file://host/...` URLs are rejected.
+For `read`, Ion also retries common macOS filename variants when the normalized
+path is missing: screenshot AM/PM narrow spaces, NFD Unicode filenames, and
+straight apostrophes typed for curly apostrophes.
 
 Native `grep` and `find` remain dedicated read-only tools instead of being
 collapsed into `bash`. They use ripgrep (`rg`) semantics for ignore handling:
@@ -76,12 +75,12 @@ work, and `.git` internals are excluded. Ion does not auto-download `rg`; a
 future in-process engine such as ripgo should be evaluated with benchmarks
 before replacing the battle-tested ripgrep baseline.
 
-`grep` follows Pi-style result shaping: `limit` counts matches, not rendered
-context lines; `context` is formatted by Ion as compact before/after blocks;
+`grep` uses compact result shaping: `limit` counts matches, not rendered context
+lines; `context` is formatted by Ion as compact before/after blocks;
 long match and context lines are truncated to 500 characters with an explicit
 notice; and directory/file results are displayed relative to the searched root.
-`find` supports Pi-style slash patterns even when `path` already narrows the
-search root, while keeping output relative to that root.
+`find` supports slash patterns even when `path` already narrows the search root,
+while keeping output relative to that root.
 
 Large model-visible tool results are truncated with explicit continuation or
 omission markers. If the model needs the omitted content, it should rerun the
@@ -110,7 +109,8 @@ files. Checkpoints are kept as recovery metadata, but `/rewind` polish is
 deferred and should not be treated as part of the default model-visible tool
 surface.
 
-Structured edits require exact `oldText` matches inside `edits[]`, paired with
-the replacement `newText`. Ambiguous edit failures include line numbers. LF
-snippets copied from `read` can still match CRLF/BOM files without changing the
-file's line-ending style.
+Structured edits require exact `old_string` matches inside `edits[]`, paired
+with `new_string`. `replace_all` and `expected_replacements` control repeated
+matches. Ambiguous edit failures include line numbers. LF snippets copied from
+`read` can still match CRLF/BOM files without changing the file's line-ending
+style.

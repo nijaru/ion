@@ -99,7 +99,7 @@ func TestSearchTools(t *testing.T) {
 			`{"pattern":"context line","path":"src","glob":"*.go","ignoreCase":true,"literal":true,"context":1,"limit":1}`,
 		)
 		if err != nil {
-			t.Fatalf("grep with pi-like options failed: %v", err)
+			t.Fatalf("grep with native options failed: %v", err)
 		}
 		if !strings.Contains(res, "upper.go") {
 			t.Fatalf("expected upper.go in filtered grep results, got %q", res)
@@ -132,7 +132,7 @@ func TestSearchTools(t *testing.T) {
 		if !strings.Contains(res, "context.go-1- before") ||
 			!strings.Contains(res, "context.go:2: Needle one") ||
 			!strings.Contains(res, "context.go-3- after") {
-			t.Fatalf("expected Pi-style context block, got %q", res)
+			t.Fatalf("expected context block, got %q", res)
 		}
 		if !strings.Contains(res, "1 matches limit reached") {
 			t.Fatalf("expected match-limit notice to count matches, got %q", res)

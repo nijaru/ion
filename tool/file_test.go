@@ -27,8 +27,8 @@ func newTestFileTool(t *testing.T, cwd string) *FileTool {
 func marshalEditArgs(t *testing.T, filePath string, edits ...map[string]any) string {
 	t.Helper()
 	args, err := json.Marshal(map[string]any{
-		"file_path": filePath,
-		"edits":     edits,
+		"path":  filePath,
+		"edits": edits,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,8 +57,8 @@ func TestFileTools(t *testing.T) {
 
 		// Write
 		writeArgs, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"content":   content,
+			"path":    filePath,
+			"content": content,
 		})
 		writeResult, err := w.Execute(context.Background(), string(writeArgs))
 		if err != nil {
@@ -69,7 +69,7 @@ func TestFileTools(t *testing.T) {
 		}
 
 		// Read full
-		readArgs, _ := json.Marshal(map[string]any{"file_path": filePath})
+		readArgs, _ := json.Marshal(map[string]any{"path": filePath})
 		res, err := r.Execute(context.Background(), string(readArgs))
 		if err != nil {
 			t.Fatalf("read failed: %v", err)
@@ -79,14 +79,13 @@ func TestFileTools(t *testing.T) {
 			t.Errorf("expected %q, got %q", wantRead, res)
 		}
 
-		// Pi-style path argument.
-		piReadArgs, _ := json.Marshal(map[string]any{"path": filePath, "offset": 2, "limit": 1})
-		res, err = r.Execute(context.Background(), string(piReadArgs))
+		readRangeArgs, _ := json.Marshal(map[string]any{"path": filePath, "offset": 2, "limit": 1})
+		res, err = r.Execute(context.Background(), string(readRangeArgs))
 		if err != nil {
-			t.Fatalf("read with Pi-style path failed: %v", err)
+			t.Fatalf("read range failed: %v", err)
 		}
 		if res != "     2\tline 2\n\n[1 more line(s) in file. Use offset=3 to continue.]" {
-			t.Errorf("Pi-style read path expected numbered line 2, got %q", res)
+			t.Errorf("read range expected numbered line 2, got %q", res)
 		}
 
 		spacePath := "space name.txt"
@@ -160,9 +159,9 @@ func TestFileTools(t *testing.T) {
 
 		// Read with limit/offset
 		limitArgs, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"offset":    2,
-			"limit":     1,
+			"path":   filePath,
+			"offset": 2,
+			"limit":  1,
 		})
 		res, err = r.Execute(context.Background(), string(limitArgs))
 		if err != nil {
@@ -173,9 +172,9 @@ func TestFileTools(t *testing.T) {
 		}
 
 		zeroOffsetArgs, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"offset":    0,
-			"limit":     1,
+			"path":   filePath,
+			"offset": 0,
+			"limit":  1,
 		})
 		res, err = r.Execute(context.Background(), string(zeroOffsetArgs))
 		if err != nil {
@@ -186,15 +185,15 @@ func TestFileTools(t *testing.T) {
 		}
 
 		negativeOffsetArgs, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"offset":    -1,
-			"limit":     1,
+			"path":   filePath,
+			"offset": -1,
+			"limit":  1,
 		})
 		if _, err := r.Execute(context.Background(), string(negativeOffsetArgs)); err == nil {
 			t.Fatal("expected negative offset to fail")
 		}
 
-		absArgs, _ := json.Marshal(map[string]any{"file_path": filepath.Join(tmpDir, filePath)})
+		absArgs, _ := json.Marshal(map[string]any{"path": filepath.Join(tmpDir, filePath)})
 		res, err = r.Execute(context.Background(), string(absArgs))
 		if err != nil {
 			t.Fatalf("read with absolute in-workspace path failed: %v", err)
@@ -207,7 +206,7 @@ func TestFileTools(t *testing.T) {
 		if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		outsideArgs, _ := json.Marshal(map[string]any{"file_path": outside})
+		outsideArgs, _ := json.Marshal(map[string]any{"path": outside})
 		res, err = r.Execute(context.Background(), string(outsideArgs))
 		if err != nil {
 			t.Fatalf("read with absolute path outside workspace failed: %v", err)
@@ -220,7 +219,7 @@ func TestFileTools(t *testing.T) {
 		if err := os.Symlink(outside, linkPath); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
-		linkArgs, _ := json.Marshal(map[string]any{"file_path": "outside-link.txt"})
+		linkArgs, _ := json.Marshal(map[string]any{"path": "outside-link.txt"})
 		res, err = r.Execute(context.Background(), string(linkArgs))
 		if err != nil {
 			t.Fatalf("read through symlink failed: %v", err)
@@ -309,7 +308,7 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		readArgs, _ := json.Marshal(map[string]any{"file_path": filePath})
+		readArgs, _ := json.Marshal(map[string]any{"path": filePath})
 		res, err := r.Execute(context.Background(), string(readArgs))
 		if err != nil {
 			t.Fatalf("read failed: %v", err)
@@ -320,9 +319,9 @@ func TestFileTools(t *testing.T) {
 		}
 
 		emptyRangeArgs, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"offset":    99,
-			"limit":     10,
+			"path":   filePath,
+			"offset": 99,
+			"limit":  10,
 		})
 		_, err = r.Execute(context.Background(), string(emptyRangeArgs))
 		if err == nil || !strings.Contains(err.Error(), "beyond end of file") {
@@ -330,7 +329,7 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("Read applies Pi-style default continuation limits", func(t *testing.T) {
+	t.Run("Read applies default continuation limits", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		filePath := "long-read.txt"
 		lines := make([]string, 2002)
@@ -359,7 +358,7 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
-	t.Run("Read applies Pi-style byte continuation limits", func(t *testing.T) {
+	t.Run("Read applies byte continuation limits", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		filePath := "wide-read.txt"
 		content := strings.Repeat("a", MaxToolOutputSize/2) + "\n" +
@@ -411,8 +410,8 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		absoluteArgs, _ := json.Marshal(map[string]any{
-			"file_path": filepath.Join(outsideDir, "absolute.txt"),
-			"content":   "absolute",
+			"path":    filepath.Join(outsideDir, "absolute.txt"),
+			"content": "absolute",
 		})
 		if _, err := w.Execute(context.Background(), string(absoluteArgs)); err != nil {
 			t.Fatalf("write absolute path outside workspace failed: %v", err)
@@ -425,19 +424,19 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("absolute file = %q, want absolute", data)
 		}
 
-		aliasArgs, _ := json.Marshal(map[string]any{
-			"path":    "pi-write.txt",
-			"content": "pi path",
+		writeArgs, _ := json.Marshal(map[string]any{
+			"path":    "write-path.txt",
+			"content": "path input",
 		})
-		if _, err := w.Execute(context.Background(), string(aliasArgs)); err != nil {
-			t.Fatalf("write with Pi-style path failed: %v", err)
+		if _, err := w.Execute(context.Background(), string(writeArgs)); err != nil {
+			t.Fatalf("write failed: %v", err)
 		}
-		data, err = os.ReadFile(filepath.Join(tmpDir, "pi-write.txt"))
+		data, err = os.ReadFile(filepath.Join(tmpDir, "write-path.txt"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(data) != "pi path" {
-			t.Fatalf("Pi-style write path file = %q, want pi path", data)
+		if string(data) != "path input" {
+			t.Fatalf("write path file = %q, want path input", data)
 		}
 
 		if err := os.Symlink(outsideFile, filepath.Join(tmpDir, "outside-write-link.txt")); err != nil {
@@ -445,8 +444,8 @@ func TestFileTools(t *testing.T) {
 		}
 
 		linkArgs, _ := json.Marshal(map[string]any{
-			"file_path": "outside-write-link.txt",
-			"content":   "changed",
+			"path":    "outside-write-link.txt",
+			"content": "changed",
 		})
 		if _, err := w.Execute(context.Background(), string(linkArgs)); err != nil {
 			t.Fatalf("write through symlink failed: %v", err)
@@ -464,8 +463,8 @@ func TestFileTools(t *testing.T) {
 			t.Skipf("symlink directory unavailable: %v", err)
 		}
 		dirArgs, _ := json.Marshal(map[string]any{
-			"file_path": "outside-write-dir/new.txt",
-			"content":   "changed",
+			"path":    "outside-write-dir/new.txt",
+			"content": "changed",
 		})
 		if _, err := w.Execute(context.Background(), string(dirArgs)); err != nil {
 			t.Fatalf("write through symlink directory failed: %v", err)
@@ -488,8 +487,8 @@ func TestFileTools(t *testing.T) {
 		}
 
 		args, _ := json.Marshal(map[string]any{
-			"file_path": filePath,
-			"content":   "#!/bin/sh\necho after\n",
+			"path":    filePath,
+			"content": "#!/bin/sh\necho after\n",
 		})
 		if _, err := w.Execute(context.Background(), string(args)); err != nil {
 			t.Fatalf("write executable: %v", err)
@@ -512,7 +511,7 @@ func TestFileTools(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		readArgs, _ := json.Marshal(map[string]any{"file_path": filePath})
+		readArgs, _ := json.Marshal(map[string]any{"path": filePath})
 		res, err := r.Execute(context.Background(), string(readArgs))
 		if err != nil {
 			t.Fatalf("read failed: %v", err)
@@ -547,8 +546,8 @@ func TestFileTools(t *testing.T) {
 
 		// Replace unique
 		editArgs := marshalEditArgs(t, filePath, map[string]any{
-			"oldText": "bar",
-			"newText": "qux",
+			"old_string": "bar",
+			"new_string": "qux",
 		})
 		_, err := e.Execute(context.Background(), editArgs)
 		if err != nil {
@@ -633,7 +632,7 @@ func TestFileTools(t *testing.T) {
 			"new_string": "x",
 		})
 		if _, err := e.Execute(context.Background(), emptyOldArgs); err == nil {
-			t.Fatal("expected empty oldText to fail")
+			t.Fatal("expected empty old_string to fail")
 		}
 
 		noopArgs := marshalEditArgs(t, filePath, map[string]any{
@@ -737,7 +736,7 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("user temp file = %q, want preserved", tempContent)
 		}
 
-		emptyArgs, _ := json.Marshal(map[string]any{"file_path": f1, "edits": []map[string]any{}})
+		emptyArgs, _ := json.Marshal(map[string]any{"path": f1, "edits": []map[string]any{}})
 		if _, err := e.Execute(context.Background(), string(emptyArgs)); err == nil {
 			t.Fatal("expected empty edits to fail")
 		}

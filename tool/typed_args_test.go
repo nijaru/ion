@@ -94,8 +94,10 @@ func TestEditToolSchemaRequiresNestedReplacementFields(t *testing.T) {
 	items := edits["items"].(map[string]any)
 	itemProperties := items["properties"].(map[string]any)
 	expectedProperties := []string{
-		"oldText",
-		"newText",
+		"old_string",
+		"new_string",
+		"replace_all",
+		"expected_replacements",
 	}
 	for _, property := range expectedProperties {
 		if _, ok := itemProperties[property]; !ok {
@@ -107,10 +109,43 @@ func TestEditToolSchemaRequiresNestedReplacementFields(t *testing.T) {
 	}
 
 	required := schemaStringList(t, items["required"])
-	for _, property := range []string{"oldText", "newText"} {
+	for _, property := range []string{"old_string", "new_string"} {
 		if !slices.Contains(required, property) {
 			t.Fatalf("nested required = %#v, want %q", required, property)
 		}
+	}
+}
+
+func TestToolsRejectLegacyArgumentAliases(t *testing.T) {
+	fileTool := NewFileTool(t.TempDir())
+	tests := []struct {
+		name string
+		tool Tool
+		args string
+	}{
+		{
+			name: "read file_path",
+			tool: &Read{FileTool: *fileTool},
+			args: `{"file_path":"missing.txt"}`,
+		},
+		{
+			name: "write file_path",
+			tool: &Write{FileTool: *fileTool},
+			args: `{"file_path":"missing.txt","content":"text"}`,
+		},
+		{
+			name: "edit oldText",
+			tool: &Edit{FileTool: *fileTool},
+			args: `{"path":"missing.txt","edits":[{"oldText":"a","newText":"b"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.tool.Execute(t.Context(), tt.args); err == nil {
+				t.Fatal("legacy argument alias was accepted")
+			}
+		})
 	}
 }
 

@@ -18,12 +18,12 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		w := &Write{FileTool: *newTestFileTool(t, tmpDir)}
 
 		executeToolJSON(t, w, context.Background(), map[string]any{
-			"file_path": "created.txt",
-			"content":   "alpha\n",
+			"path":    "created.txt",
+			"content": "alpha\n",
 		})
 		executeToolJSON(t, w, context.Background(), map[string]any{
-			"file_path": "created.txt",
-			"content":   "omega\n",
+			"path":    "created.txt",
+			"content": "omega\n",
 		})
 
 		assertFileContent(t, tmpDir, "created.txt", "omega\n")
@@ -35,7 +35,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		writeFile(t, tmpDir, path, "\ufeffalpha\r\nbeta\r\n")
 
 		executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": path,
+			"path": path,
 			"edits": []map[string]any{
 				{
 					"old_string": "alpha\nbeta",
@@ -52,7 +52,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		writeFile(t, tmpDir, "atomic.txt", "alpha\nbeta\n")
 
 		_, err := executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": "atomic.txt",
+			"path": "atomic.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "alpha",
@@ -76,7 +76,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		writeFile(t, tmpDir, "multi.txt", "alpha\nbeta\n")
 
 		result, err := executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": "multi.txt",
+			"path": "multi.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "alpha",
@@ -102,30 +102,12 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		assertFileContent(t, tmpDir, "multi.txt", "one\ntwo\n")
 	})
 
-	t.Run("edit accepts Pi-style compatibility arguments", func(t *testing.T) {
-		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
-		writeFile(t, tmpDir, "pi-compat.txt", "alpha\nbeta\ngamma\n")
-
-		result, err := e.Execute(
-			t.Context(),
-			`{"path":"pi-compat.txt","edits":"[{\"oldText\":\"alpha\",\"newText\":\"one\"}]","oldText":"gamma","newText":"three"}`,
-		)
-		if err != nil {
-			t.Fatalf("edit failed: %v", err)
-		}
-		if !strings.Contains(result, "Applied 2 edit(s)") {
-			t.Fatalf("edit result = %q, want two edit compatibility result", result)
-		}
-
-		assertFileContent(t, tmpDir, "pi-compat.txt", "one\nbeta\nthree\n")
-	})
-
 	t.Run("edit matches edits against original content", func(t *testing.T) {
 		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
 		writeFile(t, tmpDir, "original-match.txt", "alpha\none\n")
 
 		_, err := executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": "original-match.txt",
+			"path": "original-match.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "alpha",
@@ -149,7 +131,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		writeFile(t, tmpDir, "overlap.txt", "abcdef\n")
 
 		_, err := executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": "overlap.txt",
+			"path": "overlap.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "abc",
@@ -174,7 +156,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		writeFile(t, tmpDir, path, "same\nsame\n")
 
 		_, err := executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": path,
+			"path": path,
 			"edits": []map[string]any{
 				{
 					"old_string": "same",
@@ -187,7 +169,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		}
 
 		_, err = executeToolJSON(t, e, context.Background(), map[string]any{
-			"file_path": path,
+			"path": path,
 			"edits": []map[string]any{
 				{
 					"old_string":            "same",
@@ -212,7 +194,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 		cancel()
 
 		_, err := executeToolJSON(t, e, ctx, map[string]any{
-			"file_path": path,
+			"path": path,
 			"edits": []map[string]any{
 				{
 					"old_string": "before",
@@ -234,23 +216,23 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 
 		w := &Write{FileTool: FileTool{cwd: tmpDir}}
 		_, err := executeToolJSON(t, w, ctx, map[string]any{
-			"file_path": "nested/new.txt",
-			"content":   "after\n",
+			"path":    "nested/new.txt",
+			"content": "after\n",
 		})
 		assertCanceled(t, err)
 		assertFileMissing(t, tmpDir, "nested/new.txt")
 
 		writeFile(t, tmpDir, "existing.txt", "before\n")
 		_, err = executeToolJSON(t, w, ctx, map[string]any{
-			"file_path": "existing.txt",
-			"content":   "after\n",
+			"path":    "existing.txt",
+			"content": "after\n",
 		})
 		assertCanceled(t, err)
 		assertFileContent(t, tmpDir, "existing.txt", "before\n")
 
 		e := &Edit{FileTool: FileTool{cwd: tmpDir}}
 		_, err = executeToolJSON(t, e, ctx, map[string]any{
-			"file_path": "existing.txt",
+			"path": "existing.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "before",
@@ -263,7 +245,7 @@ func TestEditSurfaceEvalSingleEditTool(t *testing.T) {
 
 		writeFile(t, tmpDir, "multi.txt", "before\n")
 		_, err = executeToolJSON(t, e, ctx, map[string]any{
-			"file_path": "multi.txt",
+			"path": "multi.txt",
 			"edits": []map[string]any{
 				{
 					"old_string": "before",
@@ -341,8 +323,8 @@ func TestFileToolsWrapDeadlineWithActionableOperation(t *testing.T) {
 
 	w := &Write{FileTool: FileTool{cwd: tmpDir}}
 	_, err := executeToolJSON(t, w, ctx, map[string]any{
-		"file_path": "deadline.txt",
-		"content":   "after\n",
+		"path":    "deadline.txt",
+		"content": "after\n",
 	})
 	if err == nil {
 		t.Fatal("expected deadline context to fail")

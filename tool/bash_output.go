@@ -14,8 +14,7 @@ const (
 )
 
 // sanitizeBinaryOutput strips non-printable control characters from shell output,
-// keeping tab, newline, and carriage return. Matches Pi's sanitizeBinaryOutput in
-// utils/shell-output.js.
+// keeping tab, newline, and carriage return for stable model-visible output.
 func sanitizeBinaryOutput(s string) string {
 	// Fast path: most output is clean
 	needsSanitizing := false

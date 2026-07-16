@@ -486,7 +486,7 @@ func TestRenderAgentMarkdownPlainTableFallbackFitsLongCells(t *testing.T) {
 }
 
 func TestFormatToolTitleUsesReadableLabels(t *testing.T) {
-	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read(AGENTS.md)" {
+	if got := FormatToolTitle("read", `{"path":"AGENTS.md"}`); got != "Read(AGENTS.md)" {
 		t.Fatalf("read title = %q, want readable title", got)
 	}
 	if got := FormatToolTitle("bash", `{"command":"go test ./..."}`); got != "Bash(go test ./...)" {
@@ -505,7 +505,7 @@ func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
 	updated, _ := model.Update(session.ToolExecStart{
 		ToolCallID: "tool-read",
 		Name:       "read",
-		Args:       []byte(`{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`),
+		Args:       []byte(`{"path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`),
 	})
 	model = testModel(t, updated)
 
@@ -524,7 +524,7 @@ func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
 	updated, _ := model.Update(session.ToolExecStart{
 		ToolCallID: "tool-read",
 		Name:       "read",
-		Args:       []byte(`{"file_path":` + strconv.Quote(path) + `}`),
+		Args:       []byte(`{"path":` + strconv.Quote(path) + `}`),
 	})
 	model = testModel(t, updated)
 
@@ -547,7 +547,7 @@ func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
 	updated, _ := model.Update(session.ToolExecStart{
 		ToolCallID: "tool-read",
 		Name:       "read",
-		Args:       []byte(`{"file_path":` + strconv.Quote(path) + `}`),
+		Args:       []byte(`{"path":` + strconv.Quote(path) + `}`),
 	})
 	model = testModel(t, updated)
 

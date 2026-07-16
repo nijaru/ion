@@ -43,7 +43,7 @@ type StreamingUpdateTool interface {
 }
 
 // ContentTool is implemented by tools that can return structured model-visible
-// content such as text plus images. Execute remains the compatibility fallback.
+// content such as text plus images. Execute remains the text fallback.
 type ContentTool interface {
 	Tool
 	ExecuteContent(ctx context.Context, args string) ([]llm.ContentPart, error)

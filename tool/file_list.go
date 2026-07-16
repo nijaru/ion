@@ -12,7 +12,7 @@ import (
 
 const defaultLSLimit = 500
 
-// List tool (Pi-style ls; formerly list_directory).
+// List tool.
 type List struct {
 	FileTool
 }

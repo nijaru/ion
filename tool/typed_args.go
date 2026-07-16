@@ -22,16 +22,6 @@ type editInput struct {
 	Edits []editReplacement `json:"edits"`
 }
 
-type editParametersInput struct {
-	Path  string                      `json:"path"`
-	Edits []editParametersReplacement `json:"edits"`
-}
-
-type editParametersReplacement struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
-}
-
 type lsInput struct {
 	Path  string `json:"path"`
 	Limit int    `json:"limit"`
@@ -61,42 +51,6 @@ func decodeToolArgs[A any](name, args string) (A, error) {
 	return input, nil
 }
 
-func (i *readInput) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Path     string `json:"path"`
-		FilePath string `json:"file_path"`
-		Offset   int    `json:"offset"`
-		Limit    int    `json:"limit"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	i.Path = raw.Path
-	if i.Path == "" {
-		i.Path = raw.FilePath
-	}
-	i.Offset = raw.Offset
-	i.Limit = raw.Limit
-	return nil
-}
-
-func (i *writeInput) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Path     string `json:"path"`
-		FilePath string `json:"file_path"`
-		Content  string `json:"content"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	i.Path = raw.Path
-	if i.Path == "" {
-		i.Path = raw.FilePath
-	}
-	i.Content = raw.Content
-	return nil
-}
-
 func readParameters() map[string]any {
 	schema := typedParameters[readInput]([]string{"path"})
 	describeProperty(
@@ -121,7 +75,7 @@ func writeParameters() map[string]any {
 }
 
 func editParameters() map[string]any {
-	schema := typedParameters[editParametersInput]([]string{"path", "edits"})
+	schema := typedParameters[editInput]([]string{"path", "edits"})
 	describeProperty(
 		schema,
 		"path",
@@ -135,11 +89,11 @@ func editParameters() map[string]any {
 	describeArrayItemProperty(
 		schema,
 		"edits",
-		"oldText",
+		"old_string",
 		"The exact text to replace. Must match the original file, not another edit's output.",
 	)
-	describeArrayItemProperty(schema, "edits", "newText", "The replacement text.")
-	requireArrayItemProperties(schema, "edits", []string{"oldText", "newText"})
+	describeArrayItemProperty(schema, "edits", "new_string", "The replacement text.")
+	requireArrayItemProperties(schema, "edits", []string{"old_string", "new_string"})
 	return schema
 }
 

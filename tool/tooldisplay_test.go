@@ -12,20 +12,20 @@ func TestTitleShortensWorkspaceAbsolutePath(t *testing.T) {
 	workdir := filepath.Join(t.TempDir(), "repo")
 	path := filepath.Join(workdir, "internal", "app", "model.go")
 
-	got := Title("read", `{"file_path":`+quote(path)+`}`, Options{Workdir: workdir})
+	got := Title("read", `{"path":`+quote(path)+`}`, Options{Workdir: workdir})
 	if got != "Read(internal/app/model.go)" {
 		t.Fatalf("title = %q, want workspace-relative path", got)
 	}
 }
 
 func TestTitleCleansRelativePath(t *testing.T) {
-	got := Title("write", `{"file_path":"./internal/../hello.md"}`, Options{})
+	got := Title("write", `{"path":"./internal/../hello.md"}`, Options{})
 	if got != "Write(hello.md)" {
 		t.Fatalf("title = %q, want cleaned relative path", got)
 	}
 }
 
-func TestTitleAcceptsPiPathAlias(t *testing.T) {
+func TestTitleFormatsNativePath(t *testing.T) {
 	tests := []struct {
 		name string
 		args string
@@ -44,7 +44,7 @@ func TestTitleAcceptsPiPathAlias(t *testing.T) {
 	}
 }
 
-func TestTitleUsesPiReadOnlyToolNames(t *testing.T) {
+func TestTitleUsesReadOnlyToolNames(t *testing.T) {
 	tests := []struct {
 		name string
 		args string
@@ -69,7 +69,7 @@ func TestTitleShortensHomePathOutsideWorkspace(t *testing.T) {
 
 	got := Title(
 		"read",
-		`{"file_path":`+quote(path)+`}`,
+		`{"path":`+quote(path)+`}`,
 		Options{Workdir: filepath.Join(t.TempDir(), "repo")},
 	)
 	if got != "Read(~/notes/todo.md)" {
@@ -82,7 +82,7 @@ func TestTitlePreservesOutsideAbsolutePath(t *testing.T) {
 
 	got := Title(
 		"read",
-		`{"file_path":`+quote(path)+`}`,
+		`{"path":`+quote(path)+`}`,
 		Options{Workdir: filepath.Join(t.TempDir(), "repo")},
 	)
 	if !strings.HasPrefix(got, "Read(/") || !strings.HasSuffix(got, "/outside/file.md)") {
@@ -105,7 +105,7 @@ func TestTitleKeepsCommandAndQueryText(t *testing.T) {
 func TestTitleMiddleShortensLongPath(t *testing.T) {
 	got := Title(
 		"read",
-		`{"file_path":"internal/app/components/transcript/very-long/model_test.go"}`,
+		`{"path":"internal/app/components/transcript/very-long/model_test.go"}`,
 		Options{Width: 24},
 	)
 	if got != "Read(…/model_test.go)" {

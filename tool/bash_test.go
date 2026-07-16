@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/tool"
 	"github.com/nijaru/ion/internal/tracing"
+	"github.com/nijaru/ion/tool"
 )
 
 func TestBash_Spec(t *testing.T) {
@@ -274,7 +274,7 @@ func assertBashTailTruncation(t *testing.T, got string) {
 		t.Fatalf("output missing expected tail lines: %q", tailForTest(got, 300))
 	}
 	if !strings.Contains(got, "[Showing lines 106-2105 of 2105. Full output: ") {
-		t.Fatalf("output missing Pi-style tail notice: %q", tailForTest(got, 300))
+		t.Fatalf("output missing tail notice: %q", tailForTest(got, 300))
 	}
 	fullOutputPath := fullOutputPathFromNotice(t, got)
 	defer func() { _ = os.Remove(fullOutputPath) }()

@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/aymanbagabas/go-udiff"
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/ion/llm"
 	"golang.org/x/text/unicode/norm"
 )
@@ -111,88 +109,11 @@ type editReplacement struct {
 	Expected   int    `json:"expected_replacements"`
 }
 
-type editReplacementArg struct {
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	OldText    string `json:"oldText"`
-	NewText    string `json:"newText"`
-	ReplaceAll bool   `json:"replace_all"`
-	Expected   int    `json:"expected_replacements"`
-}
-
-type editReplacementArgs []editReplacementArg
-
 type matchedReplacement struct {
 	editIndex int
 	start     int
 	end       int
 	newString string
-}
-
-func (i *editInput) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Path     string              `json:"path"`
-		FilePath string              `json:"file_path"`
-		Edits    editReplacementArgs `json:"edits"`
-		OldText  string              `json:"oldText"`
-		NewText  string              `json:"newText"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	i.Path = raw.Path
-	if i.Path == "" {
-		i.Path = raw.FilePath
-	}
-	i.Edits = make([]editReplacement, 0, len(raw.Edits)+1)
-	for _, edit := range raw.Edits {
-		i.Edits = append(i.Edits, edit.replacement())
-	}
-	if raw.OldText != "" || raw.NewText != "" {
-		i.Edits = append(i.Edits, editReplacementArg{
-			OldText: raw.OldText,
-			NewText: raw.NewText,
-		}.replacement())
-	}
-	return nil
-}
-
-func (r *editReplacementArgs) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		*r = nil
-		return nil
-	}
-	if data[0] == '"' {
-		var encoded string
-		if err := json.Unmarshal(data, &encoded); err != nil {
-			return err
-		}
-		return r.UnmarshalJSON([]byte(encoded))
-	}
-
-	var replacements []editReplacementArg
-	if err := json.Unmarshal(data, &replacements); err != nil {
-		return err
-	}
-	*r = replacements
-	return nil
-}
-
-func (a editReplacementArg) replacement() editReplacement {
-	edit := editReplacement{
-		OldString:  a.OldString,
-		NewString:  a.NewString,
-		ReplaceAll: a.ReplaceAll,
-		Expected:   a.Expected,
-	}
-	if edit.OldString == "" {
-		edit.OldString = a.OldText
-	}
-	if edit.NewString == "" {
-		edit.NewString = a.NewText
-	}
-	return edit
 }
 
 func writeEditTempFile(path string, data []byte, mode os.FileMode) (string, error) {
@@ -236,7 +157,7 @@ func applyEditReplacements(
 	normalizedEdits := make([]editReplacement, len(edits))
 	for i, edit := range edits {
 		if edit.OldString == "" {
-			return "", 0, fmt.Errorf("edit[%d].oldText must not be empty in %s", i, filePath)
+			return "", 0, fmt.Errorf("edit[%d].old_string must not be empty in %s", i, filePath)
 		}
 		normalizedEdits[i] = editReplacement{
 			OldString:  normalizeToLF(edit.OldString),
@@ -267,7 +188,7 @@ func applyEditReplacements(
 		matchResult := fuzzyFindText(baseContent, edit.OldString)
 		if !matchResult.found {
 			return "", 0, fmt.Errorf(
-				"could not find edits[%d].oldText in %s. The old text must match exactly including all whitespace and newlines",
+				"could not find edits[%d].old_string in %s. The old text must match exactly including all whitespace and newlines",
 				i,
 				filePath,
 			)
@@ -276,7 +197,7 @@ func applyEditReplacements(
 		occurrences := countOccurrences(baseContent, edit.OldString)
 		if occurrences > 1 && !edit.ReplaceAll {
 			return "", 0, fmt.Errorf(
-				"found %d occurrences of edits[%d].oldText in %s. Each oldText must be unique. Please provide more context to make it unique%s",
+				"found %d occurrences of edits[%d].old_string in %s. Each old_string must be unique. Please provide more context to make it unique%s",
 				occurrences,
 				i,
 				filePath,
@@ -286,7 +207,7 @@ func applyEditReplacements(
 
 		if edit.Expected > 0 && occurrences != edit.Expected {
 			return "", 0, fmt.Errorf(
-				"oldText expected %d replacement(s) in %s, found %d%s",
+				"old_string expected %d replacement(s) in %s, found %d%s",
 				edit.Expected,
 				filePath,
 				occurrences,
@@ -447,23 +368,23 @@ type fuzzyMatchResult struct {
 	contentForReplacement string
 }
 
-func fuzzyFindText(content, oldText string) fuzzyMatchResult {
-	if idx := strings.Index(content, oldText); idx != -1 {
+func fuzzyFindText(content, oldString string) fuzzyMatchResult {
+	if idx := strings.Index(content, oldString); idx != -1 {
 		return fuzzyMatchResult{
 			found:                 true,
 			index:                 idx,
-			matchLength:           len(oldText),
+			matchLength:           len(oldString),
 			usedFuzzyMatch:        false,
 			contentForReplacement: content,
 		}
 	}
 	fuzzyContent := normalizeForFuzzyMatch(content)
-	fuzzyOldText := normalizeForFuzzyMatch(oldText)
-	if idx := strings.Index(fuzzyContent, fuzzyOldText); idx != -1 {
+	fuzzyOldString := normalizeForFuzzyMatch(oldString)
+	if idx := strings.Index(fuzzyContent, fuzzyOldString); idx != -1 {
 		return fuzzyMatchResult{
 			found:                 true,
 			index:                 idx,
-			matchLength:           len(fuzzyOldText),
+			matchLength:           len(fuzzyOldString),
 			usedFuzzyMatch:        true,
 			contentForReplacement: fuzzyContent,
 		}
@@ -477,13 +398,13 @@ func fuzzyFindText(content, oldText string) fuzzyMatchResult {
 	}
 }
 
-func countOccurrences(content, oldText string) int {
+func countOccurrences(content, oldString string) int {
 	fuzzyContent := normalizeForFuzzyMatch(content)
-	fuzzyOldText := normalizeForFuzzyMatch(oldText)
-	if fuzzyOldText == "" {
+	fuzzyOldString := normalizeForFuzzyMatch(oldString)
+	if fuzzyOldString == "" {
 		return 0
 	}
-	return strings.Count(fuzzyContent, fuzzyOldText)
+	return strings.Count(fuzzyContent, fuzzyOldString)
 }
 
 func occurrenceLineSummary(content, needle string) string {

@@ -2,11 +2,10 @@
 
 ## Project
 
-Ion is a terminal coding agent in Go, modeled on Pi (Node.js). Goal: a fast,
-native daily-driver coding agent. Pi is the **reference implementation** — read
-its source for behavior, but implement idiomatically in Go. Target **complete
-Pi parity in behavior and product capability**, expressed as the optimal Go
-implementation rather than a line-for-line port.
+Ion is a terminal coding agent in Go, inspired by Pi (Node.js). Goal: a fast,
+native daily-driver coding agent. Pi is a **behavioral reference** — read its
+source for useful invariants, but implement Ion's own idiomatic Go contracts.
+There is no Pi file-format, argument, or compatibility requirement.
 
 Ion is `v0.0.0`. Clean breaks allowed. No shims, no compatibility layers, no v2
 files. Fix the actual code.
@@ -36,8 +35,9 @@ Update `ai/` as you work when state changes materially.
 
 ## Reference Posture
 
-**Complete Pi parity + optimal Go implementation is the goal.** Pi is the
-behavior/product reference, not a spec to copy line-by-line. Pi source:
+**Complete agent capability + optimal Go implementation is the goal.** Pi is the
+behavior/product reference, not a compatibility target or spec to copy
+line-by-line. Pi source:
 `~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`, plus
 `pi-coding-agent/dist/` and `pi-tui/dist/` for CLI/runtime/TUI behavior.
 

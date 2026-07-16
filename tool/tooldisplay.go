@@ -77,11 +77,11 @@ func knownName(name string) (string, bool) {
 		return "Write", true
 	case "edit":
 		return "Edit", true
-	case "list", "ls":
+	case "ls":
 		return "List", true
 	case "grep":
 		return "Search", true
-	case "glob", "find":
+	case "find":
 		return "Find", true
 	case "bash":
 		return "Bash", true
@@ -99,18 +99,15 @@ func primaryArg(name, args string) (string, argKind, bool) {
 		}
 		return "", kindText, false
 	case "read", "write", "edit":
-		if value, kind, ok := jsonStringArg(args, "path", kindPath); ok {
-			return value, kind, true
-		}
-		return jsonStringArg(args, "file_path", kindPath)
-	case "list", "ls":
+		return jsonStringArg(args, "path", kindPath)
+	case "ls":
 		return jsonStringArg(args, "path", kindPath)
 	case "grep":
 		if value, kind, ok := jsonStringArg(args, "pattern", kindText); ok {
 			return value, kind, true
 		}
 		return jsonStringArg(args, "path", kindPath)
-	case "glob", "find":
+	case "find":
 		return jsonStringArg(args, "pattern", kindText)
 	default:
 		for _, candidate := range []struct {
@@ -119,7 +116,6 @@ func primaryArg(name, args string) (string, argKind, bool) {
 		}{
 			{key: "command", kind: kindText},
 			{key: "path", kind: kindPath},
-			{key: "file_path", kind: kindPath},
 			{key: "pattern", kind: kindText},
 			{key: "query", kind: kindText},
 		} {
@@ -156,7 +152,7 @@ const (
 
 func titleArgKind(verb string) argKind {
 	switch strings.ToLower(strings.TrimSpace(verb)) {
-	case "read", "write", "edit", "list", "ls":
+	case "read", "write", "edit", "ls":
 		return kindPath
 	default:
 		return kindText

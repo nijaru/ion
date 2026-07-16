@@ -406,7 +406,3 @@ func (s *resumeOnlyStore) Close() error { return nil }
 func (s *resumeOnlyStore) AddInput(ctx context.Context, workdir string, input string) error {
 	return nil
 }
-
-// --- Old event constructor compatibility helpers ---
-
-// newTextUpdate maps old session.NewTextUpdate("text", AgentMessage{}).
