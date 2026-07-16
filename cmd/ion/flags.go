@@ -33,6 +33,7 @@ type cliFlags struct {
 	timeoutFlag            *time.Duration
 	exportSessionFlag      *string
 	importSessionFlag      *string
+	versionFlag            *bool
 }
 
 func registerCLIFlags() cliFlags {
@@ -122,6 +123,11 @@ func registerCLIFlags() cliFlags {
 			"",
 			"Import a session bundle JSON file",
 		),
+		versionFlag: flag.Bool(
+			"version",
+			false,
+			"Print the Ion version and exit",
+		),
 	}
 }
 
@@ -175,6 +181,10 @@ func (f cliFlags) sessionDirOverride() string {
 
 func (f cliFlags) listModelsRequested() bool {
 	return *f.listModelsFlag
+}
+
+func (f cliFlags) versionRequested() bool {
+	return *f.versionFlag
 }
 
 func resolveListModelsSearch(requested bool, args []string) (string, error) {
@@ -420,7 +430,8 @@ func ionKnownFlag(name string) bool {
 		"json",
 		"timeout",
 		"export-session",
-		"import-session":
+		"import-session",
+		"version":
 		return true
 	default:
 		return false

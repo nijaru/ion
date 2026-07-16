@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -104,6 +106,112 @@ func TestNormalizeFlagArgsKeepsSessionPolicyFlags(t *testing.T) {
 	want := []string{"--session", "abc123", "-p", "hello"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsRecognizesVersionAsAFlag(t *testing.T) {
+	args, openResumePicker := normalizeFlagArgs([]string{"--version"})
+	if openResumePicker || !slices.Equal(args, []string{"--version"}) {
+		t.Fatalf("normalized version args = %#v, picker=%v", args, openResumePicker)
+	}
+}
+
+func TestVersionRequestedAndOutput(t *testing.T) {
+	value := true
+	flags := cliFlags{versionFlag: &value}
+	if !flags.versionRequested() {
+		t.Fatal("versionRequested = false, want true")
+	}
+
+	var out bytes.Buffer
+	printVersion(&out, "v1.2.3")
+	if got := out.String(); got != "ion v1.2.3\n" {
+		t.Fatalf("version output = %q, want %q", got, "ion v1.2.3\\n")
+	}
+}
+
+func TestResolveVersionPrefersBuildMetadataOverDevelopmentFallback(t *testing.T) {
+	tests := []struct {
+		name   string
+		ldflag string
+		build  string
+		want   string
+	}{
+		{name: "explicit ldflag", ldflag: "v1.2.3", build: "v1.0.0", want: "v1.2.3"},
+		{name: "module version", ldflag: "v0.0.0", build: "v1.0.0", want: "v1.0.0"},
+		{name: "development fallback", ldflag: "v0.0.0", build: "(devel)", want: "v0.0.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveVersion(tt.ldflag, tt.build); got != tt.want {
+				t.Fatalf("resolveVersion(%q, %q) = %q, want %q", tt.ldflag, tt.build, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateVersionSelectionRejectsOtherArguments(t *testing.T) {
+	if err := validateVersionSelection([]string{"prompt"}, nil); err == nil {
+		t.Fatal("version accepted positional arguments")
+	}
+	if err := validateVersionSelection(nil, []string{"--provider"}); err == nil {
+		t.Fatal("version accepted conflicting flags")
+	}
+	if err := validateVersionSelection(nil, nil); err != nil {
+		t.Fatalf("version selection = %v, want valid", err)
+	}
+}
+
+func TestVersionCommandBypassesConfigAndStorage(t *testing.T) {
+	if os.Getenv("ION_VERSION_SUBPROCESS") == "1" {
+		args := strings.Fields(os.Getenv("ION_VERSION_ARGS"))
+		if len(args) == 0 {
+			args = []string{"--version"}
+		}
+		os.Args = append([]string{"ion"}, args...)
+		main()
+		os.Exit(0)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestVersionCommandBypassesConfigAndStorage$")
+	cmd.Env = append(os.Environ(), "HOME=/dev/null", "ION_VERSION_SUBPROCESS=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("version subprocess error = %v, stdout=%q, stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); got != "ion v0.0.0\n" {
+		t.Fatalf("version stdout = %q, want %q", got, "ion v0.0.0\\n")
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("version stderr = %q, want empty", got)
+	}
+}
+
+func TestVersionCommandRejectsResumePicker(t *testing.T) {
+	for _, args := range []string{"--version --resume", "--resume --version"} {
+		t.Run(args, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestVersionCommandBypassesConfigAndStorage$")
+			cmd.Env = append(
+				os.Environ(),
+				"HOME=/dev/null",
+				"ION_VERSION_SUBPROCESS=1",
+				"ION_VERSION_ARGS="+args,
+			)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("version accepted resume picker: stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+			if got := stderr.String(); !strings.Contains(got, "--version cannot be combined with --resume") {
+				t.Fatalf("version error = %q, want resume conflict", got)
+			}
+			if got := stdout.String(); got != "" {
+				t.Fatalf("version stdout = %q, want empty", got)
+			}
+		})
 	}
 }
 

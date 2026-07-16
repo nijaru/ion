@@ -98,6 +98,13 @@ Start the TUI:
 ion
 ```
 
+Inspect the installed build without loading configuration or opening storage:
+
+```sh
+ion --version
+ion --help
+```
+
 Run a prompt and print the answer:
 
 ```sh

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -41,6 +42,24 @@ func main() {
 	if err := flag.CommandLine.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
+	}
+	displayVersion := resolvedVersion()
+	if cli.versionRequested() {
+		var conflictingFlags []string
+		if openResumePicker {
+			conflictingFlags = append(conflictingFlags, "--resume")
+		}
+		flag.CommandLine.Visit(func(f *flag.Flag) {
+			if f.Name != "version" && ionKnownFlag(f.Name) {
+				conflictingFlags = append(conflictingFlags, "--"+f.Name)
+			}
+		})
+		if err := validateVersionSelection(flag.Args(), conflictingFlags); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
+		}
+		printVersion(os.Stdout, displayVersion)
+		return
 	}
 
 	// Load config
@@ -195,7 +214,7 @@ func main() {
 			width = 80
 			height = 24
 		}
-		pickerModel := app.New(nil, nil, store, cwd, branch, version, nil).
+		pickerModel := app.New(nil, nil, store, cwd, branch, displayVersion, nil).
 			WithConfig(cfg).
 			WithSize(width, height).
 			WithSessionPreStartupMode()
@@ -360,7 +379,7 @@ func main() {
 		return
 	}
 
-	startupLines := startupBannerLines(version)
+	startupLines := startupBannerLines(displayVersion)
 	if toolLine := startupToolLine(b); toolLine != "" {
 		startupLines = append(startupLines, toolLine)
 	}
@@ -423,7 +442,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: workspace checkpoints unavailable: %v\n", checkpointPathErr)
 	}
 
-	model := app.New(b, sess, store, cwd, branch, version, switcher).
+	model := app.New(b, sess, store, cwd, branch, displayVersion, switcher).
 		WithRunner(runner).
 		WithJobs(tuiJobController{manager: jobs}).
 		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
@@ -477,6 +496,42 @@ func main() {
 
 func startupProviderMissing(b app.Backend) bool {
 	return b != nil && strings.TrimSpace(b.Provider()) == ""
+}
+
+func printVersion(w io.Writer, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "v0.0.0"
+	}
+	fmt.Fprintf(w, "ion %s\n", value)
+}
+
+func resolvedVersion() string {
+	buildInfoVersion := ""
+	if info, ok := debug.ReadBuildInfo(); ok && info != nil {
+		buildInfoVersion = info.Main.Version
+	}
+	return resolveVersion(version, buildInfoVersion)
+}
+
+func resolveVersion(ldflagVersion, buildInfoVersion string) string {
+	if value := strings.TrimSpace(ldflagVersion); value != "" && value != "v0.0.0" {
+		return value
+	}
+	if value := strings.TrimSpace(buildInfoVersion); value != "" && value != "(devel)" {
+		return value
+	}
+	return "v0.0.0"
+}
+
+func validateVersionSelection(args, conflictingFlags []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("--version cannot be combined with positional arguments")
+	}
+	if len(conflictingFlags) > 0 {
+		return fmt.Errorf("--version cannot be combined with %s", strings.Join(conflictingFlags, ", "))
+	}
+	return nil
 }
 
 func startupSetupRequired(b app.Backend) bool {
