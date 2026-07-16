@@ -50,16 +50,40 @@ func mustLookup(t *testing.T, id string) Definition {
 	return def
 }
 
-func TestUnsupportedExternalAdapterIDsAreNotCataloged(t *testing.T) {
+func TestUnsupportedProviderIDsAreNotCataloged(t *testing.T) {
 	for _, id := range []string{
 		"claude-pro",
 		"gemini-advanced",
 		"gh-copilot",
 		"chatgpt",
 		"codex",
+		"google-vertex",
+		"amazon-bedrock",
+		"azure-openai-responses",
+		"cloudflare-workers-ai",
+		"zai-coding-cn",
 	} {
 		if _, ok := Lookup(id); ok {
 			t.Fatalf("provider %q remains in the native catalog", id)
+		}
+	}
+}
+
+func TestCatalogModelListingsHaveAnExecutableDispatch(t *testing.T) {
+	for _, def := range definitions {
+		if !def.SupportsModelListing {
+			continue
+		}
+
+		switch {
+		case def.ID == "anthropic", def.ID == "openai", def.ID == "openrouter", def.ID == "gemini", def.ID == "ollama":
+			// These providers have dedicated catalog fetchers.
+		case def.ID == OpenAICompatibleID:
+			// The custom endpoint is supplied by the user at runtime.
+		case def.Family == FamilyOpenAI && strings.TrimSpace(def.DefaultEndpoint) != "":
+			// Other OpenAI-family providers use the generic /models fetcher.
+		default:
+			t.Errorf("provider %q advertises model listing without an executable dispatch", def.ID)
 		}
 	}
 }

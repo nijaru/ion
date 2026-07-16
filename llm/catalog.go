@@ -729,40 +729,6 @@ var definitions = []Definition{
 		SupportsCustomEndpoint: true,
 		Aliases:                []string{"local-api", "custom-api"},
 	},
-	// Google Vertex AI
-	{
-		ID:                   "google-vertex",
-		DisplayName:          "Google Vertex AI",
-		Kind:                 KindDirect,
-		Family:               FamilyGemini,
-		AuthKind:             AuthToken,
-		DefaultEnvVar:        "GOOGLE_VERTEX_API_KEY",
-		SupportsModelListing: true,
-	},
-
-	// Amazon Bedrock
-	{
-		ID:                   "amazon-bedrock",
-		DisplayName:          "Amazon Bedrock",
-		Kind:                 KindDirect,
-		Family:               FamilyAnthropic,
-		AuthKind:             AuthToken,
-		DefaultEnvVar:        "AWS_BEARER_TOKEN_BEDROCK",
-		SupportsModelListing: true,
-	},
-
-	// Azure OpenAI
-	{
-		ID:                     "azure-openai-responses",
-		DisplayName:            "Azure OpenAI",
-		Kind:                   KindDirect,
-		Family:                 FamilyOpenAI,
-		AuthKind:               AuthAPIKey,
-		DefaultEnvVar:          "AZURE_OPENAI_API_KEY",
-		SupportsModelListing:   true,
-		SupportsCustomEndpoint: true,
-	},
-
 	// Vercel AI Gateway
 	{
 		ID:                   "vercel-ai-gateway",
@@ -833,28 +799,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "KIMI_CODING_API_KEY",
 		DefaultEndpoint:      "https://api.kimi.com/v1",
 		SupportsModelListing: true,
-	},
-
-	// ZAI Coding (China)
-	{
-		ID:                   "zai-coding-cn",
-		DisplayName:          "ZAI Coding (CN)",
-		Kind:                 KindDirect,
-		Family:               FamilyOpenAI,
-		AuthKind:             AuthAPIKey,
-		DefaultEnvVar:        "ZAI_API_KEY",
-		SupportsModelListing: true,
-	},
-
-	// Cloudflare Workers AI
-	{
-		ID:                   "cloudflare-workers-ai",
-		DisplayName:          "Cloudflare Workers AI",
-		Kind:                 KindRouter,
-		Family:               FamilyOpenAI,
-		AuthKind:             AuthAPIKey,
-		DefaultEnvVar:        "CLOUDFLARE_API_TOKEN",
-		SupportsModelListing: false,
 	},
 
 	// OpenCode

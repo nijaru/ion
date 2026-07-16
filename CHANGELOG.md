@@ -20,7 +20,7 @@ All notable changes to Ion are documented in this file.
 - Startup timing — `ION_TIMING=1` environment variable for profiling
 - Real-time git branch watching — polls `.git/HEAD` for branch changes
 - Glob patterns for scoped models — `*` and `?` patterns in `[[scoped_model]]`
-- 12 new providers — Google Vertex, Amazon Bedrock, Azure OpenAI, Vercel AI Gateway, Cloudflare, OpenCode, and more (33 total)
+- Provider catalog now lists only transports implemented by Ion's native adapters.
 - OpenRouter attribution headers
 
 ### Changed
