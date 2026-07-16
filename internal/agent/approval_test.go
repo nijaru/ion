@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -102,6 +103,106 @@ func TestApprovalBrokerNonInteractiveConfirmDenies(t *testing.T) {
 	outcome := broker.Request(context.Background(), session.ApprovalRequest{ToolName: "edit"})
 	if outcome.decision != session.ApprovalDeny {
 		t.Fatalf("decision = %q, want deny", outcome.decision)
+	}
+}
+
+func TestApprovalBrokerShutdownDeniesPendingRequest(t *testing.T) {
+	events := make(chan session.Event, 2)
+	broker := NewApprovalBroker(ApprovalConfirm, true, func(event session.Event) {
+		events <- event
+	})
+	result := make(chan approvalOutcome, 1)
+	go func() {
+		result <- broker.Request(context.Background(), session.ApprovalRequest{ToolName: "bash"})
+	}()
+	request, ok := (<-events).(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("request event = %T, want ApprovalRequest", <-events)
+	}
+	if err := broker.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	outcome := <-result
+	if outcome.decision != session.ApprovalDeny || outcome.reason == "" {
+		t.Fatalf("shutdown outcome = %#v, want denied outcome with reason", outcome)
+	}
+	resolution, ok := (<-events).(session.ApprovalResolution)
+	if !ok || resolution.ID != request.ID || resolution.Decision != session.ApprovalDeny {
+		t.Fatalf("shutdown resolution = %#v, want denied request %q", resolution, request.ID)
+	}
+}
+
+func TestApprovalBrokerResolvesConcurrentRequests(t *testing.T) {
+	const count = 8
+	events := make(chan session.Event, count*2)
+	broker := NewApprovalBroker(ApprovalConfirm, true, func(event session.Event) {
+		events <- event
+	})
+	results := make(chan approvalOutcome, count)
+	for i := 0; i < count; i++ {
+		go func(i int) {
+			results <- broker.Request(context.Background(), session.ApprovalRequest{
+				ToolName: "write", Operation: "write", Resource: fmt.Sprintf("file-%d", i),
+			})
+		}(i)
+	}
+	requests := 0
+	for requests < count {
+		switch event := (<-events).(type) {
+		case session.ApprovalRequest:
+			if err := broker.Resolve(event.ID, session.ApprovalAllow); err != nil {
+				t.Fatalf("Resolve(%q): %v", event.ID, err)
+			}
+			requests++
+		case session.ApprovalResolution:
+			// Resolution events can overtake another request in the output
+			// stream; the broker still owns each decision independently.
+		default:
+			t.Fatalf("event = %T, want approval event", event)
+		}
+	}
+	for i := 0; i < count; i++ {
+		select {
+		case outcome := <-results:
+			if outcome.decision != session.ApprovalAllow {
+				t.Fatalf("concurrent outcome = %#v, want allow", outcome)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent approval request did not resolve")
+		}
+	}
+}
+
+func TestApprovalBrokerAlwaysIsRuntimeScoped(t *testing.T) {
+	events := make(chan session.Event, 2)
+	broker := NewApprovalBroker(ApprovalConfirm, true, func(event session.Event) {
+		events <- event
+	})
+	requestResult := make(chan approvalOutcome, 1)
+	go func() {
+		requestResult <- broker.Request(context.Background(), session.ApprovalRequest{
+			ToolName: "write", Operation: "write", Resource: "main.go",
+		})
+	}()
+	request := (<-events).(session.ApprovalRequest)
+	if err := broker.Resolve(request.ID, session.ApprovalAlways); err != nil {
+		t.Fatalf("Resolve always: %v", err)
+	}
+	if outcome := <-requestResult; outcome.decision != session.ApprovalAlways {
+		t.Fatalf("first always outcome = %#v, want always", outcome)
+	}
+	if resolution, ok := (<-events).(session.ApprovalResolution); !ok || resolution.ID != request.ID {
+		t.Fatalf("first resolution = %#v, want request %q", resolution, request.ID)
+	}
+	if outcome := broker.Request(context.Background(), session.ApprovalRequest{
+		ToolName: "write", Operation: "write", Resource: "main.go",
+	}); outcome.decision != session.ApprovalAlways {
+		t.Fatalf("cached always outcome = %#v, want always", outcome)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("cached always request emitted %T", event)
+	default:
 	}
 }
 
