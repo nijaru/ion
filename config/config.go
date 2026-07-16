@@ -63,7 +63,6 @@ type Config struct {
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
-	SubagentsPath          string            `toml:"subagents_path,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ReadOutput             string            `toml:"read_output,omitempty"`
@@ -74,7 +73,6 @@ type Config struct {
 	TrustMode              string            `toml:"trust_mode,omitempty"`
 	MCPServers             []MCPServerConfig `toml:"mcp_servers,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
-	SubagentTools          string            `toml:"subagent_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
 	Models                 []ModelDef        `toml:"models,omitempty" json:"models,omitempty"`
@@ -210,7 +208,6 @@ func normalizeConfig(cfg *Config) {
 	cfg.ExtraHeaders = normalizeStringMap(cfg.ExtraHeaders)
 	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
 	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
-	cfg.SubagentsPath = expandUserPath(strings.TrimSpace(cfg.SubagentsPath))
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ReadOutput = normalizeReadOutput(cfg.ReadOutput)
 	cfg.WriteOutput = normalizeWriteOutput(cfg.WriteOutput)
@@ -220,7 +217,6 @@ func normalizeConfig(cfg *Config) {
 	cfg.TrustMode = normalizeTrustMode(cfg.TrustMode)
 	cfg.MCPServers = normalizeMCPServers(cfg.MCPServers)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
-	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
 	cfg.ToolMode = normalizeToolMode(cfg.ToolMode)
 	cfg.ToolEnv = normalizeToolEnv(cfg.ToolEnv)
 	if cfg.ContextLimit < 0 {
@@ -401,9 +397,6 @@ func Save(cfg *Config) error {
 	if out.SkillTools == "off" {
 		out.SkillTools = ""
 	}
-	if out.SubagentTools == "off" {
-		out.SubagentTools = ""
-	}
 	if out.ToolMode == "coding" {
 		out.ToolMode = ""
 	}
@@ -572,14 +565,6 @@ func DefaultModelCacheTTLSeconds() int {
 	return defaultModelCacheTTLSeconds
 }
 
-func DefaultSubagentsDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".ion", "agents"), nil
-}
-
 func DefaultSkillsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -654,13 +639,6 @@ func (c *Config) SkillToolMode() string {
 		return "off"
 	}
 	return normalizeSkillTools(c.SkillTools)
-}
-
-func (c *Config) SubagentToolMode() string {
-	if c == nil {
-		return "off"
-	}
-	return normalizeSubagentTools(c.SubagentTools)
 }
 
 func (c *Config) ActiveToolMode() string {
@@ -833,15 +811,6 @@ func normalizeSkillTools(value string) string {
 		return "read"
 	case "manage", "write", "full":
 		return "manage"
-	default:
-		return "off"
-	}
-}
-
-func normalizeSubagentTools(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "on", "true", "enabled", "enable", "subagent", "subagents", "delegate":
-		return "on"
 	default:
 		return "off"
 	}

@@ -21,7 +21,6 @@ const (
 	StateWorking
 	StateComplete
 	StateCancelled
-	StateBlocked
 	StateError
 )
 
@@ -33,22 +32,11 @@ type TurnSummary struct {
 	Cost    float64
 }
 
-// SubagentProgress tracks the ephemeral state of a background worker.
-type SubagentProgress struct {
-	ID        string
-	Name      string
-	Intent    string
-	Status    string
-	Output    string
-	Reasoning string
-}
-
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
 	Pending                 *session.Entry
 	PendingTools            map[string]session.Entry
 	CommittedAssistant      *session.Entry // assistant entry that survived tool clearing
-	Subagents               map[string]*SubagentProgress
 	ReasonBuf               string
 	StreamBuf               string
 	StreamChunks            []string
@@ -407,7 +395,6 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
 	t.inFlight.CommittedAssistant = nil
-	t.inFlight.Subagents = nil
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
 	t.inFlight.StreamChunks = nil
@@ -858,101 +845,6 @@ func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Ent
 		}
 	}
 	return entry, true
-}
-
-func (t TurnReducer) RequestChild(name, intent string) SubagentProgress {
-	if t.inFlight == nil {
-		return SubagentProgress{Name: name, Intent: intent}
-	}
-	if t.inFlight.Subagents == nil {
-		t.inFlight.Subagents = make(map[string]*SubagentProgress)
-	}
-	child := &SubagentProgress{ID: name, Name: name, Intent: intent}
-	t.inFlight.Subagents[name] = child
-	if t.progress != nil {
-		t.progress.Mode = StateWorking
-	}
-	return *child
-}
-
-func (t TurnReducer) StartChild(id string) bool {
-	if t.inFlight == nil || t.inFlight.Subagents == nil {
-		return false
-	}
-	child, ok := t.inFlight.Subagents[id]
-	if !ok {
-		return false
-	}
-	child.Status = "running"
-	return true
-}
-
-func (t TurnReducer) AppendChildDelta(id string, delta string) bool {
-	if t.inFlight == nil || t.inFlight.Subagents == nil {
-		return false
-	}
-	child, ok := t.inFlight.Subagents[id]
-	if !ok {
-		return false
-	}
-	child.Output += delta
-	return true
-}
-
-func (t TurnReducer) CompleteChild(id, output string, ts time.Time) (session.Entry, bool) {
-	if t.inFlight == nil || t.inFlight.Subagents == nil {
-		return nil, false
-	}
-	if _, ok := t.inFlight.Subagents[id]; !ok {
-		return nil, false
-	}
-	delete(t.inFlight.Subagents, id)
-	if len(t.inFlight.Subagents) == 0 {
-		t.inFlight.Subagents = nil
-	}
-	if t.progress != nil && len(t.inFlight.Subagents) == 0 {
-		t.progress.Mode = StateIonizing
-		t.progress.Status = ""
-	}
-	now := time.Now()
-	if !ts.IsZero() {
-		now = ts
-	}
-	return &session.MessageEntry{
-		EntryBase: session.EntryBase{Timestamp: now},
-		Message: &session.UserMessage{
-			Content:   []session.Content{session.TextContent{Text: "Completed: " + output}},
-			Timestamp: now,
-		},
-	}, true
-}
-
-func (t TurnReducer) FailChild(id, reason string, ts time.Time) (session.Entry, bool) {
-	if t.inFlight == nil || t.inFlight.Subagents == nil {
-		return nil, false
-	}
-	if _, ok := t.inFlight.Subagents[id]; !ok {
-		return nil, false
-	}
-	delete(t.inFlight.Subagents, id)
-	if len(t.inFlight.Subagents) == 0 {
-		t.inFlight.Subagents = nil
-	}
-	if t.progress != nil {
-		t.progress.Mode = StateError
-		t.progress.LastError = "Subagent failed: " + reason
-	}
-	now := time.Now()
-	if !ts.IsZero() {
-		now = ts
-	}
-	return &session.MessageEntry{
-		EntryBase: session.EntryBase{Timestamp: now},
-		Message: &session.UserMessage{
-			Content:   []session.Content{session.TextContent{Text: "Failed: " + reason}},
-			Timestamp: now,
-		},
-	}, true
 }
 
 // --- Agent type aliases (re-exported for dependent packages) ---

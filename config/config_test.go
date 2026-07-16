@@ -33,7 +33,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -100,14 +100,8 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if got := cfg.TelemetryOTLPHeaders["x-api-key"]; got != "secret" {
 		t.Fatalf("telemetry header = %q, want secret", got)
 	}
-	if cfg.SubagentsPath != "/tmp/ion-agents" {
-		t.Fatalf("subagents_path = %q, want /tmp/ion-agents", cfg.SubagentsPath)
-	}
 	if cfg.SkillTools != "read" {
 		t.Fatalf("skill_tools = %q, want read", cfg.SkillTools)
-	}
-	if cfg.SubagentTools != "on" {
-		t.Fatalf("subagent_tools = %q, want on", cfg.SubagentTools)
 	}
 	if cfg.ToolEnvMode() != "inherit_without_provider_keys" {
 		t.Fatalf("tool_env = %q, want inherit_without_provider_keys", cfg.ToolEnvMode())
@@ -360,29 +354,6 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadExpandsUserPaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	configDir := filepath.Join(home, ".ion")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte("subagents_path = \"~/.ion/agents\""), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	want := filepath.Join(home, ".ion", "agents")
-	if cfg.SubagentsPath != want {
-		t.Fatalf("subagents_path = %q, want %q", cfg.SubagentsPath, want)
-	}
-}
-
 func TestSaveWritesStatePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -406,10 +377,8 @@ func TestSaveWritesStatePath(t *testing.T) {
 		TelemetryOTLPEndpoint:  "localhost:4317",
 		TelemetryOTLPInsecure:  true,
 		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
-		SubagentsPath:          "/tmp/ion-agents",
 		SessionRetentionDays:   14,
 		ToolEnv:                "inherit_without_provider_keys",
-		SubagentTools:          "enabled",
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -442,8 +411,6 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`retry_until_cancelled = false`,
 		`telemetry_otlp_endpoint = 'localhost:4317'`,
 		`telemetry_otlp_insecure = true`,
-		`subagents_path = '/tmp/ion-agents'`,
-		`subagent_tools = 'on'`,
 		`[telemetry_otlp_headers]`,
 		`x-api-key = 'secret'`,
 		`session_retention_days = 14`,
@@ -927,23 +894,6 @@ func TestSkillToolModeDefaultsOff(t *testing.T) {
 	}
 }
 
-func TestNormalizeSubagentTools(t *testing.T) {
-	for input, want := range map[string]string{
-		"":          "off",
-		"off":       "off",
-		"disabled":  "off",
-		"enabled":   "on",
-		"TRUE":      "on",
-		"subagents": "on",
-		"delegate":  "on",
-		"unknown":   "off",
-	} {
-		if got := normalizeSubagentTools(input); got != want {
-			t.Fatalf("normalizeSubagentTools(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 func TestNormalizeTrustMode(t *testing.T) {
 	for input, want := range map[string]string{
 		"":           "trusted",
@@ -1037,15 +987,6 @@ func TestNormalizeToolMode(t *testing.T) {
 	}
 	if got := (&Config{ToolMode: "read-only"}).ActiveToolMode(); got != "read" {
 		t.Fatalf("active tool mode = %q, want read", got)
-	}
-}
-
-func TestSubagentToolModeDefaultsOff(t *testing.T) {
-	if got := (&Config{}).SubagentToolMode(); got != "off" {
-		t.Fatalf("subagent tool mode = %q, want off", got)
-	}
-	if got := (&Config{SubagentTools: "enabled"}).SubagentToolMode(); got != "on" {
-		t.Fatalf("subagent tool mode = %q, want on", got)
 	}
 }
 

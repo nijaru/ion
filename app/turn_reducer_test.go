@@ -16,7 +16,6 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	var toolEntry session.Entry = tool
 	model.InFlight.Pending = &toolEntry
 	model.InFlight.PendingTools = map[string]session.Entry{"tool-a": tool}
-	model.InFlight.Subagents = map[string]*SubagentProgress{"child": {ID: "child"}}
 	model.InFlight.QueuedTurns = []string{"follow up"}
 	model.InFlight.StreamBuf = "stream"
 	model.InFlight.ReasonBuf = "reason"
@@ -39,9 +38,6 @@ func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 		model.Progress.LastToolUseID != "" ||
 		model.Progress.ContextTokens != 0 {
 		t.Fatalf("active state not cleared: %#v progress=%#v", model.InFlight, model.Progress)
-	}
-	if len(model.InFlight.Subagents) != 0 {
-		t.Fatalf("subagents = %#v, want reset empty map", model.InFlight.Subagents)
 	}
 	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
 		t.Fatalf("queued turns = %#v, want preserved follow-up", model.InFlight.QueuedTurns)
@@ -180,41 +176,6 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	}
 }
 
-func TestTurnReducerChildLifecycleSettlesProgress(t *testing.T) {
-	model := readyModel(t)
-	model.InFlight.Thinking = true
-
-	child := model.turnReducer().RequestChild("worker", "inspect")
-	if child.Name != "worker" ||
-		child.Intent != "inspect" ||
-		model.Progress.Mode != StateWorking {
-		t.Fatalf("requested child = %#v progress=%#v", child, model.Progress)
-	}
-
-	if !model.turnReducer().StartChild("worker") {
-		t.Fatal("startChild returned false")
-	}
-	if !model.turnReducer().AppendChildDelta("worker", "partial") {
-		t.Fatal("appendChildDelta returned false")
-	}
-	if got := model.InFlight.Subagents["worker"].Output; got != "partial" {
-		t.Fatalf("child output = %q, want partial", got)
-	}
-
-	entry, ok := model.turnReducer().CompleteChild("worker", "done", time.Time{})
-	if !ok {
-		t.Fatal("completeChild returned false")
-	}
-	if session.EntryText(entry) != "Completed: done" {
-		t.Fatalf("completion entry text = %q, want Completed: done", session.EntryText(entry))
-	}
-	if len(model.InFlight.Subagents) != 0 ||
-		model.Progress.Status != "" ||
-		model.Progress.Mode != StateIonizing {
-		t.Fatalf("settled state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
-	}
-}
-
 func TestSessionAssistantStreamUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 	now := time.Now()
@@ -289,23 +250,5 @@ func TestTurnReducerStartTurnAndDispatchManageBusyLifecycle(t *testing.T) {
 	}
 	if got := model.turnReducer().FinishTurnDispatch(); !got.AwaitNext {
 		t.Fatalf("empty dispatch = %#v, want await", got)
-	}
-}
-
-func TestTurnReducerChildFailureOwnsErrorState(t *testing.T) {
-	model := readyModel(t)
-	model.turnReducer().RequestChild("worker", "inspect")
-
-	entry, ok := model.turnReducer().FailChild("worker", "boom", time.Time{})
-	if !ok {
-		t.Fatal("failChild returned false")
-	}
-	if session.EntryText(entry) != "Failed: boom" {
-		t.Fatalf("failure entry text = %q, want Failed: boom", session.EntryText(entry))
-	}
-	if len(model.InFlight.Subagents) != 0 ||
-		model.Progress.Mode != StateError ||
-		model.Progress.LastError != "Subagent failed: boom" {
-		t.Fatalf("failure state = inFlight=%#v progress=%#v", model.InFlight, model.Progress)
 	}
 }

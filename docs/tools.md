@@ -18,8 +18,9 @@ registry, activates matching names, and exposes them on the next provider
 request. This keeps normal coding turns small while preserving typed discovery
 when the model needs it.
 
-Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
-surfaces are deferred or hidden from the default tool surface. `/compact`
+Memory and subagent tools, model-visible compaction, and rewind/checkpoint
+control surfaces are deferred or hidden from the default tool surface. MCP is
+an explicit runtime-only external-tool capability described below. `/compact`
 remains a host command because context survival is reliability work. Skill
 tools are opt-in stdlib surfaces rather than default coding tools:
 `read_skill` is available behind `skill_tools = "read"`, while `manage_skill`

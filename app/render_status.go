@@ -149,14 +149,7 @@ func (m Model) progressLine() string {
 			case StateStreaming:
 				status = "Streaming..."
 			case StateWorking:
-				if len(m.InFlight.Subagents) > 0 {
-					for _, k := range sortedKeys(m.InFlight.Subagents) {
-						status = "Waiting for " + m.InFlight.Subagents[k].Name + "..."
-						break
-					}
-				} else {
-					status = "Working..."
-				}
+				status = "Working..."
 			}
 		}
 		line = m.Input.Spinner.View() + " " + status
@@ -173,8 +166,6 @@ func (m Model) progressLine() string {
 		if reason := strings.TrimSpace(m.Progress.BudgetStopReason); reason != "" {
 			line += " • " + reason
 		}
-	case StateBlocked:
-		line = m.st.warn.Render("⚠ Subagent blocked")
 	case StateError:
 		if m.suppressTerminalErrorProgress() {
 			return ""

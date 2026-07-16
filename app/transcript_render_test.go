@@ -121,15 +121,6 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 	model.InFlight.PendingTools = map[string]session.Entry{
 		"tool-1": testToolEntry("bash "+strings.Repeat("very-long-command ", 8), strings.Repeat("tool-output ", 12), false),
 	}
-	model.InFlight.Subagents = map[string]*SubagentProgress{
-		"worker": {
-			Name:   "worker-with-long-name",
-			Intent: strings.Repeat("explore unicode paths ", 4),
-			Status: "Running",
-			Output: strings.Repeat("subagent-output ", 8),
-		},
-	}
-
 	got := ansi.Strip(model.renderPlaneB())
 	for i, line := range strings.Split(got, "\n") {
 		if line == "" {

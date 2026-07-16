@@ -452,9 +452,7 @@ func New(
 			Switcher:    switcher,
 			Checkpoints: checkpoints,
 		},
-		InFlight: InFlightState{
-			Subagents: make(map[string]*SubagentProgress),
-		},
+		InFlight: InFlightState{},
 		Progress: ProgressState{
 			Status: boot.Status,
 		},

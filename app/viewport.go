@@ -17,8 +17,7 @@ func (m Model) renderPlaneB() string {
 	hasPendingAgent := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleAgent
 	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
 		!hasPendingAgent &&
-		m.InFlight.ReasonBuf == "" &&
-		len(m.InFlight.Subagents) == 0 {
+		m.InFlight.ReasonBuf == "" {
 		return ""
 	}
 
@@ -53,29 +52,6 @@ func (m Model) renderPlaneB() string {
 	if hasPendingTool && len(m.InFlight.PendingTools) == 0 {
 		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
 		b.WriteString("\n")
-	}
-
-	// Active subagents
-	if n := len(m.InFlight.Subagents); n > 0 {
-		// Sort keys for deterministic rendering
-		keys := sortedKeys(m.InFlight.Subagents)
-
-		// Show up to 3 active subagent rows
-		maxVisible := 3
-		shown := 0
-		for _, k := range keys {
-			if shown >= maxVisible {
-				break
-			}
-			p := m.InFlight.Subagents[k]
-			b.WriteString(m.renderSubagentRow(p))
-			b.WriteString("\n")
-			shown++
-		}
-		if n > maxVisible {
-			b.WriteString(m.planeBLine(m.st.dim, 2, fmt.Sprintf("+%d more workers", n-maxVisible)))
-			b.WriteString("\n")
-		}
 	}
 
 	return b.String()
@@ -426,30 +402,4 @@ func (m Model) renderUserEntry(content string) string {
 		rows[i] = m.st.user.Render(prefix + row)
 	}
 	return strings.Join(rows, "\n")
-}
-
-// renderSubagentRow formats a single background worker's status for Plane B.
-func (m Model) renderSubagentRow(p *SubagentProgress) string {
-	intent := p.Intent
-	if ansi.StringWidth(intent) > 24 {
-		intent = ansi.Truncate(intent, 24, "...")
-	}
-
-	detail := p.Status
-	if p.Output != "" {
-		lines := strings.Split(strings.TrimSpace(p.Output), "\n")
-		if len(lines) > 0 {
-			last := strings.TrimSpace(lines[len(lines)-1])
-			if last != "" {
-				if ansi.StringWidth(last) > 32 {
-					last = ansi.Truncate(last, 32, "...")
-				}
-				detail = fmt.Sprintf("%s: %s", detail, last)
-			}
-		}
-	}
-
-	return m.planeBFitLine(m.st.subagent.Render(fmt.Sprintf("↳ %-10s", p.Name)) + " " +
-		m.st.dim.Render(fmt.Sprintf("%-24s", intent)) + " " +
-		m.st.dim.Render(detail))
 }
