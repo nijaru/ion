@@ -185,6 +185,21 @@ func (b *acceptanceBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
+// Bubble Tea prefers io.StringWriter when the output provides it. Because the
+// embedded bytes.Buffer promotes WriteString and WriteByte, those methods
+// would otherwise bypass Write's mutex and race with String during polling.
+func (b *acceptanceBuffer) WriteString(value string) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.WriteString(value)
+}
+
+func (b *acceptanceBuffer) WriteByte(value byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.WriteByte(value)
+}
+
 func (b *acceptanceBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
