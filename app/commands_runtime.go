@@ -415,6 +415,7 @@ func (m Model) switchRuntimeCommand(
 
 type runtimeSwitchOptions struct {
 	keybindings *KeybindingsManager
+	retrySetup  *setupPromptState
 }
 
 func (m Model) switchRuntimeCommandWithOptions(
@@ -430,7 +431,7 @@ func (m Model) switchRuntimeCommandWithOptions(
 		if options.keybindings != nil {
 			m.Keybindings = options.keybindings
 		}
-		return m.beginRuntimeTransitionCommit(transition, notice)
+		return m.beginRuntimeTransitionCommitWithRetry(transition, notice, options.retrySetup)
 	}
 
 	switcher := m.Model.Switcher
@@ -447,7 +448,11 @@ func (m Model) switchRuntimeCommandWithOptions(
 			SaveState:       saveRuntimeState,
 		})
 		if err != nil {
-			return runtimeSwitchErrorMsg{switchID: requestID, err: err}
+			return runtimeSwitchErrorMsg{
+				switchID: requestID,
+				err:      err,
+				retry:    options.retrySetup,
+			}
 		}
 		return runtimeSwitchedMsg{
 			switchID:    requestID,
@@ -569,6 +574,13 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 		return m, nil
 	}
 	m.runtimeRequest().clear()
+	if msg.retry != nil {
+		retry := *msg.retry
+		retry.err = msg.err.Error()
+		retry.saving = false
+		retry.request = 0
+		m.pickerReducer().openSetup(retry)
+	}
 	return m.handleLocalError(msg.err)
 }
 

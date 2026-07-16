@@ -361,20 +361,6 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 	return ResolveID(cfg.Provider) == def.ID
 }
 
-func SupportsModelListing(cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	def, ok := Lookup(cfg.Provider)
-	if !ok {
-		return false
-	}
-	if def.SupportsModelListing {
-		return true
-	}
-	return false
-}
-
 func authEnvVars(cfg *config.Config, def Definition) []string {
 	if cfg != nil && def.SupportsCustomEndpoint {
 		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {

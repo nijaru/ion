@@ -85,11 +85,13 @@ type TransitionCommittedMsg struct {
 	transition Transition
 	notice     session.Entry
 	err        error
+	retry      *setupPromptState
 }
 
 type runtimeSwitchErrorMsg struct {
 	switchID uint64
 	err      error
+	retry    *setupPromptState
 }
 
 type resumeSessionSelectedMsg struct {
@@ -227,6 +229,7 @@ type pickerItem struct {
 	Group       string
 	Provider    string // Provider ID for unified model picker (e.g. "anthropic", "openai")
 	NeedsSetup  bool   // True if provider needs auth/endpoint setup
+	ManualModel bool   // Opens the native model-ID prompt instead of selecting a catalog item.
 	Tone        pickerTone
 	Metrics     *pickerMetrics
 	Search      []pickerSearchField
@@ -816,6 +819,14 @@ func (m Model) beginRuntimeTransitionCommit(
 	t Transition,
 	notice session.Entry,
 ) (Model, tea.Cmd) {
+	return m.beginRuntimeTransitionCommitWithRetry(t, notice, nil)
+}
+
+func (m Model) beginRuntimeTransitionCommitWithRetry(
+	t Transition,
+	notice session.Entry,
+	retry *setupPromptState,
+) (Model, tea.Cmd) {
 	if !t.NeedsPersistence() {
 		var err error
 		m, err = m.commitRuntimeTransition(t)
@@ -827,7 +838,7 @@ func (m Model) beginRuntimeTransitionCommit(
 	switchID := m.runtimeRequest().begin("Saving runtime settings...")
 	return m, func() tea.Msg {
 		if err := t.Persist(saveRuntimeState); err != nil {
-			return TransitionCommittedMsg{switchID: switchID, err: err}
+			return TransitionCommittedMsg{switchID: switchID, err: err, retry: retry}
 		}
 		return TransitionCommittedMsg{
 			switchID:   switchID,
@@ -844,6 +855,13 @@ func (m Model) handleRuntimeTransitionCommitted(
 		return m, nil
 	}
 	if msg.err != nil {
+		if msg.retry != nil {
+			retry := *msg.retry
+			retry.err = msg.err.Error()
+			retry.saving = false
+			retry.request = 0
+			m.pickerReducer().openSetup(retry)
+		}
 		return m.handleLocalError(msg.err)
 	}
 	transition := msg.transition.WithHandles(m.Handles())
@@ -875,46 +893,6 @@ func (m Model) persistedReasoningEffort(preset Preset) string {
 		return m.Model.Config.FastReasoningEffort
 	}
 	return m.Model.Config.ReasoningEffort
-}
-
-func (m Model) ProviderSelection(
-	ctx context.Context,
-	cfg *config.Config,
-	provider string,
-	preset Preset,
-) (ProviderSelection, error) {
-	updated, err := updateProviderSelection(cfg, provider)
-	if err != nil {
-		return ProviderSelection{}, err
-	}
-	return providerSelectionForConfig(ctx, updated, preset)
-}
-
-func providerSelectionForConfig(
-	ctx context.Context,
-	updated *config.Config,
-	preset Preset,
-) (ProviderSelection, error) {
-	setup, err := providerSetupPrompt(ctx, updated)
-	if err != nil {
-		return ProviderSelection{Config: updated}, err
-	}
-	if setup != 0 {
-		return ProviderSelection{Config: updated, Setup: setup}, nil
-	}
-	selection := ProviderSelection{
-		Config:               updated,
-		SupportsModelListing: llm.SupportsModelListing(updated),
-	}
-	if !selection.SupportsModelListing {
-		selection.Transition = newRuntimeTransition(
-			updated,
-			updated,
-			preset,
-			noModelConfiguredStatus(),
-		).WithStatePersistence().WithActivePresetPersistence()
-	}
-	return selection, nil
 }
 
 func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKind, error) {

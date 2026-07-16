@@ -371,9 +371,6 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	if RequiresEndpoint(nil) {
 		t.Fatal("RequiresEndpoint(nil) = true, want false")
 	}
-	if SupportsModelListing(nil) {
-		t.Fatal("SupportsModelListing(nil) = true, want false")
-	}
 	probeCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	detail, ready := CredentialStateContext(probeCtx, nil, custom)

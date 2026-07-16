@@ -61,6 +61,9 @@ func (m Model) openModelPickerForPreset(
 
 	// Build initial items from favorites + any cached models
 	favorites := m.modelPickerFavoriteItems(cfg, nil)
+	if strings.TrimSpace(cfg.Provider) != "" {
+		favorites = append(favorites, manualModelPickerItem())
+	}
 	items := clonePickerItems(favorites)
 
 	m.clearProgressError()
@@ -262,9 +265,30 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 	return favorites
 }
 
+func manualModelPickerItem() pickerItem {
+	return pickerItem{
+		Label:       "Enter model ID…",
+		Value:       "",
+		Detail:      "Use a model name not returned by provider discovery",
+		Group:       "Manual",
+		ManualModel: true,
+		Search: pickerSearchIndex(
+			"Enter model ID",
+			"manual model custom model name",
+			"provider discovery",
+			"Manual",
+			nil,
+		),
+	}
+}
+
 func (m Model) modelPickerItemsForCatalog(cfg *config.Config, favorites, all []pickerItem) []pickerItem {
+	favorites = clonePickerItems(favorites)
+	if cfg != nil && strings.TrimSpace(cfg.Provider) != "" {
+		favorites = append(favorites, manualModelPickerItem())
+	}
 	catalog := m.modelPickerCatalogItems(all, favorites)
-	return append(clonePickerItems(favorites), catalog...)
+	return append(favorites, catalog...)
 }
 
 func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem {
@@ -383,8 +407,17 @@ func (m Model) handleModelPickerSetupResolved(
 	case SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
 	default:
-		return m.openModelPickerForPreset(&cfg, msg.preset)
+		return m.openModelSelectionForPreset(&cfg, msg.preset)
 	}
+}
+
+func (m Model) openModelSelectionForPreset(cfg *config.Config, preset Preset) (Model, tea.Cmd) {
+	if cfg != nil {
+		if def, ok := llm.Lookup(cfg.Provider); ok && !def.SupportsModelListing {
+			return m.openModelIDPrompt(cfg, preset)
+		}
+	}
+	return m.openModelPickerForPreset(cfg, preset)
 }
 
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
@@ -637,11 +670,15 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeModel:
+		if selected.ManualModel {
+			return m.openModelIDPrompt(&cfg, m.Picker.Overlay.Preset())
+		}
 		return m.commitUnifiedModelSelection(&cfg, selected)
 
 	case pickerPurposeProviderSetup:
-		// Provider setup: open API key prompt for selected provider
-		return m.openAPIKeyPrompt(cfgForProvider(&cfg, selected.Value), selected.Value, m.Picker.Overlay.Preset())
+		// Route every provider through the same setup decision so local and
+		// endpoint-backed providers do not get an API-key-only prompt.
+		return m.handleProviderCommand(selected.Value)
 
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
@@ -775,17 +812,26 @@ func (m Model) handleProviderCommand(name string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-
-	// Check if provider needs setup
-	def, _ := llm.Lookup(llm.ResolveID(name))
-	if def.SupportsModelListing {
-		// Try to load models — if auth fails, prompt for API key
-		_, err := listModelsForConfig(context.Background(), updated)
-		if err != nil {
-			return m.openAPIKeyPrompt(cfgForProvider(cfg, name), name, m.activePreset())
-		}
+	setup, err := providerSetupPrompt(context.Background(), updated)
+	if err != nil {
+		return m, cmdError(err.Error())
+	}
+	switch setup {
+	case SetupPromptAPIKey:
+		return m.openAPIKeyPrompt(updated, updated.Provider, m.activePreset())
+	case SetupPromptEndpoint:
+		return m.openEndpointPrompt(updated, m.activePreset())
 	}
 
-	// Provider ready — open model picker for it
+	// Provider setup has already been resolved above. Catalog discovery is
+	// optional and asynchronous; a listing failure must not be misreported as
+	// missing credentials.
+	def, _ := llm.Lookup(updated.Provider)
+
+	// Provider ready — open a manual model prompt when the provider does not
+	// expose discovery; otherwise use the catalog-backed picker.
+	if !def.SupportsModelListing {
+		return m.openModelIDPrompt(updated, m.activePreset())
+	}
 	return m.openModelPickerForPreset(updated, m.activePreset())
 }

@@ -163,6 +163,9 @@ func (m Model) renderSetupPrompt() string {
 	case SetupPromptEndpoint:
 		title = "OpenAI-compatible endpoint"
 		help = "Enter save • Esc cancel"
+	case SetupPromptModelID:
+		title = "Enter model ID for " + prompt.providerName
+		help = "Enter save • Esc cancel • /model accepts IDs directly"
 	default:
 		title = "Provider setup"
 	}
@@ -173,6 +176,10 @@ func (m Model) renderSetupPrompt() string {
 	b.WriteString("\n")
 	if prompt.kind == SetupPromptEndpoint {
 		b.WriteString(m.cardPaddedLine(m.st.dim, "  Example: http://127.0.0.1:11434/v1"))
+		b.WriteString("\n")
+	}
+	if prompt.kind == SetupPromptModelID {
+		b.WriteString(m.cardPaddedLine(m.st.dim, "  Enter the model name expected by the provider."))
 		b.WriteString("\n")
 	}
 	if prompt.err != "" {

@@ -212,6 +212,7 @@ type SetupPromptKind int
 const (
 	SetupPromptAPIKey SetupPromptKind = iota + 1
 	SetupPromptEndpoint
+	SetupPromptModelID
 )
 
 // Handles holds resolved runtime references.
@@ -381,14 +382,6 @@ func IsLocalBusyStatus(s string) bool {
 // IsCompactingStatus returns true if the status indicates compaction.
 func IsCompactingStatus(s string) bool {
 	return s == "compacting"
-}
-
-// ProviderSelection tracks provider routing.
-type ProviderSelection struct {
-	Setup                SetupPromptKind
-	Config               *config.Config
-	SupportsModelListing bool
-	Transition           Transition
 }
 
 // --- TurnReducer ---

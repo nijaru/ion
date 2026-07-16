@@ -70,6 +70,26 @@ func (m Model) openEndpointPrompt(cfg *config.Config, preset Preset) (Model, tea
 	return m, nil
 }
 
+func (m Model) openModelIDPrompt(cfg *config.Config, preset Preset) (Model, tea.Cmd) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	cfgCopy := *cfg
+	provider := strings.TrimSpace(cfgCopy.Provider)
+	if provider == "" {
+		return m, cmdError("choose a provider before entering a model ID")
+	}
+	providerName := llm.DisplayName(provider)
+	m.pickerReducer().openSetup(setupPromptState{
+		kind:         SetupPromptModelID,
+		provider:     provider,
+		providerName: providerName,
+		preset:       preset,
+		cfg:          cfgCopy,
+	})
+	return m, nil
+}
+
 func (m Model) handleSetupPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Picker.Setup == nil {
 		return m, nil
@@ -120,6 +140,42 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m, cmdError(message)
 	}
 	switch prompt.kind {
+	case SetupPromptModelID:
+		model := strings.TrimSpace(prompt.value)
+		if model == "" {
+			m.pickerReducer().setSetupError("model ID cannot be empty")
+			return m, nil
+		}
+		if strings.TrimSpace(prompt.cfg.Provider) == "" {
+			m.pickerReducer().setSetupError("choose a provider before entering a model ID")
+			return m, nil
+		}
+		currentCfg, err := m.runtimeConfigForPreset(&prompt.cfg, prompt.preset)
+		if err != nil {
+			m.pickerReducer().setSetupError(fmt.Sprintf("failed to resolve provider: %v", err))
+			return m, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(currentCfg.Model), model) {
+			m.pickerReducer().closeSetup()
+			return m, nil
+		}
+		transition, _, err := m.modelSelectionTransition(&prompt.cfg, prompt.preset, model)
+		if err != nil {
+			m.pickerReducer().setSetupError(fmt.Sprintf("failed to set model: %v", err))
+			return m, nil
+		}
+		retry := *prompt
+		retry.err = ""
+		retry.saving = false
+		retry.request = 0
+		m.pickerReducer().closeSetup()
+		return m.switchRuntimeCommandWithOptions(
+			transition,
+			systemEntry("Model set to "+model),
+			m.currentMaterializedSessionID(),
+			false,
+			runtimeSwitchOptions{retrySetup: &retry},
+		)
 	case SetupPromptAPIKey:
 		key := strings.TrimSpace(prompt.value)
 		if key == "" {
@@ -191,7 +247,7 @@ func (m Model) handleSetupPromptSaved(msg setupPromptSavedMsg) (Model, tea.Cmd) 
 	}
 	m.progressReducer().clearLocalBusyStatus()
 	cfg := msg.cfg
-	return m.openModelPickerForPreset(&cfg, msg.preset)
+	return m.openModelSelectionForPreset(&cfg, msg.preset)
 }
 
 func normalizeOpenAICompatibleEndpoint(raw string) (string, error) {

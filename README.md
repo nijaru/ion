@@ -40,7 +40,9 @@ ion
 ## Provider Setup
 
 The first interactive run opens the provider picker. Choose a provider, enter
-an API key when prompted, then choose a model.
+an API key when prompted, then choose a model. Providers that do not expose a
+model catalog open a model-ID prompt instead; enter the exact ID expected by
+that provider. You can also use `/model <id>` at any time.
 
 Ion supports direct API-key providers and custom OpenAI-compatible endpoints.
 OpenAI-compatible `/v1` APIs are the usual interface for local model servers,
