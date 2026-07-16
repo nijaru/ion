@@ -113,7 +113,7 @@ func metadataKey(provider, model string) string {
 }
 
 func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
-	if def, ok := Lookup(provider); ok && def.Runtime == RuntimeNative {
+	if _, ok := Lookup(provider); ok {
 		models, err := ListModelsForConfig(ctx, &config.Config{Provider: provider})
 		if err != nil {
 			return ModelMetadata{}, err

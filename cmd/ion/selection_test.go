@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"slices"
 	"strings"
@@ -103,6 +104,25 @@ func TestNormalizeFlagArgsKeepsSessionPolicyFlags(t *testing.T) {
 	want := []string{"--session", "abc123", "-p", "hello"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionIDIsNotARecognizedCLIFlag(t *testing.T) {
+	args, openResumePicker := normalizeFlagArgs([]string{"--session-id", "abc123"})
+	if openResumePicker {
+		t.Fatal("removed session-id flag opened the resume picker")
+	}
+	if want := []string{"--session-id", "abc123"}; !slices.Equal(args, want) {
+		t.Fatalf("normalized removed flag = %#v, want %#v", args, want)
+	}
+
+	fs := flag.NewFlagSet("ion-test", flag.ContinueOnError)
+	session := fs.String("session", "", "session")
+	if err := fs.Parse(args); err == nil {
+		t.Fatal("removed session-id flag was accepted by the CLI parser")
+	}
+	if *session != "" {
+		t.Fatalf("removed flag changed session selection: %q", *session)
 	}
 }
 
@@ -292,8 +312,10 @@ func TestSplitSessionModelName(t *testing.T) {
 }
 
 func TestBackendForProvider(t *testing.T) {
-	_, err := backendForProvider("bad")
-	if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
-		t.Fatalf("error = %v, want unsupported provider", err)
+	for _, provider := range []string{"bad", "claude-pro"} {
+		_, err := backendForProvider(provider)
+		if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
+			t.Fatalf("provider %q error = %v, want unsupported provider", provider, err)
+		}
 	}
 }

@@ -648,9 +648,6 @@ func updateProviderSelection(
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", strings.TrimSpace(provider))
 	}
-	if def.Runtime != llm.RuntimeNative {
-		return nil, fmt.Errorf("ACP providers are deferred until the advanced integration phase")
-	}
 	updated := *cfg
 	updated.Provider = def.ID
 	if llm.ResolveID(cfg.Provider) == def.ID {

@@ -384,16 +384,7 @@ func backendForProvider(provider string) (app.Backend, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	if def.Runtime == llm.RuntimeACP {
-		return nil, fmt.Errorf(
-			"ACP providers are deferred until the advanced integration phase",
-		)
-	}
-	if def.Runtime == llm.RuntimeNative {
-		return &configBackend{def: &def}, nil
-	}
-
-	return nil, fmt.Errorf("unsupported provider %q", provider)
+	return &configBackend{def: &def}, nil
 }
 
 // configBackend is a minimal agent.Backend for native providers.

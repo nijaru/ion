@@ -209,7 +209,7 @@ func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCa
 		seenProviders[provider] = struct{}{}
 
 		def, ok := Lookup(provider)
-		if !ok || def.Runtime != RuntimeNative || !def.SupportsModelListing {
+		if !ok || !def.SupportsModelListing {
 			result.Status = append(result.Status, ModelCatalogStatus{
 				Provider: provider,
 				Err:      fmt.Errorf("no model listing available for provider %s", provider),

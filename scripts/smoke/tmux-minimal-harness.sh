@@ -422,14 +422,14 @@ send_deterministic_p1_tui_smoke() {
 
   local resume_store="$TMP_DIR/store-resume"
   local resume_session="ion-tmux-resume-session"
-  start_smoke_ion "complete" "$resume_store" "--session-id \"$resume_session\""
+  start_smoke_ion "complete" "$resume_store" "--session \"$resume_session\""
   send_line "build deterministic resume transcript"
   wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
   wait_contains "Complete" 60
   send_line "/quit"
   sleep 1
 
-  start_smoke_ion "complete" "$resume_store" "--resume --session-id \"$resume_session\""
+  start_smoke_ion "complete" "$resume_store" "--resume --session \"$resume_session\""
   assert_contains "--- resumed ---"
   assert_contains "build deterministic resume transcript"
   assert_contains "Bash(sleep 2; echo ion-tmux-smoke)"

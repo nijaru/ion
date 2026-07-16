@@ -20,15 +20,13 @@ type (
 	Kind     string
 	Family   string
 	AuthKind string
-	Runtime  string
 )
 
 const (
-	KindDirect       Kind = "direct"
-	KindRouter       Kind = "router"
-	KindLocal        Kind = "local"
-	KindCustom       Kind = "custom"
-	KindSubscription Kind = "subscription"
+	KindDirect Kind = "direct"
+	KindRouter Kind = "router"
+	KindLocal  Kind = "local"
+	KindCustom Kind = "custom"
 )
 
 const (
@@ -37,7 +35,6 @@ const (
 	FamilyGemini     Family = "gemini"
 	FamilyOpenRouter Family = "openrouter"
 	FamilyOllama     Family = "ollama"
-	FamilyACP        Family = "acp"
 )
 
 const (
@@ -45,12 +42,6 @@ const (
 	AuthToken    AuthKind = "token"
 	AuthLocal    AuthKind = "local"
 	AuthOptional AuthKind = "optional"
-	AuthACP      AuthKind = "acp"
-)
-
-const (
-	RuntimeNative Runtime = "native"
-	RuntimeACP    Runtime = "acp"
 )
 
 const OpenAICompatibleID = "openai-compatible"
@@ -66,10 +57,8 @@ type Definition struct {
 	DefaultEndpoint        string
 	SupportsModelListing   bool
 	SupportsCustomEndpoint bool
-	Runtime                Runtime
 	DefaultHeaders         map[string]string
 	Aliases                []string
-	ACPCommand             string
 }
 
 type localProbeResult struct {
@@ -93,13 +82,7 @@ func All() []Definition {
 }
 
 func Native() []Definition {
-	out := make([]Definition, 0, len(definitions))
-	for _, def := range definitions {
-		if def.Runtime == RuntimeNative {
-			out = append(out, def)
-		}
-	}
-	return out
+	return All()
 }
 
 func Lookup(id string) (Definition, bool) {
@@ -131,21 +114,8 @@ func DisplayName(id string) string {
 	return id
 }
 
-func IsACP(id string) bool {
-	def, ok := Lookup(id)
-	return ok && def.Runtime == RuntimeACP
-}
-
 func IsOpenAICompatible(id string) bool {
 	return ResolveID(id) == OpenAICompatibleID
-}
-
-func DefaultACPCommand(id string) (string, bool) {
-	def, ok := Lookup(id)
-	if !ok || def.ACPCommand == "" {
-		return "", false
-	}
-	return def.ACPCommand, true
 }
 
 func ResolvedEndpoint(cfg *config.Config) string {
@@ -212,7 +182,7 @@ func CredentialEnvVars(cfg *config.Config) []string {
 }
 
 func ResolvedAuthToken(cfg *config.Config, def Definition) string {
-	if def.AuthKind == AuthLocal || def.AuthKind == AuthACP {
+	if def.AuthKind == AuthLocal {
 		return ""
 	}
 	if cfg != nil {
@@ -292,9 +262,6 @@ func CredentialStateContext(
 	cfg *config.Config,
 	def Definition,
 ) (string, bool) {
-	if def.Runtime == RuntimeACP {
-		return "Subscription", true
-	}
 	if def.ID == OpenAICompatibleID {
 		configuredEndpoint := ""
 		if cfg != nil {
@@ -382,9 +349,6 @@ func RequiresEndpoint(cfg *config.Config) bool {
 }
 
 func ShowInPicker(cfg *config.Config, def Definition) bool {
-	if def.Runtime != RuntimeNative {
-		return false
-	}
 	if def.ID == OpenAICompatibleID {
 		return true
 	}
@@ -612,7 +576,6 @@ var definitions = []Definition{
 		AuthKind:             AuthAPIKey,
 		DefaultEnvVar:        "ANTHROPIC_API_KEY",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "openai",
@@ -623,7 +586,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "OPENAI_API_KEY",
 		DefaultEndpoint:      "https://api.openai.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "openrouter",
@@ -634,7 +596,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "OPENROUTER_API_KEY",
 		DefaultEndpoint:      "https://openrouter.ai/api/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "gemini",
@@ -645,7 +606,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "GEMINI_API_KEY",
 		AlternateEnvVars:     []string{"GOOGLE_API_KEY"},
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                     "ollama",
@@ -656,7 +616,6 @@ var definitions = []Definition{
 		DefaultEndpoint:        "http://localhost:11434/v1",
 		SupportsModelListing:   true,
 		SupportsCustomEndpoint: true,
-		Runtime:                RuntimeNative,
 	},
 	{
 		ID:                   "huggingface",
@@ -667,7 +626,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "HF_TOKEN",
 		DefaultEndpoint:      "https://router.huggingface.co/v1",
 		SupportsModelListing: false,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "together",
@@ -678,7 +636,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "TOGETHER_API_KEY",
 		DefaultEndpoint:      "https://api.together.xyz/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "deepseek",
@@ -689,7 +646,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "DEEPSEEK_API_KEY",
 		DefaultEndpoint:      "https://api.deepseek.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "groq",
@@ -700,7 +656,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "GROQ_API_KEY",
 		DefaultEndpoint:      "https://api.groq.com/openai/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "fireworks",
@@ -711,7 +666,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "FIREWORKS_API_KEY",
 		DefaultEndpoint:      "https://api.fireworks.ai/inference/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "mistral",
@@ -722,7 +676,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "MISTRAL_API_KEY",
 		DefaultEndpoint:      "https://api.mistral.ai/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "xai",
@@ -733,7 +686,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "XAI_API_KEY",
 		DefaultEndpoint:      "https://api.x.ai/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "moonshot",
@@ -744,7 +696,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "MOONSHOT_API_KEY",
 		DefaultEndpoint:      "https://api.moonshot.ai/v1",
 		SupportsModelListing: false,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "cerebras",
@@ -755,7 +706,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "CEREBRAS_API_KEY",
 		DefaultEndpoint:      "https://api.cerebras.ai/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 	{
 		ID:                   "zai",
@@ -766,7 +716,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "ZAI_API_KEY",
 		DefaultEndpoint:      "https://api.z.ai/api/paas/v4",
 		SupportsModelListing: false,
-		Runtime:              RuntimeNative,
 		Aliases:              []string{"z-ai"},
 	},
 	{
@@ -778,53 +727,8 @@ var definitions = []Definition{
 		DefaultEnvVar:          "OPENAI_COMPATIBLE_API_KEY",
 		SupportsModelListing:   true,
 		SupportsCustomEndpoint: true,
-		Runtime:                RuntimeNative,
 		Aliases:                []string{"local-api", "custom-api"},
 	},
-	{
-		ID:          "claude-pro",
-		DisplayName: "Claude Code",
-		Kind:        KindSubscription,
-		Family:      FamilyACP,
-		AuthKind:    AuthACP,
-		Runtime:     RuntimeACP,
-		ACPCommand:  "claude --acp",
-	},
-	{
-		ID:          "gemini-advanced",
-		DisplayName: "Gemini CLI",
-		Kind:        KindSubscription,
-		Family:      FamilyACP,
-		AuthKind:    AuthACP,
-		Runtime:     RuntimeACP,
-		ACPCommand:  "gemini --acp",
-	},
-	{
-		ID:          "gh-copilot",
-		DisplayName: "GitHub Copilot",
-		Kind:        KindSubscription,
-		Family:      FamilyACP,
-		AuthKind:    AuthACP,
-		Runtime:     RuntimeACP,
-		ACPCommand:  "gh copilot --acp",
-	},
-	{
-		ID:          "chatgpt",
-		DisplayName: "ChatGPT",
-		Kind:        KindSubscription,
-		Family:      FamilyACP,
-		AuthKind:    AuthACP,
-		Runtime:     RuntimeACP,
-	},
-	{
-		ID:          "codex",
-		DisplayName: "Codex CLI",
-		Kind:        KindSubscription,
-		Family:      FamilyACP,
-		AuthKind:    AuthACP,
-		Runtime:     RuntimeACP,
-	},
-
 	// Google Vertex AI
 	{
 		ID:                   "google-vertex",
@@ -834,7 +738,6 @@ var definitions = []Definition{
 		AuthKind:             AuthToken,
 		DefaultEnvVar:        "GOOGLE_VERTEX_API_KEY",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Amazon Bedrock
@@ -846,7 +749,6 @@ var definitions = []Definition{
 		AuthKind:             AuthToken,
 		DefaultEnvVar:        "AWS_BEARER_TOKEN_BEDROCK",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Azure OpenAI
@@ -859,7 +761,6 @@ var definitions = []Definition{
 		DefaultEnvVar:          "AZURE_OPENAI_API_KEY",
 		SupportsModelListing:   true,
 		SupportsCustomEndpoint: true,
-		Runtime:                RuntimeNative,
 	},
 
 	// Vercel AI Gateway
@@ -872,7 +773,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "VERCEL_AI_GATEWAY_TOKEN",
 		DefaultEndpoint:      "https://ai-gateway.vercel.sh/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Xiaomi Token Plan (China)
@@ -885,7 +785,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "XIAOMI_API_KEY",
 		DefaultEndpoint:      "https://api.xiaomimimo.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Xiaomi Token Plan (Amsterdam)
@@ -898,7 +797,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "XIAOMI_API_KEY",
 		DefaultEndpoint:      "https://api-ams.xiaomimimo.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Xiaomi Token Plan (Singapore)
@@ -911,7 +809,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "XIAOMI_API_KEY",
 		DefaultEndpoint:      "https://api-sgp.xiaomimimo.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Moonshot AI (China)
@@ -924,7 +821,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "MOONSHOT_API_KEY",
 		DefaultEndpoint:      "https://api.moonshot.cn/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Kimi Coding
@@ -937,7 +833,6 @@ var definitions = []Definition{
 		DefaultEnvVar:        "KIMI_CODING_API_KEY",
 		DefaultEndpoint:      "https://api.kimi.com/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// ZAI Coding (China)
@@ -949,7 +844,6 @@ var definitions = []Definition{
 		AuthKind:             AuthAPIKey,
 		DefaultEnvVar:        "ZAI_API_KEY",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 
 	// Cloudflare Workers AI
@@ -961,7 +855,6 @@ var definitions = []Definition{
 		AuthKind:             AuthAPIKey,
 		DefaultEnvVar:        "CLOUDFLARE_API_TOKEN",
 		SupportsModelListing: false,
-		Runtime:              RuntimeNative,
 	},
 
 	// OpenCode
@@ -974,6 +867,5 @@ var definitions = []Definition{
 		DefaultEnvVar:        "OPENCODE_API_KEY",
 		DefaultEndpoint:      "https://opencode.ai/v1",
 		SupportsModelListing: true,
-		Runtime:              RuntimeNative,
 	},
 }

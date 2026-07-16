@@ -11,7 +11,6 @@ type cliFlags struct {
 	continueFlag           *bool
 	continueShortFlag      *bool
 	sessionFlag            *string
-	sessionIDFlag          *string
 	noSessionFlag          *bool
 	resumeFlag             *string
 	resumeShortFlag        *string
@@ -51,11 +50,6 @@ func registerCLIFlags() cliFlags {
 			"session",
 			"",
 			"Use a specific session by ID",
-		),
-		sessionIDFlag: flag.String(
-			"session-id",
-			"",
-			"Use a specific session by ID (Pi-equivalent alias)",
 		),
 		noSessionFlag: flag.Bool(
 			"no-session",
@@ -130,10 +124,7 @@ func (f cliFlags) continueRequested() bool {
 }
 
 func (f cliFlags) sessionID() string {
-	if sid := strings.TrimSpace(*f.sessionFlag); sid != "" {
-		return sid
-	}
-	return strings.TrimSpace(*f.sessionIDFlag)
+	return strings.TrimSpace(*f.sessionFlag)
 }
 
 func (f cliFlags) noSessionRequested() bool {
@@ -398,7 +389,6 @@ func ionKnownFlag(name string) bool {
 	case "continue",
 		"c",
 		"session",
-		"session-id",
 		"no-session",
 		"resume",
 		"r",
@@ -431,7 +421,6 @@ func ionFlagNeedsValue(name string) bool {
 	case "resume",
 		"r",
 		"session",
-		"session-id",
 		"provider",
 		"model",
 		"m",

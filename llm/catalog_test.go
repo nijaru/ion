@@ -50,6 +50,20 @@ func mustLookup(t *testing.T, id string) Definition {
 	return def
 }
 
+func TestUnsupportedExternalAdapterIDsAreNotCataloged(t *testing.T) {
+	for _, id := range []string{
+		"claude-pro",
+		"gemini-advanced",
+		"gh-copilot",
+		"chatgpt",
+		"codex",
+	} {
+		if _, ok := Lookup(id); ok {
+			t.Fatalf("provider %q remains in the native catalog", id)
+		}
+	}
+}
+
 func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 	localProbeMu.Lock()
 	localProbeCache = map[string]localProbeResult{}
