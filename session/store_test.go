@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -30,7 +32,7 @@ func TestStoreAppendGetEntry(t *testing.T) {
 		Message:   msg,
 	}
 	_, err := s.Append(ctx, entry)
-		if err != nil {
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetEntry(ctx, "e1")
@@ -82,6 +84,17 @@ func TestStoreBranchOrder(t *testing.T) {
 	}
 	if branch[0].ID() != "e1" || branch[1].ID() != "e2" || branch[2].ID() != "e3" {
 		t.Fatalf("wrong order: %s, %s, %s", branch[0].ID(), branch[1].ID(), branch[2].ID())
+	}
+}
+
+func TestStoreBranchMissingLeafReturnsNoRows(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetLeafID("missing"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Branch(context.Background())
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing leaf error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -183,11 +196,11 @@ func TestSessionUsage(t *testing.T) {
 	sess := NewSession(store, 64)
 
 	sess.AppendMessage(ctx, &AssistantMessage{
-		Usage: Usage{Input: 100, Output: 50, Cost: Cost{Total: 0.01}},
+		Usage:      Usage{Input: 100, Output: 50, Cost: Cost{Total: 0.01}},
 		StopReason: StopReasonEndTurn, Timestamp: time.Now(),
 	})
 	sess.AppendMessage(ctx, &AssistantMessage{
-		Usage: Usage{Input: 200, Output: 80, Cost: Cost{Total: 0.03}},
+		Usage:      Usage{Input: 200, Output: 80, Cost: Cost{Total: 0.03}},
 		StopReason: StopReasonEndTurn, Timestamp: time.Now(),
 	})
 

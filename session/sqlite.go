@@ -362,32 +362,44 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	if s.leaf == "" {
 		return nil, nil
 	}
-	// Walk parent_id chain from leaf to root, then reverse.
-	var ids []string
-	id := s.leaf
-	for id != "" {
-		ids = append(ids, id)
-		var parentID string
-		err := s.db.QueryRowContext(ctx, "SELECT parent_id FROM entries WHERE id=?", id).Scan(&parentID)
-		if err == sql.ErrNoRows {
-			break
-		}
+
+	// Reconstruct the parent chain and decode its rows in one query. The path
+	// guard keeps malformed cycles from spinning forever; valid entry IDs are
+	// generated hex strings, so slash-delimited membership is unambiguous.
+	rows, err := s.db.QueryContext(ctx, `
+		WITH RECURSIVE branch(id, parent_id, depth, path) AS (
+			SELECT id, parent_id, 0, '/' || id || '/'
+			FROM entries
+			WHERE id = ?
+			UNION ALL
+			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || e.id || '/'
+			FROM entries e
+			JOIN branch ON e.id = branch.parent_id
+			WHERE instr(branch.path, '/' || e.id || '/') = 0
+		)
+		SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
+		FROM branch
+		JOIN entries e ON e.id = branch.id
+		ORDER BY branch.depth DESC
+	`, s.leaf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]Entry, 0)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
 		if err != nil {
 			return nil, err
 		}
-		id = parentID
+		entries = append(entries, entry)
 	}
-	// Reverse to root-to-leaf order.
-	for i, j := 0, len(ids)-1; i < j; i, j = i+1, j-1 {
-		ids[i], ids[j] = ids[j], ids[i]
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	entries := make([]Entry, 0, len(ids))
-	for _, id := range ids {
-		e, err := s.getEntry(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
+	if len(entries) == 0 {
+		return nil, sql.ErrNoRows
 	}
 	return entries, nil
 }
