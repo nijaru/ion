@@ -229,6 +229,7 @@ func TestQueryAvailableModelsSkipsOpenAICompatibleWithoutConfiguredAuth(t *testi
 func TestQueryAvailableModelsCanIncludeDefaultLocalProviders(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "configured")
+	t.Setenv("OLLAMA_HOST", "")
 	providerModelsOnce = sync.Once{}
 	providerModelsCacheMap = nil
 

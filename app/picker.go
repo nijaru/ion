@@ -880,6 +880,7 @@ func (r pickerReducer) refreshOverlayFilter() {
 }
 
 func (r pickerReducer) beginSessionLoad() uint64 {
+	r.cancelModelLoad()
 	r.picker.Overlay = nil
 	r.picker.SessionLoadRequest++
 	requestID := r.picker.SessionLoadRequest

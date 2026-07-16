@@ -1,11 +1,30 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/nijaru/ion/session"
 )
+
+func TestPickerReducerSessionLoadCancelsModelCatalog(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{
+		purpose:     pickerPurposeModel,
+		loading:     true,
+		loadContext: ctx,
+		loadCancel:  cancel,
+	}
+
+	model.pickerReducer().beginSessionLoad()
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("session picker replacement did not cancel model catalog")
+	}
+}
 
 func TestPickerReducerAppliesOnlyCurrentSessionLoad(t *testing.T) {
 	model := readyModel(t)
