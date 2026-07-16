@@ -22,6 +22,7 @@ import (
 	"github.com/nijaru/ion/internal/timing"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
@@ -272,6 +273,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	jobs := tool.NewJobManager()
 	runtimeCfg, activePreset, err := startupRuntimeConfig(
 		ctx,
 		cfg,
@@ -287,6 +289,7 @@ func main() {
 	b, sess, runner, err := openRuntime(
 		ctx,
 		store,
+		jobs,
 		cwd,
 		branch,
 		runtimeCfg,
@@ -317,6 +320,7 @@ func main() {
 			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
 		}
 		closeErr := closeRuntimeHandles(runner, nil, store)
+		closeErr = errors.Join(closeErr, jobs.Close())
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
 			os.Exit(1)
@@ -348,6 +352,7 @@ func main() {
 		switchedBackend, switchedSession, switchedRunner, err := openRuntime(
 			ctx,
 			store,
+			jobs,
 			cwd,
 			currentBranch(),
 			cfg,
@@ -370,6 +375,7 @@ func main() {
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithRunner(runner).
+		WithJobs(tuiJobController{manager: jobs}).
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
 		WithSize(width, height)
 	if openResumePicker {
@@ -397,6 +403,7 @@ func main() {
 	finalModel, runErr := p.Run()
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
 	closeErr := closeRuntimeHandles(agentToClose, nil, store)
+	closeErr = errors.Join(closeErr, jobs.Close())
 	if runErr != nil {
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)

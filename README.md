@@ -1,8 +1,9 @@
 # Ion
 
 > [!NOTE]
-> Ion is an early preview. It can read, edit, and run commands in your working
-> tree, but the core agent and TUI are still being hardened.
+> Ion is a native Go coding agent. The core submit/stream/tool/cancel/persist/
+> resume path is covered by deterministic, race, and live terminal gates; some
+> advanced integrations remain deliberately opt-in or deferred.
 
 Ion is a terminal coding agent for working on codebases from your shell. It
 opens an interactive chat UI, gives the model a small set of coding tools, and
@@ -105,6 +106,7 @@ Common TUI commands:
 /model      choose a model
 /thinking   choose reasoning effort
 /status     show runtime status
+/jobs       list or stop background shell jobs
 /resume     resume a previous session
 /compact    compact the current session
 /clone      duplicate the current session

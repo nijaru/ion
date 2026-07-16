@@ -307,6 +307,7 @@ type persistenceAdapter interface {
 type ModelState struct {
 	Backend              Backend
 	Storage              persistenceAdapter
+	Jobs                 JobController
 	Store                session.Store
 	Switcher             Switcher
 	Config               *config.Config
@@ -477,6 +478,14 @@ func New(
 	}
 	m.loadInputHistory(context.Background())
 
+	return m
+}
+
+// WithJobs installs the runtime-owned background-job projection used by the
+// TUI. The manager itself remains outside app/ so provider switches do not
+// replace or persist process state.
+func (m Model) WithJobs(jobs JobController) Model {
+	m.Model.Jobs = jobs
 	return m
 }
 

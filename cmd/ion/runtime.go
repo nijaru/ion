@@ -207,6 +207,7 @@ func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
 func openRuntime(
 	ctx context.Context,
 	store session.Store,
+	jobs *tool.JobManager,
 	cwd, branch string,
 	cfg *config.Config,
 	sessionID string,
@@ -257,6 +258,7 @@ func openRuntime(
 	toolRegistry := tool.NewRegistry()
 	if err := tool.RegisterCodingTools(toolRegistry, tool.CodingToolsConfig{
 		Workdir: cwd,
+		Jobs:    jobs,
 	}); err != nil {
 		// Non-fatal: start without tools if registration fails.
 		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)

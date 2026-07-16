@@ -68,6 +68,7 @@ type bashOutputSnapshot struct {
 type bashOutputAccumulator struct {
 	maxLines int
 	maxBytes int
+	keepFull bool
 
 	rawChunks [][]byte
 	tail      []byte
@@ -82,10 +83,11 @@ type bashOutputAccumulator struct {
 	tempPath string
 }
 
-func newBashOutputAccumulator() *bashOutputAccumulator {
+func newBashOutputAccumulator(keepFull bool) *bashOutputAccumulator {
 	return &bashOutputAccumulator{
 		maxLines:                 bashMaxOutputLines,
 		maxBytes:                 MaxToolOutputSize,
+		keepFull:                 keepFull,
 		tailStartsAtLineBoundary: true,
 	}
 }
@@ -99,12 +101,18 @@ func (a *bashOutputAccumulator) append(data []byte) error {
 	a.updateLineCounters(data)
 	a.appendTail(data)
 
-	if a.tempFile != nil || a.truncated() {
+	if a.keepFull && (a.tempFile != nil || a.truncated()) {
 		if err := a.ensureTempFile(); err != nil {
 			return err
 		}
 		_, err := a.tempFile.Write(data)
 		return err
+	}
+	if a.truncated() {
+		// A runtime-only job keeps the bounded tail in memory and must not
+		// create a full-output temp file as a side effect of truncation.
+		a.rawChunks = nil
+		return nil
 	}
 
 	a.rawChunks = append(a.rawChunks, bytes.Clone(data))
@@ -130,7 +138,7 @@ func (a *bashOutputAccumulator) snapshot(persistIfTruncated bool) (bashOutputSna
 	truncation.MaxLines = a.maxLines
 	truncation.MaxBytes = a.maxBytes
 
-	if persistIfTruncated && truncation.Truncated {
+	if persistIfTruncated && a.keepFull && truncation.Truncated {
 		if err := a.ensureTempFile(); err != nil {
 			return bashOutputSnapshot{}, err
 		}

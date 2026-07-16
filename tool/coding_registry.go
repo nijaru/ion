@@ -8,6 +8,7 @@ type CodingToolsConfig struct {
 	Workdir     string
 	Environment EnvironmentPolicy
 	SkillDirs   []string
+	Jobs        *JobManager
 }
 
 func RegisterCodingTools(registry *Registry, cfg CodingToolsConfig) error {
@@ -16,7 +17,7 @@ func RegisterCodingTools(registry *Registry, cfg CodingToolsConfig) error {
 	}
 	fileTool := NewFileTool(cfg.Workdir)
 	searchTool := newFileSearchBase(cfg.Workdir)
-	registry.Register(NewBashWithEnvironment(cfg.Workdir, cfg.Environment))
+	registry.Register(NewBashWithEnvironmentAndJobs(cfg.Workdir, cfg.Environment, cfg.Jobs))
 	registry.Register(&Read{FileTool: *fileTool})
 	registry.Register(&Write{FileTool: *fileTool})
 	registry.Register(&Edit{FileTool: *fileTool})

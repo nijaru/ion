@@ -12,9 +12,11 @@ import (
 )
 
 type localCommand struct {
-	CWD     string
-	Command string
-	Emit    func(localOutputUpdate) error
+	CWD               string
+	Command           string
+	Emit              func(localOutputUpdate) error
+	Started           func(pid int)
+	PersistFullOutput bool
 }
 
 type localOutputUpdate struct {
@@ -135,6 +137,9 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		_ = stderrWriter.Close()
 		return "", err
 	}
+	if request.Started != nil {
+		request.Started(cmd.Process.Pid)
+	}
 	_ = stdoutWriter.Close()
 	_ = stderrWriter.Close()
 
@@ -145,7 +150,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	})
 	defer stopKill()
 
-	output := newBashOutputAccumulator()
+	output := newBashOutputAccumulator(request.PersistFullOutput)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	readProgress := make(chan struct{}, 1)
@@ -189,6 +194,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 						output,
 						data,
 						&truncatedSnapshotEmitted,
+						request.PersistFullOutput,
 					)
 					if err != nil {
 						if emitErr == nil {
@@ -228,7 +234,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	waitForReadersOrClosePipes(&wg, cmd.Process.Pid, readProgress, stdout, stderr)
 
 	mu.Lock()
-	result, resultErr := finalizeBashOutput(output, request.Emit)
+	result, resultErr := finalizeBashOutput(output, request.Emit, request.PersistFullOutput)
 	if emitErr == nil && resultErr != nil {
 		emitErr = resultErr
 	}
@@ -250,6 +256,7 @@ func bashOutputUpdateForChunk(
 	output *bashOutputAccumulator,
 	data []byte,
 	truncatedSnapshotEmitted *bool,
+	persistFullOutput bool,
 ) (localOutputUpdate, bool, error) {
 	if !output.truncated() {
 		return localOutputUpdate{Text: string(data)}, true, nil
@@ -257,7 +264,7 @@ func bashOutputUpdateForChunk(
 	if *truncatedSnapshotEmitted {
 		return localOutputUpdate{}, false, nil
 	}
-	snapshot, err := output.snapshot(true)
+	snapshot, err := output.snapshot(persistFullOutput)
 	if err != nil {
 		return localOutputUpdate{}, false, err
 	}
@@ -271,8 +278,9 @@ func bashOutputUpdateForChunk(
 func finalizeBashOutput(
 	output *bashOutputAccumulator,
 	emit func(localOutputUpdate) error,
+	persistFullOutput bool,
 ) (string, error) {
-	snapshot, err := output.snapshot(true)
+	snapshot, err := output.snapshot(persistFullOutput)
 	if err != nil {
 		return "", err
 	}

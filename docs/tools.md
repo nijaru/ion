@@ -34,13 +34,24 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current registered and active tool names. Sandbox execution is parked while
-the native core loop stabilizes; the default bash tool runs foreground commands
-directly in the workspace.
+current registered and active tool names. Sandbox execution is selected by
+`ION_SANDBOX`; the default is trusted local execution, while configured macOS
+seatbelt or Linux bubblewrap modes fail closed when unavailable.
 
-Background jobs are deferred. The native tool path only runs foreground
-commands; `/jobs` and `/stop` stay hidden until async process UX is designed as
-a coherent later feature.
+Background commands are managed by runtime-owned jobs. They are useful for dev
+servers, watchers, and long builds without blocking the agent turn:
+
+```json
+{"command":"go test ./...","background":true}
+{"action":"list"}
+{"action":"output","job_id":"job-1","tail_lines":50}
+{"action":"stop","job_id":"job-1"}
+```
+
+Jobs are process-group scoped, output-bounded, survive provider/model switches,
+and are canceled during Ion shutdown. They are intentionally not persisted or
+replayed after the process exits. The TUI exposes `/jobs` and `/jobs stop
+<job-id>` for the same runtime state.
 
 Native `bash` accepts `command` plus an optional per-command `timeout` in
 seconds. There is no default timeout; normal turns are bounded by user/provider

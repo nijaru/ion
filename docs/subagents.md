@@ -4,10 +4,11 @@ Subagents are an advanced integration surface. They are not part of Ion's
 default native tool surface today, and the model should not assume a `subagent`
 tool is available unless `subagent_tools = "on"` is explicitly configured.
 
-Ion has implementation pieces for focused delegation through Canto child
-sessions, explicit context transfer, and compact inline display. Default
-registration remains off so the normal model-visible surface stays focused on
-the core coding tools.
+Ion has substrate for focused delegation through child sessions, explicit
+context transfer, and compact inline display. This is not yet a complete
+production coordination surface: async children, child event/control wiring,
+and swarm views remain deferred. Default registration stays off so the normal
+model-visible surface stays focused on the core coding tools.
 
 The target default personas are:
 

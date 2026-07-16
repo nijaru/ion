@@ -25,12 +25,12 @@ func TestBash_Spec(t *testing.T) {
 	}
 }
 
-func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
+func TestBashSpecIncludesManagedJobOperations(t *testing.T) {
 	params := bashSpecParameters(t, tool.NewBash("."))
 	properties := bashSpecProperties(t, params)
 	for _, key := range []string{"action", "background", "job_id", "tail_lines"} {
-		if _, ok := properties[key]; ok {
-			t.Fatalf("default bash spec exposes %q: %#v", key, properties)
+		if _, ok := properties[key]; !ok {
+			t.Fatalf("bash spec missing %q: %#v", key, properties)
 		}
 	}
 	if _, ok := properties["command"]; !ok {
@@ -39,27 +39,86 @@ func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
 	if _, ok := properties["timeout"]; !ok {
 		t.Fatalf("default bash spec missing timeout: %#v", properties)
 	}
-	required, ok := params["required"].([]string)
-	if !ok {
-		t.Fatalf("bash spec required = %T, want []string", params["required"])
-	}
-	if strings.Join(required, ",") != "command" {
-		t.Fatalf("bash spec required = %#v, want command", required)
+	if _, ok := params["required"]; ok {
+		t.Fatalf("bash spec should not require command for list/output/stop: %#v", params["required"])
 	}
 }
 
-func TestBashRejectsDeferredBackgroundJobArgs(t *testing.T) {
+func TestBashRejectsBackgroundWithoutRuntimeManager(t *testing.T) {
 	b := tool.NewBash(t.TempDir())
-	for _, args := range []string{
-		`{"command":"sleep 10","background":true}`,
-		`{"action":"output","job_id":"bash-1"}`,
-		`{"action":"kill","job_id":"bash-1"}`,
-		`{"command":"echo ok","tail_lines":10}`,
-	} {
-		_, err := b.Execute(t.Context(), args)
-		if err == nil || !strings.Contains(err.Error(), "background jobs are deferred") {
-			t.Fatalf("Execute(%s) error = %v, want deferred background jobs", args, err)
+	_, err := b.Execute(t.Context(), `{"command":"sleep 10","background":true}`)
+	if err == nil || !strings.Contains(err.Error(), "runtime job manager") {
+		t.Fatalf("background error = %v, want runtime manager error", err)
+	}
+}
+
+func TestBashManagedJobLifecycle(t *testing.T) {
+	manager := tool.NewJobManager()
+	defer manager.Close()
+	b := tool.NewBashWithEnvironmentAndJobs(t.TempDir(), tool.NewEnvironmentPolicy("inherit", nil), manager)
+
+	result, err := b.Execute(t.Context(), `{"command":"printf start; sleep 0.1; printf done","background":true}`)
+	if err != nil {
+		t.Fatalf("background launch failed: %v", err)
+	}
+	if !strings.Contains(result, "job-1") {
+		t.Fatalf("launch result = %q, want job id", result)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var job tool.JobSnapshot
+	for time.Now().Before(deadline) {
+		job, err = manager.Get("job-1")
+		if err != nil {
+			t.Fatalf("get job: %v", err)
 		}
+		if job.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if job.Status != "completed" {
+		t.Fatalf("job status = %s, want completed", job.Status)
+	}
+	if !strings.Contains(job.Output, "start") || !strings.Contains(job.Output, "done") {
+		t.Fatalf("job output = %q, want start and done", job.Output)
+	}
+	list, err := b.Execute(t.Context(), `{"action":"list"}`)
+	if err != nil {
+		t.Fatalf("job list failed: %v", err)
+	}
+	if !strings.Contains(list, "job-1") || !strings.Contains(list, "completed") {
+		t.Fatalf("job list = %q, want completed job", list)
+	}
+
+	output, err := b.Execute(t.Context(), `{"action":"output","job_id":"job-1","tail_lines":2}`)
+	if err != nil {
+		t.Fatalf("job output failed: %v", err)
+	}
+	if !strings.Contains(output, "status: completed") || !strings.Contains(output, "done") {
+		t.Fatalf("job output = %q, want status and output", output)
+	}
+	if _, err := b.Execute(t.Context(), `{"action":"stop","job_id":"job-1"}`); err == nil {
+		t.Fatal("stopping completed job succeeded")
+	}
+}
+
+func TestBashManagedJobStopKillsProcess(t *testing.T) {
+	manager := tool.NewJobManager()
+	defer manager.Close()
+	b := tool.NewBashWithEnvironmentAndJobs(t.TempDir(), tool.NewEnvironmentPolicy("inherit", nil), manager)
+	if _, err := b.Execute(t.Context(), `{"command":"sleep 10","background":true}`); err != nil {
+		t.Fatalf("background launch failed: %v", err)
+	}
+	if err := manager.Stop("job-1"); err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+	job, err := manager.Get("job-1")
+	if err != nil {
+		t.Fatalf("get stopped job: %v", err)
+	}
+	if job.Status != "canceled" {
+		t.Fatalf("stopped job status = %s, want canceled", job.Status)
 	}
 }
 

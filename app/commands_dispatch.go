@@ -74,6 +74,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleSettingsCommand(fields)
 	case "/tools":
 		return m.handleToolsCommand(fields)
+	case "/jobs":
+		return m.handleJobsCommand(fields)
 	case "/status":
 		return m.handleStatusCommand(fields)
 	case "/changelog":

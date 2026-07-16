@@ -140,6 +140,35 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 	})
 }
 
+func TestDeterministicTUIAcceptanceJobs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := t.TempDir() + "/jobs.db"
+	provider := newAcceptanceProvider(acceptanceError)
+	store, sess, harness := newAcceptanceHarness(t, path, provider, false)
+	jobs := &acceptanceJobs{items: []app.JobInfo{{
+		ID:      "job-1",
+		Command: "go test ./...",
+		Status:  "running",
+		Output:  "tests are running",
+	}}}
+	program, output, result := startAcceptanceProgramWithJobs(t, store, sess, harness, jobs)
+
+	program.Send(tea.KeyPressMsg{Text: "/jobs"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "job-1  running", "job list")
+
+	program.Send(tea.KeyPressMsg{Text: "/jobs stop job-1"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "Stopped background job job-1.", "job stop")
+	if jobs.stopped != "job-1" {
+		t.Fatalf("stopped job = %q, want job-1", jobs.stopped)
+	}
+
+	program.Quit()
+	_ = waitAcceptanceProgram(t, result)
+	closeAcceptanceHarness(t, harness, store)
+}
+
 type acceptanceResult struct {
 	model tea.Model
 	err   error
@@ -168,11 +197,22 @@ func startAcceptanceProgram(
 	sess session.Session,
 	runner agent.Runner,
 ) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
+	return startAcceptanceProgramWithJobs(t, store, sess, runner, nil)
+}
+
+func startAcceptanceProgramWithJobs(
+	t *testing.T,
+	store session.Store,
+	sess session.Session,
+	runner agent.Runner,
+	jobs app.JobController,
+) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
 	t.Helper()
 	backend := newSmokeBackend("complete")
 	cfg := &config.Config{Provider: "fake", Model: "fake-model", BusyInput: "steer"}
 	model := app.New(backend, sess, store, "/tmp/ion-acceptance", "main", "test", nil).
 		WithRunner(runner).
+		WithJobs(jobs).
 		WithConfig(cfg)
 	output := &acceptanceBuffer{}
 	program := tea.NewProgram(
@@ -191,6 +231,25 @@ func startAcceptanceProgram(
 	time.Sleep(20 * time.Millisecond)
 	program.Send(tea.WindowSizeMsg{Width: 120, Height: 40})
 	return program, output, result
+}
+
+type acceptanceJobs struct {
+	items   []app.JobInfo
+	stopped string
+}
+
+func (j *acceptanceJobs) ListJobs() []app.JobInfo {
+	return append([]app.JobInfo(nil), j.items...)
+}
+
+func (j *acceptanceJobs) StopJob(id string) error {
+	j.stopped = id
+	for i := range j.items {
+		if j.items[i].ID == id {
+			j.items[i].Status = "canceled"
+		}
+	}
+	return nil
 }
 
 func waitAcceptanceSignal(t *testing.T, signal <-chan struct{}, label string) {

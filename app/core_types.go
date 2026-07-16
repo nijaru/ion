@@ -40,6 +40,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/logout", Description: "Log out of current provider"},
 	{Name: "/settings", Description: "Open settings", Idle: -1},
 	{Name: "/tools", Description: "Show tool surface", Idle: -1},
+	{Name: "/jobs", Description: "List or stop background jobs", Args: "[stop <job-id>]", Idle: -1},
 	{Name: "/status", Description: "Show runtime status", Idle: -1},
 	{Name: "/changelog", Description: "Show changelog", Idle: -1},
 	{Name: "/skills", Description: "List or search skills", Idle: -1},
