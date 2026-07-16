@@ -27,7 +27,7 @@ type eventDelivery struct {
 
 	outputMu     sync.Mutex
 	outputCond   *sync.Cond
-	outputQueue  []session.Event
+	outputQueue  []queuedOutput
 	outputHead   int
 	outputClosed bool
 	senderDone   chan struct{}
@@ -38,7 +38,13 @@ type queuedEvent struct {
 	event         session.Event
 	listeners     []func(session.Event)
 	listenersDone chan struct{}
+	outputDone    chan struct{}
 	listenerPanic any
+}
+
+type queuedOutput struct {
+	event      session.Event
+	outputDone chan struct{}
 }
 
 func newEventDelivery(output chan session.Event, closeOutput bool) *eventDelivery {
@@ -56,14 +62,18 @@ func newEventDelivery(output chan session.Event, closeOutput bool) *eventDeliver
 	return d
 }
 
-// enqueue adds an event and waits only until listeners have observed it. The
-// channel send is owned by send, so an unread channel cannot stall the agent.
+// enqueue adds an event and waits until listeners have observed it. When the
+// buffered output path has immediate room and no queued backlog, it also waits
+// for this event to reach the channel. That preserves follow-up ordering for
+// channel consumers without making an unread or full channel stall the agent.
 func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Event)) {
 	item := queuedEvent{
 		event:         event,
 		listeners:     listeners,
 		listenersDone: make(chan struct{}),
+		outputDone:    make(chan struct{}),
 	}
+	waitForOutput := d.outputHasRoom()
 
 	d.mu.Lock()
 	if d.closed {
@@ -78,6 +88,12 @@ func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Ev
 	// for that nested event while it is still executing the current callback.
 	if d.dispatching.Load() == 0 {
 		<-item.listenersDone
+		if waitForOutput {
+			select {
+			case <-item.outputDone:
+			case <-d.stop:
+			}
+		}
 	}
 	if item.listenerPanic != nil {
 		panic(item.listenerPanic)
@@ -90,7 +106,12 @@ func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Ev
 func (d *eventDelivery) enqueueAsync(event session.Event, listeners []func(session.Event)) {
 	d.mu.Lock()
 	if !d.closed {
-		d.queue = append(d.queue, queuedEvent{event: event, listeners: listeners, listenersDone: make(chan struct{})})
+		d.queue = append(d.queue, queuedEvent{
+			event:         event,
+			listeners:     listeners,
+			listenersDone: make(chan struct{}),
+			outputDone:    make(chan struct{}),
+		})
 		d.cond.Signal()
 	}
 	d.mu.Unlock()
@@ -120,7 +141,7 @@ func (d *eventDelivery) dispatch() {
 		if item.listenerPanic != nil {
 			continue
 		}
-		d.enqueueOutput(item.event)
+		d.enqueueOutput(item)
 	}
 }
 
@@ -146,10 +167,22 @@ func (d *eventDelivery) next() (queuedEvent, bool) {
 	return item, true
 }
 
-func (d *eventDelivery) enqueueOutput(event session.Event) {
+func (d *eventDelivery) outputHasRoom() bool {
+	if cap(d.output) == 0 {
+		return false
+	}
+	d.outputMu.Lock()
+	defer d.outputMu.Unlock()
+	return !d.outputClosed && len(d.output) < cap(d.output) && len(d.outputQueue) == 0
+}
+
+func (d *eventDelivery) enqueueOutput(item queuedEvent) {
 	d.outputMu.Lock()
 	if !d.outputClosed {
-		d.outputQueue = append(d.outputQueue, event)
+		d.outputQueue = append(d.outputQueue, queuedOutput{
+			event:      item.event,
+			outputDone: item.outputDone,
+		})
 		d.outputCond.Signal()
 	}
 	d.outputMu.Unlock()
@@ -158,28 +191,29 @@ func (d *eventDelivery) enqueueOutput(event session.Event) {
 func (d *eventDelivery) send() {
 	defer close(d.senderDone)
 	for {
-		event, ok := d.nextOutput()
+		item, ok := d.nextOutput()
 		if !ok {
 			return
 		}
 		select {
-		case d.output <- event:
+		case d.output <- item.event:
+			close(item.outputDone)
 		case <-d.stop:
 			return
 		}
 	}
 }
 
-func (d *eventDelivery) nextOutput() (session.Event, bool) {
+func (d *eventDelivery) nextOutput() (queuedOutput, bool) {
 	d.outputMu.Lock()
 	defer d.outputMu.Unlock()
 	for d.outputHead == len(d.outputQueue) && !d.outputClosed {
 		d.outputCond.Wait()
 	}
 	if d.outputClosed {
-		return nil, false
+		return queuedOutput{}, false
 	}
-	event := d.outputQueue[d.outputHead]
+	item := d.outputQueue[d.outputHead]
 	d.outputHead++
 	if d.outputHead == len(d.outputQueue) {
 		d.outputQueue = d.outputQueue[:0]
@@ -189,7 +223,7 @@ func (d *eventDelivery) nextOutput() (session.Event, bool) {
 		d.outputQueue = d.outputQueue[:len(d.outputQueue)-d.outputHead]
 		d.outputHead = 0
 	}
-	return event, true
+	return item, true
 }
 
 // close cancels blocked channel sends and waits for both dispatcher goroutines.

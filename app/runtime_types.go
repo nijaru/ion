@@ -566,6 +566,16 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 	switch e := entry.(type) {
 	case *session.MessageEntry:
 		if am, ok := e.Message.(*session.AssistantMessage); ok {
+			// Message events carry the harness-owned assistant pointer. Keep the
+			// TUI projection immutable with respect to the harness's post-turn
+			// overflow/final-message inspection; mutating this pointer races with
+			// the Prompt goroutine after TurnEnd.
+			projected := *e
+			projectedMessage := *am
+			projected.Message = &projectedMessage
+			entry = &projected
+			e = &projected
+			am = &projectedMessage
 			if t.inFlight.StreamBuf != "" {
 				am.Content = []session.Content{session.TextContent{Text: t.inFlight.StreamBuf}}
 			}
