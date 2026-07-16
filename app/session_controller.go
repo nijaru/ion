@@ -597,6 +597,19 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 		m.turnReducer().CommitAgentMessage(msg.Message)
 	}
 	var cmds []tea.Cmd
+	if m.Model.Config != nil && m.InFlight.Thinking {
+		if reason := BudgetStopReason(BudgetStopInput{
+			CurrentTurnCost: m.Progress.CurrentTurnCost,
+			TotalCost:       m.Progress.TotalCost,
+			MaxTurnCost:     m.Model.Config.MaxTurnCost,
+			MaxSessionCost:  m.Model.Config.MaxSessionCost,
+		}); reason != "" {
+			m.Progress.BudgetStopReason = reason
+			var cancelCmd tea.Cmd
+			m, cancelCmd = m.cancelRunningTurn(reason)
+			cmds = append(cmds, cancelCmd)
+		}
+	}
 	in, out, cost := session.TokenUsage(msg.Message)
 	if in > 0 || out > 0 || cost > 0 {
 		cmds = append(cmds, m.persistEntryCmd("persist token usage", StoreTokenUsage{

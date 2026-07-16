@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -78,15 +79,29 @@ type SubmitPreflightInput struct {
 }
 
 func DecideSubmitPreflight(input SubmitPreflightInput) SubmitPreflightDecision {
-	return SubmitPreflightDecision{Allowed: true}
+	if input.MaxSessionCost > 0 && input.TotalCost >= input.MaxSessionCost {
+		return SubmitPreflightDecision{
+			Reason: formatCostLimit("session", input.TotalCost, input.MaxSessionCost),
+		}
+	}
+	return SubmitPreflightDecision{Allowed: true, ShouldSubmit: true}
 }
 
-var budgetStopReasonStr = "budget_stop"
+func BudgetStopReason(input BudgetStopInput) string {
+	if input.MaxTurnCost > 0 && input.CurrentTurnCost >= input.MaxTurnCost {
+		return formatCostLimit("turn", input.CurrentTurnCost, input.MaxTurnCost)
+	}
+	if input.MaxSessionCost > 0 && input.TotalCost >= input.MaxSessionCost {
+		return formatCostLimit("session", input.TotalCost, input.MaxSessionCost)
+	}
+	return ""
+}
 
-func BudgetStopReason(input BudgetStopInput) string { return budgetStopReasonStr }
+func formatCostLimit(scope string, current, maximum float64) string {
+	return fmt.Sprintf("%s cost limit reached ($%.4f/$%.4f)", scope, current, maximum)
+}
 
 type BudgetStopInput struct {
-	Reason          string
 	CurrentTurnCost float64
 	TotalCost       float64
 	MaxTurnCost     float64

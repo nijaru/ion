@@ -98,6 +98,13 @@ rate-limit and server failures are bounded by `max_retries` (default `3`). Set
 waits. Retries happen before a stream is established; a partially consumed
 stream is never replayed automatically.
 
+Positive `max_session_cost` and `max_turn_cost` values are hard spend limits
+for provider-reported usage. Ion blocks new prompts at the session limit and
+cancels an active turn when a completed provider response crosses either
+limit, clearing queued turns and showing the limit in the canceled status. If a
+provider does not report cost, Ion cannot enforce a monetary limit for that
+request.
+
 ## MCP servers
 
 Ion can attach named MCP servers over stdio from `~/.ion/config.toml`:

@@ -536,6 +536,7 @@ func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {
 		t.progress.CurrentTurnInput = 0
 		t.progress.CurrentTurnOutput = 0
 		t.progress.CurrentTurnCost = 0
+		t.progress.BudgetStopReason = ""
 		t.progress.StatusUpdatedAt = ts
 	}
 }

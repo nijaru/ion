@@ -66,6 +66,7 @@ func (r progressReducer) resetSessionUsage() {
 	r.progress.TokensReceived = 0
 	r.progress.ContextTokens = 0
 	r.progress.TotalCost = 0
+	r.progress.BudgetStopReason = ""
 }
 
 func (r progressReducer) applySessionUsage(input, output int, cost float64) {
