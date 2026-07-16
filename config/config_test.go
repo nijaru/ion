@@ -22,6 +22,28 @@ func TestRuntimeAPIKeyOverrideIsNotPersisted(t *testing.T) {
 	}
 }
 
+func TestSavePersistsOptInMemoryTools(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := Save(&Config{MemoryTools: "enabled"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "memory_tools = 'on'") {
+		t.Fatalf("saved config omitted normalized memory_tools: %s", data)
+	}
+	cfg, err := LoadStable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryToolMode() != "on" {
+		t.Fatalf("loaded memory mode = %q, want on", cfg.MemoryToolMode())
+	}
+}
+
 func TestLoadReadsConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -33,7 +55,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nmemory_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -102,6 +124,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.SkillTools != "read" {
 		t.Fatalf("skill_tools = %q, want read", cfg.SkillTools)
+	}
+	if cfg.MemoryTools != "on" || cfg.MemoryToolMode() != "on" {
+		t.Fatalf("memory_tools = %q, mode %q, want on", cfg.MemoryTools, cfg.MemoryToolMode())
 	}
 	if cfg.ToolEnvMode() != "inherit_without_provider_keys" {
 		t.Fatalf("tool_env = %q, want inherit_without_provider_keys", cfg.ToolEnvMode())
@@ -891,6 +916,31 @@ func TestSkillToolModeDefaultsOff(t *testing.T) {
 	}
 	if got := (&Config{SkillTools: "read"}).SkillToolMode(); got != "read" {
 		t.Fatalf("skill tool mode = %q, want read", got)
+	}
+}
+
+func TestNormalizeMemoryTools(t *testing.T) {
+	for input, want := range map[string]string{
+		"":         "off",
+		"off":      "off",
+		"disabled": "off",
+		"on":       "on",
+		"enabled":  "on",
+		"TRUE":     "on",
+		"unknown":  "off",
+	} {
+		if got := normalizeMemoryTools(input); got != want {
+			t.Fatalf("normalizeMemoryTools(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestMemoryToolModeDefaultsOff(t *testing.T) {
+	if got := (&Config{}).MemoryToolMode(); got != "off" {
+		t.Fatalf("memory tool mode = %q, want off", got)
+	}
+	if got := (&Config{MemoryTools: "on"}).MemoryToolMode(); got != "on" {
+		t.Fatalf("configured memory tool mode = %q, want on", got)
 	}
 }
 

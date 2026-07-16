@@ -73,6 +73,7 @@ type Config struct {
 	TrustMode              string            `toml:"trust_mode,omitempty"`
 	MCPServers             []MCPServerConfig `toml:"mcp_servers,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
+	MemoryTools            string            `toml:"memory_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
 	Models                 []ModelDef        `toml:"models,omitempty" json:"models,omitempty"`
@@ -217,6 +218,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.TrustMode = normalizeTrustMode(cfg.TrustMode)
 	cfg.MCPServers = normalizeMCPServers(cfg.MCPServers)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
+	cfg.MemoryTools = normalizeMemoryTools(cfg.MemoryTools)
 	cfg.ToolMode = normalizeToolMode(cfg.ToolMode)
 	cfg.ToolEnv = normalizeToolEnv(cfg.ToolEnv)
 	if cfg.ContextLimit < 0 {
@@ -396,6 +398,9 @@ func Save(cfg *Config) error {
 	}
 	if out.SkillTools == "off" {
 		out.SkillTools = ""
+	}
+	if out.MemoryTools == "off" {
+		out.MemoryTools = ""
 	}
 	if out.ToolMode == "coding" {
 		out.ToolMode = ""
@@ -641,6 +646,13 @@ func (c *Config) SkillToolMode() string {
 	return normalizeSkillTools(c.SkillTools)
 }
 
+func (c *Config) MemoryToolMode() string {
+	if c == nil {
+		return "off"
+	}
+	return normalizeMemoryTools(c.MemoryTools)
+}
+
 func (c *Config) ActiveToolMode() string {
 	if c == nil {
 		return "coding"
@@ -811,6 +823,15 @@ func normalizeSkillTools(value string) string {
 		return "read"
 	case "manage", "write", "full":
 		return "manage"
+	default:
+		return "off"
+	}
+}
+
+func normalizeMemoryTools(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "enabled", "enable", "true", "memory":
+		return "on"
 	default:
 		return "off"
 	}

@@ -317,6 +317,7 @@ type ModelState struct {
 	Backend              Backend
 	Storage              persistenceAdapter
 	Jobs                 JobController
+	Memory               MemoryController
 	Store                session.Store
 	Switcher             Switcher
 	Config               *config.Config
@@ -494,6 +495,13 @@ func New(
 // replace or persist process state.
 func (m Model) WithJobs(jobs JobController) Model {
 	m.Model.Jobs = jobs
+	return m
+}
+
+// WithMemory installs the explicit workspace-memory host used by /memory.
+// Memory remains outside the session tree and is never injected into prompts.
+func (m Model) WithMemory(memory MemoryController) Model {
+	m.Model.Memory = memory
 	return m
 }
 

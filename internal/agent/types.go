@@ -91,10 +91,11 @@ type Tool struct {
 // ApprovalRequirement describes the user-visible scope of a tool operation.
 // Tool implementations own classification; the harness owns the decision.
 type ApprovalRequirement struct {
-	Category  string
-	Operation string
-	Resource  string
-	Metadata  map[string]any
+	Category      string
+	Operation     string
+	Resource      string
+	Metadata      map[string]any
+	AlwaysConfirm bool
 }
 
 // ExecMode controls how multiple tool calls in one assistant message are executed.

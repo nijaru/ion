@@ -2,10 +2,11 @@ package tool
 
 // Requirement describes an approval requirement for a tool call.
 type Requirement struct {
-	Category  string
-	Operation string
-	Resource  string
-	Metadata  map[string]any
+	Category      string
+	Operation     string
+	Resource      string
+	Metadata      map[string]any
+	AlwaysConfirm bool
 }
 
 // RequirementProvider is implemented by tools that can declare an approval

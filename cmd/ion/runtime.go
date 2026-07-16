@@ -19,6 +19,7 @@ import (
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
+	ionmemory "github.com/nijaru/ion/memory"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 	ionmcp "github.com/nijaru/ion/tool/mcp"
@@ -200,8 +201,13 @@ func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
 	// every normal mode. The model can still discover the complete registry via
 	// search_tools when a session's persisted ActiveTools narrows the surface.
 	for _, entry := range registry.Entries() {
-		if entry.Metadata.Category == "mcp" {
+		switch entry.Metadata.Category {
+		case "mcp":
 			preferred = append(preferred, entry.Spec.Name)
+		case "memory":
+			if config.NormalizeToolMode(mode) != "read" || entry.Metadata.ReadOnly {
+				preferred = append(preferred, entry.Spec.Name)
+			}
 		}
 	}
 	active := make([]string, 0, len(preferred))
@@ -292,6 +298,29 @@ func openRuntime(
 	if err != nil {
 		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
 	}
+	var memoryStore *ionmemory.Store
+	closeRuntimeResources := func() error {
+		var closeErrs []error
+		if memoryStore != nil {
+			closeErrs = append(closeErrs, memoryStore.Close())
+		}
+		if mcpRuntime != nil {
+			closeErrs = append(closeErrs, mcpRuntime.Close())
+		}
+		return errors.Join(closeErrs...)
+	}
+	if runtimeCfg.MemoryToolMode() == "on" {
+		dataDir, err := config.DefaultDataDir()
+		if err != nil {
+			_ = closeRuntimeResources()
+			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		}
+		memoryStore, err = ionmemory.Open(filepath.Join(dataDir, "memory.db"))
+		if err != nil {
+			_ = closeRuntimeResources()
+			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		}
+	}
 
 	// Provider construction is side-effect free with respect to the session
 	// tree, so do it before moving a shared store to a requested resume leaf.
@@ -299,11 +328,11 @@ func openRuntime(
 	if sessionID != "" {
 		sqliteStore, ok := store.(*session.SQLiteStore)
 		if !ok {
-			_ = mcpRuntime.Close()
+			_ = closeRuntimeResources()
 			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
 		}
 		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			_ = mcpRuntime.Close()
+			_ = closeRuntimeResources()
 			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
 	}
@@ -320,9 +349,15 @@ func openRuntime(
 		// Non-fatal: start without tools if registration fails.
 		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)
 	}
+	if memoryStore != nil {
+		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
+			_ = closeRuntimeResources()
+			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		}
+	}
 	for _, external := range mcpRuntime.Tools() {
 		if _, exists := toolRegistry.Get(external.Spec().Name); exists {
-			_ = mcpRuntime.Close()
+			_ = closeRuntimeResources()
 			err := fmt.Errorf("MCP tool name %q collides with an existing tool", external.Spec().Name)
 			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
 		}
@@ -340,10 +375,11 @@ func openRuntime(
 					return agent.ApprovalRequirement{}, false, err
 				}
 				return agent.ApprovalRequirement{
-					Category:  requirement.Category,
-					Operation: requirement.Operation,
-					Resource:  requirement.Resource,
-					Metadata:  requirement.Metadata,
+					Category:      requirement.Category,
+					Operation:     requirement.Operation,
+					Resource:      requirement.Resource,
+					Metadata:      requirement.Metadata,
+					AlwaysConfirm: requirement.AlwaysConfirm,
 				}, required, nil
 			}
 		}
@@ -401,7 +437,7 @@ func openRuntime(
 		cwd,
 	)
 	if err != nil {
-		_ = mcpRuntime.Close()
+		_ = closeRuntimeResources()
 		return nil, nil, nil, fmt.Errorf("build system prompt: %w", err)
 	}
 
@@ -418,7 +454,7 @@ func openRuntime(
 		SysPrompt:           sysPrompt,
 		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
 		ApprovalInteractive: interactive,
-		CloseResources:      []func() error{mcpRuntime.Close},
+		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
 	})
 	if searchTool != nil {

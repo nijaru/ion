@@ -1,21 +1,36 @@
 # Memory
 
-Memory is deferred during native-loop stabilization. It is not part of the default
-P1 model-visible native tool surface.
+Ion has an opt-in, workspace-scoped note store. It is deliberately separate from
+session persistence: notes never become session-tree entries, are never injected
+into prompts automatically, and are returned to the model as untrusted data.
 
-Ion does not initialize a memory manager on the default native hot path today.
-There is no active `/memory` command and no default `recall_memory` or
-`remember_memory` tool.
+The explicit host command is available in the TUI:
 
-Current boundary:
+```text
+/memory
+/memory search <query>
+/memory all
+/memory forget <memory-id>
+/memory restore <memory-id>
+```
 
-| Surface | Status |
-|---|---|
-| `/memory` | Deferred |
-| `recall_memory` | Deferred |
-| `remember_memory` | Deferred |
-| `memory://` namespace | Design direction only |
+`/memory` uses the current workspace and stores notes in
+`~/.ion/data/memory.db`. Deletion is a soft delete. The store retains an audit
+record for add, delete, and restore operations, and `all` shows deleted notes so
+they can be restored.
 
-Future memory should come back through explicit resource namespaces and opt-in
-narrow tools, not through default prompt/tool sprawl. Mutation needs approval,
-audit, and undo semantics before it becomes model-visible.
+Model-visible memory tools are opt-in through `~/.ion/config.toml`:
+
+```toml
+memory_tools = "on"
+```
+
+This adds `recall_memory` and `remember_memory` to the runtime registry. Recall
+requires an explicit literal query. Remember writes only after the normal Ion
+approval boundary, even when other local tools use trusted mode. Memory tool
+activation follows `tool_mode`: read mode exposes recall only, while coding and
+all modes expose both tools.
+
+Memory is intentionally not a semantic index, automatic context manager,
+`memory://` protocol, or Pi-compatible file format. The contract is a small,
+auditable Ion service for explicit workspace notes.

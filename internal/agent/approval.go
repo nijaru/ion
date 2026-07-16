@@ -71,10 +71,21 @@ func approvalKey(req session.ApprovalRequest) string {
 // Request blocks until the host resolves req, the turn is canceled, or the
 // broker closes. It always returns a concrete decision so callers fail closed.
 func (b *ApprovalBroker) Request(ctx context.Context, req session.ApprovalRequest) approvalOutcome {
+	return b.request(ctx, req, false)
+}
+
+// RequestForced applies the interactive approval boundary even when the
+// runtime's default mode is trusted. Runtime-scoped "always" decisions still
+// apply after the host explicitly grants one.
+func (b *ApprovalBroker) RequestForced(ctx context.Context, req session.ApprovalRequest) approvalOutcome {
+	return b.request(ctx, req, true)
+}
+
+func (b *ApprovalBroker) request(ctx context.Context, req session.ApprovalRequest, forced bool) approvalOutcome {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if b == nil || b.mode != ApprovalConfirm {
+	if b == nil || (!forced && b.mode != ApprovalConfirm) {
 		return approvalOutcome{decision: session.ApprovalAllow}
 	}
 

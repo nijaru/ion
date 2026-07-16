@@ -685,13 +685,19 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 					Reason: "tool approval is unavailable in this runtime",
 				}
 			}
-			outcome := h.approvals.Request(ctx.RunContext, session.ApprovalRequest{
+			request := session.ApprovalRequest{
 				ToolCallID: ctx.ToolCall.ID,
 				ToolName:   ctx.ToolCall.Name,
 				Category:   requirement.Category,
 				Operation:  requirement.Operation,
 				Resource:   requirement.Resource,
-			})
+			}
+			var outcome approvalOutcome
+			if requirement.AlwaysConfirm {
+				outcome = h.approvals.RequestForced(ctx.RunContext, request)
+			} else {
+				outcome = h.approvals.Request(ctx.RunContext, request)
+			}
 			if outcome.decision == session.ApprovalAllow ||
 				outcome.decision == session.ApprovalAlways {
 				return nil

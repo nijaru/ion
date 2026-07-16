@@ -76,6 +76,11 @@ Configured MCP stdio servers are declared in `~/.ion/config.toml` with
 `[[mcp_servers]]` entries. See [docs/tools.md](docs/tools.md#mcp-servers) for
 the server lifecycle, namespacing, workspace policy, and approval behavior.
 
+Explicit workspace memory is available through `/memory`. To expose the
+model-visible `recall_memory` and `remember_memory` tools, set
+`memory_tools = "on"`; notes remain separate from session history and are never
+injected into prompts automatically. See [docs/memory.md](docs/memory.md).
+
 Per-run overrides are also supported:
 
 ```sh

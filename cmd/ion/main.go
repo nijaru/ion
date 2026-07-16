@@ -400,10 +400,15 @@ func main() {
 		width = 80
 		height = 24
 	}
+	memoryPath, memoryPathErr := defaultMemoryPath()
+	if memoryPathErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: workspace memory unavailable: %v\n", memoryPathErr)
+	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithRunner(runner).
 		WithJobs(tuiJobController{manager: jobs}).
+		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
 		WithConfigForRuntimePreset(cfg, runtimeCfg, activePreset).
 		WithSize(width, height)
 	if openResumePicker {

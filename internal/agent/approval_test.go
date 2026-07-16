@@ -29,6 +29,38 @@ func TestApprovalBrokerTrustedAllowsWithoutRequest(t *testing.T) {
 	}
 }
 
+func TestApprovalBrokerForcedRequestPromptsInTrustedMode(t *testing.T) {
+	events := make(chan session.Event, 2)
+	broker := NewApprovalBroker(ApprovalTrusted, true, func(event session.Event) {
+		events <- event
+	})
+	defer broker.Close()
+	result := make(chan approvalOutcome, 1)
+	go func() {
+		result <- broker.RequestForced(context.Background(), session.ApprovalRequest{
+			ToolName:  "remember_memory",
+			Operation: "remember_memory",
+		})
+	}()
+
+	event := <-events
+	request, ok := event.(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("forced event = %T, want ApprovalRequest", event)
+	}
+	if err := broker.Resolve(request.ID, session.ApprovalAllow); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	select {
+	case outcome := <-result:
+		if outcome.decision != session.ApprovalAllow {
+			t.Fatalf("forced outcome = %q, want allow", outcome.decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("forced approval request did not resolve")
+	}
+}
+
 func TestApprovalBrokerResolvesExactlyOnce(t *testing.T) {
 	events := make(chan session.Event, 2)
 	broker := NewApprovalBroker(ApprovalConfirm, true, func(event session.Event) {
@@ -247,6 +279,52 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	decision := <-decisionCh
 	if decision == nil || !decision.Block || decision.Reason == "" {
 		t.Fatalf("decision = %#v, want recoverable block", decision)
+	}
+}
+
+func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	events := make(chan session.Event, 4)
+	h := NewHarness(HarnessConfig{
+		Events:              events,
+		Session:             sess,
+		Store:               store,
+		ApprovalMode:        ApprovalTrusted,
+		ApprovalInteractive: true,
+		Tools: []Tool{{
+			Name: "remember_memory",
+			ApprovalRequirement: func(json.RawMessage) (ApprovalRequirement, bool, error) {
+				return ApprovalRequirement{
+					Category:      "memory",
+					Operation:     "remember_memory",
+					AlwaysConfirm: true,
+				}, true, nil
+			},
+		}},
+	})
+	defer h.Close()
+
+	loopCfg := h.buildLoopConfig(context.Background(), h.buildTools(), nil)
+	decisionCh := make(chan *ToolCallDecision, 1)
+	go func() {
+		decisionCh <- loopCfg.BeforeToolCall(ToolCallContext{
+			RunContext: context.Background(),
+			ToolCall:   &session.ToolCall{ID: "call-1", Name: "remember_memory"},
+			Args:       json.RawMessage(`{"content":"note"}`),
+		})
+	}()
+
+	event := <-events
+	request, ok := event.(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("event = %T, want ApprovalRequest", event)
+	}
+	if err := h.ResolveApproval(request.ID, session.ApprovalAllow); err != nil {
+		t.Fatalf("ResolveApproval: %v", err)
+	}
+	if decision := <-decisionCh; decision != nil {
+		t.Fatalf("forced approval decision = %#v, want allow", decision)
 	}
 }
 

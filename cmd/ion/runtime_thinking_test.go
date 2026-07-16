@@ -86,3 +86,37 @@ func TestActiveToolNamesIncludesConfiguredMCPTools(t *testing.T) {
 		t.Fatalf("active MCP tools = %#v", got)
 	}
 }
+
+func TestActiveToolNamesRespectOptInMemorySurface(t *testing.T) {
+	registry := tool.NewRegistry()
+	for _, name := range []string{"bash", "edit", "read", "search_tools", "write"} {
+		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+			return "", nil
+		}))
+	}
+	registry.Register(tool.FuncWithMetadata(
+		tool.RecallMemoryToolName,
+		"recall workspace notes",
+		map[string]any{"type": "object"},
+		tool.Metadata{Category: "memory", ReadOnly: true, Concurrency: tool.Parallel},
+		func(context.Context, string) (string, error) { return "", nil },
+	))
+	registry.Register(tool.FuncWithMetadata(
+		tool.RememberMemoryToolName,
+		"remember workspace note",
+		map[string]any{"type": "object"},
+		tool.Metadata{Category: "memory", Concurrency: tool.Serialized},
+		func(context.Context, string) (string, error) { return "", nil },
+	))
+
+	if got := activeToolNamesForMode(registry, "read"); !slices.Equal(got, []string{
+		"read", "search_tools", tool.RecallMemoryToolName,
+	}) {
+		t.Fatalf("read memory tools = %#v", got)
+	}
+	if got := activeToolNamesForMode(registry, "coding"); !slices.Equal(got, []string{
+		"bash", "edit", "read", "search_tools", "write", tool.RecallMemoryToolName, tool.RememberMemoryToolName,
+	}) {
+		t.Fatalf("coding memory tools = %#v", got)
+	}
+}
