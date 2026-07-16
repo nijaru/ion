@@ -434,18 +434,6 @@ func (t TurnReducer) StartSubmit() {
 	}
 }
 func (t TurnReducer) RejectSubmit(reason string) {}
-func (t TurnReducer) SetBackendQueuedInput(steering []string, followUp []string) {
-	if t.inFlight == nil {
-		return
-	}
-	if !t.inFlight.QueuedTurnsBackendOwned && len(steering) == 0 && len(followUp) == 0 {
-		// An empty backend snapshot must not erase a locally queued turn.
-		return
-	}
-	t.inFlight.QueuedSteering = append([]string(nil), steering...)
-	t.inFlight.QueuedTurns = append([]string(nil), followUp...)
-	t.inFlight.QueuedTurnsBackendOwned = true
-}
 
 func (t TurnReducer) QueueTurn(text string) {
 	if t.inFlight != nil {
@@ -498,17 +486,6 @@ func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) {
 }
 func (t TurnReducer) FailTurn(msg string, now time.Time) {}
 func (t TurnReducer) ClearLocalErrorIfIdle()             {}
-
-// StatusChangedDecision holds the result of a status change.
-type StatusChangedDecision struct {
-	Root             bool
-	PersistTimestamp time.Time
-	Status           string
-}
-
-func (t TurnReducer) ApplyStatusChangedInput(msg interface{}) StatusChangedDecision {
-	return StatusChangedDecision{}
-}
 
 func providerRetryStatus(msg session.ProviderRetry) string {
 	reason := "transient provider failure"

@@ -9,9 +9,9 @@ import "time"
 // Translated from Pi's session entry model (entry.type discriminates: message,
 // model_change, thinking_level_change, active_tools_change, compaction,
 // branch_summary, label, session_info, custom). The interface is sealed via
-// isEntry; type switches are exhaustive.
+// isEntry; type switches are exhaustive within this package.
 type Entry interface {
-	IsEntry()
+	isEntry()
 	ID() string
 	ParentID() string
 	When() time.Time
@@ -104,17 +104,17 @@ type CustomMessageEntry struct {
 	Details    []byte
 }
 
-func (e *MessageEntry) IsEntry()        {}
-func (e *ModelChangeEntry) IsEntry()    {}
-func (e *ThinkingChangeEntry) IsEntry() {}
-func (e *ToolsChangeEntry) IsEntry()    {}
-func (e *CompactionEntry) IsEntry()     {}
-func (e *BranchSummaryEntry) IsEntry()  {}
-func (e *LabelEntry) IsEntry()          {}
-func (e *SessionInfoEntry) IsEntry()    {}
-func (e *CustomEntry) IsEntry()         {}
-func (e *LeafEntry) IsEntry()           {}
-func (e *CustomMessageEntry) IsEntry()  {}
+func (e *MessageEntry) isEntry()        {}
+func (e *ModelChangeEntry) isEntry()    {}
+func (e *ThinkingChangeEntry) isEntry() {}
+func (e *ToolsChangeEntry) isEntry()    {}
+func (e *CompactionEntry) isEntry()     {}
+func (e *BranchSummaryEntry) isEntry()  {}
+func (e *LabelEntry) isEntry()          {}
+func (e *SessionInfoEntry) isEntry()    {}
+func (e *CustomEntry) isEntry()         {}
+func (e *LeafEntry) isEntry()           {}
+func (e *CustomMessageEntry) isEntry()  {}
 
 func (e *MessageEntry) ID() string        { return e.EntryBase.ID }
 func (e *ModelChangeEntry) ID() string    { return e.EntryBase.ID }

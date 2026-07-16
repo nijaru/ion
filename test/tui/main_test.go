@@ -45,8 +45,8 @@ func TestSmokeBackendCancelMode(t *testing.T) {
 
 	go backend.runScript(ctx, "test input")
 
-	// Should get UserMessage, TurnStart, StatusChange
-	for _, expected := range []string{"UserMessage", "TurnStart", "StatusChange"} {
+	// Should get UserMessage and TurnStart before the cancellation gate.
+	for _, expected := range []string{"UserMessage", "TurnStart"} {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("context done before receiving %s", expected)
@@ -67,7 +67,7 @@ func TestSmokeBackendErrorMode(t *testing.T) {
 
 	go backend.runScript(ctx, "test input")
 
-	// Should get UserMessage, TurnStart, StatusChange, TurnEnd
+	// Should get UserMessage, TurnStart, MessageStart, MessageEnd.
 	for i := 0; i < 4; i++ {
 		select {
 		case <-ctx.Done():

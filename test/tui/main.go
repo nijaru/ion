@@ -300,12 +300,10 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	case "cancel":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, app.StatusChange{Status: "[smoke] waiting for cancel"})
 		<-ctx.Done()
 	case "error":
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, app.StatusChange{Status: "[smoke] active before error"})
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
@@ -329,7 +327,6 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 	default:
 		b.emit(ctx, userEvent(input))
 		b.emit(ctx, session.TurnStart{Timestamp: now()})
-		b.emit(ctx, app.StatusChange{Status: "[smoke] active progress"})
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
@@ -396,7 +393,6 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, app.StatusChange{Status: "[smoke] markdown stream"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
@@ -454,7 +450,6 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, app.StatusChange{Status: "[smoke] active controls"})
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
@@ -466,7 +461,6 @@ func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 	b.emit(ctx, userEvent(input))
 	b.emit(ctx, session.TurnStart{Timestamp: now()})
-	b.emit(ctx, app.StatusChange{Status: "[smoke] file tool rows"})
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}

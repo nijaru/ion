@@ -79,8 +79,8 @@ func TestEventDeliveryListenerCanEnqueueFollowUp(t *testing.T) {
 				if _, ok := event.(session.AgentStart); !ok {
 					t.Fatalf("event 0 = %T, want AgentStart", event)
 				}
-			} else if _, ok := event.(*session.QueueUpdate); !ok {
-				t.Fatalf("event 1 = %T, want *session.QueueUpdate", event)
+			} else if _, ok := event.(session.QueueUpdate); !ok {
+				t.Fatalf("event 1 = %T, want session.QueueUpdate", event)
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for event %d", i)

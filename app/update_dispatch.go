@@ -255,6 +255,9 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.TurnEnd,
 		session.AgentStart,
 		session.AgentEnd,
+		session.ModelUpdate,
+		session.ThinkingUpdate,
+		session.ToolsUpdate,
 		session.MessageUpdate,
 		session.MessageEnd,
 		session.MessageStart,
@@ -268,7 +271,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.Abort,
 		session.SavePoint,
 		session.ProviderRetry,
-		session.AfterProviderResponse:
+		*session.Error:
 		next, cmd := m.handleSessionEvent(msg.(session.Event))
 		return next, cmd, true
 	}

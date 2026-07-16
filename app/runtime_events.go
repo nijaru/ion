@@ -166,11 +166,6 @@ func DecideQueuedInputRecall(input QueuedInputRecallInput) BusyInputDecision {
 	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Input recalled"}
 }
 
-type QueuedSnapshot struct {
-	Steering []string
-	FollowUp []string
-}
-
 // --- Event drain ---
 
 type EventDrainInput struct {
@@ -217,25 +212,6 @@ type ErrorRoutingStop struct {
 	StopReason string
 }
 
-// --- Session events that reference runtime state ---
-
-// StatusChange reports a status change (used by TUI for display).
-type StatusChange struct {
-	session.EntryBase
-	Status string
-}
-
-func (StatusChange) IsEvent()          {}
-func (s StatusChange) When() time.Time { return s.EntryBase.Timestamp }
-
-// QueuedInputUpdate reports queued input changes.
-type QueuedInputUpdate struct {
-	session.EntryBase
-	Snapshot QueuedSnapshot
-}
-
-func (QueuedInputUpdate) IsEvent() {}
-
 // StoreRoutingDecision persists a routing decision entry.
 type StoreRoutingDecision struct {
 	session.EntryBase
@@ -254,12 +230,6 @@ type StoreRoutingDecision struct {
 	TS             time.Time
 }
 
-func (StoreRoutingDecision) IsEvent()           {}
-func (StoreRoutingDecision) IsEntry()           {}
-func (e StoreRoutingDecision) ID() string       { return e.EntryBase.ID }
-func (e StoreRoutingDecision) ParentID() string { return e.EntryBase.ParentID }
-func (e StoreRoutingDecision) When() time.Time  { return e.EntryBase.Timestamp }
-
 // --- Store persistence entries ---
 
 type StoreSystem struct {
@@ -269,24 +239,6 @@ type StoreSystem struct {
 	TS      int64
 }
 
-func (StoreSystem) IsEntry()           {}
-func (s StoreSystem) ID() string       { return s.EntryBase.ID }
-func (s StoreSystem) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreSystem) When() time.Time  { return s.EntryBase.Timestamp }
-
-type StoreStatus struct {
-	Status string
-	session.EntryBase
-	Type    string
-	Content string
-	TS      int64
-}
-
-func (StoreStatus) IsEntry()           {}
-func (s StoreStatus) ID() string       { return s.EntryBase.ID }
-func (s StoreStatus) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreStatus) When() time.Time  { return s.EntryBase.Timestamp }
-
 type StoreTokenUsage struct {
 	session.EntryBase
 	Type   string
@@ -295,11 +247,6 @@ type StoreTokenUsage struct {
 	Cost   float64
 	TS     int64
 }
-
-func (StoreTokenUsage) IsEntry()           {}
-func (s StoreTokenUsage) ID() string       { return s.EntryBase.ID }
-func (s StoreTokenUsage) ParentID() string { return s.EntryBase.ParentID }
-func (s StoreTokenUsage) When() time.Time  { return s.EntryBase.Timestamp }
 
 // --- Session tree ---
 

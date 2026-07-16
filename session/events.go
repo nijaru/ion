@@ -15,7 +15,7 @@ import "time"
 //
 // message_update carries a Delta union (text/thinking/toolcall).
 type Event interface {
-	IsEvent()
+	isEvent()
 }
 
 // --- Core events (Pi-aligned). ---
@@ -159,18 +159,18 @@ type ToolPartial = any
 
 // --- Sealing. ---
 
-func (AgentStart) IsEvent()         {}
-func (TurnStart) IsEvent()          {}
-func (MessageStart) IsEvent()       {}
-func (MessageUpdate) IsEvent()      {}
-func (MessageEnd) IsEvent()         {}
-func (ToolExecStart) IsEvent()      {}
-func (ToolExecUpdate) IsEvent()     {}
-func (ToolExecEnd) IsEvent()        {}
-func (ApprovalRequest) IsEvent()    {}
-func (ApprovalResolution) IsEvent() {}
-func (TurnEnd) IsEvent()            {}
-func (AgentEnd) IsEvent()           {}
+func (AgentStart) isEvent()         {}
+func (TurnStart) isEvent()          {}
+func (MessageStart) isEvent()       {}
+func (MessageUpdate) isEvent()      {}
+func (MessageEnd) isEvent()         {}
+func (ToolExecStart) isEvent()      {}
+func (ToolExecUpdate) isEvent()     {}
+func (ToolExecEnd) isEvent()        {}
+func (ApprovalRequest) isEvent()    {}
+func (ApprovalResolution) isEvent() {}
+func (TurnEnd) isEvent()            {}
+func (AgentEnd) isEvent()           {}
 
 // --- Harness lifecycle events (Pi-aligned). ---
 
@@ -226,13 +226,13 @@ type Abort struct {
 	ClearedFollowUp []Message
 }
 
-func (ModelUpdate) IsEvent()    {}
-func (ThinkingUpdate) IsEvent() {}
-func (ToolsUpdate) IsEvent()    {}
-func (QueueUpdate) IsEvent()    {}
-func (Settled) IsEvent()        {}
-func (SavePoint) IsEvent()      {}
-func (Abort) IsEvent()          {}
+func (ModelUpdate) isEvent()    {}
+func (ThinkingUpdate) isEvent() {}
+func (ToolsUpdate) isEvent()    {}
+func (QueueUpdate) isEvent()    {}
+func (Settled) isEvent()        {}
+func (SavePoint) isEvent()      {}
+func (Abort) isEvent()          {}
 
 // ProviderRetry reports a provider-level retry while the active turn is
 // waiting before another request attempt. It is runtime-only and is never
@@ -244,25 +244,14 @@ type ProviderRetry struct {
 	Timestamp time.Time
 }
 
-func (ProviderRetry) IsEvent() {}
-
-// AfterProviderResponse is emitted when the provider responds (HTTP response received).
-// Fires after before_provider_request/payload hooks and before the loop processes the
-// assistant stream. Status and Headers reflect the HTTP response when available;
-// both are zero/nil when the provider abstraction does not expose them.
-// Reference: Pi agent-harness.js streamSimple onResponse callback (line ~327).
-type AfterProviderResponse struct {
-	Status  int
-	Headers map[string]string
-}
+func (ProviderRetry) isEvent() {}
 
 // Error reports a non-recoverable harness error (e.g., persistence failure).
 type Error struct {
 	Err error
 }
 
-func (AfterProviderResponse) IsEvent() {}
-func (*Error) IsEvent()                {}
+func (*Error) isEvent() {}
 
 // --- Utility functions (stay in session/ as they access domain types). ---
 

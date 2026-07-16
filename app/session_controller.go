@@ -324,12 +324,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	switch msg := ev.(type) {
-	case StatusChange:
-		return m.handleStatusChanged(msg)
-
-	case QueuedInputUpdate:
-		return m.handleQueuedInputUpdated(msg)
-
 	case session.TurnStart:
 		return m.handleTurnStarted(msg)
 
@@ -364,12 +358,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.AgentEnd:
 		return m, m.awaitSessionEvent()
 
+	case session.ModelUpdate, session.ThinkingUpdate, session.ToolsUpdate:
+		// Runtime setters already update the app's accepted snapshot. These
+		// events are lifecycle notifications for subscribers, not a second
+		// source of TUI state.
+		return m, m.awaitSessionEvent()
+
 	case session.MessageUpdate:
 		return m.handleMessageUpdate(msg)
-
-	case session.AfterProviderResponse:
-		// Provider responded; extension point for cost tracking / header logging.
-		return m, m.awaitSessionEvent()
 
 	case session.ProviderRetry:
 		m.Progress.Mode = StateStreaming
@@ -513,24 +509,6 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	}
 	entry, _ := session.EntrySystem("Error: "+err.Error(), time.Time{})
 	return m, m.terminalCommit().Entries(entry)
-}
-
-func (m Model) handleStatusChanged(msg StatusChange) (Model, tea.Cmd) {
-	decision := m.turnReducer().ApplyStatusChangedInput(msg)
-	persistTimestamp := msg.When()
-	if decision.Root {
-		persistTimestamp = decision.PersistTimestamp
-	}
-	return m, batchCmds(m.persistEntryCmd("persist status", StoreStatus{
-		Type:   "status",
-		Status: msg.Status,
-		TS:     entryUnix(persistTimestamp),
-	}), m.awaitSessionEvent())
-}
-
-func (m Model) handleQueuedInputUpdated(msg QueuedInputUpdate) (Model, tea.Cmd) {
-	m.turnReducer().SetBackendQueuedInput(msg.Snapshot.Steering, msg.Snapshot.FollowUp)
-	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
@@ -725,9 +703,13 @@ func (m Model) persistenceController() persistenceController {
 	return persistenceController{runner: m.Model.Runner}
 }
 
-func (c persistenceController) appendEntry(action string, entry session.Entry) tea.Cmd {
+func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
 	if c.runner == nil {
 		return nil
+	}
+	entry, err := normalizePersistedEntry(raw)
+	if err != nil {
+		return persistErrorCmd(action, err)
 	}
 	return func() tea.Msg {
 		if err := c.runner.PersistEntry(context.Background(), entry); err != nil {
@@ -847,43 +829,43 @@ func (m Model) currentSessionModelName() string {
 	return provider + "/" + model
 }
 
-func (m Model) persistEntryCmd(action string, entry session.Entry) tea.Cmd {
-	// Convert runtime-specific entries to session.CustomEntry for SQLite persistence.
-	// Each gets a unique ID (not the original entry's zero-valued ID) to avoid
-	// UNIQUE constraint failures when multiple entries have empty/identical IDs.
-	now := time.Now()
-	id := fmt.Sprintf("%s-%d", action, now.UnixNano())
-	switch e := entry.(type) {
-	case StoreRoutingDecision:
-		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
-			Type:      "routing_decision",
-			Data:      data,
-		}
-	case StoreSystem:
-		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
-			Type:      "store_system",
-			Data:      data,
-		}
-	case StoreStatus:
-		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
-			Type:      "store_status",
-			Data:      data,
-		}
-	case StoreTokenUsage:
-		data, _ := json.Marshal(e)
-		entry = &session.CustomEntry{
-			EntryBase: session.EntryBase{ID: id, ParentID: e.ParentID(), Timestamp: now},
-			Type:      "store_token_usage",
-			Data:      data,
-		}
-	}
+func (m Model) persistEntryCmd(action string, entry any) tea.Cmd {
 	return m.persistenceController().appendEntry(action, entry)
+}
+
+func normalizePersistedEntry(raw any) (session.Entry, error) {
+	if entry, ok := raw.(session.Entry); ok {
+		return entry, nil
+	}
+
+	var (
+		typeName string
+		parentID string
+	)
+	switch entry := raw.(type) {
+	case StoreRoutingDecision:
+		typeName, parentID = "routing_decision", entry.EntryBase.ParentID
+	case StoreSystem:
+		typeName, parentID = "store_system", entry.EntryBase.ParentID
+	case StoreTokenUsage:
+		typeName, parentID = "store_token_usage", entry.EntryBase.ParentID
+	default:
+		return nil, fmt.Errorf("unsupported persistence entry %T", raw)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", typeName, err)
+	}
+	now := time.Now()
+	return &session.CustomEntry{
+		EntryBase: session.EntryBase{
+			ID:        fmt.Sprintf("%s-%d", typeName, now.UnixNano()),
+			ParentID:  parentID,
+			Timestamp: now,
+		},
+		Type: typeName,
+		Data: data,
+	}, nil
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {

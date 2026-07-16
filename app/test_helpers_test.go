@@ -329,7 +329,7 @@ func (s *stubStorageSession) Append(_ context.Context, entry session.Entry) (str
 
 // --- Entry constructors for tests ---
 
-// sysEntry creates a StoreSystem entry (implements session.Entry).
+// sysEntry creates a durable system entry for terminal-commit tests.
 // toolEntry creates a MessageEntry wrapping a ToolResultMessage.
 func toolEntry(title, content string, isError bool) *session.MessageEntry {
 	return &session.MessageEntry{
@@ -342,8 +342,12 @@ func toolEntry(title, content string, isError bool) *session.MessageEntry {
 	}
 }
 
-func sysEntry(content string) StoreSystem {
-	return StoreSystem{Type: "system", Content: content}
+func sysEntry(content string) session.Entry {
+	entry, err := session.EntrySystem(content, time.Time{})
+	if err != nil {
+		panic(err)
+	}
+	return entry
 }
 
 // agentMsgEntry creates a MessageEntry wrapping an AssistantMessage.

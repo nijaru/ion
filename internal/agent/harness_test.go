@@ -114,75 +114,15 @@ func TestHarnessEmitsEvents(t *testing.T) {
 			}
 		case <-done:
 			// Prompt finished; allow one more drain cycle for buffered events.
-				timeout = time.After(100 * time.Millisecond)
-			case <-timeout:
-				t.Fatal("timeout waiting for AgentEnd/Settled")
+			timeout = time.After(100 * time.Millisecond)
+		case <-timeout:
+			t.Fatal("timeout waiting for AgentEnd/Settled")
 		}
 	}
 afterSettled:
 	<-done // ensure Prompt finished before Close
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events, got %d", len(events))
-	}
-}
-
-// INVARIANT: after_provider_response event is emitted before the assistant message stream.
-func TestHarnessAfterProviderResponse(t *testing.T) {
-	store := newTestStore(t)
-	sess := session.NewSession(store, 64)
-
-	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-		return &mockStream{chunks: []*llm.Chunk{
-			{Content: "hello after provider", StopReason: "stop"},
-		}}, nil
-	}
-
-	h := NewHarness(HarnessConfig{
-		Session:  sess,
-		Model:    llm.Model{ID: "test"},
-		StreamFn: streamFn,
-	})
-	defer h.Close()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.Prompt(context.Background(), "test after provider")
-	}()
-
-	var events []session.Event
-	timeout := time.After(2 * time.Second)
-	var sawAfterProvider, sawMessageStart bool
-	for {
-		select {
-		case e := <-h.Events():
-			_ = append(events, e)
-			switch e.(type) {
-			case session.AfterProviderResponse:
-				sawAfterProvider = true
-			case session.MessageStart:
-				sawMessageStart = true
-			}
-			if _, ok := e.(session.Settled); ok {
-				goto done
-			}
-			if _, ok := e.(session.AgentEnd); ok {
-				// After AgentEnd comes Settled — keep draining.
-				continue
-			}
-		case <-done:
-			timeout = time.After(100 * time.Millisecond)
-		case <-timeout:
-			t.Fatal("timeout waiting for AgentEnd")
-		}
-	}
-done:
-	<-done
-	if !sawAfterProvider {
-		t.Fatal("expected AfterProviderResponse event, but none received")
-	}
-	if !sawMessageStart {
-		t.Fatal("expected MessageStart event, but none received")
 	}
 }
 

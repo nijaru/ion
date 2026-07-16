@@ -82,8 +82,8 @@ func TestStopReasonValues(t *testing.T) {
 	}
 }
 
-// INVARIANT (DESIGN §1.2): Entry is a sealed union. A type switch must cover the
-// nine kinds. MessageEntry wraps a Message; metadata entries carry their own payload.
+// INVARIANT (DESIGN §1.2): Entry is a sealed union. MessageEntry wraps a
+// Message; metadata entries carry their own payload.
 func TestEntryIsSealedUnion(t *testing.T) {
 	b := EntryBase{ID: "e1", ParentID: "", Timestamp: time.Now()}
 	entries := []Entry{
@@ -114,7 +114,7 @@ func TestEntryIsSealedUnion(t *testing.T) {
 		seen["ok"] = true
 	}
 	if len(entries) != 11 {
-		t.Fatalf("expected 9 entry kinds, got %d", len(entries))
+		t.Fatalf("expected 11 entry kinds, got %d", len(entries))
 	}
 }
 
@@ -126,14 +126,12 @@ func TestEventUnionIsClosed(t *testing.T) {
 		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{},
 		ApprovalRequest{}, ApprovalResolution{}, TurnEnd{}, AgentEnd{},
 		ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{}, QueueUpdate{}, Settled{}, SavePoint{},
-		ProviderRetry{},
+		Abort{}, ProviderRetry{},
 		&Error{},
 	}
 	for _, e := range events {
-		// The compiler enforces exhaustiveness only in switch statements with a
-		// default; here we assert each value satisfies Event (sealed) and that
-		// AgentEnd is among them.
-		_ = e.IsEvent // method present on all events
+		// The unexported marker makes this assignment a package-owned contract.
+		_ = e
 	}
 	// AgentEnd must exist (single-AgentEnd invariant, DESIGN §1.3).
 	var _ Event = AgentEnd{}

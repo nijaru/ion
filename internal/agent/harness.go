@@ -896,9 +896,8 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 			stream = &cancelOnCloseStream{Stream: stream, cancel: cancel}
 		}
 
-		// Emit after_provider_response: subscriber event + hook for registered handlers.
-		// Pi reference: agent-harness.js createStreamFn streamSimple onResponse (line ~327).
-		h.emit(session.AfterProviderResponse{})
+		// Notify registered handlers after the provider responds. The hook is the
+		// behavior-bearing extension point; no synthetic event is needed.
 		h.emitHook(HookAfterProviderResponse, afterProviderResponsePayload{
 			Model: modelID,
 		})
@@ -1025,7 +1024,7 @@ func (h *Harness) Steer(text string, images ...session.ImageContent) error {
 	copy(nextTurn, h.nextTurn)
 	h.mu.Unlock()
 	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
@@ -1050,7 +1049,7 @@ func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
 	copy(nextTurn, h.nextTurn)
 	h.mu.Unlock()
 	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
@@ -1070,7 +1069,7 @@ func (h *Harness) NextTurn(text string, images ...session.ImageContent) {
 	copy(nextTurn, h.nextTurn)
 	h.mu.Unlock()
 	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(&session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 }
 
 // emitQueueUpdate emits a QueueUpdate event for tests and internal callers
@@ -1082,7 +1081,7 @@ func (h *Harness) emitQueueUpdate() {
 	copy(followUp, h.followUp)
 	nextTurn := make([]session.Message, len(h.nextTurn))
 	copy(nextTurn, h.nextTurn)
-	h.emit(&session.QueueUpdate{
+	h.emit(session.QueueUpdate{
 		Steer: steer, FollowUp: followUp, NextTurn: nextTurn,
 	})
 }

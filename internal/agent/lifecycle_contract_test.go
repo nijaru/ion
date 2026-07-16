@@ -90,6 +90,12 @@ func eventTypeName(e session.Event) string {
 		return "TurnEnd"
 	case session.AgentEnd:
 		return "AgentEnd"
+	case session.ModelUpdate:
+		return "ModelUpdate"
+	case session.ThinkingUpdate:
+		return "ThinkingUpdate"
+	case session.ToolsUpdate:
+		return "ToolsUpdate"
 	case session.QueueUpdate:
 		return "QueueUpdate"
 	case session.Settled:
@@ -98,8 +104,6 @@ func eventTypeName(e session.Event) string {
 		return "SavePoint"
 	case session.Abort:
 		return "Abort"
-	case session.AfterProviderResponse:
-		return "AfterProviderResponse"
 	case session.ProviderRetry:
 		return "ProviderRetry"
 	default:
@@ -415,12 +419,14 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 		session.ApprovalResolution{},
 		session.TurnEnd{},
 		session.AgentEnd{},
+		session.ModelUpdate{},
+		session.ThinkingUpdate{},
+		session.ToolsUpdate{},
 		session.QueueUpdate{},
 		session.Settled{},
 		session.SavePoint{},
 		session.Abort{},
 		session.ProviderRetry{},
-		session.AfterProviderResponse{},
 		&session.Error{},
 	}
 
@@ -442,12 +448,14 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 			session.ApprovalResolution,
 			session.TurnEnd,
 			session.AgentEnd,
+			session.ModelUpdate,
+			session.ThinkingUpdate,
+			session.ToolsUpdate,
 			session.QueueUpdate,
 			session.Settled,
 			session.SavePoint,
 			session.Abort,
 			session.ProviderRetry,
-			session.AfterProviderResponse,
 			*session.Error:
 			handled[eventTypeName(e)] = true
 		default:
