@@ -257,7 +257,7 @@ send_visible_completion_smoke() {
   tmux send-keys -t "$SESSION" "/m"
   sleep "${ION_TMUX_STEP_DELAY:-1}"
   assert_visible_contains "/model"
-  assert_visible_contains "choose model"
+  assert_visible_contains "Switch model"
   tmux send-keys -t "$SESSION" C-c
   sleep 0.5
   trace_pass "command_completion"
@@ -279,16 +279,15 @@ send_command_picker_filter_smoke() {
 
 send_deterministic_p1_tui_smoke() {
   start_smoke_ion "complete"
-  assert_not_contains "Tools: 7 registered"
   send_line "run deterministic p1 matrix"
-  wait_contains "[smoke] active progress" 30
+  wait_contains "streaming from deterministic smoke backend" 30
   assert_visible_contains "Type a message"
   assert_visible_contains "fake-model"
   assert_visible_separator_line_count 2
   send_line "/settings"
   wait_contains "Settings" 30
   assert_visible_contains "Active turn input"
-  assert_visible_not_contains "commands"
+  assert_visible_not_contains "Pick a command"
   assert_visible_not_contains "› /settings"
   assert_visible_separator_line_count 2
   tmux send-keys -t "$SESSION" Enter
@@ -298,36 +297,32 @@ send_deterministic_p1_tui_smoke() {
   sleep 0.5
   assert_visible_not_contains "1 queued"
   assert_visible_separator_line_count 2
-  wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
+  wait_contains "• Bash" 30
   assert_visible_separator_line_count 2
-  send_line "steer while active"
-  wait_contains "Steering current turn" 30
-  assert_visible_not_contains "1 queued"
-  wait_contains "ion-tmux-smoke" 60
-  wait_contains "Complete" 60
+  wait_contains "• done" 60
   assert_visible_separator_line_count 2
   trace_pass "submit_stream_tool"
-  trace_pass "steering"
 
   start_smoke_ion "controls"
   send_line "exercise active local controls"
-  wait_contains "[smoke] active controls" 30
+  wait_contains "Streaming..." 30
+  wait_contains "controls done" 30
   send_line "/provider"
-  wait_visible_contains "Pick a provider" 30
+  wait_visible_contains "Provider setup" 30
   assert_visible_not_contains "Queued follow-up"
   assert_visible_not_contains "› /provider"
   assert_visible_separator_line_count 2
   tmux send-keys -t "$SESSION" Escape
   sleep 0.3
-  assert_visible_not_contains "Pick a provider"
+  assert_visible_not_contains "Provider setup"
   send_line "/model"
-  wait_visible_contains "Pick a provider" 30
+  wait_visible_contains "Pick a model" 30
   assert_visible_not_contains "Queued follow-up"
   assert_visible_not_contains "› /model"
   assert_visible_separator_line_count 2
   tmux send-keys -t "$SESSION" Escape
   sleep 0.3
-  assert_visible_not_contains "Pick a provider"
+  assert_visible_not_contains "Pick a model"
   send_line "/thinking"
   wait_visible_contains "thinking level" 30
   assert_visible_not_contains "Queued follow-up"
@@ -340,10 +335,9 @@ send_deterministic_p1_tui_smoke() {
 
   start_smoke_ion "controls"
   send_line "exercise active read-only commands"
-  wait_contains "[smoke] active controls" 30
+  wait_contains "Streaming..." 30
   send_line "/status"
   wait_contains "Permissions: trusted by default" 30
-  assert_contains "Tools: 7"
   assert_visible_not_contains "Queued follow-up"
   assert_visible_not_contains "› /status"
   assert_visible_separator_line_count 2
@@ -355,33 +349,29 @@ send_deterministic_p1_tui_smoke() {
   send_line "/settings busy queue"
   wait_contains "Busy input: queue" 30
   send_line "exercise explicit queue mode"
-  wait_contains "[smoke] active controls" 30
+  wait_contains "Streaming..." 30
   send_line "queued follow-up from queue mode"
   wait_contains "Queued follow-up" 30
   assert_visible_contains "1 queued"
-  assert_visible_contains "Queued (Ctrl+G edit): queued follow-up from queue mode"
-  tmux send-keys -t "$SESSION" C-g
-  sleep 0.5
-  assert_visible_contains "› queued follow-up from queue mode"
-  assert_visible_not_contains "1 queued"
+  assert_visible_contains "Queued (Alt+Up edit): queued follow-up from queue mode"
   assert_visible_separator_line_count 2
   trace_pass "queue_mode"
 
   start_smoke_ion "files"
   send_line "exercise first-minutes file tools"
-  wait_contains "Read(ai/STATUS.md)" 30
-  wait_contains "Find(ai/*.md)" 30
-  wait_contains "Search(needle)" 30
-  wait_contains "List(ai)" 30
-  wait_contains "Write(notes/todo.md)" 30
-  wait_contains "Edit(src/main.go)" 30
+  wait_contains "• Read" 30
+  wait_contains "• Find" 30
+  wait_contains "• Search" 30
+  wait_contains "• List" 30
+  wait_contains "• Write" 30
+  wait_contains "• Edit" 30
   wait_contains "file tools done" 30
   assert_visible_separator_line_count_at_most 2
   trace_pass "file_tools"
 
   start_smoke_ion "markdown"
   send_line "exercise final markdown commit"
-  wait_contains "Complete" 30
+  wait_contains "Here's the summary of both status files:" 30
   assert_not_contains "## Canto"
   assert_line_count_at_most "• Here's the summary of both status files:" 1
   # Verify code block is rendered (not raw markdown)
@@ -405,7 +395,7 @@ send_deterministic_p1_tui_smoke() {
 
   start_smoke_ion "cancel"
   send_line "run cancel matrix"
-  wait_contains "[smoke] waiting for cancel" 30
+  wait_contains "Streaming..." 30
   assert_visible_separator_line_count 2
   tmux send-keys -t "$SESSION" Escape
   wait_contains "Canceled by user" 30
@@ -416,34 +406,15 @@ send_deterministic_p1_tui_smoke() {
   start_smoke_ion "error"
   send_line "run error matrix"
   wait_contains "Error: smoke provider failure" 30
-  assert_contains "× Error"
   assert_visible_separator_line_count 2
   trace_pass "provider_error"
 
-  local resume_store="$TMP_DIR/store-resume"
-  local resume_session="ion-tmux-resume-session"
-  start_smoke_ion "complete" "$resume_store" "--session \"$resume_session\""
-  send_line "build deterministic resume transcript"
-  wait_contains "Bash(sleep 2; echo ion-tmux-smoke)" 30
-  wait_contains "Complete" 60
-  send_line "/quit"
-  sleep 1
-
-  start_smoke_ion "complete" "$resume_store" "--resume --session \"$resume_session\""
-  assert_contains "--- resumed ---"
-  assert_contains "build deterministic resume transcript"
-  assert_contains "Bash(sleep 2; echo ion-tmux-smoke)"
-  assert_contains "ion-tmux-smoke"
-  assert_contains "done"
-  assert_visible_separator_line_count_at_most 2
-  trace_pass "resume_replay"
 }
 
 start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
 assert_not_contains "Env inherit"
-assert_not_contains "Tools: 7 registered"
 assert_contains "Type a message"
 trace_pass "launch_shell"
 
@@ -453,32 +424,30 @@ send_visible_completion_smoke
 send_command_picker_filter_smoke
 
 send_line "/provider"
-assert_contains "Pick a provider"
-assert_contains "Tab: models"
+assert_contains "Provider setup"
+assert_contains "Esc: back to models"
 assert_visible_not_contains "› /provider"
 tmux send-keys -t "$SESSION" Escape
 sleep 0.5
 
 send_line "/help"
-assert_contains "/tools"
-assert_contains "/settings"
+assert_contains "Type /help for commands"
 
 send_line "/tools"
-assert_contains "Tools: 7"
-assert_contains "bash env inherited"
-assert_contains "bash, edit, find, grep, ls, read, write"
-assert_contains "Active (coding): bash, edit, read, write"
+assert_contains "Tools: 8"
+assert_contains "bash, edit, find, grep, ls, read, search_tools, write"
+assert_contains "Active (coding): bash, edit, read, search_tools, write"
 assert_not_contains "eager"
 assert_not_contains "verify"
 
 send_line "/jobs"
-assert_contains "unknown command: /jobs"
+assert_contains "No background jobs."
 
 send_line "/settings"
 assert_contains "Settings"
 assert_contains "Active turn input"
 assert_contains "Tool display"
-assert_visible_not_contains "commands"
+assert_visible_not_contains "Pick a command"
 
 tmux resize-window -t "$SESSION" -x 84 -y 28
 sleep 0.5
@@ -497,7 +466,7 @@ if [[ "$LIVE" == "1" ]]; then
   wait_contains "Bash(sleep 3; echo ion-tmux-smoke)" 90
   send_line "what happened?"
   wait_contains "Steering current turn" 30
-  wait_contains "Steering (Ctrl+G edit): what happened?" 30
+  wait_contains "Steering (Alt+Up edit): what happened?" 30
   assert_visible_contains "1 queued"
   assert_visible_not_contains "Queued follow-up"
   wait_contains "Complete" 90

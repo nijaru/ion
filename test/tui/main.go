@@ -26,19 +26,17 @@ func main() {
 		"smoke script mode: complete, controls, files, markdown, session-picker, cancel, or error",
 	)
 	storeRoot := flag.String("store", "", "session store directory")
-	sessionID := flag.String("session-id", "", "session id to open or resume")
-	resume := flag.Bool("resume", false, "resume an existing smoke session")
+	sessionID := flag.String("session-id", "", "session id to open")
 	startupCheck := flag.Bool("startup-check", false, "render the ready shell once and exit")
 	flag.Parse()
 
-	if err := run(*mode, *storeRoot, *sessionID, *resume, *startupCheck); err != nil {
+	if err := run(*mode, *storeRoot, *sessionID, *startupCheck); err != nil {
 		fmt.Fprintf(os.Stderr, "ion-tui-smoke: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
-	_ = resume // resume not yet wired with new session model
+func run(mode, storeRoot, sessionID string, startupCheck bool) error {
 	ctx := context.Background()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -55,6 +53,9 @@ func run(mode, storeRoot, sessionID string, resume, startupCheck bool) error {
 	storeRoot, err = filepath.Abs(storeRoot)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(storeRoot, 0o755); err != nil {
+		return fmt.Errorf("create store directory: %w", err)
 	}
 
 	dbPath := filepath.Join(storeRoot, "sessions.db")
@@ -121,7 +122,6 @@ type sessionCatalogWriter interface {
 }
 
 func seedSmokeSessionPicker(ctx context.Context, store sessionCatalogWriter, cwd string) error {
-	_ = cwd
 	fixtures := []struct {
 		id    string
 		title string
@@ -131,9 +131,11 @@ func seedSmokeSessionPicker(ctx context.Context, store sessionCatalogWriter, cwd
 	}
 	for _, fixture := range fixtures {
 		info := session.SessionInfoEntry{
-			EntryBase: session.EntryBase{ID: fixture.id},
-			Name:      fixture.title,
-			Model:     "fake/fake-model",
+			EntryBase:   session.EntryBase{ID: fixture.id},
+			Workdir:     cwd,
+			Name:        fixture.title,
+			Model:       "fake/fake-model",
+			LastPreview: "deterministic picker",
 		}
 		if err := store.UpdateSession(ctx, info); err != nil {
 			return fmt.Errorf("update seed session %s: %w", fixture.id, err)
@@ -284,19 +286,12 @@ func userEvent(text string) session.MessageStart {
 	}
 }
 
-func agentEndEvent(text string) session.MessageEnd {
+func assistantEndEvent(text string) session.MessageEnd {
 	return session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Content: []session.Content{session.TextContent{Text: text}},
 		},
 		Timestamp: now(),
-	}
-}
-
-func messageDelta(text string) session.MessageUpdate {
-	return session.MessageUpdate{
-		Delta:     session.TextDelta{Text: text},
-		BlockType: "text",
 	}
 }
 
@@ -314,7 +309,17 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 400*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, session.TurnEnd{Base: session.BaseNow(), Error: fmt.Errorf("smoke provider failure")})
+		err := fmt.Errorf("smoke provider failure")
+		failure := &session.AssistantMessage{
+			StopReason: session.StopReasonError,
+			Error:      err.Error(),
+			Timestamp:  now(),
+		}
+		b.emit(ctx, session.MessageStart{Message: failure})
+		b.emit(ctx, session.MessageEnd{Message: failure, Timestamp: now()})
+		b.emit(ctx, session.TurnEnd{Base: session.BaseNow(), Message: failure})
+		b.emit(ctx, session.AgentEnd{Messages: []session.Message{failure}})
+		b.emit(ctx, session.Settled{})
 	case "controls":
 		b.runActiveControlsScript(ctx, input)
 	case "files":
@@ -328,10 +333,27 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 700*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, messageDelta("streaming from deterministic smoke backend"))
+		streaming := &session.AssistantMessage{Timestamp: now()}
+		b.emit(ctx, session.MessageStart{Message: streaming})
+		streaming.Content = []session.Content{session.TextContent{Text: "streaming from deterministic smoke backend"}}
+		b.emit(ctx, session.MessageUpdate{
+			Message:   streaming,
+			Delta:     session.TextDelta{Text: "streaming from deterministic smoke backend"},
+			BlockType: "text",
+			Timestamp: now(),
+		})
 		if !b.sleep(ctx, 900*time.Millisecond) {
 			return
 		}
+		toolCall := &session.ToolCall{
+			ID:        "tool-1",
+			Name:      "bash",
+			Type:      "function",
+			Arguments: map[string]any{"command": "sleep 2; echo ion-tmux-smoke"},
+		}
+		streaming.Content = append(streaming.Content, toolCall)
+		streaming.StopReason = session.StopReasonToolUse
+		b.emit(ctx, session.MessageEnd{Message: streaming, Timestamp: now()})
 		b.emit(ctx, session.ToolExecStart{
 			ToolCallID: "tool-1",
 			Name:       "bash",
@@ -358,8 +380,15 @@ func (b *smokeBackend) runScript(ctx context.Context, input string) {
 		if !b.sleep(ctx, 500*time.Millisecond) {
 			return
 		}
-		b.emit(ctx, agentEndEvent("done"))
+		final := &session.AssistantMessage{
+			Content:    []session.Content{session.TextContent{Text: "done"}},
+			StopReason: session.StopReasonEndTurn,
+			Timestamp:  now(),
+		}
+		b.emit(ctx, session.MessageStart{Message: final})
+		b.emit(ctx, session.MessageEnd{Message: final, Timestamp: now()})
 		b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
+		b.emit(ctx, session.AgentEnd{Messages: []session.Message{final}})
 		b.emit(ctx, session.Settled{})
 	}
 }
@@ -371,17 +400,26 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 	if !b.sleep(ctx, 200*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, messageDelta(strings.Join([]string{
+	streaming := &session.AssistantMessage{Timestamp: now()}
+	b.emit(ctx, session.MessageStart{Message: streaming})
+	summary := strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
 		"",
 		"**Key facts:**",
-	}, "\n")))
+	}, "\n")
+	streaming.Content = []session.Content{session.TextContent{Text: summary}}
+	b.emit(ctx, session.MessageUpdate{
+		Message:   streaming,
+		Delta:     session.TextDelta{Text: summary},
+		BlockType: "text",
+		Timestamp: now(),
+	})
 	if !b.sleep(ctx, 500*time.Millisecond) {
 		return
 	}
-	b.emit(ctx, agentEndEvent(strings.Join([]string{
+	finalText := strings.Join([]string{
 		"Here's the summary of both status files:",
 		"",
 		"## Canto (`../canto/ai/STATUS.md`)",
@@ -400,8 +438,17 @@ func (b *smokeBackend) runMarkdownScript(ctx context.Context, input string) {
 		"```",
 		"",
 		"Bottom line: formatted final output should be the only committed assistant entry.",
-	}, "\n")))
+	}, "\n")
+	final := &session.AssistantMessage{
+		Content:    []session.Content{session.TextContent{Text: finalText}},
+		StopReason: session.StopReasonEndTurn,
+		Timestamp:  now(),
+	}
+	b.emit(ctx, session.MessageStart{Message: final})
+	b.emit(ctx, session.MessageEnd{Message: final, Timestamp: now()})
 	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
+	b.emit(ctx, session.AgentEnd{Messages: []session.Message{final}})
+	b.emit(ctx, session.Settled{})
 }
 
 func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string) {
@@ -411,8 +458,9 @@ func (b *smokeBackend) runActiveControlsScript(ctx context.Context, input string
 	if !b.sleep(ctx, 9*time.Second) {
 		return
 	}
-	b.emit(ctx, agentEndEvent("controls done"))
+	b.emit(ctx, assistantEndEvent("controls done"))
 	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
+	b.emit(ctx, session.Settled{})
 }
 
 func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
@@ -486,8 +534,9 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 			return
 		}
 	}
-	b.emit(ctx, agentEndEvent("file tools done"))
+	b.emit(ctx, assistantEndEvent("file tools done"))
 	b.emit(ctx, session.TurnEnd{Base: session.BaseNow()})
+	b.emit(ctx, session.Settled{})
 }
 
 func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
