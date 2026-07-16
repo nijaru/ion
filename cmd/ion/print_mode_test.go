@@ -229,6 +229,35 @@ func TestResolvePrintFlagsRejectsUnsupportedOutputBeforePrint(t *testing.T) {
 	}
 }
 
+func TestValidatePrintTimeoutRequiresPositiveDuration(t *testing.T) {
+	tests := []struct {
+		name           string
+		printRequested bool
+		timeout        time.Duration
+		wantError      string
+	}{
+		{name: "default", printRequested: true, timeout: 5 * time.Minute},
+		{name: "positive", printRequested: true, timeout: time.Millisecond},
+		{name: "interactive ignores timeout", printRequested: false, timeout: 0},
+		{name: "zero", printRequested: true, timeout: 0, wantError: "--timeout must be greater than zero in print mode (got 0s)"},
+		{name: "negative", printRequested: true, timeout: -time.Second, wantError: "--timeout must be greater than zero in print mode (got -1s)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePrintTimeout(tt.printRequested, tt.timeout)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("validatePrintTimeout() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantError {
+				t.Fatalf("validatePrintTimeout() = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestNormalizeFlagArgsAllowsFlagsAfterPositionalPrompt(t *testing.T) {
 	got, openResumePicker := normalizeFlagArgs([]string{
 		"--print",

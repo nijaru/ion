@@ -247,6 +247,13 @@ func validatePrintSelection(printRequested, openResumePicker bool) error {
 	return nil
 }
 
+func validatePrintTimeout(printRequested bool, timeout time.Duration) error {
+	if printRequested && timeout <= 0 {
+		return fmt.Errorf("--timeout must be greater than zero in print mode (got %s)", timeout)
+	}
+	return nil
+}
+
 func validateSessionBundleSelection(exportPath, importPath string) error {
 	if exportPath != "" && importPath != "" {
 		return fmt.Errorf("--export-session and --import-session cannot be used together")
