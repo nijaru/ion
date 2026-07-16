@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestMCPHelperProcess(t *testing.T) {
@@ -18,6 +20,20 @@ func TestMCPHelperProcess(t *testing.T) {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+func TestOwnedClientCloseIgnoresExpectedShutdownErrors(t *testing.T) {
+	for _, err := range []error{context.Canceled, sdkmcp.ErrConnectionClosed} {
+		t.Run(err.Error(), func(t *testing.T) {
+			client := &ownedClient{
+				client: &Client{session: &fakeClientSession{closeErr: err}},
+				cancel: func() {},
+			}
+			if err := client.Close(); err != nil {
+				t.Fatalf("ownedClient.Close() = %v, want nil for expected shutdown", err)
+			}
+		})
+	}
 }
 
 func TestOpenDiscoversAndClosesStdioRuntime(t *testing.T) {

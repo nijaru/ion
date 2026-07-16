@@ -166,9 +166,12 @@ func (c *ownedClient) Close() error {
 	c.cancel()
 	err := c.client.Close()
 	// Canceling the command context intentionally terminates a stdio child;
-	// the SDK may surface that expected process exit as an ExitError.
+	// the SDK may surface that expected process exit as an ExitError or a
+	// context/connection cancellation.
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if errors.As(err, &exitErr) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, sdkmcp.ErrConnectionClosed) {
 		return nil
 	}
 	return err
