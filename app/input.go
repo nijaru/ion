@@ -38,6 +38,7 @@ func (r inputReducer) insertComposerText(value string) {
 
 func (r inputReducer) resetComposerDraft() {
 	r.input.Composer.Reset()
+	r.input.Images = nil
 	r.clearCompletion()
 	if r.pasteMarkers != nil {
 		*r.pasteMarkers = make(map[string]pasteMarker)

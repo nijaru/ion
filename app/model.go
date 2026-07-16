@@ -162,10 +162,11 @@ type queuedTurnMsg struct {
 }
 
 type turnSubmitResultMsg struct {
-	text  string
-	draft string
-	err   error
-	rearm bool
+	text   string
+	draft  string
+	images []session.ImageContent
+	err    error
+	rearm  bool
 }
 
 type turnCancelResultMsg struct {
@@ -341,6 +342,7 @@ type PickerState struct {
 // InputState holds state for the composer, history, and double-tap tracking.
 type InputState struct {
 	Composer              textarea.Model
+	Images                []session.ImageContent
 	Completion            *completionState
 	FileCompletionRequest uint64
 	Spinner               spinner.Model
@@ -478,13 +480,31 @@ func New(
 	return m
 }
 
-// pasteImageFromClipboard reads an image from the clipboard and inserts its path.
+// pasteImageFromClipboard attaches an image to the next prompt and inserts its
+// temporary path as a visible reference in the composer.
 func (m Model) pasteImageFromClipboard() (Model, tea.Cmd) {
 	img, err := ionclipboard.ReadClipboardImage()
 	if err != nil || img == nil {
 		return m, nil
 	}
-	// Insert the file path into the composer
+	return m.attachClipboardImage(img)
+}
+
+func (m Model) attachClipboardImage(img *ionclipboard.ImageData) (Model, tea.Cmd) {
+	if img == nil || len(img.Bytes) == 0 {
+		return m, nil
+	}
+	mimeType := strings.TrimSpace(img.MimeType)
+	if mimeType == "" {
+		mimeType = "image/png"
+	}
+	m.Input.Images = append(m.Input.Images, session.ImageContent{
+		Data:     append([]byte(nil), img.Bytes...),
+		MimeType: mimeType,
+	})
+	if img.FilePath == "" {
+		return m, nil
+	}
 	return m, m.insertComposerText(img.FilePath)
 }
 

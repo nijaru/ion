@@ -25,23 +25,31 @@ type localErrorMsg struct {
 func (m Model) submitComposer() (Model, tea.Cmd) {
 	m.clearPendingAction()
 	text := strings.TrimSpace(m.Input.Composer.Value())
-	if text == "" {
+	images := cloneImageAttachments(m.Input.Images)
+	if text == "" && len(images) == 0 {
 		return m, nil
 	}
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError("Wait for the runtime switch to finish before sending input.")
 	}
 	if strings.HasPrefix(text, "/") {
+		if len(images) > 0 {
+			return m, cmdError("image attachments cannot be used with slash commands")
+		}
 		return m.submitText(text)
 	}
 	if m.localCommandBusy() {
-		return m.submitBusyInput(text)
+		return m.submitBusyInput(text, images)
 	}
 
-	return m.submitText(text)
+	return m.submitTextWithImages(text, images)
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {
+	return m.submitTextWithImages(text, nil)
+}
+
+func (m Model) submitTextWithImages(text string, images []session.ImageContent) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	draft := text
 	text = m.expandMarkers(text)
@@ -65,19 +73,21 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	m.turnReducer().StartSubmit()
 	m.resetComposerDraft()
-	return m, submitTurnCmd(m.Model.Runner, text, draft)
+	return m, submitTurnCmd(m.Model.Runner, text, draft, images)
 }
 
-func submitTurnCmd(runner agent.Runner, text, draft string) tea.Cmd {
+func submitTurnCmd(runner agent.Runner, text, draft string, images []session.ImageContent) tea.Cmd {
+	images = cloneImageAttachments(images)
 	return func() tea.Msg {
 		if runner != nil {
-			_, err := runner.Prompt(context.Background(), text)
-			return turnSubmitResultMsg{text: text, draft: draft, err: err}
+			_, err := runner.Prompt(context.Background(), text, images...)
+			return turnSubmitResultMsg{text: text, draft: draft, images: images, err: err}
 		}
 		return turnSubmitResultMsg{
-			text:  text,
-			draft: draft,
-			err:   errors.New("turn execution requires a configured provider and model"),
+			text:   text,
+			draft:  draft,
+			images: images,
+			err:    errors.New("turn execution requires a configured provider and model"),
 		}
 	}
 }
@@ -103,6 +113,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 	var draftCmd tea.Cmd
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
 		draftCmd = m.setComposerDraft(msg.draft)
+		m.Input.Images = cloneImageAttachments(msg.images)
 	}
 	return m, tea.Batch(draftCmd, cmdError(msg.err.Error()))
 }
@@ -132,7 +143,7 @@ func rearmSubmitResultCmd(submitCmd tea.Cmd) tea.Cmd {
 	}
 }
 
-func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
+func (m Model) submitBusyInput(text string, images []session.ImageContent) (Model, tea.Cmd) {
 	mode := ""
 	if m.Model.Config != nil {
 		mode = m.Model.Config.BusyInputMode()
@@ -150,13 +161,16 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	}) {
 	case BusyInputRouteSteer:
 		m.resetComposerDraft()
-		_ = runner.Steer(text) // ignore idle error; TUI can't fix harness state
+		_ = runner.Steer(text, images...) // ignore idle error; TUI can't fix harness state
 		return m, nil
 	case BusyInputRouteFollowUp:
 		m.resetComposerDraft()
-		_ = runner.FollowUp(text)
+		_ = runner.FollowUp(text, images...)
 		return m, nil
 	default:
+		if len(images) > 0 {
+			return m, cmdError("image attachments require an active agent turn")
+		}
 		return m.queueBusyInputLocal(text)
 	}
 }
@@ -198,6 +212,20 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 	}
 	m.turnReducer().ClearQueuedTurns()
 	return m, m.setComposerDraft(decision.ComposerText)
+}
+
+func cloneImageAttachments(images []session.ImageContent) []session.ImageContent {
+	if len(images) == 0 {
+		return nil
+	}
+	cloned := make([]session.ImageContent, len(images))
+	for i, image := range images {
+		cloned[i] = session.ImageContent{
+			Data:     append([]byte(nil), image.Data...),
+			MimeType: image.MimeType,
+		}
+	}
+	return cloned
 }
 
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {

@@ -104,15 +104,15 @@ func (s *printSession) Close() error {
 
 // --- agent.Runner implementation ---
 
-func (s *printSession) Prompt(_ context.Context, _ string) (session.Message, error) {
+func (s *printSession) Prompt(_ context.Context, _ string, _ ...session.ImageContent) (session.Message, error) {
 	if s.submitErr != nil {
 		return nil, s.submitErr
 	}
 	return nil, nil
 }
-func (s *printSession) Steer(_ string) error    { return nil }
-func (s *printSession) FollowUp(_ string) error { return nil }
-func (s *printSession) NextTurn(_ string)       {}
+func (s *printSession) Steer(_ string, _ ...session.ImageContent) error    { return nil }
+func (s *printSession) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
+func (s *printSession) NextTurn(_ string, _ ...session.ImageContent)       {}
 func (s *printSession) Abort() ([]session.Message, []session.Message, error) {
 	s.cancelled++
 	return nil, nil, nil

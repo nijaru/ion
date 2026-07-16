@@ -136,6 +136,9 @@ func (s *stubSession) Close() error {
 type stubRunner struct {
 	aborts       int
 	compacts     int
+	promptTexts  []string
+	promptImages [][]session.ImageContent
+	promptErr    error
 	appends      []session.Entry
 	appendErr    error
 	navigates    int
@@ -144,11 +147,15 @@ type stubRunner struct {
 	navigateErr  error
 }
 
-func (r *stubRunner) Events() <-chan session.Event                                { return nil }
-func (r *stubRunner) Prompt(_ context.Context, _ string) (session.Message, error) { return nil, nil }
-func (r *stubRunner) Steer(_ string) error                                        { return nil }
-func (r *stubRunner) FollowUp(_ string) error                                     { return nil }
-func (r *stubRunner) NextTurn(_ string)                                           {}
+func (r *stubRunner) Events() <-chan session.Event { return nil }
+func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.ImageContent) (session.Message, error) {
+	r.promptTexts = append(r.promptTexts, text)
+	r.promptImages = append(r.promptImages, cloneImageAttachments(images))
+	return nil, r.promptErr
+}
+func (r *stubRunner) Steer(_ string, _ ...session.ImageContent) error    { return nil }
+func (r *stubRunner) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
+func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent)       {}
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
 	return nil, nil, nil

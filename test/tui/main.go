@@ -235,18 +235,18 @@ type smokeRunner struct {
 }
 
 func (r *smokeRunner) Events() <-chan session.Event { return r.backend.Events() }
-func (r *smokeRunner) Prompt(ctx context.Context, text string) (session.Message, error) {
+func (r *smokeRunner) Prompt(ctx context.Context, text string, _ ...session.ImageContent) (session.Message, error) {
 	return nil, r.backend.SubmitTurn(ctx, text)
 }
-func (r *smokeRunner) Steer(text string) error {
+func (r *smokeRunner) Steer(text string, _ ...session.ImageContent) error {
 	r.backend.Steer(text)
 	return nil
 }
-func (r *smokeRunner) FollowUp(text string) error {
+func (r *smokeRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.backend.FollowUp(text)
 	return nil
 }
-func (r *smokeRunner) NextTurn(string) {}
+func (r *smokeRunner) NextTurn(string, ...session.ImageContent) {}
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }

@@ -149,18 +149,18 @@ type Runner interface {
 
 	// Prompt submits a user message and runs a full agent turn.
 	// Blocks until the turn completes. Returns the final assistant message.
-	Prompt(ctx context.Context, text string) (session.Message, error)
+	Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error)
 
 	// Steer queues a steering message (mid-turn direction change).
 	// Returns an error if the harness is idle.
-	Steer(text string) error
+	Steer(text string, images ...session.ImageContent) error
 
 	// FollowUp queues a follow-up message for the next turn.
 	// Returns an error if the harness is idle.
-	FollowUp(text string) error
+	FollowUp(text string, images ...session.ImageContent) error
 
 	// NextTurn queues a message to start a new turn.
-	NextTurn(text string)
+	NextTurn(text string, images ...session.ImageContent)
 
 	// Abort cancels the current turn and clears steering/follow-up queues.
 	// Returns the cleared messages.

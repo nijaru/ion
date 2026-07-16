@@ -1,15 +1,18 @@
-
 package app
 
 import (
 	"fmt"
 	"testing"
 	"time"
+
+	ionclipboard "github.com/nijaru/ion/internal/clipboard"
+	"github.com/nijaru/ion/session"
 )
 
 func TestInputReducerResetComposerDraftClearsCompletionAndPasteMarkers(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("draft")
+	model.Input.Images = []session.ImageContent{{Data: []byte{1}, MimeType: "image/png"}}
 	model.Input.Completion = &completionState{items: []completionItem{{Label: "read"}}}
 	model.PasteMarkers = map[string]pasteMarker{
 		"[paste #1]": {content: "expanded"},
@@ -20,11 +23,80 @@ func TestInputReducerResetComposerDraftClearsCompletionAndPasteMarkers(t *testin
 	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want empty", got)
 	}
+	if len(model.Input.Images) != 0 {
+		t.Fatalf("images = %#v, want none", model.Input.Images)
+	}
 	if model.Input.Completion != nil {
 		t.Fatalf("completion = %#v, want nil", model.Input.Completion)
 	}
 	if len(model.PasteMarkers) != 0 {
 		t.Fatalf("paste markers = %#v, want cleared", model.PasteMarkers)
+	}
+}
+
+func TestClipboardImageAttachmentFlowsIntoPrompt(t *testing.T) {
+	model := readyModel(t)
+	runner := &stubRunner{}
+	model.Model.Runner = runner
+
+	data := []byte{1, 2, 3, 4}
+	model, _ = model.attachClipboardImage(&ionclipboard.ImageData{
+		Bytes:    data,
+		MimeType: "image/jpeg",
+		FilePath: "/tmp/clipboard-image.jpg",
+	})
+	data[0] = 99
+	model.Input.Composer.SetValue("describe this")
+
+	updated, cmd := model.submitComposer()
+	if cmd == nil {
+		t.Fatal("submit command = nil, want prompt command")
+	}
+	if len(updated.Input.Images) != 0 {
+		t.Fatalf("images after submit = %#v, want cleared", updated.Input.Images)
+	}
+	message := cmd()
+	result, ok := message.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit result = %T, want turnSubmitResultMsg", message)
+	}
+	if result.err != nil {
+		t.Fatalf("submit error = %v", result.err)
+	}
+	if len(runner.promptImages) != 1 || len(runner.promptImages[0]) != 1 {
+		t.Fatalf("prompt images = %#v, want one attachment", runner.promptImages)
+	}
+	image := runner.promptImages[0][0]
+	if image.MimeType != "image/jpeg" || string(image.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("prompt image = %#v, want copied jpeg bytes", image)
+	}
+}
+
+func TestFailedImagePromptRestoresAttachment(t *testing.T) {
+	model := readyModel(t)
+	runner := &stubRunner{promptErr: fmt.Errorf("provider unavailable")}
+	model.Model.Runner = runner
+	model, _ = model.attachClipboardImage(&ionclipboard.ImageData{
+		Bytes:    []byte{5, 6, 7},
+		MimeType: "image/png",
+	})
+	model.Input.Composer.SetValue("describe this")
+
+	submitted, cmd := model.submitComposer()
+	message := cmd()
+	result, ok := message.(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit result = %T, want turnSubmitResultMsg", message)
+	}
+	if result.err == nil {
+		t.Fatal("submit error = nil, want provider error")
+	}
+	recovered, _ := submitted.handleTurnSubmitResult(result)
+	if len(recovered.Input.Images) != 1 {
+		t.Fatalf("restored images = %#v, want one attachment", recovered.Input.Images)
+	}
+	if string(recovered.Input.Images[0].Data) != string([]byte{5, 6, 7}) {
+		t.Fatalf("restored image data = %v, want original bytes", recovered.Input.Images[0].Data)
 	}
 }
 

@@ -299,12 +299,36 @@ func (h *Harness) emitLocked(e session.Event) {
 	}
 }
 
+func newUserMessage(text string, images []session.ImageContent, timestamp time.Time) *session.UserMessage {
+	content := make([]session.Content, 0, 1+len(images))
+	content = append(content, session.TextContent{Text: text})
+	for _, image := range images {
+		content = append(content, image)
+	}
+	return &session.UserMessage{Content: content, Timestamp: timestamp}
+}
+
+func cloneImageContents(images []session.ImageContent) []session.ImageContent {
+	if len(images) == 0 {
+		return nil
+	}
+	cloned := make([]session.ImageContent, len(images))
+	for i, image := range images {
+		cloned[i] = session.ImageContent{
+			Data:     append([]byte(nil), image.Data...),
+			MimeType: image.MimeType,
+		}
+	}
+	return cloned
+}
+
 // Prompt submits a user message and runs the agent turn.
 // Returns the final assistant message. Blocks until the turn completes.
 //
 // Reference: Pi agent-harness.js prompt (line 541).
-func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, error) {
+func (h *Harness) Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	turnStart := time.Now()
+	promptImages := cloneImageContents(images)
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -363,11 +387,12 @@ func (h *Harness) Prompt(ctx context.Context, text string) (session.Message, err
 
 	// Drain nextTurn queue and prepend to prompts.
 	prompts := h.drainNextTurn() // holds its own lock
-	prompts = append(prompts, session.NewUserText(text, time.Now()))
+	prompts = append(prompts, newUserMessage(text, promptImages, time.Now()))
 
 	// Emit before_agent_start hook — inject extra messages.
 	patches, err := h.emitHook(HookBeforeAgentStart, beforeAgentStartPayload{
 		Prompt:       text,
+		Images:       cloneImageContents(promptImages),
 		SystemPrompt: h.sysprompt,
 	})
 	if err != nil {
@@ -857,7 +882,7 @@ type BeforeAgentStartPatch struct {
 // beforeAgentStartPayload is the payload for HookBeforeAgentStart.
 type beforeAgentStartPayload struct {
 	Prompt       string
-	Images       []any // TODO: image support
+	Images       []session.ImageContent
 	SystemPrompt string
 }
 
@@ -916,7 +941,7 @@ func (h *Harness) drainNextTurn() []session.Message {
 
 // Steer queues a message to be injected before the next assistant response.
 // Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
-func (h *Harness) Steer(text string) error {
+func (h *Harness) Steer(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -926,7 +951,7 @@ func (h *Harness) Steer(text string) error {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot steer while idle")
 	}
-	h.steer = append(h.steer, session.NewUserText(text, time.Now()))
+	h.steer = append(h.steer, newUserMessage(text, cloneImageContents(images), time.Now()))
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
@@ -941,7 +966,7 @@ func (h *Harness) Steer(text string) error {
 
 // FollowUp queues a message to be processed after the agent would otherwise stop.
 // Returns an error if the harness is idle.
-func (h *Harness) FollowUp(text string) error {
+func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -951,7 +976,7 @@ func (h *Harness) FollowUp(text string) error {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot follow up while idle")
 	}
-	h.followUp = append(h.followUp, session.NewUserText(text, time.Now()))
+	h.followUp = append(h.followUp, newUserMessage(text, cloneImageContents(images), time.Now()))
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
@@ -965,13 +990,13 @@ func (h *Harness) FollowUp(text string) error {
 }
 
 // NextTurn queues a message to be prepended to the next prompt (always allowed).
-func (h *Harness) NextTurn(text string) {
+func (h *Harness) NextTurn(text string, images ...session.ImageContent) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return
 	}
-	h.nextTurn = append(h.nextTurn, session.NewUserText(text, time.Now()))
+	h.nextTurn = append(h.nextTurn, newUserMessage(text, cloneImageContents(images), time.Now()))
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
