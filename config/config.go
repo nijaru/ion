@@ -255,71 +255,69 @@ func LoadState() (*State, error) {
 }
 
 func SaveState(cfg *Config) error {
-	current, err := LoadState()
-	if err != nil {
-		return err
-	}
-	state := stateFromConfig(cfg)
-	state.ActivePreset = current.ActivePreset
-	return saveState(state)
+	return updateState(func(state *State) {
+		activePreset := state.ActivePreset
+		*state = *stateFromConfig(cfg)
+		state.ActivePreset = activePreset
+	})
 }
 
 func SaveReasoningState(preset, effort string) error {
-	state, err := LoadState()
-	if err != nil {
-		return err
-	}
-	normalized := normalizeOptionalReasoningEffort(effort)
-	switch normalizeActivePreset(preset) {
-	case "fast":
-		state.FastReasoningEffort = optionalString(normalized)
-	default:
-		state.ReasoningEffort = optionalString(normalized)
-	}
-	return saveState(state)
-}
-
-func SaveActivePreset(preset string) error {
-	state, err := LoadState()
-	if err != nil {
-		return err
-	}
-	normalized := normalizeActivePreset(preset)
-	if normalized == "" {
-		state.ActivePreset = nil
-	} else {
-		state.ActivePreset = &normalized
-	}
-	return saveState(state)
-}
-
-func SaveRuntimeState(update RuntimeStateUpdate) error {
-	state, err := LoadState()
-	if err != nil {
-		return err
-	}
-	if update.PersistConfig {
-		active := state.ActivePreset
-		state = stateFromConfig(update.Config)
-		state.ActivePreset = active
-	}
-	if update.PersistReasoning {
-		normalized := normalizeOptionalReasoningEffort(update.ReasoningEffort)
-		switch normalizeActivePreset(update.ReasoningPreset) {
+	return updateState(func(state *State) {
+		normalized := normalizeOptionalReasoningEffort(effort)
+		switch normalizeActivePreset(preset) {
 		case "fast":
 			state.FastReasoningEffort = optionalString(normalized)
 		default:
 			state.ReasoningEffort = optionalString(normalized)
 		}
-	}
-	if update.PersistActivePreset {
-		normalized := normalizeActivePreset(update.ActivePreset)
+	})
+}
+
+func SaveActivePreset(preset string) error {
+	return updateState(func(state *State) {
+		normalized := normalizeActivePreset(preset)
 		if normalized == "" {
 			state.ActivePreset = nil
 		} else {
 			state.ActivePreset = &normalized
 		}
+	})
+}
+
+func SaveRuntimeState(update RuntimeStateUpdate) error {
+	return updateState(func(state *State) {
+		if update.PersistConfig {
+			activePreset := state.ActivePreset
+			*state = *stateFromConfig(update.Config)
+			state.ActivePreset = activePreset
+		}
+		if update.PersistReasoning {
+			normalized := normalizeOptionalReasoningEffort(update.ReasoningEffort)
+			switch normalizeActivePreset(update.ReasoningPreset) {
+			case "fast":
+				state.FastReasoningEffort = optionalString(normalized)
+			default:
+				state.ReasoningEffort = optionalString(normalized)
+			}
+		}
+		if update.PersistActivePreset {
+			normalized := normalizeActivePreset(update.ActivePreset)
+			if normalized == "" {
+				state.ActivePreset = nil
+			} else {
+				state.ActivePreset = &normalized
+			}
+		}
+	})
+}
+
+func updateState(update func(*State)) error {
+	state, err := LoadState()
+	if err != nil {
+		return err
 	}
+	update(state)
 	return saveState(state)
 }
 
