@@ -371,6 +371,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		// Provider responded; extension point for cost tracking / header logging.
 		return m, m.awaitSessionEvent()
 
+	case session.ProviderRetry:
+		m.Progress.Mode = StateStreaming
+		m.Progress.Status = providerRetryStatus(msg)
+		m.Progress.StatusUpdatedAt = msg.Timestamp
+		return m, m.awaitSessionEvent()
+
 	case session.MessageEnd:
 		return m.handleMessageEnd(msg)
 

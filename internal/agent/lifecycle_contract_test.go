@@ -100,6 +100,8 @@ func eventTypeName(e session.Event) string {
 		return "Abort"
 	case session.AfterProviderResponse:
 		return "AfterProviderResponse"
+	case session.ProviderRetry:
+		return "ProviderRetry"
 	default:
 		return fmt.Sprintf("%T", e)
 	}
@@ -417,6 +419,7 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 		session.Settled{},
 		session.SavePoint{},
 		session.Abort{},
+		session.ProviderRetry{},
 		session.AfterProviderResponse{},
 		&session.Error{},
 	}
@@ -443,6 +446,7 @@ func TestLifecycle_EventRegistryComplete(t *testing.T) {
 			session.Settled,
 			session.SavePoint,
 			session.Abort,
+			session.ProviderRetry,
 			session.AfterProviderResponse,
 			*session.Error:
 			handled[eventTypeName(e)] = true

@@ -293,6 +293,7 @@ func openRuntime(
 		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil,
 			fmt.Errorf("initialize provider: %w", err)
 	}
+	provider = providerWithRetryPolicy(provider, &runtimeCfg)
 
 	mcpRuntime, err := openMCPRuntime(ctx, cwd, runtimeCfg.MCPServers)
 	if err != nil {

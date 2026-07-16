@@ -267,6 +267,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.Settled,
 		session.Abort,
 		session.SavePoint,
+		session.ProviderRetry,
 		session.AfterProviderResponse:
 		next, cmd := m.handleSessionEvent(msg.(session.Event))
 		return next, cmd, true

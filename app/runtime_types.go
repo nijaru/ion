@@ -510,6 +510,20 @@ func (t TurnReducer) ApplyStatusChangedInput(msg interface{}) StatusChangedDecis
 	return StatusChangedDecision{}
 }
 
+func providerRetryStatus(msg session.ProviderRetry) string {
+	reason := "transient provider failure"
+	if msg.Err != nil {
+		reason = strings.Join(strings.Fields(msg.Err.Error()), " ")
+		if len(reason) > 160 {
+			reason = reason[:160] + "..."
+		}
+	}
+	if msg.Delay <= 0 {
+		return fmt.Sprintf("Provider error: %s. Retrying now... Ctrl+C stops.", reason)
+	}
+	return fmt.Sprintf("Provider error: %s. Retrying in %s... Ctrl+C stops.", reason, msg.Delay)
+}
+
 func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = true

@@ -879,6 +879,14 @@ func (h *Harness) wrapStreamFn() func(ctx context.Context, req *llm.Request) (ll
 		if timeout > 0 {
 			streamCtx, cancel = context.WithTimeout(ctx, timeout)
 		}
+		streamCtx = llm.WithRetryObserver(streamCtx, func(retry llm.RetryEvent) {
+			h.emit(session.ProviderRetry{
+				Attempt:   retry.Attempt,
+				Delay:     retry.Delay,
+				Err:       retry.Err,
+				Timestamp: time.Now(),
+			})
+		})
 		stream, err := base(streamCtx, req)
 		if err != nil {
 			if cancel != nil {

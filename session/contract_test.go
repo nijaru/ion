@@ -126,6 +126,7 @@ func TestEventUnionIsClosed(t *testing.T) {
 		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{},
 		ApprovalRequest{}, ApprovalResolution{}, TurnEnd{}, AgentEnd{},
 		ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{}, QueueUpdate{}, Settled{}, SavePoint{},
+		ProviderRetry{},
 		&Error{},
 	}
 	for _, e := range events {

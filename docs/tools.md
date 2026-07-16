@@ -78,6 +78,15 @@ decision prompt. Persistent approval policy is intentionally not part of the
 runtime contract; future external tools must use the same broker before they
 are exposed.
 
+Provider requests retry transient failures with exponential backoff. Transport
+failures retry until the active turn is canceled by default; provider-declared
+rate-limit and server failures are bounded by `max_retries` (default `3`). Set
+`retry_until_cancelled = false` for one-attempt behavior, or tune
+`retry_base_delay_ms` (default `1000`, capped at `60000`) in
+`~/.ion/config.toml`. The TUI shows the retry reason and countdown while it
+waits. Retries happen before a stream is established; a partially consumed
+stream is never replayed automatically.
+
 ## MCP servers
 
 Ion can attach named MCP servers over stdio from `~/.ion/config.toml`:

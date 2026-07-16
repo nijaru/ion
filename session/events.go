@@ -10,8 +10,8 @@ import "time"
 //	tool_execution_start, tool_execution_update, tool_execution_end,
 //	turn_end, agent_end
 //
-// ApprovalRequest and ApprovalResolution are runtime-only control events; the
-// resulting tool result is the durable session record.
+// ApprovalRequest, ApprovalResolution, and ProviderRetry are runtime-only
+// control events; tool results remain the durable session record.
 //
 // message_update carries a Delta union (text/thinking/toolcall).
 type Event interface {
@@ -233,6 +233,18 @@ func (QueueUpdate) IsEvent()    {}
 func (Settled) IsEvent()        {}
 func (SavePoint) IsEvent()      {}
 func (Abort) IsEvent()          {}
+
+// ProviderRetry reports a provider-level retry while the active turn is
+// waiting before another request attempt. It is runtime-only and is never
+// persisted in the session tree.
+type ProviderRetry struct {
+	Attempt   int
+	Delay     time.Duration
+	Err       error
+	Timestamp time.Time
+}
+
+func (ProviderRetry) IsEvent() {}
 
 // AfterProviderResponse is emitted when the provider responds (HTTP response received).
 // Fires after before_provider_request/payload hooks and before the loop processes the
