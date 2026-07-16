@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	DefaultSessionRetentionDays = 90
 	defaultModelCacheTTLSeconds = 3600
 	DefaultReasoningEffort      = "auto"
 )
@@ -60,10 +59,6 @@ type Config struct {
 	RetryUntilCancelled    *bool             `toml:"retry_until_cancelled,omitempty"`
 	MaxRetries             int               `toml:"max_retries,omitempty"`
 	RetryBaseDelayMs       int               `toml:"retry_base_delay_ms,omitempty"`
-	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
-	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
-	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
-	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ReadOutput             string            `toml:"read_output,omitempty"`
 	WriteOutput            string            `toml:"write_output,omitempty"`
@@ -207,8 +202,6 @@ func normalizeConfig(cfg *Config) {
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 	cfg.ExtraHeaders = normalizeStringMap(cfg.ExtraHeaders)
-	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
-	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ReadOutput = normalizeReadOutput(cfg.ReadOutput)
 	cfg.WriteOutput = normalizeWriteOutput(cfg.WriteOutput)
@@ -241,9 +234,6 @@ func normalizeConfig(cfg *Config) {
 	}
 	if cfg.RetryBaseDelayMs > 60000 {
 		cfg.RetryBaseDelayMs = 60000
-	}
-	if cfg.SessionRetentionDays <= 0 {
-		cfg.SessionRetentionDays = DefaultSessionRetentionDays
 	}
 }
 
@@ -580,7 +570,6 @@ func DefaultSkillsDir() (string, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		SessionRetentionDays: DefaultSessionRetentionDays,
 		Models: []ModelDef{
 			// o1 family: reasoning preset, user system role
 			{Pattern: "o1", Preset: "openai-reasoning", SystemRole: "user"},

@@ -55,7 +55,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nmemory_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nmemory_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -110,18 +110,6 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.RetryUntilCancelled == nil || *cfg.RetryUntilCancelled {
 		t.Fatal("retry_until_cancelled = true or nil, want false")
 	}
-	if cfg.SessionRetentionDays != 14 {
-		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
-	}
-	if cfg.TelemetryOTLPEndpoint != "localhost:4317" {
-		t.Fatalf("telemetry_otlp_endpoint = %q, want localhost:4317", cfg.TelemetryOTLPEndpoint)
-	}
-	if !cfg.TelemetryOTLPInsecure {
-		t.Fatal("telemetry_otlp_insecure = false, want true")
-	}
-	if got := cfg.TelemetryOTLPHeaders["x-api-key"]; got != "secret" {
-		t.Fatalf("telemetry header = %q, want secret", got)
-	}
 	if cfg.SkillTools != "read" {
 		t.Fatalf("skill_tools = %q, want read", cfg.SkillTools)
 	}
@@ -153,13 +141,6 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	}
 	if cfg.ReasoningEffort != DefaultReasoningEffort {
 		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, DefaultReasoningEffort)
-	}
-	if cfg.SessionRetentionDays != DefaultSessionRetentionDays {
-		t.Fatalf(
-			"session_retention_days = %d, want %d",
-			cfg.SessionRetentionDays,
-			DefaultSessionRetentionDays,
-		)
 	}
 	if !cfg.RetryUntilCancelledEnabled() {
 		t.Fatal("retry_until_cancelled = false, want true")
@@ -399,10 +380,6 @@ func TestSaveWritesStatePath(t *testing.T) {
 		MaxSessionCost:         1.25,
 		MaxTurnCost:            0.10,
 		RetryUntilCancelled:    &retryUntilCancelled,
-		TelemetryOTLPEndpoint:  "localhost:4317",
-		TelemetryOTLPInsecure:  true,
-		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
-		SessionRetentionDays:   14,
 		ToolEnv:                "inherit_without_provider_keys",
 	}
 	if err := Save(cfg); err != nil {
@@ -434,11 +411,6 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`max_session_cost = 1.25`,
 		`max_turn_cost = 0.1`,
 		`retry_until_cancelled = false`,
-		`telemetry_otlp_endpoint = 'localhost:4317'`,
-		`telemetry_otlp_insecure = true`,
-		`[telemetry_otlp_headers]`,
-		`x-api-key = 'secret'`,
-		`session_retention_days = 14`,
 		`tool_env = 'inherit_without_provider_keys'`,
 	} {
 		if !strings.Contains(got, want) {
@@ -455,13 +427,12 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := &Config{
-		Provider:             "local-api",
-		Model:                "qwen3.6:27b",
-		ReasoningEffort:      "auto",
-		Endpoint:             "http://fedora:8080/v1",
-		ToolVerbosity:        "collapsed",
-		MaxSessionCost:       1.25,
-		SessionRetentionDays: 14,
+		Provider:        "local-api",
+		Model:           "qwen3.6:27b",
+		ReasoningEffort: "auto",
+		Endpoint:        "http://fedora:8080/v1",
+		ToolVerbosity:   "collapsed",
+		MaxSessionCost:  1.25,
 	}
 	if err := SaveState(cfg); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -483,7 +454,6 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 		`endpoint`,
 		`tool_verbosity`,
 		`max_session_cost`,
-		`session_retention_days`,
 		`reasoning_effort`,
 	} {
 		if strings.Contains(got, notWant) {

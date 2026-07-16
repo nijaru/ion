@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/tracing"
 	"github.com/nijaru/ion/tool"
 )
 
@@ -283,15 +282,6 @@ func TestBashExecuteStreamingEmitsTruncatedSnapshot(t *testing.T) {
 func TestBashExecuteStreamingUpdatesEmitTailSnapshotWhenTruncated(t *testing.T) {
 	b := tool.NewBash(t.TempDir())
 	assertStreamingUpdateTailSnapshot(t, b)
-}
-
-func TestBashExecuteStreamingUpdatesThroughTracingEmitTailSnapshotWhenTruncated(t *testing.T) {
-	b := tool.NewBash(t.TempDir())
-	wrapped, ok := tracing.WrapTool(b).(tool.StreamingUpdateTool)
-	if !ok {
-		t.Fatal("wrapped bash does not implement StreamingUpdateTool")
-	}
-	assertStreamingUpdateTailSnapshot(t, wrapped)
 }
 
 func TestBashExecuteReturnsTailAndFullOutputPathWhenTruncated(t *testing.T) {
