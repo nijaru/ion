@@ -265,7 +265,7 @@ func streamAssistantResponse(
 		Model:           cfg.Model.ID,
 		Messages:        llmMsgs,
 		Tools:           tools,
-		ReasoningEffort: string(cfg.Thinking),
+		ReasoningEffort: providerReasoningEffort(cfg.Thinking),
 		SessionID:       cfg.SessionID,
 	}
 

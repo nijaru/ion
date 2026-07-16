@@ -177,8 +177,11 @@ func startupSessionID(
 
 func thinkingLevelForRuntime(value string) session.ThinkingLevel {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || value == config.DefaultReasoningEffort {
+	if value == "" {
 		return ""
+	}
+	if value == config.DefaultReasoningEffort {
+		return session.ThinkingAuto
 	}
 	return session.ThinkingLevel(value)
 }

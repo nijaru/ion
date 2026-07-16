@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -824,9 +825,34 @@ func (m Model) handleRuntimeTransitionCommitted(
 		return m.handleLocalError(msg.err)
 	}
 	transition := msg.transition.WithHandles(m.Handles())
+	if transition.PersistReasoning && m.Model.Runner != nil {
+		if err := m.Model.Runner.SetThinking(context.Background(), thinkingLevelForRuntime(transition.Snapshot.Reasoning)); err != nil {
+			previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
+			if transition.PreviousReasoning != nil {
+				previous = *transition.PreviousReasoning
+			}
+			rollback := config.RuntimeStateUpdate{
+				ReasoningPreset:  transition.PersistReasoningSlot.String(),
+				ReasoningEffort:  previous,
+				PersistReasoning: true,
+			}
+			rollbackErr := saveRuntimeState(rollback)
+			return m.handleLocalError(errors.Join(err, rollbackErr))
+		}
+	}
 	m.applyRuntimeSnapshot(transition.Snapshot)
 	m.clearProgressError()
 	return m, m.terminalCommit().Entries(msg.notice)
+}
+
+func (m Model) persistedReasoningEffort(preset Preset) string {
+	if m.Model.Config == nil {
+		return config.DefaultReasoningEffort
+	}
+	if preset == PresetFast {
+		return m.Model.Config.FastReasoningEffort
+	}
+	return m.Model.Config.ReasoningEffort
 }
 
 func (m Model) ProviderSelection(
@@ -924,6 +950,13 @@ func (m Model) thinkingSelectionTransition(
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithReasoningPersistence()
+	if state, err := config.LoadState(); err == nil {
+		if preset == PresetFast {
+			transition.PreviousReasoning = state.FastReasoningEffort
+		} else {
+			transition.PreviousReasoning = state.ReasoningEffort
+		}
+	}
 	return transition, runtimeCfg, nil
 }
 

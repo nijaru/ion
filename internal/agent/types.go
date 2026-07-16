@@ -183,8 +183,9 @@ type Runner interface {
 	// SetModel switches the active model.
 	SetModel(model llm.Model)
 
-	// SetThinking changes the thinking level.
-	SetThinking(level session.ThinkingLevel)
+	// SetThinking changes the thinking level. Idle changes are durable before
+	// the live value changes; active changes are applied at the next boundary.
+	SetThinking(ctx context.Context, level session.ThinkingLevel) error
 
 	// SetTools updates the complete tool registry and active tool set.
 	SetTools(tools []Tool, active []string)

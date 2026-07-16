@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -22,7 +23,9 @@ func TestHarnessSettersEmitLifecycleUpdates(t *testing.T) {
 	defer unsubscribe()
 
 	h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})
-	h.SetThinking(session.ThinkingHigh)
+	if err := h.SetThinking(context.Background(), session.ThinkingHigh); err != nil {
+		t.Fatal(err)
+	}
 	h.SetTools([]Tool{{Name: "read"}}, []string{"read"})
 
 	selectEvent := func() session.Event {

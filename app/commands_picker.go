@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/nijaru/ion/config"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
@@ -445,6 +446,14 @@ func normalizeThinkingValue(value string) string {
 	default:
 		return config.DefaultReasoningEffort
 	}
+}
+
+func thinkingLevelForRuntime(value string) session.ThinkingLevel {
+	normalized := normalizeThinkingValue(value)
+	if normalized == config.DefaultReasoningEffort {
+		return session.ThinkingAuto
+	}
+	return session.ThinkingLevel(normalized)
 }
 
 func thinkingDisplayName(value string) string {

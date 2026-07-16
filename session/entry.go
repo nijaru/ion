@@ -156,6 +156,9 @@ func (e *CustomMessageEntry) When() time.Time  { return e.EntryBase.Timestamp }
 type ThinkingLevel string
 
 const (
+	// ThinkingAuto is an explicit provider-default selection. It remains
+	// distinct from an absent historical entry until request construction.
+	ThinkingAuto    ThinkingLevel = "auto"
 	ThinkingOff     ThinkingLevel = "off"
 	ThinkingMinimal ThinkingLevel = "minimal"
 	ThinkingLow     ThinkingLevel = "low"

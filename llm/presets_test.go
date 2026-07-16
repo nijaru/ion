@@ -40,6 +40,20 @@ func TestResolveFastPresetUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestResolveFastPresetPreservesExplicitAuto(t *testing.T) {
+	cfg, err := ResolveRuntimeConfig(context.Background(), &config.Config{
+		Provider:            "openai",
+		FastModel:           "gpt-4.1-mini",
+		FastReasoningEffort: config.DefaultReasoningEffort,
+	}, PresetFast)
+	if err != nil {
+		t.Fatalf("resolve fast preset: %v", err)
+	}
+	if cfg.ReasoningEffort != config.DefaultReasoningEffort {
+		t.Fatalf("reasoning_effort = %q, want auto", cfg.ReasoningEffort)
+	}
+}
+
 func TestResolveSummaryPresetDoesNotInferFastModel(t *testing.T) {
 	cfg, err := ResolveRuntimeConfig(context.Background(), &config.Config{
 		Provider: "openrouter",

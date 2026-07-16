@@ -15,7 +15,7 @@ func TestThinkingLevelForRuntime(t *testing.T) {
 		value string
 		want  session.ThinkingLevel
 	}{
-		{name: "auto uses provider default", value: "auto", want: ""},
+		{name: "auto uses provider default", value: "auto", want: session.ThinkingAuto},
 		{name: "empty uses provider default", value: "", want: ""},
 		{name: "minimal", value: "minimal", want: session.ThinkingMinimal},
 		{name: "xhigh", value: "xhigh", want: session.ThinkingXHigh},

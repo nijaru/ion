@@ -133,7 +133,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+tab":
-		// Pi parity: Shift+Tab cycles thinking level.
+		// Shift+Tab opens the thinking-level picker.
 		m.clearPendingAction()
 		return m.openThinkingPicker()
 

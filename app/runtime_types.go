@@ -117,6 +117,9 @@ func NewSnapshot(appCfg, backendCfg *config.Config, preset Preset, status string
 	}
 	if backendCfg != nil {
 		s.BackendConfig = *backendCfg
+		s.Reasoning = normalizeThinkingValue(backendCfg.ReasoningEffort)
+		s.Provider = backendCfg.Provider
+		s.Model = backendCfg.Model
 	}
 	return s
 }
@@ -128,6 +131,7 @@ type Transition struct {
 	PersistReasoning     bool
 	PersistActivePreset  bool
 	PersistReasoningSlot Preset
+	PreviousReasoning    *string
 }
 
 func NewTransition(appCfg, backendCfg *config.Config, preset Preset, status string) Transition {
@@ -143,13 +147,16 @@ func NewTransition(appCfg, backendCfg *config.Config, preset Preset, status stri
 			BackendConfig: *backendCfg,
 			Preset:        preset,
 			Status:        status,
+			Reasoning:     normalizeThinkingValue(backendCfg.ReasoningEffort),
 			Provider:      backendCfg.Provider,
 			Model:         backendCfg.Model,
 		},
 	}
 }
 
-func (t Transition) NeedsPersistence() bool { return t.PersistState || t.PersistActivePreset }
+func (t Transition) NeedsPersistence() bool {
+	return t.PersistState || t.PersistReasoning || t.PersistActivePreset
+}
 func (t Transition) WithHandles(h Handles) Transition {
 	t.Snapshot.SessionID = ""
 	t.Snapshot.Materialized = false
@@ -168,10 +175,26 @@ func (t Transition) Persist(fn func(update config.RuntimeStateUpdate) error) err
 	if fn == nil {
 		return nil
 	}
-	return fn(config.RuntimeStateUpdate{})
+	update := config.RuntimeStateUpdate{
+		ActivePreset:        t.Snapshot.Preset.String(),
+		PersistActivePreset: t.PersistActivePreset,
+		ReasoningPreset:     t.PersistReasoningSlot.String(),
+		ReasoningEffort:     t.Snapshot.Reasoning,
+		PersistReasoning:    t.PersistReasoning,
+	}
+	if t.PersistState {
+		cfg := t.Snapshot.AppConfig
+		update.Config = &cfg
+		update.PersistConfig = true
+	}
+	return fn(update)
 }
-func (t Transition) WithStatePersistence() Transition     { t.PersistState = true; return t }
-func (t Transition) WithReasoningPersistence() Transition { t.PersistReasoning = true; return t }
+func (t Transition) WithStatePersistence() Transition { t.PersistState = true; return t }
+func (t Transition) WithReasoningPersistence() Transition {
+	t.PersistReasoning = true
+	t.PersistReasoningSlot = t.Snapshot.Preset
+	return t
+}
 
 // Accepted wraps a Transition with resolved Handles.
 type Accepted struct {

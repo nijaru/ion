@@ -76,7 +76,7 @@ func normalizeOptionalReasoning(value, fallback string) string {
 	case "":
 		return fallback
 	case "auto":
-		return fallback
+		return config.DefaultReasoningEffort
 	case "off", "none", "disabled":
 		return "off"
 	case "minimal", "min":

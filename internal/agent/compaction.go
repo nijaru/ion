@@ -638,7 +638,7 @@ func GenerateSummary(
 		},
 		MaxTokens:       maxTokens,
 		Headers:         headers,
-		ReasoningEffort: string(thinkingLevel),
+		ReasoningEffort: providerReasoningEffort(thinkingLevel),
 		ThinkingBudget:  0, // summarization doesn't need deep thinking
 	}
 
@@ -749,7 +749,7 @@ func GenerateTurnPrefixSummary(
 		},
 		MaxTokens:       maxTokens,
 		Headers:         headers,
-		ReasoningEffort: string(thinkingLevel),
+		ReasoningEffort: providerReasoningEffort(thinkingLevel),
 	}
 
 	if apiKey != "" {

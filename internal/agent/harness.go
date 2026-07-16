@@ -69,6 +69,13 @@ type Harness struct {
 	// buffered session writes during a run
 	pending []pendingWrite
 
+	// thinkingPending prevents a live active-turn change from being overwritten
+	// by a stale session snapshot and records the last durable level for rollback.
+	thinkingPending     bool
+	thinkingRollback    session.ThinkingLevel
+	thinkingGeneration  uint64
+	thinkingRollbackSet bool
+
 	// compaction settings
 	compaction     CompactionSettings
 	contextWindow  int
@@ -90,6 +97,8 @@ const (
 type pendingWrite struct {
 	apply      func(ctx context.Context, s session.Session) error
 	applyStore func(ctx context.Context, store session.Store) error
+	onSuccess  func()
+	onFailure  func()
 }
 
 // HookHandler is a function registered for a hook type. It receives a payload
@@ -377,6 +386,17 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 		h.logf(slog.LevelInfo, "turn end", slog.Duration("duration", dur), slog.String("model", modelID))
 	}()
 
+	// A retained thinking write must be durable before rebuilding the context.
+	// Other deferred setters retain their turn-boundary SavePoint semantics.
+	h.mu.Lock()
+	thinkingPending := h.thinkingPending
+	h.mu.Unlock()
+	if thinkingPending {
+		if err := h.flushPending(ctx); err != nil {
+			return nil, fmt.Errorf("flush pending writes: %w", err)
+		}
+	}
+
 	// Build turn context from session.
 	snap, err := h.session.BuildContext(ctx)
 	if err != nil {
@@ -391,7 +411,7 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 		// Model was changed mid-session — the session tree is authoritative.
 		// The harness's model at construction time was a starting point.
 	}
-	if snap.Thinking != "" {
+	if snap.Thinking != "" && !h.thinkingPending {
 		h.thinking = snap.Thinking
 	}
 	if len(snap.ActiveTools) > 0 {
@@ -579,7 +599,9 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 		h.emit(e)
 
 	case session.TurnEnd:
+		h.mu.Lock()
 		hadPending := len(h.pending) > 0
+		h.mu.Unlock()
 		if err := h.flushPending(ctx); err != nil {
 			return err
 		}
@@ -1101,7 +1123,13 @@ func (h *Harness) flushPending(ctx context.Context) error {
 			err = pw.apply(ctx, h.session)
 		}
 		if err == nil {
+			if pw.onSuccess != nil {
+				pw.onSuccess()
+			}
 			continue
+		}
+		if pw.onFailure != nil {
+			pw.onFailure()
 		}
 		err = fmt.Errorf("flush pending write: %w", err)
 		h.mu.Lock()
@@ -1140,23 +1168,73 @@ func (h *Harness) SetModel(model llm.Model) {
 	h.mu.Unlock()
 }
 
-// SetThinking changes the thinking level.
-func (h *Harness) SetThinking(level session.ThinkingLevel) {
+// SetThinking changes the thinking level. Idle changes are durable before the
+// live value changes so the next Prompt cannot restore the previous tree value.
+// Active changes are buffered for the next turn boundary.
+func (h *Harness) SetThinking(ctx context.Context, level session.ThinkingLevel) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return
+		return errors.New("harness is closed")
+	}
+	if h.phase == PhaseIdle {
+		if h.session == nil {
+			h.mu.Unlock()
+			return errors.New("harness has no session")
+		}
+		if _, err := h.session.AppendThinkingLevelChange(ctx, level); err != nil {
+			h.mu.Unlock()
+			return fmt.Errorf("persist thinking level: %w", err)
+		}
 	}
 	previous := h.thinking
 	h.thinking = level
-	h.pending = append(h.pending, pendingWrite{
-		apply: func(ctx context.Context, s session.Session) error {
-			_, err := s.AppendThinkingLevelChange(ctx, level)
-			return err
-		},
-	})
+	if h.phase != PhaseIdle {
+		h.thinkingGeneration++
+		generation := h.thinkingGeneration
+		if !h.thinkingPending {
+			h.thinkingRollback = previous
+			h.thinkingRollbackSet = true
+		}
+		h.thinkingPending = true
+		h.pending = append(h.pending, pendingWrite{
+			apply: func(ctx context.Context, s session.Session) error {
+				_, err := s.AppendThinkingLevelChange(ctx, level)
+				return err
+			},
+			onSuccess: func() {
+				h.mu.Lock()
+				if generation == h.thinkingGeneration {
+					h.thinking = level
+					h.thinkingPending = false
+					h.thinkingRollbackSet = false
+				} else {
+					h.thinkingRollback = level
+				}
+				h.mu.Unlock()
+			},
+			onFailure: func() {
+				h.mu.Lock()
+				if !h.thinkingRollbackSet {
+					h.mu.Unlock()
+					return
+				}
+				rollback := h.thinkingRollback
+				previous := h.thinking
+				h.thinking = rollback
+				h.mu.Unlock()
+				if previous != rollback {
+					h.emit(session.ThinkingUpdate{Level: rollback, Previous: previous})
+				}
+			},
+		})
+	}
 	h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
 	h.mu.Unlock()
+	return nil
 }
 
 // SetTools changes the active tools.

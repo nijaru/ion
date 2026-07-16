@@ -479,6 +479,9 @@ func stateFromConfig(cfg *Config) *State {
 	provider := normalizeProviderID(cfg.Provider)
 	model := strings.TrimSpace(cfg.Model)
 	reasoning := normalizeOptionalReasoningEffort(cfg.ReasoningEffort)
+	if reasoning == DefaultReasoningEffort {
+		reasoning = ""
+	}
 	fastModel := strings.TrimSpace(cfg.FastModel)
 	fastReasoning := normalizeOptionalReasoningEffort(cfg.FastReasoningEffort)
 	summaryModel := strings.TrimSpace(cfg.SummaryModel)
@@ -681,8 +684,10 @@ func normalizeReasoningEffort(value string) string {
 
 func normalizeOptionalReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", DefaultReasoningEffort:
+	case "":
 		return ""
+	case DefaultReasoningEffort:
+		return DefaultReasoningEffort
 	case "off", "none", "disabled":
 		return "off"
 	case "minimal", "min":
