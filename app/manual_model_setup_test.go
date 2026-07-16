@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
@@ -37,6 +38,100 @@ func TestManualModelPickerItemSurvivesCatalogLoad(t *testing.T) {
 	items := model.modelPickerItemsForCatalog(cfg, nil, nil)
 	if len(items) != 1 || !items[0].ManualModel {
 		t.Fatalf("picker items = %#v, want one manual model item", items)
+	}
+}
+
+func TestModelItemsFromMetadataPreservesProviderGroups(t *testing.T) {
+	items := modelItemsFromMetadata([]llm.ModelMetadata{
+		{ID: "shared-model", Provider: "openrouter"},
+		{ID: "shared-model", Provider: "openai"},
+	})
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want both provider entries", items)
+	}
+	groups := make(map[string]string, len(items))
+	for _, item := range items {
+		groups[item.Provider] = item.Group
+	}
+	if groups["openrouter"] != "OpenRouter" || groups["openai"] != "OpenAI" {
+		t.Fatalf("provider groups = %#v, want openrouter/OpenRouter and openai/OpenAI", groups)
+	}
+	if items[0].Provider != "openai" || items[1].Provider != "openrouter" {
+		t.Fatalf("items = %#v, want provider-contiguous order", items)
+	}
+}
+
+func TestModelPickerKeepsDuplicateIDsBoundToTheirProvider(t *testing.T) {
+	model := readyModel(t)
+	cfg := &config.Config{
+		Provider: "openai",
+		Model:    "shared-model",
+	}
+	all := modelItemsFromMetadata([]llm.ModelMetadata{
+		{ID: "shared-model", Provider: "openai"},
+		{ID: "shared-model", Provider: "openrouter"},
+	})
+	favorites := model.modelPickerFavoriteItems(cfg, all)
+	if len(favorites) != 1 || favorites[0].Provider != "openai" {
+		t.Fatalf("favorites = %#v, want current openai model", favorites)
+	}
+	combined := model.modelPickerItemsForCatalog(cfg, favorites, all)
+	providers := make(map[string]bool)
+	for _, item := range combined {
+		if item.Value == "shared-model" {
+			providers[item.Provider] = true
+		}
+	}
+	if len(providers) != 2 || !providers["openai"] || !providers["openrouter"] {
+		t.Fatalf("duplicate model providers = %#v, want both providers", providers)
+	}
+}
+
+func TestModelPickerLoadHonorsOverlayCancellation(t *testing.T) {
+	previous := queryAvailableModels
+	t.Cleanup(func() { queryAvailableModels = previous })
+	queryAvailableModels = func(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+		<-ctx.Done()
+		return llm.ModelCatalogResult{}, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{
+		purpose:     pickerPurposeModel,
+		request:     1,
+		cfg:         &config.Config{Provider: "openai"},
+		loading:     true,
+		loadContext: ctx,
+		loadCancel:  cancel,
+	}
+	loadCfg := *model.Picker.Overlay.cfg
+	done := make(chan any, 1)
+	go func() {
+		done <- loadAllModelPickerItems(1, &loadCfg, PresetPrimary, ctx)()
+	}()
+
+	model.pickerReducer().closeOverlay()
+	select {
+	case msg := <-done:
+		loaded, ok := msg.(allModelsLoadedMsg)
+		if !ok || !errors.Is(loaded.err, context.Canceled) {
+			t.Fatalf("load result = %#v, want canceled model load", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled model load did not settle")
+	}
+}
+
+func TestModelCatalogWarningSurfacesPartialAndStaleProviders(t *testing.T) {
+	warning := modelCatalogWarning(llm.ModelCatalogResult{
+		Status: []llm.ModelCatalogStatus{
+			{Provider: "openai", Err: errors.New("offline")},
+			{Provider: "openrouter", Stale: true},
+		},
+	})
+	if !strings.Contains(warning, "OpenAI") || !strings.Contains(warning, "OpenRouter") {
+		t.Fatalf("warning = %q, want unavailable and stale providers", warning)
 	}
 }
 

@@ -40,10 +40,13 @@ type ModelListResult struct {
 // An empty Providers list means all native providers with model-list support.
 // Config supplies the selected provider's endpoint, auth, headers, and runtime
 // API-key override. Other providers receive only their own ambient credentials.
+// IncludeLocal adds default local providers such as Ollama even when they are
+// not the selected provider and no local-host environment variable is set.
 type ModelCatalogQuery struct {
 	Config                 *config.Config
 	Providers              []string
 	IncludeUnauthenticated bool
+	IncludeLocal           bool
 }
 
 // ModelCatalogStatus records the outcome for one provider in an aggregate
@@ -176,8 +179,8 @@ func QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListRes
 
 // QueryAvailableModels queries all configured, listable native providers and
 // returns the successful union. Providers without credentials are omitted by
-// default, matching Pi's getAvailable behavior; set IncludeUnauthenticated to
-// probe every requested provider and receive explicit failures in Status.
+// default; set IncludeUnauthenticated to probe every requested provider and
+// receive explicit failures in Status.
 func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCatalogResult, error) {
 	base := query.Config
 	if base == nil {
@@ -197,6 +200,13 @@ func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCa
 		Models: make([]ModelMetadata, 0),
 		Status: make([]ModelCatalogStatus, 0, len(providers)),
 	}
+	type providerQuery struct {
+		provider string
+		cfg      *config.Config
+		listed   ModelListResult
+		err      error
+	}
+	queries := make([]providerQuery, 0, len(providers))
 	seenProviders := make(map[string]struct{}, len(providers))
 	for _, rawProvider := range providers {
 		provider := ResolveID(rawProvider)
@@ -210,34 +220,56 @@ func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCa
 
 		def, ok := Lookup(provider)
 		if !ok || !def.SupportsModelListing {
-			result.Status = append(result.Status, ModelCatalogStatus{
-				Provider: provider,
-				Err:      fmt.Errorf("no model listing available for provider %s", provider),
+			queries = append(queries, providerQuery{
+				provider: provider,
+				err:      fmt.Errorf("no model listing available for provider %s", provider),
 			})
 			continue
 		}
 
 		cfg := catalogConfigForProvider(base, provider)
-		if !query.IncludeUnauthenticated && !catalogProviderConfigured(base, cfg, def) {
+		if !query.IncludeUnauthenticated &&
+			!catalogProviderConfigured(base, cfg, def, query.IncludeLocal) {
 			continue
 		}
+		queries = append(queries, providerQuery{provider: provider, cfg: cfg})
+	}
 
-		listed, err := QueryModelsForConfig(ctx, cfg)
+	var wg sync.WaitGroup
+	for i := range queries {
+		if queries[i].cfg == nil {
+			continue
+		}
+		i := i
+		wg.Go(func() {
+			queries[i].listed, queries[i].err = QueryModelsForConfig(ctx, queries[i].cfg)
+		})
+	}
+	wg.Wait()
+
+	for _, query := range queries {
 		status := ModelCatalogStatus{
-			Provider: provider,
-			Models:   len(listed.Models),
-			Stale:    listed.Stale,
-			Err:      err,
+			Provider: query.provider,
+			Models:   len(query.listed.Models),
+			Stale:    query.listed.Stale,
+			Err:      query.err,
 		}
 		result.Status = append(result.Status, status)
-		if err != nil {
+		if query.err != nil {
 			continue
 		}
-		result.Models = append(result.Models, listed.Models...)
-		result.Stale = result.Stale || listed.Stale
+		models := cloneModelMetadataSlice(query.listed.Models)
+		for i := range models {
+			models[i].Provider = query.provider
+		}
+		result.Models = append(result.Models, models...)
+		result.Stale = result.Stale || query.listed.Stale
 	}
 
 	sortCatalogModels(result.Models)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if len(result.Models) == 0 {
 		for _, status := range result.Status {
 			if status.Err != nil {
@@ -259,12 +291,16 @@ func catalogConfigForProvider(base *config.Config, provider string) *config.Conf
 	return &clone
 }
 
-func catalogProviderConfigured(base, cfg *config.Config, def Definition) bool {
+func catalogProviderConfigured(base, cfg *config.Config, def Definition, includeLocal bool) bool {
 	switch def.AuthKind {
 	case AuthLocal:
-		return ResolveID(base.Provider) == def.ID || strings.TrimSpace(os.Getenv("OLLAMA_HOST")) != ""
+		return includeLocal ||
+			ResolveID(base.Provider) == def.ID ||
+			strings.TrimSpace(os.Getenv("OLLAMA_HOST")) != ""
 	case AuthOptional:
-		return ResolveID(base.Provider) == def.ID && strings.TrimSpace(cfg.Endpoint) != ""
+		return ResolveID(base.Provider) == def.ID &&
+			strings.TrimSpace(cfg.Endpoint) != "" &&
+			(!RequiresAuth(cfg, def) || ResolvedAuthToken(cfg, def) != "")
 	}
 	return ResolvedAuthToken(cfg, def) != ""
 }

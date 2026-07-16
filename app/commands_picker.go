@@ -58,6 +58,7 @@ func (m Model) openModelPickerForPreset(
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	loadContext, loadCancel := context.WithCancel(context.Background())
 
 	// Build initial items from favorites + any cached models
 	favorites := m.modelPickerFavoriteItems(cfg, nil)
@@ -68,86 +69,48 @@ func (m Model) openModelPickerForPreset(
 
 	m.clearProgressError()
 	requestID := m.pickerReducer().beginModelOverlayLoad(pickerOverlayState{
-		title:    "Pick a model",
-		items:    items,
-		filtered: append([]pickerItem(nil), items...),
-		index:    pickerIndex(items, configuredModelForPreset(cfg, preset)),
-		purpose:  pickerPurposeModel,
-		preset:   preset,
-		cfg:      cfg,
-		loading:  true,
+		title:       "Pick a model",
+		items:       items,
+		filtered:    append([]pickerItem(nil), items...),
+		index:       pickerIndexForModel(items, cfg.Provider, configuredModelForPreset(cfg, preset)),
+		purpose:     pickerPurposeModel,
+		preset:      preset,
+		cfg:         cfg,
+		loading:     true,
+		loadContext: loadContext,
+		loadCancel:  loadCancel,
 	})
-	return m, loadAllModelPickerItems(requestID, cfg, preset)
+	return m, loadAllModelPickerItems(requestID, cfg, preset, loadContext)
 }
 
-// loadAllModelPickerItems loads models from ALL providers that have API keys,
-// in parallel. Returns a unified list grouped by provider.
-func loadAllModelPickerItems(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
+// loadAllModelPickerItems loads the configured provider catalog. Provider
+// fan-out and cache/error handling belong to llm; the TUI only projects the
+// typed result into picker items.
+func loadAllModelPickerItems(
+	requestID uint64,
+	cfg *config.Config,
+	preset Preset,
+	loadContext context.Context,
+) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
 	}
+	if loadContext == nil {
+		loadContext = context.Background()
+	}
 	return func() tea.Msg {
-		items := loadAllModelsParallel(context.Background(), &cfgCopy)
+		catalog, err := queryAvailableModels(loadContext, llm.ModelCatalogQuery{
+			Config:       &cfgCopy,
+			IncludeLocal: true,
+		})
 		return allModelsLoadedMsg{
 			requestID: requestID,
-			items:     items,
+			items:     modelItemsFromMetadata(catalog.Models),
+			catalog:   catalog,
+			err:       err,
 		}
 	}
-}
-
-// loadAllModelsParallel fetches models from all providers with API keys.
-func loadAllModelsParallel(ctx context.Context, cfg *config.Config) []pickerItem {
-	providers := allProvidersWithAuth(cfg)
-	if len(providers) == 0 {
-		return nil
-	}
-
-	var all []pickerItem
-	for _, prov := range providers {
-		models, err := listModelsForConfig(ctx, prov)
-		if err != nil {
-			continue // skip providers that fail
-		}
-		displayName := providerDisplayName(prov.Provider)
-		items := modelItemsFromMetadata(models)
-		for j := range items {
-			items[j].Provider = prov.Provider
-			items[j].Group = displayName
-		}
-		all = append(all, items...)
-	}
-	return all
-}
-
-// allProvidersWithAuth returns configs for all providers that have API keys or are local.
-func allProvidersWithAuth(cfg *config.Config) []*config.Config {
-	var providers []*config.Config
-	for _, def := range llm.Native() {
-		if !llm.ShowInPicker(cfg, def) {
-			continue
-		}
-		if !def.SupportsModelListing {
-			continue
-		}
-		provCfg := cfgForProvider(cfg, def.ID)
-		// Include if: has API key, or is local, or is openai-compatible with endpoint
-		if providerReadyForModelListing(provCfg, def) {
-			providers = append(providers, provCfg)
-		}
-	}
-	return providers
-}
-
-// providerReadyForModelListing checks if a provider can list models.
-func providerReadyForModelListing(cfg *config.Config, def llm.Definition) bool {
-	if def.Kind == llm.KindLocal {
-		return true
-	}
-	if llm.IsOpenAICompatible(def.ID) {
-		return strings.TrimSpace(cfg.Endpoint) != ""
-	}
-	return !llm.RequiresAuth(cfg, def) || llm.ResolvedAuthToken(cfg, def) != ""
 }
 
 func (m Model) handleAllModelsLoaded(msg allModelsLoadedMsg) (Model, tea.Cmd) {
@@ -181,8 +144,43 @@ func (m Model) handleAllModelsLoaded(msg allModelsLoadedMsg) (Model, tea.Cmd) {
 		msg.requestID,
 		combined,
 		configuredModelForPreset(cfg, preset),
+		modelCatalogWarning(msg.catalog),
 	)
 	return m, nil
+}
+
+func modelCatalogWarning(catalog llm.ModelCatalogResult) string {
+	var unavailable []string
+	var stale []string
+	for _, status := range catalog.Status {
+		label := providerDisplayName(status.Provider)
+		if label == "" {
+			label = status.Provider
+		}
+		if status.Err != nil {
+			unavailable = append(unavailable, label)
+		}
+		if status.Stale {
+			stale = append(stale, label)
+		}
+	}
+	if len(unavailable) > 0 && len(stale) > 0 {
+		return fmt.Sprintf(
+			"Some catalogs unavailable (%s); using cached models for %s",
+			strings.Join(unavailable, ", "),
+			strings.Join(stale, ", "),
+		)
+	}
+	if len(unavailable) > 0 {
+		return "Some catalogs unavailable: " + strings.Join(unavailable, ", ")
+	}
+	if len(stale) > 0 || catalog.Stale {
+		if len(stale) == 0 {
+			return "Using cached model metadata"
+		}
+		return "Using cached model metadata for: " + strings.Join(stale, ", ")
+	}
+	return ""
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
@@ -242,23 +240,24 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 
 	primaryModel := strings.TrimSpace(cfg.Model)
 	fastModel := strings.TrimSpace(cfg.FastModel)
+	provider := llm.ResolveID(cfg.Provider)
 	switch {
 	case primaryModel == "" && fastModel == "":
 		return nil
 	case primaryModel != "" && strings.EqualFold(primaryModel, fastModel):
-		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
+		item := m.modelPickerFavoriteItem(all, provider, primaryModel, "primary")
 		item.Group = "Current"
 		return []pickerItem{item}
 	}
 
 	favorites := make([]pickerItem, 0, 2)
 	if primaryModel != "" {
-		item := m.modelPickerFavoriteItem(all, primaryModel, "primary")
+		item := m.modelPickerFavoriteItem(all, provider, primaryModel, "primary")
 		item.Group = "Current"
 		favorites = append(favorites, item)
 	}
 	if fastModel != "" {
-		item := m.modelPickerFavoriteItem(all, fastModel, "fast")
+		item := m.modelPickerFavoriteItem(all, provider, fastModel, "fast")
 		item.Group = "Current"
 		favorites = append(favorites, item)
 	}
@@ -302,7 +301,7 @@ func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem
 		if item.Value == "" {
 			continue
 		}
-		key := strings.ToLower(item.Value)
+		key := pickerModelKey(item.Provider, item.Value)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -312,17 +311,18 @@ func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem
 		if item.Value == "" {
 			continue
 		}
-		key := strings.ToLower(item.Value)
+		key := pickerModelKey(item.Provider, item.Value)
 		if _, ok := seen[key]; ok {
 			continue
 		}
+		seen[key] = struct{}{}
 		catalog = append(catalog, item)
 	}
 	return catalog
 }
 
-func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pickerItem {
-	if item, ok := pickerItemByValue(all, model); ok {
+func (m Model) modelPickerFavoriteItem(all []pickerItem, provider, model, slot string) pickerItem {
+	if item, ok := pickerItemByModel(all, provider, model); ok {
 		if item.Detail == "" && item.Metrics == nil {
 			item.Detail = slot
 		}
@@ -334,10 +334,11 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model, slot string) pic
 		return item
 	}
 	return pickerItem{
-		Label:  model,
-		Value:  model,
-		Detail: slot,
-		Tone:   pickerToneWarn,
+		Label:    model,
+		Value:    model,
+		Provider: provider,
+		Detail:   slot,
+		Tone:     pickerToneWarn,
 		Search: pickerSearchIndex(
 			model,
 			model,
@@ -355,10 +356,23 @@ func (m Model) startupPickerCmd() tea.Cmd {
 		overlay.loading &&
 		overlay.request != 0 &&
 		overlay.cfg != nil {
-		if overlay.setup {
-			return checkModelPickerSetup(overlay.request, overlay.cfg, overlay.Preset())
+		if overlay.loadContext == nil {
+			overlay.loadContext, overlay.loadCancel = context.WithCancel(context.Background())
 		}
-		return loadAllModelPickerItems(overlay.request, overlay.cfg, overlay.Preset())
+		if overlay.setup {
+			return checkModelPickerSetup(
+				overlay.request,
+				overlay.cfg,
+				overlay.Preset(),
+				overlay.loadContext,
+			)
+		}
+		return loadAllModelPickerItems(
+			overlay.request,
+			overlay.cfg,
+			overlay.Preset(),
+			overlay.loadContext,
+		)
 	}
 
 	if sessionPicker := m.Picker.Session; sessionPicker != nil &&
@@ -373,13 +387,21 @@ func (m Model) startupPickerCmd() tea.Cmd {
 	return nil
 }
 
-func checkModelPickerSetup(requestID uint64, cfg *config.Config, preset Preset) tea.Cmd {
+func checkModelPickerSetup(
+	requestID uint64,
+	cfg *config.Config,
+	preset Preset,
+	loadContext context.Context,
+) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
 		cfgCopy = *cfg
 	}
+	if loadContext == nil {
+		loadContext = context.Background()
+	}
 	return func() tea.Msg {
-		setup, err := providerSetupPrompt(context.Background(), &cfgCopy)
+		setup, err := providerSetupPrompt(loadContext, &cfgCopy)
 		return modelPickerSetupResolvedMsg{
 			requestID: requestID,
 			cfg:       cfgCopy,
@@ -447,6 +469,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 		msg.requestID,
 		combined,
 		configuredModelForPreset(cfg, msg.preset),
+		"",
 	)
 	return m, nil
 }

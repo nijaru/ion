@@ -103,6 +103,7 @@ type resumeSessionSelectedMsg struct {
 type allModelsLoadedMsg struct {
 	requestID uint64
 	items     []pickerItem // All models from all providers, with Provider field set
+	catalog   llm.ModelCatalogResult
 	err       error
 }
 
@@ -252,18 +253,21 @@ const (
 )
 
 type pickerOverlayState struct {
-	title    string
-	items    []pickerItem
-	filtered []pickerItem
-	index    int
-	query    string
-	purpose  pickerPurpose
-	preset   Preset
-	cfg      *config.Config
-	loading  bool
-	err      string
-	request  uint64
-	setup    bool
+	title       string
+	items       []pickerItem
+	filtered    []pickerItem
+	index       int
+	query       string
+	purpose     pickerPurpose
+	preset      Preset
+	cfg         *config.Config
+	loading     bool
+	err         string
+	warning     string
+	request     uint64
+	setup       bool
+	loadContext context.Context
+	loadCancel  context.CancelFunc
 }
 
 type completionState struct {

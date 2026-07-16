@@ -50,6 +50,10 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.cardPaddedLine(m.st.warn, "  Error: "+m.Picker.Overlay.err))
 		b.WriteString("\n")
 	}
+	if m.Picker.Overlay.warning != "" {
+		b.WriteString(m.cardPaddedLine(m.st.warn, "  Warning: "+m.Picker.Overlay.warning))
+		b.WriteString("\n")
+	}
 
 	b.WriteString(m.cardDivider())
 	b.WriteString("\n")

@@ -14,7 +14,10 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
-var listModelsForConfig = llm.ListModelsForConfig
+var (
+	listModelsForConfig  = llm.ListModelsForConfig
+	queryAvailableModels = llm.QueryAvailableModels
+)
 
 const pickerPageSize = 8
 
@@ -47,13 +50,36 @@ func pickerIndex(items []pickerItem, value string) int {
 	return 0
 }
 
-func pickerItemByValue(items []pickerItem, value string) (pickerItem, bool) {
+func pickerItemByModel(items []pickerItem, provider, model string) (pickerItem, bool) {
+	provider = llm.ResolveID(provider)
+	model = strings.TrimSpace(model)
 	for _, item := range items {
-		if strings.EqualFold(item.Value, value) || strings.EqualFold(item.Label, value) {
+		if item.Value == "" || !strings.EqualFold(item.Value, model) {
+			continue
+		}
+		if strings.EqualFold(llm.ResolveID(item.Provider), provider) {
 			return item, true
 		}
 	}
 	return pickerItem{}, false
+}
+
+func pickerModelKey(provider, model string) string {
+	return strings.ToLower(llm.ResolveID(provider)) + "\x00" + strings.ToLower(strings.TrimSpace(model))
+}
+
+func pickerIndexForModel(items []pickerItem, provider, value string) int {
+	provider = llm.ResolveID(provider)
+	for i, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Value), strings.TrimSpace(value)) &&
+			strings.EqualFold(llm.ResolveID(item.Provider), provider) {
+			return i
+		}
+	}
+	if provider != "" {
+		return 0
+	}
+	return pickerIndex(items, value)
 }
 
 func providerDisplayName(value string) string {
@@ -66,6 +92,9 @@ func providerDisplayName(value string) string {
 func modelItemsFromMetadata(metas []llm.ModelMetadata) []pickerItem {
 	metas = append([]llm.ModelMetadata(nil), metas...)
 	slices.SortFunc(metas, func(a, b llm.ModelMetadata) int {
+		if providerA, providerB := strings.ToLower(a.Provider), strings.ToLower(b.Provider); providerA != providerB {
+			return strings.Compare(providerA, providerB)
+		}
 		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
 			return strings.Compare(orgA, orgB)
 		}
@@ -87,10 +116,12 @@ func modelItemsFromMetadata(metas []llm.ModelMetadata) []pickerItem {
 			search = append(search, pickerSearchField{value: "free", weight: 12})
 		}
 		items = append(items, pickerItem{
-			Label:   model.ID,
-			Value:   model.ID,
-			Metrics: metrics,
-			Search:  search,
+			Label:    model.ID,
+			Value:    model.ID,
+			Provider: model.Provider,
+			Group:    providerDisplayName(model.Provider),
+			Metrics:  metrics,
+			Search:   search,
 		})
 	}
 	return items
@@ -582,11 +613,13 @@ func (m *Model) pickerReducer() pickerReducer {
 }
 
 func (r pickerReducer) showSessionUnavailable() {
+	r.cancelModelLoad()
 	r.picker.Overlay = nil
 	r.picker.Session = &sessionPickerState{err: "session store not available"}
 }
 
 func (r pickerReducer) openOverlay(state pickerOverlayState) {
+	r.cancelModelLoad()
 	r.picker.Overlay = &state
 }
 
@@ -622,6 +655,8 @@ func (r pickerReducer) failModelSetup(requestID uint64, message string) bool {
 	r.picker.Overlay.loading = false
 	r.picker.Overlay.setup = false
 	r.picker.Overlay.err = message
+	r.picker.Overlay.warning = ""
+	r.cancelModelLoad()
 	return true
 }
 
@@ -636,12 +671,23 @@ func (r pickerReducer) modelLoadRequestMatches(requestID uint64) bool {
 	return true
 }
 
+func (r pickerReducer) cancelModelLoad() {
+	if r.picker.Overlay == nil || r.picker.Overlay.loadCancel == nil {
+		return
+	}
+	r.picker.Overlay.loadCancel()
+	r.picker.Overlay.loadCancel = nil
+	r.picker.Overlay.loadContext = nil
+}
+
 func (r pickerReducer) failModelLoad(requestID uint64, message string) bool {
 	if !r.modelLoadRequestMatches(requestID) {
 		return false
 	}
 	r.picker.Overlay.loading = false
 	r.picker.Overlay.err = message
+	r.picker.Overlay.warning = ""
+	r.cancelModelLoad()
 	if len(r.picker.Overlay.items) == 0 {
 		r.picker.Overlay.filtered = nil
 	}
@@ -652,25 +698,38 @@ func (r pickerReducer) completeModelLoad(
 	requestID uint64,
 	items []pickerItem,
 	selectedValue string,
+	warning string,
 ) bool {
 	if !r.modelLoadRequestMatches(requestID) {
 		return false
 	}
 	r.picker.Overlay.loading = false
 	r.picker.Overlay.err = ""
+	r.picker.Overlay.warning = warning
 	r.picker.Overlay.items = items
 	r.picker.Overlay.filtered = clonePickerItems(items)
-	r.picker.Overlay.index = pickerIndex(items, selectedValue)
+	provider := ""
+	if r.picker.Overlay.cfg != nil {
+		provider = r.picker.Overlay.cfg.Provider
+	}
+	if r.picker.Overlay.purpose == pickerPurposeModel {
+		r.picker.Overlay.index = pickerIndexForModel(items, provider, selectedValue)
+	} else {
+		r.picker.Overlay.index = pickerIndex(items, selectedValue)
+	}
+	r.cancelModelLoad()
 	r.refreshOverlayFilter()
 	return true
 }
 
 func (r pickerReducer) closeOverlay() {
+	r.cancelModelLoad()
 	r.picker.Overlay = nil
 	r.picker.OverlayClosedAt = time.Now()
 }
 
 func (r pickerReducer) closeAll() {
+	r.cancelModelLoad()
 	r.picker.Overlay = nil
 	r.picker.Session = nil
 	r.picker.Setup = nil
@@ -679,6 +738,7 @@ func (r pickerReducer) closeAll() {
 }
 
 func (r pickerReducer) openSetup(state setupPromptState) {
+	r.cancelModelLoad()
 	r.picker.Overlay = nil
 	r.picker.Setup = &state
 }

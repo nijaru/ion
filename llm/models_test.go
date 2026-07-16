@@ -208,6 +208,124 @@ func TestQueryAvailableModelsFiltersUnconfiguredProviders(t *testing.T) {
 	}
 }
 
+func TestQueryAvailableModelsSkipsOpenAICompatibleWithoutConfiguredAuth(t *testing.T) {
+	t.Setenv("ION_TEST_COMPATIBLE_KEY", "")
+	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+		Config: &config.Config{
+			Provider:   OpenAICompatibleID,
+			Endpoint:   "http://127.0.0.1:8080/v1",
+			AuthEnvVar: "ION_TEST_COMPATIBLE_KEY",
+		},
+		Providers: []string{OpenAICompatibleID},
+	})
+	if err != nil {
+		t.Fatalf("query available models: %v", err)
+	}
+	if len(result.Models) != 0 || len(result.Status) != 0 {
+		t.Fatalf("catalog = %#v, want unconfigured provider omitted", result)
+	}
+}
+
+func TestQueryAvailableModelsCanIncludeDefaultLocalProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "configured")
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldFetcher := providerCatalogFetcher
+	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	var queried sync.Map
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		queried.Store(provider, true)
+		return []ModelMetadata{{ID: provider + "-model"}}, nil
+	}
+
+	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+		Config:       &config.Config{Provider: "openai"},
+		Providers:    []string{"openai", "ollama"},
+		IncludeLocal: true,
+	})
+	if err != nil {
+		t.Fatalf("query available models: %v", err)
+	}
+	if _, ok := queried.Load("ollama"); !ok {
+		t.Fatal("default local provider was not queried")
+	}
+	if len(result.Models) != 2 {
+		t.Fatalf("models = %#v, want openai and ollama", result.Models)
+	}
+}
+
+func TestQueryAvailableModelsQueriesProvidersConcurrentlyAndInOrder(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+	providerModelsOnce = sync.Once{}
+	providerModelsCacheMap = nil
+
+	oldFetcher := providerCatalogFetcher
+	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+		started <- provider
+		select {
+		case <-release:
+			return []ModelMetadata{{ID: provider + "-model"}}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	type queryResult struct {
+		catalog ModelCatalogResult
+		err     error
+	}
+	done := make(chan queryResult, 1)
+	go func() {
+		catalog, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+			Providers: []string{"openai", "openrouter"},
+		})
+		done <- queryResult{catalog: catalog, err: err}
+	}()
+
+	seen := make(map[string]struct{}, 2)
+	for range 2 {
+		select {
+		case provider := <-started:
+			seen[provider] = struct{}{}
+		case <-time.After(time.Second):
+			t.Fatal("model catalog queries did not start concurrently")
+		}
+	}
+	if _, ok := seen["openai"]; !ok {
+		t.Fatalf("started providers = %#v, want openai and openrouter", seen)
+	}
+	if _, ok := seen["openrouter"]; !ok {
+		t.Fatalf("started providers = %#v, want openai and openrouter", seen)
+	}
+	close(release)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("query available models: %v", got.err)
+		}
+		if len(got.catalog.Status) != 2 ||
+			got.catalog.Status[0].Provider != "openai" ||
+			got.catalog.Status[1].Provider != "openrouter" {
+			t.Fatalf("status order = %#v, want input order", got.catalog.Status)
+		}
+		if len(got.catalog.Models) != 2 ||
+			got.catalog.Models[0].Provider != "openai" ||
+			got.catalog.Models[1].Provider != "openrouter" {
+			t.Fatalf("model order/providers = %#v, want deterministic provider order", got.catalog.Models)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("model catalog query did not finish after release")
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {

@@ -174,6 +174,7 @@ func TestPickerReducerOverlayLoadRequestsFenceStaleResults(t *testing.T) {
 		requestID,
 		[]pickerItem{{Label: "GPT", Value: "gpt"}},
 		"gpt",
+		"",
 	) {
 		t.Fatal("current model load completion was not applied")
 	}
