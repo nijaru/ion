@@ -299,13 +299,37 @@ func main() {
 		cli.appendSystemPromptOverride(),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
-		os.Exit(1)
+		if printRequested || b == nil || b.Name() != "setup" {
+			closeErr := errors.Join(store.Close(), jobs.Close())
+			if closeErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+			}
+			if printRequested {
+				fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
+			}
+			os.Exit(1)
+		}
+		// Provider setup failures remain actionable in the interactive TUI.
+		// The setup backend has no runner and cannot be accepted by a runtime
+		// switch; the original error is shown in the bootstrap status.
+		fmt.Fprintf(os.Stderr, "runtime setup required: %v\n", err)
 	}
 	// Print mode: run a single turn and exit
 	if printRequested {
 		if runner == nil {
-			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")
+			message := "print mode requires a configured provider and model"
+			if b != nil {
+				if status := strings.TrimSpace(b.Bootstrap().Status); status != "" {
+					message = status
+				}
+			}
+			closeErr := errors.Join(store.Close(), jobs.Close())
+			if closeErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+			}
+			fmt.Fprintf(os.Stderr, "print mode error: %s\n", message)
 			os.Exit(1)
 		}
 		runErr := runPrintModeWithTimeout(
@@ -380,7 +404,7 @@ func main() {
 		WithSize(width, height)
 	if openResumePicker {
 		model = model.WithSessionPicker()
-	} else if startupProviderMissing(b) {
+	} else if startupSetupRequired(b) || startupProviderMissing(b) {
 		model = model.WithProviderPicker()
 	} else if startupModelMissing(b) {
 		model = model.WithModelPicker()
@@ -422,6 +446,10 @@ func main() {
 
 func startupProviderMissing(b app.Backend) bool {
 	return b != nil && strings.TrimSpace(b.Provider()) == ""
+}
+
+func startupSetupRequired(b app.Backend) bool {
+	return b != nil && b.Name() == "setup"
 }
 
 func startupModelMissing(b app.Backend) bool {

@@ -227,16 +227,6 @@ func openRuntime(
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
 
-	if sessionID != "" {
-		sqliteStore, ok := store.(*session.SQLiteStore)
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
-		}
-		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
-		}
-	}
-
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
 	if modelName == "" {
 		return nil, nil, nil, fmt.Errorf(
@@ -247,8 +237,24 @@ func openRuntime(
 	// Create a Provider and Harness for turn execution.
 	provider, err := providers.NewProviderFromConfig(&runtimeCfg)
 	if err != nil {
-		// Provider creation failed — return Backend only (no Runner).
-		return b, nil, nil, nil
+		// Keep startup recoverable for the TUI, but never present an incomplete
+		// runtime as accepted. Callers must handle the error before installing
+		// or persisting this setup backend.
+		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil,
+			fmt.Errorf("initialize provider: %w", err)
+	}
+
+	// Provider construction is side-effect free with respect to the session
+	// tree, so do it before moving a shared store to a requested resume leaf.
+	// A failed provider must leave the current runtime's session untouched.
+	if sessionID != "" {
+		sqliteStore, ok := store.(*session.SQLiteStore)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
+		}
+		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+		}
 	}
 
 	sess := session.NewSession(store, 64)

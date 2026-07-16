@@ -365,7 +365,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 		*observed = append(*observed, cfg.Model)
 		newSess := newStubSession(sessionID)
 		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}
-		return newBackend, nil, newSess, nil
+		return newBackend, &stubRunner{}, newSess, nil
 	}
 	model := New(b, nil, nil, "/tmp/test", "main", "dev", switcher)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

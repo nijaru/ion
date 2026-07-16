@@ -780,7 +780,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 				storageBranch: "main",
 			}
 			newBackend.SetSession(newStorage)
-			return newBackend, nil, newStorage, nil
+			return newBackend, &stubRunner{}, newStorage, nil
 		},
 	)
 

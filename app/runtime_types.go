@@ -275,6 +275,10 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		Runner:  runner,
 		Storage: storage,
 	}
+	if err := validateRuntimeHandles(newHandles); err != nil {
+		CloseHandles(newHandles)
+		return SwitchResult{}, fmt.Errorf("switch: %w", err)
+	}
 
 	result := SwitchResult{
 		Runtime: Accepted{
@@ -285,9 +289,12 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 	}
 
 	if input.SaveState != nil {
-		_ = input.SaveState(config.RuntimeStateUpdate{
+		if err := input.SaveState(config.RuntimeStateUpdate{
 			Config: cfg,
-		})
+		}); err != nil {
+			CloseHandles(newHandles)
+			return SwitchResult{}, fmt.Errorf("switch: persist runtime state: %w", err)
+		}
 	}
 
 	return result, nil
@@ -310,14 +317,34 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 	}
 
 	newHandles := Handles{Backend: backend, Runner: runner, Storage: storage}
+	if err := validateRuntimeHandles(newHandles); err != nil {
+		CloseHandles(newHandles)
+		return SwitchResult{}, fmt.Errorf("resume: %w", err)
+	}
 	transition := input.Transition.WithHandles(newHandles)
 	if input.SaveState != nil {
-		_ = input.SaveState(config.RuntimeStateUpdate{Config: &cfg})
+		if err := input.SaveState(config.RuntimeStateUpdate{Config: &cfg}); err != nil {
+			CloseHandles(newHandles)
+			return SwitchResult{}, fmt.Errorf("resume: persist runtime state: %w", err)
+		}
 	}
 	return SwitchResult{
 		Runtime:  NewAccepted(transition, newHandles),
 		Previous: input.Current,
 	}, nil
+}
+
+func validateRuntimeHandles(handles Handles) error {
+	if handles.Backend == nil {
+		return fmt.Errorf("incomplete runtime: backend is nil")
+	}
+	if handles.Runner == nil {
+		return fmt.Errorf("incomplete runtime: runner is nil")
+	}
+	if handles.Storage == nil {
+		return fmt.Errorf("incomplete runtime: session storage is nil")
+	}
+	return nil
 }
 
 // CloseHandles releases resources.
