@@ -31,17 +31,25 @@ import (
 var version = "v0.0.0"
 
 func main() {
-	if handled, code := runTopLevelCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
-		os.Exit(code)
+	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func runCLI(args []string, stdout, stderr io.Writer) int {
+	if handled, code := runTopLevelCommand(args, stdout, stderr); handled {
+		return code
 	}
 
 	timing.Record("cli-parse")
 
-	cli := registerCLIFlags()
-	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
-	if err := flag.CommandLine.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+	flagSet := flag.NewFlagSet("ion", flag.ContinueOnError)
+	flagSet.SetOutput(stderr)
+	cli := registerCLIFlags(flagSet)
+	normalizedArgs, openResumePicker := normalizeFlagArgs(args)
+	if err := flagSet.Parse(normalizedArgs); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
 	}
 	displayVersion := resolvedVersion()
 	if cli.versionRequested() {
@@ -49,27 +57,27 @@ func main() {
 		if openResumePicker {
 			conflictingFlags = append(conflictingFlags, "--resume")
 		}
-		flag.CommandLine.Visit(func(f *flag.Flag) {
+		flagSet.Visit(func(f *flag.Flag) {
 			if f.Name != "version" && ionKnownFlag(f.Name) {
 				conflictingFlags = append(conflictingFlags, "--"+f.Name)
 			}
 		})
-		if err := validateVersionSelection(flag.Args(), conflictingFlags); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(2)
+		if err := validateVersionSelection(flagSet.Args(), conflictingFlags); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 2
 		}
-		printVersion(os.Stdout, displayVersion)
-		return
+		printVersion(stdout, displayVersion)
+		return 0
 	}
 
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "failed to load config: %v\n", err)
+		return 1
 	}
 	for _, w := range config.Validate(cfg) {
-		fmt.Fprintf(os.Stderr, "config warning: %s\n", w)
+		fmt.Fprintf(stderr, "config warning: %s\n", w)
 	}
 	timing.Record("config-load")
 
@@ -91,8 +99,8 @@ func main() {
 		!selectionRequested && cli.exportSessionPath() == "" && cli.importSessionPath() == "" &&
 		!cli.listModelsRequested() {
 		if err := validateAPIKeyOverride(cfg.APIKeyOverride, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(2)
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 2
 		}
 	}
 
@@ -100,17 +108,17 @@ func main() {
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
 
-	listModelsSearch, err := resolveListModelsSearch(cli.listModelsRequested(), flag.Args())
+	listModelsSearch, err := resolveListModelsSearch(cli.listModelsRequested(), flagSet.Args())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
-	printArgs := flag.Args()
+	printArgs := flagSet.Args()
 	if cli.listModelsRequested() {
 		printArgs = nil
 		if cli.printRequested() || cli.printShortRequested() || cli.prompt() != "" || cli.jsonRequested() {
-			fmt.Fprintln(os.Stderr, "--list-models cannot be combined with print-mode flags")
-			os.Exit(2)
+			fmt.Fprintln(stderr, "--list-models cannot be combined with print-mode flags")
+			return 2
 		}
 	}
 	printRequested, prompt, output, err := resolvePrintFlags(
@@ -122,20 +130,20 @@ func main() {
 		cli.jsonRequested(),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if err := validatePrintTimeout(printRequested, cli.timeout()); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if err := validateSessionBundleSelection(cli.exportSessionPath(), cli.importSessionPath()); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if err := validateSessionSelection(
 		cli.noSessionRequested(),
@@ -147,8 +155,8 @@ func main() {
 		cli.exportSessionPath(),
 		cli.importSessionPath(),
 	); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if err := validateForkSelection(
 		forkRequested,
@@ -163,36 +171,36 @@ func main() {
 		cli.exportSessionPath(),
 		cli.importSessionPath(),
 	); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	if printRequested {
 		if isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
-				os.Exit(1)
+				fmt.Fprintf(stderr, "failed to read stdin: %v\n", err)
+				return 1
 			}
 			prompt = promptWithStdinContext(prompt, string(data))
 		}
 		if prompt == "" {
-			fmt.Fprintf(os.Stderr, "print mode requires --prompt or stdin pipe\n")
-			os.Exit(1)
+			fmt.Fprintf(stderr, "print mode requires --prompt or stdin pipe\n")
+			return 1
 		}
 	}
 
 	if cli.listModelsRequested() {
-		if err := runListModels(ctx, os.Stdout, os.Stderr, cfg, listModelsSearch); err != nil {
-			fmt.Fprintf(os.Stderr, "--list-models: %v\n", err)
-			os.Exit(1)
+		if err := runListModels(ctx, stdout, stderr, cfg, listModelsSearch); err != nil {
+			fmt.Fprintf(stderr, "--list-models: %v\n", err)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	store, err := openStartupStore(cli.noSessionRequested(), cli.sessionDirOverride())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "failed to initialize storage: %v\n", err)
+		return 1
 	}
 	timing.Record("store-open")
 
@@ -200,24 +208,20 @@ func main() {
 		imported, err := importSessionBundleFile(ctx, store, cli.importSessionPath())
 		closeErr := store.Close()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to import session bundle: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to import session bundle: %v\n", err)
+			return 1
 		}
 		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to close storage: %v\n", closeErr)
+			return 1
 		}
-		printSessionBundleImport(os.Stdout, imported)
-		return
+		printSessionBundleImport(stdout, imported)
+		return 0
 	}
 
 	var sessionID string
 	if openResumePicker {
-		width, height, err := term.GetSize(os.Stdout.Fd())
-		if err != nil || width <= 0 {
-			width = 80
-			height = 24
-		}
+		width, height := terminalSize(stdout)
 		pickerModel := app.New(nil, nil, store, cwd, branch, displayVersion, nil).
 			WithConfig(cfg).
 			WithSize(width, height).
@@ -226,18 +230,18 @@ func main() {
 		p := tea.NewProgram(&pickerModel)
 		finalPickerModel, pickerErr := p.Run()
 		if pickerErr != nil {
-			fmt.Fprintf(os.Stderr, "session picker error: %v\n", pickerErr)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "session picker error: %v\n", pickerErr)
+			return 1
 		}
 
 		appPickerModel, ok := finalPickerModel.(*app.Model)
 		if !ok || appPickerModel == nil {
-			os.Exit(0)
+			return 0
 		}
 
 		selectedSessionID := appPickerModel.SelectedSessionID()
 		if selectedSessionID == "" {
-			os.Exit(0)
+			return 0
 		}
 
 		sessionID = selectedSessionID
@@ -254,50 +258,50 @@ func main() {
 			cli.continueRequested(),
 		)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 1
 		}
 	}
 	if cli.exportSessionPath() != "" {
 		if sessionID == "" {
 			fmt.Fprintln(
-				os.Stderr,
+				stderr,
 				"--export-session requires --session <id>, --resume <id>, or --continue",
 			)
-			os.Exit(2)
+			return 2
 		}
 		exported, err := exportSessionBundleFile(ctx, store, sessionID, cli.exportSessionPath())
 		closeErr := store.Close()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to export session bundle: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to export session bundle: %v\n", err)
+			return 1
 		}
 		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to close storage: %v\n", closeErr)
+			return 1
 		}
-		printSessionBundleExport(os.Stdout, exported)
-		return
+		printSessionBundleExport(stdout, exported)
+		return 0
 	}
 	if forkRequested {
 		forkedID, err := ionexport.ForkSession(ctx, store, sessionID)
 		if err != nil {
 			store.Close()
-			fmt.Fprintf(os.Stderr, "failed to fork session %s: %v\n", sessionID, err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to fork session %s: %v\n", sessionID, err)
+			return 1
 		}
 		sessionID = forkedID
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, cwd, sessionID, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 1
 		}
 	}
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
 	if err := validateAPIKeyOverride(cfg.APIKeyOverride, firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel)); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
 	}
 	jobs := tool.NewJobManager()
 	runtimeCfg, activePreset, err := startupRuntimeConfig(
@@ -307,8 +311,8 @@ func main() {
 		explicitRuntimeOverride,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve runtime config: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "failed to resolve runtime config: %v\n", err)
+		return 1
 	}
 
 	persistResumedSessionModel := !(sessionID != "" && explicitRuntimeOverride)
@@ -329,19 +333,19 @@ func main() {
 		if printRequested || b == nil || b.Name() != "setup" {
 			closeErr := errors.Join(store.Close(), jobs.Close())
 			if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+				fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
 			}
 			if printRequested {
-				fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
+				fmt.Fprintf(stderr, "print mode error: %v\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
+				fmt.Fprintf(stderr, "failed to initialize runtime: %v\n", err)
 			}
-			os.Exit(1)
+			return 1
 		}
 		// Provider setup failures remain actionable in the interactive TUI.
 		// The setup backend has no runner and cannot be accepted by a runtime
 		// switch; the original error is shown in the bootstrap status.
-		fmt.Fprintf(os.Stderr, "runtime setup required: %v\n", err)
+		fmt.Fprintf(stderr, "runtime setup required: %v\n", err)
 	}
 	// Print mode: run a single turn and exit
 	if printRequested {
@@ -354,14 +358,14 @@ func main() {
 			}
 			closeErr := errors.Join(store.Close(), jobs.Close())
 			if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+				fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
 			}
-			fmt.Fprintf(os.Stderr, "print mode error: %s\n", message)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "print mode error: %s\n", message)
+			return 1
 		}
 		runErr := runPrintModeWithTimeout(
 			ctx,
-			os.Stdout,
+			stdout,
 			runner,
 			prompt,
 			cli.timeout(),
@@ -373,14 +377,14 @@ func main() {
 		closeErr := closeRuntimeHandles(runner, nil, store)
 		closeErr = errors.Join(closeErr, jobs.Close())
 		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "print mode error: %v\n", runErr)
+			return 1
 		}
 		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
-			os.Exit(1)
+			fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	startupLines := startupBannerLines(displayVersion)
@@ -394,7 +398,7 @@ func main() {
 	if sess != nil {
 		entries, err := sess.Entries(ctx)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to load startup history: %v\n", err)
+			fmt.Fprintf(stderr, "failed to load startup history: %v\n", err)
 		} else {
 			startupEntries = entries
 		}
@@ -432,18 +436,14 @@ func main() {
 		)
 	}
 
-	width, height, err := term.GetSize(os.Stdout.Fd())
-	if err != nil || width <= 0 {
-		width = 80
-		height = 24
-	}
+	width, height := terminalSize(stdout)
 	memoryPath, memoryPathErr := defaultMemoryPath()
 	if memoryPathErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: workspace memory unavailable: %v\n", memoryPathErr)
+		fmt.Fprintf(stderr, "warning: workspace memory unavailable: %v\n", memoryPathErr)
 	}
 	checkpointPath, checkpointPathErr := ionworkspace.DefaultCheckpointPath()
 	if checkpointPathErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: workspace checkpoints unavailable: %v\n", checkpointPathErr)
+		fmt.Fprintf(stderr, "warning: workspace checkpoints unavailable: %v\n", checkpointPathErr)
 	}
 
 	model := app.New(b, sess, store, cwd, branch, displayVersion, switcher).
@@ -467,7 +467,7 @@ func main() {
 	// will print its own header after the user selects a session.
 	if !openResumePicker {
 		printStartup(
-			os.Stdout,
+			stdout,
 			startupLines,
 			workspaceHeader(cwd, branch),
 			sessionID != "",
@@ -484,18 +484,31 @@ func main() {
 	closeErr = errors.Join(closeErr, jobs.Close())
 	if runErr != nil {
 		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+			fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
 		}
-		fmt.Fprintf(os.Stderr, "ion error: %v\n", runErr)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "ion error: %v\n", runErr)
+		return 1
 	}
 	if closeErr != nil {
-		fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
+		return 1
 	}
 	if sessionID := resumeHintSessionID(finalModel); sessionID != "" && !cli.noSessionRequested() {
-		printResumeHint(os.Stdout, sessionID)
+		printResumeHint(stdout, sessionID)
 	}
+	return 0
+}
+
+func terminalSize(w io.Writer) (int, int) {
+	file, ok := w.(*os.File)
+	if !ok {
+		return 80, 24
+	}
+	width, height, err := term.GetSize(file.Fd())
+	if err != nil || width <= 0 {
+		return 80, 24
+	}
+	return width, height
 }
 
 func startupProviderMissing(b app.Backend) bool {

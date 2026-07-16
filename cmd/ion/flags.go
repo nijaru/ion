@@ -36,94 +36,94 @@ type cliFlags struct {
 	versionFlag            *bool
 }
 
-func registerCLIFlags() cliFlags {
+func registerCLIFlags(fs *flag.FlagSet) cliFlags {
 	return cliFlags{
-		continueFlag: flag.Bool(
+		continueFlag: fs.Bool(
 			"continue",
 			false,
 			"Continue the most recent session in this directory",
 		),
-		continueShortFlag: flag.Bool(
+		continueShortFlag: fs.Bool(
 			"c",
 			false,
 			"Continue the most recent session in this directory",
 		),
-		sessionFlag: flag.String(
+		sessionFlag: fs.String(
 			"session",
 			"",
 			"Use a specific session by ID",
 		),
-		noSessionFlag: flag.Bool(
+		noSessionFlag: fs.Bool(
 			"no-session",
 			false,
 			"Run with an ephemeral in-memory session",
 		),
-		resumeFlag:      flag.String("resume", "", "Resume a specific session by ID"),
-		resumeShortFlag: flag.String("r", "", "Resume a specific session by ID"),
-		forkFlag: flag.Bool(
+		resumeFlag:      fs.String("resume", "", "Resume a specific session by ID"),
+		resumeShortFlag: fs.String("r", "", "Resume a specific session by ID"),
+		forkFlag: fs.Bool(
 			"fork",
 			false,
 			"Fork the current session into a new branch",
 		),
-		providerFlag:   flag.String("provider", "", "Provider to use"),
-		modelFlag:      flag.String("model", "", "Model to use"),
-		modelShortFlag: flag.String("m", "", "Model to use"),
-		thinkingFlag: flag.String(
+		providerFlag:   fs.String("provider", "", "Provider to use"),
+		modelFlag:      fs.String("model", "", "Model to use"),
+		modelShortFlag: fs.String("m", "", "Model to use"),
+		thinkingFlag: fs.String(
 			"thinking",
 			"",
 			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
 		),
-		trustModeFlag: flag.String(
+		trustModeFlag: fs.String(
 			"trust-mode",
 			"",
 			"Tool trust mode: trusted or confirm",
 		),
-		apiKeyFlag: flag.String(
+		apiKeyFlag: fs.String(
 			"api-key",
 			"",
 			"API key for the selected provider",
 		),
-		sessionDirFlag: flag.String(
+		sessionDirFlag: fs.String(
 			"session-dir",
 			"",
 			"Directory path for session storage",
 		),
-		listModelsFlag: flag.Bool(
+		listModelsFlag: fs.Bool(
 			"list-models",
 			false,
 			"List available models and exit",
 		),
-		systemPromptFlag: flag.String(
+		systemPromptFlag: fs.String(
 			"system-prompt",
 			"",
 			"Override the system prompt",
 		),
-		appendSystemPromptFlag: flag.String(
+		appendSystemPromptFlag: fs.String(
 			"append-system-prompt",
 			"",
 			"Append to the system prompt",
 		),
-		printFlag: flag.Bool(
+		printFlag: fs.Bool(
 			"print",
 			false,
 			"Print response and exit (use with --prompt or stdin)",
 		),
-		promptFlag:     flag.String("prompt", "", "Prompt to send in print mode"),
-		printShortFlag: flag.Bool("p", false, "Print response and exit (alias for --print)"),
-		outputFlag:     flag.String("output", "text", "Print mode output: text or json"),
-		jsonFlag:       flag.Bool("json", false, "Emit JSON in print mode"),
-		timeoutFlag:    flag.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
-		exportSessionFlag: flag.String(
+		promptFlag:     fs.String("prompt", "", "Prompt to send in print mode"),
+		printShortFlag: fs.Bool("p", false, "Print response and exit (alias for --print)"),
+		outputFlag:     fs.String("output", "text", "Print mode output: text or json"),
+		jsonFlag:       fs.Bool("json", false, "Emit JSON in print mode"),
+		timeoutFlag:    fs.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
+		exportSessionFlag: fs.String(
 			"export-session",
 			"",
 			"Export the selected session bundle to a JSON file",
 		),
-		importSessionFlag: flag.String(
+		importSessionFlag: fs.String(
 			"import-session",
 			"",
 			"Import a session bundle JSON file",
 		),
-		versionFlag: flag.Bool(
+		versionFlag: fs.Bool(
 			"version",
 			false,
 			"Print the Ion version and exit",
