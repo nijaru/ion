@@ -104,9 +104,15 @@ changes, update it by explicit decision before changing structural code.
   runtime owns the live lifecycle event stream.
 - internal/agent/loop.go is a stateless turn engine. It receives all inputs,
   persists nothing, owns no session/store, and emits typed events.
-- The agent harness is the stateful owner of active session state, tools,
-  queues, context, compaction/recovery, model/thinking/tool state, hooks,
-  policy, runtime resources, and persistence coordination.
+- The runtime controller is the sole stateful owner of active session state,
+  turn phases, tools, queues, context, compaction/recovery,
+  model/thinking/tool state, hooks, policy, event ordering, and persistence
+  coordination. `internal/agent/loop.go` remains a stateless turn engine;
+  `Harness` is only the current implementation surface being migrated into
+  this controller contract.
+- Frontends consume `agent.Runtime` for submit/stream/control and request
+  narrow optional capabilities for session administration. Do not recreate a
+  broad `Runner` interface or make the TUI depend on controller internals.
 - The host/composition root owns process lifetime, provider/auth/model
   construction, resource loading, runtime replacement, teardown, and CLI mode
   selection. No hidden package-global host state.
@@ -136,8 +142,9 @@ Use tk for multi-step work. The current overall goal is tk-2lt7. The
 reference-backed product charter is captured in
 ai/research/agent-reference-matrix.md; the ideal architecture is frozen in
 ai/DESIGN.md and tracked by completed task tk-uyfo. The implementation audit
-tk-03v2 is complete; the active bounded implementation task is tk-mkmt
-(session durability/replay), followed by tk-gwp7 (runtime/controller).
+tk-03v2 and session durability task tk-mkmt are complete; the active bounded
+implementation task is tk-gwp7 (runtime/controller), with tk-kw1m and tk-k6gf
+gated behind it.
 Keep tasks atomic, demoable, and acceptance-tested. Log findings while fresh,
 and do not reopen completed design work unless new evidence requires an
 explicit target change.
