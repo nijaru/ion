@@ -135,10 +135,12 @@ useful policy model.
 Use tk for multi-step work. The current overall goal is tk-2lt7. The
 reference-backed product charter is captured in
 ai/research/agent-reference-matrix.md; the ideal architecture is frozen in
-ai/DESIGN.md and tracked by completed task tk-uyfo. The active implementation
-audit is tk-03v2. Keep tasks atomic, demoable, and acceptance-tested. Log
-findings while fresh, and do not reopen completed design work unless new
-evidence requires an explicit target change.
+ai/DESIGN.md and tracked by completed task tk-uyfo. The implementation audit
+tk-03v2 is complete; the active bounded implementation task is tk-mkmt
+(session durability/replay), followed by tk-gwp7 (runtime/controller).
+Keep tasks atomic, demoable, and acceptance-tested. Log findings while fresh,
+and do not reopen completed design work unless new evidence requires an
+explicit target change.
 
 Use native Codex subagents when a second opinion materially improves an
 important architecture, safety, or code-review decision. The user has
