@@ -343,7 +343,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		// Provider setup failures remain actionable in the interactive TUI.
-		// The setup backend has no runner and cannot be accepted by a runtime
+		// The setup runtime has no runner and cannot be accepted by a runtime
 		// switch; the original error is shown in the bootstrap status.
 		fmt.Fprintf(stderr, "runtime setup required: %v\n", err)
 	}

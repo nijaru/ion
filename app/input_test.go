@@ -797,7 +797,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	if model.App.ActivePreset != PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
-	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+	if got := model.Model.Info.Model(); got != "gpt-4.1-mini" {
 		t.Fatalf("model = %q, want gpt-4.1-mini", got)
 	}
 
@@ -816,7 +816,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 	if model.App.ActivePreset != PresetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
-	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+	if got := model.Model.Info.Model(); got != "gpt-4.1" {
 		t.Fatalf("model = %q, want gpt-4.1", got)
 	}
 	if !slices.Equal(observedModels, []string{"gpt-4.1-mini", "gpt-4.1"}) {
@@ -886,10 +886,10 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	}
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
-	if got, want := model.Model.Backend.Model(), "claude-sonnet-4-5"; got != want {
+	if got, want := model.Model.Info.Model(), "claude-sonnet-4-5"; got != want {
 		t.Fatalf("model = %q, want %q", got, want)
 	}
-	if got := model.Model.Backend.Provider(); got != "anthropic" {
+	if got := model.Model.Info.Provider(); got != "anthropic" {
 		t.Fatalf("provider = %q, want anthropic", got)
 	}
 
@@ -903,7 +903,7 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	}
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
-	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+	if got := model.Model.Info.Model(); got != "gpt-4.1-mini" {
 		t.Fatalf("model = %q, want gpt-4.1-mini", got)
 	}
 
@@ -917,7 +917,7 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	}
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
-	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+	if got := model.Model.Info.Model(); got != "gpt-4.1" {
 		t.Fatalf("model = %q, want gpt-4.1 (wrap)", got)
 	}
 }
@@ -947,7 +947,7 @@ func TestCtrlLCyclesScopedModelsBackward(t *testing.T) {
 	}
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
-	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+	if got := model.Model.Info.Model(); got != "gpt-4.1-mini" {
 		t.Fatalf("model = %q, want gpt-4.1-mini (backward wrap)", got)
 	}
 }

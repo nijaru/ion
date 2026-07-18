@@ -24,7 +24,7 @@ Update `ai/` as you work when state changes materially.
 ## Project Layout
 
 - `internal/agent/` — agent loop, stream, tools, config (the core)
-- `internal/harness/` — harness with hooks (wraps the agent)
+- `internal/agent/` — stateless loop plus stateful harness with hooks
 - `session/` — session tree (source of truth), events, settings, projection
 - `app/` — TUI (Bubble Tea v2), markdown, syntax highlighting
 - `llm/` — LLM message types and providers (anthropic, openai, openrouter, etc.)

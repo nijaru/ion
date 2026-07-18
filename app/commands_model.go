@@ -226,9 +226,9 @@ func (m Model) handleToolsCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) != 1 {
 		return m, cmdError("usage: /tools")
 	}
-	summarizer, ok := m.Model.Backend.(ToolSummarizer)
+	summarizer, ok := m.Model.Info.(ToolSummarizer)
 	if !ok {
-		return m, cmdError("tool summary unavailable for this backend")
+		return m, cmdError("tool summary unavailable for this runtime")
 	}
 	return m, m.terminalCommit().Entries(
 		systemEntry(toolSurfaceSummary(summarizer.ToolSurface())),

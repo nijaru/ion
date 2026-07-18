@@ -205,7 +205,7 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 		CurrentDraft: m.Input.Composer.Value(),
 		Steering:     m.InFlight.QueuedSteering,
 		FollowUp:     m.InFlight.QueuedTurns,
-		BackendOwned: m.InFlight.QueuedTurnsBackendOwned,
+		RuntimeOwned: m.InFlight.QueuedTurnsRuntimeOwned,
 	})
 	if !decision.Recall {
 		return m, nil
@@ -808,9 +808,9 @@ func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry
 func (m Model) currentSessionModelName() string {
 	provider := ""
 	model := ""
-	if m.Model.Backend != nil {
-		provider = strings.TrimSpace(m.Model.Backend.Provider())
-		model = strings.TrimSpace(m.Model.Backend.Model())
+	if m.Model.Info != nil {
+		provider = strings.TrimSpace(m.Model.Info.Provider())
+		model = strings.TrimSpace(m.Model.Info.Model())
 	}
 	if m.Model.Config != nil {
 		if provider == "" {

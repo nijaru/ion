@@ -262,8 +262,8 @@ func (m Model) statusLine() string {
 	provider := m.runtimeProvider()
 	model := m.runtimeModel()
 	limit := 0
-	if m.Model.Backend != nil {
-		limit = m.Model.Backend.ContextLimit()
+	if m.Model.Info != nil {
+		limit = m.Model.Info.ContextLimit()
 	}
 	if provider != "" {
 		provider = m.st.dim.Render(providerDisplayName(provider))

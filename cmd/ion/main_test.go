@@ -81,17 +81,16 @@ func (s *closeStorageSession) Close() error {
 	return nil
 }
 
-type providerBackend struct {
+type providerRuntimeInfo struct {
 	provider string
 	model    string
 }
 
-func (b providerBackend) Name() string             { return "provider-test" }
-func (b providerBackend) Provider() string         { return b.provider }
-func (b providerBackend) Model() string            { return b.model }
-func (b providerBackend) ContextLimit() int        { return 0 }
-func (b providerBackend) Bootstrap() app.Bootstrap { return app.Bootstrap{} }
-func (b providerBackend) Session() session.Session { return nil }
+func (b providerRuntimeInfo) Name() string             { return "provider-test" }
+func (b providerRuntimeInfo) Provider() string         { return b.provider }
+func (b providerRuntimeInfo) Model() string            { return b.model }
+func (b providerRuntimeInfo) ContextLimit() int        { return 0 }
+func (b providerRuntimeInfo) Bootstrap() app.Bootstrap { return app.Bootstrap{} }
 
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 	startupAgent := &printSession{events: make(chan session.Event)}
@@ -143,10 +142,10 @@ func TestCloseRuntimeOpenErrorClosesPartialHandles(t *testing.T) {
 }
 
 func TestStartupProviderMissing(t *testing.T) {
-	if !startupProviderMissing(providerBackend{}) {
+	if !startupProviderMissing(providerRuntimeInfo{}) {
 		t.Fatal("empty provider should need startup setup")
 	}
-	if startupProviderMissing(providerBackend{provider: "openai"}) {
+	if startupProviderMissing(providerRuntimeInfo{provider: "openai"}) {
 		t.Fatal("configured provider should not need startup setup")
 	}
 	if startupProviderMissing(nil) {
@@ -155,13 +154,13 @@ func TestStartupProviderMissing(t *testing.T) {
 }
 
 func TestStartupModelMissing(t *testing.T) {
-	if startupModelMissing(providerBackend{}) {
+	if startupModelMissing(providerRuntimeInfo{}) {
 		t.Fatal("empty provider should not need model setup")
 	}
-	if !startupModelMissing(providerBackend{provider: "openrouter"}) {
+	if !startupModelMissing(providerRuntimeInfo{provider: "openrouter"}) {
 		t.Fatal("configured provider without model should need model setup")
 	}
-	if startupModelMissing(providerBackend{provider: "openrouter", model: "model-a"}) {
+	if startupModelMissing(providerRuntimeInfo{provider: "openrouter", model: "model-a"}) {
 		t.Fatal("configured provider and model should not need model setup")
 	}
 	if startupModelMissing(nil) {

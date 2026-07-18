@@ -37,7 +37,7 @@ func runtimeSwitchInput(current Handles) SwitchInput {
 
 func completeRuntimeHandles(runner agent.Runner) Handles {
 	return Handles{
-		Backend: stubBackend{provider: "openai", model: "gpt-4.1"},
+		Info:    stubBackend{provider: "openai", model: "gpt-4.1"},
 		Runner:  runner,
 		Storage: newStubSession("runtime"),
 	}
@@ -77,7 +77,7 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
 	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		handles := completeRuntimeHandles(newRunner)
-		return handles.Backend, handles.Runner, handles.Storage.(session.Session), nil
+		return handles.Info, handles.Runner, handles.Storage.(session.Session), nil
 	}
 	input.SaveState = func(config.RuntimeStateUpdate) error {
 		return errors.New("state store unavailable")
@@ -100,7 +100,7 @@ func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
 	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		handles := completeRuntimeHandles(newRunner)
-		return handles.Backend, handles.Runner, handles.Storage.(session.Session), nil
+		return handles.Info, handles.Runner, handles.Storage.(session.Session), nil
 	}
 	saved := false
 	input.SaveState = func(update config.RuntimeStateUpdate) error {

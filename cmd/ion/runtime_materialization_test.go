@@ -38,7 +38,7 @@ func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 		t.Fatalf("openRuntime error = %v, want actionable credential error", err)
 	}
 	if b == nil || b.Name() != "setup" {
-		t.Fatalf("backend = %#v, want setup backend", b)
+		t.Fatalf("runtime info = %#v, want setup runtime", b)
 	}
 	if sess != nil || runner != nil {
 		t.Fatalf("incomplete runtime handles = (%v, %v), want nil", sess, runner)
@@ -97,10 +97,10 @@ func TestOpenRuntimeDoesNotMoveLeafWhenMaterializationFails(t *testing.T) {
 }
 
 func TestStartupSetupRequiredRecognizesSetupBackend(t *testing.T) {
-	if !startupSetupRequired(app.NewSetupBackend(&config.Config{Provider: "openai"}, nil, "missing")) {
+	if !startupSetupRequired(app.NewSetupRuntime(&config.Config{Provider: "openai"}, nil, "missing")) {
 		t.Fatal("setup backend should require startup setup")
 	}
-	if startupSetupRequired(providerBackend{provider: "openai"}) {
+	if startupSetupRequired(providerRuntimeInfo{provider: "openai"}) {
 		t.Fatal("materialized backend should not require startup setup")
 	}
 }

@@ -308,10 +308,10 @@ func openRuntime(
 	}
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, nil
+		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, nil
 	}
 
-	b, err := backendForProvider(runtimeCfg.Provider, &runtimeCfg, store)
+	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, store)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -327,15 +327,15 @@ func openRuntime(
 	if err != nil {
 		// Keep startup recoverable for the TUI, but never present an incomplete
 		// runtime as accepted. Callers must handle the error before installing
-		// or persisting this setup backend.
-		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil,
+		// or persisting this setup runtime.
+		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil,
 			fmt.Errorf("initialize provider: %w", err)
 	}
 	provider = providerWithRetryPolicy(provider, &runtimeCfg)
 
 	mcpRuntime, err := openMCPRuntime(ctx, cwd, runtimeCfg.MCPServers)
 	if err != nil {
-		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 	}
 	var memoryStore *ionmemory.Store
 	closeRuntimeResources := func() error {
@@ -352,12 +352,12 @@ func openRuntime(
 		dataDir, err := config.DefaultDataDir()
 		if err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 		}
 		memoryStore, err = ionmemory.Open(filepath.Join(dataDir, "memory.db"))
 		if err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 		}
 	}
 
@@ -370,7 +370,7 @@ func openRuntime(
 	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, jobs)
 	if err != nil {
 		_ = closeRuntimeResources()
-		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 	}
 	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
 		// Non-fatal: start without tools if registration fails.
@@ -379,14 +379,14 @@ func openRuntime(
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 		}
 	}
 	for _, external := range mcpRuntime.Tools() {
 		if _, exists := toolRegistry.Get(external.Spec().Name); exists {
 			_ = closeRuntimeResources()
 			err := fmt.Errorf("MCP tool name %q collides with an existing tool", external.Spec().Name)
-			return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
 		}
 		toolRegistry.Register(external)
 	}
@@ -428,8 +428,8 @@ func openRuntime(
 		runtimeCfg.ActiveToolMode(),
 		runtimeCfg.SkillToolMode() == "read",
 	)
-	if backend, ok := b.(*configBackend); ok {
-		backend.surface = app.ToolSurface{
+	if runtime, ok := info.(*runtimeInfo); ok {
+		runtime.surface = app.ToolSurface{
 			Count:       len(toolRegistry.Names()),
 			Names:       toolRegistry.Names(),
 			ActiveNames: append([]string(nil), activeToolNames...),
@@ -510,7 +510,7 @@ func openRuntime(
 		searchTool.SetActivator(harness.ActivateTools)
 	}
 
-	return b, sess, harness, nil
+	return info, sess, harness, nil
 }
 
 func closeRuntimeOpenError(

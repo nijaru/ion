@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nijaru/ion/config"
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
 )
 
 func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
@@ -60,7 +60,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 			}
 		}
 		mergeRuntimeSelection(runtimeCfg, activeCfg)
-		backendCfg, err := m.runtimeConfigForPreset(runtimeCfg, preset)
+		activeRuntimeCfg, err := m.runtimeConfigForPreset(runtimeCfg, preset)
 		if err != nil {
 			return settingsCommandMsg{
 				requestID: requestID,
@@ -69,7 +69,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		}
 		return settingsCommandMsg{
 			requestID:     requestID,
-			transition:    newRuntimeTransition(runtimeCfg, backendCfg, preset, ""),
+			transition:    newRuntimeTransition(runtimeCfg, activeRuntimeCfg, preset, ""),
 			hasTransition: true,
 			notice:        notice,
 		}
@@ -423,4 +423,3 @@ func displayToolMode(value string) string {
 	}
 	return "coding"
 }
-

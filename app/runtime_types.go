@@ -42,7 +42,7 @@ type InFlightState struct {
 	StreamChunks            []string
 	QueuedSteering          []string
 	QueuedTurns             []string
-	QueuedTurnsBackendOwned bool
+	QueuedTurnsRuntimeOwned bool
 	Thinking                bool
 	Canceling               bool
 	AgentCommitted          bool
@@ -95,7 +95,7 @@ func (p Preset) String() string { return string(p) }
 // Snapshot captures the current runtime state.
 type Snapshot struct {
 	AppConfig     config.Config
-	BackendConfig config.Config
+	RuntimeConfig config.Config
 	Preset        Preset
 	Status        string
 	Reasoning     string
@@ -107,16 +107,16 @@ type Snapshot struct {
 
 func (s Snapshot) WithHandles(h Handles) Snapshot { return s }
 
-func NewSnapshot(appCfg, backendCfg *config.Config, preset Preset, status string) Snapshot {
+func NewSnapshot(appCfg, runtimeCfg *config.Config, preset Preset, status string) Snapshot {
 	s := Snapshot{Preset: preset, Status: status}
 	if appCfg != nil {
 		s.AppConfig = *appCfg
 	}
-	if backendCfg != nil {
-		s.BackendConfig = *backendCfg
-		s.Reasoning = normalizeThinkingValue(backendCfg.ReasoningEffort)
-		s.Provider = backendCfg.Provider
-		s.Model = backendCfg.Model
+	if runtimeCfg != nil {
+		s.RuntimeConfig = *runtimeCfg
+		s.Reasoning = normalizeThinkingValue(runtimeCfg.ReasoningEffort)
+		s.Provider = runtimeCfg.Provider
+		s.Model = runtimeCfg.Model
 	}
 	return s
 }
@@ -131,22 +131,22 @@ type Transition struct {
 	PreviousReasoning    *string
 }
 
-func NewTransition(appCfg, backendCfg *config.Config, preset Preset, status string) Transition {
+func NewTransition(appCfg, runtimeCfg *config.Config, preset Preset, status string) Transition {
 	if appCfg == nil {
 		appCfg = &config.Config{}
 	}
-	if backendCfg == nil {
-		backendCfg = appCfg
+	if runtimeCfg == nil {
+		runtimeCfg = appCfg
 	}
 	return Transition{
 		Snapshot: Snapshot{
 			AppConfig:     *appCfg,
-			BackendConfig: *backendCfg,
+			RuntimeConfig: *runtimeCfg,
 			Preset:        preset,
 			Status:        status,
-			Reasoning:     normalizeThinkingValue(backendCfg.ReasoningEffort),
-			Provider:      backendCfg.Provider,
-			Model:         backendCfg.Model,
+			Reasoning:     normalizeThinkingValue(runtimeCfg.ReasoningEffort),
+			Provider:      runtimeCfg.Provider,
+			Model:         runtimeCfg.Model,
 		},
 	}
 }
@@ -214,12 +214,12 @@ const (
 
 // Handles holds resolved runtime references.
 type Handles struct {
-	Backend RuntimeInfo
+	Info    RuntimeInfo
 	Runner  agent.Runner
 	Storage persistenceAdapter
 }
 
-// Switcher creates a new backend, harness, and storage session for model switching.
+// Switcher creates a new runtime info object, harness, and storage session for model switching.
 type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error)
 
 // SwitchInput holds the parameters for a model switch.
@@ -274,13 +274,13 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		cfg = &appCfg
 	}
 
-	backend, runner, storage, err := input.Switcher(ctx, cfg, input.TargetSessionID)
+	info, runner, storage, err := input.Switcher(ctx, cfg, input.TargetSessionID)
 	if err != nil {
 		return SwitchResult{}, fmt.Errorf("switch: %w", err)
 	}
 
 	newHandles := Handles{
-		Backend: backend,
+		Info:    info,
 		Runner:  runner,
 		Storage: storage,
 	}
@@ -319,13 +319,13 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 		return SwitchResult{}, fmt.Errorf("session id is required")
 	}
 
-	cfg := input.Transition.Snapshot.BackendConfig
-	backend, runner, storage, err := input.Switcher(ctx, &cfg, input.SessionID)
+	cfg := input.Transition.Snapshot.RuntimeConfig
+	info, runner, storage, err := input.Switcher(ctx, &cfg, input.SessionID)
 	if err != nil {
 		return SwitchResult{}, fmt.Errorf("resume: %w", err)
 	}
 
-	newHandles := Handles{Backend: backend, Runner: runner, Storage: storage}
+	newHandles := Handles{Info: info, Runner: runner, Storage: storage}
 	if err := validateRuntimeHandles(newHandles); err != nil {
 		CloseHandles(newHandles)
 		return SwitchResult{}, fmt.Errorf("resume: %w", err)
@@ -344,8 +344,8 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 }
 
 func validateRuntimeHandles(handles Handles) error {
-	if handles.Backend == nil {
-		return fmt.Errorf("incomplete runtime: backend is nil")
+	if handles.Info == nil {
+		return fmt.Errorf("incomplete runtime: runtime info is nil")
 	}
 	if handles.Runner == nil {
 		return fmt.Errorf("incomplete runtime: runner is nil")
@@ -422,7 +422,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	if full {
 		t.inFlight.QueuedTurns = nil
 		t.inFlight.QueuedSteering = nil
-		t.inFlight.QueuedTurnsBackendOwned = false
+		t.inFlight.QueuedTurnsRuntimeOwned = false
 	}
 }
 
@@ -627,7 +627,7 @@ func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
 	if t.inFlight == nil {
 		return TurnFinishedDispatch{AwaitNext: true}
 	}
-	if !t.inFlight.QueuedTurnsBackendOwned {
+	if !t.inFlight.QueuedTurnsRuntimeOwned {
 		if text := t.PopQueuedTurn(); text != "" {
 			return TurnFinishedDispatch{
 				Action:             TurnFinishedDispatchSubmitLocal,

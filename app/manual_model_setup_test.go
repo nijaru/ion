@@ -255,7 +255,7 @@ func TestManualModelPromptCommitsArbitraryModelID(t *testing.T) {
 	}
 	final, _ := updated.Update(switched)
 	updated = testModel(t, final)
-	if got, want := updated.Model.Backend.Model(), "moonshot-v1-8k"; got != want {
+	if got, want := updated.Model.Info.Model(), "moonshot-v1-8k"; got != want {
 		t.Fatalf("backend model = %q, want %q", got, want)
 	}
 	if len(observed) != 1 || observed[0] != "moonshot-v1-8k" {

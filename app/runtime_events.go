@@ -146,7 +146,7 @@ var BusyInputRouteFollowUp = "follow_up"
 type BusyInputDecision struct {
 	Recall        bool
 	ComposerText  string
-	ClearBackend  bool
+	ClearRuntime  bool
 	Action        string
 	NoticeContent string
 	FollowUp      []string
@@ -159,7 +159,7 @@ type QueuedInputRecallInput struct {
 	CurrentDraft string
 	Steering     []string
 	FollowUp     []string
-	BackendOwned bool
+	RuntimeOwned bool
 }
 
 func DecideQueuedInputRecall(input QueuedInputRecallInput) BusyInputDecision {

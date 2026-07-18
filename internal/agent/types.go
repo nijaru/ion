@@ -1,6 +1,7 @@
-// Package agent implements the stateless turn engine (RunLoop) and will hold
-// the stateful harness in a later phase. The loop is a pure function of its
-// arguments — no persistence, no tree, no retry. Events are the sole output.
+// Package agent implements the stateless turn engine (RunLoop) and the
+// stateful Harness that owns active-session lifecycle. The loop is a pure
+// function of its arguments — no persistence, no tree, no retry. Events are
+// the sole output.
 //
 // Reference: Pi's agent-loop.js (509 lines).
 package agent

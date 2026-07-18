@@ -334,7 +334,7 @@ type ConfigLoader func() (*config.Config, error)
 
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
-	Backend              RuntimeInfo
+	Info                 RuntimeInfo
 	Storage              persistenceAdapter
 	Jobs                 JobController
 	Memory               MemoryController
@@ -465,7 +465,7 @@ func New(
 			ActivePreset: PresetPrimary,
 		},
 		Model: ModelState{
-			Backend:  b,
+			Info:     b,
 			Storage:  s,
 			Store:    store,
 			Switcher: switcher,
@@ -685,7 +685,7 @@ func (m Model) configurationStatus() string {
 
 func (m Model) submitPreflightWithoutBudget() SubmitPreflightDecision {
 	return DecideSubmitPreflight(SubmitPreflightInput{
-		RuntimeRequired: m.Model.Backend != nil,
+		RuntimeRequired: m.Model.Info != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
 	})
@@ -697,7 +697,7 @@ func (m Model) submitPreflight() SubmitPreflightDecision {
 		maxSessionCost = m.Model.Config.MaxSessionCost
 	}
 	return DecideSubmitPreflight(SubmitPreflightInput{
-		RuntimeRequired: m.Model.Backend != nil,
+		RuntimeRequired: m.Model.Info != nil,
 		Provider:        m.runtimeProvider(),
 		Model:           m.runtimeModel(),
 		TotalCost:       m.Progress.TotalCost,
@@ -793,20 +793,20 @@ var saveRuntimeState = config.SaveRuntimeState
 
 func newRuntimeSnapshot(
 	appCfg *config.Config,
-	backendCfg *config.Config,
+	runtimeCfg *config.Config,
 	preset Preset,
 	status string,
 ) Snapshot {
-	return NewSnapshot(appCfg, backendCfg, preset, status)
+	return NewSnapshot(appCfg, runtimeCfg, preset, status)
 }
 
 func newRuntimeTransition(
 	appCfg *config.Config,
-	backendCfg *config.Config,
+	runtimeCfg *config.Config,
 	preset Preset,
 	status string,
 ) Transition {
-	return NewTransition(appCfg, backendCfg, preset, status)
+	return NewTransition(appCfg, runtimeCfg, preset, status)
 }
 
 func (m Model) commitRuntimeTransition(t Transition) (Model, error) {
@@ -1005,7 +1005,7 @@ func (m Model) activeSession() session.Session {
 
 func (m Model) Handles() Handles {
 	return Handles{
-		Backend: m.Model.Backend,
+		Info:    m.Model.Info,
 		Runner:  m.Model.Runner,
 		Storage: m.Model.Storage,
 	}
@@ -1015,18 +1015,18 @@ func (m Model) runtimeProvider() string {
 	if provider := strings.TrimSpace(m.Model.Runtime.Provider); provider != "" {
 		return provider
 	}
-	if m.Model.Backend == nil {
+	if m.Model.Info == nil {
 		return ""
 	}
-	return strings.TrimSpace(m.Model.Backend.Provider())
+	return strings.TrimSpace(m.Model.Info.Provider())
 }
 
 func (m Model) runtimeModel() string {
 	if model := strings.TrimSpace(m.Model.Runtime.Model); model != "" {
 		return model
 	}
-	if m.Model.Backend == nil {
+	if m.Model.Info == nil {
 		return ""
 	}
-	return strings.TrimSpace(m.Model.Backend.Model())
+	return strings.TrimSpace(m.Model.Info.Model())
 }

@@ -534,7 +534,7 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
 	model = testModel(t, updated)
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:         &stubSession{events: make(chan session.Event)},
 		provider:     "subscription-provider-with-a-very-long-name",
 		model:        "model-name-that-would-wrap-in-a-small-terminal",
@@ -616,7 +616,7 @@ func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
 	model = testModel(t, updated)
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "short-model",
@@ -632,7 +632,7 @@ func TestStatusLineDoesNotShowBranchWithoutWorkspace(t *testing.T) {
 
 func TestStatusLineMarksFastPresetOnModelSegment(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "deepseek/deepseek-v4-flash:free",
@@ -659,7 +659,7 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	model.Progress.TokensReceived = 0
 	model.Progress.ContextTokens = 0
 	model.Progress.TotalCost = 0
-	model.Model.Backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
+	model.Model.Info = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
 
 	line := ansi.Strip(model.statusLine())
 	if strings.Contains(line, "0 tokens") {
@@ -683,7 +683,7 @@ func TestStatusLineColorsContextUsageByContextPercentage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			model := readyModel(t)
-			model.Model.Backend = stubBackend{
+			model.Model.Info = stubBackend{
 				sess:         &stubSession{events: make(chan session.Event)},
 				contextLimit: 100_000,
 			}
@@ -704,7 +704,7 @@ func TestStatusLineColorsContextUsageByContextPercentage(t *testing.T) {
 
 func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:         &stubSession{events: make(chan session.Event)},
 		contextLimit: 100_000,
 	}
@@ -723,7 +723,7 @@ func TestStatusLineDoesNotUseCumulativeTokensAsContextUsage(t *testing.T) {
 
 func TestStatusLineShowsSmallContextUsageWithoutZeroK(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:         &stubSession{events: make(chan session.Event)},
 		contextLimit: 128_000,
 	}
@@ -752,7 +752,7 @@ func TestStatusLineShowsConfiguredSessionCostBudget(t *testing.T) {
 func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.ReasoningEffort = "high"
-	model.Model.Backend = stubBackend{
+	model.Model.Info = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "o3-mini",

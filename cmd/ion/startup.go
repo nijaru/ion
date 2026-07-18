@@ -406,7 +406,7 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func backendForProvider(provider string, cfg *config.Config, store session.Store) (app.RuntimeInfo, error) {
+func runtimeInfoForProvider(provider string, cfg *config.Config, store session.Store) (app.RuntimeInfo, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
@@ -416,43 +416,43 @@ func backendForProvider(provider string, cfg *config.Config, store session.Store
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	return &configBackend{def: &def, cfg: cfg, store: store}, nil
+	return &runtimeInfo{def: &def, cfg: cfg, store: store}, nil
 }
 
-// configBackend is a minimal app.RuntimeInfo for native providers.
+// runtimeInfo is a minimal app.RuntimeInfo for native providers.
 // It holds config and store, but does not own a Session (the harness does).
-type configBackend struct {
+type runtimeInfo struct {
 	def     *llm.Definition
 	cfg     *config.Config
 	store   session.Store
 	surface app.ToolSurface
 }
 
-func (b *configBackend) Name() string { return "ion" }
-func (b *configBackend) Provider() string {
+func (b *runtimeInfo) Name() string { return "ion" }
+func (b *runtimeInfo) Provider() string {
 	if b.def != nil {
 		return b.def.ID
 	}
 	return ""
 }
-func (b *configBackend) Model() string {
+func (b *runtimeInfo) Model() string {
 	if b.cfg != nil {
 		return b.cfg.Model
 	}
 	return ""
 }
-func (b *configBackend) ContextLimit() int {
+func (b *runtimeInfo) ContextLimit() int {
 	if b.cfg != nil {
 		return b.cfg.ContextLimit
 	}
 	return 0
 }
-func (b *configBackend) Bootstrap() app.Bootstrap {
+func (b *runtimeInfo) Bootstrap() app.Bootstrap {
 	entries, _ := b.store.Entries(context.Background())
 	return app.Bootstrap{Entries: entries,
 		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
 }
-func (b *configBackend) ToolSurface() app.ToolSurface {
+func (b *runtimeInfo) ToolSurface() app.ToolSurface {
 	surface := b.surface
 	surface.Names = append([]string(nil), surface.Names...)
 	surface.ActiveNames = append([]string(nil), surface.ActiveNames...)

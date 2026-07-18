@@ -490,7 +490,7 @@ func (m Model) resumeRuntimeCommand(
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
 		resumeBranch := currentBranchName(m.App.Branch, result.Runtime.Handles.Storage)
-		printLines := []string{m.runtimeHeaderLine(result.Runtime.Handles.Backend)}
+		printLines := []string{m.runtimeHeaderLine(result.Runtime.Handles.Info)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
 			printLines = append(printLines, header)
 		}
@@ -523,7 +523,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	// after-switch lifecycle boundary; Switch/Resume deliberately do not run
 	// teardown on construction failure.
 	m.runtimeRequest().clear()
-	m.Model.Backend = msg.runtime.Handles.Backend
+	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner
 	m.Model.Storage = msg.runtime.Handles.Storage
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
