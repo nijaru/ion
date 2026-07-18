@@ -18,7 +18,7 @@ Summary of that exploration:
 // NavigateTree moves the session leaf and optionally summarizes the abandoned
 // branch. The harness owns the phase and model call; Session owns validation,
 // leaf persistence, and the branch_summary entry.
-func (h *Harness) NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (result NavigateResult, err error) {
+func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts NavigateOptions) (result NavigateResult, err error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()

@@ -387,8 +387,12 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 
 	// Turn 1 fails.
 	msg1, err := h.Prompt(context.Background(), "first")
-	if err != nil {
-		t.Fatal(err)
+	var turnErr *TurnError
+	if !errors.As(err, &turnErr) || turnErr.Outcome != TurnFailed {
+		t.Fatalf("turn 1 error = %v, want failed TurnError", err)
+	}
+	if msg1 == nil {
+		t.Fatal("turn 1 did not return the terminal assistant message")
 	}
 	am1 := msg1.(*session.AssistantMessage)
 	if am1.StopReason != session.StopReasonError {

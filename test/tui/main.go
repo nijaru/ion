@@ -246,9 +246,9 @@ func (r *smokeRunner) NextTurn(string, ...session.ImageContent) error { return n
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }
-func (r *smokeRunner) SetModel(llm.Model)                                        {}
+func (r *smokeRunner) SetModel(llm.Model) error                                  { return nil }
 func (r *smokeRunner) SetThinking(context.Context, session.ThinkingLevel) error  { return nil }
-func (r *smokeRunner) SetTools([]agent.Tool, []string)                           {}
+func (r *smokeRunner) SetTools([]agent.Tool, []string) error                     { return nil }
 func (r *smokeRunner) ActivateTools(context.Context, []string) error             { return nil }
 func (r *smokeRunner) Session() session.Session                                  { return r.sess }
 func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }

@@ -162,10 +162,10 @@ func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
 	return nil, nil, nil
 }
-func (r *stubRunner) WaitForIdle()             {}
-func (r *stubRunner) Close() error             { return nil }
-func (r *stubRunner) Session() session.Session { return nil }
-func (r *stubRunner) SetModel(_ llm.Model)     {}
+func (r *stubRunner) WaitForIdle()               {}
+func (r *stubRunner) Close() error               { return nil }
+func (r *stubRunner) Session() session.Session   { return nil }
+func (r *stubRunner) SetModel(_ llm.Model) error { return nil }
 func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel) error {
 	if r.thinkingErr != nil {
 		return r.thinkingErr
@@ -173,7 +173,7 @@ func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel)
 	r.thinking = append(r.thinking, level)
 	return nil
 }
-func (r *stubRunner) SetTools(_ []agent.Tool, _ []string)           {}
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error     { return nil }
 func (r *stubRunner) ActivateTools(context.Context, []string) error { return nil }
 func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error {
 	if r.appendErr != nil {

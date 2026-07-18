@@ -159,6 +159,40 @@ type StopContext struct {
 	Context     TurnContext
 }
 
+// TurnOutcome identifies the durable terminal state of a logical turn.
+type TurnOutcome string
+
+const (
+	TurnCommitted     TurnOutcome = "committed"
+	TurnAborted       TurnOutcome = "aborted"
+	TurnFailed        TurnOutcome = "failed"
+	TurnIndeterminate TurnOutcome = "indeterminate"
+)
+
+// TurnError is returned when a turn produced a terminal assistant message but
+// did not complete successfully. The assistant message remains available to
+// the event/session projections, while callers can no longer mistake an
+// aborted or failed turn for a successful response.
+type TurnError struct {
+	Outcome TurnOutcome
+	TurnID  string
+	Err     error
+}
+
+func (e *TurnError) Error() string {
+	if e == nil || e.Err == nil {
+		return string(e.Outcome)
+	}
+	return string(e.Outcome) + ": " + e.Err.Error()
+}
+
+func (e *TurnError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // Runtime is the narrow turn and event surface consumed by the TUI and CLI.
 //
 // Session administration is deliberately not part of this interface. Those
@@ -190,15 +224,16 @@ type Runtime interface {
 	// Returns the cleared messages.
 	Abort() ([]session.Message, []session.Message, error)
 
-	// SetModel switches the active model.
-	SetModel(model llm.Model)
+	// SetModel switches the active model. It rejects a closed runtime.
+	SetModel(model llm.Model) error
 
 	// SetThinking changes the thinking level. Idle changes are durable before
 	// the live value changes; active changes are applied at the next boundary.
 	SetThinking(ctx context.Context, level session.ThinkingLevel) error
 
-	// SetTools updates the complete tool registry and active tool set.
-	SetTools(tools []Tool, active []string)
+	// SetTools updates the complete tool registry and active tool set. Active
+	// names must exist in the replacement registry.
+	SetTools(tools []Tool, active []string) error
 
 	// ActivateTools adds registered tools to the active set for the next turn.
 	// Unknown names fail closed and do not mutate the harness.

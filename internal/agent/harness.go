@@ -53,11 +53,14 @@ type Harness struct {
 	maxParallelTools int
 
 	// single active run
-	phase     Phase
-	closed    bool
-	mu        sync.Mutex
-	runDone   chan struct{}
-	runCancel chan struct{} // closed to abort current run
+	phase       Phase
+	closed      bool
+	mu          sync.Mutex
+	commandMu   sync.Mutex
+	commands    chan runtimeCommand
+	commandStop chan struct{}
+	runDone     chan struct{}
+	runCancel   chan struct{} // closed to abort current run
 
 	// event subscription
 	events         chan session.Event
@@ -116,7 +119,43 @@ const (
 	PhaseTurn       Phase = "turn"
 	PhaseCompaction Phase = "compaction"
 	PhaseBranchNav  Phase = "branch_summary"
+	PhaseSessionOp  Phase = "session_operation"
 )
+
+// beginExclusive reserves the controller for a non-turn operation. The phase
+// and cancellation handles are changed under the state lock; the operation
+// itself must run after this method returns so provider/storage I/O never runs
+// while h.mu is held.
+func (h *Harness) beginExclusive(phase Phase) (func(), error) {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, errors.New("harness is closed")
+	}
+	if h.phase != PhaseIdle {
+		current := h.phase
+		h.mu.Unlock()
+		return nil, fmt.Errorf("harness is busy (phase=%s)", current)
+	}
+	h.phase = phase
+	h.runDone = make(chan struct{})
+	h.runCancel = make(chan struct{})
+	done := h.runDone
+	h.mu.Unlock()
+
+	return func() {
+		h.mu.Lock()
+		if h.phase == phase {
+			h.phase = PhaseIdle
+			h.runCancel = nil
+			if h.runDone == done {
+				close(done)
+				h.runDone = nil
+			}
+		}
+		h.mu.Unlock()
+	}, nil
+}
 
 // pendingWrite is a buffered session mutation applied at turn boundary.
 // Pi reference: agent-harness.js pendSessionWrites (line 410-435).
@@ -235,6 +274,8 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		transport:        cfg.Transport,
 		timeout:          cfg.Timeout,
 		phase:            PhaseIdle,
+		commands:         make(chan runtimeCommand, controllerCommandCapacity),
+		commandStop:      make(chan struct{}),
 		events:           cfg.Events,
 		externalEvents:   cfg.Events != nil,
 		done:             make(chan struct{}),
@@ -266,6 +307,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	}
 	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
 	h.closeResources = append([]func() error(nil), cfg.CloseResources...)
+	go h.commandLoop()
 	return h
 }
 
@@ -393,21 +435,15 @@ func cloneImageContents(images []session.ImageContent) []session.ImageContent {
 //
 // Reference: Pi agent-harness.js prompt (line 541).
 func (h *Harness) Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
+	return h.submitPrompt(ctx, text, images)
+}
+
+// runPrompt executes an accepted turn. Acceptance and phase reservation are
+// performed by the controller command loop before this worker starts.
+func (h *Harness) runPrompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	turnStart := time.Now()
 	promptImages := cloneImageContents(images)
 	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return nil, errors.New("harness is closed")
-	}
-	if h.phase != PhaseIdle {
-		h.mu.Unlock()
-		h.logf(slog.LevelWarn, "prompt rejected: harness busy", slog.String("phase", string(h.phase)))
-		return nil, fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
-	h.phase = PhaseTurn
-	h.runDone = make(chan struct{})
-	h.runCancel = make(chan struct{})
 	cancel := h.runCancel
 	h.mu.Unlock()
 
@@ -637,13 +673,30 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 	// events. Do not flush again after AgentEnd: a concurrent setter may queue
 	// a mutation after the terminal boundary, which belongs to the next turn.
 
-	// Return the last assistant message.
+	// Return the last assistant message. A terminal failure is not a successful
+	// Prompt merely because the loop produced an error message; callers need the
+	// durable outcome to distinguish committed work from an aborted/failed turn.
+	var assistant *session.AssistantMessage
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if am, ok := msgs[i].(*session.AssistantMessage); ok {
-			return am, nil
+			assistant = am
+			break
 		}
 	}
-	return nil, fmt.Errorf("no assistant message produced")
+	if assistant == nil {
+		return nil, fmt.Errorf("no assistant message produced")
+	}
+	if reason := terminalTurnFailure(msgs); reason != "" {
+		h.mu.Lock()
+		turnID := h.activeTurnID
+		h.mu.Unlock()
+		return assistant, &TurnError{
+			Outcome: turnOutcomeForMessages(msgs),
+			TurnID:  turnID,
+			Err:     errors.New(reason),
+		}
+	}
+	return assistant, nil
 }
 
 // handleEvent is the event reducer. Persists on message_end, flushes on turn_end/agent_end.
@@ -688,7 +741,7 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 		h.emit(session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
 		if h.canCompactAfterTurn() && ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
-			if err := h.Compact(ctx); err != nil {
+			if err := h.compact(ctx); err != nil {
 				h.emit(&session.Error{Err: fmt.Errorf("auto-compact: %w", err)})
 			}
 		}
@@ -832,7 +885,7 @@ func (h *Harness) compactAfterTurn(ctx context.Context) error {
 	if !h.canCompactAfterTurn() {
 		return errors.New("compaction cannot run inside an uncommitted durable turn")
 	}
-	return h.Compact(ctx)
+	return h.compact(ctx)
 }
 
 func terminalTurnFailure(messages []session.Message) string {
@@ -851,6 +904,20 @@ func terminalTurnFailure(messages []session.Message) string {
 		return ""
 	}
 	return ""
+}
+
+func turnOutcomeForMessages(messages []session.Message) TurnOutcome {
+	for i := len(messages) - 1; i >= 0; i-- {
+		assistant, ok := messages[i].(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.StopReason == session.StopReasonAborted {
+			return TurnAborted
+		}
+		return TurnFailed
+	}
+	return TurnFailed
 }
 
 // buildLoopConfig constructs the per-turn LoopConfig.
@@ -1256,7 +1323,7 @@ func (h *Harness) appendQueued(queue *[]session.Message, message session.Message
 
 // Steer queues a message to be injected before the next assistant response.
 // Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
-func (h *Harness) Steer(text string, images ...session.ImageContent) error {
+func (h *Harness) steerDirect(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -1284,7 +1351,7 @@ func (h *Harness) Steer(text string, images ...session.ImageContent) error {
 
 // FollowUp queues a message to be processed after the agent would otherwise stop.
 // Returns an error if the harness is idle.
-func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
+func (h *Harness) followUpDirect(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -1311,7 +1378,7 @@ func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
 }
 
 // NextTurn queues a message to be prepended to the next prompt.
-func (h *Harness) NextTurn(text string, images ...session.ImageContent) error {
+func (h *Harness) nextTurnDirect(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -1433,11 +1500,11 @@ func reparentDurableEntry(entry session.Entry, parentID string) (session.Entry, 
 }
 
 // SetModel changes the model. If a run is active, buffered until next turn boundary.
-func (h *Harness) SetModel(model llm.Model) {
+func (h *Harness) setModelDirect(model llm.Model) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return
+		return errors.New("harness is closed")
 	}
 	oldModel := h.model
 	h.model = model
@@ -1460,12 +1527,13 @@ func (h *Harness) SetModel(model llm.Model) {
 		Source:   session.UpdateSourceSet,
 	})
 	h.mu.Unlock()
+	return nil
 }
 
 // SetThinking changes the thinking level. Idle changes are durable before the
 // live value changes so the next Prompt cannot restore the previous tree value.
 // Active changes are buffered for the next turn boundary.
-func (h *Harness) SetThinking(ctx context.Context, level session.ThinkingLevel) error {
+func (h *Harness) setThinkingDirect(ctx context.Context, level session.ThinkingLevel) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1474,15 +1542,34 @@ func (h *Harness) SetThinking(ctx context.Context, level session.ThinkingLevel) 
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if h.phase == PhaseIdle {
-		if h.session == nil {
-			h.mu.Unlock()
+	idle := h.phase == PhaseIdle
+	sess := h.session
+	h.mu.Unlock()
+	if idle {
+		if sess == nil {
 			return errors.New("harness has no session")
 		}
-		if _, err := h.session.AppendThinkingLevelChange(ctx, level); err != nil {
-			h.mu.Unlock()
+		finish, err := h.beginExclusive(PhaseSessionOp)
+		if err != nil {
+			return err
+		}
+		if _, err := sess.AppendThinkingLevelChange(ctx, level); err != nil {
+			finish()
 			return fmt.Errorf("persist thinking level: %w", err)
 		}
+		h.mu.Lock()
+		previous := h.thinking
+		h.thinking = level
+		h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
+		h.mu.Unlock()
+		finish()
+		return nil
+	}
+
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errors.New("harness is closed")
 	}
 	previous := h.thinking
 	h.thinking = level
@@ -1537,15 +1624,21 @@ func (h *Harness) SetThinking(ctx context.Context, level session.ThinkingLevel) 
 }
 
 // SetTools changes the active tools.
-func (h *Harness) SetTools(tools []Tool, active []string) {
+func (h *Harness) setToolsDirect(tools []Tool, active []string) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return
+		return errors.New("harness is closed")
 	}
 	toolMap := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		toolMap[t.Name] = t
+	}
+	for _, name := range active {
+		if _, ok := toolMap[name]; !ok {
+			h.mu.Unlock()
+			return fmt.Errorf("tool not found: %s", name)
+		}
 	}
 	previous := append([]string(nil), h.active...)
 	h.tools = toolMap
@@ -1565,22 +1658,26 @@ func (h *Harness) SetTools(tools []Tool, active []string) {
 	})
 	h.emitLocked(session.ToolsUpdate{Active: eventActive, Previous: previous})
 	h.mu.Unlock()
+	return nil
 }
 
 // ActivateTools adds registered tools to the active set without replacing the
 // registry or already-active tools. It is intentionally harness-owned: the
 // registry defines tools, while the harness controls provider visibility and
 // session persistence.
-func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
+func (h *Harness) activateToolsDirect(ctx context.Context, names []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
 
-	active := make(map[string]struct{}, len(h.active)+len(names))
+	activeSet := make(map[string]struct{}, len(h.active)+len(names))
 	for _, name := range h.active {
-		active[name] = struct{}{}
+		activeSet[name] = struct{}{}
 	}
 	for _, name := range names {
 		if _, ok := h.tools[name]; !ok {
@@ -1591,10 +1688,10 @@ func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
 
 	updated := append([]string(nil), h.active...)
 	for _, name := range names {
-		if _, ok := active[name]; ok {
+		if _, ok := activeSet[name]; ok {
 			continue
 		}
-		active[name] = struct{}{}
+		activeSet[name] = struct{}{}
 		updated = append(updated, name)
 	}
 	if len(updated) == len(h.active) {
@@ -1602,15 +1699,8 @@ func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
 		return nil
 	}
 
-	// Idle mutations are durable before the in-memory state changes. Prompt
-	// restores the session snapshot at turn start, so buffering this write
-	// would otherwise discard an activation made immediately before Prompt.
-	if h.phase == PhaseIdle {
-		if _, err := h.session.AppendActiveToolsChange(ctx, updated); err != nil {
-			h.mu.Unlock()
-			return fmt.Errorf("persist active tools: %w", err)
-		}
-	} else {
+	previous := append([]string(nil), h.active...)
+	if h.phase != PhaseIdle {
 		persistActive := append([]string(nil), updated...)
 		h.pending = append(h.pending, pendingWrite{
 			apply: func(ctx context.Context, s session.Session) error {
@@ -1623,15 +1713,36 @@ func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
 				})
 			},
 		})
+		h.active = updated
+		h.emitLocked(session.ToolsUpdate{
+			Active:   append([]string(nil), updated...),
+			Previous: previous,
+		})
+		h.mu.Unlock()
+		return nil
 	}
+	sess := h.session
+	h.mu.Unlock()
 
-	previous := append([]string(nil), h.active...)
+	if sess == nil {
+		return errors.New("harness has no session")
+	}
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return err
+	}
+	if _, err := sess.AppendActiveToolsChange(ctx, updated); err != nil {
+		finish()
+		return fmt.Errorf("persist active tools: %w", err)
+	}
+	h.mu.Lock()
 	h.active = updated
 	h.emitLocked(session.ToolsUpdate{
 		Active:   append([]string(nil), updated...),
 		Previous: previous,
 	})
 	h.mu.Unlock()
+	finish()
 	return nil
 }
 
@@ -1698,15 +1809,19 @@ func (h *Harness) ResolveApproval(id string, decision session.ApprovalDecision) 
 // Close releases resources. Active work is cancelled before waiting for its
 // completion so providers and tools that honor the run signal can terminate.
 func (h *Harness) Close() error {
+	h.commandMu.Lock()
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
+		h.commandMu.Unlock()
 		return nil
 	}
 	h.closed = true
+	close(h.commandStop)
 	close(h.done)
 	cancel := h.runCancel
 	h.mu.Unlock()
+	h.commandMu.Unlock()
 
 	if cancel != nil {
 		select {
@@ -1770,12 +1885,12 @@ func (h *Harness) Session() session.Session { return h.session }
 func (h *Harness) Store() session.Store { return h.store }
 
 // ExportSessionBundle performs explicit transport through the harness owner.
-func (h *Harness) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return ionexport.SessionBundle{}, errors.New("harness is closed")
+func (h *Harness) exportSessionBundleDirect(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return ionexport.SessionBundle{}, err
 	}
+	defer finish()
 	if h.store == nil {
 		return ionexport.SessionBundle{}, errors.New("session store does not support export")
 	}
@@ -1783,15 +1898,12 @@ func (h *Harness) ExportSessionBundle(ctx context.Context, sessionID string) (io
 }
 
 // ImportSessionBundle performs explicit transport through the harness owner.
-func (h *Harness) ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
+func (h *Harness) importSessionBundleDirect(ctx context.Context, bundle ionexport.SessionBundle) (string, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return "", err
 	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
+	defer finish()
 	if h.store == nil {
 		return "", errors.New("session store does not support import")
 	}
@@ -1800,15 +1912,12 @@ func (h *Harness) ImportSessionBundle(ctx context.Context, bundle ionexport.Sess
 
 // ForkSession copies a branch into an independent durable session. The
 // harness owns the idle gate so the active turn cannot race the tree copy.
-func (h *Harness) ForkSession(ctx context.Context, sourceID string) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
+func (h *Harness) forkSessionDirect(ctx context.Context, sourceID string) (string, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return "", err
 	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
+	defer finish()
 	if h.store == nil {
 		return "", errors.New("harness has no session store")
 	}
@@ -1818,8 +1927,19 @@ func (h *Harness) ForkSession(ctx context.Context, sourceID string) (string, err
 // Metrics returns the runtime metrics collector (may be nil).
 func (h *Harness) Metrics() *Metrics { return h.metrics }
 
-// Compact triggers context compaction.
-func (h *Harness) Compact(ctx context.Context) error {
+// Compact triggers context compaction while reserving the controller for the
+// operation. The internal compact method is used by an active turn only after
+// its caller has already established the lifecycle phase.
+func (h *Harness) compactDirect(ctx context.Context) error {
+	finish, err := h.beginExclusive(PhaseCompaction)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return h.compact(ctx)
+}
+
+func (h *Harness) compact(ctx context.Context) error {
 	start := time.Now()
 	// Build auth from harness config.
 	h.mu.Lock()
@@ -1829,8 +1949,8 @@ func (h *Harness) Compact(ctx context.Context) error {
 	}
 	model := h.model
 	thinking := h.thinking
-	h.logf(slog.LevelInfo, "compact start", slog.String("model", model.ID))
 	h.mu.Unlock()
+	h.logf(slog.LevelInfo, "compact start", slog.String("model", model.ID))
 
 	var apiKey string
 	var authHeaders map[string]string
@@ -1967,13 +2087,13 @@ func (h *Harness) GetTools() (map[string]Tool, []string) {
 
 // AppendMessage appends a message directly to the session without running a turn.
 // Reference: Pi agent-harness.js appendMessage (line 614).
-func (h *Harness) AppendMessage(ctx context.Context, msg session.Message) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return errors.New("harness is closed")
+func (h *Harness) appendMessageDirect(ctx context.Context, msg session.Message) error {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return err
 	}
-	_, err := h.session.AppendMessage(ctx, msg)
+	defer finish()
+	_, err = h.session.AppendMessage(ctx, msg)
 	return err
 }
 
@@ -1988,13 +2108,14 @@ func appendRunnerEntry(ctx context.Context, store session.Store, entry session.E
 }
 
 // PersistEntry persists an auxiliary entry through the harness-owned session.
-func (h *Harness) PersistEntry(ctx context.Context, entry session.Entry) error {
+func (h *Harness) persistEntryDirect(ctx context.Context, entry session.Entry) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
 	if h.store == nil {
+		h.mu.Unlock()
 		return errors.New("harness has no session store")
 	}
 	if h.phase != PhaseIdle {
@@ -2010,46 +2131,45 @@ func (h *Harness) PersistEntry(ctx context.Context, entry session.Entry) error {
 				return appendDurableEntry(ctx, store, turnID, parentID, attached)
 			},
 		})
+		h.mu.Unlock()
 		return nil
 	}
-	return appendRunnerEntry(ctx, h.store, entry)
+	store := h.store
+	h.mu.Unlock()
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return appendRunnerEntry(ctx, store, entry)
 }
 
 // AppendSessionInfo persists the session display name.
-func (h *Harness) AppendSessionInfo(ctx context.Context, name string) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
+func (h *Harness) appendSessionInfoDirect(ctx context.Context, name string) (string, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return "", err
 	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
+	defer finish()
 	return h.session.AppendSessionInfo(ctx, name)
 }
 
 // AppendLabel attaches a label to a target entry.
-func (h *Harness) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
+func (h *Harness) appendLabelDirect(ctx context.Context, targetID, label string) (string, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return "", err
 	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
+	defer finish()
 	return h.session.AppendLabel(ctx, targetID, label)
 }
 
 // GetLabel returns the most recent label for a target entry.
-func (h *Harness) GetLabel(ctx context.Context, targetID string) (string, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return "", errors.New("harness is closed")
+func (h *Harness) getLabelDirect(ctx context.Context, targetID string) (string, error) {
+	finish, err := h.beginExclusive(PhaseSessionOp)
+	if err != nil {
+		return "", err
 	}
-	if h.phase != PhaseIdle {
-		return "", fmt.Errorf("harness is busy (phase=%s)", h.phase)
-	}
+	defer finish()
 	return h.session.GetLabel(ctx, targetID)
 }

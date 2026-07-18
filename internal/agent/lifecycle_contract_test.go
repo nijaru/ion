@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -491,8 +492,9 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 	defer h.Close()
 
 	events, err := collectWithSubscribe(h, "fail fast")
-	if err != nil {
-		t.Fatal(err)
+	var turnErr *TurnError
+	if !errors.As(err, &turnErr) || turnErr.Outcome != TurnFailed {
+		t.Fatalf("turn error = %v, want failed TurnError", err)
 	}
 	// Must still get exactly one AgentEnd despite failure, proving loop didn't need store.
 	count := 0
