@@ -85,7 +85,7 @@ func run(mode, storeRoot, sessionID string, startupCheck bool) error {
 	if mode == "controls" {
 		cfg = &config.Config{}
 	}
-	smoke.SetConfig(cfg)
+	smoke.cfg = cfg
 
 	fmt.Println("ion v0.0.0")
 	fmt.Println(cwd + " • smoke")
@@ -180,12 +180,6 @@ func (b *smokeBackend) ContextLimit() int { return 262144 }
 
 func (b *smokeBackend) Bootstrap() app.Bootstrap {
 	return app.Bootstrap{Status: "[smoke] ready"}
-}
-
-func (b *smokeBackend) SetStore(session.Store) {}
-
-func (b *smokeBackend) SetConfig(cfg *config.Config) {
-	b.cfg = cfg
 }
 
 func (b *smokeBackend) Open(context.Context) error { return nil }

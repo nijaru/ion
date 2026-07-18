@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 
@@ -21,8 +20,6 @@ type RuntimeInfo interface {
 	Model() string
 	ContextLimit() int
 	Bootstrap() Bootstrap
-	SetStore(session.Store)
-	SetConfig(*config.Config)
 }
 
 // ToolSurface describes the tools exposed by the materialized runtime.

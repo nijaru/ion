@@ -406,7 +406,7 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func backendForProvider(provider string) (app.RuntimeInfo, error) {
+func backendForProvider(provider string, cfg *config.Config, store session.Store) (app.RuntimeInfo, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
@@ -416,7 +416,7 @@ func backendForProvider(provider string) (app.RuntimeInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	return &configBackend{def: &def}, nil
+	return &configBackend{def: &def, cfg: cfg, store: store}, nil
 }
 
 // configBackend is a minimal app.RuntimeInfo for native providers.
@@ -452,8 +452,6 @@ func (b *configBackend) Bootstrap() app.Bootstrap {
 	return app.Bootstrap{Entries: entries,
 		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
 }
-func (b *configBackend) SetStore(s session.Store)     { b.store = s }
-func (b *configBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
 func (b *configBackend) ToolSurface() app.ToolSurface {
 	surface := b.surface
 	surface.Names = append([]string(nil), surface.Names...)

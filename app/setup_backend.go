@@ -40,9 +40,6 @@ func (b *setupBackend) ContextLimit() int {
 	}
 	return 0
 }
-func (b *setupBackend) SetStore(s session.Store)     { b.store = s }
-func (b *setupBackend) SetConfig(cfg *config.Config) { b.cfg = cfg }
-
 func (b *setupBackend) Bootstrap() Bootstrap {
 	entries := []session.Entry{}
 	if b.store != nil {

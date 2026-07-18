@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/app"
-	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
 )
 
@@ -93,8 +92,6 @@ func (b providerBackend) Model() string            { return b.model }
 func (b providerBackend) ContextLimit() int        { return 0 }
 func (b providerBackend) Bootstrap() app.Bootstrap { return app.Bootstrap{} }
 func (b providerBackend) Session() session.Session { return nil }
-func (b providerBackend) SetStore(session.Store)   {}
-func (b providerBackend) SetConfig(*config.Config) {}
 
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 	startupAgent := &printSession{events: make(chan session.Event)}

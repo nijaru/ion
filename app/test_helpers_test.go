@@ -234,9 +234,7 @@ func (b stubBackend) Bootstrap() Bootstrap {
 		Status:  "ready",
 	}
 }
-func (b stubBackend) Session() session.Session   { return b.sess }
-func (b stubBackend) SetStore(_ session.Store)   {}
-func (b stubBackend) SetConfig(_ *config.Config) {}
+func (b stubBackend) Session() session.Session { return b.sess }
 
 // --- readyModel creates a Model ready for testing ---
 

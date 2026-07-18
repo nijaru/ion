@@ -463,7 +463,7 @@ func TestSplitSessionModelName(t *testing.T) {
 
 func TestBackendForProvider(t *testing.T) {
 	for _, provider := range []string{"bad", "claude-pro"} {
-		_, err := backendForProvider(provider)
+		_, err := backendForProvider(provider, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
 			t.Fatalf("provider %q error = %v, want unsupported provider", provider, err)
 		}

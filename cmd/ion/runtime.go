@@ -311,13 +311,10 @@ func openRuntime(
 		return app.NewSetupBackend(&runtimeCfg, store, err.Error()), nil, nil, nil
 	}
 
-	b, err := backendForProvider(runtimeCfg.Provider)
+	b, err := backendForProvider(runtimeCfg.Provider, &runtimeCfg, store)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	b.SetStore(store)
-	b.SetConfig(&runtimeCfg)
-
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
 	if modelName == "" {
 		return nil, nil, nil, fmt.Errorf(
@@ -364,22 +361,6 @@ func openRuntime(
 		}
 	}
 
-	// Provider construction is side-effect free with respect to the session
-	// tree, so do it before moving a shared store to a requested resume leaf.
-	// A failed provider must leave the current runtime's session untouched.
-	if sessionID != "" {
-		sqliteStore, ok := store.(*session.SQLiteStore)
-		if !ok {
-			_ = closeRuntimeResources()
-			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
-		}
-		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			_ = closeRuntimeResources()
-			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
-		}
-	}
-
-	sess := session.NewSession(store, 64)
 	model := llm.Model{ID: runtimeCfg.Model}
 
 	// Register coding tools and convert to agent.Tool. Runtime policy belongs
@@ -490,6 +471,24 @@ func openRuntime(
 		_ = closeRuntimeResources()
 		return nil, nil, nil, fmt.Errorf("build system prompt: %w", err)
 	}
+
+	// Resume only after every fallible runtime-materialization step has
+	// completed. The store is shared with the current runtime during TUI
+	// replacement, so moving its leaf earlier would violate Switch's guarantee
+	// that a failed replacement leaves the current runtime untouched.
+	if sessionID != "" {
+		sqliteStore, ok := store.(*session.SQLiteStore)
+		if !ok {
+			_ = closeRuntimeResources()
+			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
+		}
+		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
+			_ = closeRuntimeResources()
+			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+		}
+	}
+
+	sess := session.NewSession(store, 64)
 
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:             sess,

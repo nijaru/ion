@@ -352,8 +352,8 @@ type ModelState struct {
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
-	// Runner is the agent runner (Harness). When set, the TUI uses it
-	// instead of Backend + Session for turn execution and events.
+	// Runner is the agent runner (Harness). When set, the TUI uses it as the
+	// single turn and event owner.
 	Runner agent.Runner
 }
 
@@ -669,9 +669,8 @@ func (m Model) WithCheckpoints(checkpoints CheckpointController) Model {
 	return m
 }
 
-// WithRunner sets the agent runner (Harness) for the model.
-// When set, the TUI uses the Runner for turn execution and events
-// instead of Backend + Session directly.
+// WithRunner sets the agent runner (Harness) for the model. The TUI uses the
+// Runner for turn execution and events rather than duplicating session state.
 func (m Model) WithRunner(r agent.Runner) Model {
 	m.Model.Runner = r
 	return m
@@ -984,11 +983,7 @@ func TransitionErrorCmd(err error) tea.Cmd {
 
 func (m *Model) applyRuntimeSnapshot(snapshot Snapshot) {
 	appCfg := snapshot.AppConfig
-	backendCfg := snapshot.BackendConfig
 
-	if m.Model.Backend != nil {
-		m.Model.Backend.SetConfig(&backendCfg)
-	}
 	m.Model.Config = &appCfg
 	m.Model.Runtime = snapshot
 	m.App.ActivePreset = snapshot.Preset
