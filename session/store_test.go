@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -423,6 +424,9 @@ func TestSQLiteMigratesUnversionedStoreTransactionally(t *testing.T) {
 	if version != currentSchemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
 	}
+	if _, err := os.Stat(path + ".pre-migration-v0"); err != nil {
+		t.Fatalf("migration backup missing: %v", err)
+	}
 	if got := store.Meta().ID; got != "legacy-session" {
 		t.Fatalf("session ID = %q, want durable legacy identity", got)
 	}
@@ -463,6 +467,37 @@ func TestSQLiteStoreEnforcesSingleWriterLock(t *testing.T) {
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLiteStoreRejectsCorruptLeafOnOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.db")
+	store, err := NewSQLiteStore(path, "corrupt-leaf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		"INSERT INTO session_meta(key,value) VALUES('leaf_id','missing') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+	); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := NewSQLiteStore(path, "ignored")
+	if opened != nil {
+		_ = opened.Close()
+	}
+	if !errors.Is(err, ErrCorruptSession) {
+		t.Fatalf("corrupt leaf open error = %v, want ErrCorruptSession", err)
 	}
 }
 

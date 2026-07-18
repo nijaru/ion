@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -129,7 +130,7 @@ func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
 	// entries concurrently, and a single connection avoids SQLITE_BUSY races.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if err := migrateSchema(context.Background(), db); err != nil {
+	if err := migrateSchema(context.Background(), db, path); err != nil {
 		db.Close()
 		if lockFile != nil {
 			_ = releaseSessionLock(lockFile)
@@ -145,6 +146,13 @@ func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
 	}
 	s := &SQLiteStore{db: db, lockFile: lockFile, meta: Metadata{ID: sessionID}}
 	if err := s.loadMeta(); err != nil {
+		db.Close()
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
+		return nil, err
+	}
+	if err := s.validateLoadedState(); err != nil {
 		db.Close()
 		if lockFile != nil {
 			_ = releaseSessionLock(lockFile)
@@ -187,7 +195,20 @@ func releaseSessionLock(lockFile *os.File) error {
 // migrateSchema upgrades the store under one immediate SQLite transaction.
 // Version zero is the pre-versioned Ion schema; it is upgraded in place after
 // verifying each additive change. Unknown newer schemas are never opened.
-func migrateSchema(ctx context.Context, db *sql.DB) error {
+func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
+	ctx = normalizeContext(ctx)
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version > currentSchemaVersion {
+		return fmt.Errorf("%w: found %d, supported through %d", ErrUnsupportedSchema, version, currentSchemaVersion)
+	}
+	if version < currentSchemaVersion && path != ":memory:" {
+		if err := backupBeforeMigration(ctx, db, path, version); err != nil {
+			return err
+		}
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return classifySQLiteError("begin schema migration", err)
@@ -197,7 +218,6 @@ func migrateSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	var version int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return rollback(fmt.Errorf("read schema version: %w", err))
 	}
@@ -237,6 +257,53 @@ func migrateSchema(ctx context.Context, db *sql.DB) error {
 	if err := tx.Commit(); err != nil {
 		return classifySQLiteError("commit schema migration", err)
 	}
+	return nil
+}
+
+func backupBeforeMigration(ctx context.Context, db *sql.DB, path string, version int) error {
+	var tables int
+	if err := db.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type = 'table'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect database before migration: %w", err)
+	}
+	if tables == 0 {
+		return nil
+	}
+	backupPath := fmt.Sprintf("%s.pre-migration-v%d", path, version)
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect migration backup: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return classifySQLiteError("checkpoint database before migration", err)
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open database for migration backup: %w", err)
+	}
+	defer source.Close()
+	backup, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create migration backup: %w", err)
+	}
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			_ = backup.Close()
+			_ = os.Remove(backupPath)
+		}
+	}()
+	if _, err := io.Copy(backup, source); err != nil {
+		return fmt.Errorf("copy migration backup: %w", err)
+	}
+	if err := backup.Sync(); err != nil {
+		return fmt.Errorf("sync migration backup: %w", err)
+	}
+	if err := backup.Close(); err != nil {
+		return fmt.Errorf("close migration backup: %w", err)
+	}
+	keepBackup = true
 	return nil
 }
 
@@ -447,6 +514,25 @@ func (s *SQLiteStore) loadMeta() error {
 	}
 	if name.Valid {
 		s.meta.Name = name.String
+	}
+	return nil
+}
+
+func (s *SQLiteStore) validateLoadedState() error {
+	if s.leaf == "" {
+		return nil
+	}
+	var id string
+	err := s.db.QueryRow(`
+		SELECT e.id FROM entries e
+		WHERE e.id = ? AND (e.turn_id IS NULL OR EXISTS (
+			SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+		))`, s.leaf).Scan(&id)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("%w: leaf %q does not identify visible entry", ErrCorruptSession, s.leaf)
+	}
+	if err != nil {
+		return fmt.Errorf("validate session leaf: %w", err)
 	}
 	return nil
 }
