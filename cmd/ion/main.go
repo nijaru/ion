@@ -651,10 +651,12 @@ func runPromptTurn(
 	runner agent.Runtime,
 	prompt string,
 ) (printResult, error) {
-	events := runner.Events()
-	if events == nil {
-		events = make(chan session.EventEnvelope) // dummy, never receives
+	subscription, err := runner.Subscribe(ctx, agent.EventCursor{})
+	if err != nil {
+		return printResult{}, fmt.Errorf("subscribe runtime events: %w", err)
 	}
+	defer subscription.Close()
+	events := subscription.Events
 
 	var agentText strings.Builder
 	result := printResult{}

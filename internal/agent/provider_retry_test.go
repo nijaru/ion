@@ -54,7 +54,7 @@ func TestHarnessEmitsRuntimeProviderRetryEvent(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "retry me")
+	events, err := collectWithSubscribe(t, h, "retry me")
 	if err != nil {
 		t.Fatalf("Prompt() error = %v", err)
 	}

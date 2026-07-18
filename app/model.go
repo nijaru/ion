@@ -26,12 +26,19 @@ const (
 
 type sessionEventMsg struct {
 	generation uint64
-	cursor     session.EventCursor
+	cursor     agent.EventCursor
 	event      session.Event
+}
+
+type runtimeSubscriptionMsg struct {
+	generation   uint64
+	subscription *agent.EventSubscription
+	err          error
 }
 
 type streamClosedMsg struct {
 	generation uint64
+	err        error
 }
 
 type clearPendingMsg struct {
@@ -347,7 +354,8 @@ type ModelState struct {
 	Config               *config.Config
 	Runtime              Snapshot
 	EventGeneration      uint64
-	EventCursor          session.EventCursor
+	EventCursor          agent.EventCursor
+	EventSubscription    *agent.EventSubscription
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
 	MemoryRequest        uint64

@@ -63,11 +63,8 @@ type Harness struct {
 	runCancel   chan struct{} // closed to abort current run
 
 	// event subscription
-	events         chan session.EventEnvelope
-	externalEvents bool
-	delivery       *eventDelivery
-	done           chan struct{}
-	listeners      []func(session.Event)
+	eventHub *eventHub
+	done     chan struct{}
 
 	// hook registry (Pi on/emitHook pattern)
 	hooks map[string][]HookHandler
@@ -190,7 +187,6 @@ const (
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
-	Events          chan session.EventEnvelope
 	Session         session.Session
 	Store           session.Store
 	Durable         session.DurableStore // optional transactional turn journal
@@ -279,8 +275,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		phase:            PhaseIdle,
 		commands:         make(chan runtimeCommand, controllerCommandCapacity),
 		commandStop:      make(chan struct{}),
-		events:           cfg.Events,
-		externalEvents:   cfg.Events != nil,
+		eventHub:         newEventHub(),
 		done:             make(chan struct{}),
 		compaction:       cfg.Compaction,
 		contextWindow:    cfg.ContextWindow,
@@ -301,10 +296,6 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	if h.maxParallelTools <= 0 {
 		h.maxParallelTools = 8
 	}
-	if h.events == nil {
-		h.events = make(chan session.EventEnvelope, 256)
-	}
-	h.delivery = newEventDelivery(h.events, !h.externalEvents)
 	if h.hooks == nil {
 		h.hooks = make(map[string][]HookHandler)
 	}
@@ -313,9 +304,6 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	go h.commandLoop()
 	return h
 }
-
-// Events returns the ordered channel the TUI subscribes to.
-func (h *Harness) Events() <-chan session.EventEnvelope { return h.events }
 
 // Done is closed when the harness is no longer a valid event source.
 func (h *Harness) Done() <-chan struct{} { return h.done }
@@ -359,54 +347,19 @@ func (h *Harness) emitHook(hookType string, payload any) (patches []any, err err
 	return patches, errors.Join(hookErrors...)
 }
 
-// Subscribe registers a listener for all agent events.
-// Returns an unsubscribe function. Listeners are called on every emit.
-// Reference: Pi agent-harness.js subscribe (line 944).
-func (h *Harness) Subscribe(listener func(session.Event)) func() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	index := len(h.listeners)
-	h.listeners = append(h.listeners, listener)
-	return func() {
-		h.mu.Lock()
-		if index < len(h.listeners) {
-			h.listeners[index] = nil
-		}
-		h.mu.Unlock()
-	}
-}
-
-// emit snapshots listeners without holding h.mu, then enqueues the event on
-// the single ordered delivery path. The dispatcher invokes listeners before it
-// sends the same event to the consumer channel.
+// emit publishes an event through the controller-owned bounded subscription
+// hub. Subscribers never execute on the publisher and cannot block it.
 func (h *Harness) emit(e session.Event) {
-	h.mu.Lock()
-	snapshot := make([]func(session.Event), 0, len(h.listeners))
-	for _, fn := range h.listeners {
-		if fn != nil {
-			snapshot = append(snapshot, fn)
-		}
-	}
-	delivery := h.delivery
-	h.mu.Unlock()
-
-	if delivery != nil {
-		delivery.enqueue(e, snapshot)
+	if h.eventHub != nil {
+		h.eventHub.publish(e)
 	}
 }
 
-// emitLocked enqueues an event while h.mu is already held. It does not wait for
-// listeners, which keeps setter event ordering tied to state mutation and lets
-// a listener reenter the harness safely.
+// emitLocked publishes an event while h.mu is already held. Publication is
+// non-blocking and has no callback reentry path.
 func (h *Harness) emitLocked(e session.Event) {
-	snapshot := make([]func(session.Event), 0, len(h.listeners))
-	for _, fn := range h.listeners {
-		if fn != nil {
-			snapshot = append(snapshot, fn)
-		}
-	}
-	if h.delivery != nil {
-		h.delivery.enqueueAsync(e, snapshot)
+	if h.eventHub != nil {
+		h.eventHub.publish(e)
 	}
 }
 
@@ -1839,8 +1792,8 @@ func (h *Harness) Close() error {
 	// Ensure no active run is enqueueing before cancelling the dispatcher.
 	h.WaitForIdle()
 	flushErr := h.flushPending(context.Background())
-	if h.delivery != nil {
-		h.delivery.close()
+	if h.eventHub != nil {
+		h.eventHub.close()
 	}
 	return flushErr
 }

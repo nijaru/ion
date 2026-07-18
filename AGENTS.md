@@ -117,6 +117,12 @@ changes, update it by explicit decision before changing structural code.
   queue; private direct operations may perform owned external work only after
   acceptance. Every operation needs a typed result or error, and no void
   setter may silently lose input after close or queue saturation.
+- Runtime event delivery is an Ion-owned snapshot-plus-cursor subscription,
+  not a shared channel or callback registry. Each subscriber has an
+  independent bounded stream; a slow subscriber is explicitly detached with
+  `ErrSubscriptionLagged` and must resubscribe from the authoritative runtime
+  snapshot. Do not reintroduce `Events()`, injected event channels, listener
+  callbacks, or frontend-side transcript recovery.
 - The host/composition root owns process lifetime, provider/auth/model
   construction, resource loading, runtime replacement, teardown, and CLI mode
   selection. `Runtime.Close` stops the controller; host-owned resource handles

@@ -91,6 +91,11 @@ func TestHarnessEmitsEvents(t *testing.T) {
 		StreamFn: streamFn,
 	})
 	defer h.Close()
+	sub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
 
 	done := make(chan struct{})
 	go func() {
@@ -102,7 +107,7 @@ func TestHarnessEmitsEvents(t *testing.T) {
 	timeout := time.After(2 * time.Second)
 	for {
 		select {
-		case envelope := <-h.Events():
+		case envelope := <-sub.Events:
 			e := envelope.Event
 			events = append(events, e)
 			// AgentEnd now precedes Settled (Pi parity), so wait for Settled or timeout after AgentEnd.

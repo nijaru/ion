@@ -1,11 +1,12 @@
 package app
 
 import (
-	"fmt"
+	"errors"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -230,27 +231,63 @@ func (m Model) dispatchPickerControllerMessage(msg tea.Msg) (Model, tea.Cmd, boo
 
 func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
+	case runtimeSubscriptionMsg:
+		if msg.generation != m.Model.EventGeneration {
+			if msg.subscription != nil {
+				msg.subscription.Close()
+			}
+			return m, nil, true
+		}
+		if msg.err != nil {
+			if errors.Is(msg.err, agent.ErrSnapshotChanged) {
+				return m, m.awaitSessionEvent(), true
+			}
+			next, cmd := m.handleSessionError(msg.err, false)
+			return next, cmd, true
+		}
+		if msg.subscription == nil {
+			next, cmd := m.handleSessionError(errors.New("runtime returned an empty event subscription"), false)
+			return next, cmd, true
+		}
+		if m.Model.EventSubscription != nil {
+			m.Model.EventSubscription.Close()
+		}
+		m.Model.EventSubscription = msg.subscription
+		m.Model.EventCursor = msg.subscription.Snapshot.Cursor
+		var snapshotCmd tea.Cmd
+		if msg.subscription.Snapshot.Resynced {
+			m.turnReducer().ClearActiveState(true)
+			snapshotCmd = m.terminalCommit().SwitchReplay(
+				nil,
+				msg.subscription.Snapshot.Branch,
+				"Runtime resynchronized from the session snapshot.",
+				"",
+			)
+		}
+		return m, sequenceCmds(snapshotCmd, m.awaitSessionEvent()), true
+
 	case sessionEventMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
 		}
-		if msg.cursor != 0 && m.Model.EventCursor != 0 && msg.cursor != m.Model.EventCursor+1 {
-			next, cmd := m.handleSessionError(fmt.Errorf(
-				"runtime event cursor gap: expected %d, got %d",
-				m.Model.EventCursor+1,
-				msg.cursor,
-			), false)
-			return next, cmd, true
+		if msg.cursor != m.Model.EventCursor {
+			if m.Model.EventSubscription != nil {
+				m.Model.EventSubscription.Close()
+				m.Model.EventSubscription = nil
+			}
+			return m, m.awaitSessionEvent(), true
 		}
-		if msg.cursor != 0 {
-			m.Model.EventCursor = msg.cursor
-		}
+		m.Model.EventCursor.Next++
 		next, cmd := m.handleSessionEvent(msg.event)
 		return next, cmd, true
 
 	case streamClosedMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
+		}
+		if errors.Is(msg.err, agent.ErrSubscriptionLagged) {
+			m.Model.EventSubscription = nil
+			return m, m.awaitSessionEvent(), true
 		}
 		next, cmd := m.handleStreamClosed()
 		return next, cmd, true

@@ -19,7 +19,7 @@ func TestHarnessSettersEmitLifecycleUpdates(t *testing.T) {
 	defer func() { _ = h.Close() }()
 
 	events := make(chan session.Event, 3)
-	unsubscribe := h.Subscribe(func(event session.Event) { events <- event })
+	unsubscribe := watchEvents(t, h, func(event session.Event) { events <- event })
 	defer unsubscribe()
 
 	h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})

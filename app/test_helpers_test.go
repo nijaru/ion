@@ -49,6 +49,9 @@ func (s *stubSession) BuildContext(_ context.Context) (session.ContextSnapshot, 
 func (s *stubSession) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
+func (s *stubSession) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
+	return s.entries, nil
+}
 
 func (s *stubSession) AppendMessage(_ context.Context, msg session.Message) (string, error) {
 	s.messages = append(s.messages, msg)
@@ -149,7 +152,9 @@ type stubRunner struct {
 	thinkingErr  error
 }
 
-func (r *stubRunner) Events() <-chan session.EventEnvelope { return nil }
+func (r *stubRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
+	return &agent.EventSubscription{}, nil
+}
 func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	r.promptTexts = append(r.promptTexts, text)
 	r.promptImages = append(r.promptImages, cloneImageAttachments(images))
@@ -399,6 +404,9 @@ func (s *resumeOnlyStore) GetEntry(ctx context.Context, id string) (session.Entr
 	return nil, nil
 }
 func (s *resumeOnlyStore) Branch(ctx context.Context) ([]session.Entry, error) {
+	return nil, nil
+}
+func (s *resumeOnlyStore) BranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
 	return nil, nil
 }
 func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) {

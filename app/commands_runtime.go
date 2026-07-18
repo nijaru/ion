@@ -3,12 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/nijaru/ion/config"
 	"os"
 	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -533,9 +534,13 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	if msg.keybindings != nil {
 		m.Keybindings = msg.keybindings
 	}
+	if m.Model.EventSubscription != nil {
+		m.Model.EventSubscription.Close()
+		m.Model.EventSubscription = nil
+	}
 	closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
-	m.Model.EventCursor = 0
+	m.Model.EventCursor = agent.EventCursor{}
 	m.pickerReducer().closeAll()
 	m.clearProgressError()
 	if msg.runtime.Handles.Storage != nil {

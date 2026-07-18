@@ -201,8 +201,11 @@ func (e *TurnError) Unwrap() error {
 // the turn boundary explicit and prevents the UI from depending on the
 // controller's entire implementation.
 type Runtime interface {
-	// Events returns the channel the TUI subscribes to for agent events.
-	Events() <-chan session.EventEnvelope
+	// Subscribe opens an independent bounded event stream and returns an
+	// authoritative renderable snapshot. A non-zero cursor is used for
+	// resubscription; if the stream has advanced, the snapshot is marked
+	// Resynced and the caller replaces its projection before reading events.
+	Subscribe(ctx context.Context, after EventCursor) (*EventSubscription, error)
 
 	// Prompt submits a user message and runs a full agent turn.
 	// Blocks until the turn completes. Returns the final assistant message.

@@ -18,18 +18,6 @@ type Event interface {
 	isEvent()
 }
 
-// EventCursor is the monotonic runtime sequence assigned by the controller's
-// event owner. It is transport metadata, not session-tree state.
-type EventCursor uint64
-
-// EventEnvelope carries one typed runtime event with its delivery cursor.
-// Consumers use the cursor to detect a stale or interrupted subscription and
-// request a fresh projection instead of silently rendering a partial stream.
-type EventEnvelope struct {
-	Cursor EventCursor
-	Event  Event
-}
-
 // --- Core events (Pi-aligned). ---
 
 // AgentStart opens a run. Origin tags root vs child for the future subagent seam.

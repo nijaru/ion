@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -38,7 +39,7 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 		},
 	}
 
-	var eventTypes []string
+	events := make(chan session.Event, 64)
 	h := NewHarness(HarnessConfig{
 		Session: sess,
 		Store:   store,
@@ -59,10 +60,25 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 			}}, nil
 		},
 	})
-	h.Subscribe(func(event session.Event) { eventTypes = append(eventTypes, fmt.Sprintf("%T", event)) })
+	unsub := watchEvents(t, h, func(event session.Event) { events <- event })
+	defer unsub()
 	if _, err := h.Prompt(ctx, "use echo"); err != nil {
 		t.Fatalf("first Prompt: %v", err)
 	}
+	var eventTypes []string
+	for {
+		select {
+		case event := <-events:
+			eventTypes = append(eventTypes, fmt.Sprintf("%T", event))
+			if _, ok := event.(session.AgentEnd); ok {
+				goto collected
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out collecting first turn events")
+		}
+	}
+
+collected:
 	if !containsEventType(eventTypes, "ToolExecStart") || !containsEventType(eventTypes, "ToolExecEnd") {
 		t.Fatalf("tool lifecycle missing from events: %v", eventTypes)
 	}

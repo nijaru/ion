@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/app"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -93,8 +94,8 @@ func (b providerRuntimeInfo) ContextLimit() int        { return 0 }
 func (b providerRuntimeInfo) Bootstrap() app.Bootstrap { return app.Bootstrap{} }
 
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
-	startupAgent := &printSession{events: make(chan session.EventEnvelope)}
-	currentAgent := &printSession{events: make(chan session.EventEnvelope)}
+	startupAgent := &printSession{events: make(chan agent.EventEnvelope)}
+	currentAgent := &printSession{events: make(chan agent.EventEnvelope)}
 	currentStorage := &closeStorageSession{id: "current", events: make(chan session.Event)}
 	final := app.Model{
 		Model: app.ModelState{
@@ -110,7 +111,7 @@ func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 }
 
 func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
-	startupAgent := &printSession{events: make(chan session.EventEnvelope)}
+	startupAgent := &printSession{events: make(chan agent.EventEnvelope)}
 	agent := runtimeHandlesForClose(nil, startupAgent)
 	if agent != startupAgent {
 		t.Fatalf("agent = %#v, want fallback agent", agent)
@@ -118,7 +119,7 @@ func TestRuntimeHandlesForCloseFallsBackForNonAppModel(t *testing.T) {
 }
 
 func TestCloseRuntimeOpenErrorClosesPartialHandles(t *testing.T) {
-	agent := &printSession{events: make(chan session.EventEnvelope)}
+	agent := &printSession{events: make(chan agent.EventEnvelope)}
 	storageSession := &closeStorageSession{id: "partial", events: make(chan session.Event)}
 
 	err := closeRuntimeOpenError(

@@ -101,7 +101,7 @@ func TestCompactEmpty(t *testing.T) {
 	sess := session.NewSession(store, 64)
 
 	result, err := Compact(context.Background(), sess, CompactOptions{
-		Model:    "test",
+		Model: "test",
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			return &mockStream{}, nil
 		},

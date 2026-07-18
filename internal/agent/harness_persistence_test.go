@@ -49,7 +49,7 @@ func TestHarnessPersistenceFailureIsTerminalAndNotAcknowledged(t *testing.T) {
 	})
 	var terminalEvents atomic.Int32
 	var messageEnds atomic.Int32
-	h.Subscribe(func(event session.Event) {
+	watchEvents(t, h, func(event session.Event) {
 		switch event.(type) {
 		case session.AgentEnd, session.Settled, session.SavePoint:
 			terminalEvents.Add(1)

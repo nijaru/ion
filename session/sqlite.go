@@ -955,7 +955,23 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	if s.closed || s.db == nil {
 		return nil, ErrSessionClosed
 	}
-	if s.leaf == "" {
+	return s.branchAtLocked(ctx, s.leaf)
+}
+
+// BranchAt returns entries from root to the explicitly supplied leaf. The
+// caller owns the leaf identity; this method never consults the mutable store
+// leaf after entry, which makes it safe for snapshot construction.
+func (s *SQLiteStore) BranchAt(ctx context.Context, leafID string) ([]Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, ErrSessionClosed
+	}
+	return s.branchAtLocked(ctx, leafID)
+}
+
+func (s *SQLiteStore) branchAtLocked(ctx context.Context, leafID string) ([]Entry, error) {
+	if leafID == "" {
 		return nil, nil
 	}
 
@@ -983,7 +999,7 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 		FROM branch
 		JOIN entries e ON e.id = branch.id
 		ORDER BY branch.depth DESC
-	`, s.leaf)
+	`, leafID)
 	if err != nil {
 		return nil, err
 	}

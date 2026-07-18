@@ -38,6 +38,9 @@ func (s *testStore) GetEntry(_ context.Context, _ string) (session.Entry, error)
 func (s *testStore) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
+func (s *testStore) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
+	return s.entries, nil
+}
 func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }

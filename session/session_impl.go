@@ -25,6 +25,9 @@ func (s *sessionImpl) Meta() Metadata { return s.store.Meta() }
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
+func (s *sessionImpl) BranchAt(ctx context.Context, leafID string) ([]Entry, error) {
+	return s.store.BranchAt(ctx, leafID)
+}
 func (s *sessionImpl) GetEntry(ctx context.Context, id string) (Entry, error) {
 	return s.store.GetEntry(ctx, id)
 }

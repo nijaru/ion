@@ -269,9 +269,7 @@ func TestApprovalBrokerShutdownOverridesCachedAlways(t *testing.T) {
 func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	events := make(chan session.EventEnvelope, 4)
 	h := NewHarness(HarnessConfig{
-		Events:              events,
 		Session:             sess,
 		Store:               store,
 		ApprovalMode:        ApprovalConfirm,
@@ -285,6 +283,9 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 		}},
 	})
 	defer h.Close()
+	events := make(chan session.Event, 1)
+	unsub := watchEvents(t, h, func(event session.Event) { events <- event })
+	defer unsub()
 
 	loopCfg := h.buildLoopConfig(context.Background(), h.buildTools(), nil)
 	decisionCh := make(chan *ToolCallDecision, 1)
@@ -296,7 +297,7 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 		})
 	}()
 
-	event := (<-events).Event
+	event := <-events
 	request, ok := event.(session.ApprovalRequest)
 	if !ok {
 		t.Fatalf("event = %T, want ApprovalRequest", event)
@@ -313,9 +314,7 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	events := make(chan session.EventEnvelope, 4)
 	h := NewHarness(HarnessConfig{
-		Events:              events,
 		Session:             sess,
 		Store:               store,
 		ApprovalMode:        ApprovalTrusted,
@@ -332,6 +331,9 @@ func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 		}},
 	})
 	defer h.Close()
+	events := make(chan session.Event, 1)
+	unsub := watchEvents(t, h, func(event session.Event) { events <- event })
+	defer unsub()
 
 	loopCfg := h.buildLoopConfig(context.Background(), h.buildTools(), nil)
 	decisionCh := make(chan *ToolCallDecision, 1)
@@ -343,7 +345,7 @@ func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 		})
 	}()
 
-	event := (<-events).Event
+	event := <-events
 	request, ok := event.(session.ApprovalRequest)
 	if !ok {
 		t.Fatalf("event = %T, want ApprovalRequest", event)
@@ -396,7 +398,7 @@ func TestDeniedApprovalPersistsRecoverableToolResult(t *testing.T) {
 		},
 	})
 	defer h.Close()
-	h.Subscribe(func(event session.Event) {
+	watchEvents(t, h, func(event session.Event) {
 		if request, ok := event.(session.ApprovalRequest); ok {
 			if err := h.ResolveApproval(request.ID, session.ApprovalDeny); err != nil {
 				t.Errorf("ResolveApproval: %v", err)

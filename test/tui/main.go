@@ -146,18 +146,20 @@ func seedSmokeSessionPicker(ctx context.Context, store sessionCatalogWriter, cwd
 
 type smokeBackend struct {
 	mode   string
-	events chan session.EventEnvelope
+	events chan agent.EventEnvelope
 	cfg    *config.Config
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
-	cursor session.EventCursor
+	stream agent.EventStreamID
+	cursor uint64
 }
 
 func newSmokeBackend(mode string) *smokeBackend {
 	return &smokeBackend{
 		mode:   mode,
-		events: make(chan session.EventEnvelope, 64),
+		events: make(chan agent.EventEnvelope, 64),
+		stream: agent.EventStreamID{1},
 	}
 }
 
@@ -224,14 +226,22 @@ func (b *smokeBackend) Close() error {
 	return nil
 }
 
-func (b *smokeBackend) Events() <-chan session.EventEnvelope { return b.events }
+func (b *smokeBackend) Events() <-chan agent.EventEnvelope { return b.events }
 
 type smokeRunner struct {
 	backend *smokeBackend
 	sess    session.Session
 }
 
-func (r *smokeRunner) Events() <-chan session.EventEnvelope { return r.backend.Events() }
+func (r *smokeRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
+	r.backend.mu.Lock()
+	cursor := agent.EventCursor{Stream: r.backend.stream, Next: r.backend.cursor + 1}
+	r.backend.mu.Unlock()
+	return &agent.EventSubscription{
+		Snapshot: agent.RuntimeSnapshot{Cursor: cursor},
+		Events:   r.backend.Events(),
+	}, nil
+}
 func (r *smokeRunner) Prompt(ctx context.Context, text string, _ ...session.ImageContent) (session.Message, error) {
 	return nil, r.backend.SubmitTurn(ctx, text)
 }
@@ -530,13 +540,13 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 
 func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
 	b.mu.Lock()
-	envelope := session.EventEnvelope{Cursor: b.cursor + 1, Event: event}
+	envelope := agent.EventEnvelope{Stream: b.stream, Sequence: b.cursor + 1, Event: event}
 	select {
 	case <-ctx.Done():
 		b.mu.Unlock()
 		return false
 	case b.events <- envelope:
-		b.cursor = envelope.Cursor
+		b.cursor = envelope.Sequence
 		b.mu.Unlock()
 		return true
 	}

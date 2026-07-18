@@ -22,41 +22,16 @@ import (
 
 // ----- Helpers to collect events from a Prompt -----
 
-func collectWithSubscribe(h *Harness, prompt string) ([]session.Event, error) {
+func collectWithSubscribe(t *testing.T, h *Harness, prompt string) ([]session.Event, error) {
 	var events []session.Event
 	var mu sync.Mutex
-	// Drain Events() channel concurrently to avoid blocking emit when no TUI reader exists.
-	// Without this, blocking ordered emit would deadlock when channel fills (256) in tests
-	// that only use Subscribe.
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		for {
-			select {
-			case _, ok := <-h.Events():
-				if !ok {
-					return
-				}
-			case <-time.After(10 * time.Second):
-				return
-			}
-		}
-	}()
-	// Subscribe captures all events reliably even if channel reader lags.
-	unsub := h.Subscribe(func(e session.Event) {
+	unsub := watchEvents(t, h, func(e session.Event) {
 		mu.Lock()
 		events = append(events, e)
 		mu.Unlock()
 	})
 	_, err := h.Prompt(context.Background(), prompt)
 	unsub()
-	// Allow drain goroutine to exit after Prompt finishes (channel will no longer be written).
-	// We don't close Events channel here — harness owns it — so we just stop draining after timeout.
-	// Prompt has returned, so no more emits will happen for this turn; drain goroutine will timeout.
-	select {
-	case <-drainDone:
-	case <-time.After(100 * time.Millisecond):
-	}
 	mu.Lock()
 	defer mu.Unlock()
 	out := make([]session.Event, len(events))
@@ -129,7 +104,7 @@ func TestLifecycle_MessageStartBeforeEnd(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "hi")
+	events, err := collectWithSubscribe(t, h, "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +191,7 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "use echo")
+	events, err := collectWithSubscribe(t, h, "use echo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +231,7 @@ func TestLifecycle_SingleAgentEnd_Normal(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "hello")
+	events, err := collectWithSubscribe(t, h, "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +262,7 @@ func TestLifecycle_NoEventsAfterAgentEnd(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "hi")
+	events, err := collectWithSubscribe(t, h, "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +311,7 @@ func TestLifecycle_SingleAgentEnd_OnPanic(t *testing.T) {
 		panic("test panic")
 	}
 
-	events, err := collectWithSubscribe(h, "cause panic")
+	events, err := collectWithSubscribe(t, h, "cause panic")
 	// Prompt returns nil error but produces failure message; we only care about event counts
 	_ = err
 
@@ -368,29 +343,37 @@ func TestLifecycle_PersistBeforeEmit(t *testing.T) {
 	})
 	defer h.Close()
 
-	var seenMessageEnd bool
-	var messagesAtMessageEnd int
-	h.Subscribe(func(e session.Event) {
-		if _, ok := e.(session.MessageEnd); ok {
-			// At this point, BuildContext should include the message if persist-before-emit holds.
-			snap, err := sess.BuildContext(context.Background())
-			if err == nil {
-				// Filter assistant messages
-				for _, m := range snap.Messages {
-					if _, isAsst := m.(*session.AssistantMessage); isAsst {
-						messagesAtMessageEnd++
-					}
+	messageEnd := make(chan int, 1)
+	watchEvents(t, h, func(e session.Event) {
+		message, ok := e.(session.MessageEnd)
+		if !ok {
+			return
+		}
+		if _, ok := message.Message.(*session.AssistantMessage); !ok {
+			return
+		}
+		messageCount := 0
+		// At this point, BuildContext should include the message if
+		// persist-before-emit holds.
+		snap, err := sess.BuildContext(context.Background())
+		if err == nil {
+			for _, m := range snap.Messages {
+				if _, isAsst := m.(*session.AssistantMessage); isAsst {
+					messageCount++
 				}
 			}
-			seenMessageEnd = true
 		}
+		messageEnd <- messageCount
 	})
 
 	if _, err := h.Prompt(context.Background(), "check persist"); err != nil {
 		t.Fatal(err)
 	}
 
-	if !seenMessageEnd {
+	var messagesAtMessageEnd int
+	select {
+	case messagesAtMessageEnd = <-messageEnd:
+	case <-time.After(time.Second):
 		t.Fatal("did not see MessageEnd")
 	}
 	if messagesAtMessageEnd == 0 {
@@ -491,7 +474,7 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "fail fast")
+	events, err := collectWithSubscribe(t, h, "fail fast")
 	var turnErr *TurnError
 	if !errors.As(err, &turnErr) || turnErr.Outcome != TurnFailed {
 		t.Fatalf("turn error = %v, want failed TurnError", err)
@@ -528,13 +511,10 @@ func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	// TurnEnd should report via HadPendingMutations (fixed in 1B).
 	h.SetModel(llm.Model{ID: "new-model", Provider: "test"})
 
-	var savePoints []session.SavePoint
-	var mu sync.Mutex
-	h.Subscribe(func(e session.Event) {
+	savePoints := make(chan session.SavePoint, 1)
+	watchEvents(t, h, func(e session.Event) {
 		if sp, ok := e.(session.SavePoint); ok {
-			mu.Lock()
-			savePoints = append(savePoints, sp)
-			mu.Unlock()
+			savePoints <- sp
 		}
 	})
 
@@ -543,11 +523,14 @@ func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(savePoints) == 0 {
+	var savePoint session.SavePoint
+	select {
+	case savePoint = <-savePoints:
+	case <-time.After(time.Second):
 		t.Fatal("no SavePoint emitted")
 	}
 	// After 1B fix, HadPendingMutations should be true because we queued SetModel.
-	if !savePoints[0].HadPendingMutations {
+	if !savePoint.HadPendingMutations {
 		t.Fatalf("expected HadPendingMutations=true after SetModel pending write, got false; events: %v", eventNames(filterEvents(nil, func(e session.Event) bool { return true })))
 	}
 }
@@ -574,7 +557,7 @@ func TestLifecycle_SettledOrdering(t *testing.T) {
 	})
 	defer h.Close()
 
-	events, err := collectWithSubscribe(h, "ordering")
+	events, err := collectWithSubscribe(t, h, "ordering")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,14 +593,13 @@ func TestLifecycle_SettledOrdering_Bug(t *testing.T) {
 // ----- 1C: Backpressure regression -----
 
 func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
-	// Fill Events channel to capacity, then ensure a concurrent drainer prevents drop.
+	// A bounded subscriber must preserve an ordered prefix while an independent
+	// subscriber observes the same lifecycle.
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	// Create harness with small buffer to force backpressure quickly.
 	h := NewHarness(HarnessConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
-		Events:  make(chan session.EventEnvelope, 1), // tiny buffer to trigger slow path
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			// Emit many chunks to generate many MessageUpdate events.
 			chunks := make([]*llm.Chunk, 20)
@@ -629,6 +611,11 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 		},
 	})
 	defer h.Close()
+	sub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
 
 	// Concurrent drainer mimicking TUI's awaitSessionEvent loop.
 	var drained []session.Event
@@ -638,7 +625,7 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 		defer close(drainDone)
 		for {
 			select {
-			case envelope, ok := <-h.Events():
+			case envelope, ok := <-sub.Events:
 				if !ok {
 					return
 				}
@@ -655,17 +642,17 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 		}
 	}()
 
-	// Subscribe also captures all events via listeners (no drop path).
+	// The second independent subscription captures the same lifecycle.
 	var viaSubscribe []session.Event
 	var sMu sync.Mutex
-	unsub := h.Subscribe(func(e session.Event) {
+	unsub := watchEvents(t, h, func(e session.Event) {
 		sMu.Lock()
 		viaSubscribe = append(viaSubscribe, e)
 		sMu.Unlock()
 	})
 	defer unsub()
 
-	_, err := h.Prompt(context.Background(), "backpressure")
+	_, err = h.Prompt(context.Background(), "backpressure")
 	if err != nil {
 		t.Fatal(err)
 	}

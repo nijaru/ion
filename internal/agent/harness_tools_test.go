@@ -38,7 +38,7 @@ func TestHarnessActivateToolsAddsDeferredToolForNextTurn(t *testing.T) {
 	defer h.Close()
 
 	events := make(chan session.Event, 1)
-	unsubscribe := h.Subscribe(func(event session.Event) {
+	unsubscribe := watchEvents(t, h, func(event session.Event) {
 		if _, ok := event.(session.ToolsUpdate); ok {
 			events <- event
 		}

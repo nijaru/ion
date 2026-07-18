@@ -274,34 +274,43 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
-	var events <-chan session.EventEnvelope
+	if m.Model.EventSubscription == nil {
+		runner := m.Model.Runner
+		after := m.Model.EventCursor
+		return func() tea.Msg {
+			if runner == nil {
+				return runtimeSubscriptionMsg{generation: generation, err: errors.New("session event stream unavailable")}
+			}
+			source, ok := runner.(interface {
+				Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error)
+			})
+			if !ok {
+				return runtimeSubscriptionMsg{generation: generation, err: errors.New("runtime subscription unavailable")}
+			}
+			subscription, err := source.Subscribe(context.Background(), after)
+			return runtimeSubscriptionMsg{generation: generation, subscription: subscription, err: err}
+		}
+	}
+	subscription := m.Model.EventSubscription
 	var done <-chan struct{}
 	if m.Model.Runner != nil {
-		events = m.Model.Runner.Events()
 		if source, ok := m.Model.Runner.(interface{ Done() <-chan struct{} }); ok {
 			done = source.Done()
 		}
 	}
-	if events == nil {
-		return func() tea.Msg {
-			return sessionEventMsg{
-				generation: generation,
-				event: session.TurnEnd{
-					Base:  session.BaseNow(),
-					Error: errors.New("session event stream unavailable"),
-				},
-			}
-		}
-	}
 	return func() tea.Msg {
 		select {
-		case envelope, ok := <-events:
+		case envelope, ok := <-subscription.Events:
 			if !ok {
-				return streamClosedMsg{generation: generation}
+				return streamClosedMsg{generation: generation, err: subscription.Err()}
 			}
-			return sessionEventMsg{generation: generation, cursor: envelope.Cursor, event: envelope.Event}
+			return sessionEventMsg{
+				generation: generation,
+				cursor:     agent.EventCursor{Stream: envelope.Stream, Next: envelope.Sequence + 1},
+				event:      envelope.Event,
+			}
 		case <-done:
-			return streamClosedMsg{generation: generation}
+			return streamClosedMsg{generation: generation, err: agent.ErrRuntimeClosed}
 		}
 	}
 }

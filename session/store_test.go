@@ -87,6 +87,17 @@ func TestStoreBranchOrder(t *testing.T) {
 	if branch[0].ID() != "e1" || branch[1].ID() != "e2" || branch[2].ID() != "e3" {
 		t.Fatalf("wrong order: %s, %s, %s", branch[0].ID(), branch[1].ID(), branch[2].ID())
 	}
+
+	captured, err := s.BranchAt(ctx, "e2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetLeafID("e3"); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 || captured[0].ID() != "e1" || captured[1].ID() != "e2" {
+		t.Fatalf("captured branch = %v, want [e1 e2]", entryIDs(captured))
+	}
 }
 
 func TestStoreBranchMissingLeafReturnsNoRows(t *testing.T) {

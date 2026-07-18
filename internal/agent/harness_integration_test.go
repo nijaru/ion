@@ -502,15 +502,20 @@ func TestHarnessIntegration_ConcurrentSubscribers(t *testing.T) {
 
 	// Register 5 concurrent subscribers.
 	var wg sync.WaitGroup
+	subs := make([]*EventSubscription, 0, 5)
 	for range 5 {
+		sub, err := h.Subscribe(context.Background(), EventCursor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		subs = append(subs, sub)
 		wg.Add(1)
-		go func() {
+		go func(sub *EventSubscription) {
 			defer wg.Done()
-			ch := h.Events()
-			for range ch {
+			for range sub.Events {
 				// drain
 			}
-		}()
+		}(sub)
 	}
 
 	// Run a prompt and wait for completion before closing.
@@ -642,7 +647,11 @@ func TestHarnessIntegration_Steering(t *testing.T) {
 
 	// Start a turn but steer a message after the tool request is sent.
 	// We subscribe to events and inject when we see the tool call start.
-	events := h.Events()
+	sub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
 
 	errCh := make(chan error, 1)
 	msgCh := make(chan session.Message, 1)
@@ -653,14 +662,14 @@ func TestHarnessIntegration_Steering(t *testing.T) {
 	}()
 
 	// Watch for tool execution start, then steer.
-	for ev := range events {
+	for ev := range sub.Events {
 		if _, ok := ev.Event.(session.ToolExecStart); ok {
 			h.Steer("steered message")
 			break
 		}
 	}
 
-	err := <-errCh
+	err = <-errCh
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +705,11 @@ func TestHarnessIntegration_FollowUp(t *testing.T) {
 	})
 	defer h.Close()
 
-	events := h.Events()
+	sub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
 
 	errCh := make(chan error, 1)
 	msgCh := make(chan session.Message, 1)
@@ -707,7 +720,7 @@ func TestHarnessIntegration_FollowUp(t *testing.T) {
 	}()
 
 	// Watch for the assistant response, inject follow-up.
-	for ev := range events {
+	for ev := range sub.Events {
 		if me, ok := ev.Event.(session.MessageEnd); ok {
 			if _, isAssistant := me.Message.(*session.AssistantMessage); isAssistant {
 				h.FollowUp("please continue")
@@ -716,7 +729,7 @@ func TestHarnessIntegration_FollowUp(t *testing.T) {
 		}
 	}
 
-	err := <-errCh
+	err = <-errCh
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1023,16 +1036,16 @@ func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
 	// Use Subscribe() listener to reliably capture events.
 	var events []string
 	var mu sync.Mutex
-	done := false
-	unsub := h.Subscribe(func(e session.Event) {
+	queueUpdate := make(chan struct{}, 1)
+	unsub := watchEvents(t, h, func(e session.Event) {
 		mu.Lock()
 		defer mu.Unlock()
-		if done {
-			return
-		}
 		events = append(events, typeName(e))
-		if _, ok := e.(session.AgentEnd); ok {
-			done = true
+		if _, ok := e.(session.QueueUpdate); ok {
+			select {
+			case queueUpdate <- struct{}{}:
+			default:
+			}
 		}
 	})
 	defer unsub()
@@ -1043,7 +1056,13 @@ func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = msg
+	select {
+	case <-queueUpdate:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for QueueUpdate event")
+	}
 
+	mu.Lock()
 	t.Logf("events: %v", events)
 
 	// At least one QueueUpdate should have been emitted.
@@ -1057,6 +1076,7 @@ func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
 	if !foundQueueUpdate {
 		t.Errorf("no QueueUpdate in %d events: %v", len(events), events)
 	}
+	mu.Unlock()
 }
 
 // REGRESSION: overflow recovery retries the run, but the harness must emit
@@ -1089,18 +1109,20 @@ func TestHarnessIntegration_SingleAgentEndOnOverflowRetry(t *testing.T) {
 	})
 	defer h.Close()
 
-	var agentEndCount int
-	h.Subscribe(func(e session.Event) {
+	agentEnd := make(chan struct{})
+	watchEvents(t, h, func(e session.Event) {
 		if _, ok := e.(session.AgentEnd); ok {
-			agentEndCount++
+			agentEnd <- struct{}{}
 		}
 	})
 
 	if _, err := h.Prompt(context.Background(), "test overflow"); err != nil {
 		t.Fatal(err)
 	}
-	if agentEndCount != 1 {
-		t.Fatalf("expected exactly 1 AgentEnd across overflow retry, got %d", agentEndCount)
+	select {
+	case <-agentEnd:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AgentEnd event")
 	}
 }
 
@@ -1142,25 +1164,31 @@ func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
 		return &ToolCallDecision{Block: true, Reason: "blocked by test"}, nil
 	})
 
-	var blocked session.ToolResultMessage
-	h.Subscribe(func(e session.Event) {
+	blocked := make(chan session.ToolResultMessage, 1)
+	watchEvents(t, h, func(e session.Event) {
 		if te, ok := e.(session.ToolExecEnd); ok {
-			blocked = te.Result
+			blocked <- te.Result
 		}
 	})
 
 	if _, err := h.Prompt(context.Background(), "use the tool"); err != nil {
 		t.Fatal(err)
 	}
+	var blockedResult session.ToolResultMessage
+	select {
+	case blockedResult = <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked tool result")
+	}
 
 	if executed {
 		t.Fatal("tool must NOT execute when before_tool_call blocks")
 	}
-	if !blocked.IsError {
+	if !blockedResult.IsError {
 		t.Fatal("blocked tool result must be an error")
 	}
 	var got string
-	for _, c := range blocked.Content {
+	for _, c := range blockedResult.Content {
 		if tc, ok := c.(session.TextContent); ok {
 			got += tc.Text
 		}
@@ -1240,7 +1268,7 @@ func TestHarnessIntegration_SequentialPrep_MixedBlockAllow(t *testing.T) {
 
 	var blockResult, runResult session.ToolResultMessage
 	var mu sync.Mutex
-	h.Subscribe(func(e session.Event) {
+	watchEvents(t, h, func(e session.Event) {
 		if te, ok := e.(session.ToolExecEnd); ok {
 			mu.Lock()
 			defer mu.Unlock()

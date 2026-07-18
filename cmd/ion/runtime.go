@@ -493,7 +493,6 @@ func openRuntime(
 	}
 
 	sess := session.NewSession(store, 64)
-	runtimeEvents := make(chan session.EventEnvelope, 64)
 
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:             sess,
@@ -503,7 +502,6 @@ func openRuntime(
 		Thinking:            thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:               agentTools,
 		Active:              activeToolNames,
-		Events:              runtimeEvents,
 		StreamFn:            provider.Stream,
 		PromptTemplates:     promptTemplates,
 		SysPrompt:           sysPrompt,

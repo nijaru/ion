@@ -19,14 +19,14 @@ import (
 
 // printSession implements both session.Session and agent.Runtime for testing print mode.
 type printSession struct {
-	events    chan session.EventEnvelope
+	events    chan agent.EventEnvelope
 	cancelled int
 	closed    int
 	submitErr error
 }
 
-func printEnvelope(event session.Event) session.EventEnvelope {
-	return session.EventEnvelope{Event: event}
+func printEnvelope(event session.Event) agent.EventEnvelope {
+	return agent.EventEnvelope{Event: event}
 }
 
 type abortReleasingPrintSession struct {
@@ -52,7 +52,8 @@ func (s *printSession) SessionName(context.Context) (string, error) { return "",
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
-func (s *printSession) Branch(context.Context) ([]session.Entry, error) { return nil, nil }
+func (s *printSession) Branch(context.Context) ([]session.Entry, error)           { return nil, nil }
+func (s *printSession) BranchAt(context.Context, string) ([]session.Entry, error) { return nil, nil }
 func (s *printSession) AppendMessage(context.Context, session.Message) (string, error) {
 	return "", nil
 }
@@ -102,8 +103,9 @@ func (s *printSession) CancelTurn(context.Context) error {
 	s.cancelled++
 	return nil
 }
-func (s *printSession) Events() <-chan session.EventEnvelope    { return s.events }
-func (s *printSession) EventSender() chan session.EventEnvelope { return s.events }
+func (s *printSession) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
+	return &agent.EventSubscription{Events: s.events}, nil
+}
 func (s *printSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
@@ -461,7 +463,7 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 // harness approval broker and persist a recoverable tool error.
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 3)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 3)}
 	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "hello"},
 		BlockType: "text",
@@ -482,7 +484,7 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 }
 
 func TestPrintModeWritesJSONOutput(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 4)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 4)}
 	sess.events <- printEnvelope(session.ToolExecStart{Name: "read"})
 	sess.events <- printEnvelope(session.MessageEnd{
 		Message: &session.AssistantMessage{
@@ -509,7 +511,7 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 }
 
 func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 6)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 6)}
 	sess.events <- printEnvelope(session.TurnStart{Timestamp: time.Now()})
 	sess.events <- printEnvelope(session.ToolExecStart{Name: "bash"})
 	sess.events <- printEnvelope(session.MessageUpdate{
@@ -549,7 +551,7 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	sess := &printSession{events: make(chan session.EventEnvelope)}
+	sess := &printSession{events: make(chan agent.EventEnvelope)}
 
 	_, err := runPromptTurn(ctx, sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
@@ -561,7 +563,7 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 }
 
 func TestPrintModeTimeoutIsActionable(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope)}
+	sess := &printSession{events: make(chan agent.EventEnvelope)}
 
 	err := runPrintModeWithTimeout(
 		context.Background(),
@@ -598,7 +600,7 @@ func TestPrintModeReturnsSubmitError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionError(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("rate limited")})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
@@ -611,7 +613,7 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("session error")})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
@@ -624,7 +626,7 @@ func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
 }
 
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
 	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "partial"},
 		BlockType: "text",
@@ -641,7 +643,7 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 }
 
 func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) {
-	base := &printSession{events: make(chan session.EventEnvelope)}
+	base := &printSession{events: make(chan agent.EventEnvelope)}
 	sess := &abortReleasingPrintSession{
 		printSession: base,
 		unblock:      make(chan struct{}),
@@ -668,7 +670,7 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 }
 
 func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
-	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")

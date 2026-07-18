@@ -19,6 +19,10 @@ type Session interface {
 
 	// Branch returns entries on the current leaf path.
 	Branch(ctx context.Context) ([]Entry, error)
+	// BranchAt returns entries on the explicitly selected leaf path. The leaf
+	// is captured by the caller, so the result cannot silently follow a later
+	// navigation while a runtime snapshot is being assembled.
+	BranchAt(ctx context.Context, leafID string) ([]Entry, error)
 	// GetEntry returns one persisted tree entry by ID.
 	GetEntry(ctx context.Context, id string) (Entry, error)
 	// GetLeafID returns the current durable leaf pointer.
@@ -91,6 +95,8 @@ type Store interface {
 	// Branch returns all entries on the path from root to the current leaf,
 	// in order. This is what buildContext projects into []Message.
 	Branch(ctx context.Context) ([]Entry, error)
+	// BranchAt reads the branch rooted at an explicit immutable leaf ID.
+	BranchAt(ctx context.Context, leafID string) ([]Entry, error)
 
 	// Entries returns all entries in the session (for export/query).
 	Entries(ctx context.Context) ([]Entry, error)
