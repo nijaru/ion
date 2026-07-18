@@ -149,6 +149,14 @@ non-interactive behavior, cancellation, and auditability. Do not preserve a
 trusted-by-default posture by momentum if the target requires a safer or more
 useful policy model.
 
+The next safety boundary is one runtime-owned action planner/executor: tools
+describe logical operations, while the planner normalizes and fingerprints
+them, the policy decides, the action journal records prepared/authorized/
+started/outcome transitions, and the sandbox enforces the technical boundary.
+Do not add per-tool approval shortcuts, implicit trusted defaults, or journal
+writes from individual tool implementations. A tool effect must not bypass
+the planner, and a failed or unavailable journal/sandbox must fail closed.
+
 ## Work tracking and review
 
 Use tk for multi-step work. The current overall goal is tk-2lt7. The
