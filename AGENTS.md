@@ -73,6 +73,29 @@ Do not start broad feature work while the product charter or target
 architecture is unresolved. Do not let the current implementation define the
 ideal merely because it already exists.
 
+## Priority and scope
+
+Choose the next slice from the highest-priority open gate, not from the most
+visible missing feature:
+
+1. Correctness and ownership: lifecycle, persistence, replay/resume,
+   cancellation, failure recovery, and resource cleanup.
+2. Safety: explicit permission, canonical action identity, auditability,
+   sandbox enforcement, and fail-closed behavior.
+3. Core daily-driver UX: submit/stream/steer/follow-up in TUI, CLI, and print
+   modes through the same runtime contract.
+4. Provider and integration completeness: real adapters, auth/configuration,
+   MCP, and useful host capabilities.
+5. Measured performance and polish: latency, allocations, throughput,
+   terminal rendering, accessibility, and documentation.
+
+Do not use lower-priority polish to conceal an unresolved correctness or safety
+gate. Keep each slice narrow enough to finish and prove, but rewrite an entire
+owner when a local patch would preserve duplicated state or an unsafe boundary.
+Deferred work is acceptable only when it is recorded in tk with an owner,
+reason, and unblock condition. `archive/` and `ai/archive/` are historical
+material, not implementation or architecture sources.
+
 ## Quality bar
 
 - One owner for every invariant, state transition, and persistence guarantee.
@@ -176,6 +199,13 @@ authorized Sol reviewers. Do not route Codex-available GPT models through Pi;
 use Pi only when explicitly requested or when a non-native model is the
 deliberate choice. A reviewer must report evidence, changed files (if any),
 commands, findings, risks, and unresolved questions.
+
+When continuing an existing goal, verify the baton first, then advance the
+highest-priority unblocked slice materially. Do not spend the session merely
+rewriting status prose, reopening completed design work, or declaring a phase
+complete without its acceptance evidence. At a clean boundary, the current
+commit, active task, remaining gates, and exact verification commands must be
+recoverable from `ai/brief.md`, `handoff.md`, and tk.
 
 ## Verification
 
