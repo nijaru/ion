@@ -92,6 +92,17 @@ type Harness struct {
 	closeResources []func() error
 }
 
+var (
+	_ Runtime          = (*Harness)(nil)
+	_ SessionOwner     = (*Harness)(nil)
+	_ EntryPersister   = (*Harness)(nil)
+	_ SessionNamer     = (*Harness)(nil)
+	_ SessionForker    = (*Harness)(nil)
+	_ SessionNavigator = (*Harness)(nil)
+	_ SessionLabels    = (*Harness)(nil)
+	_ Compactor        = (*Harness)(nil)
+)
+
 type Phase string
 
 const (

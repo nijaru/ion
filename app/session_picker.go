@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -411,9 +412,13 @@ func (m Model) forkSessionFromPicker(parentID string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	runner := m.Model.Runner
+	forker, ok := runner.(agent.SessionForker)
+	if !ok {
+		return m, nil
+	}
 	m.pickerReducer().closeSession()
 	return m, func() tea.Msg {
-		sessionID, err := runner.ForkSession(context.Background(), parentID)
+		sessionID, err := forker.ForkSession(context.Background(), parentID)
 		if err != nil {
 			return sessionForkedMsg{err: err}
 		}

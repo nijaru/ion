@@ -12,7 +12,7 @@ type Bootstrap struct {
 }
 
 // RuntimeInfo describes the configured runtime for host and TUI presentation.
-// The active turn/session behavior is owned by agent.Runner; this interface is
+// The active turn/session behavior is owned by agent.Runtime; this interface is
 // deliberately limited to startup and display metadata.
 type RuntimeInfo interface {
 	Name() string

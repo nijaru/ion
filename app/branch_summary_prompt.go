@@ -125,8 +125,14 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 	prompt.err = ""
 	targetID := prompt.targetID
 	runner := m.Model.Runner
+	navigator, ok := runner.(agent.SessionNavigator)
+	if !ok {
+		prompt.navigating = false
+		prompt.err = "tree navigation is unavailable"
+		return m, nil
+	}
 	return m, func() tea.Msg {
-		_, err := runner.NavigateTree(context.Background(), targetID, opts)
+		_, err := navigator.NavigateTree(context.Background(), targetID, opts)
 		return treePickerMoveMsg{err: err, cancelled: errors.Is(err, context.Canceled)}
 	}
 }

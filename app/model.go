@@ -355,7 +355,7 @@ type ModelState struct {
 	originalPrimaryModel string
 	// Runner is the agent runner (Harness). When set, the TUI uses it as the
 	// single turn and event owner.
-	Runner agent.Runner
+	Runner agent.Runtime
 }
 
 // PickerState holds state for the various overlay pickers.
@@ -679,7 +679,7 @@ func (m Model) WithCheckpoints(checkpoints CheckpointController) Model {
 
 // WithRunner sets the agent runner (Harness) for the model. The TUI uses the
 // Runner for turn execution and events rather than duplicating session state.
-func (m Model) WithRunner(r agent.Runner) Model {
+func (m Model) WithRunner(r agent.Runtime) Model {
 	m.Model.Runner = r
 	return m
 }
@@ -1005,10 +1005,11 @@ func (m *Model) refreshRuntimeSessionSnapshot() {
 }
 
 func (m Model) activeSession() session.Session {
-	if m.Model.Runner == nil {
+	owner, ok := m.Model.Runner.(agent.SessionOwner)
+	if !ok {
 		return nil
 	}
-	return m.Model.Runner.Session()
+	return owner.Session()
 }
 
 func (m Model) Handles() Handles {

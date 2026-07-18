@@ -76,7 +76,7 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 	return m, submitTurnCmd(m.Model.Runner, text, draft, images)
 }
 
-func submitTurnCmd(runner agent.Runner, text, draft string, images []session.ImageContent) tea.Cmd {
+func submitTurnCmd(runner agent.Runtime, text, draft string, images []session.ImageContent) tea.Cmd {
 	images = cloneImageAttachments(images)
 	return func() tea.Msg {
 		if runner != nil {
@@ -242,7 +242,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	)
 }
 
-func cancelTurnCmd(runner agent.Runner) tea.Cmd {
+func cancelTurnCmd(runner agent.Runtime) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
 			return turnCancelResultMsg{err: errors.New("session unavailable")}
@@ -696,7 +696,7 @@ func (c runtimeRequestController) clear() {
 }
 
 type persistenceController struct {
-	runner agent.Runner
+	runner agent.Runtime
 }
 
 func (m Model) persistenceController() persistenceController {
@@ -712,7 +712,11 @@ func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
 		return persistErrorCmd(action, err)
 	}
 	return func() tea.Msg {
-		if err := c.runner.PersistEntry(context.Background(), entry); err != nil {
+		persister, ok := c.runner.(agent.EntryPersister)
+		if !ok {
+			return localErrorMsg{err: fmt.Errorf("%s: runtime does not support entry persistence", action)}
+		}
+		if err := persister.PersistEntry(context.Background(), entry); err != nil {
 			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
 		}
 		return nil

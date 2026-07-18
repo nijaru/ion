@@ -131,7 +131,7 @@ func (s *stubSession) Close() error {
 	return nil
 }
 
-// --- stubRunner implements agent.Runner ---
+// --- stubRunner implements agent.Runtime ---
 
 type stubRunner struct {
 	aborts       int
@@ -371,7 +371,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 	t.Helper()
 	sess := newStubSession("stub")
 	b := stubBackend{sess: sess, provider: "openai", model: "gpt-4.1"}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
 		*observed = append(*observed, cfg.Model)
 		newSess := newStubSession(sessionID)
 		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}

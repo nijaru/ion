@@ -17,7 +17,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// printSession implements both session.Session and agent.Runner for testing print mode.
+// printSession implements both session.Session and agent.Runtime for testing print mode.
 type printSession struct {
 	events    chan session.Event
 	cancelled int
@@ -120,7 +120,7 @@ func (s *printSession) Close() error {
 	return nil
 }
 
-// --- agent.Runner implementation ---
+// --- agent.Runtime implementation ---
 
 func (s *printSession) Prompt(_ context.Context, _ string, _ ...session.ImageContent) (session.Message, error) {
 	if s.submitErr != nil {

@@ -25,7 +25,7 @@ func TestReloadMaterializesRuntimeAndKeybindingsTogether(t *testing.T) {
 
 	oldRunner := &trackingRuntimeRunner{}
 	var observedModel string
-	switcher := func(_ context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
+	switcher := func(_ context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
 		observedModel = cfg.Model
 		newSession := newStubSession(sessionID)
 		return stubBackend{sess: newSession, provider: cfg.Provider, model: cfg.Model}, &stubRunner{}, newSession, nil
@@ -100,7 +100,7 @@ func TestReloadMaterializationFailureLeavesRuntimeAndKeybindingsUnchanged(t *tes
 	}
 
 	var switchCalls int
-	switcher := func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
+	switcher := func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
 		switchCalls++
 		return nil, nil, nil, errors.New("provider unavailable")
 	}

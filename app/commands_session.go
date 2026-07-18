@@ -10,10 +10,17 @@ import (
 	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/internal/agent"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/session"
 )
+
+// sessionBundleImporter stays at the product boundary because the transport
+// bundle is an export-package concern, not part of the turn runtime contract.
+type sessionBundleImporter interface {
+	ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error)
+}
 
 func (m Model) exportSession() (Model, tea.Cmd) {
 	if m.Model.Store == nil {
@@ -79,6 +86,10 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 		return m, cmdError("active runtime does not support import")
 	}
 	runner := m.Model.Runner
+	importer, ok := runner.(sessionBundleImporter)
+	if !ok {
+		return m, cmdError("active runtime does not support import")
+	}
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(filename)
 		if err != nil {
@@ -89,7 +100,7 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 			return localErrorMsg{err: fmt.Errorf("decode Ion session bundle: %w", err)}
 		}
 		bundle.RootSessionID = ""
-		imported, err := runner.ImportSessionBundle(context.Background(), bundle)
+		imported, err := importer.ImportSessionBundle(context.Background(), bundle)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -114,8 +125,12 @@ func (m Model) nameSession(name string) (Model, tea.Cmd) {
 		return m, cmdError("no active session")
 	}
 	runner := m.Model.Runner
+	namer, ok := runner.(agent.SessionNamer)
+	if !ok {
+		return m, cmdError("active runtime does not support session naming")
+	}
 	return m, func() tea.Msg {
-		_, err := runner.AppendSessionInfo(context.Background(), name)
+		_, err := namer.AppendSessionInfo(context.Background(), name)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -167,6 +182,10 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	}
 	sessionID := m.activeSession().ID()
 	runner := m.Model.Runner
+	importer, ok := runner.(sessionBundleImporter)
+	if !ok {
+		return m, cmdError("active runtime does not support import")
+	}
 	return m, func() tea.Msg {
 		ctx := context.Background()
 		bundle, err := ionexport.ExportSessionBundle(ctx, m.Model.Store, sessionID)
@@ -175,7 +194,7 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 		}
 		// Clear the root session ID so import creates a new session
 		bundle.RootSessionID = ""
-		imported, err := runner.ImportSessionBundle(ctx, bundle)
+		imported, err := importer.ImportSessionBundle(ctx, bundle)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("import session: %w", err)}
 		}
@@ -440,9 +459,13 @@ func (m Model) handleCompactCommand() (Model, tea.Cmd) {
 	if runner == nil {
 		return m, cmdError("no active runner")
 	}
+	compactor, ok := runner.(agent.Compactor)
+	if !ok {
+		return m, cmdError("active runtime does not support compaction")
+	}
 	m.progressReducer().beginCompaction()
 	return m, func() tea.Msg {
-		if err := runner.Compact(context.Background()); err != nil {
+		if err := compactor.Compact(context.Background()); err != nil {
 			return localErrorMsg{err: err}
 		}
 		return sessionCompactedMsg{notice: "Compacted current session context"}
@@ -471,20 +494,24 @@ func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError("no store available")
 	}
 	runner := m.Model.Runner
+	labels, ok := runner.(agent.SessionLabels)
+	if !ok {
+		return m, cmdError("active runtime does not support labels")
+	}
 	store := m.Model.Store
 	leafID := store.GetLeafID()
 
 	if len(fields) < 2 {
 		// Show current label.
 		return m, func() tea.Msg {
-			label, err := runner.GetLabel(context.Background(), leafID)
+			label, err := labels.GetLabel(context.Background(), leafID)
 			return labelShowMsg{label: label, err: err}
 		}
 	}
 	// Set label.
 	text := strings.Join(fields[1:], " ")
 	return m, func() tea.Msg {
-		_, err := runner.AppendLabel(context.Background(), leafID, text)
+		_, err := labels.AppendLabel(context.Background(), leafID, text)
 		return labelShowMsg{label: text, err: err}
 	}
 }

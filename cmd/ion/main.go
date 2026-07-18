@@ -404,7 +404,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.RuntimeInfo, agent.Runner, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.RuntimeInfo, agent.Runtime, session.Session, error) {
 		switchedBackend, switchedSession, switchedRunner, err := openRuntime(
 			ctx,
 			store,
@@ -565,12 +565,23 @@ func startupModelMissing(b app.RuntimeInfo) bool {
 
 func runtimeHandlesForClose(
 	finalModel tea.Model,
-	fallbackRunner agent.Runner,
-) agent.Runner {
+	fallbackRunner agent.Runtime,
+) agent.Runtime {
 	if model, ok := finalModel.(*app.Model); ok && model != nil {
 		return model.Model.Runner
 	}
 	return fallbackRunner
+}
+
+func runtimeSession(runner agent.Runtime) session.Session {
+	if runner == nil {
+		return nil
+	}
+	owner, ok := runner.(agent.SessionOwner)
+	if !ok {
+		return nil
+	}
+	return owner.Session()
 }
 
 type printResult struct {
@@ -624,7 +635,7 @@ func resolvePrintFlags(
 func runPrintModeWithWriter(
 	ctx context.Context,
 	w io.Writer,
-	runner agent.Runner,
+	runner agent.Runtime,
 	prompt string,
 	output string,
 ) error {
@@ -637,7 +648,7 @@ func runPrintModeWithWriter(
 
 func runPromptTurn(
 	ctx context.Context,
-	runner agent.Runner,
+	runner agent.Runtime,
 	prompt string,
 ) (printResult, error) {
 	events := runner.Events()
@@ -647,7 +658,7 @@ func runPromptTurn(
 
 	var agentText strings.Builder
 	result := printResult{}
-	if sess := runner.Session(); sess != nil {
+	if sess := runtimeSession(runner); sess != nil {
 		result.SessionID = sess.ID()
 	}
 
@@ -729,7 +740,7 @@ func runPromptTurn(
 	if strings.TrimSpace(result.Response) == "" {
 		return printResult{}, fmt.Errorf("turn finished without assistant response")
 	}
-	if sess := runner.Session(); sess != nil {
+	if sess := runtimeSession(runner); sess != nil {
 		result.SessionID = sess.ID()
 	}
 	return result, nil
@@ -738,16 +749,17 @@ func runPromptTurn(
 func updatePrintSessionInfo(
 	ctx context.Context,
 	store session.Store,
-	runner agent.Runner,
+	runner agent.Runtime,
 	cwd string,
 	branch string,
 	cfg *config.Config,
 	prompt string,
 ) error {
-	if store == nil || runner == nil || runner.Session() == nil || cfg == nil {
+	sess := runtimeSession(runner)
+	if store == nil || runner == nil || sess == nil || cfg == nil {
 		return nil
 	}
-	id := runner.Session().ID()
+	id := sess.ID()
 	if id == "" || id == "ion" {
 		return nil
 	}
@@ -815,7 +827,7 @@ func promptWithStdinContext(prompt, stdinText string) string {
 func runPrintModeWithTimeout(
 	ctx context.Context,
 	w io.Writer,
-	runner agent.Runner,
+	runner agent.Runtime,
 	prompt string,
 	timeout time.Duration,
 	output string,

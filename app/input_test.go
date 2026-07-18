@@ -768,7 +768,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := stubBackend{provider: resolved.Provider, model: resolved.Model}
@@ -833,7 +833,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

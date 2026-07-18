@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 
-	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -156,9 +155,14 @@ type StopContext struct {
 	Context     TurnContext
 }
 
-// Runner is the interface app/ uses to drive the agent. The Harness implements
-// this and owns the active session, persistence, queues, and lifecycle.
-type Runner interface {
+// Runtime is the narrow turn and event surface consumed by the TUI and CLI.
+//
+// Session administration is deliberately not part of this interface. Those
+// operations are optional capabilities owned by the runtime controller and
+// requested by the command that needs them. Keeping this surface small makes
+// the turn boundary explicit and prevents the UI from depending on the
+// controller's entire implementation.
+type Runtime interface {
 	// Events returns the channel the TUI subscribes to for agent events.
 	Events() <-chan session.Event
 
@@ -195,23 +199,47 @@ type Runner interface {
 	// Unknown names fail closed and do not mutate the harness.
 	ActivateTools(ctx context.Context, names []string) error
 
-	// Session returns the underlying session for auxiliary reads.
-	Session() session.Session
-
-	// Append persists an auxiliary entry through the harness-owned session.
-	PersistEntry(ctx context.Context, entry session.Entry) error
-	AppendSessionInfo(ctx context.Context, name string) (string, error)
-	ForkSession(ctx context.Context, sourceID string) (string, error)
-	ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error)
-	NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (NavigateResult, error)
-	AppendLabel(ctx context.Context, targetID, label string) (string, error)
-	GetLabel(ctx context.Context, targetID string) (string, error)
-
-	// Compact triggers context compaction.
-	Compact(ctx context.Context) error
-
 	// Close releases resources.
 	Close() error
+}
+
+// SessionOwner exposes the current session for read-only projections. It is an
+// optional capability rather than part of Runtime because the runtime host is
+// the eventual owner of session lifetime.
+type SessionOwner interface {
+	Session() session.Session
+}
+
+// EntryPersister persists a non-turn entry through the runtime controller.
+type EntryPersister interface {
+	PersistEntry(ctx context.Context, entry session.Entry) error
+}
+
+// SessionNamer updates the display metadata for the active session.
+type SessionNamer interface {
+	AppendSessionInfo(ctx context.Context, name string) (string, error)
+}
+
+// SessionForker creates a new session rooted at a source session.
+type SessionForker interface {
+	ForkSession(ctx context.Context, sourceID string) (string, error)
+}
+
+// SessionNavigator moves the active session leaf, optionally preserving the
+// abandoned branch with a summary entry.
+type SessionNavigator interface {
+	NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (NavigateResult, error)
+}
+
+// SessionLabels reads and writes branch labels.
+type SessionLabels interface {
+	AppendLabel(ctx context.Context, targetID, label string) (string, error)
+	GetLabel(ctx context.Context, targetID string) (string, error)
+}
+
+// Compactor requests a context compaction at a safe runtime boundary.
+type Compactor interface {
+	Compact(ctx context.Context) error
 }
 
 // NavigateOptions controls optional context preservation when moving to another

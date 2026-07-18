@@ -34,7 +34,7 @@ type sessionCatalogWriter interface {
 }
 
 func closeRuntimeHandles(
-	runner agent.Runner,
+	runner agent.Runtime,
 	store session.Store,
 ) error {
 	var errs []error
@@ -297,7 +297,7 @@ func openRuntime(
 	systemPromptOverride string,
 	appendSystemPromptOverride string,
 	approvalInteractive ...bool,
-) (app.RuntimeInfo, session.Session, agent.Runner, error) {
+) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
 	interactive := true
 	if len(approvalInteractive) > 0 {
 		interactive = approvalInteractive[0]
@@ -519,7 +519,7 @@ func openRuntime(
 func closeRuntimeOpenError(
 	label string,
 	err error,
-	runner agent.Runner,
+	runner agent.Runtime,
 	store interface{ Close() error },
 ) error {
 	var closeErrs []error

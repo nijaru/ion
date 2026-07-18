@@ -215,12 +215,12 @@ const (
 // Handles holds resolved runtime references.
 type Handles struct {
 	Info    RuntimeInfo
-	Runner  agent.Runner
+	Runner  agent.Runtime
 	Storage persistenceAdapter
 }
 
 // Switcher creates a new runtime info object, harness, and storage session for model switching.
-type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error)
+type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error)
 
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
@@ -365,10 +365,11 @@ func CloseHandles(handles Handles) {
 
 // GetSessionState returns the active harness session ID if available.
 func GetSessionState(h Handles) (string, bool) {
-	if h.Runner == nil || h.Runner.Session() == nil {
+	owner, ok := h.Runner.(agent.SessionOwner)
+	if !ok || owner.Session() == nil {
 		return "", false
 	}
-	return h.Runner.Session().ID(), true
+	return owner.Session().ID(), true
 }
 
 // IsLocalBusyStatus returns true if the status indicates local activity.

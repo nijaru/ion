@@ -211,7 +211,7 @@ func startAcceptanceProgram(
 	t *testing.T,
 	store session.Store,
 	sess session.Session,
-	runner agent.Runner,
+	runner agent.Runtime,
 ) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
 	return startAcceptanceProgramWithJobs(t, store, sess, runner, nil)
 }
@@ -220,7 +220,7 @@ func startAcceptanceProgramWithJobs(
 	t *testing.T,
 	store session.Store,
 	sess session.Session,
-	runner agent.Runner,
+	runner agent.Runtime,
 	jobs app.JobController,
 ) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
 	t.Helper()
