@@ -40,6 +40,9 @@ func closeRuntimeHandles(
 	var errs []error
 	if runner != nil {
 		errs = append(errs, runner.Close())
+		if resources, ok := runner.(agent.ResourceOwner); ok {
+			errs = append(errs, resources.CloseResources())
+		}
 	}
 	if store != nil {
 		errs = append(errs, store.Close())
@@ -525,6 +528,9 @@ func closeRuntimeOpenError(
 	var closeErrs []error
 	if runner != nil {
 		closeErrs = append(closeErrs, runner.Close())
+		if resources, ok := runner.(agent.ResourceOwner); ok {
+			closeErrs = append(closeErrs, resources.CloseResources())
+		}
 	}
 	if store != nil {
 		closeErrs = append(closeErrs, store.Close())

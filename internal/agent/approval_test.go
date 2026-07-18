@@ -458,6 +458,15 @@ func TestHarnessClosesRuntimeResourcesExactlyOnce(t *testing.T) {
 	if err := h.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+	if closed != 0 {
+		t.Fatalf("resource close count after Close = %d, want 0", closed)
+	}
+	if err := h.CloseResources(); err != nil {
+		t.Fatalf("CloseResources: %v", err)
+	}
+	if err := h.CloseResources(); err != nil {
+		t.Fatalf("second CloseResources: %v", err)
+	}
 	if closed != 1 {
 		t.Fatalf("resource close count = %d, want 1", closed)
 	}

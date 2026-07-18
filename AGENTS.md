@@ -119,7 +119,10 @@ changes, update it by explicit decision before changing structural code.
   setter may silently lose input after close or queue saturation.
 - The host/composition root owns process lifetime, provider/auth/model
   construction, resource loading, runtime replacement, teardown, and CLI mode
-  selection. No hidden package-global host state.
+  selection. `Runtime.Close` stops the controller; host-owned resource handles
+  are closed separately through the runtime's resource capability after that
+  boundary. No hidden package-global host state or controller-owned final
+  close.
 - app/ is a Bubble Tea v2 projection/control layer. It owns view state and
   user intent, not a second agent loop, transcript, session materializer, or
   hidden runtime.

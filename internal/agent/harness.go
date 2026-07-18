@@ -95,6 +95,8 @@ type Harness struct {
 	contextWindow  int
 	approvals      *ApprovalBroker
 	closeResources []func() error
+	resourcesOnce  sync.Once
+	resourcesErr   error
 }
 
 var (
@@ -106,6 +108,7 @@ var (
 	_ SessionNavigator = (*Harness)(nil)
 	_ SessionLabels    = (*Harness)(nil)
 	_ Compactor        = (*Harness)(nil)
+	_ ResourceOwner    = (*Harness)(nil)
 )
 
 type Phase string
@@ -234,8 +237,8 @@ type HarnessConfig struct {
 	ApprovalMode        ApprovalMode
 	ApprovalInteractive bool
 
-	// CloseResources are runtime-owned services that close with the harness,
-	// such as external tool clients.
+	// CloseResources are host-created services such as external tool clients.
+	// The host invokes Harness.CloseResources after Runtime.Close.
 	CloseResources []func() error
 }
 
@@ -1839,15 +1842,24 @@ func (h *Harness) Close() error {
 	if h.delivery != nil {
 		h.delivery.close()
 	}
-	var resourceErr error
-	for i := len(h.closeResources) - 1; i >= 0; i-- {
-		resourceErr = errors.Join(resourceErr, h.closeResources[i]())
-	}
-	return errors.Join(flushErr, resourceErr)
+	return flushErr
 }
 
-// Shutdown attempts a graceful stop: abort any running turn, wait for completion
-// (up to the context deadline), flush pending writes, and close resources.
+// CloseResources releases host-created runtime services after the controller
+// has stopped. It is separate from Close because the host owns the final
+// resource boundary and may close shared storage independently.
+func (h *Harness) CloseResources() error {
+	h.resourcesOnce.Do(func() {
+		for i := len(h.closeResources) - 1; i >= 0; i-- {
+			h.resourcesErr = errors.Join(h.resourcesErr, h.closeResources[i]())
+		}
+	})
+	return h.resourcesErr
+}
+
+// Shutdown attempts a graceful stop: abort any running turn, wait for
+// completion (up to the context deadline), flush pending writes, and stop the
+// controller. The host must call CloseResources after Shutdown/Close.
 func (h *Harness) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

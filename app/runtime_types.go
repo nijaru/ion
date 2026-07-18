@@ -360,6 +360,9 @@ func validateRuntimeHandles(handles Handles) error {
 func CloseHandles(handles Handles) {
 	if handles.Runner != nil {
 		_ = handles.Runner.Close()
+		if resources, ok := handles.Runner.(agent.ResourceOwner); ok {
+			_ = resources.CloseResources()
+		}
 	}
 }
 

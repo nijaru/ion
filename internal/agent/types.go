@@ -243,6 +243,13 @@ type Runtime interface {
 	Close() error
 }
 
+// ResourceOwner exposes host-created runtime resources that must be closed
+// after the controller has stopped. Runtime.Close only terminates controller
+// activity; the composition root owns final resource closure.
+type ResourceOwner interface {
+	CloseResources() error
+}
+
 // SessionOwner exposes the current session for read-only projections. It is an
 // optional capability rather than part of Runtime because the runtime host is
 // the eventual owner of session lifetime.
