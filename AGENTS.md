@@ -30,6 +30,13 @@ Read ai/DESIGN.md before structural work. Read the relevant task, tests, and
 recent journal/decision entries. Repo-local code, tests, ai/, and tk outrank
 stale chat context.
 
+At the start of a continuing session, identify the active task, its acceptance
+gate, the current commit, and the first unfinished dependency. If the active
+task is still the highest-priority unblocked work, continue it; do not reopen a
+completed design task or start a more visible but lower-priority feature. If
+the task is blocked, record the concrete blocker and advance the next safe
+dependency rather than improvising around it.
+
 ## Product and reference posture
 
 Pi is the closest behavioral reference because it is a provider-agnostic agent
@@ -73,6 +80,12 @@ Do not start broad feature work while the product charter or target
 architecture is unresolved. Do not let the current implementation define the
 ideal merely because it already exists.
 
+Before editing a substantial slice, write down the target invariant, its single
+Ion owner, the failure/recovery behavior, and the behavioral evidence that will
+close the slice. During implementation, keep the change on that slice. Expand
+scope only when deleting or refactoring an obsolete owner is required to make
+the target contract true.
+
 ## Priority and scope
 
 Choose the next slice from the highest-priority open gate, not from the most
@@ -95,6 +108,13 @@ owner when a local patch would preserve duplicated state or an unsafe boundary.
 Deferred work is acceptable only when it is recorded in tk with an owner,
 reason, and unblock condition. `archive/` and `ai/archive/` are historical
 material, not implementation or architecture sources.
+
+Priority is a dependency order, not a request to optimize every dimension at
+once: unresolved correctness, safety, or ownership gates block dependent UX,
+provider breadth, and polish. Within one priority, choose the smallest slice
+that removes a real gate and produces user-visible or testable progress. Do
+not spend a session trading prose, abstractions, or benchmarks for a missing
+owner or an unverified lifecycle guarantee.
 
 ## Quality bar
 
@@ -180,6 +200,13 @@ Do not add per-tool approval shortcuts, implicit trusted defaults, or journal
 writes from individual tool implementations. A tool effect must not bypass
 the planner, and a failed or unavailable journal/sandbox must fail closed.
 
+The same ownership rule applies to every cross-cutting guarantee: session
+durability belongs to `session/`, live lifecycle ordering to the runtime
+controller, provider translation to `llm/`, OS enforcement to the sandbox/tool
+boundary, and rendering to `app/`. When two layers appear to own a guarantee,
+stop and resolve the ownership before adding another callback, wrapper, cache,
+event, or compatibility path.
+
 ## Work tracking and review
 
 Use tk for multi-step work. The current overall goal is tk-2lt7. The
@@ -206,6 +233,23 @@ rewriting status prose, reopening completed design work, or declaring a phase
 complete without its acceptance evidence. At a clean boundary, the current
 commit, active task, remaining gates, and exact verification commands must be
 recoverable from `ai/brief.md`, `handoff.md`, and tk.
+
+For each coherent chunk, use this loop:
+
+1. Read the target and current owner; inspect call sites and relevant tests.
+2. Make the smallest correct implementation or rewrite, deleting obsolete
+   paths in the same change.
+3. Run focused behavioral tests immediately; add failure-injection tests for
+   lifecycle, persistence, cancellation, safety, and cleanup changes.
+4. Review the diff for duplicate ownership, accidental compatibility, silent
+   fallback, unbounded work, and stale context claims.
+5. Run proportional repository gates, log the evidence in tk and ai/, and
+   commit the working chunk before switching slices.
+
+Green compilation or a legacy test suite is only a compatibility signal. A
+slice is complete only when its target invariant, failure behavior, and stated
+acceptance evidence are all demonstrated. If the tree cannot be left clean,
+leave an explicit handoff with the exact uncommitted files and next command.
 
 ## Verification
 
