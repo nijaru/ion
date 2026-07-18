@@ -113,6 +113,10 @@ changes, update it by explicit decision before changing structural code.
 - Frontends consume `agent.Runtime` for submit/stream/control and request
   narrow optional capabilities for session administration. Do not recreate a
   broad `Runner` interface or make the TUI depend on controller internals.
+- Public runtime operations must enter through the bounded controller command
+  queue; private direct operations may perform owned external work only after
+  acceptance. Every operation needs a typed result or error, and no void
+  setter may silently lose input after close or queue saturation.
 - The host/composition root owns process lifetime, provider/auth/model
   construction, resource loading, runtime replacement, teardown, and CLI mode
   selection. No hidden package-global host state.
