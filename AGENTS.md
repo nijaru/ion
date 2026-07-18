@@ -1,218 +1,191 @@
-# Agent Instructions
+# Ion Agent Instructions
 
-## Project
+## Mission
 
-Ion is a terminal coding agent in Go, inspired by Pi (Node.js). Goal: a fast,
-native daily-driver coding agent. Pi is a **behavioral reference** — read its
-source for useful invariants, but implement Ion's own idiomatic Go contracts.
-There is no Pi file-format, argument, or compatibility requirement.
+Ion is a native Go terminal coding agent and TUI. The goal is a complete,
+stable, correct, elegant, optimized, idiomatic daily-driver agent—not merely a
+green demo or a collection of feature checkboxes.
 
-Ion is `v0.0.0`. Clean breaks allowed. No shims, no compatibility layers, no v2
-files. Fix the actual code.
+Ion is v0.0.0. Clean breaks are allowed. There are no Pi compatibility
+requirements: no Pi file formats, arguments, JSONL/session protocols, package
+names, or compatibility shims.
 
-**P1 bar:** `submit → stream → tool call/result → cancel/error → persist →
-replay/resume`. This must work under tmux, race detector, and live providers.
+The required core workflow is:
 
-## Session Start
+submit → stream → tool call/result → steer/follow-up → cancel/error → persist → replay/resume
 
-1. `cat ai/brief.md` — current state
-2. `tk ready` — next task
-3. `git log --oneline -10` — recent changes
+It must be correct under normal use, restart, cancellation, provider failure,
+tmux, the race detector, and live providers.
 
-Update `ai/` as you work when state changes materially.
+## Session start
 
-## Project Layout
+Run these before making claims or choosing work:
 
-- `internal/agent/` — agent loop, stream, tools, config (the core)
-- `internal/agent/` — stateless loop plus stateful harness with hooks
-- `session/` — session tree (source of truth), events, settings, projection
-- `app/` — TUI (Bubble Tea v2), markdown, syntax highlighting
-- `llm/` — LLM message types and providers (anthropic, openai, openrouter, etc.)
-- `tool/` — tool interface and implementations (bash, edit, read, glob, grep)
-- `tool/mcp/` — MCP client (stdio) and first-party MCP server
-- `config/` — settings loading
-- `archive/` — stale code, ignored (tests may fail there, not blocking)
+    cat ai/brief.md
+    tk ready
+    git log --oneline -10
+    git status --short
 
-## Reference Posture
+Read ai/DESIGN.md before structural work. Read the relevant task, tests, and
+recent journal/decision entries. Repo-local code, tests, ai/, and tk outrank
+stale chat context.
 
-**Complete agent capability + optimal Go implementation is the goal.** Pi is the
-behavior/product reference, not a compatibility target or spec to copy
-line-by-line. Pi source:
-`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`, plus
-`pi-coding-agent/dist/` and `pi-tui/dist/` for CLI/runtime/TUI behavior.
+## Product and reference posture
 
-1. Read Pi's source for the feature you're building
-2. Understand the invariant (what guarantee it provides)
-3. Find the correct Ion owner first; refactor ownership if the current location
-   is wrong
-4. Express the invariant idiomatically in Go (errors not exceptions, channels
-   not EventStream, defer not try/finally)
-5. Delete obsolete/duplicate paths in the same change; no shims or compatibility
-   layers
-6. Document intentional divergence only when Go/product constraints justify it
+Pi is the closest behavioral reference because it is a provider-agnostic agent
+harness. Use its current source and SDK/release documentation to recover
+invariants and solved product problems. Also inspect Codex CLI/Desktop,
+Claude Code, Cursor, Zed, and other strong references for safety, CLI/TUI,
+review, settings, integrations, and workflow patterns.
 
-## Implementation Rules
+References provide evidence about behavior and tradeoffs, not a specification
+to copy. Translate the invariant into an Ion-owned contract and choose the
+idiomatic Go implementation. A reference feature is not automatically an Ion
+requirement; a missing reference feature is not automatically a reason to add
+one.
 
-1. **Read Pi source first** — find the exact function, understand the behavior
-2. **Fix actual code** — no shims, wrappers, or v2 files at v0
-3. **Test behavior, not existence** — verify `GetLabel("x")` returns the right
-   string, not just that it compiles
-4. **One layer owns each guarantee** — no duplicate ownership across files
-5. **Surgical changes** — no opportunistic reformat
-6. **Root causes, not symptoms** — when a module repeatedly lets bugs through,
-   rewrite it
+## Required order of work
 
-## Design Discipline
+For any substantial product or structural change:
 
-The recurring failure mode is **refactoring without a cohesive target**: each
-refactor optimizes locally and the whole drifts. These rules prevent relapse.
+1. Reference research: inspect authoritative/current source or docs and record
+   the observable behavior and invariant.
+2. Ideal target: define the desired Ion behavior, ownership, lifecycle, failure
+   semantics, safety semantics, and UX before reading existing code as a design
+   guide. ai/DESIGN.md is the authoritative target.
+3. Implementation audit: map current code to the target using grep, imports,
+   call sites, tests, and runtime evidence. Classify each area as keep,
+   refactor, delete, or rewrite. Do not infer quality from filenames, line
+   counts, or passing legacy tests.
+4. Migration/rewrite: fix ownership and contracts first. Delete obsolete paths
+   in the same change. A full rewrite of a bad subsystem is preferable to
+   preserving its shape with wrappers or transitional layers.
+5. Behavioral proof: add tests for the target contract, then run the affected
+   serial, race, TUI/tmux, provider, security, and performance gates.
+6. Adversarial review: have an authorized native Sol reviewer challenge the
+   design and diff at important boundaries. Reconcile findings before calling
+   the slice complete.
+7. Persist and save: update ai/brief.md, ai/decisions.md, ai/journal.md, and tk
+   when state or architecture changes materially; commit each coherent working
+   chunk.
 
-1. **`ai/DESIGN.md` is the single source of truth for the target architecture.**
-   It is defined on its own terms (learning from Pi's `pi-agent-core` source),
-   not derived from current code. Every structural commit is measured against
-   it. Drift requires updating the doc by explicit decision — or reverting.
+Do not start broad feature work while the product charter or target
+architecture is unresolved. Do not let the current implementation define the
+ideal merely because it already exists.
 
-2. **Target-first, never anchor to existing code.** The order is: define the
-   optimal target → measure the gap → migrate. A structural decision phrased as
-   "move X out of agent.go" is a smell; it should be "the target owns Y here."
+## Quality bar
 
-3. **Read Pi source for the actual invariant before designing.** Pi is the
-   reference (`~/.pi/agent/npm/node_modules/@earendil-works/pi-agent-core/dist/`
-   and `pi-ai`'s `types.d.ts`). Cite with grep-verified line numbers. Have the
-   `architect` subagent verify load-bearing claims against the source before
-   committing to them (prior citations were off by 15-110 lines).
+- One owner for every invariant, state transition, and persistence guarantee.
+- No duplicate domain models, event streams, transcripts, caches, policy
+  engines, runtime composition roots, or cleanup paths.
+- No speculative abstractions, dead configuration, compatibility aliases,
+  fallback branches, TODO-based architecture, or “temporary” v2 files.
+- Rewrite repeated or tangled code when local patches would preserve bad
+  ownership. Do not optimize a subsystem before its contract is correct.
+- Prefer simple, explicit Go: small packages, concrete types at ownership
+  boundaries, narrow interfaces at consumption boundaries, context-aware I/O,
+  typed errors, deterministic ordering, bounded queues/loops, and clear
+  shutdown semantics.
+- Let errors propagate. Recover only to add useful context or to implement a
+  defined recovery contract. Never silently downgrade a failed write,
+  approval, cancellation, teardown, or provider request.
+- Performance claims require benchmarks or profiles. Keep hot paths measured,
+  bounded, allocation-aware, and free of avoidable global locks/state.
+- Tests must verify behavior and invariants, not names, existence, or legacy
+  implementation details.
 
-4. **Verify premises before they're load-bearing.** LOC counts, interface
-   counts, "dead" claims, import graphs — grep-derive every one. Repeated
-   numbers in `ai/` files were wrong ("86k" counted tests) and drove bad
-   decisions. No number enters the design without a reproducing command.
+## Target architecture constraints
 
-5. **Tests encode design contracts, not old behavior.** There is nothing worth
-   characterizing in pre-redesign code — it's the thing being escaped. Contract
-   tests assert the target's invariants (sealed unions are exhaustive, the loop
-   is stateless, one `AgentEnd` per turn) and pass only when the design is
-   realized. "Tests pass" is not done; the contract tests for the phase being
-   green, with output shown, is done.
+ai/DESIGN.md is the current authoritative architecture. If the ideal target
+changes, update it by explicit decision before changing structural code.
 
-6. **Work on `main` in place. No branches, no parallel systems, no cutover.**
-   A red build mid-refactor is honest — it reflects the gap between old
-   consumers and the new model, and the red list *is* the work plan. v0.0.0
-   means clean breaks; preserving old behavior is not a goal.
+- session/ owns the typed domain model, session tree, events, and durable
+  storage. The session tree is the source of truth for conversation state.
+- internal/agent/loop.go is a stateless turn engine. It receives all inputs,
+  persists nothing, owns no session/store, and emits typed events.
+- The agent harness is the stateful owner of active session state, tools,
+  queues, context, compaction/recovery, model/thinking/tool state, hooks,
+  policy, runtime resources, and persistence coordination.
+- The host/composition root owns process lifetime, provider/auth/model
+  construction, resource loading, runtime replacement, teardown, and CLI mode
+  selection. No hidden package-global host state.
+- app/ is a Bubble Tea v2 projection/control layer. It owns view state and
+  user intent, not a second agent loop, transcript, session materializer, or
+  hidden runtime.
+- llm/ owns provider-neutral wire contracts and real provider adapters.
+  Catalogs and endpoint resolvers must have explicit host ownership. Catalog
+  metadata may describe only executable provider behavior.
+- tool/ owns tool contracts and execution adapters. tool/mcp/ owns MCP client
+  lifecycle; MCP state is runtime state, not session content.
+- Instructions, skills, memory, checkpoints, jobs, and other auxiliary
+  services must each have one explicit owner and a documented relationship to
+  session history and prompt context.
 
-7. **No shims, no transitional code, no "v2" files.** (Already rule 2 of
-   Implementation Rules; restated because it's also the anti-drift mechanism —
-   there is no forgotten temporary mess.)
+The current safety implementation is a baseline, not automatically the final
+policy. The target must be derived from an explicit threat model and strong
+reference behavior: approval modes, workspace/path boundaries, process and
+filesystem access, network policy, credential exposure, MCP/tool permissions,
+non-interactive behavior, cancellation, and auditability. Do not preserve a
+trusted-by-default posture by momentum if the target requires a safer or more
+useful policy model.
 
-8. **Adversarial review at phase boundaries.** The `reviewer`/`architect`
-   subagent (GLM-5.2) reviews each phase's diff against `DESIGN.md` before it
-   ships. The D3 overflow-recovery regression was caught this way — review is
-   load-bearing, not ceremonial.
+## Work tracking and review
 
-9. **Parity and cleanup are one track.** Do not patch Pi gaps onto messy code.
-   For every parity item: read Pi → state the invariant → identify the correct
-   Ion owner → refactor to that owner if needed → implement the behavior →
-   delete obsolete paths → add behavioral tests. If implementing parity would
-   make a package messier, stop and redesign the local ownership before coding.
+Use tk for multi-step work. The current overall goal is tk-2lt7; its first
+bounded deliverable is tk-rvdx, the reference-backed product charter. Keep
+tasks atomic, demoable, and acceptance-tested. Log findings while fresh.
+
+Use native Codex subagents when a second opinion materially improves an
+important architecture, safety, or code-review decision. The user has
+authorized Sol reviewers. Do not route Codex-available GPT models through Pi;
+use Pi only when explicitly requested or when a non-native model is the
+deliberate choice. A reviewer must report evidence, changed files (if any),
+commands, findings, risks, and unresolved questions.
 
 ## Verification
 
-### What counts as evidence
-- **Pi source**: file.js:line_number
-- **Ion source**: file.go:line_number
-- **Test output**: command + pass/fail with actual output
-- **Behavioral proof**: terminal output showing it works
+Evidence means:
 
-### What does NOT count
-- "I implemented a function with that name"
-- "The checklist says ✅"
-- "Tests pass" (without showing which tests)
-- "I remember doing this"
+- reference source/docs with a direct citation;
+- Ion source with file and line;
+- actual test command and output;
+- behavioral terminal/TUI/provider proof.
 
-### Done workflow
-1. Read Pi source for the feature
-2. State the invariant and the correct Ion owner
-3. Refactor misplaced responsibility first if needed (no shims)
-4. Implement in Ion's actual code
-5. Delete obsolete/duplicate paths created by the old structure
-6. Write behavioral test
-7. Run test, show output
-8. If substantial: spawn parallel reviewers for source comparison and code quality
-9. Only then claim done
+Minimum gates for core changes:
 
-### Red flags — stop and re-audit
-- "Phase 1 is complete" (said 3 times, found bugs each time)
-- "I think it's done" without source comparison
-- Checklist has all ✅ but no behavioral verification
-- User says "are you sure?" — answer is "let me verify"
+    go test ./... -count=1 -timeout 300s
+    go test -race ./internal/agent/ ./session/ ./app/ ./llm/ -count=1 -timeout 180s
+    go vet ./...
 
-## Work Style
+TUI changes require deterministic reducer tests plus tmux acceptance. Provider
+or lifecycle changes require the relevant fake, failure-injection, restart,
+and live-provider evidence. Security changes require allow/deny, boundary,
+cancellation, shutdown, and non-interactive tests. Performance changes require
+before/after benchmarks or profiles.
 
-- Let errors propagate. Catch only to recover or add context.
-- Commit after each coherent change set.
-- `tk` for all multi-step work. Log findings while fresh.
-- Short prompts (`proceed`, `what's next`) mean: verify repo truth first, pick
-  the next slice from `ai/`/`tk`, execute.
+Never claim completion from a checklist alone. If a gate is skipped, state why.
 
-## Architecture Constraints
+## User regressions and stop conditions
 
-- **`ai/DESIGN.md` is authoritative** for package layout, the domain model, the
-  loop/harness contract, and the `session` interface allowlist. Contradictions
-  in `architecture.md`/`brief.md`/`STATUS.md` are stale; `DESIGN.md` wins.
-- **Session tree is the source of truth.** All state (messages, model changes,
-  thinking level, compaction) flows through the tree.
-- **The agent loop is stateless and persists nothing.** It takes all inputs as
-  args (prompts, TurnContext, LoopConfig, emit, signal) and emits events as its
-  sole output. No `*session.Session` field, no persistence calls in loop files.
-- **The harness is the sole stateful owner** of session, tools, model state,
-  queues, compaction, and recovery. It builds a fresh `LoopConfig` per turn.
-- **TUI is projection/control over runtime events.** It must not own a second
-  agent loop, second transcript, or hidden session materializer. Its contract
-  with the core is typed (events in, commands out), part of `DESIGN.md`.
-- **Hooks are extension points.** Keep the core small; optional capabilities
-  live behind explicit hook boundaries.
+Treat every user-reported behavior problem as a regression until disproven.
+Search tk, ai/journal.md, recent commits, and relevant tests before answering
+that it is fixed. Create a task when no record exists.
 
-## Config And State
+Stop and re-audit when:
 
-- Global files under `~/.ion/`: `config.toml` (settings), `state.toml` (runtime
-  state), `credentials.toml` (API keys).
-- Don't persist provider/model at startup. Only explicit user edits or TUI
-  actions write settings/state.
+- a phase is declared complete repeatedly while new defects appear;
+- a change adds a wrapper, duplicate state, global mutable seam, or temporary
+  compatibility path;
+- a design claim lacks grep/source/test evidence;
+- a user asks “are you sure?”;
+- the next implementation step depends on an unresolved product or threat-model
+  decision.
 
-## Commands
+## Active context files
 
-```bash
-# Verification
-go test ./... -count=1 -timeout 300s
-go test -race ./internal/agent/ ./session/ ./app/ -count=1 -timeout 120s
-go vet ./...
-
-# Task tracking
-tk ready          # what's next
-tk show <id>      # task detail
-tk log <id> "msg" # record finding
-tk done <id>      # mark complete
-
-# TUI changes: test in tmux. Unit tests for reducers; tmux smoke for integration.
-```
-
-Report exact commands run. If a gate is skipped, say why.
-
-## Dogfood Regressions
-
-User-reported behavior bugs are regressions until proven otherwise. Before
-answering "is this fixed", search `tk`, `ai/journal.md`, recent commits. If no
-record exists, create a `tk` task. Don't guess.
-
-## References
-
-**Active `ai/` files** (update as you work):
-- `ai/DESIGN.md` — **the target architecture; authoritative** (read every session)
-- `ai/brief.md` — current state + pointer (read every session)
-- `ai/decisions.md` — decision log (append)
-- `ai/journal.md` — session findings (append-only)
-
-**Archived** (historical only, superseded by `DESIGN.md`): `ai/archive/`
-contains `REWRITE-PLAN.md`, `architecture.md`, `STATUS.md`, `PLAN.md`, the
-`spec-*.md` files, `COMPREHENSIVE-AUDIT.md`, `CODEBASE-QUALITY.md`,
-`PI-PARITY-GAP.md`. Read for history only; where they disagree with `DESIGN.md`,
-`DESIGN.md` wins.
+- ai/DESIGN.md — authoritative target architecture
+- ai/brief.md — concise current state and roadmap
+- ai/decisions.md — durable architectural decisions
+- ai/journal.md — append-only evidence and findings
+- handoff.md — ephemeral next-session baton
+- .tasks/ via tk — executable work queue
