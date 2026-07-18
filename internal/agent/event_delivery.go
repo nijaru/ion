@@ -13,13 +13,14 @@ import (
 // channel. A slow or temporarily absent TUI therefore cannot drop events or
 // stall the agent turn.
 type eventDelivery struct {
-	output      chan session.Event
+	output      chan session.EventEnvelope
 	closeOutput bool
 
 	mu          sync.Mutex
 	cond        *sync.Cond
 	queue       []queuedEvent
 	head        int
+	nextCursor  session.EventCursor
 	closed      bool
 	stop        chan struct{}
 	stopped     chan struct{}
@@ -36,6 +37,7 @@ type eventDelivery struct {
 
 type queuedEvent struct {
 	event         session.Event
+	envelope      session.EventEnvelope
 	listeners     []func(session.Event)
 	listenersDone chan struct{}
 	outputDone    chan struct{}
@@ -43,11 +45,11 @@ type queuedEvent struct {
 }
 
 type queuedOutput struct {
-	event      session.Event
+	envelope   session.EventEnvelope
 	outputDone chan struct{}
 }
 
-func newEventDelivery(output chan session.Event, closeOutput bool) *eventDelivery {
+func newEventDelivery(output chan session.EventEnvelope, closeOutput bool) *eventDelivery {
 	d := &eventDelivery{
 		output:      output,
 		closeOutput: closeOutput,
@@ -80,6 +82,8 @@ func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Ev
 		d.mu.Unlock()
 		return
 	}
+	d.nextCursor++
+	item.envelope = session.EventEnvelope{Cursor: d.nextCursor, Event: event}
 	d.queue = append(d.queue, item)
 	d.cond.Signal()
 	d.mu.Unlock()
@@ -106,8 +110,10 @@ func (d *eventDelivery) enqueue(event session.Event, listeners []func(session.Ev
 func (d *eventDelivery) enqueueAsync(event session.Event, listeners []func(session.Event)) {
 	d.mu.Lock()
 	if !d.closed {
+		d.nextCursor++
 		d.queue = append(d.queue, queuedEvent{
 			event:         event,
+			envelope:      session.EventEnvelope{Cursor: d.nextCursor, Event: event},
 			listeners:     listeners,
 			listenersDone: make(chan struct{}),
 			outputDone:    make(chan struct{}),
@@ -180,7 +186,7 @@ func (d *eventDelivery) enqueueOutput(item queuedEvent) {
 	d.outputMu.Lock()
 	if !d.outputClosed {
 		d.outputQueue = append(d.outputQueue, queuedOutput{
-			event:      item.event,
+			envelope:   item.envelope,
 			outputDone: item.outputDone,
 		})
 		d.outputCond.Signal()
@@ -196,7 +202,7 @@ func (d *eventDelivery) send() {
 			return
 		}
 		select {
-		case d.output <- item.event:
+		case d.output <- item.envelope:
 			close(item.outputDone)
 		case <-d.stop:
 			return

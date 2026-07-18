@@ -149,7 +149,7 @@ type stubRunner struct {
 	thinkingErr  error
 }
 
-func (r *stubRunner) Events() <-chan session.Event { return nil }
+func (r *stubRunner) Events() <-chan session.EventEnvelope { return nil }
 func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	r.promptTexts = append(r.promptTexts, text)
 	r.promptImages = append(r.promptImages, cloneImageAttachments(images))

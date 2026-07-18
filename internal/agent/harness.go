@@ -63,7 +63,7 @@ type Harness struct {
 	runCancel   chan struct{} // closed to abort current run
 
 	// event subscription
-	events         chan session.Event
+	events         chan session.EventEnvelope
 	externalEvents bool
 	delivery       *eventDelivery
 	done           chan struct{}
@@ -190,7 +190,7 @@ const (
 
 // HarnessConfig holds construction-time configuration for a Harness.
 type HarnessConfig struct {
-	Events          chan session.Event
+	Events          chan session.EventEnvelope
 	Session         session.Session
 	Store           session.Store
 	Durable         session.DurableStore // optional transactional turn journal
@@ -302,7 +302,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		h.maxParallelTools = 8
 	}
 	if h.events == nil {
-		h.events = make(chan session.Event, 256)
+		h.events = make(chan session.EventEnvelope, 256)
 	}
 	h.delivery = newEventDelivery(h.events, !h.externalEvents)
 	if h.hooks == nil {
@@ -315,7 +315,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 }
 
 // Events returns the ordered channel the TUI subscribes to.
-func (h *Harness) Events() <-chan session.Event { return h.events }
+func (h *Harness) Events() <-chan session.EventEnvelope { return h.events }
 
 // Done is closed when the harness is no longer a valid event source.
 func (h *Harness) Done() <-chan struct{} { return h.done }

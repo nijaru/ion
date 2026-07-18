@@ -617,7 +617,7 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	h := NewHarness(HarnessConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
-		Events:  make(chan session.Event, 1), // tiny buffer to trigger slow path
+		Events:  make(chan session.EventEnvelope, 1), // tiny buffer to trigger slow path
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			// Emit many chunks to generate many MessageUpdate events.
 			chunks := make([]*llm.Chunk, 20)
@@ -638,10 +638,11 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 		defer close(drainDone)
 		for {
 			select {
-			case e, ok := <-h.Events():
+			case envelope, ok := <-h.Events():
 				if !ok {
 					return
 				}
+				e := envelope.Event
 				dMu.Lock()
 				drained = append(drained, e)
 				dMu.Unlock()

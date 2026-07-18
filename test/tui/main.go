@@ -146,17 +146,18 @@ func seedSmokeSessionPicker(ctx context.Context, store sessionCatalogWriter, cwd
 
 type smokeBackend struct {
 	mode   string
-	events chan session.Event
+	events chan session.EventEnvelope
 	cfg    *config.Config
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	cursor session.EventCursor
 }
 
 func newSmokeBackend(mode string) *smokeBackend {
 	return &smokeBackend{
 		mode:   mode,
-		events: make(chan session.Event, 64),
+		events: make(chan session.EventEnvelope, 64),
 	}
 }
 
@@ -223,14 +224,14 @@ func (b *smokeBackend) Close() error {
 	return nil
 }
 
-func (b *smokeBackend) Events() <-chan session.Event { return b.events }
+func (b *smokeBackend) Events() <-chan session.EventEnvelope { return b.events }
 
 type smokeRunner struct {
 	backend *smokeBackend
 	sess    session.Session
 }
 
-func (r *smokeRunner) Events() <-chan session.Event { return r.backend.Events() }
+func (r *smokeRunner) Events() <-chan session.EventEnvelope { return r.backend.Events() }
 func (r *smokeRunner) Prompt(ctx context.Context, text string, _ ...session.ImageContent) (session.Message, error) {
 	return nil, r.backend.SubmitTurn(ctx, text)
 }
@@ -528,10 +529,15 @@ func (b *smokeBackend) runFileToolScript(ctx context.Context, input string) {
 }
 
 func (b *smokeBackend) emit(ctx context.Context, event session.Event) bool {
+	b.mu.Lock()
+	envelope := session.EventEnvelope{Cursor: b.cursor + 1, Event: event}
 	select {
 	case <-ctx.Done():
+		b.mu.Unlock()
 		return false
-	case b.events <- event:
+	case b.events <- envelope:
+		b.cursor = envelope.Cursor
+		b.mu.Unlock()
 		return true
 	}
 }

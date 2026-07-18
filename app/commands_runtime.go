@@ -535,6 +535,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	}
 	closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
+	m.Model.EventCursor = 0
 	m.pickerReducer().closeAll()
 	m.clearProgressError()
 	if msg.runtime.Handles.Storage != nil {

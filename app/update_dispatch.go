@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
@@ -231,6 +233,17 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 	case sessionEventMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
+		}
+		if msg.cursor != 0 && m.Model.EventCursor != 0 && msg.cursor != m.Model.EventCursor+1 {
+			next, cmd := m.handleSessionError(fmt.Errorf(
+				"runtime event cursor gap: expected %d, got %d",
+				m.Model.EventCursor+1,
+				msg.cursor,
+			), false)
+			return next, cmd, true
+		}
+		if msg.cursor != 0 {
+			m.Model.EventCursor = msg.cursor
 		}
 		next, cmd := m.handleSessionEvent(msg.event)
 		return next, cmd, true

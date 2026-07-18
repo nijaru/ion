@@ -14,7 +14,7 @@ import (
 func TestEventDeliveryChannelAndListenersShareExactOrder(t *testing.T) {
 	h := NewHarness(HarnessConfig{
 		Session: newTestSession(t),
-		Events:  make(chan session.Event, 1),
+		Events:  make(chan session.EventEnvelope, 1),
 	})
 
 	want := []session.Event{
@@ -35,10 +35,13 @@ func TestEventDeliveryChannelAndListenersShareExactOrder(t *testing.T) {
 	}
 
 	got := make([]session.Event, 0, len(want))
-	for range want {
+	for i := range want {
 		select {
-		case event := <-h.Events():
-			got = append(got, event)
+		case envelope := <-h.Events():
+			if envelope.Cursor != session.EventCursor(i+1) {
+				t.Fatalf("event %d cursor = %d, want %d", i, envelope.Cursor, i+1)
+			}
+			got = append(got, envelope.Event)
 		case <-time.After(time.Second):
 			t.Fatal("timed out draining event channel")
 		}
@@ -61,7 +64,7 @@ func TestEventDeliveryChannelAndListenersShareExactOrder(t *testing.T) {
 func TestEventDeliveryListenerCanEnqueueFollowUp(t *testing.T) {
 	h := NewHarness(HarnessConfig{
 		Session: newTestSession(t),
-		Events:  make(chan session.Event, 1),
+		Events:  make(chan session.EventEnvelope, 1),
 	})
 	defer h.Close()
 
@@ -74,7 +77,8 @@ func TestEventDeliveryListenerCanEnqueueFollowUp(t *testing.T) {
 	h.emit(session.AgentStart{})
 	for i := range 2 {
 		select {
-		case event := <-h.Events():
+		case envelope := <-h.Events():
+			event := envelope.Event
 			if i == 0 {
 				if _, ok := event.(session.AgentStart); !ok {
 					t.Fatalf("event 0 = %T, want AgentStart", event)
@@ -131,7 +135,7 @@ func TestEventDeliveryConcurrentCloseIsRaceFree(t *testing.T) {
 func TestEventDeliveryNoReaderCloseIsCancellable(t *testing.T) {
 	h := NewHarness(HarnessConfig{
 		Session: newTestSession(t),
-		Events:  make(chan session.Event, 1),
+		Events:  make(chan session.EventEnvelope, 1),
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
 			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
 		},

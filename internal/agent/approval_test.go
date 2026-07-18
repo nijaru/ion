@@ -269,7 +269,7 @@ func TestApprovalBrokerShutdownOverridesCachedAlways(t *testing.T) {
 func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	events := make(chan session.Event, 4)
+	events := make(chan session.EventEnvelope, 4)
 	h := NewHarness(HarnessConfig{
 		Events:              events,
 		Session:             sess,
@@ -296,7 +296,7 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 		})
 	}()
 
-	event := <-events
+	event := (<-events).Event
 	request, ok := event.(session.ApprovalRequest)
 	if !ok {
 		t.Fatalf("event = %T, want ApprovalRequest", event)
@@ -313,7 +313,7 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	events := make(chan session.Event, 4)
+	events := make(chan session.EventEnvelope, 4)
 	h := NewHarness(HarnessConfig{
 		Events:              events,
 		Session:             sess,
@@ -343,7 +343,7 @@ func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 		})
 	}()
 
-	event := <-events
+	event := (<-events).Event
 	request, ok := event.(session.ApprovalRequest)
 	if !ok {
 		t.Fatalf("event = %T, want ApprovalRequest", event)

@@ -102,7 +102,8 @@ func TestHarnessEmitsEvents(t *testing.T) {
 	timeout := time.After(2 * time.Second)
 	for {
 		select {
-		case e := <-h.Events():
+		case envelope := <-h.Events():
+			e := envelope.Event
 			events = append(events, e)
 			// AgentEnd now precedes Settled (Pi parity), so wait for Settled or timeout after AgentEnd.
 			if _, ok := e.(session.Settled); ok {

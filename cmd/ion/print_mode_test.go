@@ -19,10 +19,14 @@ import (
 
 // printSession implements both session.Session and agent.Runtime for testing print mode.
 type printSession struct {
-	events    chan session.Event
+	events    chan session.EventEnvelope
 	cancelled int
 	closed    int
 	submitErr error
+}
+
+func printEnvelope(event session.Event) session.EventEnvelope {
+	return session.EventEnvelope{Event: event}
 }
 
 type abortReleasingPrintSession struct {
@@ -98,8 +102,8 @@ func (s *printSession) CancelTurn(context.Context) error {
 	s.cancelled++
 	return nil
 }
-func (s *printSession) Events() <-chan session.Event    { return s.events }
-func (s *printSession) EventSender() chan session.Event { return s.events }
+func (s *printSession) Events() <-chan session.EventEnvelope    { return s.events }
+func (s *printSession) EventSender() chan session.EventEnvelope { return s.events }
 func (s *printSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
@@ -457,16 +461,16 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 // harness approval broker and persist a recoverable tool error.
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 3)}
-	sess.events <- session.MessageUpdate{
+	sess := &printSession{events: make(chan session.EventEnvelope, 3)}
+	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "hello"},
 		BlockType: "text",
-	}
-	sess.events <- session.MessageUpdate{
+	})
+	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: " world"},
 		BlockType: "text",
-	}
-	sess.events <- session.TurnEnd{Base: session.BaseNow()}
+	})
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "text"); err != nil {
@@ -478,15 +482,15 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 }
 
 func TestPrintModeWritesJSONOutput(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 4)}
-	sess.events <- session.ToolExecStart{Name: "read"}
-	sess.events <- session.MessageEnd{
+	sess := &printSession{events: make(chan session.EventEnvelope, 4)}
+	sess.events <- printEnvelope(session.ToolExecStart{Name: "read"})
+	sess.events <- printEnvelope(session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Content: []session.Content{session.TextContent{Text: "done"}},
 			Usage:   session.Usage{Input: 12, Output: 3, Cost: session.Cost{Total: 0.25}},
 		},
-	}
-	sess.events <- session.TurnEnd{Base: session.BaseNow()}
+	})
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "json"); err != nil {
@@ -505,23 +509,23 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 }
 
 func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 6)}
-	sess.events <- session.TurnStart{Timestamp: time.Now()}
-	sess.events <- session.ToolExecStart{Name: "bash"}
-	sess.events <- session.MessageUpdate{
+	sess := &printSession{events: make(chan session.EventEnvelope, 6)}
+	sess.events <- printEnvelope(session.TurnStart{Timestamp: time.Now()})
+	sess.events <- printEnvelope(session.ToolExecStart{Name: "bash"})
+	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "do"},
 		BlockType: "text",
-	}
-	sess.events <- session.MessageEnd{
+	})
+	sess.events <- printEnvelope(session.MessageEnd{
 		Message: &session.AssistantMessage{
 			Usage: session.Usage{Input: 10, Output: 2, Cost: session.Cost{Total: 0.01}},
 		},
-	}
-	sess.events <- session.MessageUpdate{
+	})
+	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "ne"},
 		BlockType: "text",
-	}
-	sess.events <- session.TurnEnd{Base: session.BaseNow()}
+	})
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "run smoke", "json"); err != nil {
@@ -545,7 +549,7 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	sess := &printSession{events: make(chan session.Event)}
+	sess := &printSession{events: make(chan session.EventEnvelope)}
 
 	_, err := runPromptTurn(ctx, sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
@@ -557,7 +561,7 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 }
 
 func TestPrintModeTimeoutIsActionable(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event)}
+	sess := &printSession{events: make(chan session.EventEnvelope)}
 
 	err := runPrintModeWithTimeout(
 		context.Background(),
@@ -594,8 +598,8 @@ func TestPrintModeReturnsSubmitError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionError(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 1)}
-	sess.events <- session.TurnEnd{Base: session.BaseNow(), Error: errors.New("rate limited")}
+	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("rate limited")})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
@@ -607,8 +611,8 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 1)}
-	sess.events <- session.TurnEnd{Base: session.BaseNow(), Error: errors.New("session error")}
+	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("session error")})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error") {
@@ -620,11 +624,11 @@ func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
 }
 
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 1)}
-	sess.events <- session.MessageUpdate{
+	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "partial"},
 		BlockType: "text",
-	}
+	})
 	close(sess.events)
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
@@ -637,7 +641,7 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 }
 
 func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) {
-	base := &printSession{events: make(chan session.Event)}
+	base := &printSession{events: make(chan session.EventEnvelope)}
 	sess := &abortReleasingPrintSession{
 		printSession: base,
 		unblock:      make(chan struct{}),
@@ -664,8 +668,8 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 }
 
 func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 1)}
-	sess.events <- session.TurnEnd{Base: session.BaseNow()}
+	sess := &printSession{events: make(chan session.EventEnvelope, 1)}
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "turn finished without assistant response") {

@@ -26,6 +26,7 @@ const (
 
 type sessionEventMsg struct {
 	generation uint64
+	cursor     session.EventCursor
 	event      session.Event
 }
 
@@ -346,6 +347,7 @@ type ModelState struct {
 	Config               *config.Config
 	Runtime              Snapshot
 	EventGeneration      uint64
+	EventCursor          session.EventCursor
 	RuntimeSwitchRequest uint64
 	SettingsRequest      uint64
 	MemoryRequest        uint64

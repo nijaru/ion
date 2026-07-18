@@ -274,7 +274,7 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
-	var events <-chan session.Event
+	var events <-chan session.EventEnvelope
 	var done <-chan struct{}
 	if m.Model.Runner != nil {
 		events = m.Model.Runner.Events()
@@ -295,11 +295,11 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 	}
 	return func() tea.Msg {
 		select {
-		case ev, ok := <-events:
+		case envelope, ok := <-events:
 			if !ok {
 				return streamClosedMsg{generation: generation}
 			}
-			return sessionEventMsg{generation: generation, event: ev}
+			return sessionEventMsg{generation: generation, cursor: envelope.Cursor, event: envelope.Event}
 		case <-done:
 			return streamClosedMsg{generation: generation}
 		}

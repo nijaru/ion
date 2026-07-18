@@ -654,7 +654,7 @@ func TestHarnessIntegration_Steering(t *testing.T) {
 
 	// Watch for tool execution start, then steer.
 	for ev := range events {
-		if _, ok := ev.(session.ToolExecStart); ok {
+		if _, ok := ev.Event.(session.ToolExecStart); ok {
 			h.Steer("steered message")
 			break
 		}
@@ -708,7 +708,7 @@ func TestHarnessIntegration_FollowUp(t *testing.T) {
 
 	// Watch for the assistant response, inject follow-up.
 	for ev := range events {
-		if me, ok := ev.(session.MessageEnd); ok {
+		if me, ok := ev.Event.(session.MessageEnd); ok {
 			if _, isAssistant := me.Message.(*session.AssistantMessage); isAssistant {
 				h.FollowUp("please continue")
 				break

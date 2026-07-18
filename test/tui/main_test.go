@@ -31,8 +31,8 @@ func TestSmokeBackendEmitsEvents(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			t.Fatal("context done before receiving all events")
-		case e := <-backend.Events():
-			if e == nil {
+		case envelope := <-backend.Events():
+			if envelope.Event == nil {
 				t.Fatalf("event %d is nil", i)
 			}
 		}
@@ -50,8 +50,8 @@ func TestSmokeBackendCancelMode(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("context done before receiving %s", expected)
-		case e := <-backend.Events():
-			if e == nil {
+		case envelope := <-backend.Events():
+			if envelope.Event == nil {
 				t.Fatalf("received nil event, expected %s", expected)
 			}
 		}
@@ -72,8 +72,8 @@ func TestSmokeBackendErrorMode(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("context done before receiving event %d", i)
-		case e := <-backend.Events():
-			if e == nil {
+		case envelope := <-backend.Events():
+			if envelope.Event == nil {
 				t.Fatalf("received nil event at index %d", i)
 			}
 		}

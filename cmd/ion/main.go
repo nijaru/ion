@@ -653,7 +653,7 @@ func runPromptTurn(
 ) (printResult, error) {
 	events := runner.Events()
 	if events == nil {
-		events = make(chan session.Event) // dummy, never receives
+		events = make(chan session.EventEnvelope) // dummy, never receives
 	}
 
 	var agentText strings.Builder
@@ -682,7 +682,7 @@ func runPromptTurn(
 
 	for !promptDone || !turnFinished {
 		select {
-		case ev, ok := <-events:
+		case envelope, ok := <-events:
 			if !ok {
 				// Abort first: a runner may need the abort signal to release Prompt.
 				// Waiting for Prompt before aborting can deadlock print mode when the
@@ -695,7 +695,7 @@ func runPromptTurn(
 				}
 				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
-			switch msg := ev.(type) {
+			switch msg := envelope.Event.(type) {
 			case session.ToolExecStart:
 				result.ToolCalls = append(result.ToolCalls, msg.Name)
 			case session.MessageUpdate:

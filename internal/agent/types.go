@@ -202,7 +202,7 @@ func (e *TurnError) Unwrap() error {
 // controller's entire implementation.
 type Runtime interface {
 	// Events returns the channel the TUI subscribes to for agent events.
-	Events() <-chan session.Event
+	Events() <-chan session.EventEnvelope
 
 	// Prompt submits a user message and runs a full agent turn.
 	// Blocks until the turn completes. Returns the final assistant message.

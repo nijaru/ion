@@ -493,7 +493,7 @@ func openRuntime(
 	}
 
 	sess := session.NewSession(store, 64)
-	runtimeEvents := make(chan session.Event, 64)
+	runtimeEvents := make(chan session.EventEnvelope, 64)
 
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:             sess,
