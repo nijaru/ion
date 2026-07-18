@@ -14,7 +14,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/session"
 )
 
@@ -769,17 +768,15 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
-			newBackend := testutil.New()
-			newBackend.SetConfig(&resolved)
+			newBackend := stubBackend{provider: resolved.Provider, model: resolved.Model}
 			newStorage := &stubStorageSession{
 				storageID:     sessionID,
 				storageModel:  cfg.Provider + "/" + cfg.Model,
 				storageBranch: "main",
 			}
-			newBackend.SetSession(newStorage)
 			return newBackend, &stubRunner{}, newStorage, nil
 		},
 	)
@@ -836,7 +833,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

@@ -7,7 +7,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// setupBackend is a minimal Backend used before the user configures a provider
+// setupBackend is a minimal RuntimeInfo used before the user configures a provider
 // and model. It shows a bootstrap status message and holds the store + config
 // for later materialization. It has no session or runner — the TUI shows a
 // setup prompt until the user runs /provider and /model.

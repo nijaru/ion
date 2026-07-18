@@ -48,7 +48,7 @@ func TestSwitchRejectsIncompleteRuntimeWithoutPersisting(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
 	saved := false
-	input.Switcher = func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		return stubBackend{provider: "openai", model: "gpt-4.1"}, newRunner, nil, nil
 	}
 	input.SaveState = func(config.RuntimeStateUpdate) error {
@@ -75,7 +75,7 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 	oldRunner := &trackingRuntimeRunner{}
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
-	input.Switcher = func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		handles := completeRuntimeHandles(newRunner)
 		return handles.Backend, handles.Runner, handles.Storage.(session.Session), nil
 	}
@@ -98,7 +98,7 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
-	input.Switcher = func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		handles := completeRuntimeHandles(newRunner)
 		return handles.Backend, handles.Runner, handles.Storage.(session.Session), nil
 	}
@@ -128,7 +128,7 @@ func TestResumeRejectsIncompleteRuntimeWithoutPersisting(t *testing.T) {
 		Transition: NewTransition(cfg, cfg, PresetPrimary, ""),
 		Current:    completeRuntimeHandles(oldRunner),
 		SessionID:  "resume",
-		Switcher: func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error) {
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 			return stubBackend{provider: "openai", model: "gpt-4.1"}, nil, newStorage, nil
 		},
 	}

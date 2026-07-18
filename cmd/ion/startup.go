@@ -27,7 +27,7 @@ func startupBannerLines(version string) []string {
 	return []string{"ion " + version}
 }
 
-func startupToolLine(b app.Backend) string {
+func startupToolLine(b app.RuntimeInfo) string {
 	summarizer, ok := b.(app.ToolSummarizer)
 	if !ok {
 		return ""
@@ -406,7 +406,7 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func backendForProvider(provider string) (app.Backend, error) {
+func backendForProvider(provider string) (app.RuntimeInfo, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
@@ -419,12 +419,12 @@ func backendForProvider(provider string) (app.Backend, error) {
 	return &configBackend{def: &def}, nil
 }
 
-// configBackend is a minimal agent.Backend for native providers.
+// configBackend is a minimal app.RuntimeInfo for native providers.
 // It holds config and store, but does not own a Session (the harness does).
 type configBackend struct {
-	def   *llm.Definition
-	cfg   *config.Config
-	store session.Store
+	def     *llm.Definition
+	cfg     *config.Config
+	store   session.Store
 	surface app.ToolSurface
 }
 

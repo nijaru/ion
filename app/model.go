@@ -334,7 +334,7 @@ type ConfigLoader func() (*config.Config, error)
 
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
-	Backend              Backend
+	Backend              RuntimeInfo
 	Storage              persistenceAdapter
 	Jobs                 JobController
 	Memory               MemoryController
@@ -426,7 +426,7 @@ type Model struct {
 }
 
 func New(
-	b Backend,
+	b RuntimeInfo,
 	s session.Session,
 	store session.Store,
 	workdir, branch, version string,
@@ -782,7 +782,7 @@ func (m Model) routingDecision(decision, reason, stopReason string) StoreRouting
 	}
 }
 
-func (m Model) runtimeHeaderLine(_ Backend) string {
+func (m Model) runtimeHeaderLine(_ RuntimeInfo) string {
 	version := strings.TrimSpace(m.App.Version)
 	if version == "" {
 		version = "v0.0.0"

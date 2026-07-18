@@ -403,7 +403,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.Backend, agent.Runner, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.RuntimeInfo, agent.Runner, session.Session, error) {
 		switchedBackend, switchedSession, switchedRunner, err := openRuntime(
 			ctx,
 			store,
@@ -511,7 +511,7 @@ func terminalSize(w io.Writer) (int, int) {
 	return width, height
 }
 
-func startupProviderMissing(b app.Backend) bool {
+func startupProviderMissing(b app.RuntimeInfo) bool {
 	return b != nil && strings.TrimSpace(b.Provider()) == ""
 }
 
@@ -551,11 +551,11 @@ func validateVersionSelection(args, conflictingFlags []string) error {
 	return nil
 }
 
-func startupSetupRequired(b app.Backend) bool {
+func startupSetupRequired(b app.RuntimeInfo) bool {
 	return b != nil && b.Name() == "setup"
 }
 
-func startupModelMissing(b app.Backend) bool {
+func startupModelMissing(b app.RuntimeInfo) bool {
 	return b != nil &&
 		strings.TrimSpace(b.Provider()) != "" &&
 		strings.TrimSpace(b.Model()) == ""

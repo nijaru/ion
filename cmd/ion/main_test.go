@@ -6,7 +6,6 @@ import (
 
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -88,14 +87,14 @@ type providerBackend struct {
 	model    string
 }
 
-func (b providerBackend) Name() string               { return "provider-test" }
-func (b providerBackend) Provider() string           { return b.provider }
-func (b providerBackend) Model() string              { return b.model }
-func (b providerBackend) ContextLimit() int          { return 0 }
-func (b providerBackend) Bootstrap() agent.Bootstrap { return agent.Bootstrap{} }
-func (b providerBackend) Session() session.Session   { return nil }
-func (b providerBackend) SetStore(session.Store)     {}
-func (b providerBackend) SetConfig(*config.Config)   {}
+func (b providerBackend) Name() string             { return "provider-test" }
+func (b providerBackend) Provider() string         { return b.provider }
+func (b providerBackend) Model() string            { return b.model }
+func (b providerBackend) ContextLimit() int        { return 0 }
+func (b providerBackend) Bootstrap() app.Bootstrap { return app.Bootstrap{} }
+func (b providerBackend) Session() session.Session { return nil }
+func (b providerBackend) SetStore(session.Store)   {}
+func (b providerBackend) SetConfig(*config.Config) {}
 
 func TestRuntimeHandlesForCloseUsesFinalAppRuntime(t *testing.T) {
 	startupAgent := &printSession{events: make(chan session.Event)}

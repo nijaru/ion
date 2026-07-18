@@ -73,9 +73,6 @@ type ProgressState struct {
 	LastToolUseID     string
 }
 
-// Backend is the agent backend interface.
-type Backend = agent.Backend
-
 // Preset represents a named model preset.
 type Preset string
 
@@ -217,13 +214,13 @@ const (
 
 // Handles holds resolved runtime references.
 type Handles struct {
-	Backend Backend
+	Backend RuntimeInfo
 	Runner  agent.Runner
 	Storage persistenceAdapter
 }
 
 // Switcher creates a new backend, harness, and storage session for model switching.
-type Switcher func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error)
+type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error)
 
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
@@ -864,10 +861,3 @@ func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Ent
 	}
 	return entry, true
 }
-
-// --- Agent type aliases (re-exported for dependent packages) ---
-
-type Bootstrap = agent.Bootstrap
-type Compactor = agent.Compactor
-type ToolSurface = agent.ToolSurface
-type ToolSummarizer = agent.ToolSummarizer

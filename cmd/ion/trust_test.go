@@ -8,7 +8,7 @@ import (
 )
 
 type toolSummaryBackend struct {
-	app.Backend
+	app.RuntimeInfo
 	surface app.ToolSurface
 }
 

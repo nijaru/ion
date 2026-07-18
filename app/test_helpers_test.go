@@ -202,7 +202,7 @@ func (r *stubRunner) Compact(_ context.Context) error {
 	return nil
 }
 
-// --- stubBackend implements agent.Backend ---
+// --- stubBackend implements RuntimeInfo ---
 
 type stubBackend struct {
 	sess         session.Session
@@ -211,7 +211,7 @@ type stubBackend struct {
 	providerSet  bool
 	modelSet     bool
 	contextLimit int
-	surface      agent.ToolSurface
+	surface      ToolSurface
 }
 
 func (b stubBackend) Name() string { return "stub" }
@@ -228,8 +228,8 @@ func (b stubBackend) Model() string {
 	return "stub-model"
 }
 func (b stubBackend) ContextLimit() int { return b.contextLimit }
-func (b stubBackend) Bootstrap() agent.Bootstrap {
-	return agent.Bootstrap{
+func (b stubBackend) Bootstrap() Bootstrap {
+	return Bootstrap{
 		Entries: []session.Entry{&session.LabelEntry{EntryBase: session.EntryBase{ID: "boot"}, Label: "boot"}},
 		Status:  "ready",
 	}
@@ -373,7 +373,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 	t.Helper()
 	sess := newStubSession("stub")
 	b := stubBackend{sess: sess, provider: "openai", model: "gpt-4.1"}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (Backend, agent.Runner, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		*observed = append(*observed, cfg.Model)
 		newSess := newStubSession(sessionID)
 		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}

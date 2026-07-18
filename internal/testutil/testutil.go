@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -34,7 +32,7 @@ func NewMockSession(id string) *MockSession {
 	}
 }
 
-func (s *MockSession) ID() string     { return s.id }
+func (s *MockSession) ID() string             { return s.id }
 func (s *MockSession) Meta() session.Metadata { return s.meta }
 
 func (s *MockSession) BuildContext(_ context.Context) (session.ContextSnapshot, error) {
@@ -91,13 +89,18 @@ func (s *MockSession) Append(_ context.Context, _ session.Entry) (string, error)
 }
 
 func (s *MockSession) Events() <-chan session.Event    { return s.events }
-func (s *MockSession) EventSender() chan session.Event  { return s.events }
+func (s *MockSession) EventSender() chan session.Event { return s.events }
 
 func (s *MockSession) GetEntry(_ context.Context, _ string) (session.Entry, error) {
 	return nil, nil
 }
-func (s *MockSession) GetLeafID() string      { s.mu.Lock(); defer s.mu.Unlock(); return s.leafID }
-func (s *MockSession) SetLeafID(id string) error { s.mu.Lock(); defer s.mu.Unlock(); s.leafID = id; return nil }
+func (s *MockSession) GetLeafID() string { s.mu.Lock(); defer s.mu.Unlock(); return s.leafID }
+func (s *MockSession) SetLeafID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leafID = id
+	return nil
+}
 func (s *MockSession) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
@@ -185,9 +188,9 @@ func (s *MockStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
 
-func (s *MockStore) GetLeafID() string            { return "" }
-func (s *MockStore) SetLeafID(_ string) error     { return nil }
-func (s *MockStore) Meta() session.Metadata        { return session.Metadata{} }
+func (s *MockStore) GetLeafID() string        { return "" }
+func (s *MockStore) SetLeafID(_ string) error { return nil }
+func (s *MockStore) Meta() session.Metadata   { return session.Metadata{} }
 
 func (s *MockStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil
@@ -219,66 +222,6 @@ func (s *MockStore) AddSession(info session.SessionInfoEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions = append(s.sessions, info)
-}
-
-// --- Mock Backend ---
-
-// ScriptStep is a pre-programmed event with optional delay.
-type ScriptStep struct {
-	Event session.Event
-	Delay time.Duration
-}
-
-// MockBackend implements agent.Backend for testing.
-// It also implements session.Session (the old testutil.Backend did this).
-type MockBackend struct {
-	mu          sync.Mutex
-	NameVal     string
-	ProviderVal string
-	ModelVal    string
-	CtxLimit    int
-	BootstrapVal agent.Bootstrap
-	SessionVal   session.Session
-	StoreVal     session.Store
-	ConfigVal    *config.Config
-	script       []ScriptStep
-	scriptPos    int
-	events       chan session.Event
-}
-
-// New creates a MockBackend with default values.
-func New() *MockBackend {
-	return &MockBackend{
-		events: make(chan session.Event, 100),
-	}
-}
-
-// SetScript sets pre-programmed events to emit.
-func (b *MockBackend) SetScript(steps []ScriptStep) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.script = steps
-	b.scriptPos = 0
-}
-
-// SetSession sets the session to return from Session().
-func (b *MockBackend) SetSession(s session.Session) {
-	b.SessionVal = s
-}
-
-func (b *MockBackend) Name() string              { return b.NameVal }
-func (b *MockBackend) Provider() string          { return b.ProviderVal }
-func (b *MockBackend) Model() string             { return b.ModelVal }
-func (b *MockBackend) ContextLimit() int         { return b.CtxLimit }
-func (b *MockBackend) Bootstrap() agent.Bootstrap { return b.BootstrapVal }
-func (b *MockBackend) Session() session.Session   { return b.SessionVal }
-func (b *MockBackend) SetStore(s session.Store)   { b.StoreVal = s }
-func (b *MockBackend) SetConfig(c *config.Config) {
-	b.ConfigVal = c
-	if c != nil {
-		b.ProviderVal = c.Provider
-		b.ModelVal = c.Model
-	}
 }
 
 // --- Event Helpers ---

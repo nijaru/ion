@@ -301,7 +301,7 @@ func openRuntime(
 	systemPromptOverride string,
 	appendSystemPromptOverride string,
 	approvalInteractive ...bool,
-) (app.Backend, session.Session, agent.Runner, error) {
+) (app.RuntimeInfo, session.Session, agent.Runner, error) {
 	interactive := true
 	if len(approvalInteractive) > 0 {
 		interactive = approvalInteractive[0]

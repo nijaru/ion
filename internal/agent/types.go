@@ -155,8 +155,8 @@ type StopContext struct {
 	Context     TurnContext
 }
 
-// Runner is the interface app/ uses to drive the agent.
-// The Harness implements this. It replaces the old Backend + Session pattern.
+// Runner is the interface app/ uses to drive the agent. The Harness implements
+// this and owns the active session, persistence, queues, and lifecycle.
 type Runner interface {
 	// Events returns the channel the TUI subscribes to for agent events.
 	Events() <-chan session.Event

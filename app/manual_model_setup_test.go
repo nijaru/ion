@@ -265,7 +265,7 @@ func TestManualModelPromptCommitsArbitraryModelID(t *testing.T) {
 
 func TestManualModelPromptRestoresRetryAfterSwitchFailure(t *testing.T) {
 	model := readyModel(t).WithConfig(&config.Config{Provider: "moonshot"})
-	model.Model.Switcher = func(context.Context, *config.Config, string) (Backend, agent.Runner, session.Session, error) {
+	model.Model.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runner, session.Session, error) {
 		return nil, nil, nil, errors.New("provider unavailable")
 	}
 	model.Picker.Setup = &setupPromptState{
