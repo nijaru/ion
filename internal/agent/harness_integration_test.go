@@ -143,6 +143,7 @@ func TestHarnessIntegration_DurableCancelledTurnDoesNotReplay(t *testing.T) {
 		close(done)
 	}()
 	<-started
+	h.SetModel(llm.Model{ID: "must-not-commit"})
 	if _, _, err := h.Abort(); err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +167,9 @@ func TestHarnessIntegration_DurableCancelledTurnDoesNotReplay(t *testing.T) {
 	}
 	if len(snapshot.Messages) != 0 {
 		t.Fatalf("cancelled durable messages replayed = %#v, want none", snapshot.Messages)
+	}
+	if snapshot.ActiveModel != "" {
+		t.Fatalf("cancelled durable model change replayed = %q, want none", snapshot.ActiveModel)
 	}
 	if interrupted, err := reopened.InterruptedTurns(ctx); err != nil {
 		t.Fatal(err)

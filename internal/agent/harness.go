@@ -76,6 +76,7 @@ type Harness struct {
 	activeTurnID   string
 	activeTurnLeaf string
 	turnCommitted  bool
+	turnAborted    bool
 
 	// thinkingPending prevents a live active-turn change from being overwritten
 	// by a stale session snapshot and records the last durable level for rollback.
@@ -384,17 +385,22 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 		h.mu.Lock()
 		activeTurnID := h.activeTurnID
 		turnCommitted := h.turnCommitted
+		turnAborted := h.turnAborted
 		h.mu.Unlock()
-		if activeTurnID != "" && !turnCommitted && h.durable != nil {
+		if activeTurnID != "" && !turnCommitted && !turnAborted && h.durable != nil {
 			if err := h.durable.AbortTurn(context.Background(), activeTurnID, "turn ended before durable commit"); err != nil {
 				h.logf(slog.LevelError, "abort uncommitted turn failed", slog.String("turn_id", activeTurnID), slog.String("error", err.Error()))
 			}
+		}
+		if activeTurnID != "" && !turnCommitted {
+			h.discardAbortedTurnWrites()
 		}
 		h.mu.Lock()
 		if h.activeTurnID == activeTurnID {
 			h.activeTurnID = ""
 			h.activeTurnLeaf = ""
 			h.turnCommitted = false
+			h.turnAborted = false
 		}
 		h.phase = PhaseIdle
 		h.runCancel = nil
@@ -440,6 +446,7 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 		h.activeTurnID = turn.ID
 		h.activeTurnLeaf = turn.LeafID
 		h.turnCommitted = false
+		h.turnAborted = false
 		h.mu.Unlock()
 	}
 
@@ -573,7 +580,7 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 			break // no overflow, done
 		}
 		// Compact and retry.
-		if compactErr := h.Compact(ctx); compactErr != nil {
+		if compactErr := h.compactAfterTurn(ctx); compactErr != nil {
 			break // can't compact, give up
 		}
 		snap, err = h.contextSnapshot(ctx)
@@ -649,7 +656,7 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 		// must be captured BEFORE flush, otherwise always false.
 		h.emit(session.SavePoint{HadPendingMutations: hadPending})
 		// Auto-compaction check after turn ends.
-		if ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
+		if h.canCompactAfterTurn() && ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
 			if err := h.Compact(ctx); err != nil {
 				h.emit(&session.Error{Err: fmt.Errorf("auto-compact: %w", err)})
 			}
@@ -766,10 +773,35 @@ func (h *Harness) abortTurn(ctx context.Context, reason string) error {
 	}
 	h.mu.Lock()
 	if h.activeTurnID == turnID {
-		h.turnCommitted = true // terminalized; defer must not issue a second abort
+		h.turnAborted = true
 	}
 	h.mu.Unlock()
 	return nil
+}
+
+func (h *Harness) discardAbortedTurnWrites() {
+	h.mu.Lock()
+	pending := h.pending
+	h.pending = nil
+	h.mu.Unlock()
+	for _, write := range pending {
+		if write.onFailure != nil {
+			write.onFailure()
+		}
+	}
+}
+
+func (h *Harness) canCompactAfterTurn() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.activeTurnID == "" || h.durable == nil
+}
+
+func (h *Harness) compactAfterTurn(ctx context.Context) error {
+	if !h.canCompactAfterTurn() {
+		return errors.New("compaction cannot run inside an uncommitted durable turn")
+	}
+	return h.Compact(ctx)
 }
 
 func terminalTurnFailure(messages []session.Message) string {

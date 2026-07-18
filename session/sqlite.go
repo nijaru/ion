@@ -35,6 +35,8 @@ var _ Store = (*SQLiteStore)(nil)
 
 const currentSchemaVersion = 3
 
+const sessionLockWait = 500 * time.Millisecond
+
 var (
 	ErrSessionClosed     = errors.New("session store is closed")
 	ErrSessionBusy       = errors.New("session store is busy")
@@ -157,14 +159,22 @@ func acquireSessionLock(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open session lock: %w", err)
 	}
-	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		_ = lockFile.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, fmt.Errorf("%w: %s", ErrSessionBusy, path)
+	deadline := time.Now().Add(sessionLockWait)
+	for {
+		err = unix.Flock(int(lockFile.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return lockFile, nil
 		}
-		return nil, fmt.Errorf("acquire session lock: %w", err)
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			_ = lockFile.Close()
+			return nil, fmt.Errorf("acquire session lock: %w", err)
+		}
+		if time.Now().After(deadline) {
+			_ = lockFile.Close()
+			return nil, fmt.Errorf("%w: %s (waited %s)", ErrSessionBusy, path, sessionLockWait)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return lockFile, nil
 }
 
 func releaseSessionLock(lockFile *os.File) error {
