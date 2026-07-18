@@ -245,26 +245,3 @@ func (r *Registry) capabilitiesFromDef(def ModelDef, modelID string) Capabilitie
 		return DefaultCapabilities()
 	}
 }
-
-// DefaultRegistry is the framework-wide capability registry.
-var DefaultRegistry = NewRegistry()
-
-func init() {
-	// Start with an empty registry. All capability presets and matching definitions
-	// should be registered dynamically by the host application or dynamically discovered.
-}
-
-// RegisterModel registers a model capability definition globally.
-func RegisterModel(def ModelDef) {
-	DefaultRegistry.Register(def)
-}
-
-// ResolveCapabilities resolves model capabilities globally.
-func ResolveCapabilities(model string) Capabilities {
-	return DefaultRegistry.Resolve(model)
-}
-
-// ClearRegistry clears all definitions from the global registry.
-func ClearRegistry() {
-	DefaultRegistry.Clear()
-}

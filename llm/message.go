@@ -494,6 +494,9 @@ type ProviderConfig struct {
 	APIEndpoint    string
 	DefaultHeaders map[string]string
 	Models         []Model
+	// ModelRegistry supplies optional per-provider capability overrides. A
+	// nil registry uses the provider's built-in defaults.
+	ModelRegistry *Registry
 	// ModelRouting maps model IDs to OpenRouter routing preferences.
 	// Only used by the OpenRouter provider; other providers ignore it.
 	ModelRouting map[string]ModelRouting

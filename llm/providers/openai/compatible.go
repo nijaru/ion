@@ -77,6 +77,7 @@ func NewCompatibleProvider(cfg llm.ProviderConfig, spec CompatibleSpec) *Provide
 			Client:        client,
 			Config:        cfg,
 			ModelCaps:     spec.ModelCaps,
+			ModelRegistry: cfg.ModelRegistry,
 			clientFactory: factory,
 		},
 	}

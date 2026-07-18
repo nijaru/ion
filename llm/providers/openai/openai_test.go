@@ -98,6 +98,23 @@ func TestCompatibleProviderDefaultsToNoReasoningCaps(t *testing.T) {
 	}
 }
 
+func TestCompatibleProviderUsesScopedCapabilityRegistry(t *testing.T) {
+	registry := llm.NewRegistry()
+	registry.Register(llm.ModelDef{
+		Pattern: "*custom-reasoning*",
+		Preset:  llm.PresetReasoning,
+	})
+	p := NewCompatibleProvider(
+		llm.ProviderConfig{ModelRegistry: registry},
+		CompatibleSpec{ID: "local-api", DefaultAPIEndpoint: "http://localhost:8080/v1"},
+	)
+
+	caps := p.Capabilities("vendor/custom-reasoning-model")
+	if caps.Reasoning.Kind != llm.ReasoningKindEffort || !caps.SupportsReasoningEffort("high") {
+		t.Fatalf("scoped capability registry returned %#v, want reasoning capabilities", caps)
+	}
+}
+
 func TestNewProviderRespectsConfig(t *testing.T) {
 	models := []llm.Model{{ID: "custom"}}
 	p := NewProvider(llm.ProviderConfig{

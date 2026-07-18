@@ -35,13 +35,6 @@ func TestNewProviderRespectsConfig(t *testing.T) {
 }
 
 func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
-	// Register a reasoning model.
-	llm.ClearRegistry()
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*mimo*",
-		Preset:  llm.PresetReasoning,
-	})
-
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
@@ -123,12 +116,6 @@ func TestBuildRequestJSON_NoReasoningWhenNotSpecified(t *testing.T) {
 }
 
 func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
-	llm.ClearRegistry()
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*mimo*",
-		Preset:  llm.PresetReasoning,
-	})
-
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
@@ -200,12 +187,6 @@ func TestIsReasoningOff(t *testing.T) {
 }
 
 func TestBuildRequestJSON_StripsTopLevelReasoningEffort(t *testing.T) {
-	llm.ClearRegistry()
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*mimo*",
-		Preset:  llm.PresetReasoning,
-	})
-
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
@@ -261,12 +242,6 @@ func TestBuildRequestJSON_StripsTopLevelReasoningEffort(t *testing.T) {
 func TestOpenRouterProviderUsesBaseCapabilities(t *testing.T) {
 	// Verify that the OpenRouter provider correctly delegates capabilities
 	// to the underlying Base provider.
-	llm.ClearRegistry()
-	llm.RegisterModel(llm.ModelDef{
-		Pattern: "*mimo*",
-		Preset:  llm.PresetReasoning,
-	})
-
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{

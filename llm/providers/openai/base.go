@@ -19,6 +19,8 @@ type Base struct {
 	// up this map before falling back to DefaultCapabilities. Populate with
 	// DefaultModelCaps() to get known reasoning model entries.
 	ModelCaps map[string]llm.Capabilities
+	// ModelRegistry contains optional provider-scoped capability definitions.
+	ModelRegistry *llm.Registry
 	// Compat holds provider-specific compatibility settings.
 	// If nil, defaults are auto-detected from the provider ID and endpoint.
 	Compat *llm.ProviderCompat

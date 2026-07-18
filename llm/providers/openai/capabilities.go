@@ -18,7 +18,10 @@ func (b *Base) Capabilities(model string) llm.Capabilities {
 			return *m.Capabilities
 		}
 	}
-	return llm.ResolveCapabilities(model)
+	if b.ModelRegistry != nil {
+		return b.ModelRegistry.Resolve(model)
+	}
+	return llm.DefaultCapabilities()
 }
 
 // DefaultModelCaps returns capability entries for well-known OpenAI reasoning
