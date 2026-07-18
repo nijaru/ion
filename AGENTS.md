@@ -99,8 +99,9 @@ ideal merely because it already exists.
 ai/DESIGN.md is the current authoritative architecture. If the ideal target
 changes, update it by explicit decision before changing structural code.
 
-- session/ owns the typed domain model, session tree, events, and durable
-  storage. The session tree is the source of truth for conversation state.
+- session/ owns the typed domain model, session tree, durable entries, and
+  storage. The session tree is the source of truth for conversation state;
+  runtime owns the live lifecycle event stream.
 - internal/agent/loop.go is a stateless turn engine. It receives all inputs,
   persists nothing, owns no session/store, and emits typed events.
 - The agent harness is the stateful owner of active session state, tools,
@@ -131,9 +132,11 @@ useful policy model.
 
 ## Work tracking and review
 
-Use tk for multi-step work. The current overall goal is tk-2lt7; its first
-bounded deliverable is tk-rvdx, the reference-backed product charter. Keep
-tasks atomic, demoable, and acceptance-tested. Log findings while fresh.
+Use tk for multi-step work. The current overall goal is tk-2lt7. The
+reference-backed product charter is captured in
+ai/research/agent-reference-matrix.md; the active architecture deliverable is
+tk-uyfo. Keep tasks atomic, demoable, and acceptance-tested. Log findings
+while fresh.
 
 Use native Codex subagents when a second opinion materially improves an
 important architecture, safety, or code-review decision. The user has
@@ -184,6 +187,8 @@ Stop and re-audit when:
 ## Active context files
 
 - ai/DESIGN.md — authoritative target architecture
+- ai/research/agent-reference-matrix.md — consolidated reference evidence and
+  product charter
 - ai/brief.md — concise current state and roadmap
 - ai/decisions.md — durable architectural decisions
 - ai/journal.md — append-only evidence and findings
