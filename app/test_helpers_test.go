@@ -38,9 +38,9 @@ func newStubSession(id string) *stubSession {
 	}
 }
 
-func (s *stubSession) ID() string                         { return s.id }
-func (s *stubSession) Meta() session.Metadata             { return session.Metadata{ID: s.id} }
-func (s *stubSession) SessionName(context.Context) string { return s.name }
+func (s *stubSession) ID() string                                  { return s.id }
+func (s *stubSession) Meta() session.Metadata                      { return session.Metadata{ID: s.id} }
+func (s *stubSession) SessionName(context.Context) (string, error) { return s.name, nil }
 
 func (s *stubSession) BuildContext(_ context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{Messages: s.messages}, nil
@@ -406,7 +406,10 @@ func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) 
 }
 func (s *resumeOnlyStore) GetLeafID() string         { return "" }
 func (s *resumeOnlyStore) SetLeafID(id string) error { return nil }
-func (s *resumeOnlyStore) Meta() session.Metadata    { return session.Metadata{} }
+func (s *resumeOnlyStore) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (s *resumeOnlyStore) Meta() session.Metadata { return session.Metadata{} }
 func (s *resumeOnlyStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
 	return nil, nil
 }

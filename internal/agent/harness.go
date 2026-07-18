@@ -24,6 +24,7 @@ import (
 type Harness struct {
 	session   session.Session
 	store     session.Store
+	durable   session.DurableStore
 	tools     map[string]Tool
 	active    []string // active tool names
 	model     llm.Model
@@ -69,6 +70,13 @@ type Harness struct {
 	// buffered session writes during a run
 	pending []pendingWrite
 
+	// activeTurnID and activeTurnLeaf identify the durable, uncommitted turn
+	// owned by the current prompt. Ordinary replay cannot see these entries;
+	// TurnBranch is used to build the live context until commit.
+	activeTurnID   string
+	activeTurnLeaf string
+	turnCommitted  bool
+
 	// thinkingPending prevents a live active-turn change from being overwritten
 	// by a stale session snapshot and records the last durable level for rollback.
 	thinkingPending     bool
@@ -97,6 +105,7 @@ const (
 type pendingWrite struct {
 	apply      func(ctx context.Context, s session.Session) error
 	applyStore func(ctx context.Context, store session.Store) error
+	applyTurn  func(ctx context.Context, store session.DurableStore, turnID, parentID string) (string, error)
 	onSuccess  func()
 	onFailure  func()
 }
@@ -124,6 +133,7 @@ type HarnessConfig struct {
 	Events          chan session.Event
 	Session         session.Session
 	Store           session.Store
+	Durable         session.DurableStore // optional transactional turn journal
 	Tools           []Tool
 	Active          []string // active tool names (subset of Tools); nil = all
 	Model           llm.Model
@@ -187,6 +197,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 	h := &Harness{
 		session:         cfg.Session,
 		store:           cfg.Store,
+		durable:         cfg.Durable,
 		tools:           toolMap,
 		active:          active,
 		model:           cfg.Model,
@@ -371,6 +382,20 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 	defer func() {
 		dur := time.Since(turnStart)
 		h.mu.Lock()
+		activeTurnID := h.activeTurnID
+		turnCommitted := h.turnCommitted
+		h.mu.Unlock()
+		if activeTurnID != "" && !turnCommitted && h.durable != nil {
+			if err := h.durable.AbortTurn(context.Background(), activeTurnID, "turn ended before durable commit"); err != nil {
+				h.logf(slog.LevelError, "abort uncommitted turn failed", slog.String("turn_id", activeTurnID), slog.String("error", err.Error()))
+			}
+		}
+		h.mu.Lock()
+		if h.activeTurnID == activeTurnID {
+			h.activeTurnID = ""
+			h.activeTurnLeaf = ""
+			h.turnCommitted = false
+		}
 		h.phase = PhaseIdle
 		h.runCancel = nil
 		done := h.runDone
@@ -401,6 +426,21 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 	snap, err := h.session.BuildContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
+	}
+
+	// Begin the durable turn before hooks or provider work. The accepted input
+	// and context leaf are recovery evidence even if setup, streaming, or
+	// cancellation prevents a commit.
+	if h.durable != nil {
+		turn, err := h.durable.BeginTurn(ctx, session.NewEntryID(), text, h.session.GetLeafID())
+		if err != nil {
+			return nil, fmt.Errorf("begin durable turn: %w", err)
+		}
+		h.mu.Lock()
+		h.activeTurnID = turn.ID
+		h.activeTurnLeaf = turn.LeafID
+		h.turnCommitted = false
+		h.mu.Unlock()
 	}
 
 	// Restore active state from session tree (survives replay).
@@ -536,7 +576,7 @@ func (h *Harness) Prompt(ctx context.Context, text string, images ...session.Ima
 		if compactErr := h.Compact(ctx); compactErr != nil {
 			break // can't compact, give up
 		}
-		snap, err = h.session.BuildContext(ctx)
+		snap, err = h.contextSnapshot(ctx)
 		if err != nil {
 			break
 		}
@@ -590,7 +630,7 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 	case session.MessageEnd:
 		// Persist message to session tree BEFORE emitting to subscribers.
 		// Pi: orders appendMessage before emitAny so subscribers can BuildContext.
-		if _, err := h.session.AppendMessage(ctx, e.Message); err != nil {
+		if err := h.persistMessage(ctx, e.Message); err != nil {
 			err = fmt.Errorf("persist message: %w", err)
 			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
 			return err
@@ -621,6 +661,13 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 		if err := h.flushPending(ctx); err != nil {
 			return err
 		}
+		if reason := terminalTurnFailure(e.Messages); reason != "" {
+			if err := h.abortTurn(ctx, reason); err != nil {
+				return err
+			}
+		} else if err := h.commitTurn(ctx); err != nil {
+			return err
+		}
 		h.mu.Lock()
 		nextCount := len(h.nextTurn)
 		h.mu.Unlock()
@@ -634,6 +681,113 @@ func (h *Harness) handleEvent(ctx context.Context, e session.Event) error {
 		h.emit(e)
 	}
 	return nil
+}
+
+// persistMessage appends conversation messages to the active durable turn.
+// Non-SQLite stores retain the existing façade path until their runtime
+// storage contract is migrated; production SQLite always takes the turn path.
+func (h *Harness) persistMessage(ctx context.Context, msg session.Message) error {
+	h.mu.Lock()
+	turnID := h.activeTurnID
+	parentID := h.activeTurnLeaf
+	durable := h.durable
+	h.mu.Unlock()
+	if durable == nil || turnID == "" {
+		_, err := h.session.AppendMessage(ctx, msg)
+		return err
+	}
+	entry := &session.MessageEntry{
+		EntryBase: session.EntryBase{
+			ID:        session.NewEntryID(),
+			ParentID:  parentID,
+			Timestamp: time.Now(),
+		},
+		Message: msg,
+	}
+	id, err := durable.AppendTurnEntry(ctx, turnID, entry)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	if h.activeTurnID == turnID {
+		h.activeTurnLeaf = id
+	}
+	h.mu.Unlock()
+	return nil
+}
+
+// contextSnapshot returns the committed session context, or the active turn
+// projection when the current prompt has staged entries that are not replayable
+// yet.
+func (h *Harness) contextSnapshot(ctx context.Context) (session.ContextSnapshot, error) {
+	h.mu.Lock()
+	turnID := h.activeTurnID
+	durable := h.durable
+	h.mu.Unlock()
+	if durable != nil && turnID != "" {
+		entries, err := durable.TurnBranch(ctx, turnID)
+		if err != nil {
+			return session.ContextSnapshot{}, err
+		}
+		return session.ProjectContext(entries)
+	}
+	return h.session.BuildContext(ctx)
+}
+
+func (h *Harness) commitTurn(ctx context.Context) error {
+	h.mu.Lock()
+	turnID := h.activeTurnID
+	durable := h.durable
+	h.mu.Unlock()
+	if durable == nil || turnID == "" {
+		return nil
+	}
+	if err := durable.CommitTurn(ctx, turnID); err != nil {
+		return fmt.Errorf("commit durable turn: %w", err)
+	}
+	h.mu.Lock()
+	if h.activeTurnID == turnID {
+		h.turnCommitted = true
+	}
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *Harness) abortTurn(ctx context.Context, reason string) error {
+	h.mu.Lock()
+	turnID := h.activeTurnID
+	durable := h.durable
+	h.mu.Unlock()
+	if durable == nil || turnID == "" {
+		return nil
+	}
+	if err := durable.AbortTurn(ctx, turnID, reason); err != nil {
+		return fmt.Errorf("abort durable turn: %w", err)
+	}
+	h.mu.Lock()
+	if h.activeTurnID == turnID {
+		h.turnCommitted = true // terminalized; defer must not issue a second abort
+	}
+	h.mu.Unlock()
+	return nil
+}
+
+func terminalTurnFailure(messages []session.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		assistant, ok := messages[i].(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.Error != "" {
+			return assistant.Error
+		}
+		switch assistant.StopReason {
+		case session.StopReasonAborted, session.StopReasonError:
+			return string(assistant.StopReason)
+		}
+		return ""
+	}
+	return ""
 }
 
 // buildLoopConfig constructs the per-turn LoopConfig.
@@ -775,7 +929,7 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 				onPersistenceError(err)
 				return nil
 			}
-			snap, err := h.session.BuildContext(ctx)
+			snap, err := h.contextSnapshot(ctx)
 			if err != nil {
 				return nil
 			}
@@ -1114,15 +1268,33 @@ func (h *Harness) flushPending(ctx context.Context) error {
 	h.mu.Lock()
 	pending := h.pending
 	h.pending = nil
+	turnID := h.activeTurnID
+	turnLeaf := h.activeTurnLeaf
+	durable := h.durable
 	h.mu.Unlock()
 	for i, pw := range pending {
 		var err error
-		if pw.applyStore != nil {
+		var writtenID string
+		if durable != nil && turnID != "" {
+			if pw.applyTurn == nil {
+				err = errors.New("pending write has no durable turn operation")
+			} else {
+				writtenID, err = pw.applyTurn(ctx, durable, turnID, turnLeaf)
+			}
+		} else if pw.applyStore != nil {
 			err = pw.applyStore(ctx, h.store)
 		} else {
 			err = pw.apply(ctx, h.session)
 		}
 		if err == nil {
+			if writtenID != "" {
+				turnLeaf = writtenID
+				h.mu.Lock()
+				if h.activeTurnID == turnID {
+					h.activeTurnLeaf = writtenID
+				}
+				h.mu.Unlock()
+			}
 			if pw.onSuccess != nil {
 				pw.onSuccess()
 			}
@@ -1143,6 +1315,38 @@ func (h *Harness) flushPending(ctx context.Context) error {
 	return nil
 }
 
+func durableEntryBase(parentID string) session.EntryBase {
+	return session.EntryBase{ID: session.NewEntryID(), ParentID: parentID, Timestamp: time.Now()}
+}
+
+func appendDurableEntry(ctx context.Context, store session.DurableStore, turnID, parentID string, entry session.Entry) (string, error) {
+	if entry == nil {
+		return "", errors.New("durable entry is nil")
+	}
+	if entry.ParentID() != parentID {
+		return "", fmt.Errorf("durable entry %q parent %q does not match active leaf %q", entry.ID(), entry.ParentID(), parentID)
+	}
+	return store.AppendTurnEntry(ctx, turnID, entry)
+}
+
+func reparentDurableEntry(entry session.Entry, parentID string) (session.Entry, error) {
+	if entry == nil {
+		return nil, errors.New("durable entry is nil")
+	}
+	if entry.ParentID() == parentID {
+		return entry, nil
+	}
+	if entry.ParentID() != "" {
+		return nil, fmt.Errorf("entry %q already has parent %q", entry.ID(), entry.ParentID())
+	}
+	if custom, ok := entry.(*session.CustomEntry); ok {
+		copy := *custom
+		copy.EntryBase.ParentID = parentID
+		return &copy, nil
+	}
+	return nil, fmt.Errorf("cannot attach %T to active durable turn without an explicit parent", entry)
+}
+
 // SetModel changes the model. If a run is active, buffered until next turn boundary.
 func (h *Harness) SetModel(model llm.Model) {
 	h.mu.Lock()
@@ -1157,6 +1361,11 @@ func (h *Harness) SetModel(model llm.Model) {
 			apply: func(ctx context.Context, s session.Session) error {
 				_, err := s.AppendModelChange(ctx, model.Provider, model.ID)
 				return err
+			},
+			applyTurn: func(ctx context.Context, d session.DurableStore, turnID, parentID string) (string, error) {
+				return appendDurableEntry(ctx, d, turnID, parentID, &session.ModelChangeEntry{
+					EntryBase: durableEntryBase(parentID), Provider: model.Provider, ModelID: model.ID,
+				})
 			},
 		})
 	}
@@ -1204,6 +1413,11 @@ func (h *Harness) SetThinking(ctx context.Context, level session.ThinkingLevel) 
 			apply: func(ctx context.Context, s session.Session) error {
 				_, err := s.AppendThinkingLevelChange(ctx, level)
 				return err
+			},
+			applyTurn: func(ctx context.Context, d session.DurableStore, turnID, parentID string) (string, error) {
+				return appendDurableEntry(ctx, d, turnID, parentID, &session.ThinkingChangeEntry{
+					EntryBase: durableEntryBase(parentID), Level: level,
+				})
 			},
 			onSuccess: func() {
 				h.mu.Lock()
@@ -1257,6 +1471,11 @@ func (h *Harness) SetTools(tools []Tool, active []string) {
 		apply: func(ctx context.Context, s session.Session) error {
 			_, err := s.AppendActiveToolsChange(ctx, persistActive)
 			return err
+		},
+		applyTurn: func(ctx context.Context, d session.DurableStore, turnID, parentID string) (string, error) {
+			return appendDurableEntry(ctx, d, turnID, parentID, &session.ToolsChangeEntry{
+				EntryBase: durableEntryBase(parentID), ActiveTools: append([]string(nil), persistActive...),
+			})
 		},
 	})
 	h.emitLocked(session.ToolsUpdate{Active: eventActive, Previous: previous})
@@ -1312,6 +1531,11 @@ func (h *Harness) ActivateTools(ctx context.Context, names []string) error {
 			apply: func(ctx context.Context, s session.Session) error {
 				_, err := s.AppendActiveToolsChange(ctx, persistActive)
 				return err
+			},
+			applyTurn: func(ctx context.Context, d session.DurableStore, turnID, parentID string) (string, error) {
+				return appendDurableEntry(ctx, d, turnID, parentID, &session.ToolsChangeEntry{
+					EntryBase: durableEntryBase(parentID), ActiveTools: append([]string(nil), persistActive...),
+				})
 			},
 		})
 	}
@@ -1419,7 +1643,7 @@ func (h *Harness) Close() error {
 	for i := len(h.closeResources) - 1; i >= 0; i-- {
 		resourceErr = errors.Join(resourceErr, h.closeResources[i]())
 	}
-	return errors.Join(flushErr, resourceErr, h.session.Close())
+	return errors.Join(flushErr, resourceErr)
 }
 
 // Shutdown attempts a graceful stop: abort any running turn, wait for completion
@@ -1689,9 +1913,18 @@ func (h *Harness) PersistEntry(ctx context.Context, entry session.Entry) error {
 		return errors.New("harness has no session store")
 	}
 	if h.phase != PhaseIdle {
-		h.pending = append(h.pending, pendingWrite{applyStore: func(ctx context.Context, store session.Store) error {
-			return appendRunnerEntry(ctx, store, entry)
-		}})
+		h.pending = append(h.pending, pendingWrite{
+			applyStore: func(ctx context.Context, store session.Store) error {
+				return appendRunnerEntry(ctx, store, entry)
+			},
+			applyTurn: func(ctx context.Context, store session.DurableStore, turnID, parentID string) (string, error) {
+				attached, err := reparentDurableEntry(entry, parentID)
+				if err != nil {
+					return "", err
+				}
+				return appendDurableEntry(ctx, store, turnID, parentID, attached)
+			},
+		})
 		return nil
 	}
 	return appendRunnerEntry(ctx, h.store, entry)

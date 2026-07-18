@@ -42,6 +42,7 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 	h := NewHarness(HarnessConfig{
 		Session: sess,
 		Store:   store,
+		Durable: store,
 		Model:   llm.Model{ID: "test"},
 		Tools:   []Tool{tool},
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
@@ -95,6 +96,7 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 	h2 := NewHarness(HarnessConfig{
 		Session: sess2,
 		Store:   store2,
+		Durable: store2,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
 			return &mockStream{chunks: []*llm.Chunk{{Content: "resumed", StopReason: "stop"}}}, nil

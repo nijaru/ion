@@ -375,7 +375,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		if runErr == nil {
 			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
 		}
-		closeErr := closeRuntimeHandles(runner, nil, store)
+		closeErr := closeRuntimeHandles(runner, store)
 		closeErr = errors.Join(closeErr, jobs.Close())
 		if runErr != nil {
 			fmt.Fprintf(stderr, "print mode error: %v\n", runErr)
@@ -482,7 +482,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
-	closeErr := closeRuntimeHandles(agentToClose, nil, store)
+	closeErr := closeRuntimeHandles(agentToClose, store)
 	closeErr = errors.Join(closeErr, jobs.Close())
 	if runErr != nil {
 		if closeErr != nil {

@@ -35,15 +35,11 @@ type sessionCatalogWriter interface {
 
 func closeRuntimeHandles(
 	runner agent.Runner,
-	sess session.Session,
 	store session.Store,
 ) error {
 	var errs []error
 	if runner != nil {
 		errs = append(errs, runner.Close())
-	}
-	if runner == nil && sess != nil {
-		errs = append(errs, sess.Close())
 	}
 	if store != nil {
 		errs = append(errs, store.Close())
@@ -310,6 +306,11 @@ func openRuntime(
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, nil
 	}
+	durableStore, ok := store.(session.DurableStore)
+	if !ok {
+		return app.NewSetupRuntime(&runtimeCfg, store, "session store does not support durable turns"), nil, nil,
+			fmt.Errorf("session store does not support durable turns")
+	}
 
 	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, store)
 	if err != nil {
@@ -489,15 +490,17 @@ func openRuntime(
 	}
 
 	sess := session.NewSession(store, 64)
+	runtimeEvents := make(chan session.Event, 64)
 
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:             sess,
 		Store:               store,
+		Durable:             durableStore,
 		Model:               model,
 		Thinking:            thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:               agentTools,
 		Active:              activeToolNames,
-		Events:              sess.EventSender(),
+		Events:              runtimeEvents,
 		StreamFn:            provider.Stream,
 		PromptTemplates:     promptTemplates,
 		SysPrompt:           sysPrompt,
@@ -517,14 +520,14 @@ func closeRuntimeOpenError(
 	label string,
 	err error,
 	runner agent.Runner,
-	sess session.Session,
+	store interface{ Close() error },
 ) error {
 	var closeErrs []error
 	if runner != nil {
 		closeErrs = append(closeErrs, runner.Close())
 	}
-	if sess != nil {
-		closeErrs = append(closeErrs, sess.Close())
+	if store != nil {
+		closeErrs = append(closeErrs, store.Close())
 	}
 	if closeErr := errors.Join(closeErrs...); closeErr != nil {
 		err = errors.Join(err, fmt.Errorf("close runtime after failed open: %w", closeErr))

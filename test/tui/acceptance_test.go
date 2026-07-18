@@ -84,6 +84,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	harness2 := agent.NewHarness(agent.HarnessConfig{
 		Session:  sess2,
 		Store:    store2,
+		Durable:  store2,
 		Model:    acceptanceModel(),
 		StreamFn: provider2.stream,
 	})
@@ -327,6 +328,7 @@ func newAcceptanceHarness(
 	harness := agent.NewHarness(agent.HarnessConfig{
 		Session:  sess,
 		Store:    store,
+		Durable:  store,
 		Model:    acceptanceModel(),
 		Tools:    tools,
 		StreamFn: provider.stream,

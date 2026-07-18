@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,6 +65,112 @@ func TestHarnessIntegration_MultiTurn(t *testing.T) {
 	}
 	if len(snap.Messages) < 4 {
 		t.Fatalf("expected at least 4 messages (user+asst * 2), got %d", len(snap.Messages))
+	}
+}
+
+func TestHarnessIntegration_DurableTurnCommitAndReplay(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ion.db")
+	store, err := session.NewSQLiteStore(path, "durable-harness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := session.NewSession(store, 0)
+	h := NewHarness(HarnessConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "durable", StopReason: "stop"}}}, nil
+		},
+	})
+	if _, err := h.Prompt(ctx, "persist durably"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := session.NewSQLiteStore(path, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	replayed := session.NewSession(reopened, 0)
+	snapshot, err := replayed.BuildContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 2 || session.MessageText(snapshot.Messages[0]) != "persist durably" || session.MessageText(snapshot.Messages[1]) != "durable" {
+		t.Fatalf("replayed durable messages = %#v, want user and assistant", snapshot.Messages)
+	}
+	interrupted, err := reopened.InterruptedTurns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(interrupted) != 0 {
+		t.Fatalf("interrupted turns after committed run = %+v", interrupted)
+	}
+}
+
+func TestHarnessIntegration_DurableCancelledTurnDoesNotReplay(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ion.db")
+	store, err := session.NewSQLiteStore(path, "durable-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := session.NewSession(store, 0)
+	started := make(chan struct{})
+	h := NewHarness(HarnessConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	done := make(chan struct{})
+	go func() {
+		_, _ = h.Prompt(ctx, "do not replay")
+		close(done)
+	}()
+	<-started
+	if _, _, err := h.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := session.NewSQLiteStore(path, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	replayed := session.NewSession(reopened, 0)
+	snapshot, err := replayed.BuildContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 0 {
+		t.Fatalf("cancelled durable messages replayed = %#v, want none", snapshot.Messages)
+	}
+	if interrupted, err := reopened.InterruptedTurns(ctx); err != nil {
+		t.Fatal(err)
+	} else if len(interrupted) != 0 {
+		t.Fatalf("explicitly aborted turns reported interrupted = %+v", interrupted)
 	}
 }
 
@@ -418,8 +525,8 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	// Use a single harness for all pre-fill turns.
 	func() {
 		h := NewHarness(HarnessConfig{
-			Session:  sess,
-			Model:    llm.Model{ID: "test"},
+			Session: sess,
+			Model:   llm.Model{ID: "test"},
 			StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 				return &mockStream{chunks: []*llm.Chunk{
 					{Content: "filler", StopReason: "stop"},
@@ -783,7 +890,12 @@ func TestHarnessIntegration_SessionResume(t *testing.T) {
 	}
 
 	// Close harness and session.
-	h.Close()
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Reopen from same DB.
 	store2, err := session.NewSQLiteStore(dbPath, "resume-test")

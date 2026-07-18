@@ -190,7 +190,10 @@ func (s *MockStore) Entries(_ context.Context) ([]session.Entry, error) {
 
 func (s *MockStore) GetLeafID() string        { return "" }
 func (s *MockStore) SetLeafID(_ string) error { return nil }
-func (s *MockStore) Meta() session.Metadata   { return session.Metadata{} }
+func (s *MockStore) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
+	return "", nil
+}
+func (s *MockStore) Meta() session.Metadata { return session.Metadata{} }
 
 func (s *MockStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil

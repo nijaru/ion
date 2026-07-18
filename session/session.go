@@ -4,15 +4,14 @@ import (
 	"context"
 )
 
-// Session is the live session handle. The harness is the only writer.
-// Translated from Pi's Session contract (agent-harness.js usage).
+// Session is the live session projection used by the current harness.
+// The runtime controller is the sole owner of session mutation.
 type Session interface {
 	ID() string
 	Meta() Metadata
 
 	// SessionName returns the user-facing name from the last session_info entry.
-	// Matches Pi's getSessionName() (harness/session/session.js:95).
-	SessionName(ctx context.Context) string
+	SessionName(ctx context.Context) (string, error)
 
 	// Context projection — the loop consumes this.
 	// Reconstructs []Message by walking the branch and extracting MessageEntries.
@@ -42,16 +41,11 @@ type Session interface {
 	AppendLeaf(ctx context.Context, targetID string) (string, error)
 	AppendCustomMessage(ctx context.Context, entry *CustomMessageEntry) (string, error)
 	Append(ctx context.Context, entry Entry) (string, error)
-	Events() <-chan Event
-	EventSender() chan Event
-
 	// Query.
 	Entries(ctx context.Context) ([]Entry, error)
 	Usage(ctx context.Context) (Usage, error)
 	AppendLabel(ctx context.Context, targetID string, label string) (string, error)
 	GetLabel(ctx context.Context, targetID string) (string, error)
-
-	Close() error
 }
 
 // ContextSnapshot is the result of BuildContext — what the loop needs to run a turn.
@@ -77,8 +71,6 @@ type BranchSummaryData struct {
 	Summary string
 	Details []byte
 }
-
-func (s *sessionImpl) Events() <-chan Event { return nil }
 
 // an interface for test fakes. The Session façade wraps this.
 type Store interface {
@@ -108,6 +100,11 @@ type Store interface {
 
 	// SetLeafID moves the leaf pointer.
 	SetLeafID(id string) error
+
+	// MoveTo atomically records a navigation, changes the selected leaf, and
+	// optionally appends a branch summary. The operation leaves the current
+	// leaf unchanged if any part fails.
+	MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error)
 
 	// Meta returns session-level metadata.
 	Meta() Metadata

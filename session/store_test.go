@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -89,12 +90,11 @@ func TestStoreBranchOrder(t *testing.T) {
 
 func TestStoreBranchMissingLeafReturnsNoRows(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SetLeafID("missing"); err != nil {
-		t.Fatal(err)
+	if err := s.SetLeafID("missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("SetLeafID(missing) = %v, want sql.ErrNoRows", err)
 	}
-	_, err := s.Branch(context.Background())
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("missing leaf error = %v, want sql.ErrNoRows", err)
+	if got := s.GetLeafID(); got != "" {
+		t.Fatalf("leaf changed after rejected update: %q", got)
 	}
 }
 
@@ -366,6 +366,106 @@ func TestSQLiteCatalogRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigratesUnversionedStoreTransactionally(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := `
+		CREATE TABLE entries (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			timestamp INTEGER NOT NULL,
+			payload BLOB NOT NULL DEFAULT '{}'
+		);
+		CREATE TABLE session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+	if _, err := raw.ExecContext(ctx, legacySchema); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	legacyEntry := &MessageEntry{
+		EntryBase: EntryBase{ID: "legacy-entry", Timestamp: time.Now()},
+		Message:   NewUserText("legacy", time.Now()),
+	}
+	typ, payload, err := encodeEntry(legacyEntry)
+	if err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx,
+		"INSERT INTO entries(id,parent_id,type,timestamp,payload) VALUES(?,?,?,?,?)",
+		legacyEntry.ID(), legacyEntry.ParentID(), typ, legacyEntry.When().UnixMilli(), payload); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO session_meta(key,value) VALUES
+			('session_id','legacy-session'), ('leaf_id','legacy-entry')`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(path, "ignored-request-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+	if got := store.Meta().ID; got != "legacy-session" {
+		t.Fatalf("session ID = %q, want durable legacy identity", got)
+	}
+	if got := store.GetLeafID(); got != "legacy-entry" {
+		t.Fatalf("leaf = %q, want legacy-entry", got)
+	}
+	if _, err := NewSession(store, 0).AppendMessage(ctx, NewUserText("after migration", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := store.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 2 || branch[0].ID() != "legacy-entry" {
+		t.Fatalf("migrated branch = %v, want legacy entry plus new entry", entryIDs(branch))
+	}
+}
+
+func TestSQLiteStoreEnforcesSingleWriterLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.db")
+	first, err := NewSQLiteStore(path, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSQLiteStore(path, "second")
+	if !errors.Is(err, ErrSessionBusy) {
+		if second != nil {
+			_ = second.Close()
+		}
+		t.Fatalf("second store error = %v, want ErrSessionBusy", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewSQLiteStore(path, "third")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSQLiteResumeSession(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -388,4 +488,186 @@ func TestSQLiteResumeSession(t *testing.T) {
 	if got := s.GetLeafID(); got != "resume-entry" {
 		t.Fatalf("leaf changed after failed resume: %q", got)
 	}
+}
+
+func TestSessionIdentityIsStableAcrossLeafMovementAndReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "session.db")
+	store, err := NewSQLiteStore(path, "requested-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(store, 0)
+	stableID := sess.ID()
+	if stableID == "" {
+		t.Fatal("session identity is empty")
+	}
+	messageID, err := sess.AppendMessage(ctx, NewUserText("hello", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(messageID); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.ID(); got != stableID {
+		t.Fatalf("session ID changed with leaf: got %q, want %q", got, stableID)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewSQLiteStore(path, "different-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got := reopened.Meta().ID; got != stableID {
+		t.Fatalf("reopened session ID = %q, want %q", got, stableID)
+	}
+}
+
+func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "session.db")
+	store, err := NewSQLiteStore(path, "turn-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(store, 0)
+	baseID, err := sess.AppendMessage(ctx, NewUserText("base", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := store.BeginTurn(ctx, "turn-commit", "draft", "context-base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" || record.ContextID != "context-base" {
+		t.Fatalf("unexpected begin record: %+v", record)
+	}
+	draft := &MessageEntry{
+		EntryBase: EntryBase{ID: "draft-commit", ParentID: baseID, Timestamp: time.Now()},
+		Message:   NewUserText("draft", time.Now()),
+	}
+	if _, err := store.AppendTurnEntry(ctx, record.ID, draft); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := sess.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 1 || branch[0].ID() != baseID {
+		t.Fatalf("uncommitted branch = %v, want only %q", entryIDs(branch), baseID)
+	}
+	turnBranch, err := store.TurnBranch(ctx, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turnBranch) != 2 || turnBranch[1].ID() != draft.ID() {
+		t.Fatalf("active turn branch = %v, want staged draft", entryIDs(turnBranch))
+	}
+	turnContext, err := ProjectContext(turnBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turnContext.Messages) != 2 {
+		t.Fatalf("active turn context messages = %d, want 2", len(turnContext.Messages))
+	}
+	if err := store.CommitTurn(ctx, record.ID); err != nil {
+		t.Fatal(err)
+	}
+	branch, err = sess.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 2 || branch[1].ID() != draft.ID() {
+		t.Fatalf("committed branch = %v, want draft appended", entryIDs(branch))
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptedTurnIsRetainedButExcludedFromReplay(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "session.db")
+	store, err := NewSQLiteStore(path, "interrupted-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(store, 0)
+	baseID, err := sess.AppendMessage(ctx, NewUserText("base", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.BeginTurn(ctx, "turn-interrupted", "draft", "context-base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := &MessageEntry{
+		EntryBase: EntryBase{ID: "draft-interrupted", ParentID: baseID, Timestamp: time.Now()},
+		Message:   NewUserText("must not replay", time.Now()),
+	}
+	if _, err := store.AppendTurnEntry(ctx, record.ID, draft); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewSQLiteStore(path, "interrupted-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	replayed := NewSession(reopened, 0)
+	turns, err := reopened.InterruptedTurns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].ID != record.ID || turns[0].State != TurnInterrupted {
+		t.Fatalf("interrupted turns = %+v", turns)
+	}
+	branch, err := replayed.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 1 || branch[0].ID() != baseID {
+		t.Fatalf("replayed branch = %v, want only committed base", entryIDs(branch))
+	}
+	if err := reopened.AbortTurn(ctx, record.ID, "user discarded interrupted turn"); err != nil {
+		t.Fatal(err)
+	}
+	turns, err = reopened.InterruptedTurns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 0 {
+		t.Fatalf("interrupted turns after explicit abort = %+v", turns)
+	}
+}
+
+func TestMoveToIsAtomicAndRejectsMissingTarget(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := NewSession(store, 0)
+	first, err := sess.AppendMessage(ctx, NewUserText("first", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.MoveTo(ctx, "missing", nil); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("MoveTo(missing) = %v, want sql.ErrNoRows", err)
+	}
+	if got := store.GetLeafID(); got != first {
+		t.Fatalf("leaf after rejected move = %q, want %q", got, first)
+	}
+}
+
+func entryIDs(entries []Entry) []string {
+	ids := make([]string, len(entries))
+	for i, entry := range entries {
+		ids[i] = entry.ID()
+	}
+	return ids
 }

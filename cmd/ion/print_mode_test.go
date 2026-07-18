@@ -42,9 +42,9 @@ func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Messa
 	return nil, nil, nil
 }
 
-func (s *printSession) ID() string                         { return "print-test" }
-func (s *printSession) Meta() session.Metadata             { return session.Metadata{} }
-func (s *printSession) SessionName(context.Context) string { return "" }
+func (s *printSession) ID() string                                  { return "print-test" }
+func (s *printSession) Meta() session.Metadata                      { return session.Metadata{} }
+func (s *printSession) SessionName(context.Context) (string, error) { return "", nil }
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
@@ -676,7 +676,7 @@ func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
 func TestCloseRuntimeHandlesClosesPrintAgent(t *testing.T) {
 	sess := &printSession{}
 
-	if err := closeRuntimeHandles(sess, nil, nil); err != nil {
+	if err := closeRuntimeHandles(sess, nil); err != nil {
 		t.Fatalf("closeRuntimeHandles: %v", err)
 	}
 	if sess.closed != 1 {

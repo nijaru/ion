@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,13 +21,28 @@ import (
 // discriminated by type; message payload as JSON content blocks.
 // Tree structure via parent_id; leaf pointer via session_meta table.
 type SQLiteStore struct {
-	db   *sql.DB
-	mu   sync.Mutex
-	meta Metadata
-	leaf string
+	db        *sql.DB
+	mu        sync.RWMutex
+	meta      Metadata
+	leaf      string
+	closed    bool
+	closeErr  error
+	closeOnce sync.Once
+	lockFile  *os.File
 }
 
 var _ Store = (*SQLiteStore)(nil)
+
+const currentSchemaVersion = 3
+
+var (
+	ErrSessionClosed     = errors.New("session store is closed")
+	ErrSessionBusy       = errors.New("session store is busy")
+	ErrUnsupportedSchema = errors.New("unsupported session schema")
+	ErrCorruptSession    = errors.New("corrupt session store")
+	ErrTurnNotFound      = errors.New("turn not found")
+	ErrTurnState         = errors.New("invalid turn state")
+)
 
 // Schema holds the SQL for creating the tables.
 const Schema = `
@@ -32,15 +51,32 @@ CREATE TABLE IF NOT EXISTS entries (
 	parent_id  TEXT NOT NULL DEFAULT '',
 	type       TEXT NOT NULL,
 	timestamp  INTEGER NOT NULL,
+	sequence   INTEGER NOT NULL DEFAULT 0,
+	turn_id    TEXT,
 	payload    BLOB NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id);
 CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
+CREATE INDEX IF NOT EXISTS idx_entries_sequence ON entries(sequence);
+CREATE INDEX IF NOT EXISTS idx_entries_turn ON entries(turn_id);
 
 CREATE TABLE IF NOT EXISTS session_meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS turns (
+	turn_id    TEXT PRIMARY KEY,
+	sequence   INTEGER NOT NULL,
+	state      TEXT NOT NULL,
+	leaf_id    TEXT NOT NULL DEFAULT '',
+	input      TEXT NOT NULL DEFAULT '',
+	context_id TEXT NOT NULL DEFAULT '',
+	started_at INTEGER NOT NULL,
+	ended_at   INTEGER NOT NULL DEFAULT 0,
+	error      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_turns_state ON turns(state, sequence);
 
 CREATE TABLE IF NOT EXISTS input_history (
 	id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,26 +108,320 @@ func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
 			path = filepath.Join(path, "ion.db")
 		}
 	}
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	var err error
+	var lockFile *os.File
+	if path != ":memory:" {
+		lockFile, err = acquireSessionLock(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate")
 	if err != nil {
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
 		return nil, err
 	}
 	// Serialize SQLite connections: the harness and TUI may persist auxiliary
 	// entries concurrently, and a single connection avoids SQLITE_BUSY races.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(Schema); err != nil {
+	db.SetMaxIdleConns(1)
+	if err := migrateSchema(context.Background(), db); err != nil {
 		db.Close()
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
 		return nil, err
 	}
-	s := &SQLiteStore{db: db, meta: Metadata{ID: sessionID}}
+	if err := recoverInterruptedTurns(context.Background(), db); err != nil {
+		db.Close()
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
+		return nil, err
+	}
+	s := &SQLiteStore{db: db, lockFile: lockFile, meta: Metadata{ID: sessionID}}
 	if err := s.loadMeta(); err != nil {
 		db.Close()
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
 		return nil, err
 	}
 	return s, nil
 }
 
+func acquireSessionLock(path string) (*os.File, error) {
+	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open session lock: %w", err)
+	}
+	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, fmt.Errorf("%w: %s", ErrSessionBusy, path)
+		}
+		return nil, fmt.Errorf("acquire session lock: %w", err)
+	}
+	return lockFile, nil
+}
+
+func releaseSessionLock(lockFile *os.File) error {
+	if lockFile == nil {
+		return nil
+	}
+	return errors.Join(unix.Flock(int(lockFile.Fd()), unix.LOCK_UN), lockFile.Close())
+}
+
+// migrateSchema upgrades the store under one immediate SQLite transaction.
+// Version zero is the pre-versioned Ion schema; it is upgraded in place after
+// verifying each additive change. Unknown newer schemas are never opened.
+func migrateSchema(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return classifySQLiteError("begin schema migration", err)
+	}
+	rollback := func(err error) error {
+		_ = tx.Rollback()
+		return err
+	}
+
+	var version int
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return rollback(fmt.Errorf("read schema version: %w", err))
+	}
+	if version > currentSchemaVersion {
+		return rollback(fmt.Errorf("%w: found %d, supported through %d", ErrUnsupportedSchema, version, currentSchemaVersion))
+	}
+	if err := ensureBaseSchema(ctx, tx); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "entries", "sequence", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "entries", "turn_id", "TEXT"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "turns", "input", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "turns", "context_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return rollback(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id);
+		CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
+		CREATE INDEX IF NOT EXISTS idx_entries_sequence ON entries(sequence);
+		CREATE INDEX IF NOT EXISTS idx_entries_turn ON entries(turn_id);
+		CREATE INDEX IF NOT EXISTS idx_turns_state ON turns(state, sequence);
+	`); err != nil {
+		return rollback(fmt.Errorf("create session indexes: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE entries SET sequence = rowid WHERE sequence = 0"); err != nil {
+		return rollback(fmt.Errorf("backfill entry sequence: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion)); err != nil {
+		return rollback(fmt.Errorf("write schema version: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit schema migration", err)
+	}
+	return nil
+}
+
+func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS entries (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			timestamp INTEGER NOT NULL,
+			payload BLOB NOT NULL DEFAULT '{}'
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS turns (
+			turn_id TEXT PRIMARY KEY,
+			sequence INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			leaf_id TEXT NOT NULL DEFAULT '',
+			input TEXT NOT NULL DEFAULT '',
+			context_id TEXT NOT NULL DEFAULT '',
+			started_at INTEGER NOT NULL,
+			ended_at INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS input_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workdir TEXT NOT NULL,
+			input TEXT NOT NULL,
+			timestamp INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id TEXT PRIMARY KEY,
+			workdir TEXT NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			last_preview TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("create session schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, definition string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("inspect %s column: %w", table, err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func classifySQLiteError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "busy") || strings.Contains(lower, "locked") {
+		return fmt.Errorf("%w: %s: %v", ErrSessionBusy, operation, err)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (s *SQLiteStore) ensureOpenLocked() error {
+	if s.closed || s.db == nil {
+		return ErrSessionClosed
+	}
+	return nil
+}
+
+func (s *SQLiteStore) beginWriteLocked(ctx context.Context) (*sql.Tx, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, classifySQLiteError("begin session write", err)
+	}
+	return tx, nil
+}
+
+func setLeafTx(ctx context.Context, tx *sql.Tx, id string) error {
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		id,
+	); err != nil {
+		return fmt.Errorf("persist leaf pointer: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) getVisibleEntryTx(ctx context.Context, tx *sql.Tx, id string) (Entry, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
+		FROM entries e
+		WHERE e.id = ?
+		  AND (e.turn_id IS NULL OR EXISTS (
+			SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+		  ))`, id)
+	return scanEntry(row)
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// nextSequenceTx allocates one monotonic session sequence inside the caller's
+// transaction. It is shared by entries and turn records so replay ordering is
+// deterministic even when a turn has no visible messages.
+func nextSequenceTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var stored sql.NullString
+	err := tx.QueryRowContext(ctx, "SELECT value FROM session_meta WHERE key='next_sequence'").Scan(&stored)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, fmt.Errorf("read session sequence: %w", err)
+	}
+	var next int64
+	if stored.Valid && stored.String != "" {
+		next, err = strconv.ParseInt(stored.String, 10, 64)
+		if err != nil || next < 1 {
+			return 0, fmt.Errorf("%w: invalid next sequence %q", ErrCorruptSession, stored.String)
+		}
+	} else {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(sequence), 0) + 1
+			FROM (
+				SELECT sequence FROM entries
+				UNION ALL
+				SELECT sequence FROM turns
+			)`).Scan(&next); err != nil {
+			return 0, fmt.Errorf("derive session sequence: %w", err)
+		}
+		if next < 1 {
+			next = 1
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO session_meta(key,value) VALUES('next_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		strconv.FormatInt(next+1, 10),
+	); err != nil {
+		return 0, fmt.Errorf("advance session sequence: %w", err)
+	}
+	return next, nil
+}
+
 func (s *SQLiteStore) loadMeta() error {
+	// Session identity is durable and never follows the selected leaf.
+	var storedID sql.NullString
+	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='session_id'").Scan(&storedID); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if storedID.Valid && storedID.String != "" {
+		s.meta.ID = storedID.String
+	} else {
+		if s.meta.ID == "" {
+			s.meta.ID = newID()
+		}
+		if _, err := s.db.Exec(
+			"INSERT INTO session_meta(key,value) VALUES('session_id',?) ON CONFLICT(key) DO NOTHING",
+			s.meta.ID,
+		); err != nil {
+			return fmt.Errorf("persist session identity: %w", err)
+		}
+	}
+
 	// Load leaf pointer.
 	var leaf sql.NullString
 	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='leaf_id'").Scan(&leaf); err != nil && err != sql.ErrNoRows {
@@ -112,55 +442,89 @@ func (s *SQLiteStore) loadMeta() error {
 }
 
 func (s *SQLiteStore) GetLeafID() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.leaf
 }
 
 func (s *SQLiteStore) Meta() Metadata {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.meta
 }
 
-func (s *SQLiteStore) Close() error { return s.db.Close() }
+func (s *SQLiteStore) Close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		db := s.db
+		s.mu.Unlock()
+		s.closeErr = errors.Join(db.Close(), releaseSessionLock(s.lockFile))
+	})
+	return s.closeErr
+}
 
 func (s *SQLiteStore) SetLeafID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
-		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-		id,
-	)
-	if err == nil {
-		s.leaf = id
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
 	}
-	return err
+	tx, err := s.beginWriteLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		if _, err := s.getVisibleEntryTx(context.Background(), tx, id); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("set leaf %q: %w", id, err)
+		}
+	}
+	if err := setLeafTx(context.Background(), tx, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit leaf update", err)
+	}
+	s.leaf = id
+	return nil
 }
 
 // ResumeSession validates an existing entry and makes it the current leaf.
 func (s *SQLiteStore) ResumeSession(ctx context.Context, entryID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.getEntry(ctx, entryID); err != nil {
+	if err := s.ensureOpenLocked(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-		entryID,
-	)
-	if err == nil {
-		s.leaf = entryID
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
 	}
-	return err
+	if _, err := s.getVisibleEntryTx(ctx, tx, entryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := setLeafTx(ctx, tx, entryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit session resume", err)
+	}
+	s.leaf = entryID
+	return nil
 }
 
 func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
-	if s.db == nil {
-		return nil, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT input FROM input_history WHERE workdir = ? ORDER BY timestamp DESC LIMIT ?",
+		"SELECT input FROM input_history WHERE workdir = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
 		workdir, n)
 	if err != nil {
 		return nil, err
@@ -177,18 +541,35 @@ func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]s
 	return inputs, rows.Err()
 }
 func (s *SQLiteStore) AddInput(ctx context.Context, workdir string, input string) error {
-	if s.db == nil || input == "" {
+	if input == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx,
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO input_history (workdir, input, timestamp) VALUES (?, ?, ?)",
-		workdir, input, time.Now().Unix())
-	return err
+		workdir, input, time.Now().Unix()); err != nil {
+		return classifySQLiteError("insert input history", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit input history", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]SessionInfoEntry, error) {
-	if s.db == nil {
-		return nil, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
@@ -218,9 +599,6 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 }
 
 func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) error {
-	if s.db == nil {
-		return nil
-	}
 	if info.ID() == "" {
 		return fmt.Errorf("session id is required")
 	}
@@ -228,16 +606,45 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO sessions (session_id, workdir, model, branch, name, summary, last_preview, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		info.ID(), info.Workdir, info.Model, info.Branch, info.Name, info.Summary, info.LastPreview, updatedAt.Unix())
-	return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (session_id, workdir, model, branch, name, summary, last_preview, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			workdir = excluded.workdir,
+			model = excluded.model,
+			branch = excluded.branch,
+			name = excluded.name,
+			summary = excluded.summary,
+			last_preview = excluded.last_preview,
+			updated_at = excluded.updated_at`,
+		info.ID(), info.Workdir, info.Model, info.Branch, info.Name, info.Summary, info.LastPreview, updatedAt.Unix()); err != nil {
+		return classifySQLiteError("update session catalog", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit session catalog", err)
+	}
+	return nil
 }
 
 // GetSessionInfo returns one catalog record by its session/leaf ID.
 // It is a concrete catalog lookup for transport boundaries; Store intentionally
 // remains focused on the active tree and does not grow a catalog interface.
 func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInfoEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return SessionInfoEntry{}, err
+	}
 	var info SessionInfoEntry
 	var updatedAt int64
 	err := s.db.QueryRowContext(ctx,
@@ -265,11 +672,30 @@ func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInf
 func (s *SQLiteStore) Append(ctx context.Context, entry Entry) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.append(ctx, entry)
+	if err := s.ensureOpenLocked(); err != nil {
+		return "", err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return "", err
+	}
+	id, err := s.appendTx(ctx, tx, "", entry)
+	if err != nil {
+		_ = tx.Rollback()
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", classifySQLiteError("commit entry", err)
+	}
+	return id, nil
 }
 
-// append is the internal (unlocked) entry writer.
-func (s *SQLiteStore) append(ctx context.Context, entry Entry) (string, error) {
+// appendTx is the internal transaction-bound entry writer. A non-empty turn
+// ID makes the entry invisible to normal replay until that turn commits.
+func (s *SQLiteStore) appendTx(ctx context.Context, tx *sql.Tx, turnID string, entry Entry) (string, error) {
+	if entry == nil || entry.ID() == "" {
+		return "", fmt.Errorf("entry ID is required")
+	}
 	id := entry.ID()
 	parentID := entry.ParentID()
 	ts := entry.When().UnixMilli()
@@ -277,11 +703,18 @@ func (s *SQLiteStore) append(ctx context.Context, entry Entry) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO entries(id,parent_id,type,timestamp,payload) VALUES(?,?,?,?,?)",
-		id, parentID, typ, ts, payload,
+	sequence, err := nextSequenceTx(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO entries(id,parent_id,type,timestamp,sequence,turn_id,payload) VALUES(?,?,?,?,?,?,?)",
+		id, parentID, typ, ts, sequence, nullableString(turnID), payload,
 	)
-	return id, err
+	if err != nil {
+		return "", classifySQLiteError("insert entry", err)
+	}
+	return id, nil
 }
 
 // AppendLeafEntry appends an entry and atomically updates the leaf pointer.
@@ -290,19 +723,32 @@ func (s *SQLiteStore) append(ctx context.Context, entry Entry) (string, error) {
 func (s *SQLiteStore) AppendLeafEntry(ctx context.Context, entry Entry) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id, err := s.append(ctx, entry)
+	if err := s.ensureOpenLocked(); err != nil {
+		return "", err
+	}
+	if entry == nil || entry.ID() == "" {
+		return "", fmt.Errorf("entry ID is required")
+	}
+	if entry.ParentID() != s.leaf {
+		return "", fmt.Errorf("entry %q parent %q does not match current leaf %q", entry.ID(), entry.ParentID(), s.leaf)
+	}
+	tx, err := s.beginWriteLocked(ctx)
 	if err != nil {
 		return "", err
 	}
-	s.leaf = id
-	// Persist the leaf pointer so the branch is reachable after restart.
-	// Pi writes the leaf on every append; without this, a linear session (no
-	// MoveTo) is unreachable after reopening the store (loadMeta reads it).
-	if _, err := s.db.ExecContext(ctx,
-		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-		id); err != nil {
-		return id, err
+	id, err := s.appendTx(ctx, tx, "", entry)
+	if err != nil {
+		_ = tx.Rollback()
+		return "", err
 	}
+	if err := setLeafTx(ctx, tx, id); err != nil {
+		_ = tx.Rollback()
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", classifySQLiteError("commit leaf entry", err)
+	}
+	s.leaf = id
 	return id, nil
 }
 
@@ -310,26 +756,18 @@ func (s *SQLiteStore) AppendLeafEntry(ctx context.Context, entry Entry) (string,
 func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	tx, err := s.db.BeginTx(ctx, nil)
+	if err := s.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	tx, err := s.beginWriteLocked(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
+		return nil, err
 	}
 	defer tx.Rollback()
 
 	ids := make([]string, len(entries))
 	for i, entry := range entries {
-		id := entry.ID()
-		parentID := entry.ParentID()
-		ts := entry.When().UnixMilli()
-		typ, payload, err := encodeEntry(entry)
-		if err != nil {
-			return nil, err
-		}
-		_, err = tx.ExecContext(ctx,
-			"INSERT INTO entries(id,parent_id,type,timestamp,payload) VALUES(?,?,?,?,?)",
-			id, parentID, typ, ts, payload,
-		)
+		id, err := s.appendTx(ctx, tx, "", entry)
 		if err != nil {
 			return nil, err
 		}
@@ -337,15 +775,74 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]strin
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit: %w", err)
+		return nil, classifySQLiteError("commit entry batch", err)
 	}
 	return ids, nil
 }
 
-// GetEntry returns a single entry by ID.
-func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (Entry, error) {
+// MoveTo records navigation, changes the selected leaf, and optionally adds a
+// summary in one transaction. The selected branch is never partially changed.
+func (s *SQLiteStore) MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return "", err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.getVisibleEntryTx(ctx, tx, entryID); err != nil {
+		_ = tx.Rollback()
+		return "", fmt.Errorf("move to %q: %w", entryID, err)
+	}
+	oldLeaf := s.leaf
+	leafEntry := &LeafEntry{
+		EntryBase: EntryBase{ID: newID(), ParentID: oldLeaf, Timestamp: time.Now()},
+		TargetID:  entryID,
+	}
+	if _, err := s.appendTx(ctx, tx, "", leafEntry); err != nil {
+		_ = tx.Rollback()
+		return "", fmt.Errorf("record leaf move: %w", err)
+	}
+	finalLeaf := entryID
+	var summaryID string
+	if summary != nil {
+		fromID := summary.FromID
+		if fromID == "" {
+			fromID = oldLeaf
+		}
+		summaryEntry := &BranchSummaryEntry{
+			EntryBase: EntryBase{ID: newID(), ParentID: entryID, Timestamp: time.Now()},
+			FromID:    fromID,
+			Summary:   summary.Summary,
+			Details:   append([]byte(nil), summary.Details...),
+		}
+		summaryID, err = s.appendTx(ctx, tx, "", summaryEntry)
+		if err != nil {
+			_ = tx.Rollback()
+			return "", fmt.Errorf("record branch summary: %w", err)
+		}
+		finalLeaf = summaryID
+	}
+	if err := setLeafTx(ctx, tx, finalLeaf); err != nil {
+		_ = tx.Rollback()
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", classifySQLiteError("commit tree navigation", err)
+	}
+	s.leaf = finalLeaf
+	return summaryID, nil
+}
+
+// GetEntry returns a single entry by ID.
+func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, ErrSessionClosed
+	}
 	return s.getEntry(ctx, id)
 }
 
@@ -357,8 +854,11 @@ func (s *SQLiteStore) getEntry(ctx context.Context, id string) (Entry, error) {
 
 // Branch returns entries from root to the current leaf.
 func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, ErrSessionClosed
+	}
 	if s.leaf == "" {
 		return nil, nil
 	}
@@ -368,14 +868,20 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	// generated hex strings, so slash-delimited membership is unambiguous.
 	rows, err := s.db.QueryContext(ctx, `
 		WITH RECURSIVE branch(id, parent_id, depth, path) AS (
-			SELECT id, parent_id, 0, '/' || id || '/'
-			FROM entries
-			WHERE id = ?
+			SELECT e.id, e.parent_id, 0, '/' || e.id || '/'
+			FROM entries e
+			WHERE e.id = ?
+			  AND (e.turn_id IS NULL OR EXISTS (
+				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+			  ))
 			UNION ALL
 			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || e.id || '/'
 			FROM entries e
 			JOIN branch ON e.id = branch.parent_id
-			WHERE instr(branch.path, '/' || e.id || '/') = 0
+			WHERE (e.turn_id IS NULL OR EXISTS (
+				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+			))
+			  AND instr(branch.path, '/' || e.id || '/') = 0
 		)
 		SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
 		FROM branch
@@ -406,7 +912,18 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 
 // Entries returns all entries in the session.
 func (s *SQLiteStore) Entries(ctx context.Context) ([]Entry, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,parent_id,type,timestamp,payload FROM entries ORDER BY timestamp ASC")
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed || s.db == nil {
+		return nil, ErrSessionClosed
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.id,e.parent_id,e.type,e.timestamp,e.payload
+		FROM entries e
+		WHERE e.turn_id IS NULL OR EXISTS (
+			SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+		)
+		ORDER BY e.sequence ASC, e.rowid ASC`)
 	if err != nil {
 		return nil, err
 	}
