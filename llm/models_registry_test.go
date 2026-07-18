@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -10,13 +9,8 @@ import (
 )
 
 func TestGetMetadataUsesInjectedFetcher(t *testing.T) {
-	registryOnce = sync.Once{}
-	registryCache = nil
-
-	oldFetcher := metadataFetcher
-	defer func() { metadataFetcher = oldFetcher }()
-
-	metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	catalog.metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
 		return ModelMetadata{
 			ID:           model,
 			Provider:     provider,
@@ -27,7 +21,7 @@ func TestGetMetadataUsesInjectedFetcher(t *testing.T) {
 		}, nil
 	}
 
-	meta, ok := GetMetadata(context.Background(), "openrouter", "openai/gpt-5.4")
+	meta, ok := catalog.GetMetadata(context.Background(), "openrouter", "openai/gpt-5.4")
 	if !ok {
 		t.Fatal("expected metadata fetch to succeed")
 	}
@@ -37,14 +31,10 @@ func TestGetMetadataUsesInjectedFetcher(t *testing.T) {
 }
 
 func TestGetCachedMetadataDoesNotFetch(t *testing.T) {
-	registryOnce = sync.Once{}
-	registryCache = nil
-
-	oldFetcher := metadataFetcher
-	defer func() { metadataFetcher = oldFetcher }()
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 
 	var calls int
-	metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
+	catalog.metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
 		calls++
 		return ModelMetadata{
 			ID:        model,
@@ -53,7 +43,7 @@ func TestGetCachedMetadataDoesNotFetch(t *testing.T) {
 		}, nil
 	}
 
-	if meta, ok := GetCachedMetadata("openrouter", "openai/gpt-5.4"); ok {
+	if meta, ok := catalog.GetCachedMetadata("openrouter", "openai/gpt-5.4"); ok {
 		t.Fatalf("cached metadata = %#v, want miss", meta)
 	}
 	if calls != 0 {
@@ -63,14 +53,10 @@ func TestGetCachedMetadataDoesNotFetch(t *testing.T) {
 
 func TestCachedContextLimitUsesOnlyRegistryCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	registryOnce = sync.Once{}
-	registryCache = nil
-
-	oldFetcher := metadataFetcher
-	defer func() { metadataFetcher = oldFetcher }()
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 
 	var calls int
-	metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
+	catalog.metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
 		calls++
 		return ModelMetadata{
 			ID:           model,
@@ -80,23 +66,23 @@ func TestCachedContextLimitUsesOnlyRegistryCache(t *testing.T) {
 		}, nil
 	}
 
-	if limit, ok := CachedContextLimit("openrouter", "openai/gpt-5.4"); ok {
+	if limit, ok := catalog.CachedContextLimit("openrouter", "openai/gpt-5.4"); ok {
 		t.Fatalf("cached context limit = %d, want cache miss", limit)
 	}
 	if calls != 0 {
 		t.Fatalf("metadata fetch calls = %d, want 0", calls)
 	}
 
-	registryMu.Lock()
-	registryCache[metadataKey("openrouter", "openai/gpt-5.4")] = ModelMetadata{
+	catalog.metadataMu.Lock()
+	catalog.metadataCache[metadataKey("openrouter", "openai/gpt-5.4")] = ModelMetadata{
 		ID:           "openai/gpt-5.4",
 		Provider:     "openrouter",
 		ContextLimit: 456000,
 		UpdatedAt:    time.Now().Unix(),
 	}
-	registryMu.Unlock()
+	catalog.metadataMu.Unlock()
 
-	limit, ok := CachedContextLimit("openrouter", "openai/gpt-5.4")
+	limit, ok := catalog.CachedContextLimit("openrouter", "openai/gpt-5.4")
 	if !ok {
 		t.Fatal("expected cached context limit")
 	}
@@ -110,21 +96,11 @@ func TestCachedContextLimitUsesOnlyRegistryCache(t *testing.T) {
 
 func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	registryOnce = sync.Once{}
-	registryCache = nil
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldMetadataFetcher := metadataFetcher
-	oldCatalogFetcher := providerCatalogFetcher
-	defer func() {
-		metadataFetcher = oldMetadataFetcher
-		providerCatalogFetcher = oldCatalogFetcher
-	}()
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 
 	var metadataCalls int
 	var catalogCalls int
-	metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
+	catalog.metadataFetcher = func(ctx context.Context, provider, model string) (ModelMetadata, error) {
 		metadataCalls++
 		return ModelMetadata{
 			ID:           model,
@@ -133,13 +109,13 @@ func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
 			UpdatedAt:    time.Now().Unix(),
 		}, nil
 	}
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		catalogCalls++
 		return []ModelMetadata{{ID: "vendor/model", ContextLimit: 123000}}, nil
 	}
 
 	cfg := &config.Config{Provider: "openrouter", Model: "vendor/model"}
-	if limit, ok := CachedContextLimitForConfig(cfg); ok {
+	if limit, ok := catalog.CachedContextLimitForConfig(cfg); ok {
 		t.Fatalf("cached context limit = %d, want cache miss", limit)
 	}
 	if metadataCalls != 0 || catalogCalls != 0 {
@@ -150,9 +126,8 @@ func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
 		)
 	}
 
-	providerModelsOnce.Do(initProviderModelsCache)
-	providerModelsMu.Lock()
-	providerModelsCacheMap[providerCacheKey(cfg)] = providerModelsCache{
+	catalog.providerModelsMu.Lock()
+	catalog.providerModelsCacheMap[providerCacheKey(cfg)] = providerModelsCache{
 		UpdatedAt: time.Now().Unix(),
 		Models: []ModelMetadata{{
 			ID:           "vendor/model",
@@ -160,9 +135,9 @@ func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
 			ContextLimit: 456000,
 		}},
 	}
-	providerModelsMu.Unlock()
+	catalog.providerModelsMu.Unlock()
 
-	limit, ok := CachedContextLimitForConfig(cfg)
+	limit, ok := catalog.CachedContextLimitForConfig(cfg)
 	if !ok {
 		t.Fatal("expected cached provider model context limit")
 	}

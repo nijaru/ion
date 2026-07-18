@@ -80,7 +80,7 @@ func (m Model) openModelPickerForPreset(
 		loadContext: loadContext,
 		loadCancel:  loadCancel,
 	})
-	return m, loadAllModelPickerItems(requestID, cfg, preset, loadContext)
+	return m, loadAllModelPickerItems(requestID, cfg, preset, loadContext, m.Model.Catalog)
 }
 
 // loadAllModelPickerItems loads the configured provider catalog. Provider
@@ -91,6 +91,7 @@ func loadAllModelPickerItems(
 	cfg *config.Config,
 	preset Preset,
 	loadContext context.Context,
+	catalog ModelCatalog,
 ) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
@@ -100,14 +101,20 @@ func loadAllModelPickerItems(
 		loadContext = context.Background()
 	}
 	return func() tea.Msg {
-		catalog, err := queryAvailableModels(loadContext, llm.ModelCatalogQuery{
+		if catalog == nil {
+			return allModelsLoadedMsg{
+				requestID: requestID,
+				err:       fmt.Errorf("model catalog is not configured"),
+			}
+		}
+		result, err := catalog.QueryAvailableModels(loadContext, llm.ModelCatalogQuery{
 			Config:       &cfgCopy,
 			IncludeLocal: true,
 		})
 		return allModelsLoadedMsg{
 			requestID: requestID,
-			items:     modelItemsFromMetadata(catalog.Models),
-			catalog:   catalog,
+			items:     modelItemsFromMetadata(result.Models),
+			catalog:   result,
 			err:       err,
 		}
 	}
@@ -372,6 +379,7 @@ func (m Model) startupPickerCmd() tea.Cmd {
 			overlay.cfg,
 			overlay.Preset(),
 			overlay.loadContext,
+			m.Model.Catalog,
 		)
 	}
 

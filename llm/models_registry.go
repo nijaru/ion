@@ -29,63 +29,46 @@ type ModelMetadata struct {
 	Reasoning        bool     `json:"reasoning"`
 }
 
-var (
-	registryCache   map[string]ModelMetadata
-	registryMu      sync.RWMutex
-	registryOnce    sync.Once
-	metadataFetcher = fetchMetadata
-)
-
-func initRegistry() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registryCache = make(map[string]ModelMetadata)
-	loadCache()
-}
-
-func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bool) {
-	registryOnce.Do(initRegistry)
-
-	if meta, ok := cachedMetadata(provider, model); ok {
+func (c *ModelCatalog) GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bool) {
+	if meta, ok := c.cachedMetadata(provider, model); ok {
 		return meta, true
 	}
 
-	fetched, err := metadataFetcher(ctx, provider, model)
+	fetched, err := c.metadataFetcher(ctx, provider, model)
 	if err == nil {
-		registryMu.Lock()
-		registryCache[metadataKey(provider, model)] = fetched
-		saveCache()
-		registryMu.Unlock()
+		c.metadataMu.Lock()
+		c.metadataCache[metadataKey(provider, model)] = fetched
+		c.saveMetadataCache()
+		c.metadataMu.Unlock()
 		return fetched, true
 	}
 
 	return ModelMetadata{}, false
 }
 
-func GetCachedMetadata(provider, model string) (ModelMetadata, bool) {
-	registryOnce.Do(initRegistry)
-	return cachedMetadata(provider, model)
+func (c *ModelCatalog) GetCachedMetadata(provider, model string) (ModelMetadata, bool) {
+	return c.cachedMetadata(provider, model)
 }
 
-func CachedContextLimit(provider, model string) (int, bool) {
-	meta, ok := GetCachedMetadata(provider, model)
+func (c *ModelCatalog) CachedContextLimit(provider, model string) (int, bool) {
+	meta, ok := c.GetCachedMetadata(provider, model)
 	if !ok || meta.ContextLimit <= 0 {
 		return 0, false
 	}
 	return meta.ContextLimit, true
 }
 
-func CachedContextLimitForConfig(cfg *config.Config) (int, bool) {
+func (c *ModelCatalog) CachedContextLimitForConfig(cfg *config.Config) (int, bool) {
 	if cfg == nil || strings.TrimSpace(cfg.Model) == "" {
 		return 0, false
 	}
-	if limit, ok := CachedContextLimit(cfg.Provider, cfg.Model); ok {
+	if limit, ok := c.CachedContextLimit(cfg.Provider, cfg.Model); ok {
 		return limit, true
 	}
 	if IsOpenAICompatible(cfg.Provider) && strings.TrimSpace(cfg.Endpoint) == "" {
 		return 0, false
 	}
-	models, _, ok := CachedModelsForConfig(cfg)
+	models, _, ok := c.CachedModelsForConfig(cfg)
 	if !ok {
 		return 0, false
 	}
@@ -97,10 +80,10 @@ func CachedContextLimitForConfig(cfg *config.Config) (int, bool) {
 	return 0, false
 }
 
-func cachedMetadata(provider, model string) (ModelMetadata, bool) {
-	registryMu.RLock()
-	meta, ok := registryCache[metadataKey(provider, model)]
-	registryMu.RUnlock()
+func (c *ModelCatalog) cachedMetadata(provider, model string) (ModelMetadata, bool) {
+	c.metadataMu.RLock()
+	meta, ok := c.metadataCache[metadataKey(provider, model)]
+	c.metadataMu.RUnlock()
 
 	if ok && time.Now().Unix()-meta.UpdatedAt < 86400 {
 		return meta, true
@@ -112,9 +95,9 @@ func metadataKey(provider, model string) string {
 	return fmt.Sprintf("%s/%s", strings.ToLower(provider), strings.ToLower(model))
 }
 
-func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
+func (c *ModelCatalog) fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
 	if _, ok := Lookup(provider); ok {
-		models, err := ListModelsForConfig(ctx, &config.Config{Provider: provider})
+		models, err := c.ListModelsForConfig(ctx, &config.Config{Provider: provider})
 		if err != nil {
 			return ModelMetadata{}, err
 		}
@@ -131,29 +114,24 @@ func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, 
 	)
 }
 
-func cachePath() string {
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".ion", "data", "metadata_cache.json")
-	}
-	return filepath.Join(dataDir, "metadata_cache.json")
+func (c *ModelCatalog) metadataCachePath() string {
+	return filepath.Join(c.dataDir, "metadata_cache.json")
 }
 
-func loadCache() {
-	data, err := os.ReadFile(cachePath())
+func (c *ModelCatalog) loadMetadataCache() {
+	data, err := os.ReadFile(c.metadataCachePath())
 	if err != nil {
 		return
 	}
-	_ = json.Unmarshal(data, &registryCache)
+	_ = json.Unmarshal(data, &c.metadataCache)
 }
 
-func saveCache() {
-	data, err := json.MarshalIndent(registryCache, "", "  ")
+func (c *ModelCatalog) saveMetadataCache() {
+	data, err := json.MarshalIndent(c.metadataCache, "", "  ")
 	if err != nil {
 		return
 	}
-	path := cachePath()
+	path := c.metadataCachePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	_ = os.WriteFile(path, data, 0o644)
 }

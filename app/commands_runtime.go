@@ -130,7 +130,7 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	next, ok := pickScopedModel(resolveScopedModelPatterns(context.Background(), cfg), runtimeCfg.Provider, runtimeCfg.Model, forward)
+	next, ok := pickScopedModel(m.resolveScopedModelPatterns(context.Background(), cfg), runtimeCfg.Provider, runtimeCfg.Model, forward)
 	if !ok {
 		return m.cyclePresetFallback(cfg, preset, forward)
 	}
@@ -292,7 +292,7 @@ func filterScopedModelsByAuth(models []config.ScopedModel) []config.ScopedModel 
 
 // resolveScopedModelPatterns expands glob patterns in scoped models against available models.
 // Patterns without glob characters are passed through as-is.
-func resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []config.ScopedModel {
+func (m Model) resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []config.ScopedModel {
 	if cfg == nil || len(cfg.ScopedModels) == 0 {
 		return nil
 	}
@@ -306,7 +306,7 @@ func resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []confi
 		}
 
 		// Glob pattern — resolve against available models
-		matched := matchModelsByPattern(ctx, cfg, sm.Pattern)
+		matched := m.matchModelsByPattern(ctx, cfg, sm.Pattern)
 		for _, m := range matched {
 			result = append(result, config.ScopedModel{
 				Provider: m.Provider,
@@ -320,8 +320,11 @@ func resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []confi
 
 // matchModelsByPattern returns models matching a glob pattern.
 // Matches against "provider/model" or just "model".
-func matchModelsByPattern(ctx context.Context, cfg *config.Config, pattern string) []llm.ModelMetadata {
-	models, err := listModelsForConfig(ctx, cfg)
+func (m Model) matchModelsByPattern(ctx context.Context, cfg *config.Config, pattern string) []llm.ModelMetadata {
+	if m.Model.Catalog == nil {
+		return nil
+	}
+	models, err := m.Model.Catalog.ListModelsForConfig(ctx, cfg)
 	if err != nil {
 		return nil
 	}

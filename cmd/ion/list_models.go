@@ -19,8 +19,12 @@ func runListModels(
 	errW io.Writer,
 	cfg *config.Config,
 	search string,
+	catalog *llm.ModelCatalog,
 ) error {
-	result, err := llm.QueryAvailableModels(ctx, llm.ModelCatalogQuery{Config: cfg})
+	if catalog == nil {
+		return fmt.Errorf("model catalog is not configured")
+	}
+	result, err := catalog.QueryAvailableModels(ctx, llm.ModelCatalogQuery{Config: cfg})
 	if err != nil && len(result.Models) == 0 {
 		return err
 	}

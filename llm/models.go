@@ -71,21 +71,77 @@ type modelsDevCache struct {
 	Created   map[string]int64 `json:"created"`
 }
 
-var (
+// ModelCatalog owns provider discovery, metadata, and their resilience caches
+// for one host process. Callers inject one instance into each CLI/TUI host so
+// cache state, HTTP policy, and test seams are explicit rather than package
+// globals.
+type ModelCatalog struct {
 	providerModelsMu       sync.RWMutex
-	providerModelsOnce     sync.Once
 	providerModelsCacheMap map[string]providerModelsCache
 	modelsDevMu            sync.RWMutex
 	modelsDevMeta          modelsDevCache
-	providerCatalogFetcher providerCatalogFetcherFunc = fetchModels
-	modelsDevFetcher                                  = fetchModelsDevCreated
-	openAIFetcher          providerModelFetcher       = fetchOpenAIModels
-	anthropicFetcher       providerModelFetcher       = fetchAnthropicModels
-	openRouterFetcher      providerModelFetcher       = fetchOpenRouterModels
-	geminiFetcher          providerModelFetcher       = fetchGeminiModels
-	ollamaFetcher          providerModelFetcher       = fetchOllamaModels
-	modelListHTTPClient                               = http.DefaultClient
-)
+	providerCatalogFetcher providerCatalogFetcherFunc
+	modelsDevFetcher       func(context.Context) (map[string]int64, error)
+	openAIFetcher          providerModelFetcher
+	anthropicFetcher       providerModelFetcher
+	openRouterFetcher      providerModelFetcher
+	geminiFetcher          providerModelFetcher
+	ollamaFetcher          providerModelFetcher
+	modelListHTTPClient    *http.Client
+	dataDir                string
+
+	metadataMu      sync.RWMutex
+	metadataCache   map[string]ModelMetadata
+	metadataFetcher func(context.Context, string, string) (ModelMetadata, error)
+}
+
+type ModelCatalogOptions struct {
+	// DataDir controls the on-disk model and metadata cache directory. Empty
+	// uses Ion's default data directory.
+	DataDir string
+	// HTTPClient is used for all provider and models.dev requests. Empty uses
+	// http.DefaultClient.
+	HTTPClient *http.Client
+}
+
+func NewModelCatalog(opts ModelCatalogOptions) *ModelCatalog {
+	dataDir := strings.TrimSpace(opts.DataDir)
+	if dataDir == "" {
+		dataDir, _ = config.DefaultDataDir()
+		if dataDir == "" {
+			home, _ := os.UserHomeDir()
+			dataDir = filepath.Join(home, ".ion", "data")
+		}
+	}
+	client := opts.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	catalog := &ModelCatalog{
+		providerModelsCacheMap: make(map[string]providerModelsCache),
+		providerCatalogFetcher: nil,
+		modelsDevFetcher:       nil,
+		openAIFetcher:          nil,
+		anthropicFetcher:       nil,
+		openRouterFetcher:      nil,
+		geminiFetcher:          nil,
+		ollamaFetcher:          nil,
+		modelListHTTPClient:    client,
+		dataDir:                filepath.Clean(dataDir),
+		metadataCache:          make(map[string]ModelMetadata),
+	}
+	catalog.providerCatalogFetcher = catalog.fetchModels
+	catalog.modelsDevFetcher = catalog.fetchModelsDevCreated
+	catalog.openAIFetcher = catalog.fetchOpenAIModels
+	catalog.anthropicFetcher = catalog.fetchAnthropicModels
+	catalog.openRouterFetcher = catalog.fetchOpenRouterModels
+	catalog.geminiFetcher = catalog.fetchGeminiModels
+	catalog.ollamaFetcher = catalog.fetchOllamaModels
+	catalog.metadataFetcher = catalog.fetchMetadata
+	catalog.loadProviderModelsCache()
+	catalog.loadMetadataCache()
+	return catalog
+}
 
 type providerModelFetcher func(context.Context, *config.Config) ([]ModelMetadata, error)
 type providerCatalogFetcherFunc func(context.Context, string, *config.Config) ([]ModelMetadata, error)
@@ -96,20 +152,19 @@ const (
 	modelsDevTTL            = 24 * time.Hour
 )
 
-func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
-	return ListModelsForConfig(ctx, &config.Config{Provider: provider})
+func (c *ModelCatalog) ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
+	return c.ListModelsForConfig(ctx, &config.Config{Provider: provider})
 }
 
-func CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
+func (c *ModelCatalog) CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
 	if cfg == nil {
 		return nil, false, false
 	}
-	providerModelsOnce.Do(initProviderModelsCache)
 
 	key := providerCacheKey(cfg)
-	providerModelsMu.RLock()
-	cached, ok := providerModelsCacheMap[key]
-	providerModelsMu.RUnlock()
+	c.providerModelsMu.RLock()
+	cached, ok := c.providerModelsCacheMap[key]
+	c.providerModelsMu.RUnlock()
 	if !ok {
 		return nil, false, false
 	}
@@ -118,8 +173,8 @@ func CachedModelsForConfig(cfg *config.Config) ([]ModelMetadata, bool, bool) {
 	return models, cachedFreshForConfig(cached.UpdatedAt, cfg), true
 }
 
-func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
-	result, err := QueryModelsForConfig(ctx, cfg)
+func (c *ModelCatalog) ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	result, err := c.QueryModelsForConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -129,19 +184,17 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 // QueryModelsForConfig lists one provider and exposes whether a stale cache was
 // used. ListModelsForConfig is the convenience form for callers that do not
 // need freshness information.
-func QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListResult, error) {
+func (c *ModelCatalog) QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListResult, error) {
 	if cfg == nil {
 		return ModelListResult{}, fmt.Errorf("model provider config is required")
 	}
 	ctx, cancel, timeout := withModelListTimeout(ctx)
 	defer cancel()
 
-	providerModelsOnce.Do(initProviderModelsCache)
-
 	key := providerCacheKey(cfg)
-	providerModelsMu.RLock()
-	cached, ok := providerModelsCacheMap[key]
-	providerModelsMu.RUnlock()
+	c.providerModelsMu.RLock()
+	cached, ok := c.providerModelsCacheMap[key]
+	c.providerModelsMu.RUnlock()
 	if ok && cachedFreshForConfig(cached.UpdatedAt, cfg) {
 		return ModelListResult{
 			Models:    cloneModelMetadataSlice(cached.Models),
@@ -149,17 +202,17 @@ func QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListRes
 		}, nil
 	}
 
-	fetched, err := providerCatalogFetcher(ctx, cfg.Provider, cfg)
+	fetched, err := c.providerCatalogFetcher(ctx, cfg.Provider, cfg)
 	if err == nil {
 		sortModels(fetched)
 		updatedAt := time.Now()
-		providerModelsMu.Lock()
-		providerModelsCacheMap[key] = providerModelsCache{
+		c.providerModelsMu.Lock()
+		c.providerModelsCacheMap[key] = providerModelsCache{
 			UpdatedAt: updatedAt.Unix(),
 			Models:    cloneModelMetadataSlice(fetched),
 		}
-		saveProviderModelsCache()
-		providerModelsMu.Unlock()
+		c.saveProviderModelsCache()
+		c.providerModelsMu.Unlock()
 		return ModelListResult{
 			Models:    cloneModelMetadataSlice(fetched),
 			UpdatedAt: updatedAt,
@@ -181,7 +234,7 @@ func QueryModelsForConfig(ctx context.Context, cfg *config.Config) (ModelListRes
 // returns the successful union. Providers without credentials are omitted by
 // default; set IncludeUnauthenticated to probe every requested provider and
 // receive explicit failures in Status.
-func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCatalogResult, error) {
+func (c *ModelCatalog) QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCatalogResult, error) {
 	base := query.Config
 	if base == nil {
 		base = &config.Config{}
@@ -242,7 +295,7 @@ func QueryAvailableModels(ctx context.Context, query ModelCatalogQuery) (ModelCa
 		}
 		i := i
 		wg.Go(func() {
-			queries[i].listed, queries[i].err = QueryModelsForConfig(ctx, queries[i].cfg)
+			queries[i].listed, queries[i].err = c.QueryModelsForConfig(ctx, queries[i].cfg)
 		})
 	}
 	wg.Wait()
@@ -333,14 +386,7 @@ func wrapModelListError(cfg *config.Config, timeout time.Duration, err error) er
 	return ctxerr.WrapContext(operation, err)
 }
 
-func initProviderModelsCache() {
-	providerModelsMu.Lock()
-	defer providerModelsMu.Unlock()
-	providerModelsCacheMap = make(map[string]providerModelsCache)
-	loadProviderModelsCache()
-}
-
-func fetchModels(
+func (c *ModelCatalog) fetchModels(
 	ctx context.Context,
 	provider string,
 	cfg *config.Config,
@@ -348,18 +394,18 @@ func fetchModels(
 	provider = ResolveID(provider)
 	switch provider {
 	case "anthropic":
-		return anthropicFetcher(ctx, cfg)
+		return c.anthropicFetcher(ctx, cfg)
 	case "openai":
-		return openAIFetcher(ctx, cfg)
+		return c.openAIFetcher(ctx, cfg)
 	case "openrouter":
-		return openRouterFetcher(ctx, cfg)
+		return c.openRouterFetcher(ctx, cfg)
 	case "gemini":
-		return geminiFetcher(ctx, cfg)
+		return c.geminiFetcher(ctx, cfg)
 	case "ollama":
 		if cfg != nil && strings.TrimSpace(cfg.Endpoint) != "" {
 			endpoint := ResolvedEndpointContext(ctx, cfg)
 			def, _ := Lookup(provider)
-			return fetchOpenAICompatibleModels(
+			return c.fetchOpenAICompatibleModels(
 				ctx,
 				provider,
 				endpoint,
@@ -367,14 +413,14 @@ func fetchModels(
 				ResolvedHeaders(cfg),
 			)
 		}
-		return ollamaFetcher(ctx, cfg)
+		return c.ollamaFetcher(ctx, cfg)
 	case OpenAICompatibleID:
 		endpoint := ResolvedEndpointContext(ctx, cfg)
 		if endpoint == "" {
 			return nil, fmt.Errorf("OpenAI-compatible endpoint is not configured")
 		}
 		def, _ := Lookup(provider)
-		return fetchOpenAICompatibleModels(
+		return c.fetchOpenAICompatibleModels(
 			ctx,
 			provider,
 			endpoint,
@@ -390,7 +436,7 @@ func fetchModels(
 		if endpoint == "" {
 			return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 		}
-		return fetchOpenAICompatibleModels(
+		return c.fetchOpenAICompatibleModels(
 			ctx,
 			provider,
 			endpoint,
@@ -470,7 +516,7 @@ type ollamaModel struct {
 	Name string `json:"name"`
 }
 
-func fetchOpenAIModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+func (c *ModelCatalog) fetchOpenAIModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	def, _ := Lookup("openai")
 	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
@@ -481,7 +527,7 @@ func fetchOpenAIModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata
 	headers["Authorization"] = "Bearer " + apiKey
 
 	var payload openAIModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch openai models: %w", err)
 	}
 
@@ -499,11 +545,11 @@ func fetchOpenAIModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
-	annotateCreated(ctx, models)
+	c.annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
-func fetchAnthropicModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+func (c *ModelCatalog) fetchAnthropicModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	def, _ := Lookup("anthropic")
 	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
@@ -515,7 +561,7 @@ func fetchAnthropicModels(ctx context.Context, cfg *config.Config) ([]ModelMetad
 	headers["anthropic-version"] = "2023-06-01"
 
 	var payload anthropicModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models?limit=1000", headers, &payload); err != nil {
+	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models?limit=1000", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch anthropic models: %w", err)
 	}
 
@@ -533,11 +579,11 @@ func fetchAnthropicModels(ctx context.Context, cfg *config.Config) ([]ModelMetad
 			UpdatedAt:    time.Now().Unix(),
 		})
 	}
-	annotateCreated(ctx, models)
+	c.annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
-func fetchOpenRouterModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+func (c *ModelCatalog) fetchOpenRouterModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	def, _ := Lookup("openrouter")
 	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
@@ -548,7 +594,7 @@ func fetchOpenRouterModels(ctx context.Context, cfg *config.Config) ([]ModelMeta
 	headers["Authorization"] = "Bearer " + apiKey
 
 	var payload openRouterModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch openrouter models: %w", err)
 	}
 
@@ -584,11 +630,11 @@ func fetchOpenRouterModels(ctx context.Context, cfg *config.Config) ([]ModelMeta
 		})
 	}
 
-	annotateCreated(ctx, models)
+	c.annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
-func fetchGeminiModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+func (c *ModelCatalog) fetchGeminiModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	def, _ := Lookup("gemini")
 	apiKey := ResolvedAuthToken(cfg, def)
 	if apiKey == "" {
@@ -606,7 +652,7 @@ func fetchGeminiModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata
 		}
 
 		var payload geminiModelsResponse
-		if err := fetchJSON(ctx, http.MethodGet, endpoint, headers, &payload); err != nil {
+		if err := c.fetchJSON(ctx, http.MethodGet, endpoint, headers, &payload); err != nil {
 			return nil, fmt.Errorf("fetch gemini models: %w", err)
 		}
 
@@ -637,18 +683,18 @@ func fetchGeminiModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata
 		pageToken = payload.NextPageToken
 	}
 
-	annotateCreated(ctx, models)
+	c.annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
-func fetchOllamaModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+func (c *ModelCatalog) fetchOllamaModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	base := normalizeOllamaBaseURL(strings.TrimSpace(os.Getenv("OLLAMA_HOST")))
 	if cfg != nil && strings.TrimSpace(cfg.Endpoint) != "" {
 		base = strings.TrimRight(cfg.Endpoint, "/")
 		base = strings.TrimSuffix(base, "/v1")
 	}
 	var payload ollamaTagsResponse
-	if err := fetchJSON(ctx, http.MethodGet, base+"/api/tags", nil, &payload); err != nil {
+	if err := c.fetchJSON(ctx, http.MethodGet, base+"/api/tags", nil, &payload); err != nil {
 		return nil, fmt.Errorf("fetch ollama models: %w", err)
 	}
 
@@ -669,7 +715,7 @@ func fetchOllamaModels(ctx context.Context, cfg *config.Config) ([]ModelMetadata
 	return sortModels(models), nil
 }
 
-func fetchOpenAICompatibleModels(
+func (c *ModelCatalog) fetchOpenAICompatibleModels(
 	ctx context.Context,
 	provider, endpoint, token string,
 	extraHeaders map[string]string,
@@ -683,7 +729,7 @@ func fetchOpenAICompatibleModels(
 	}
 
 	var payload openAIModelsResponse
-	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
 		return nil, fmt.Errorf("fetch %s models: %w", provider, err)
 	}
 
@@ -766,34 +812,29 @@ func modelCacheTTL(cfg *config.Config) time.Duration {
 	return time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
 }
 
-func providerModelsCachePath() string {
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".ion", "data", "models_cache.json")
-	}
-	return filepath.Join(dataDir, "models_cache.json")
+func (c *ModelCatalog) providerModelsCachePath() string {
+	return filepath.Join(c.dataDir, "models_cache.json")
 }
 
-func loadProviderModelsCache() {
-	data, err := os.ReadFile(providerModelsCachePath())
+func (c *ModelCatalog) loadProviderModelsCache() {
+	data, err := os.ReadFile(c.providerModelsCachePath())
 	if err != nil {
 		return
 	}
-	_ = json.Unmarshal(data, &providerModelsCacheMap)
+	_ = json.Unmarshal(data, &c.providerModelsCacheMap)
 }
 
-func saveProviderModelsCache() {
-	data, err := json.MarshalIndent(providerModelsCacheMap, "", "  ")
+func (c *ModelCatalog) saveProviderModelsCache() {
+	data, err := json.MarshalIndent(c.providerModelsCacheMap, "", "  ")
 	if err != nil {
 		return
 	}
-	path := providerModelsCachePath()
+	path := c.providerModelsCachePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	_ = os.WriteFile(path, data, 0o644)
 }
 
-func fetchJSON(
+func (c *ModelCatalog) fetchJSON(
 	ctx context.Context,
 	method, endpoint string,
 	headers map[string]string,
@@ -808,7 +849,7 @@ func fetchJSON(
 		req.Header.Set(key, value)
 	}
 
-	resp, err := modelListHTTPClient.Do(req)
+	resp, err := c.modelListHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -848,8 +889,8 @@ func sortModels(models []ModelMetadata) []ModelMetadata {
 	return models
 }
 
-func annotateCreated(ctx context.Context, models []ModelMetadata) {
-	index := modelsDevCreatedIndex(ctx)
+func (c *ModelCatalog) annotateCreated(ctx context.Context, models []ModelMetadata) {
+	index := c.modelsDevCreatedIndex(ctx)
 	for i := range models {
 		if models[i].Created <= 0 {
 			models[i].Created = index[strings.ToLower(models[i].ID)]
@@ -868,30 +909,30 @@ func modelOrg(id string) string {
 	return left
 }
 
-func modelsDevCreatedIndex(ctx context.Context) map[string]int64 {
-	modelsDevMu.RLock()
-	if len(modelsDevMeta.Created) > 0 &&
-		time.Since(time.Unix(modelsDevMeta.UpdatedAt, 0)) < modelsDevTTL {
-		index := mapsCloneInt64(modelsDevMeta.Created)
-		modelsDevMu.RUnlock()
+func (c *ModelCatalog) modelsDevCreatedIndex(ctx context.Context) map[string]int64 {
+	c.modelsDevMu.RLock()
+	if len(c.modelsDevMeta.Created) > 0 &&
+		time.Since(time.Unix(c.modelsDevMeta.UpdatedAt, 0)) < modelsDevTTL {
+		index := mapsCloneInt64(c.modelsDevMeta.Created)
+		c.modelsDevMu.RUnlock()
 		return index
 	}
-	modelsDevMu.RUnlock()
+	c.modelsDevMu.RUnlock()
 
-	created, err := modelsDevFetcher(ctx)
+	created, err := c.modelsDevFetcher(ctx)
 	if err != nil {
-		modelsDevMu.RLock()
-		index := mapsCloneInt64(modelsDevMeta.Created)
-		modelsDevMu.RUnlock()
+		c.modelsDevMu.RLock()
+		index := mapsCloneInt64(c.modelsDevMeta.Created)
+		c.modelsDevMu.RUnlock()
 		return index
 	}
 
-	modelsDevMu.Lock()
-	modelsDevMeta = modelsDevCache{
+	c.modelsDevMu.Lock()
+	c.modelsDevMeta = modelsDevCache{
 		UpdatedAt: time.Now().Unix(),
 		Created:   mapsCloneInt64(created),
 	}
-	modelsDevMu.Unlock()
+	c.modelsDevMu.Unlock()
 	return created
 }
 
@@ -903,13 +944,13 @@ type modelsDevEntry struct {
 	ReleaseDate string `json:"release_date"`
 }
 
-func fetchModelsDevCreated(ctx context.Context) (map[string]int64, error) {
+func (c *ModelCatalog) fetchModelsDevCreated(ctx context.Context) (map[string]int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://models.dev/api.json", nil)
 	if err != nil {
 		return nil, fmt.Errorf("build models.dev request: %w", err)
 	}
 	req.Header.Set("User-Agent", "ion/0.0.0")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.modelListHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

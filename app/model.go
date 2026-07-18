@@ -342,6 +342,7 @@ type ModelState struct {
 	Store                session.Store
 	Switcher             Switcher
 	ConfigLoader         ConfigLoader
+	Catalog              ModelCatalog
 	Config               *config.Config
 	Runtime              Snapshot
 	EventGeneration      uint64
@@ -469,6 +470,7 @@ func New(
 			Storage:  s,
 			Store:    store,
 			Switcher: switcher,
+			Catalog:  llm.NewModelCatalog(llm.ModelCatalogOptions{}),
 		},
 		InFlight: InFlightState{},
 		Progress: ProgressState{
@@ -520,6 +522,12 @@ func (m Model) WithJobs(jobs JobController) Model {
 // TUI know how startup flags are represented.
 func (m Model) WithConfigLoader(loader ConfigLoader) Model {
 	m.Model.ConfigLoader = loader
+	return m
+}
+
+// WithModelCatalog installs the host-owned provider/model discovery service.
+func (m Model) WithModelCatalog(catalog ModelCatalog) Model {
+	m.Model.Catalog = catalog
 	return m
 }
 

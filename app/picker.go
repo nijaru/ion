@@ -14,10 +14,13 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
-var (
-	listModelsForConfig  = llm.ListModelsForConfig
-	queryAvailableModels = llm.QueryAvailableModels
-)
+// ModelCatalog is the narrow model-discovery capability used by the TUI.
+// The host injects one instance so provider fetch policy and cache state have
+// one owner for the process.
+type ModelCatalog interface {
+	ListModelsForConfig(context.Context, *config.Config) ([]llm.ModelMetadata, error)
+	QueryAvailableModels(context.Context, llm.ModelCatalogQuery) (llm.ModelCatalogResult, error)
+}
 
 const pickerPageSize = 8
 

@@ -21,19 +21,13 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	oldModelsDevFetcher := modelsDevFetcher
-	defer func() { providerCatalogFetcher = oldFetcher }()
-	defer func() { modelsDevFetcher = oldModelsDevFetcher }()
-	modelsDevFetcher = func(ctx context.Context) (map[string]int64, error) {
+	catalog := NewModelCatalog(ModelCatalogOptions{})
+	catalog.modelsDevFetcher = func(ctx context.Context) (map[string]int64, error) {
 		return map[string]int64{}, nil
 	}
 
 	var calls int
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		calls++
 		if provider != "openrouter" {
 			t.Fatalf("provider = %q, want openrouter", provider)
@@ -44,7 +38,7 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 		}, nil
 	}
 
-	items, err := ListModels(context.Background(), "openrouter")
+	items, err := catalog.ListModels(context.Background(), "openrouter")
 	if err != nil {
 		t.Fatalf("first ListModels: %v", err)
 	}
@@ -55,7 +49,7 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 		t.Fatalf("fetch calls = %d, want 1", calls)
 	}
 
-	items, err = ListModels(context.Background(), "openrouter")
+	items, err = catalog.ListModels(context.Background(), "openrouter")
 	if err != nil {
 		t.Fatalf("second ListModels: %v", err)
 	}
@@ -72,13 +66,9 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 
 func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 	calls := 0
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		calls++
 		if calls == 1 {
 			return []ModelMetadata{{ID: "cached-model", Provider: provider}}, nil
@@ -87,7 +77,7 @@ func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
 	}
 
 	cfg := &config.Config{Provider: "openrouter"}
-	first, err := QueryModelsForConfig(t.Context(), cfg)
+	first, err := catalog.QueryModelsForConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("first query: %v", err)
 	}
@@ -95,14 +85,14 @@ func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
 		t.Fatal("fresh catalog was marked stale")
 	}
 
-	providerModelsMu.Lock()
+	catalog.providerModelsMu.Lock()
 	key := providerCacheKey(cfg)
-	cached := providerModelsCacheMap[key]
+	cached := catalog.providerModelsCacheMap[key]
 	cached.UpdatedAt = time.Now().Add(-2 * time.Hour).Unix()
-	providerModelsCacheMap[key] = cached
-	providerModelsMu.Unlock()
+	catalog.providerModelsCacheMap[key] = cached
+	catalog.providerModelsMu.Unlock()
 
-	second, err := QueryModelsForConfig(t.Context(), cfg)
+	second, err := catalog.QueryModelsForConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("stale query: %v", err)
 	}
@@ -114,15 +104,38 @@ func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
 	}
 }
 
-func TestFetchOpenAIModelsUsesResolvedRuntimeAPIKey(t *testing.T) {
-	oldClient := modelListHTTPClient
-	t.Cleanup(func() { modelListHTTPClient = oldClient })
-	oldModelsDevFetcher := modelsDevFetcher
-	t.Cleanup(func() { modelsDevFetcher = oldModelsDevFetcher })
-	modelsDevFetcher = func(context.Context) (map[string]int64, error) {
-		return map[string]int64{}, nil
+func TestModelCatalogInstancesOwnFetchersAndCaches(t *testing.T) {
+	cfg := &config.Config{Provider: "openrouter"}
+	first := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	second := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	firstCalls, secondCalls := 0, 0
+	first.providerCatalogFetcher = func(context.Context, string, *config.Config) ([]ModelMetadata, error) {
+		firstCalls++
+		return []ModelMetadata{{ID: "first-model"}}, nil
 	}
-	modelListHTTPClient = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	second.providerCatalogFetcher = func(context.Context, string, *config.Config) ([]ModelMetadata, error) {
+		secondCalls++
+		return []ModelMetadata{{ID: "second-model"}}, nil
+	}
+
+	firstModels, err := first.ListModelsForConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("first catalog query: %v", err)
+	}
+	secondModels, err := second.ListModelsForConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("second catalog query: %v", err)
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("fetch calls = first %d/second %d, want one per catalog", firstCalls, secondCalls)
+	}
+	if firstModels[0].ID != "first-model" || secondModels[0].ID != "second-model" {
+		t.Fatalf("catalog models = %#v / %#v, want isolated results", firstModels, secondModels)
+	}
+}
+
+func TestFetchOpenAIModelsUsesResolvedRuntimeAPIKey(t *testing.T) {
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		if got, want := req.URL.String(), "https://api.openai.com/v1/models"; got != want {
 			t.Fatalf("catalog URL = %q, want %q", got, want)
 		}
@@ -135,8 +148,12 @@ func TestFetchOpenAIModelsUsesResolvedRuntimeAPIKey(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir(), HTTPClient: client})
+	catalog.modelsDevFetcher = func(context.Context) (map[string]int64, error) {
+		return map[string]int64{}, nil
+	}
 
-	models, err := fetchModels(t.Context(), "openai", &config.Config{
+	models, err := catalog.fetchModels(t.Context(), "openai", &config.Config{
 		Provider:               "openai",
 		APIKeyOverride:         "runtime-key",
 		APIKeyOverrideProvider: "openai",
@@ -166,7 +183,8 @@ func TestFetchOpenAICompatibleModelsUsesCustomAuthEnvEndpointAndHeaders(t *testi
 	}))
 	defer server.Close()
 
-	models, err := fetchModels(t.Context(), OpenAICompatibleID, &config.Config{
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	models, err := catalog.fetchModels(t.Context(), OpenAICompatibleID, &config.Config{
 		Provider:   OpenAICompatibleID,
 		Endpoint:   server.URL + "/v1",
 		AuthEnvVar: "ION_TEST_CATALOG_KEY",
@@ -185,16 +203,12 @@ func TestFetchOpenAICompatibleModelsUsesCustomAuthEnvEndpointAndHeaders(t *testi
 func TestQueryAvailableModelsFiltersUnconfiguredProviders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "configured")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		return []ModelMetadata{{ID: provider + "-model", Provider: provider}}, nil
 	}
 
-	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+	result, err := catalog.QueryAvailableModels(t.Context(), ModelCatalogQuery{
 		Providers: []string{"openai", "openrouter"},
 	})
 	if err != nil {
@@ -210,7 +224,8 @@ func TestQueryAvailableModelsFiltersUnconfiguredProviders(t *testing.T) {
 
 func TestQueryAvailableModelsSkipsOpenAICompatibleWithoutConfiguredAuth(t *testing.T) {
 	t.Setenv("ION_TEST_COMPATIBLE_KEY", "")
-	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	result, err := catalog.QueryAvailableModels(t.Context(), ModelCatalogQuery{
 		Config: &config.Config{
 			Provider:   OpenAICompatibleID,
 			Endpoint:   "http://127.0.0.1:8080/v1",
@@ -230,18 +245,14 @@ func TestQueryAvailableModelsCanIncludeDefaultLocalProviders(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "configured")
 	t.Setenv("OLLAMA_HOST", "")
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 	var queried sync.Map
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		queried.Store(provider, true)
 		return []ModelMetadata{{ID: provider + "-model"}}, nil
 	}
 
-	result, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+	result, err := catalog.QueryAvailableModels(t.Context(), ModelCatalogQuery{
 		Config:       &config.Config{Provider: "openai"},
 		Providers:    []string{"openai", "ollama"},
 		IncludeLocal: true,
@@ -261,14 +272,10 @@ func TestQueryAvailableModelsQueriesProvidersConcurrentlyAndInOrder(t *testing.T
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		started <- provider
 		select {
 		case <-release:
@@ -284,10 +291,10 @@ func TestQueryAvailableModelsQueriesProvidersConcurrentlyAndInOrder(t *testing.T
 	}
 	done := make(chan queryResult, 1)
 	go func() {
-		catalog, err := QueryAvailableModels(t.Context(), ModelCatalogQuery{
+		result, err := catalog.QueryAvailableModels(t.Context(), ModelCatalogQuery{
 			Providers: []string{"openai", "openrouter"},
 		})
-		done <- queryResult{catalog: catalog, err: err}
+		done <- queryResult{catalog: result, err: err}
 	}()
 
 	seen := make(map[string]struct{}, 2)
@@ -334,7 +341,8 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
-	_, err := ListModelsForConfig(t.Context(), nil)
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	_, err := catalog.ListModelsForConfig(t.Context(), nil)
 	if err == nil || err.Error() != "model provider config is required" {
 		t.Fatalf("ListModelsForConfig(nil) error = %v", err)
 	}
@@ -342,16 +350,12 @@ func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
 
 func TestListModelsForConfigWrapsDeadlineWithoutRawContextText(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	providerModelsOnce = sync.Once{}
-	providerModelsCacheMap = nil
-
-	oldFetcher := providerCatalogFetcher
-	t.Cleanup(func() { providerCatalogFetcher = oldFetcher })
-	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	catalog.providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		return nil, context.DeadlineExceeded
 	}
 
-	_, err := ListModelsForConfig(t.Context(), &config.Config{Provider: "openrouter"})
+	_, err := catalog.ListModelsForConfig(t.Context(), &config.Config{Provider: "openrouter"})
 	if err == nil {
 		t.Fatal("ListModelsForConfig returned nil error")
 	}
@@ -397,27 +401,26 @@ func TestCachedFreshForConfigExpiresLocalCatalogsSooner(t *testing.T) {
 
 func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 	tests := []struct {
-		provider string
-		target   *providerModelFetcher
+		provider  string
+		configure func(*ModelCatalog, providerModelFetcher)
 	}{
-		{provider: "anthropic", target: &anthropicFetcher},
-		{provider: "openai", target: &openAIFetcher},
-		{provider: "openrouter", target: &openRouterFetcher},
-		{provider: "gemini", target: &geminiFetcher},
-		{provider: "ollama", target: &ollamaFetcher},
+		{provider: "anthropic", configure: func(c *ModelCatalog, f providerModelFetcher) { c.anthropicFetcher = f }},
+		{provider: "openai", configure: func(c *ModelCatalog, f providerModelFetcher) { c.openAIFetcher = f }},
+		{provider: "openrouter", configure: func(c *ModelCatalog, f providerModelFetcher) { c.openRouterFetcher = f }},
+		{provider: "gemini", configure: func(c *ModelCatalog, f providerModelFetcher) { c.geminiFetcher = f }},
+		{provider: "ollama", configure: func(c *ModelCatalog, f providerModelFetcher) { c.ollamaFetcher = f }},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.provider, func(t *testing.T) {
 			called := false
-			original := *tc.target
-			*tc.target = func(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+			catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+			tc.configure(catalog, func(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 				called = true
 				return []ModelMetadata{{ID: tc.provider + "-model"}}, nil
-			}
-			defer func() { *tc.target = original }()
+			})
 
-			models, err := fetchModels(
+			models, err := catalog.fetchModels(
 				context.Background(),
 				tc.provider,
 				&config.Config{Provider: tc.provider},
@@ -445,7 +448,8 @@ func TestFetchModelsUsesConfiguredOpenAICompatibleEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	models, err := fetchModels(context.Background(), "openai-compatible", &config.Config{
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	models, err := catalog.fetchModels(context.Background(), "openai-compatible", &config.Config{
 		Provider: "openai-compatible",
 		Endpoint: server.URL,
 	})
@@ -458,7 +462,8 @@ func TestFetchModelsUsesConfiguredOpenAICompatibleEndpoint(t *testing.T) {
 }
 
 func TestFetchModelsRejectsUnknownProviderWithoutCatalog(t *testing.T) {
-	_, err := fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	_, err := catalog.fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
 	if err == nil {
 		t.Fatal("expected unknown provider without configured catalog to fail")
 	}

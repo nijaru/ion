@@ -93,7 +93,7 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-	resolved := resolveScopedModelPatterns(context.Background(), cfg)
+	resolved := m.resolveScopedModelPatterns(context.Background(), cfg)
 	if len(resolved) == 0 {
 		return m, m.terminalCommit().Entries(systemEntry("No scoped models configured"))
 	}

@@ -92,6 +92,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	applyCLITrustModeOverride(cfg, cli.trustModeOverride())
 	cfg.APIKeyOverride = cli.apiKeyOverride()
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
+	catalog := llm.NewModelCatalog(llm.ModelCatalogOptions{})
 	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
 		cli.resumeShortID() != "" || cli.continueRequested() || openResumePicker
 	forkRequested := cli.forkRequested()
@@ -190,7 +191,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if cli.listModelsRequested() {
-		if err := runListModels(ctx, stdout, stderr, cfg, listModelsSearch); err != nil {
+		if err := runListModels(ctx, stdout, stderr, cfg, listModelsSearch, catalog); err != nil {
 			fmt.Fprintf(stderr, "--list-models: %v\n", err)
 			return 1
 		}
@@ -448,6 +449,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 
 	model := app.New(b, sess, store, cwd, branch, displayVersion, switcher).
 		WithRunner(runner).
+		WithModelCatalog(catalog).
 		WithJobs(tuiJobController{manager: jobs}).
 		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
 		WithConfigLoader(reloadConfig).

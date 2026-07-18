@@ -13,6 +13,25 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+type modelCatalogStub struct {
+	list  func(context.Context, *config.Config) ([]llm.ModelMetadata, error)
+	query func(context.Context, llm.ModelCatalogQuery) (llm.ModelCatalogResult, error)
+}
+
+func (s modelCatalogStub) ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]llm.ModelMetadata, error) {
+	if s.list == nil {
+		return nil, nil
+	}
+	return s.list(ctx, cfg)
+}
+
+func (s modelCatalogStub) QueryAvailableModels(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+	if s.query == nil {
+		return llm.ModelCatalogResult{}, nil
+	}
+	return s.query(ctx, query)
+}
+
 func TestModelSelectionForNonListingProviderOpensManualPrompt(t *testing.T) {
 	model := readyModel(t).WithConfig(&config.Config{Provider: "moonshot"})
 
@@ -88,15 +107,13 @@ func TestModelPickerKeepsDuplicateIDsBoundToTheirProvider(t *testing.T) {
 }
 
 func TestModelPickerLoadHonorsOverlayCancellation(t *testing.T) {
-	previous := queryAvailableModels
-	t.Cleanup(func() { queryAvailableModels = previous })
-	queryAvailableModels = func(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+	modelCatalog := modelCatalogStub{query: func(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
 		<-ctx.Done()
 		return llm.ModelCatalogResult{}, ctx.Err()
-	}
+	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	model := readyModel(t)
+	model := readyModel(t).WithModelCatalog(modelCatalog)
 	model.Picker.Overlay = &pickerOverlayState{
 		purpose:     pickerPurposeModel,
 		request:     1,
@@ -108,7 +125,7 @@ func TestModelPickerLoadHonorsOverlayCancellation(t *testing.T) {
 	loadCfg := *model.Picker.Overlay.cfg
 	done := make(chan any, 1)
 	go func() {
-		done <- loadAllModelPickerItems(1, &loadCfg, PresetPrimary, ctx)()
+		done <- loadAllModelPickerItems(1, &loadCfg, PresetPrimary, ctx, model.Model.Catalog)()
 	}()
 
 	model.pickerReducer().closeOverlay()
@@ -183,15 +200,13 @@ func TestProviderSetupSaveLeadsToManualModelPrompt(t *testing.T) {
 }
 
 func TestProviderSetupDoesNotProbeCatalogSynchronously(t *testing.T) {
-	previous := listModelsForConfig
-	listModelsForConfig = func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
+	modelCatalog := modelCatalogStub{list: func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
 		t.Fatal("provider setup synchronously probed model catalog")
 		return nil, nil
-	}
-	defer func() { listModelsForConfig = previous }()
+	}}
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	model := readyModel(t).WithConfig(&config.Config{Provider: "openai"})
+	model := readyModel(t).WithModelCatalog(modelCatalog).WithConfig(&config.Config{Provider: "openai"})
 	updated, cmd := model.handleProviderCommand("openai")
 	if cmd == nil {
 		t.Fatal("provider setup did not start asynchronous model loading")
