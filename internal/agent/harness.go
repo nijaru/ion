@@ -47,8 +47,10 @@ type Harness struct {
 	nextTurn []session.Message
 
 	// queue drain modes (Pi: one-at-a-time vs all)
-	steeringMode string // "one-at-a-time" | "all"
-	followUpMode string // "one-at-a-time" | "all"
+	steeringMode     string // "one-at-a-time" | "all"
+	followUpMode     string // "one-at-a-time" | "all"
+	queueCapacity    int
+	maxParallelTools int
 
 	// single active run
 	phase     Phase
@@ -104,6 +106,10 @@ var (
 )
 
 type Phase string
+
+// ErrQueueFull reports that a bounded runtime input queue cannot accept more
+// messages. The caller can retry or surface the rejection to the user.
+var ErrQueueFull = errors.New("runtime input queue is full")
 
 const (
 	PhaseIdle       Phase = "idle"
@@ -169,6 +175,12 @@ type HarnessConfig struct {
 	SteeringMode string
 	// FollowUpMode controls how follow-up messages are drained (default "one-at-a-time").
 	FollowUpMode string
+	// QueueCapacity bounds each steer, follow-up, and next-turn queue. Zero uses
+	// the runtime default.
+	QueueCapacity int
+	// MaxParallelTools bounds tool execution workers for one turn. Zero uses the
+	// runtime default.
+	MaxParallelTools int
 
 	// Metrics collects runtime statistics. When nil, metrics are not recorded.
 	Metrics *Metrics
@@ -207,35 +219,43 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		}
 	}
 	h := &Harness{
-		session:         cfg.Session,
-		store:           cfg.Store,
-		durable:         cfg.Durable,
-		tools:           toolMap,
-		active:          active,
-		model:           cfg.Model,
-		thinking:        cfg.Thinking,
-		sysprompt:       cfg.SysPrompt,
-		log:             cfg.Logger,
-		metrics:         cfg.Metrics,
-		promptTemplates: cfg.PromptTemplates,
-		stream:          cfg.StreamFn,
-		auth:            cfg.Auth,
-		transport:       cfg.Transport,
-		timeout:         cfg.Timeout,
-		phase:           PhaseIdle,
-		events:          cfg.Events,
-		externalEvents:  cfg.Events != nil,
-		done:            make(chan struct{}),
-		compaction:      cfg.Compaction,
-		contextWindow:   cfg.ContextWindow,
-		steeringMode:    cfg.SteeringMode,
-		followUpMode:    cfg.FollowUpMode,
+		session:          cfg.Session,
+		store:            cfg.Store,
+		durable:          cfg.Durable,
+		tools:            toolMap,
+		active:           active,
+		model:            cfg.Model,
+		thinking:         cfg.Thinking,
+		sysprompt:        cfg.SysPrompt,
+		log:              cfg.Logger,
+		metrics:          cfg.Metrics,
+		promptTemplates:  cfg.PromptTemplates,
+		stream:           cfg.StreamFn,
+		auth:             cfg.Auth,
+		transport:        cfg.Transport,
+		timeout:          cfg.Timeout,
+		phase:            PhaseIdle,
+		events:           cfg.Events,
+		externalEvents:   cfg.Events != nil,
+		done:             make(chan struct{}),
+		compaction:       cfg.Compaction,
+		contextWindow:    cfg.ContextWindow,
+		steeringMode:     cfg.SteeringMode,
+		followUpMode:     cfg.FollowUpMode,
+		queueCapacity:    cfg.QueueCapacity,
+		maxParallelTools: cfg.MaxParallelTools,
 	}
 	if h.steeringMode == "" {
 		h.steeringMode = "one-at-a-time"
 	}
 	if h.followUpMode == "" {
 		h.followUpMode = "one-at-a-time"
+	}
+	if h.queueCapacity <= 0 {
+		h.queueCapacity = 64
+	}
+	if h.maxParallelTools <= 0 {
+		h.maxParallelTools = 8
 	}
 	if h.events == nil {
 		h.events = make(chan session.Event, 256)
@@ -845,13 +865,14 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 	h.mu.Unlock()
 
 	return LoopConfig{
-		Model:     model,
-		Thinking:  thinking,
-		SessionID: h.session.Meta().ID,
-		Tools:     tools,
-		StreamFn:  h.wrapStreamFn(),
-		Convert:   DefaultConvert,
-		Auth:      h.auth,
+		Model:            model,
+		Thinking:         thinking,
+		SessionID:        h.session.Meta().ID,
+		Tools:            tools,
+		MaxParallelTools: h.maxParallelTools,
+		StreamFn:         h.wrapStreamFn(),
+		Convert:          DefaultConvert,
+		Auth:             h.auth,
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
 			msgs := h.drainQueued(&h.steer, h.steeringMode)
@@ -1222,6 +1243,17 @@ func (h *Harness) drainNextTurn() []session.Message {
 	return msgs
 }
 
+// appendQueued appends one user-controlled message to a bounded runtime queue.
+// The caller must hold h.mu. Keeping the bound at the owner makes queue
+// capacity a lifecycle invariant instead of a UI convention.
+func (h *Harness) appendQueued(queue *[]session.Message, message session.Message) error {
+	if len(*queue) >= h.queueCapacity {
+		return ErrQueueFull
+	}
+	*queue = append(*queue, message)
+	return nil
+}
+
 // Steer queues a message to be injected before the next assistant response.
 // Returns an error if the harness is idle (Pi: steer/followUp reject while idle).
 func (h *Harness) Steer(text string, images ...session.ImageContent) error {
@@ -1234,7 +1266,10 @@ func (h *Harness) Steer(text string, images ...session.ImageContent) error {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot steer while idle")
 	}
-	h.steer = append(h.steer, newUserMessage(text, cloneImageContents(images), time.Now()))
+	if err := h.appendQueued(&h.steer, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
+		h.mu.Unlock()
+		return fmt.Errorf("queue steer: %w", err)
+	}
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
@@ -1259,7 +1294,10 @@ func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
 		h.mu.Unlock()
 		return fmt.Errorf("cannot follow up while idle")
 	}
-	h.followUp = append(h.followUp, newUserMessage(text, cloneImageContents(images), time.Now()))
+	if err := h.appendQueued(&h.followUp, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
+		h.mu.Unlock()
+		return fmt.Errorf("queue follow-up: %w", err)
+	}
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
@@ -1272,14 +1310,17 @@ func (h *Harness) FollowUp(text string, images ...session.ImageContent) error {
 	return nil
 }
 
-// NextTurn queues a message to be prepended to the next prompt (always allowed).
-func (h *Harness) NextTurn(text string, images ...session.ImageContent) {
+// NextTurn queues a message to be prepended to the next prompt.
+func (h *Harness) NextTurn(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return
+		return errors.New("harness is closed")
 	}
-	h.nextTurn = append(h.nextTurn, newUserMessage(text, cloneImageContents(images), time.Now()))
+	if err := h.appendQueued(&h.nextTurn, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
+		h.mu.Unlock()
+		return fmt.Errorf("queue next turn: %w", err)
+	}
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
@@ -1289,6 +1330,7 @@ func (h *Harness) NextTurn(text string, images ...session.ImageContent) {
 	h.mu.Unlock()
 	// emit outside lock — emit() acquires h.mu internally for listener snapshot
 	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	return nil
 }
 
 // emitQueueUpdate emits a QueueUpdate event for tests and internal callers

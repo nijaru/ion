@@ -65,6 +65,10 @@ type LoopConfig struct {
 	// Default: 25.
 	MaxToolIterations int
 
+	// MaxParallelTools bounds the number of tool executors active for one
+	// assistant tool batch. Zero uses the runtime default.
+	MaxParallelTools int
+
 	// DrainSteer returns queued steering messages (injected before next assistant response).
 	DrainSteer func() []session.Message
 
@@ -178,8 +182,9 @@ type Runtime interface {
 	// Returns an error if the harness is idle.
 	FollowUp(text string, images ...session.ImageContent) error
 
-	// NextTurn queues a message to start a new turn.
-	NextTurn(text string, images ...session.ImageContent)
+	// NextTurn queues a message to start a new turn. It rejects closed or full
+	// queues rather than silently losing user input.
+	NextTurn(text string, images ...session.ImageContent) error
 
 	// Abort cancels the current turn and clears steering/follow-up queues.
 	// Returns the cleared messages.

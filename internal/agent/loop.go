@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -400,7 +401,16 @@ func executeToolCallsSequential(
 	var results []session.ToolResultMessage
 
 	for _, tc := range toolCalls {
-		result := executeOneToolCall(ctx, snapshot, assistantMsg, tc, cfg, emit, signal)
+		argsRaw, _ := json.Marshal(tc.Arguments)
+		emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsRaw})
+		prepared, preparationResult := prepareToolCall(ctx, snapshot, assistantMsg, tc, cfg, signal)
+		var result session.ToolResultMessage
+		if preparationResult != nil {
+			result = *preparationResult
+			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
+		} else {
+			result = executePreparedToolCall(ctx, snapshot, assistantMsg, prepared, cfg, emit, signal)
+		}
 		results = append(results, result)
 		if isAborted(signal) {
 			break
@@ -617,16 +627,45 @@ func executeToolCallsParallel(
 		}
 	}
 
-	// Concurrent execution phase.
-	ch := make(chan indexedResult, len(prepared))
-	for _, p := range prepared {
-		go func(pc preparedToolCall) {
-			ch <- indexedResult{pc.index, executePreparedToolCall(ctx, snapshot, assistantMsg, pc, cfg, emit, signal)}
-		}(p)
+	// Concurrent execution phase. Use a fixed worker pool so a single model
+	// response cannot create an unbounded number of goroutines or external
+	// effects. Results are indexed and returned in model order.
+	workerLimit := cfg.MaxParallelTools
+	if workerLimit <= 0 {
+		workerLimit = 8
 	}
-	for range prepared {
-		r := <-ch
+	if workerLimit > len(prepared) {
+		workerLimit = len(prepared)
+	}
+	jobs := make(chan preparedToolCall)
+	ch := make(chan indexedResult, len(prepared))
+	eventBuffers := make([][]session.Event, len(toolCalls))
+	var workers sync.WaitGroup
+	workers.Add(workerLimit)
+	for i := 0; i < workerLimit; i++ {
+		go func() {
+			defer workers.Done()
+			for p := range jobs {
+				bufferedEmit := func(event session.Event) {
+					eventBuffers[p.index] = append(eventBuffers[p.index], event)
+				}
+				ch <- indexedResult{p.index, executePreparedToolCall(ctx, snapshot, assistantMsg, p, cfg, bufferedEmit, signal)}
+			}
+		}()
+	}
+	for _, p := range prepared {
+		jobs <- p
+	}
+	close(jobs)
+	workers.Wait()
+	close(ch)
+	for r := range ch {
 		results[r.index] = r.result
+	}
+	for _, p := range prepared {
+		for _, event := range eventBuffers[p.index] {
+			emit(event)
+		}
 	}
 
 	// Pi: terminate when every finalized call has result.terminate === true.
@@ -739,201 +778,6 @@ func applyToolCallPatch(result *session.ToolResultMessage, patch *ToolCallPatch)
 	if patch.Terminate != nil {
 		result.Terminate = *patch.Terminate
 	}
-}
-
-func executeOneToolCall(
-	ctx context.Context,
-	snapshot TurnContext,
-	assistantMsg session.AssistantMessage,
-	tc *session.ToolCall,
-	cfg LoopConfig,
-	emit func(session.Event),
-	signal <-chan struct{},
-) session.ToolResultMessage {
-	argsJSON, _ := json.Marshal(tc.Arguments)
-	emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsJSON})
-
-	// Find the tool.
-	var tool *Tool
-	for i := range cfg.Tools {
-		if cfg.Tools[i].Name == tc.Name {
-			tool = &cfg.Tools[i]
-			break
-		}
-	}
-
-	if tool == nil {
-		result := session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: "tool not found: " + tc.Name}},
-			IsError:    true,
-			Timestamp:  time.Now(),
-		}
-		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-		return result
-	}
-
-	// Pi: prepareToolCallArguments normalizes args before validation.
-	// Reference: Pi agent-loop.js prepareToolCallArguments (line 360).
-	args, prepareErr := prepareToolArguments(tool, tc.Arguments)
-	if prepareErr != nil {
-		result := session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("invalid prepared arguments: %v", prepareErr)}},
-			IsError:    true, Timestamp: time.Now(),
-		}
-		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-		return result
-	}
-
-	// Pi: validateToolArguments checks schema and returns coerced arguments.
-	if tool.Parameters != nil {
-		var err error
-		args, err = coerceAndValidateArgs(tool.Parameters, args)
-		if err != nil {
-			result := session.ToolResultMessage{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("invalid arguments: %v", err)}},
-				IsError:    true,
-				Timestamp:  time.Now(),
-			}
-			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-			return result
-		}
-	}
-
-	argsRaw, marshalErr := json.Marshal(args)
-	if marshalErr != nil {
-		result := session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("invalid arguments: %v", marshalErr)}},
-			IsError:    true, Timestamp: time.Now(),
-		}
-		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-		return result
-	}
-
-	// BeforeToolCall hook.
-	if cfg.BeforeToolCall != nil {
-		decision, hookErr := invokeBeforeToolCall(cfg, ToolCallContext{
-			RunContext:       ctx,
-			AssistantMessage: assistantMsg,
-			ToolCall:         tc,
-			Args:             argsRaw,
-			Context:          snapshot,
-		})
-		if hookErr != nil {
-			result := session.ToolResultMessage{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Content:    []session.Content{session.TextContent{Text: hookErr.Error()}},
-				IsError:    true, Timestamp: time.Now(),
-			}
-			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-			return result
-		}
-		if isAborted(signal) {
-			result := session.ToolResultMessage{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
-				IsError:    true,
-				Timestamp:  time.Now(),
-			}
-			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-			return result
-		}
-		if decision != nil && decision.Block {
-			result := session.ToolResultMessage{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Content:    []session.Content{session.TextContent{Text: decision.Reason}},
-				IsError:    true,
-				Timestamp:  time.Now(),
-			}
-			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-			return result
-		}
-	}
-
-	// Pi: check abort after BeforeToolCall.
-	// Reference: Pi agent-loop.js prepareToolCall (line 398).
-	if isAborted(signal) {
-		result := session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
-			IsError:    true,
-			Timestamp:  time.Now(),
-		}
-		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-		return result
-	}
-
-	// Execute with panic recovery.
-	progress := func(p session.ToolPartial) {
-		emit(session.ToolExecUpdate{ToolCallID: tc.ID, Partial: p})
-	}
-
-	var result session.ToolResultMessage
-	var err error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				result = session.ToolResultMessage{
-					ToolCallID: tc.ID,
-					ToolName:   tc.Name,
-					Content:    []session.Content{session.TextContent{Text: fmt.Sprintf("tool panic: %v", r)}},
-					IsError:    true,
-					Timestamp:  time.Now(),
-				}
-			}
-		}()
-		result, err = tool.Execute(ctx, tc.ID, argsRaw, signal, progress)
-	}()
-	if err != nil {
-		result = session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: err.Error()}},
-			IsError:    true,
-			Timestamp:  time.Now(),
-		}
-	}
-
-	// AfterToolCall hook. Errors in the hook produce an error tool result rather
-	// than crashing the turn — matching Pi's finalizeExecutedToolCall try/catch.
-	// Reference: Pi agent-loop.js finalizeExecutedToolCall (line 450).
-	if cfg.AfterToolCall != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					result = session.ToolResultMessage{
-						ToolCallID: tc.ID,
-						ToolName:   tc.Name,
-						Content: []session.Content{
-							session.TextContent{Text: fmt.Sprintf("afterToolCall hook panic: %v", r)},
-						},
-						IsError:   true,
-						Timestamp: time.Now(),
-					}
-				}
-			}()
-			patch := cfg.AfterToolCall(ToolCallResultContext{
-				ToolCall: tc,
-				Args:     argsRaw,
-				Result:   result,
-			})
-			applyToolCallPatch(&result, patch)
-		}()
-	}
-
-	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
-	return result
 }
 
 // validateArgs validates the JSON Schema used by a tool before execution.

@@ -242,7 +242,7 @@ func (r *smokeRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.backend.FollowUp(text)
 	return nil
 }
-func (r *smokeRunner) NextTurn(string, ...session.ImageContent) {}
+func (r *smokeRunner) NextTurn(string, ...session.ImageContent) error { return nil }
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }

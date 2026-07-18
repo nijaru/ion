@@ -130,7 +130,7 @@ func (s *printSession) Prompt(_ context.Context, _ string, _ ...session.ImageCon
 }
 func (s *printSession) Steer(_ string, _ ...session.ImageContent) error    { return nil }
 func (s *printSession) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
-func (s *printSession) NextTurn(_ string, _ ...session.ImageContent)       {}
+func (s *printSession) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
 func (s *printSession) Abort() ([]session.Message, []session.Message, error) {
 	s.cancelled++
 	return nil, nil, nil

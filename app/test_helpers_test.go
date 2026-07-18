@@ -157,7 +157,7 @@ func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.Im
 }
 func (r *stubRunner) Steer(_ string, _ ...session.ImageContent) error    { return nil }
 func (r *stubRunner) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
-func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent)       {}
+func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
 	return nil, nil, nil
