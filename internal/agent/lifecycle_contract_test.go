@@ -476,7 +476,7 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 
 	events, err := collectWithSubscribe(t, h, "fail fast")
 	var turnErr *TurnError
-	if !errors.As(err, &turnErr) || turnErr.Outcome != TurnFailed {
+	if !errors.As(err, &turnErr) || turnErr.Kind != KindTool || turnErr.Recovery != RecoveryAbort {
 		t.Fatalf("turn error = %v, want failed TurnError", err)
 	}
 	// Must still get exactly one AgentEnd despite failure, proving loop didn't need store.

@@ -237,27 +237,8 @@ const (
 
 // TurnError is returned when a turn produced a terminal assistant message but
 // did not complete successfully. The assistant message remains available to
-// the event/session projections, while callers can no longer mistake an
-// aborted or failed turn for a successful response.
-type TurnError struct {
-	Outcome TurnOutcome
-	TurnID  string
-	Err     error
-}
-
-func (e *TurnError) Error() string {
-	if e == nil || e.Err == nil {
-		return string(e.Outcome)
-	}
-	return string(e.Outcome) + ": " + e.Err.Error()
-}
-
-func (e *TurnError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Err
-}
+// TurnError now lives in state.go with the phase machine.
+// It carries Phase, Kind, RecoveryAction, and Cause.
 
 // Runtime is the narrow turn and event surface consumed by the TUI and CLI.
 //

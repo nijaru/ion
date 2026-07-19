@@ -111,19 +111,8 @@ var (
 	_ ActionRecovery   = (*Harness)(nil)
 )
 
-type Phase string
-
-// ErrQueueFull reports that a bounded runtime input queue cannot accept more
-// messages. The caller can retry or surface the rejection to the user.
-var ErrQueueFull = errors.New("runtime input queue is full")
-
-const (
-	PhaseIdle       Phase = "idle"
-	PhaseTurn       Phase = "turn"
-	PhaseCompaction Phase = "compaction"
-	PhaseBranchNav  Phase = "branch_summary"
-	PhaseSessionOp  Phase = "session_operation"
-)
+// Phase, ErrQueueFull, and ErrRuntimeClosed now live in state.go.
+// The new Phase is a uint8 enum with an explicit state machine.
 
 // beginExclusive reserves the controller for a non-turn operation. The phase
 // and cancellation handles are changed under the state lock; the operation
@@ -696,13 +685,11 @@ func (h *Harness) runPrompt(ctx context.Context, text string, images ...session.
 		return nil, fmt.Errorf("no assistant message produced")
 	}
 	if reason := terminalTurnFailure(msgs); reason != "" {
-		h.mu.Lock()
-		turnID := h.activeTurnID
-		h.mu.Unlock()
 		return assistant, &TurnError{
-			Outcome: turnOutcomeForMessages(msgs),
-			TurnID:  turnID,
-			Err:     errors.New(reason),
+			Phase:    PhaseStreaming,
+			Kind:     KindTool,
+			Cause:    errors.New(reason),
+			Recovery: RecoveryAbort,
 		}
 	}
 	return assistant, nil

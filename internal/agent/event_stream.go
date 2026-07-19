@@ -35,11 +35,7 @@ type EventEnvelope struct {
 	Event    session.Event
 }
 
-var (
-	ErrSubscriptionLagged = errors.New("runtime event subscription lagged")
-	ErrRuntimeClosed      = errors.New("runtime is closed")
-	ErrSnapshotChanged    = errors.New("runtime snapshot changed during subscription")
-)
+// ErrRuntimeClosed is now in state.go.
 
 // QueueSnapshot is the immutable queued-input portion of a runtime snapshot.
 type QueueSnapshot struct {

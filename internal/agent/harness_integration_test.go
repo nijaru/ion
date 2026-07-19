@@ -388,7 +388,7 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 	// Turn 1 fails.
 	msg1, err := h.Prompt(context.Background(), "first")
 	var turnErr *TurnError
-	if !errors.As(err, &turnErr) || turnErr.Outcome != TurnFailed {
+	if !errors.As(err, &turnErr) || turnErr.Kind != KindTool || turnErr.Recovery != RecoveryAbort {
 		t.Fatalf("turn 1 error = %v, want failed TurnError", err)
 	}
 	if msg1 == nil {
