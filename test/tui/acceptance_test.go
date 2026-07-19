@@ -34,11 +34,15 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	program.Send(tea.KeyPressMsg{Text: "run the deterministic tool"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, provider.toolStarted, "tool execution start")
-	// ToolExecStart is emitted before Execute; allow the event pump to put the
-	// TUI into its busy state before testing the configured steer route.
-	time.Sleep(100 * time.Millisecond)
+	// ToolExecStart is emitted before Execute; wait for the rendered busy state
+	// before testing the configured steer route so this remains deterministic on
+	// a loaded test runner.
+	waitForAcceptanceOutput(t, output, "Streaming...", "busy TUI state")
 	program.Send(tea.KeyPressMsg{Text: "steer-now"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// tea.Program.Send is asynchronous; let the runtime-owned steer command
+	// reach the harness before releasing the blocked tool.
+	time.Sleep(100 * time.Millisecond)
 	close(provider.release)
 
 	waitForAcceptanceOutput(t, output, "tool-output", "persisted tool output")
@@ -112,8 +116,9 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		program.Send(tea.KeyPressMsg{Text: "cancel this turn"})
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		waitAcceptanceSignal(t, provider.streamStarted, "provider stream start")
-		time.Sleep(100 * time.Millisecond)
+		waitForAcceptanceOutput(t, output, "Streaming...", "cancelable TUI state")
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+		time.Sleep(100 * time.Millisecond)
 		waitForAcceptanceOutput(t, output, "Canceled by user", "cancel settlement")
 		program.Quit()
 		model := waitAcceptanceProgram(t, result)

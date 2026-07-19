@@ -332,7 +332,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	)
 	if err != nil {
 		if printRequested || b == nil || b.Name() != "setup" {
-			closeErr := errors.Join(store.Close(), jobs.Close())
+			closeErr := errors.Join(jobs.Close(), store.Close())
 			if closeErr != nil {
 				fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
 			}
@@ -357,7 +357,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 					message = status
 				}
 			}
-			closeErr := errors.Join(store.Close(), jobs.Close())
+			closeErr := errors.Join(jobs.Close(), store.Close())
 			if closeErr != nil {
 				fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
 			}
@@ -375,8 +375,8 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		if runErr == nil {
 			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
 		}
-		closeErr := closeRuntimeHandles(runner, store)
-		closeErr = errors.Join(closeErr, jobs.Close())
+		closeErr := jobs.Close()
+		closeErr = errors.Join(closeErr, closeRuntimeHandles(runner, store))
 		if runErr != nil {
 			fmt.Fprintf(stderr, "print mode error: %v\n", runErr)
 			return 1
@@ -482,8 +482,8 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
-	closeErr := closeRuntimeHandles(agentToClose, store)
-	closeErr = errors.Join(closeErr, jobs.Close())
+	closeErr := jobs.Close()
+	closeErr = errors.Join(closeErr, closeRuntimeHandles(agentToClose, store))
 	if runErr != nil {
 		if closeErr != nil {
 			fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)

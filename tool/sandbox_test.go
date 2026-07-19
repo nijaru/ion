@@ -24,6 +24,13 @@ func TestPlanSandboxedBashOffUsesPlainBash(t *testing.T) {
 	}
 }
 
+func TestResolveSandboxModeDefaultsToAuto(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "")
+	if got := resolveSandboxMode(); got != SandboxAuto {
+		t.Fatalf("default sandbox mode = %s, want %s", got, SandboxAuto)
+	}
+}
+
 func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 	prevGOOS := sandboxGOOS
 	prevLookPath := sandboxLookPath
@@ -170,7 +177,7 @@ func TestExplicitBubblewrapFailsClosedOnUnsupportedPlatform(t *testing.T) {
 	}
 }
 
-func TestSandboxSummaryReportsAutoFallback(t *testing.T) {
+func TestSandboxSummaryReportsAutoUnavailable(t *testing.T) {
 	prevGOOS := sandboxGOOS
 	prevLookPath := sandboxLookPath
 	sandboxGOOS = "linux"
@@ -182,7 +189,24 @@ func TestSandboxSummaryReportsAutoFallback(t *testing.T) {
 		sandboxLookPath = prevLookPath
 	}()
 
-	if got := sandboxSummary(SandboxAuto); got != "auto: off (no backend)" {
-		t.Fatalf("summary = %q, want auto fallback", got)
+	if got := sandboxSummary(SandboxAuto); got != "auto: unavailable" {
+		t.Fatalf("summary = %q, want unavailable backend", got)
+	}
+}
+
+func TestPlanSandboxedBashAutoFailsClosedWithoutBackend(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	prevLookPath := sandboxLookPath
+	sandboxGOOS = "linux"
+	sandboxLookPath = func(string) (string, error) {
+		return "", errors.New("missing")
+	}
+	defer func() {
+		sandboxGOOS = prevGOOS
+		sandboxLookPath = prevLookPath
+	}()
+
+	if _, err := planSandboxedBash("/tmp/workspace", "pwd", SandboxAuto); err == nil {
+		t.Fatal("automatic sandbox unexpectedly fell back to unsandboxed bash")
 	}
 }

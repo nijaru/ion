@@ -916,7 +916,7 @@ func TestMemoryToolModeDefaultsOff(t *testing.T) {
 
 func TestNormalizeTrustMode(t *testing.T) {
 	for input, want := range map[string]string{
-		"":           "trusted",
+		"":           "confirm",
 		"trusted":    "trusted",
 		"local":      "trusted",
 		"confirm":    "confirm",
@@ -928,8 +928,8 @@ func TestNormalizeTrustMode(t *testing.T) {
 			t.Fatalf("NormalizeTrustMode(%q) = %q, want %q", input, got, want)
 		}
 	}
-	if got := (&Config{}).ToolTrustMode(); got != "trusted" {
-		t.Fatalf("default trust mode = %q, want trusted", got)
+	if got := (&Config{}).ToolTrustMode(); got != "confirm" {
+		t.Fatalf("default trust mode = %q, want confirm", got)
 	}
 	if got := (&Config{TrustMode: "confirm"}).ToolTrustMode(); got != "confirm" {
 		t.Fatalf("configured trust mode = %q, want confirm", got)

@@ -169,7 +169,7 @@ func toolSurfaceSummary(surface ToolSurface) string {
 }
 
 func runtimeStatusSummary(m Model) string {
-	lines := []string{"Permissions: trusted by default"}
+	lines := []string{"Permissions: confirm by default"}
 	if provider := m.runtimeProvider(); provider != "" {
 		lines = append(lines, "Provider: "+llm.DisplayName(provider)+" ("+provider+")")
 	}

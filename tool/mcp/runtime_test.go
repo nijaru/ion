@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -50,10 +51,10 @@ func TestOpenDiscoversAndClosesStdioRuntime(t *testing.T) {
 	if len(tools) != 1 || tools[0].Spec().Name != "mcp_test_echo" {
 		t.Fatalf("discovered tools = %#v, want namespaced echo", tools)
 	}
-	if _, ok, err := tools[0].(interface {
+	if requirement, ok, err := tools[0].(interface {
 		ApprovalRequirement(string) (Requirement, bool, error)
-	}).ApprovalRequirement(`{"msg":"hello"}`); err != nil || !ok {
-		t.Fatalf("external tool approval = %v, %v; want required", err, ok)
+	}).ApprovalRequirement(`{"msg":"hello"}`); err != nil || !ok || !strings.HasPrefix(requirement.MCPIdentity, "mcp:server:test:") {
+		t.Fatalf("external tool approval = %#v, %v, %v; want required server identity", requirement, err, ok)
 	}
 	text, err := tools[0].Execute(t.Context(), `{"msg":"hello"}`)
 	if err != nil || text != "echo: hello" {

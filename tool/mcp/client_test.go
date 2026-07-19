@@ -261,7 +261,7 @@ func TestWrapperApprovalRequirementUsesProtectedMCPPath(t *testing.T) {
 	}
 }
 
-func TestWrapperApprovalRequirementReturnsFalseForNonFileTools(t *testing.T) {
+func TestWrapperApprovalRequirementRequiresApprovalForOpaqueTools(t *testing.T) {
 	w := &wrapper{
 		client: (&Client{session: &fakeClientSession{}}).WithFilePolicy(&FilePolicy{}),
 		spec:   llmSpec("echo"),
@@ -271,8 +271,8 @@ func TestWrapperApprovalRequirementReturnsFalseForNonFileTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApprovalRequirement: %v", err)
 	}
-	if ok || req.Category != "" || req.Operation != "" || req.Resource != "" {
-		t.Fatalf("expected no approval requirement, got %#v ok=%v", req, ok)
+	if !ok || req.Category != "mcp" || req.Operation != "echo" || req.Resource != "echo" || req.MCPIdentity == "" {
+		t.Fatalf("opaque approval = %#v, ok=%v; want an MCP action identity", req, ok)
 	}
 }
 
@@ -288,7 +288,7 @@ func TestWrapperApprovalRequirementCanRequireOpaqueExternalTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApprovalRequirement: %v", err)
 	}
-	if !ok || req.Category != "external" || req.Operation != "remote_action" {
+	if !ok || req.Category != "external" || req.Operation != "remote_action" || req.MCPIdentity == "" {
 		t.Fatalf("approval = %#v, ok=%v; want opaque external requirement", req, ok)
 	}
 }

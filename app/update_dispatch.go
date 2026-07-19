@@ -257,6 +257,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		var snapshotCmd tea.Cmd
 		if msg.subscription.Snapshot.Resynced {
 			m.turnReducer().ClearActiveState(true)
+			m.turnReducer().RestoreRuntimePhase(msg.subscription.Snapshot.Phase)
 			snapshotCmd = m.terminalCommit().SwitchReplay(
 				nil,
 				msg.subscription.Snapshot.Branch,

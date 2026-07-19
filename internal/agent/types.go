@@ -32,7 +32,14 @@ type LoopConfig struct {
 	// SessionID is the stable session identity for provider-side caching/routing.
 	// It is distinct from the changing session-tree leaf ID.
 	SessionID string
-	Tools     []Tool
+	// TurnID scopes action invocation identity to one durable logical turn.
+	TurnID string
+	Tools  []Tool
+
+	// ActionBoundary is the runtime-owned effect gate. When configured, every
+	// tool marked RequiresAction must pass durable prepare/authorize/start and
+	// terminal recording before and after its Execute function.
+	ActionBoundary ActionBoundary
 
 	// StreamFn calls the LLM provider. The loop constructs an llm.Request
 	// and passes it here. The harness wraps this with auth/hooks.
@@ -84,6 +91,13 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  any // JSON Schema for the tool's arguments
+	// ReadOnly separates tool availability from the permission/effect boundary.
+	// A tool marked read-only does not create an external action record.
+	ReadOnly bool
+	// RequiresAction marks a tool as capable of an external effect. Production
+	// composition sets this explicitly; an action boundary rejects a marked
+	// tool that has no logical approval descriptor.
+	RequiresAction bool
 	// ApprovalRequirement classifies a prepared argument payload. A nil
 	// function means the tool is trusted without an interactive decision.
 	ApprovalRequirement func(json.RawMessage) (ApprovalRequirement, bool, error)
@@ -92,12 +106,64 @@ type Tool struct {
 	PrepareArgs         func(json.RawMessage) json.RawMessage
 }
 
+// ActionRequest is the normalized loop-to-runtime action handoff. The loop
+// owns schema validation; the runtime boundary owns canonical identity,
+// policy, durability, and the effect boundary.
+type ActionRequest struct {
+	ToolName     string
+	InvocationID string
+	SessionID    string
+	TurnID       string
+	Arguments    json.RawMessage
+	Requirement  ApprovalRequirement
+	Required     bool
+	CWD          string
+}
+
+// ActionToken is opaque execution authority returned only after the exact
+// action has been durably prepared and authorized.
+type ActionToken struct {
+	ID     string
+	Record session.ActionRecord
+}
+
+// ActionResult describes what the executor observed after crossing the start
+// boundary. A started action whose outcome cannot be durably finalized remains
+// recoverable as indeterminate in the journal.
+type ActionResult struct {
+	State          session.ActionState
+	ResultIdentity string
+	Error          string
+	CleanupOutcome string
+}
+
+// ActionInvoker is the only callback the boundary may use to invoke a tool.
+// The loop supplies the already validated tool implementation; the boundary
+// owns when that callback is allowed to cross the effect boundary.
+type ActionInvoker func(
+	ctx context.Context,
+	signal <-chan struct{},
+	progress func(session.ToolPartial),
+) (session.ToolResultMessage, error)
+
+// ActionBoundary is the sole runtime-owned boundary around external effects.
+// Implementations must not execute the tool from PrepareAndAuthorize or Start.
+type ActionBoundary interface {
+	PrepareAndAuthorize(ctx context.Context, request ActionRequest) (*ActionToken, error)
+	Execute(ctx context.Context, token *ActionToken, invoke ActionInvoker, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
+	Cancel(ctx context.Context, token *ActionToken, reason string) error
+}
+
 // ApprovalRequirement describes the user-visible scope of a tool operation.
 // Tool implementations own classification; the harness owns the decision.
 type ApprovalRequirement struct {
 	Category      string
 	Operation     string
 	Resource      string
+	Paths         []string
+	Environment   []string
+	NetworkIntent string
+	MCPIdentity   string
 	Metadata      map[string]any
 	AlwaysConfirm bool
 }
@@ -244,6 +310,15 @@ type Runtime interface {
 
 	// Close releases resources.
 	Close() error
+}
+
+// ActionRecovery is an optional runtime capability for presenting and
+// reconciling externally observable actions whose outcome was not proven.
+// It is separate from Runtime's turn surface so the TUI/CLI can opt into
+// recovery without making ordinary prompt consumers depend on administration.
+type ActionRecovery interface {
+	UnsettledActions(ctx context.Context) ([]session.ActionRecord, error)
+	ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error)
 }
 
 // ResourceOwner exposes host-created runtime resources that must be closed

@@ -314,6 +314,11 @@ func openRuntime(
 		return app.NewSetupRuntime(&runtimeCfg, store, "session store does not support durable turns"), nil, nil,
 			fmt.Errorf("session store does not support durable turns")
 	}
+	actionJournal, ok := store.(session.ActionJournal)
+	if !ok {
+		return app.NewSetupRuntime(&runtimeCfg, store, "session store does not support durable action journaling"), nil, nil,
+			fmt.Errorf("session store does not support durable action journaling")
+	}
 
 	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, store)
 	if err != nil {
@@ -409,6 +414,10 @@ func openRuntime(
 					Category:      requirement.Category,
 					Operation:     requirement.Operation,
 					Resource:      requirement.Resource,
+					Paths:         append([]string(nil), requirement.Paths...),
+					Environment:   append([]string(nil), requirement.Environment...),
+					NetworkIntent: requirement.NetworkIntent,
+					MCPIdentity:   requirement.MCPIdentity,
 					Metadata:      requirement.Metadata,
 					AlwaysConfirm: requirement.AlwaysConfirm,
 				}, required, nil
@@ -418,6 +427,8 @@ func openRuntime(
 			Name:                entry.Spec.Name,
 			Description:         entry.Spec.Description,
 			Parameters:          entry.Spec.Parameters,
+			ReadOnly:            entry.Metadata.ReadOnly,
+			RequiresAction:      !entry.Metadata.ReadOnly,
 			ApprovalRequirement: approvalRequirement,
 			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
 				toolCtx, cancel := contextWithToolSignal(ctx, signal)
@@ -507,6 +518,8 @@ func openRuntime(
 		SysPrompt:           sysPrompt,
 		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
 		ApprovalInteractive: interactive,
+		ActionJournal:       actionJournal,
+		Workdir:             cwd,
 		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
 	})

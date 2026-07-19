@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -83,6 +86,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
+		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env))
 		validator, err := workvfs.NewValidator(command.Dir)
 		if err != nil {
 			cancel()
@@ -119,6 +123,18 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 		return cmpStrings(a.Spec().Name, b.Spec().Name)
 	})
 	return runtime, nil
+}
+
+func serverIdentity(name, command string, args []string, directory string, environment map[string]string) string {
+	payload, _ := json.Marshal(struct {
+		Name        string            `json:"name"`
+		Command     string            `json:"command"`
+		Directory   string            `json:"directory"`
+		Args        []string          `json:"args"`
+		Environment map[string]string `json:"environment"`
+	}{Name: name, Command: command, Directory: directory, Args: args, Environment: environment})
+	digest := sha256.Sum256(payload)
+	return "mcp:server:" + name + ":" + hex.EncodeToString(digest[:8])
 }
 
 // Tools returns a stable snapshot of discovered external tools.

@@ -102,6 +102,7 @@ func (p *FilePolicy) approvalRequirement(
 		Category:  string(intent.category),
 		Operation: spec.Name,
 		Resource:  resource,
+		Paths:     slices.Clone(intent.paths),
 	}, true, nil
 }
 

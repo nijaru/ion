@@ -11,8 +11,8 @@ import (
 )
 
 // ApprovalMode controls whether requirement-bearing tools can execute without
-// a host decision. Trusted is the default for backwards-safe local operation;
-// Confirm is fail-closed when no interactive host is attached.
+// a host decision. The runtime boundary records the exact action before this
+// broker is consulted; this broker only handles the host decision protocol.
 type ApprovalMode string
 
 const (
@@ -65,6 +65,9 @@ func NewApprovalBroker(
 }
 
 func approvalKey(req session.ApprovalRequest) string {
+	if req.Fingerprint != "" {
+		return req.Fingerprint
+	}
 	return req.ToolName + "\x00" + req.Operation + "\x00" + req.Resource
 }
 

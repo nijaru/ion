@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -250,5 +251,29 @@ func TestTurnReducerStartTurnAndDispatchManageBusyLifecycle(t *testing.T) {
 	}
 	if got := model.turnReducer().FinishTurnDispatch(); !got.AwaitNext {
 		t.Fatalf("empty dispatch = %#v, want await", got)
+	}
+}
+
+func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.InFlight.Canceling = true
+	model.Progress.Mode = StateError
+	model.Progress.Status = "stale"
+
+	model.turnReducer().ClearActiveState(true)
+	model.turnReducer().RestoreRuntimePhase(agent.PhaseTurn)
+
+	if !model.InFlight.Thinking || model.InFlight.Canceling {
+		t.Fatalf("in-flight state = %#v, want active and not canceling", model.InFlight)
+	}
+	if model.Progress.Mode != StateStreaming || model.Progress.Status != "Streaming..." {
+		t.Fatalf("progress = %#v, want streaming runtime projection", model.Progress)
+	}
+
+	model.turnReducer().ClearActiveState(true)
+	model.turnReducer().RestoreRuntimePhase(agent.PhaseCompaction)
+	if !model.Progress.Compacting || model.Progress.Mode != StateWorking || model.Progress.Status != "Compacting context..." {
+		t.Fatalf("compaction progress = %#v, want compacting runtime projection", model.Progress)
 	}
 }

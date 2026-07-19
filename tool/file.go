@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -160,6 +161,95 @@ func (t *FileTool) mutationPath(target string) (string, error) {
 		return "", err
 	}
 	return realPathForPossiblyMissingPath(absPath)
+}
+
+// openSecureMutationTarget pins the target's parent directory by handle. The
+// caller must still enforce the runtime action guard against absPath before
+// opening it. Once the returned root is open, a parent-directory replacement
+// cannot redirect the mutation outside the verified directory.
+func (t *FileTool) openSecureMutationTarget(absPath string, createParents bool) (*os.Root, string, error) {
+	cwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	cwd, err = filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve mutation root: %w", err)
+	}
+	rel, err := filepath.Rel(cwd, absPath)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		parent := filepath.Dir(absPath)
+		if createParents {
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				return nil, "", fmt.Errorf("create trusted mutation parent: %w", err)
+			}
+		}
+		expectedParent, err := os.Stat(parent)
+		if err != nil {
+			return nil, "", fmt.Errorf("stat trusted mutation parent: %w", err)
+		}
+		parentRoot, err := os.OpenRoot(parent)
+		if err != nil {
+			return nil, "", fmt.Errorf("pin trusted mutation parent: %w", err)
+		}
+		actualParent, err := parentRoot.Stat(".")
+		if err != nil {
+			_ = parentRoot.Close()
+			return nil, "", fmt.Errorf("verify trusted mutation parent: %w", err)
+		}
+		if !os.SameFile(expectedParent, actualParent) {
+			_ = parentRoot.Close()
+			return nil, "", errors.New("trusted mutation parent changed while securing target")
+		}
+		return parentRoot, filepath.Base(absPath), nil
+	}
+	parent := filepath.Dir(rel)
+	root, err := os.OpenRoot(cwd)
+	if err != nil {
+		return nil, "", fmt.Errorf("open mutation root: %w", err)
+	}
+	closeRoot := func() {
+		_ = root.Close()
+	}
+	if createParents {
+		if err := root.MkdirAll(parent, 0o755); err != nil {
+			closeRoot()
+			return nil, "", fmt.Errorf("create mutation parent: %w", err)
+		}
+	}
+	expectedParent, err := os.Stat(filepath.Join(cwd, parent))
+	if err != nil {
+		closeRoot()
+		return nil, "", fmt.Errorf("stat mutation parent: %w", err)
+	}
+	parentRoot, err := root.OpenRoot(parent)
+	closeRoot()
+	if err != nil {
+		return nil, "", fmt.Errorf("pin mutation parent: %w", err)
+	}
+	actualParent, err := parentRoot.Stat(".")
+	if err != nil {
+		_ = parentRoot.Close()
+		return nil, "", fmt.Errorf("verify mutation parent: %w", err)
+	}
+	if !os.SameFile(expectedParent, actualParent) {
+		_ = parentRoot.Close()
+		return nil, "", errors.New("mutation parent changed while securing action target")
+	}
+	return parentRoot, filepath.Base(rel), nil
+}
+
+func (t *FileTool) enforceActionPath(ctx context.Context, path string) error {
+	guard, ok := ActionPathGuardFromContext(ctx)
+	if !ok || len(guard.Paths) == 0 {
+		return nil
+	}
+	for _, approved := range guard.Paths {
+		if filepath.Clean(approved) == filepath.Clean(path) {
+			return nil
+		}
+	}
+	return fmt.Errorf("mutation target %q is not the approved action target", path)
 }
 
 func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string, error) {

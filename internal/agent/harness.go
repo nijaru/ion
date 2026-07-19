@@ -91,6 +91,8 @@ type Harness struct {
 	compaction     CompactionSettings
 	contextWindow  int
 	approvals      *ApprovalBroker
+	actionBoundary ActionBoundary
+	actionsEnabled bool
 	closeResources []func() error
 	resourcesOnce  sync.Once
 	resourcesErr   error
@@ -106,6 +108,7 @@ var (
 	_ SessionLabels    = (*Harness)(nil)
 	_ Compactor        = (*Harness)(nil)
 	_ ResourceOwner    = (*Harness)(nil)
+	_ ActionRecovery   = (*Harness)(nil)
 )
 
 type Phase string
@@ -232,6 +235,13 @@ type HarnessConfig struct {
 	// requests immediately (the print-mode fail-closed behavior).
 	ApprovalMode        ApprovalMode
 	ApprovalInteractive bool
+	// ActionJournal is required by the production host for tools that can have
+	// external effects. Without it, a configured action boundary cannot issue
+	// execution authority.
+	ActionJournal session.ActionJournal
+	// Workdir is the explicit workspace root used for action identity and path
+	// canonicalization.
+	Workdir string
 
 	// CloseResources are host-created services such as external tool clients.
 	// The host invokes Harness.CloseResources after Runtime.Close.
@@ -300,9 +310,52 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		h.hooks = make(map[string][]HookHandler)
 	}
 	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
+	if cfg.ActionJournal != nil {
+		h.actionBoundary = newJournalActionBoundary(
+			cfg.ActionJournal, h.approvals, cfg.ApprovalMode,
+			cfg.ApprovalInteractive, cfg.Workdir,
+		)
+		h.actionsEnabled = true
+	} else if hasExternalActionTool(cfg.Tools) {
+		// A runtime with effect-capable tools but no journal is still wired to
+		// the boundary so execution fails closed instead of falling back to the
+		// legacy ephemeral approval path.
+		h.actionBoundary = newJournalActionBoundary(
+			nil, h.approvals, cfg.ApprovalMode, cfg.ApprovalInteractive, cfg.Workdir,
+		)
+	}
 	h.closeResources = append([]func() error(nil), cfg.CloseResources...)
 	go h.commandLoop()
 	return h
+}
+
+func hasExternalActionTool(tools []Tool) bool {
+	for _, tool := range tools {
+		if tool.RequiresAction || tool.ApprovalRequirement != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// UnsettledActions returns durable action records that need completion or
+// explicit reconciliation. Indeterminate records remain visible after restart.
+func (h *Harness) UnsettledActions(ctx context.Context) ([]session.ActionRecord, error) {
+	journal, ok := h.store.(session.ActionJournal)
+	if !ok {
+		return nil, errors.New("session store does not support action recovery")
+	}
+	return journal.UnsettledActions(ctx)
+}
+
+// ReconcileAction completes an indeterminate action only with explicit
+// verification evidence from the host or an executor-specific verifier.
+func (h *Harness) ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error) {
+	journal, ok := h.store.(session.ActionJournal)
+	if !ok {
+		return session.ActionRecord{}, errors.New("session store does not support action recovery")
+	}
+	return journal.ReconcileAction(ctx, actionID, state, verification, resultIdentity, reason, cleanup)
 }
 
 // Done is closed when the harness is no longer a valid event source.
@@ -885,13 +938,16 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 	h.mu.Lock()
 	model := h.model
 	thinking := h.thinking
+	turnID := h.activeTurnID
 	h.mu.Unlock()
 
 	return LoopConfig{
 		Model:            model,
 		Thinking:         thinking,
 		SessionID:        h.session.Meta().ID,
+		TurnID:           turnID,
 		Tools:            tools,
+		ActionBoundary:   h.actionBoundary,
 		MaxParallelTools: h.maxParallelTools,
 		StreamFn:         h.wrapStreamFn(),
 		Convert:          DefaultConvert,
@@ -925,6 +981,9 @@ func (h *Harness) buildLoopConfig(ctx context.Context, tools []Tool, onPersisten
 				if bp, ok := p.(*ToolCallDecision); ok && bp != nil && bp.Block {
 					return bp
 				}
+			}
+			if h.actionsEnabled {
+				return nil
 			}
 			h.mu.Lock()
 			registered, ok := h.tools[ctx.ToolCall.Name]

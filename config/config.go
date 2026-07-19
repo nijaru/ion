@@ -782,13 +782,13 @@ func NormalizeBusyInput(value string) string {
 	}
 }
 
-// NormalizeTrustMode returns the host's tool trust policy. Unknown values
-// fail closed to confirm; an empty value retains Ion's trusted-local default.
+// NormalizeTrustMode returns the host's tool trust policy. Unknown and empty
+// values fail closed to the interactive confirm mode; trusted is explicit.
 func NormalizeTrustMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "confirm", "approval", "approvals", "ask":
 		return "confirm"
-	case "", "trusted", "trust", "local":
+	case "trusted", "trust", "local":
 		return "trusted"
 	default:
 		return "confirm"
@@ -799,7 +799,7 @@ func normalizeTrustMode(value string) string { return NormalizeTrustMode(value) 
 
 func (c *Config) ToolTrustMode() string {
 	if c == nil {
-		return "trusted"
+		return "confirm"
 	}
 	return NormalizeTrustMode(c.TrustMode)
 }

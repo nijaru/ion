@@ -534,6 +534,28 @@ func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {
 		t.progress.StatusUpdatedAt = ts
 	}
 }
+
+// RestoreRuntimePhase rehydrates the ephemeral projection after the runtime
+// replaces the event stream with an authoritative snapshot. A snapshot does
+// not contain provider stream buffers, so those remain cleared; it must still
+// restore whether input and cancellation are allowed for the live runtime.
+func (t TurnReducer) RestoreRuntimePhase(phase agent.Phase) {
+	if t.inFlight == nil || t.progress == nil {
+		return
+	}
+	switch phase {
+	case agent.PhaseTurn:
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+		t.progress.Mode = StateStreaming
+		t.progress.Status = "Streaming..."
+	case agent.PhaseCompaction:
+		t.progress.Compacting = true
+		t.progress.Mode = StateWorking
+		t.progress.Status = "Compacting context..."
+	}
+}
+
 func (t TurnReducer) StopThinking() {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = false

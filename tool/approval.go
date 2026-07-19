@@ -5,6 +5,10 @@ type Requirement struct {
 	Category      string
 	Operation     string
 	Resource      string
+	Paths         []string
+	Environment   []string
+	NetworkIntent string
+	MCPIdentity   string
 	Metadata      map[string]any
 	AlwaysConfirm bool
 }

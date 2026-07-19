@@ -23,6 +23,7 @@ type clientSession interface {
 type Client struct {
 	session    clientSession
 	filePolicy *FilePolicy
+	identity   string
 }
 
 // NewClient connects to an MCP server over the provided official SDK transport.
@@ -75,6 +76,16 @@ func (c *Client) WithFilePolicy(policy *FilePolicy) *Client {
 	return c
 }
 
+// WithIdentity binds discovered tool calls to the configuration of the
+// long-lived MCP server process without persisting its environment values.
+func (c *Client) WithIdentity(identity string) *Client {
+	if c == nil {
+		return nil
+	}
+	c.identity = identity
+	return c
+}
+
 // DiscoverTools fetches available tools from the MCP server and returns them
 // as tool.Tool values that can be registered in a tool.Registry.
 func (c *Client) DiscoverTools(ctx context.Context) ([]tool.Tool, error) {
@@ -115,7 +126,19 @@ func (c *Client) discoverTools(ctx context.Context, namespace string) ([]tool.To
 		if err := Validate(spec); err != nil {
 			return nil, err
 		}
-		tools = append(tools, &wrapper{client: c, spec: spec, remoteName: remoteName})
+		identity := c.identity
+		if identity == "" {
+			identity = "mcp:client:" + remoteName
+			if namespace != "" {
+				identity = "mcp:server:" + namespace
+			}
+		}
+		tools = append(tools, &wrapper{
+			client:      c,
+			spec:        spec,
+			remoteName:  remoteName,
+			mcpIdentity: identity,
+		})
 	}
 	return tools, nil
 }
@@ -155,9 +178,10 @@ func (c *Client) CallTool(
 
 // wrapper implements the tool.Tool interface for an MCP tool.
 type wrapper struct {
-	client     *Client
-	spec       llm.Spec
-	remoteName string
+	client      *Client
+	spec        llm.Spec
+	remoteName  string
+	mcpIdentity string
 }
 
 func (w *wrapper) Spec() llm.Spec {
@@ -191,12 +215,54 @@ func (w *wrapper) Execute(ctx context.Context, args string) (string, error) {
 }
 
 func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {
-	if w == nil || w.client == nil || w.client.filePolicy == nil {
-		return Requirement{}, false, nil
+	if w == nil || w.client == nil {
+		return Requirement{}, false, fmt.Errorf("mcp: nil tool wrapper")
 	}
 	var parsedArgs map[string]any
 	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
 		return Requirement{}, false, fmt.Errorf("failed to parse arguments: %w", err)
 	}
-	return w.client.filePolicy.approvalRequirement(w.spec, parsedArgs)
+	var (
+		requirement Requirement
+		required    bool
+	)
+	if w.client.filePolicy != nil {
+		var err error
+		requirement, required, err = w.client.filePolicy.approvalRequirement(w.spec, parsedArgs)
+		if err != nil {
+			return Requirement{}, false, err
+		}
+	}
+	if !required {
+		resource := w.remoteName
+		if resource == "" {
+			resource = w.spec.Name
+		}
+		requirement = Requirement{
+			Category:  "mcp",
+			Operation: w.spec.Name,
+			Resource:  resource,
+		}
+	}
+	if requirement.Category == "" {
+		requirement.Category = "mcp"
+	}
+	if requirement.Operation == "" {
+		requirement.Operation = w.spec.Name
+	}
+	if requirement.Resource == "" {
+		requirement.Resource = w.remoteName
+		if requirement.Resource == "" {
+			requirement.Resource = w.spec.Name
+		}
+	}
+	requirement.MCPIdentity = w.mcpIdentity
+	if requirement.MCPIdentity == "" {
+		identityName := w.remoteName
+		if identityName == "" {
+			identityName = w.spec.Name
+		}
+		requirement.MCPIdentity = "mcp:client:" + identityName
+	}
+	return requirement, true, nil
 }

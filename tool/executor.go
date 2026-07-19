@@ -15,7 +15,7 @@ type localCommand struct {
 	CWD               string
 	Command           string
 	Emit              func(localOutputUpdate) error
-	Started           func(pid int)
+	Started           func(pid int) error
 	PersistFullOutput bool
 }
 
@@ -138,7 +138,13 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		return "", err
 	}
 	if request.Started != nil {
-		request.Started(cmd.Process.Pid)
+		if err := request.Started(cmd.Process.Pid); err != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
+			_ = stdoutWriter.Close()
+			_ = stderrWriter.Close()
+			return "", fmt.Errorf("record process group: %w", err)
+		}
 	}
 	_ = stdoutWriter.Close()
 	_ = stderrWriter.Close()

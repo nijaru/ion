@@ -83,13 +83,17 @@ const (
 // ApprovalRequest pauses a requirement-bearing tool call until the host
 // resolves it. ID is unique within the active harness runtime.
 type ApprovalRequest struct {
-	ID         string
-	ToolCallID string
-	ToolName   string
-	Category   string
-	Operation  string
-	Resource   string
-	Timestamp  time.Time
+	ID          string
+	ActionID    string
+	Fingerprint string
+	ToolCallID  string
+	ToolName    string
+	Category    string
+	Operation   string
+	Resource    string
+	CWD         string
+	Paths       []string
+	Timestamp   time.Time
 }
 
 // ApprovalResolution closes one ApprovalRequest exactly once.

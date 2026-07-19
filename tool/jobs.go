@@ -94,6 +94,21 @@ func (m *JobManager) start(ctx context.Context, command string, run jobRunner) (
 	m.nextID++
 	id := fmt.Sprintf("job-%d", m.nextID)
 	jobCtx, cancel := context.WithCancel(m.root)
+	// Background jobs intentionally outlive the turn's cancellation, but
+	// action-boundary capabilities must follow the process that they authorize.
+	// Propagate those explicit values onto the runtime-owned job context while
+	// retaining JobManager shutdown as the cancellation parent.
+	if recorder, ok := ProcessGroupRecorderFromContext(ctx); ok {
+		jobCtx = WithProcessGroupRecorder(jobCtx, recorder)
+	}
+	if guard, ok := ActionPathGuardFromContext(ctx); ok {
+		jobCtx = WithActionPathGuard(jobCtx, guard.Paths)
+	}
+	var lifecycle JobLifecycleRecorder
+	if value, ok := JobLifecycleRecorderFromContext(ctx); ok {
+		lifecycle = value
+		jobCtx = WithJobLifecycleRecorder(jobCtx, lifecycle)
+	}
 	record := &jobRecord{
 		info: JobSnapshot{
 			ID:        id,
@@ -125,11 +140,21 @@ func (m *JobManager) start(ctx context.Context, command string, run jobRunner) (
 		})
 		readyOnce.Do(func() { ready <- err })
 		m.finish(id, result, err)
+		if lifecycle.Finished != nil {
+			lifecycle.Finished(result, err)
+		}
 	}()
 
 	select {
 	case err := <-ready:
 		if err == nil {
+			if lifecycle.Started != nil {
+				if err := lifecycle.Started(id); err != nil {
+					record.cancel()
+					<-record.done
+					return "", fmt.Errorf("register job %s: %w", id, err)
+				}
+			}
 			return id, nil
 		}
 		<-record.done

@@ -3,6 +3,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -442,6 +444,7 @@ type preparedToolCall struct {
 	tool    *Tool
 	tc      *session.ToolCall
 	argsRaw json.RawMessage
+	action  *ActionToken
 }
 
 func invokeBeforeToolCall(cfg LoopConfig, call ToolCallContext) (decision *ToolCallDecision, err error) {
@@ -575,6 +578,48 @@ func prepareToolCall(
 			}
 		}
 	}
+	if tool.RequiresAction || tool.ApprovalRequirement != nil {
+		requirement, declared, descriptorErr := invokeActionDescriptor(tool, argsRaw)
+		if descriptorErr != nil {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content: []session.Content{session.TextContent{Text: descriptorErr.Error()}},
+				IsError: true, Timestamp: time.Now(),
+			}
+		}
+		required := declared
+		if tool.ApprovalRequirement == nil {
+			required = tool.RequiresAction
+		}
+		if !required {
+			return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
+		}
+		if cfg.ActionBoundary == nil {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content: []session.Content{session.TextContent{Text: "external action boundary is unavailable"}},
+				IsError: true, Timestamp: time.Now(),
+			}
+		}
+		action, actionErr := cfg.ActionBoundary.PrepareAndAuthorize(ctx, ActionRequest{
+			ToolName:     tc.Name,
+			InvocationID: tc.ID,
+			SessionID:    cfg.SessionID,
+			TurnID:       cfg.TurnID,
+			Arguments:    argsRaw,
+			Requirement:  requirement,
+			Required:     required,
+			CWD:          "",
+		})
+		if actionErr != nil {
+			return preparedToolCall{}, &session.ToolResultMessage{
+				ToolCallID: tc.ID, ToolName: tc.Name,
+				Content: []session.Content{session.TextContent{Text: actionErr.Error()}},
+				IsError: true, Timestamp: time.Now(),
+			}
+		}
+		return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw, action: action}, nil
+	}
 	if isAborted(signal) {
 		return preparedToolCall{}, &session.ToolResultMessage{
 			ToolCallID: tc.ID, ToolName: tc.Name,
@@ -584,6 +629,18 @@ func prepareToolCall(
 	}
 
 	return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
+}
+
+func invokeActionDescriptor(tool *Tool, args json.RawMessage) (requirement ApprovalRequirement, required bool, err error) {
+	if tool == nil || tool.ApprovalRequirement == nil {
+		return ApprovalRequirement{}, false, nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("action descriptor panic: %v", recovered)
+		}
+	}()
+	return tool.ApprovalRequirement(args)
 }
 
 // executeToolCallsParallel executes multiple tool calls concurrently.
@@ -695,18 +752,18 @@ func executePreparedToolCall(
 			Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
 			IsError:    true, Timestamp: time.Now(),
 		}
+		if p.action != nil && cfg.ActionBoundary != nil {
+			_ = cfg.ActionBoundary.Cancel(ctx, p.action, "operation aborted")
+		}
 		emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 		return result
 	}
-
 	// Execute with panic recovery.
 	progress := func(p session.ToolPartial) {
 		emit(session.ToolExecUpdate{ToolCallID: tc.ID, Partial: p})
 	}
 
-	var result session.ToolResultMessage
-	var err error
-	func() {
+	invoke := func(execCtx context.Context, execSignal <-chan struct{}, execProgress func(session.ToolPartial)) (result session.ToolResultMessage, err error) {
 		defer func() {
 			if r := recover(); r != nil {
 				result = session.ToolResultMessage{
@@ -714,10 +771,20 @@ func executePreparedToolCall(
 					Content: []session.Content{session.TextContent{Text: fmt.Sprintf("tool panic: %v", r)}},
 					IsError: true, Timestamp: time.Now(),
 				}
+				err = nil
 			}
 		}()
-		result, err = tool.Execute(ctx, tc.ID, argsRaw, signal, progress)
-	}()
+		result, err = tool.Execute(execCtx, tc.ID, argsRaw, execSignal, execProgress)
+		return result, err
+	}
+
+	var result session.ToolResultMessage
+	var err error
+	if cfg.ActionBoundary != nil {
+		result, err = cfg.ActionBoundary.Execute(ctx, p.action, invoke, signal, progress)
+	} else {
+		result, err = invoke(ctx, signal, progress)
+	}
 	if err != nil {
 		result = session.ToolResultMessage{
 			ToolCallID: tc.ID, ToolName: tc.Name,
@@ -750,9 +817,26 @@ func executePreparedToolCall(
 			applyToolCallPatch(&result, patch)
 		}()
 	}
-
 	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 	return result
+}
+
+func toolResultIdentity(result session.ToolResultMessage) string {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func firstToolResultText(result session.ToolResultMessage) string {
+	for _, content := range result.Content {
+		if text, ok := content.(session.TextContent); ok {
+			return text.Text
+		}
+	}
+	return "tool returned an error"
 }
 
 func applyToolCallPatch(result *session.ToolResultMessage, patch *ToolCallPatch) {

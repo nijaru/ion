@@ -3,7 +3,6 @@ package tool
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
@@ -30,7 +29,7 @@ func (e *Edit) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if err != nil {
 		return Requirement{}, false, err
 	}
-	return Requirement{Category: "write", Operation: "edit", Resource: input.Path}, true, nil
+	return Requirement{Category: "write", Operation: "edit", Resource: input.Path, Paths: []string{input.Path}}, true, nil
 }
 
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
@@ -57,15 +56,23 @@ func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := e.enforceActionPath(ctx, absPath); err != nil {
+		return "", err
+	}
 	if err := ctx.Err(); err != nil {
 		return "", toolContextErr("edit", err)
 	}
 
-	content, err := os.ReadFile(absPath)
+	parentRoot, targetName, err := e.openSecureMutationTarget(absPath, false)
+	if err != nil {
+		return "", err
+	}
+	defer parentRoot.Close()
+	content, err := parentRoot.ReadFile(targetName)
 	if err != nil {
 		return "", fmt.Errorf("failed to read %s: %w", input.Path, err)
 	}
-	info, err := os.Stat(absPath)
+	info, err := parentRoot.Stat(targetName)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat %s: %w", input.Path, err)
 	}
@@ -82,7 +89,7 @@ func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 		return "", toolContextErr("edit", err)
 	}
 
-	if err := replaceFile(ctx, "edit", absPath, []byte(newContent), info.Mode().Perm()); err != nil {
+	if err := replaceFileWithinRoot(ctx, "edit", parentRoot, targetName, []byte(newContent), info.Mode().Perm()); err != nil {
 		return "", err
 	}
 

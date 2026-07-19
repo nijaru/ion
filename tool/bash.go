@@ -104,9 +104,16 @@ func (b *Bash) ApprovalRequirement(args string) (Requirement, bool, error) {
 		return Requirement{}, false, nil
 	}
 	return Requirement{
-		Category:  "execute",
-		Operation: "bash",
-		Resource:  input.Command,
+		Category:      "execute",
+		Operation:     "bash",
+		Resource:      input.Command,
+		Environment:   []string{b.executor.environment.Summary()},
+		NetworkIntent: sandboxNetworkIntent(b.executor.sandbox),
+		Metadata: map[string]any{
+			"sandbox":     string(b.executor.sandbox),
+			"environment": b.executor.environment.Summary(),
+			"background":  input.Background,
+		},
 	}, true, nil
 }
 
@@ -220,12 +227,24 @@ func (b *Bash) runCommand(
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	processRecorder, _ := ProcessGroupRecorderFromContext(runCtx)
+	startedCallback := func(pid int) error {
+		if processRecorder != nil {
+			if err := processRecorder(pid); err != nil {
+				return err
+			}
+		}
+		if started != nil {
+			started(pid)
+		}
+		return nil
+	}
 
 	result, err := b.executor.Run(runCtx, localCommand{
 		CWD:               b.cwd,
 		Command:           input.Command,
 		Emit:              emit,
-		Started:           started,
+		Started:           startedCallback,
 		PersistFullOutput: persistFullOutput,
 	})
 	if input.Timeout > 0 && errors.Is(runCtx.Err(), context.DeadlineExceeded) {

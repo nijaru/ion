@@ -34,7 +34,7 @@ type SQLiteStore struct {
 
 var _ Store = (*SQLiteStore)(nil)
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 8
 
 const sessionLockWait = 500 * time.Millisecond
 
@@ -80,6 +80,48 @@ CREATE TABLE IF NOT EXISTS turns (
 	error      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_turns_state ON turns(state, sequence);
+
+CREATE TABLE IF NOT EXISTS actions (
+	action_id        TEXT PRIMARY KEY,
+	invocation_id    TEXT NOT NULL,
+	session_id       TEXT NOT NULL DEFAULT '',
+	turn_id          TEXT NOT NULL DEFAULT '',
+	tool_name        TEXT NOT NULL,
+	category         TEXT NOT NULL DEFAULT '',
+	operation        TEXT NOT NULL,
+	arguments        BLOB NOT NULL,
+	metadata         BLOB NOT NULL DEFAULT '{}',
+	preimages        BLOB NOT NULL DEFAULT '[]',
+	fingerprint      TEXT NOT NULL,
+	cwd              TEXT NOT NULL DEFAULT '',
+	paths            BLOB NOT NULL DEFAULT '[]',
+	environment      BLOB NOT NULL DEFAULT '[]',
+	network_intent   TEXT NOT NULL DEFAULT '',
+	mcp_identity     TEXT NOT NULL DEFAULT '',
+	policy_mode      TEXT NOT NULL DEFAULT '',
+	state            TEXT NOT NULL,
+	authorization    TEXT NOT NULL DEFAULT '',
+	result_identity  TEXT NOT NULL DEFAULT '',
+	error            TEXT NOT NULL DEFAULT '',
+	cleanup_outcome  TEXT NOT NULL DEFAULT '',
+	process_group_id TEXT NOT NULL DEFAULT '',
+	prepared_at      INTEGER NOT NULL,
+	authorized_at    INTEGER NOT NULL DEFAULT 0,
+	started_at       INTEGER NOT NULL DEFAULT 0,
+	ended_at         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_actions_state ON actions(state, prepared_at);
+CREATE INDEX IF NOT EXISTS idx_actions_fingerprint ON actions(fingerprint);
+
+CREATE TABLE IF NOT EXISTS action_transitions (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	action_id  TEXT NOT NULL,
+	from_state TEXT NOT NULL DEFAULT '',
+	to_state   TEXT NOT NULL,
+	reason     TEXT NOT NULL DEFAULT '',
+	timestamp  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_action_transitions_action ON action_transitions(action_id, id);
 
 CREATE TABLE IF NOT EXISTS input_history (
 	id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +180,13 @@ func NewSQLiteStore(path string, sessionID string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	if err := recoverInterruptedTurns(context.Background(), db); err != nil {
+		db.Close()
+		if lockFile != nil {
+			_ = releaseSessionLock(lockFile)
+		}
+		return nil, err
+	}
+	if err := recoverInterruptedActions(context.Background(), db); err != nil {
 		db.Close()
 		if lockFile != nil {
 			_ = releaseSessionLock(lockFile)
@@ -239,12 +288,27 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 	if err := ensureColumn(ctx, tx, "turns", "context_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return rollback(err)
 	}
+	if err := ensureColumn(ctx, tx, "actions", "session_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "actions", "turn_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "actions", "metadata", "BLOB NOT NULL DEFAULT '{}'"); err != nil {
+		return rollback(err)
+	}
+	if err := ensureColumn(ctx, tx, "actions", "preimages", "BLOB NOT NULL DEFAULT '[]'"); err != nil {
+		return rollback(err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id);
 		CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
 		CREATE INDEX IF NOT EXISTS idx_entries_sequence ON entries(sequence);
 		CREATE INDEX IF NOT EXISTS idx_entries_turn ON entries(turn_id);
 		CREATE INDEX IF NOT EXISTS idx_turns_state ON turns(state, sequence);
+		CREATE INDEX IF NOT EXISTS idx_actions_state ON actions(state, prepared_at);
+		CREATE INDEX IF NOT EXISTS idx_actions_fingerprint ON actions(fingerprint);
+		CREATE INDEX IF NOT EXISTS idx_action_transitions_action ON action_transitions(action_id, id);
 	`); err != nil {
 		return rollback(fmt.Errorf("create session indexes: %w", err))
 	}
@@ -327,6 +391,43 @@ func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
 			started_at INTEGER NOT NULL,
 			ended_at INTEGER NOT NULL DEFAULT 0,
 			error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS actions (
+			action_id TEXT PRIMARY KEY,
+			invocation_id TEXT NOT NULL,
+			session_id TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT '',
+			operation TEXT NOT NULL,
+			arguments BLOB NOT NULL,
+			metadata BLOB NOT NULL DEFAULT '{}',
+			preimages BLOB NOT NULL DEFAULT '[]',
+			fingerprint TEXT NOT NULL,
+			cwd TEXT NOT NULL DEFAULT '',
+			paths BLOB NOT NULL DEFAULT '[]',
+			environment BLOB NOT NULL DEFAULT '[]',
+			network_intent TEXT NOT NULL DEFAULT '',
+			mcp_identity TEXT NOT NULL DEFAULT '',
+			policy_mode TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			authorization TEXT NOT NULL DEFAULT '',
+			result_identity TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			cleanup_outcome TEXT NOT NULL DEFAULT '',
+			process_group_id TEXT NOT NULL DEFAULT '',
+			prepared_at INTEGER NOT NULL,
+			authorized_at INTEGER NOT NULL DEFAULT 0,
+			started_at INTEGER NOT NULL DEFAULT 0,
+			ended_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS action_transitions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			action_id TEXT NOT NULL,
+			from_state TEXT NOT NULL DEFAULT '',
+			to_state TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			timestamp INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS input_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

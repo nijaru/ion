@@ -39,9 +39,10 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current registered and active tool names. Sandbox execution is selected by
-`ION_SANDBOX`; the default is trusted local execution, while configured macOS
-seatbelt or Linux bubblewrap modes fail closed when unavailable.
+current registered and active tool names. Shell execution defaults to `auto`,
+selecting the available macOS seatbelt or Linux bubblewrap backend and failing
+closed when no backend is available. Use `ION_SANDBOX=off` only as an explicit
+unsandboxed technical boundary.
 
 Shell environment inheritance is controlled by `tool_env` in
 `~/.ion/config.toml`. The default `inherit` passes the process environment to
@@ -79,15 +80,15 @@ Long native `bash` output uses tail semantics: Ion keeps the last 2000 lines or
 file referenced in the tool result. This preserves final test summaries and
 compiler errors instead of returning only the command's head.
 
-Native execution is trusted by default. For an interactive confirmation gate,
-set `trust_mode = "confirm"` in `~/.ion/config.toml` or pass
-`--trust-mode confirm`. Requirement-bearing mutating tools pause in the TUI
-until the user chooses allow, allow for the rest of the runtime, or deny.
-Denying produces a recoverable error result in the session rather than running
-the tool. Print mode and shutdown fail closed because they cannot host a
-decision prompt. Persistent approval policy is intentionally not part of the
-runtime contract; future external tools must use the same broker before they
-are exposed.
+External actions use the durable runtime action boundary. The default policy is
+interactive confirmation; set `trust_mode = "confirm"` explicitly or pass
+`--trust-mode confirm`. `trusted` is an explicit unsandboxed policy choice, not
+an implicit default. Requirement-bearing tools are durably prepared and bound
+to their normalized operation fingerprint before the TUI offers allow, allow
+for the rest of the runtime, or deny. Denying produces a recoverable error
+result without running the tool. Print mode and shutdown fail closed because
+they cannot host a decision prompt. Actions that are started but cannot be
+finalized recover as indeterminate and are never silently retried.
 
 Provider requests retry transient failures with exponential backoff. Transport
 failures retry until the active turn is canceled by default; provider-declared

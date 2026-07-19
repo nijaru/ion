@@ -38,7 +38,7 @@ func resolveSandboxMode() SandboxMode {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("ION_SANDBOX")))
 	switch raw {
 	case "":
-		return SandboxOff
+		return SandboxAuto
 	case string(SandboxAuto):
 		return SandboxAuto
 	case string(SandboxOff):
@@ -54,6 +54,13 @@ func resolveSandboxMode() SandboxMode {
 
 func SandboxSummary() string {
 	return sandboxSummary(resolveSandboxMode())
+}
+
+func sandboxNetworkIntent(mode SandboxMode) string {
+	if mode == SandboxOff {
+		return "unrestricted"
+	}
+	return "denied-by-sandbox"
 }
 
 func sandboxSummary(mode SandboxMode) string {
@@ -87,7 +94,7 @@ func sandboxSummary(mode SandboxMode) string {
 				return "auto: bubblewrap"
 			}
 		}
-		return "auto: off (no backend)"
+		return "auto: unavailable"
 	default:
 		return "unsupported: " + string(mode)
 	}
@@ -116,11 +123,7 @@ func planSandboxedBash(cwd, command string, mode SandboxMode) (sandboxPlan, erro
 				return planBubblewrapSandbox(cwd, command)
 			}
 		}
-		return sandboxPlan{
-			name: "bash",
-			args: []string{"-c", command},
-			dir:  cwd,
-		}, nil
+		return sandboxPlan{}, fmt.Errorf("automatic sandbox backend unavailable on %s", sandboxGOOS)
 	default:
 		return sandboxPlan{}, fmt.Errorf("unsupported sandbox mode %q", mode)
 	}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/nijaru/ion/llm"
 )
@@ -28,7 +27,7 @@ func (w *Write) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if err != nil {
 		return Requirement{}, false, err
 	}
-	return Requirement{Category: "write", Operation: "write", Resource: input.Path}, true, nil
+	return Requirement{Category: "write", Operation: "write", Resource: input.Path, Paths: []string{input.Path}}, true, nil
 }
 
 func (w *Write) Execute(ctx context.Context, args string) (string, error) {
@@ -51,6 +50,9 @@ func (w *Write) execute(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := w.enforceActionPath(ctx, absPath); err != nil {
+		return "", err
+	}
 	if err := ctx.Err(); err != nil {
 		return "", toolContextErr("write", err)
 	}
@@ -62,12 +64,13 @@ func (w *Write) execute(ctx context.Context, args string) (string, error) {
 		return "", toolContextErr("write", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+	parentRoot, targetName, err := w.openSecureMutationTarget(absPath, true)
+	if err != nil {
 		return "", err
 	}
-
+	defer parentRoot.Close()
 	mode := os.FileMode(0o644)
-	if info, err := os.Stat(absPath); err == nil {
+	if info, err := parentRoot.Stat(targetName); err == nil {
 		mode = info.Mode().Perm()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -75,7 +78,7 @@ func (w *Write) execute(ctx context.Context, args string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", toolContextErr("write", err)
 	}
-	if err := replaceFile(ctx, "write", absPath, []byte(input.Content), mode); err != nil {
+	if err := replaceFileWithinRoot(ctx, "write", parentRoot, targetName, []byte(input.Content), mode); err != nil {
 		return "", err
 	}
 

@@ -645,10 +645,17 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	// The second independent subscription captures the same lifecycle.
 	var viaSubscribe []session.Event
 	var sMu sync.Mutex
+	settledSeen := make(chan struct{}, 1)
 	unsub := watchEvents(t, h, func(e session.Event) {
 		sMu.Lock()
 		viaSubscribe = append(viaSubscribe, e)
 		sMu.Unlock()
+		if _, ok := e.(session.Settled); ok {
+			select {
+			case settledSeen <- struct{}{}:
+			default:
+			}
+		}
 	})
 	defer unsub()
 
@@ -657,6 +664,11 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-drainDone
+	select {
+	case <-settledSeen:
+	case <-time.After(time.Second):
+		t.Fatal("independent subscription did not receive Settled")
+	}
 
 	sMu.Lock()
 	dMu.Lock()
