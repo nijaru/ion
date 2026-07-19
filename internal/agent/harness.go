@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	ionexport "github.com/nijaru/ion/internal/export"
@@ -21,133 +19,13 @@ import (
 // session store. Constructs TurnContext + LoopConfig per turn and calls RunLoop.
 //
 // Reference: Pi agent-harness.js AgentHarness (line 125).
-type Harness struct {
-	session   session.Session
-	store     session.Store
-	durable   session.DurableStore
-	tools     map[string]Tool
-	active    []string // active tool names
-	model     llm.Model
-	thinking  session.ThinkingLevel
-	sysprompt string
-	log       *slog.Logger // structured logger, may be nil
-	metrics   *Metrics     // runtime statistics, may be nil
+//
+// Harness is a type alias for Controller. The struct definition, command
+// loop, and typed dispatch live in runtime.go. This file contains the
+// *Direct handler implementations called by the typed dispatch.
+type Harness = Controller
 
-	// resources (Pi: prompt templates; system prompt is preassembled at startup)
-	promptTemplates map[string]string
 
-	stream    func(ctx context.Context, req *llm.Request) (llm.Stream, error)
-	auth      func(model llm.Model) (apiKey string, headers map[string]string)
-	transport http.RoundTripper
-	timeout   time.Duration
-
-	// queues (Pi PendingMessageQueue x3)
-	steer    []session.Message
-	followUp []session.Message
-	nextTurn []session.Message
-
-	// queue drain modes (Pi: one-at-a-time vs all)
-	steeringMode     string // "one-at-a-time" | "all"
-	followUpMode     string // "one-at-a-time" | "all"
-	queueCapacity    int
-	maxParallelTools int
-
-	// single active run
-	phase       Phase
-	closed      bool
-	mu          sync.Mutex
-	commandMu   sync.Mutex
-	commands    chan runtimeCommand
-	commandStop chan struct{}
-	runDone     chan struct{}
-	runCancel   chan struct{} // closed to abort current run
-
-	// event subscription
-	eventHub *eventHub
-	done     chan struct{}
-
-	// hook registry (Pi on/emitHook pattern)
-	hooks map[string][]HookHandler
-
-	// buffered session writes during a run
-	pending []pendingWrite
-
-	// activeTurnID and activeTurnLeaf identify the durable, uncommitted turn
-	// owned by the current prompt. Ordinary replay cannot see these entries;
-	// TurnBranch is used to build the live context until commit.
-	activeTurnID   string
-	activeTurnLeaf string
-	turnCommitted  bool
-	turnAborted    bool
-
-	// thinkingPending prevents a live active-turn change from being overwritten
-	// by a stale session snapshot and records the last durable level for rollback.
-	thinkingPending     bool
-	thinkingRollback    session.ThinkingLevel
-	thinkingGeneration  uint64
-	thinkingRollbackSet bool
-
-	// compaction settings
-	compaction     CompactionSettings
-	contextWindow  int
-	approvals      *ApprovalBroker
-	actionBoundary ActionBoundary
-	actionsEnabled bool
-	closeResources []func() error
-	resourcesOnce  sync.Once
-	resourcesErr   error
-}
-
-var (
-	_ Runtime          = (*Harness)(nil)
-	_ SessionOwner     = (*Harness)(nil)
-	_ EntryPersister   = (*Harness)(nil)
-	_ SessionNamer     = (*Harness)(nil)
-	_ SessionForker    = (*Harness)(nil)
-	_ SessionNavigator = (*Harness)(nil)
-	_ SessionLabels    = (*Harness)(nil)
-	_ Compactor        = (*Harness)(nil)
-	_ ResourceOwner    = (*Harness)(nil)
-	_ ActionRecovery   = (*Harness)(nil)
-)
-
-// Phase, ErrQueueFull, and ErrRuntimeClosed now live in state.go.
-// The new Phase is a uint8 enum with an explicit state machine.
-
-// beginExclusive reserves the controller for a non-turn operation. The phase
-// and cancellation handles are changed under the state lock; the operation
-// itself must run after this method returns so provider/storage I/O never runs
-// while h.mu is held.
-func (h *Harness) beginExclusive(phase Phase) (func(), error) {
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return nil, errors.New("harness is closed")
-	}
-	if h.phase != PhaseIdle {
-		current := h.phase
-		h.mu.Unlock()
-		return nil, fmt.Errorf("harness is busy (phase=%s)", current)
-	}
-	h.phase = phase
-	h.runDone = make(chan struct{})
-	h.runCancel = make(chan struct{})
-	done := h.runDone
-	h.mu.Unlock()
-
-	return func() {
-		h.mu.Lock()
-		if h.phase == phase {
-			h.phase = PhaseIdle
-			h.runCancel = nil
-			if h.runDone == done {
-				close(done)
-				h.runDone = nil
-			}
-		}
-		h.mu.Unlock()
-	}, nil
-}
 
 // pendingWrite is a buffered session mutation applied at turn boundary.
 // Pi reference: agent-harness.js pendSessionWrites (line 410-435).
@@ -272,7 +150,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		transport:        cfg.Transport,
 		timeout:          cfg.Timeout,
 		phase:            PhaseIdle,
-		commands:         make(chan runtimeCommand, controllerCommandCapacity),
+		commands:         make(chan Command, controllerCommandCapacity),
 		commandStop:      make(chan struct{}),
 		eventHub:         newEventHub(),
 		done:             make(chan struct{}),
@@ -314,7 +192,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		)
 	}
 	h.closeResources = append([]func() error(nil), cfg.CloseResources...)
-	go h.commandLoop()
+	go h.run()
 	return h
 }
 
@@ -327,28 +205,7 @@ func hasExternalActionTool(tools []Tool) bool {
 	return false
 }
 
-// UnsettledActions returns durable action records that need completion or
-// explicit reconciliation. Indeterminate records remain visible after restart.
-func (h *Harness) UnsettledActions(ctx context.Context) ([]session.ActionRecord, error) {
-	journal, ok := h.store.(session.ActionJournal)
-	if !ok {
-		return nil, errors.New("session store does not support action recovery")
-	}
-	return journal.UnsettledActions(ctx)
-}
 
-// ReconcileAction completes an indeterminate action only with explicit
-// verification evidence from the host or an executor-specific verifier.
-func (h *Harness) ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error) {
-	journal, ok := h.store.(session.ActionJournal)
-	if !ok {
-		return session.ActionRecord{}, errors.New("session store does not support action recovery")
-	}
-	return journal.ReconcileAction(ctx, actionID, state, verification, resultIdentity, reason, cleanup)
-}
-
-// Done is closed when the harness is no longer a valid event source.
-func (h *Harness) Done() <-chan struct{} { return h.done }
 
 // On registers a handler for a hook type. Returns an unsubscribe function.
 // Reference: Pi agent-harness.js on (line 962).
@@ -428,13 +285,6 @@ func cloneImageContents(images []session.ImageContent) []session.ImageContent {
 	return cloned
 }
 
-// Prompt submits a user message and runs the agent turn.
-// Returns the final assistant message. Blocks until the turn completes.
-//
-// Reference: Pi agent-harness.js prompt (line 541).
-func (h *Harness) Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
-	return h.submitPrompt(ctx, text, images)
-}
 
 // runPrompt executes an accepted turn. Acceptance and phase reservation are
 // performed by the controller command loop before this worker starts.
@@ -1748,15 +1598,6 @@ func (h *Harness) activateToolsDirect(ctx context.Context, names []string) error
 	return nil
 }
 
-// WaitForIdle blocks until the current run completes.
-func (h *Harness) WaitForIdle() {
-	h.mu.Lock()
-	done := h.runDone
-	h.mu.Unlock()
-	if done != nil {
-		<-done
-	}
-}
 
 // cancelActiveRun clears pending queues and signals the current run without
 // waiting for its provider or tools to return. The caller chooses the wait policy.
@@ -1783,117 +1624,10 @@ func (h *Harness) cancelActiveRun() ([]session.Message, []session.Message, error
 	return clearedSteer, clearedFollowUp, nil
 }
 
-// Abort cancels the current run and clears steering/follow-up queues.
-// Emits an Abort event with the cleared messages (Pi: line ~905).
-func (h *Harness) Abort() ([]session.Message, []session.Message, error) {
-	clearedSteer, clearedFollowUp, err := h.cancelActiveRun()
-	if err != nil {
-		return nil, nil, err
-	}
-	h.emitQueueUpdate()
-	h.WaitForIdle()
-	h.emit(session.Abort{
-		ClearedSteer:    clearedSteer,
-		ClearedFollowUp: clearedFollowUp,
-	})
-	return clearedSteer, clearedFollowUp, nil
-}
 
-// ResolveApproval supplies the host's decision for one pending tool call.
-// It is intentionally a small optional runner capability used by the TUI.
-func (h *Harness) ResolveApproval(id string, decision session.ApprovalDecision) error {
-	if h == nil || h.approvals == nil {
-		return errors.New("approval broker is unavailable")
-	}
-	return h.approvals.Resolve(id, decision)
-}
 
-// Close releases resources. Active work is cancelled before waiting for its
-// completion so providers and tools that honor the run signal can terminate.
-func (h *Harness) Close() error {
-	h.commandMu.Lock()
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		h.commandMu.Unlock()
-		return nil
-	}
-	h.closed = true
-	close(h.commandStop)
-	close(h.done)
-	cancel := h.runCancel
-	h.mu.Unlock()
-	h.commandMu.Unlock()
 
-	if cancel != nil {
-		select {
-		case <-cancel:
-		default:
-			close(cancel)
-		}
-	}
-	if h.approvals != nil {
-		_ = h.approvals.Close()
-	}
-	// Ensure no active run is enqueueing before cancelling the dispatcher.
-	h.WaitForIdle()
-	flushErr := h.flushPending(context.Background())
-	if h.eventHub != nil {
-		h.eventHub.close()
-	}
-	return flushErr
-}
 
-// CloseResources releases host-created runtime services after the controller
-// has stopped. It is separate from Close because the host owns the final
-// resource boundary and may close shared storage independently.
-func (h *Harness) CloseResources() error {
-	h.resourcesOnce.Do(func() {
-		for i := len(h.closeResources) - 1; i >= 0; i-- {
-			h.resourcesErr = errors.Join(h.resourcesErr, h.closeResources[i]())
-		}
-	})
-	return h.resourcesErr
-}
-
-// Shutdown attempts a graceful stop: abort any running turn, wait for
-// completion (up to the context deadline), flush pending writes, and stop the
-// controller. The host must call CloseResources after Shutdown/Close.
-func (h *Harness) Shutdown(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	h.logf(slog.LevelInfo, "shutdown start")
-	if _, _, err := h.cancelActiveRun(); err != nil {
-		return err
-	}
-	h.emitQueueUpdate()
-
-	h.mu.Lock()
-	done := h.runDone
-	h.mu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			h.logf(slog.LevelWarn, "shutdown timed out waiting for turn")
-			return ctx.Err()
-		}
-	}
-
-	if err := h.flushPending(context.Background()); err != nil {
-		h.logf(slog.LevelError, "shutdown pending write failed", slog.String("error", err.Error()))
-		return errors.Join(err, h.Close())
-	}
-	h.logf(slog.LevelInfo, "shutdown complete")
-	return h.Close()
-}
-
-// Session returns the underlying session handle. Used by TUI for ID(), Usage(), Entries().
-func (h *Harness) Session() session.Session { return h.session }
-
-// Store returns the underlying store. Used by TUI for tree reads.
-func (h *Harness) Store() session.Store { return h.store }
 
 // ExportSessionBundle performs explicit transport through the harness owner.
 func (h *Harness) exportSessionBundleDirect(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
@@ -1934,9 +1668,6 @@ func (h *Harness) forkSessionDirect(ctx context.Context, sourceID string) (strin
 	}
 	return ionexport.ForkSession(ctx, h.store, sourceID)
 }
-
-// Metrics returns the runtime metrics collector (may be nil).
-func (h *Harness) Metrics() *Metrics { return h.metrics }
 
 // Compact triggers context compaction while reserving the controller for the
 // operation. The internal compact method is used by an active turn only after
@@ -2058,43 +1789,8 @@ func (h *Harness) logf(level slog.Level, msg string, attrs ...slog.Attr) {
 	_ = h.log.Handler().Handle(context.Background(), a)
 }
 
-// PromptFromTemplate fills a prompt template with the given data.
-// Returns the filled template, or an empty string if the template doesn't exist.
-// Reference: Pi agent.js promptFromTemplate (line 98).
-func (h *Harness) PromptFromTemplate(name string, data map[string]string) string {
-	tmpl, ok := h.promptTemplates[name]
-	if !ok {
-		return ""
-	}
-	result := tmpl
-	for k, v := range data {
-		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
-	}
-	return result
-}
 
-// GetModel returns the current model.
-func (h *Harness) GetModel() llm.Model { h.mu.Lock(); defer h.mu.Unlock(); return h.model }
 
-// GetThinkingLevel returns the current thinking level.
-func (h *Harness) GetThinkingLevel() session.ThinkingLevel {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.thinking
-}
-
-// GetTools returns the current tool map and active tool names.
-func (h *Harness) GetTools() (map[string]Tool, []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	tools := make(map[string]Tool, len(h.tools))
-	for k, v := range h.tools {
-		tools[k] = v
-	}
-	active := make([]string, len(h.active))
-	copy(active, h.active)
-	return tools, active
-}
 
 // AppendMessage appends a message directly to the session without running a turn.
 // Reference: Pi agent-harness.js appendMessage (line 614).

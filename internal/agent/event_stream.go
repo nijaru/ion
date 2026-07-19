@@ -103,14 +103,8 @@ type eventHub struct {
 	closed bool
 }
 
-// Subscribe enters through the runtime controller command owner so snapshot
-// construction and subscription registration are part of one accepted
-// operation, not a frontend-side channel read.
-func (h *Harness) Subscribe(ctx context.Context, after EventCursor) (*EventSubscription, error) {
-	return submitResult(h, ctx, func() (*EventSubscription, error) {
-		return h.subscribeDirect(ctx, after)
-	})
-}
+// Subscribe is now in runtime.go — it sends a SubscribeCmd through the
+// typed command queue and calls subscribeDirect from the command goroutine.
 
 func (h *Harness) subscribeDirect(ctx context.Context, after EventCursor) (*EventSubscription, error) {
 	if ctx == nil {
