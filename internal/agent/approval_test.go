@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -471,5 +472,32 @@ func TestHarnessClosesRuntimeResourcesExactlyOnce(t *testing.T) {
 	}
 	if closed != 1 {
 		t.Fatalf("resource close count = %d, want 1", closed)
+	}
+}
+
+func TestHarnessResourceCloseErrorsAreStableAndJoined(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	first := errors.New("first resource close failed")
+	second := errors.New("second resource close failed")
+	closed := 0
+	h := NewController(ControllerConfig{
+		Session: sess,
+		CloseResources: []func() error{
+			func() error { closed++; return first },
+			func() error { closed++; return second },
+		},
+	})
+	defer h.Close()
+
+	err := h.CloseResources()
+	if !errors.Is(err, first) || !errors.Is(err, second) {
+		t.Fatalf("CloseResources error = %v, want both close errors", err)
+	}
+	if got := h.CloseResources(); !errors.Is(got, first) || !errors.Is(got, second) {
+		t.Fatalf("second CloseResources error = %v, want stable joined error", got)
+	}
+	if closed != 2 {
+		t.Fatalf("resource close count = %d, want 2", closed)
 	}
 }

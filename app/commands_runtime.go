@@ -513,16 +513,25 @@ func (m Model) resumeRuntimeCommand(
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 	if !m.runtimeRequest().matches(msg.switchID) {
-		closeRuntimeHandles(msg.runtime.Handles)
+		if err := closeRuntimeHandles(msg.runtime.Handles); err != nil {
+			return m.handleLocalError(fmt.Errorf("close stale runtime: %w", err))
+		}
 		return m, nil
 	}
 
-	m.applyRuntimeSwitched(msg)
+	closeErr := m.applyRuntimeSwitched(msg)
 	cmds := m.runtimeSwitchedCommands(msg)
+	if closeErr != nil {
+		var errCmd tea.Cmd
+		m, errCmd = m.handleLocalError(fmt.Errorf("close previous runtime: %w", closeErr))
+		if errCmd != nil {
+			cmds = append(cmds, errCmd)
+		}
+	}
 	return m, tea.Sequence(cmds...)
 }
 
-func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
+func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	// Replacement is live before the previous runner is closed. This is the
 	// after-switch lifecycle boundary; Switch/Resume deliberately do not run
 	// teardown on construction failure.
@@ -543,7 +552,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 		m.Model.EventSubscription.Close()
 		m.Model.EventSubscription = nil
 	}
-	closeRuntimeHandles(msg.previous)
+	closeErr := closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
 	m.Model.EventCursor = agent.EventCursor{}
 	m.pickerReducer().closeAll()
@@ -559,6 +568,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.clearPendingAction()
 	m.progressReducer().resetSessionUsage()
 	m.resetHistoryCursor()
+	return closeErr
 }
 
 func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
@@ -598,8 +608,8 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 	return m.handleLocalError(msg.err)
 }
 
-func closeRuntimeHandles(handles Handles) {
-	CloseHandles(handles)
+func closeRuntimeHandles(handles Handles) error {
+	return CloseHandles(handles)
 }
 
 func currentBranchName(defaultBranch string, sess persistenceAdapter) string {

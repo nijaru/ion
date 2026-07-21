@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,44 @@ func TestCompactEmpty(t *testing.T) {
 	}
 	if result != nil {
 		t.Error("expected nil result for empty session")
+	}
+}
+
+func TestCompactCancellationDoesNotDoubleCloseSignal(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("history", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("recent", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := Compact(ctx, sess, CompactOptions{
+		Model: "test",
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			cancel()
+			// Give the old proxy implementation time to close its channel. The
+			// regression then panicked when Compact deferred another close.
+			time.Sleep(10 * time.Millisecond)
+			return &mockStream{}, nil
+		},
+	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
+	if err == nil || !strings.Contains(err.Error(), "summarization aborted") {
+		t.Fatalf("Compact error = %v, want cancellation during summarization", err)
+	}
+}
+
+func TestGenerateSummaryRequiresStream(t *testing.T) {
+	_, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "", nil, nil, "", "", "", nil, nil,
+	)
+	if err == nil || err.Error() != "compaction stream is not configured" {
+		t.Fatalf("GenerateSummary error = %v, want missing stream error", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -285,8 +286,7 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		Storage: storage,
 	}
 	if err := validateRuntimeHandles(newHandles); err != nil {
-		CloseHandles(newHandles)
-		return SwitchResult{}, fmt.Errorf("switch: %w", err)
+		return SwitchResult{}, errors.Join(fmt.Errorf("switch: %w", err), CloseHandles(newHandles))
 	}
 
 	result := SwitchResult{
@@ -301,8 +301,10 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		if err := input.SaveState(config.RuntimeStateUpdate{
 			Config: cfg,
 		}); err != nil {
-			CloseHandles(newHandles)
-			return SwitchResult{}, fmt.Errorf("switch: persist runtime state: %w", err)
+			return SwitchResult{}, errors.Join(
+				fmt.Errorf("switch: persist runtime state: %w", err),
+				CloseHandles(newHandles),
+			)
 		}
 	}
 
@@ -327,14 +329,15 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 
 	newHandles := Handles{Info: info, Runner: runner, Storage: storage}
 	if err := validateRuntimeHandles(newHandles); err != nil {
-		CloseHandles(newHandles)
-		return SwitchResult{}, fmt.Errorf("resume: %w", err)
+		return SwitchResult{}, errors.Join(fmt.Errorf("resume: %w", err), CloseHandles(newHandles))
 	}
 	transition := input.Transition.WithHandles(newHandles)
 	if input.SaveState != nil {
 		if err := input.SaveState(config.RuntimeStateUpdate{Config: &cfg}); err != nil {
-			CloseHandles(newHandles)
-			return SwitchResult{}, fmt.Errorf("resume: persist runtime state: %w", err)
+			return SwitchResult{}, errors.Join(
+				fmt.Errorf("resume: persist runtime state: %w", err),
+				CloseHandles(newHandles),
+			)
 		}
 	}
 	return SwitchResult{
@@ -356,14 +359,20 @@ func validateRuntimeHandles(handles Handles) error {
 	return nil
 }
 
-// CloseHandles releases resources.
-func CloseHandles(handles Handles) {
+// CloseHandles releases runtime-owned resources and reports every close error.
+func CloseHandles(handles Handles) error {
+	var errs []error
 	if handles.Runner != nil {
-		_ = handles.Runner.Close()
+		if err := handles.Runner.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		if resources, ok := handles.Runner.(agent.ResourceOwner); ok {
-			_ = resources.CloseResources()
+			if err := resources.CloseResources(); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // GetSessionState returns the active harness session ID if available.

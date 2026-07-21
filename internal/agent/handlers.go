@@ -354,19 +354,24 @@ func (c *Controller) Store() session.Store {
 // CloseResources closes host-created resources after the controller has
 // stopped. Called by the composition root, not by Runtime.Close.
 func (c *Controller) CloseResources() error {
-	var firstErr error
 	c.resourcesOnce.Do(func() {
+		var errs []error
 		for _, fn := range c.closeResources {
-			if err := fn(); err != nil && firstErr == nil {
-				firstErr = err
+			if fn == nil {
+				continue
+			}
+			if err := fn(); err != nil {
+				errs = append(errs, err)
 			}
 		}
+		c.resourcesErr = errors.Join(errs...)
 	})
-	return firstErr
+	return c.resourcesErr
 }
 
-// Shutdown stops the controller with a context-bounded wait for active
-// work, then closes resources.
+// Shutdown stops the controller with a context-bounded wait for active work.
+// Host-created resources remain the composition root's responsibility through
+// CloseResources after the controller boundary has closed.
 func (c *Controller) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

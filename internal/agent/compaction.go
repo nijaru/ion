@@ -18,6 +18,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -567,6 +568,9 @@ func GenerateSummary(
 	convert func([]session.Message) []llm.Message,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
 ) (string, error) {
+	if streamFn == nil {
+		return "", errors.New("compaction stream is not configured")
+	}
 	// Pi: maxTokens = min(floor(0.8 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.8 * float64(reserveTokens))
 	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
@@ -699,6 +703,9 @@ func GenerateTurnPrefixSummary(
 	thinkingLevel session.ThinkingLevel,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
 ) (string, error) {
+	if streamFn == nil {
+		return "", errors.New("compaction stream is not configured")
+	}
 	// Pi: maxTokens = min(floor(0.5 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.5 * float64(reserveTokens))
 	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
@@ -796,15 +803,15 @@ func GenerateTurnPrefixSummary(
 
 // CompactionPreparation holds all data needed to execute compaction.
 type CompactionPreparation struct {
-	Entries              []session.Entry
-	MessagesToSummarize  []session.Message
-	TurnPrefixMessages   []session.Message
-	IsSplitTurn          bool
-	TokensBefore         int
-	PreviousSummary      string
-	FileOps              *CompactionFileOps
-	FirstKeptEntryID     string
-	Settings             CompactionSettings
+	Entries             []session.Entry
+	MessagesToSummarize []session.Message
+	TurnPrefixMessages  []session.Message
+	IsSplitTurn         bool
+	TokensBefore        int
+	PreviousSummary     string
+	FileOps             *CompactionFileOps
+	FirstKeptEntryID    string
+	Settings            CompactionSettings
 }
 
 // PrepareCompaction prepares the session for compaction, returning
@@ -902,15 +909,15 @@ func PrepareCompaction(ctx context.Context, sess session.Session, settings Compa
 	}
 
 	return &CompactionPreparation{
-		Entries:              entries,
-		MessagesToSummarize:  messagesToSummarize,
-		TurnPrefixMessages:   turnPrefixMessages,
-		IsSplitTurn:          cutPoint.IsSplitTurn,
-		TokensBefore:         tokensBefore,
-		PreviousSummary:      previousSummary,
-		FileOps:              fileOps,
-		FirstKeptEntryID:     firstKeptEntryID,
-		Settings:             settings,
+		Entries:             entries,
+		MessagesToSummarize: messagesToSummarize,
+		TurnPrefixMessages:  turnPrefixMessages,
+		IsSplitTurn:         cutPoint.IsSplitTurn,
+		TokensBefore:        tokensBefore,
+		PreviousSummary:     previousSummary,
+		FileOps:             fileOps,
+		FirstKeptEntryID:    firstKeptEntryID,
+		Settings:            settings,
 	}, nil
 }
 
@@ -940,13 +947,10 @@ func Compact(ctx context.Context, sess session.Session, opts CompactOptions, set
 		return nil, nil
 	}
 
-	// Build abort signal from context.
-	signal := make(chan struct{})
-	go func() {
-		<-ctx.Done()
-		close(signal)
-	}()
-	defer close(signal)
+	// The context's done channel is already the cancellation signal. Do not
+	// proxy it through a goroutine: a proxy needs a second owner and can either
+	// leak on successful compaction or panic when cancellation races return.
+	signal := ctx.Done()
 
 	var summary string
 	if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
