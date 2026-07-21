@@ -223,8 +223,8 @@ func (b *journalActionBoundary) Execute(
 	var processRecordMu sync.Mutex
 	var backgroundMu sync.Mutex
 	backgroundJob := false
-	effectCtx = tool.WithProcessIdentityRecorder(effectCtx, func(pid int) error {
-		processIdentity, err := tool.CaptureProcessIdentity(pid)
+	effectCtx = tool.WithProcessIdentityRecorder(effectCtx, func(launch tool.ProcessLaunch) error {
+		processIdentity, err := tool.CaptureProcessLaunchIdentity(launch)
 		if err != nil {
 			return fmt.Errorf("capture process identity: %w", err)
 		}

@@ -54,7 +54,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	// Exercise the actual tree picker: current leaf -> parent -> no-summary
 	// navigation -> replay. The store-backed projection is what makes this
 	// work with the production SQLite store, not only with test fakes.
-	time.Sleep(100 * time.Millisecond)
+	waitForAcceptanceIdle(t, harness)
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	waitForAcceptanceOutput(t, output, "routing_ [current]", "loaded session tree")

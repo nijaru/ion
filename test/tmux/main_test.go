@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,13 +193,13 @@ func TestTUIToolCall(t *testing.T) {
 		t.Skip("tmux not available")
 	}
 
-	testFile := "/tmp/ion-tmux-test-readme.txt"
+	tt := newTmuxTest(t)
+	testFile := filepath.Join(tt.root, fmt.Sprintf(".ion-tmux-test-readme-%d.txt", time.Now().UnixNano()))
 	if err := os.WriteFile(testFile, []byte("ION-TMUX-FILE-CONTENT-42"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(testFile)
 
-	tt := newTmuxTest(t)
 	tt.launchIon()
 	t.Log("Ion started")
 

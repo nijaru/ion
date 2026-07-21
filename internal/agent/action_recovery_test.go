@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
@@ -16,6 +17,16 @@ import (
 type recordingProcessReconciler struct {
 	result tool.ProcessRecoveryResult
 	seen   []string
+}
+
+type cancelingProcessReconciler struct {
+	started chan struct{}
+}
+
+func (r *cancelingProcessReconciler) ReconcileProcess(ctx context.Context, _ string) (tool.ProcessRecoveryResult, error) {
+	close(r.started)
+	<-ctx.Done()
+	return tool.ProcessRecoveryResult{Status: tool.ProcessRecoveryTerminated, Detail: "cleanup completed after caller cancellation"}, nil
 }
 
 func (r *recordingProcessReconciler) ReconcileProcess(_ context.Context, identity string) (tool.ProcessRecoveryResult, error) {
@@ -43,9 +54,6 @@ func TestControllerProcessRecoveryPersistsCleanupWithoutResolvingAction(t *testi
 		t.Fatal(err)
 	}
 	if _, err := store.StartAction(ctx, record.ID, "recorded-process"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.FinishAction(ctx, record.ID, session.ActionIndeterminate, "", "unknown effect", "cleanup pending"); err != nil {
 		t.Fatal(err)
 	}
 	reconciler := &recordingProcessReconciler{result: tool.ProcessRecoveryResult{
@@ -167,4 +175,68 @@ func TestControllerRestartRecoveryTerminatesRecordedOrphanGroup(t *testing.T) {
 	if !strings.Contains(action.CleanupOutcome, "terminated") {
 		t.Fatalf("restart cleanup evidence = %#v", action)
 	}
+}
+
+func TestControllerRecoveryPersistsAfterCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := newTestStore(t)
+	record := session.ActionRecord{
+		ID:              "cancel-recovery-action",
+		InvocationID:    "cancel-recovery-call",
+		SessionID:       "cancel-recovery-session",
+		TurnID:          "cancel-recovery-turn",
+		Tool:            "bash",
+		Operation:       "run",
+		Arguments:       []byte(`{"command":"sleep 30"}`),
+		Fingerprint:     "cancel-recovery-fingerprint",
+		ProcessIdentity: "opaque-process",
+	}
+	if _, err := store.PrepareAction(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthorizeAction(ctx, record.ID, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartAction(ctx, record.ID, record.ProcessIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FinishAction(ctx, record.ID, session.ActionIndeterminate, "", "unknown effect", "cleanup pending"); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := &cancelingProcessReconciler{started: make(chan struct{})}
+	controller := NewController(ControllerConfig{
+		Session:           session.NewSession(store, 64),
+		Store:             store,
+		ActionJournal:     store,
+		ProcessReconciler: reconciler,
+	})
+	t.Cleanup(func() { _ = controller.Close() })
+
+	done := make(chan error, 1)
+	go func() { done <- controller.RecoverProcessActions(ctx) }()
+	select {
+	case <-reconciler.started:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("process recovery did not start")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled process recovery did not return")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action, err := store.GetAction(context.Background(), record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(action.Error, "cleanup completed after caller cancellation") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	action, _ := store.GetAction(context.Background(), record.ID)
+	t.Fatalf("canceled recovery did not persist evidence: %#v", action)
 }

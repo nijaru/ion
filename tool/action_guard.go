@@ -2,7 +2,9 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"sync/atomic"
 )
 
 // ActionPathGuard carries the canonical paths approved by the runtime action
@@ -11,10 +13,31 @@ type ActionPathGuard struct {
 	Paths []string
 }
 
-// ProcessIdentityRecorder is called immediately after a process-backed effect
-// starts. A runtime action boundary captures and durably associates the
-// operating-system identity of that process group before its first effect.
-type ProcessIdentityRecorder func(pid int) error
+// ProcessLaunch is an executor-issued, opaque launch capability. Its
+// unexported identity prevents a tool from manufacturing a PID and asking the
+// action boundary to adopt an unrelated process.
+type ProcessLaunch struct {
+	pid   int
+	nonce uint64
+}
+
+var processLaunchNonce atomic.Uint64
+
+func newProcessLaunch(pid int) ProcessLaunch {
+	return ProcessLaunch{pid: pid, nonce: processLaunchNonce.Add(1)}
+}
+
+func (launch ProcessLaunch) pidForIdentity() (int, error) {
+	if launch.pid <= 0 || launch.nonce == 0 {
+		return 0, ErrInvalidProcessLaunch
+	}
+	return launch.pid, nil
+}
+
+// ProcessIdentityRecorder is called immediately after an executor-issued
+// process launch. A runtime action boundary captures and durably associates
+// the operating-system identity before the executor releases its handshake.
+type ProcessIdentityRecorder func(ProcessLaunch) error
 
 // JobLifecycleRecorder lets the runtime action boundary distinguish a
 // background launch from a foreground result. Started is acknowledged before
@@ -31,6 +54,8 @@ type actionPathGuardKey struct{}
 type processIdentityRecorderKey struct{}
 
 type jobLifecycleRecorderKey struct{}
+
+var ErrInvalidProcessLaunch = errors.New("invalid executor process launch")
 
 // WithActionPathGuard attaches the approved canonical targets to an effect
 // callback context. Built-in mutating file tools enforce the guard immediately

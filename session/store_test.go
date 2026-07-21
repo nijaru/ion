@@ -525,6 +525,37 @@ func TestSQLiteMigratesProcessGroupStorageToProcessIdentity(t *testing.T) {
 	}
 }
 
+func TestSQLiteRejectsConflictingDualProcessIdentityColumns(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conflicting-process-identity.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := strings.ReplaceAll(Schema, "process_identity", "process_group_id")
+	if _, err := raw.ExecContext(ctx, legacySchema+`
+		ALTER TABLE actions ADD COLUMN process_identity TEXT NOT NULL DEFAULT '';`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, "PRAGMA user_version = 9"); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO actions(action_id, invocation_id, tool_name, operation, arguments, fingerprint, state, process_group_id, process_identity, prepared_at)
+		VALUES('conflicting-action', 'conflicting-call', 'bash', 'run', '{"command":"true"}', 'conflicting-fingerprint', 'started', 'legacy-process', 'different-process', 1)`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSQLiteStore(path, "ignored"); err == nil || !strings.Contains(err.Error(), "conflicting process identity columns") {
+		t.Fatalf("conflicting dual-column store error = %v", err)
+	}
+}
+
 func TestSQLiteStoreEnforcesSingleWriterLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.db")
 	first, err := NewSQLiteStore(path, "first")

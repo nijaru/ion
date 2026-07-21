@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -62,6 +63,48 @@ func TestOwnedClientCloseTerminatesProcessGroup(t *testing.T) {
 	}
 	if !cleaned {
 		t.Fatal("ownedClient.Close did not run sandbox cleanup")
+	}
+}
+
+func TestMCPParentWatchKillsGroupWhenIonPipeCloses(t *testing.T) {
+	childControl, parentControl, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandArgs := append([]string{"-c", mcpParentWatchScript, "ion-mcp-supervisor", "/bin/sh"}, "-c", "sleep 30")
+	command := exec.Command("/bin/sh", commandArgs...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.ExtraFiles = []*os.File{childControl}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		childControl.Close()
+		parentControl.Close()
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	command.Stdin = devNull
+	command.Stdout = devNull
+	command.Stderr = devNull
+	if err := command.Start(); err != nil {
+		childControl.Close()
+		parentControl.Close()
+		t.Fatal(err)
+	}
+	_ = childControl.Close()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- command.Wait() }()
+	if err := parentControl.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-waitDone:
+		if err == nil {
+			t.Fatal("parent-watch supervisor exited cleanly; expected group termination")
+		}
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		<-waitDone
+		t.Fatal("parent-watch supervisor did not terminate its group")
 	}
 }
 

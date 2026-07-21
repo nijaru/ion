@@ -234,8 +234,9 @@ func (b *Bash) runCommand(
 	}
 	processRecorder, _ := ProcessIdentityRecorderFromContext(runCtx)
 	startedCallback := func(pid int) error {
+		launch := newProcessLaunch(pid)
 		if processRecorder != nil {
-			if err := processRecorder(pid); err != nil {
+			if err := processRecorder(launch); err != nil {
 				return err
 			}
 		}

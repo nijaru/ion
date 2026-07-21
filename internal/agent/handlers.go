@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
@@ -256,7 +257,16 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 			sendResult(cmd.Reply, err)
 			return
 		}
+		durableCtx, cancelDurability := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelDurability()
 		for _, action := range actions {
+			if action.State == session.ActionStarted {
+				action, err = journal.FinishAction(durableCtx, action.ID, session.ActionIndeterminate, "", "startup found an action after its durable start boundary", "startup recovery required")
+				if err != nil {
+					sendResult(cmd.Reply, err)
+					return
+				}
+			}
 			if action.State != session.ActionIndeterminate {
 				continue
 			}
@@ -286,7 +296,7 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 			}
 			reason := "restart process recovery: " + result.Detail
 			cleanup := "restart process recovery status: " + string(result.Status)
-			if _, err := journal.RecordActionRecovery(cmd.Ctx, action.ID, reason, cleanup); err != nil {
+			if _, err := journal.RecordActionRecovery(durableCtx, action.ID, reason, cleanup); err != nil {
 				sendResult(cmd.Reply, err)
 				return
 			}

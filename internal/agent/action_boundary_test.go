@@ -6,16 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
-	"golang.org/x/sys/unix"
 )
 
 func TestJournalActionBoundaryBindsCanonicalActionIdentity(t *testing.T) {
@@ -336,7 +333,7 @@ func TestPrepareToolCallRejectsEffectWithoutActionBoundary(t *testing.T) {
 	}
 }
 
-func TestJournalActionBoundaryRecordsProcessGroupIdentity(t *testing.T) {
+func TestJournalActionBoundaryRejectsUnboundProcessLaunch(t *testing.T) {
 	ctx := t.Context()
 	workdir := t.TempDir()
 	store := newTestStore(t)
@@ -351,36 +348,25 @@ func TestJournalActionBoundaryRecordsProcessGroupIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := exec.Command("/bin/sh", "-c", "sleep 30")
-	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := process.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = unix.Kill(-process.Process.Pid, unix.SIGKILL)
-		_, _ = process.Process.Wait()
-	})
-	if _, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+	_, err = boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
 		recorder, ok := tool.ProcessIdentityRecorderFromContext(ctx)
 		if !ok {
 			return session.ToolResultMessage{}, errors.New("process recorder missing from action context")
 		}
-		if err := recorder(process.Process.Pid); err != nil {
-			return session.ToolResultMessage{}, err
+		if err := recorder(tool.ProcessLaunch{}); !errors.Is(err, tool.ErrInvalidProcessLaunch) {
+			return session.ToolResultMessage{}, fmt.Errorf("unbound launch error = %v, want ErrInvalidProcessLaunch", err)
 		}
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: "ok"}}}, nil
-	}, nil, nil); err != nil {
-		t.Fatal(err)
+		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: "unbound launch rejected"}}}, errors.New("executor did not launch a bound process")
+	}, nil, nil)
+	if err == nil {
+		t.Fatal("unbound process launch unexpectedly completed")
 	}
 	record, err := store.GetAction(ctx, token.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != session.ActionCompleted || record.ProcessIdentity == "" {
-		t.Fatalf("action process identity = %#v, want completed process identity", record)
-	}
-	if identity, err := tool.DecodeProcessIdentity(record.ProcessIdentity); err != nil || identity.PID != process.Process.Pid {
-		t.Fatalf("durable process identity = %q, err = %v", record.ProcessIdentity, err)
+	if record.State != session.ActionIndeterminate || record.ProcessIdentity != "" {
+		t.Fatalf("unbound process action = %#v, want indeterminate without identity", record)
 	}
 }
 

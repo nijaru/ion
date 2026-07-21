@@ -21,6 +21,10 @@ func (unsupportedProcessPlatform) inspect(int) (ProcessIdentity, error) {
 	return ProcessIdentity{}, ErrProcessIdentityUnsupported
 }
 
-func (unsupportedProcessPlatform) terminateGroup(context.Context, int) error {
+func (unsupportedProcessPlatform) terminateGroup(context.Context, ProcessIdentity) error {
 	return fmt.Errorf("%w: process-group termination", ErrProcessIdentityUnsupported)
+}
+
+func (unsupportedProcessPlatform) groupExists(int) (bool, error) {
+	return false, ErrProcessIdentityUnsupported
 }

@@ -43,6 +43,22 @@ type Runtime struct {
 	closed  bool
 }
 
+// mcpParentWatchScript keeps a stdio server contained by the Ion process
+// lifetime. The control pipe remains open in the parent; if Ion crashes, the
+// watcher observes EOF and kills the whole process group. The server is kept
+// in the same group so descendants are contained as well.
+const mcpParentWatchScript = `( watcher() {
+	IFS= read -r _ <&3 || kill -KILL -- -$$
+}; watcher ) &
+watcher=$!
+"$@" <&0 >&1 2>&2 &
+child=$!
+wait "$child"
+status=$?
+kill "$watcher" 2>/dev/null || :
+wait "$watcher" 2>/dev/null || :
+exit "$status"`
+
 // Open connects and discovers every configured server atomically. A failure
 // closes all clients opened so far and returns no partially usable runtime.
 func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime, error) {
@@ -118,13 +134,23 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q sandbox: %w", name, err)
 		}
-		command := exec.CommandContext(serverCtx, plan.Name, plan.Args...)
+		childControl, parentControl, err := os.Pipe()
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q parent-lifetime pipe: %w", name, err)
+		}
+		commandArgs := append([]string{"-c", mcpParentWatchScript, "ion-mcp-supervisor", plan.Name}, plan.Args...)
+		command := exec.CommandContext(serverCtx, "/bin/sh", commandArgs...)
 		command.Dir = plan.Dir
 		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		command.Env = overlayEnvironment(tool.NewEnvironmentPolicy("allowlist", nil).CommandEnvironment(), cfg.Env)
+		command.ExtraFiles = []*os.File{childControl}
 		client, err := NewClient(ctx, &sdkmcp.CommandTransport{Command: command}, "ion", "0.0.1")
+		_ = childControl.Close()
 		if err != nil {
 			cancel()
+			_ = parentControl.Close()
 			_ = terminateProcessGroup(command)
 			_ = plan.Cleanup()
 			runtime.Close()
@@ -142,6 +168,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 		if err != nil {
 			cancel()
 			_ = client.Close()
+			_ = parentControl.Close()
 			_ = terminateProcessGroup(command)
 			_ = plan.Cleanup()
 			runtime.Close()
@@ -160,10 +187,11 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			seenTools[toolName] = struct{}{}
 		}
 		runtime.clients = append(runtime.clients, &ownedClient{
-			client:  client,
-			cancel:  cancel,
-			command: command,
-			cleanup: plan.Cleanup,
+			client:        client,
+			cancel:        cancel,
+			command:       command,
+			cleanup:       plan.Cleanup,
+			parentControl: parentControl,
 		})
 		runtime.tools = append(runtime.tools, discovered...)
 	}
@@ -250,10 +278,13 @@ func (r *Runtime) Close() error {
 // Client.Close handles the protocol; cancel guarantees the command exits even
 // when a server does not finish its transport handshake cleanly.
 type ownedClient struct {
-	client  *Client
-	cancel  context.CancelFunc
-	command *exec.Cmd
-	cleanup func() error
+	client        *Client
+	cancel        context.CancelFunc
+	command       *exec.Cmd
+	cleanup       func() error
+	parentControl *os.File
+	controlOnce   sync.Once
+	controlErr    error
 }
 
 func (c *ownedClient) Close() error {
@@ -273,7 +304,15 @@ func (c *ownedClient) Close() error {
 		errors.Is(err, sdkmcp.ErrConnectionClosed) {
 		err = nil
 	}
-	return errors.Join(err, terminateProcessGroup(c.command), callCleanup(c.cleanup))
+	return errors.Join(err, c.closeParentControl(), terminateProcessGroup(c.command), callCleanup(c.cleanup))
+}
+
+func (c *ownedClient) closeParentControl() error {
+	if c == nil || c.parentControl == nil {
+		return nil
+	}
+	c.controlOnce.Do(func() { c.controlErr = c.parentControl.Close() })
+	return c.controlErr
 }
 
 func terminateProcessGroup(command *exec.Cmd) error {

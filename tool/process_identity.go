@@ -27,6 +27,7 @@ const processIdentityVersion = 1
 var (
 	ErrProcessIdentityUnsupported = errors.New("process identity is unsupported on this platform")
 	ErrProcessIdentityInvalid     = errors.New("invalid process identity")
+	ErrProcessIdentityChanged     = errors.New("process identity changed")
 	ErrProcessNotFound            = errors.New("process not found")
 )
 
@@ -65,7 +66,8 @@ type processPlatform interface {
 	name() string
 	capture(pid int) (ProcessIdentity, error)
 	inspect(pid int) (ProcessIdentity, error)
-	terminateGroup(ctx context.Context, pgid int) error
+	terminateGroup(ctx context.Context, identity ProcessIdentity) error
+	groupExists(pgid int) (bool, error)
 }
 
 // CaptureProcessIdentity captures the canonical identity used by the action
@@ -80,6 +82,16 @@ func CaptureProcessIdentity(pid int) (string, error) {
 		return "", err
 	}
 	return EncodeProcessIdentity(identity)
+}
+
+// CaptureProcessLaunchIdentity captures identity only from an executor-issued
+// launch capability. Callers cannot provide a raw PID through this boundary.
+func CaptureProcessLaunchIdentity(launch ProcessLaunch) (string, error) {
+	pid, err := launch.pidForIdentity()
+	if err != nil {
+		return "", err
+	}
+	return CaptureProcessIdentity(pid)
 }
 
 // EncodeProcessIdentity turns an identity into a versioned opaque token for
@@ -163,34 +175,43 @@ func (processReconciler) ReconcileProcess(ctx context.Context, encodedIdentity s
 			Detail: "recorded PID is present but its process-group identity changed; refused to signal it",
 		}, nil
 	}
-	if err := platform.terminateGroup(ctx, identity.PGID); err != nil {
+	if err := platform.terminateGroup(ctx, identity); err != nil {
 		if errors.Is(err, ErrProcessNotFound) {
 			return ProcessRecoveryResult{Status: ProcessRecoveryGone, Detail: "recorded process group exited before cleanup"}, nil
 		}
+		if errors.Is(err, ErrProcessIdentityChanged) {
+			return ProcessRecoveryResult{Status: ProcessRecoveryIdentityChanged, Detail: "process identity changed before cleanup; refused to signal it"}, nil
+		}
 		return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("terminate recorded process group: %v", err)}, nil
 	}
-	deadline := time.NewTimer(500 * time.Millisecond)
-	defer deadline.Stop()
+	// Once signaling has succeeded, cleanup verification must not be abandoned
+	// merely because the initiating turn was canceled.
+	verifyCtx, cancelVerify := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelVerify()
 	poll := time.NewTicker(10 * time.Millisecond)
 	defer poll.Stop()
 	for {
+		leaderGone := false
 		observed, err = platform.inspect(identity.PID)
 		if errors.Is(err, ErrProcessNotFound) {
-			return ProcessRecoveryResult{Status: ProcessRecoveryTerminated, Detail: "terminated matching recorded process group"}, nil
-		}
-		if err != nil {
+			leaderGone = true
+		} else if err != nil {
 			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("verify process-group cleanup: %v", err)}, nil
-		}
-		if observed != identity {
+		} else if observed != identity {
 			return ProcessRecoveryResult{
 				Status: ProcessRecoveryIdentityChanged,
 				Detail: "process identity changed during cleanup; no further signal sent",
 			}, nil
 		}
+		groupExists, err := platform.groupExists(identity.PGID)
+		if err != nil {
+			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("verify process-group cleanup: %v", err)}, nil
+		}
+		if leaderGone && !groupExists {
+			return ProcessRecoveryResult{Status: ProcessRecoveryTerminated, Detail: "terminated matching recorded process group"}, nil
+		}
 		select {
-		case <-ctx.Done():
-			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("verify process-group cleanup: %v", ctx.Err())}, nil
-		case <-deadline.C:
+		case <-verifyCtx.Done():
 			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: "recorded process group remained alive after termination"}, nil
 		case <-poll.C:
 		}

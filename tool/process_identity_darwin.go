@@ -61,15 +61,40 @@ func (darwinProcessPlatform) inspect(pid int) (ProcessIdentity, error) {
 	}, nil
 }
 
-func (darwinProcessPlatform) terminateGroup(ctx context.Context, pgid int) error {
+func (p darwinProcessPlatform) terminateGroup(ctx context.Context, identity ProcessIdentity) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := unix.Kill(-pgid, unix.SIGKILL); err != nil {
+	observed, err := p.inspect(identity.PID)
+	if err != nil {
+		return err
+	}
+	if observed != identity {
+		return ErrProcessIdentityChanged
+	}
+	if err := unix.Kill(-identity.PGID, unix.SIGKILL); err != nil {
 		if errors.Is(err, unix.ESRCH) {
 			return ErrProcessNotFound
 		}
 		return err
 	}
 	return nil
+}
+
+func (darwinProcessPlatform) groupExists(pgid int) (bool, error) {
+	processes, err := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pgid)
+	if err != nil {
+		if errors.Is(err, unix.ESRCH) || errors.Is(err, unix.EIO) || errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, process := range processes {
+		// Darwin's SZOMB state is 5. Zombies no longer execute and do not
+		// represent a live descendant that recovery must signal.
+		if process.Proc.P_stat != 5 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

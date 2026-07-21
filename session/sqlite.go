@@ -358,6 +358,27 @@ func ensureActionProcessIdentity(ctx context.Context, tx *sql.Tx) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("inspect actions columns: %w", err)
 	}
+	if hasIdentity && hasGroup {
+		var conflicts int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM actions
+			WHERE process_identity <> '' AND process_group_id <> ''
+			  AND process_identity <> process_group_id`).Scan(&conflicts); err != nil {
+			return fmt.Errorf("inspect dual process identity columns: %w", err)
+		}
+		if conflicts != 0 {
+			return fmt.Errorf("%w: conflicting process identity columns", ErrCorruptSession)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE actions SET process_identity = process_group_id
+			WHERE process_identity = '' AND process_group_id <> ''`); err != nil {
+			return fmt.Errorf("merge legacy process identity column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE actions DROP COLUMN process_group_id"); err != nil {
+			return fmt.Errorf("drop legacy process identity column: %w", err)
+		}
+		return nil
+	}
 	if hasIdentity {
 		return nil
 	}
