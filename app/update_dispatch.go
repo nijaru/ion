@@ -300,6 +300,10 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		next, cmd := m.handleQueuedTurn(msg)
 		return next, cmd, true
 
+	case busyInputResultMsg:
+		next, cmd := m.handleBusyInputResult(msg)
+		return next, cmd, true
+
 	case turnSubmitResultMsg:
 		next, cmd := m.handleTurnSubmitResult(msg)
 		return next, cmd, true

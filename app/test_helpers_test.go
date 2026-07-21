@@ -138,6 +138,10 @@ func (s *stubSession) Close() error {
 
 type stubRunner struct {
 	aborts       int
+	steers       []string
+	followUps    []string
+	steerErr     error
+	followUpErr  error
 	compacts     int
 	promptTexts  []string
 	promptImages [][]session.ImageContent
@@ -160,8 +164,14 @@ func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.Im
 	r.promptImages = append(r.promptImages, cloneImageAttachments(images))
 	return nil, r.promptErr
 }
-func (r *stubRunner) Steer(_ string, _ ...session.ImageContent) error    { return nil }
-func (r *stubRunner) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
+func (r *stubRunner) Steer(text string, _ ...session.ImageContent) error {
+	r.steers = append(r.steers, text)
+	return r.steerErr
+}
+func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
+	r.followUps = append(r.followUps, text)
+	return r.followUpErr
+}
 func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++

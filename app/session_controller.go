@@ -161,12 +161,10 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 	}) {
 	case BusyInputRouteSteer:
 		m.resetComposerDraft()
-		_ = runner.Steer(text, images...) // ignore idle error; TUI can't fix harness state
-		return m, nil
+		return m, busyInputCmd(runner, "steer", text, images)
 	case BusyInputRouteFollowUp:
 		m.resetComposerDraft()
-		_ = runner.FollowUp(text, images...)
-		return m, nil
+		return m, busyInputCmd(runner, "follow-up", text, images)
 	default:
 		if len(images) > 0 {
 			return m, cmdError("image attachments require an active agent turn")
@@ -178,10 +176,53 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	if m.InFlight.Thinking && !m.Progress.Compacting && m.Model.Runner != nil {
 		m.resetComposerDraft()
-		_ = m.Model.Runner.FollowUp(text)
-		return m, nil
+		return m, busyInputCmd(m.Model.Runner, "follow-up", text, nil)
 	}
 	return m.queueBusyInputLocal(text)
+}
+
+func busyInputCmd(runner agent.Runtime, action, text string, images []session.ImageContent) tea.Cmd {
+	images = cloneImageAttachments(images)
+	return func() tea.Msg {
+		if runner == nil {
+			return busyInputResultMsg{
+				action: action,
+				text:   text,
+				images: images,
+				err:    errors.New("session unavailable"),
+			}
+		}
+
+		var err error
+		switch action {
+		case "steer":
+			err = runner.Steer(text, images...)
+		case "follow-up":
+			err = runner.FollowUp(text, images...)
+		default:
+			err = fmt.Errorf("unsupported busy input action %q", action)
+		}
+		return busyInputResultMsg{action: action, text: text, images: images, err: err}
+	}
+}
+
+func (m Model) handleBusyInputResult(msg busyInputResultMsg) (Model, tea.Cmd) {
+	if msg.err == nil {
+		return m, nil
+	}
+
+	// The draft was cleared optimistically so the user can continue typing
+	// while the bounded runtime command is accepted. Restore it only when the
+	// composer is still empty; never overwrite newer user input.
+	var restoreCmd tea.Cmd
+	if strings.TrimSpace(m.Input.Composer.Value()) == "" && len(m.Input.Images) == 0 {
+		m.Input.Images = cloneImageAttachments(msg.images)
+		restoreCmd = m.setComposerDraft(msg.text)
+	}
+	return m, sequenceCmds(
+		restoreCmd,
+		cmdError(fmt.Sprintf("%s input: %v", msg.action, msg.err)),
+	)
 }
 
 // queueFollowUp queues a follow-up message when Alt+Enter is pressed while the agent is streaming.

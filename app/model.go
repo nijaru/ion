@@ -184,6 +184,13 @@ type queuedTurnMsg struct {
 	rearmSessionEvents bool
 }
 
+type busyInputResultMsg struct {
+	action string
+	text   string
+	images []session.ImageContent
+	err    error
+}
+
 type turnSubmitResultMsg struct {
 	text   string
 	draft  string
