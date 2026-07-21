@@ -378,8 +378,9 @@ func openRuntime(
 		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 	}
 	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
-		// Non-fatal: start without tools if registration fails.
-		fmt.Fprintf(os.Stderr, "warning: failed to register tools: %v\n", err)
+		_ = closeRuntimeResources()
+		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil,
+			fmt.Errorf("register coding tools: %w", err)
 	}
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {

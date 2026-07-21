@@ -51,3 +51,37 @@ func TestPrepareRequestOmitsToolsForModelWithoutToolSupport(t *testing.T) {
 		t.Fatal("original request tools were mutated")
 	}
 }
+
+func TestPrepareRequestMapsEffortToThinkingBudget(t *testing.T) {
+	request := &llm.Request{
+		Model:           "claude-sonnet-4-20250514",
+		ReasoningEffort: "xhigh",
+		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	}
+	caps := llm.Capabilities{
+		Streaming: true,
+		Tools:     true,
+		Reasoning: llm.ReasoningCapabilities{
+			Kind:                llm.ReasoningKindBudget,
+			CanDisable:          true,
+			BudgetMinTokens:     1024,
+			BudgetDefaultTokens: 4096,
+			BudgetMaxTokens:     32768,
+		},
+	}
+
+	prepared, err := llm.PrepareRequestForCapabilities(request, caps)
+	if err != nil {
+		t.Fatalf("PrepareRequestForCapabilities() error = %v", err)
+	}
+	if prepared.ThinkingBudget != 16384 || prepared.ReasoningEffort != "" {
+		t.Fatalf(
+			"prepared reasoning = effort %q, budget %d; want empty effort and 16384 budget",
+			prepared.ReasoningEffort,
+			prepared.ThinkingBudget,
+		)
+	}
+	if request.ThinkingBudget != 0 || request.ReasoningEffort != "xhigh" {
+		t.Fatalf("original request mutated: %#v", request)
+	}
+}

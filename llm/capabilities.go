@@ -44,6 +44,12 @@ type ReasoningCapabilities struct {
 	BudgetDefaultTokens int
 }
 
+const (
+	defaultThinkingBudgetMinTokens = 1024
+	defaultThinkingBudgetTokens    = 4096
+	defaultThinkingBudgetMaxTokens = 32768
+)
+
 // DefaultCapabilities returns full capabilities — suitable for most chat models.
 func DefaultCapabilities() Capabilities {
 	return Capabilities{
@@ -77,6 +83,13 @@ func (c Capabilities) SupportsReasoningEffort(effort string) bool {
 }
 
 func (c Capabilities) SupportsReasoningControl(value string) bool {
+	if c.SupportsThinking() {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "off" || value == "none" || value == "disabled" {
+			return c.Reasoning.CanDisable
+		}
+		return c.ThinkingBudgetForEffort(value) > 0
+	}
 	return c.SupportsReasoningEffort(value) || c.SupportsReasoningToggle(value)
 }
 
@@ -114,4 +127,56 @@ func (c Capabilities) SupportsThinkingBudget(tokens int) bool {
 		return false
 	}
 	return true
+}
+
+// ThinkingBudgetForEffort maps Ion's user-facing reasoning levels to the
+// token budget used by providers whose native control is a thinking budget.
+// An explicit provider-native budget remains authoritative; this mapping only
+// adapts the shared effort control at the provider boundary.
+func (c Capabilities) ThinkingBudgetForEffort(effort string) int {
+	if !c.SupportsThinking() {
+		return 0
+	}
+
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if effort == "" || effort == "auto" || effort == "off" || effort == "none" || effort == "disabled" {
+		return 0
+	}
+
+	min := c.Reasoning.BudgetMinTokens
+	if min <= 0 {
+		min = defaultThinkingBudgetMinTokens
+	}
+	defaultBudget := c.Reasoning.BudgetDefaultTokens
+	if defaultBudget < min {
+		defaultBudget = defaultThinkingBudgetTokens
+	}
+	max := c.Reasoning.BudgetMaxTokens
+	if max <= 0 {
+		max = defaultThinkingBudgetMaxTokens
+	}
+
+	var budget int
+	switch effort {
+	case "minimal":
+		budget = min
+	case "low":
+		budget = defaultBudget / 2
+	case "medium":
+		budget = defaultBudget
+	case "high":
+		budget = defaultBudget * 2
+	case "xhigh", "max":
+		budget = defaultBudget * 4
+	default:
+		return 0
+	}
+
+	if budget < min {
+		budget = min
+	}
+	if budget > max {
+		budget = max
+	}
+	return budget
 }

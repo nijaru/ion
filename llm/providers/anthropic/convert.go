@@ -1,13 +1,17 @@
 package anthropic
 
 import (
+	"fmt"
+
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/ion/llm"
 )
 
-func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
+const defaultAnthropicOutputReserveTokens = 4096
+
+func (p *Provider) convertRequest(req *llm.Request) (sdk.MessageNewParams, error) {
 	var system []sdk.TextBlockParam
 	var messages []sdk.MessageParam
 
@@ -54,11 +58,28 @@ func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
 		}
 	}
 
+	maxTokens := int64(4096)
+	if req.MaxTokens > 0 {
+		maxTokens = int64(req.MaxTokens)
+	}
+	if req.ThinkingBudget > 0 {
+		if req.MaxTokens > 0 && maxTokens <= int64(req.ThinkingBudget) {
+			return sdk.MessageNewParams{}, fmt.Errorf(
+				"anthropic: max_tokens (%d) must exceed thinking budget (%d)",
+				maxTokens,
+				req.ThinkingBudget,
+			)
+		}
+		if req.MaxTokens == 0 {
+			maxTokens = int64(req.ThinkingBudget + defaultAnthropicOutputReserveTokens)
+		}
+	}
+
 	params := sdk.MessageNewParams{
 		Model:     sdk.Model(req.Model),
 		Messages:  messages,
 		Tools:     p.convertTools(req.Tools),
-		MaxTokens: 4096,
+		MaxTokens: maxTokens,
 	}
 
 	if rf := req.ResponseFormat; rf != nil &&
@@ -73,9 +94,6 @@ func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
 		params.ToolChoice = sdk.ToolChoiceParamOfTool(name)
 	}
 
-	if req.MaxTokens > 0 {
-		params.MaxTokens = int64(req.MaxTokens)
-	}
 	if len(system) > 0 {
 		params.System = system
 	}
@@ -86,7 +104,7 @@ func (p *Provider) convertRequest(req *llm.Request) sdk.MessageNewParams {
 		params.Temperature = sdk.Float(req.Temperature)
 	}
 
-	return params
+	return params, nil
 }
 
 func (p *Provider) convertContentBlocks(m llm.Message) []sdk.ContentBlockParamUnion {

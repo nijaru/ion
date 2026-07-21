@@ -147,9 +147,12 @@ const (
 
 // ModelDef represents a model capability mapping definition.
 type ModelDef struct {
-	Pattern      string        `json:"pattern"                toml:"pattern"` // glob pattern (e.g. "deepseek-*") or exact name
-	Preset       ModelPreset   `json:"preset,omitempty"       toml:"preset,omitempty"`
-	Capabilities *Capabilities `json:"capabilities,omitempty" toml:"capabilities,omitempty"`
+	Pattern       string        `json:"pattern"                toml:"pattern"` // glob pattern (e.g. "deepseek-*") or exact name
+	Preset        ModelPreset   `json:"preset,omitempty"       toml:"preset,omitempty"`
+	Temperature   *bool         `json:"temperature,omitempty"   toml:"temperature,omitempty"`
+	SystemRole    Role          `json:"system_role,omitempty"   toml:"system_role,omitempty"`
+	ReasoningKind ReasoningKind `json:"reasoning_kind,omitempty" toml:"reasoning_kind,omitempty"`
+	Capabilities  *Capabilities `json:"capabilities,omitempty" toml:"capabilities,omitempty"`
 }
 
 // Registry manages thread-safe resolution of model capabilities.
@@ -208,20 +211,16 @@ func (r *Registry) capabilitiesFromDef(def ModelDef, modelID string) Capabilitie
 		return *def.Capabilities
 	}
 
+	caps := DefaultCapabilities()
 	switch def.Preset {
 	case PresetChat:
-		return DefaultCapabilities()
+		// DefaultCapabilities is already the chat profile.
 	case PresetReasoning:
-		return Capabilities{
-			Streaming:   true,
-			Tools:       true,
-			Temperature: false,
-			SystemRole:  RoleSystem,
-			Reasoning: ReasoningCapabilities{
-				Kind:       ReasoningKindEffort,
-				Efforts:    []string{"minimal", "low", "medium", "high"},
-				CanDisable: true,
-			},
+		caps.Temperature = false
+		caps.Reasoning = ReasoningCapabilities{
+			Kind:       ReasoningKindEffort,
+			Efforts:    []string{"minimal", "low", "medium", "high"},
+			CanDisable: true,
 		}
 	case PresetOpenAIReasoning:
 		role := RoleSystem
@@ -230,18 +229,49 @@ func (r *Registry) capabilitiesFromDef(def ModelDef, modelID string) Capabilitie
 		} else if strings.Contains(modelID, "o3") || strings.Contains(modelID, "o4") {
 			role = RoleDeveloper
 		}
-		return Capabilities{
-			Streaming:   true,
-			Tools:       true,
-			Temperature: false,
-			SystemRole:  role,
-			Reasoning: ReasoningCapabilities{
-				Kind:       ReasoningKindEffort,
-				Efforts:    []string{"minimal", "low", "medium", "high"},
-				CanDisable: true,
-			},
+		caps.Temperature = false
+		caps.SystemRole = role
+		caps.Reasoning = ReasoningCapabilities{
+			Kind:       ReasoningKindEffort,
+			Efforts:    []string{"minimal", "low", "medium", "high"},
+			CanDisable: true,
+		}
+	}
+
+	if def.Temperature != nil {
+		caps.Temperature = *def.Temperature
+	}
+	if def.SystemRole != "" {
+		caps.SystemRole = def.SystemRole
+	}
+	if def.ReasoningKind != ReasoningKindNone {
+		caps.Reasoning = reasoningCapabilitiesForKind(def.ReasoningKind)
+	}
+	return caps
+}
+
+func reasoningCapabilitiesForKind(kind ReasoningKind) ReasoningCapabilities {
+	switch kind {
+	case ReasoningKindEffort:
+		return ReasoningCapabilities{
+			Kind:       ReasoningKindEffort,
+			Efforts:    []string{"minimal", "low", "medium", "high", "xhigh"},
+			CanDisable: true,
+		}
+	case ReasoningKindBudget:
+		return ReasoningCapabilities{
+			Kind:                ReasoningKindBudget,
+			CanDisable:          true,
+			BudgetMinTokens:     defaultThinkingBudgetMinTokens,
+			BudgetDefaultTokens: defaultThinkingBudgetTokens,
+			BudgetMaxTokens:     defaultThinkingBudgetMaxTokens,
+		}
+	case ReasoningKindBoolean:
+		return ReasoningCapabilities{
+			Kind:       ReasoningKindBoolean,
+			CanDisable: true,
 		}
 	default:
-		return DefaultCapabilities()
+		return ReasoningCapabilities{}
 	}
 }

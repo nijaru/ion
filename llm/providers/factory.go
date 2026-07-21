@@ -33,6 +33,10 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 
 	apiKey := llm.ResolvedAuthToken(cfg, def)
 	endpoint := llm.ResolvedEndpoint(cfg)
+	modelRegistry, err := modelRegistryFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	providerCfg := llm.ProviderConfig{
 		ID:             def.ID,
@@ -40,6 +44,7 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 		APIEndpoint:    endpoint,
 		DefaultHeaders: llm.ResolvedHeaders(cfg),
 		Models:         configModels(cfg),
+		ModelRegistry:  modelRegistry,
 		ModelRouting:   convertRouting(providerName, cfg.Providers),
 	}
 
@@ -74,6 +79,50 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 	default:
 		return nil, fmt.Errorf("unsupported provider family %q", def.Family)
 	}
+}
+
+func modelRegistryFromConfig(cfg *config.Config) (*llm.Registry, error) {
+	if cfg == nil || len(cfg.Models) == 0 {
+		return nil, nil
+	}
+
+	registry := llm.NewRegistry()
+	for _, def := range cfg.Models {
+		pattern := strings.TrimSpace(def.Pattern)
+		if pattern == "" {
+			return nil, fmt.Errorf("model capability pattern is empty")
+		}
+
+		role := llm.Role(strings.ToLower(strings.TrimSpace(def.SystemRole)))
+		switch role {
+		case "", llm.RoleSystem, llm.RoleUser, llm.RoleDeveloper:
+		default:
+			return nil, fmt.Errorf("model %q has invalid system role %q", pattern, def.SystemRole)
+		}
+
+		preset := llm.ModelPreset(strings.ToLower(strings.TrimSpace(def.Preset)))
+		switch preset {
+		case "", llm.PresetChat, llm.PresetReasoning, llm.PresetOpenAIReasoning:
+		default:
+			return nil, fmt.Errorf("model %q has invalid capability preset %q", pattern, def.Preset)
+		}
+
+		reasoningKind := llm.ReasoningKind(strings.ToLower(strings.TrimSpace(def.ReasoningKind)))
+		switch reasoningKind {
+		case "", llm.ReasoningKindEffort, llm.ReasoningKindBudget, llm.ReasoningKindBoolean:
+		default:
+			return nil, fmt.Errorf("model %q has invalid reasoning kind %q", pattern, def.ReasoningKind)
+		}
+
+		registry.Register(llm.ModelDef{
+			Pattern:       pattern,
+			Preset:        preset,
+			Temperature:   def.Temperature,
+			SystemRole:    role,
+			ReasoningKind: reasoningKind,
+		})
+	}
+	return registry, nil
 }
 
 // configModels creates basic model definitions from config without metadata.

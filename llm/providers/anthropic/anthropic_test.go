@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -19,6 +20,57 @@ func TestConvertSchema_Nil(t *testing.T) {
 	}
 	if len(schema.Required) != 0 {
 		t.Errorf("nil params: Required must be empty, got %v", schema.Required)
+	}
+}
+
+func TestConvertRequestMapsBudgetAndReservesOutputTokens(t *testing.T) {
+	caps := llm.Capabilities{
+		Streaming: true,
+		Tools:     true,
+		Reasoning: llm.ReasoningCapabilities{
+			Kind:                llm.ReasoningKindBudget,
+			CanDisable:          true,
+			BudgetMinTokens:     1024,
+			BudgetDefaultTokens: 4096,
+			BudgetMaxTokens:     32768,
+		},
+	}
+	prepared, err := llm.PrepareRequestForCapabilities(&llm.Request{
+		Model:           "claude-sonnet-4-20250514",
+		ReasoningEffort: "high",
+		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	}, caps)
+	if err != nil {
+		t.Fatalf("prepare request: %v", err)
+	}
+	if prepared.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort = %q, want empty", prepared.ReasoningEffort)
+	}
+	if prepared.ThinkingBudget != 8192 {
+		t.Fatalf("thinking budget = %d, want 8192", prepared.ThinkingBudget)
+	}
+
+	params, err := provider().convertRequest(prepared)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+	if params.MaxTokens != 12288 {
+		t.Fatalf("max tokens = %d, want 12288", params.MaxTokens)
+	}
+	if params.Thinking.OfEnabled == nil || params.Thinking.OfEnabled.BudgetTokens != 8192 {
+		t.Fatalf("thinking config = %#v, want enabled budget 8192", params.Thinking)
+	}
+}
+
+func TestConvertRequestRejectsExplicitMaxTokensAtBudget(t *testing.T) {
+	_, err := provider().convertRequest(&llm.Request{
+		Model:          "claude-sonnet-4-20250514",
+		MaxTokens:      4096,
+		ThinkingBudget: 4096,
+		Messages:       []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must exceed thinking budget") {
+		t.Fatalf("error = %v, want max_tokens validation", err)
 	}
 }
 
@@ -120,7 +172,10 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 		}},
 	}
 
-	params := provider().convertRequest(req)
+	params, err := provider().convertRequest(req)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
 	if len(params.Messages) != 1 {
 		t.Fatalf("messages = %d, want 1", len(params.Messages))
 	}

@@ -16,7 +16,8 @@ type Provider struct {
 	config llm.ProviderConfig
 	// modelCaps holds per-model capability overrides. Capabilities(model) looks
 	// up this map before falling back to DefaultCapabilities.
-	modelCaps map[string]llm.Capabilities
+	modelCaps     map[string]llm.Capabilities
+	modelRegistry *llm.Registry
 }
 
 // New creates an Anthropic provider with the given API key.
@@ -45,9 +46,10 @@ func NewProvider(cfg llm.ProviderConfig) *Provider {
 	}
 
 	return &Provider{
-		client:    sdk.NewClient(opts...),
-		config:    cfg,
-		modelCaps: DefaultModelCaps(),
+		client:        sdk.NewClient(opts...),
+		config:        cfg,
+		modelCaps:     DefaultModelCaps(),
+		modelRegistry: cfg.ModelRegistry,
 	}
 }
 
@@ -61,7 +63,10 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		return nil, err
 	}
 
-	params := p.convertRequest(prepared)
+	params, err := p.convertRequest(prepared)
+	if err != nil {
+		return nil, err
+	}
 	var opts []option.RequestOption
 	if prepared.ThinkingBudget > 0 {
 		opts = append(opts, option.WithHeader("anthropic-beta", "interleaved-thinking-2025-05-14"))
@@ -127,7 +132,10 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		return nil, err
 	}
 
-	params := p.convertRequest(prepared)
+	params, err := p.convertRequest(prepared)
+	if err != nil {
+		return nil, err
+	}
 	var opts []option.RequestOption
 	if prepared.ThinkingBudget > 0 {
 		opts = append(opts, option.WithHeader("anthropic-beta", "interleaved-thinking-2025-05-14"))

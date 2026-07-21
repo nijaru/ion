@@ -27,6 +27,23 @@ func TransformRequestForCapabilities(req *Request, caps Capabilities) {
 	if !caps.Temperature {
 		req.Temperature = 0
 	}
+	if caps.SupportsThinking() {
+		if req.ThinkingBudget > 0 {
+			if !caps.SupportsThinkingBudget(req.ThinkingBudget) {
+				req.ThinkingBudget = 0
+			}
+			// The provider-native budget is authoritative when present.
+			req.ReasoningEffort = ""
+		} else if req.ReasoningEffort != "" {
+			// Convert the shared user-facing level before the generic effort
+			// validation below, since budget models have a different native
+			// control shape.
+			req.ThinkingBudget = caps.ThinkingBudgetForEffort(req.ReasoningEffort)
+			if req.ThinkingBudget > 0 {
+				req.ReasoningEffort = ""
+			}
+		}
+	}
 	if req.ReasoningEffort != "" && !caps.SupportsReasoningControl(req.ReasoningEffort) {
 		req.ReasoningEffort = ""
 	}
