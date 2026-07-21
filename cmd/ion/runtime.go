@@ -519,6 +519,7 @@ func openRuntime(
 		ApprovalInteractive: interactive,
 		ActionJournal:       actionJournal,
 		Workdir:             cwd,
+		ProcessReconciler:   tool.NewProcessReconciler(),
 		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
 	})
@@ -530,6 +531,13 @@ func openRuntime(
 		return openErr
 	}
 	var recovery agent.ActionRecovery = harness
+	processRecovery, ok := any(harness).(agent.ProcessRecovery)
+	if !ok {
+		return nil, nil, nil, closeUnusableRuntime(errors.New("runtime does not support process-backed action recovery"))
+	}
+	if err := processRecovery.RecoverProcessActions(ctx); err != nil {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("reconcile process-backed actions: %w", err))
+	}
 	unsettled, recoveryErr := recovery.UnsettledActions(ctx)
 	if recoveryErr != nil {
 		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("load unsettled actions: %w", recoveryErr))

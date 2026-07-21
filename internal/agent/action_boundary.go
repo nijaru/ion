@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -141,14 +140,14 @@ func (b *journalActionBoundary) Start(ctx context.Context, token *ActionToken) e
 	return b.start(ctx, token, "")
 }
 
-func (b *journalActionBoundary) start(ctx context.Context, token *ActionToken, processGroupID string) error {
+func (b *journalActionBoundary) start(ctx context.Context, token *ActionToken, processIdentity string) error {
 	if token == nil {
 		return nil
 	}
 	if b != nil && b.controller != nil {
 		reply := make(chan ActionStartResult, 1)
 		if err := b.controller.enqueue(ctx, &StartActionCmd{
-			Ctx: ctx, Token: cloneActionToken(*token), ProcessGroupID: processGroupID, Reply: reply,
+			Ctx: ctx, Token: cloneActionToken(*token), ProcessIdentity: processIdentity, Reply: reply,
 		}); err != nil {
 			return err
 		}
@@ -161,14 +160,14 @@ func (b *journalActionBoundary) start(ctx context.Context, token *ActionToken, p
 		}
 		return result.Err
 	}
-	return b.startDirect(ctx, token, processGroupID)
+	return b.startDirect(ctx, token, processIdentity)
 }
 
-func (b *journalActionBoundary) startDirect(ctx context.Context, token *ActionToken, processGroupID string) error {
+func (b *journalActionBoundary) startDirect(ctx context.Context, token *ActionToken, processIdentity string) error {
 	if token == nil {
 		return nil
 	}
-	started, err := b.journal.StartAction(ctx, token.ID, processGroupID)
+	started, err := b.journal.StartAction(ctx, token.ID, processIdentity)
 	if err != nil {
 		// Do not finalize this as an ordinary failure. A storage commit can be
 		// durable even when its caller observes an error; recovery must inspect
@@ -224,8 +223,12 @@ func (b *journalActionBoundary) Execute(
 	var processRecordMu sync.Mutex
 	var backgroundMu sync.Mutex
 	backgroundJob := false
-	effectCtx = tool.WithProcessGroupRecorder(effectCtx, func(pid int) error {
-		err := b.start(b.durableContext(ctx), token, strconv.Itoa(pid))
+	effectCtx = tool.WithProcessIdentityRecorder(effectCtx, func(pid int) error {
+		processIdentity, err := tool.CaptureProcessIdentity(pid)
+		if err != nil {
+			return fmt.Errorf("capture process identity: %w", err)
+		}
+		err = b.start(b.durableContext(ctx), token, processIdentity)
 		if err != nil {
 			processRecordMu.Lock()
 			processRecordErr = err

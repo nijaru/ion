@@ -10,6 +10,7 @@ import (
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // Handler methods for typed commands. Each handler runs on the command
@@ -188,7 +189,7 @@ func (c *Controller) handleStartAction(cmd *StartActionCmd) {
 			return
 		}
 		token := cmd.Token
-		err = coordinator.startDirect(cmd.Ctx, &token, cmd.ProcessGroupID)
+		err = coordinator.startDirect(cmd.Ctx, &token, cmd.ProcessIdentity)
 		sendResult(cmd.Reply, ActionStartResult{Token: &token, Err: err})
 	})
 }
@@ -240,6 +241,57 @@ func (c *Controller) handleReconcileAction(cmd *ReconcileActionCmd) {
 			return
 		}
 		sendResult(cmd.Reply, ReconcileActionResult{Err: err})
+	})
+}
+
+func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) {
+	c.startOperation(func() {
+		journal, err := c.actionJournal()
+		if err != nil {
+			sendResult(cmd.Reply, err)
+			return
+		}
+		actions, err := journal.UnsettledActions(cmd.Ctx)
+		if err != nil {
+			sendResult(cmd.Reply, err)
+			return
+		}
+		for _, action := range actions {
+			if action.State != session.ActionIndeterminate {
+				continue
+			}
+			result := tool.ProcessRecoveryResult{
+				Status: tool.ProcessRecoveryUnavailable,
+				Detail: "no process identity was durably recorded; manual verification is required",
+			}
+			if action.ProcessIdentity != "" {
+				if c.processReconciler == nil {
+					result.Detail = "runtime has no process reconciler; manual verification is required"
+				} else {
+					result, err = c.processReconciler.ReconcileProcess(cmd.Ctx, action.ProcessIdentity)
+					if err != nil {
+						result = tool.ProcessRecoveryResult{
+							Status: tool.ProcessRecoveryFailed,
+							Detail: fmt.Sprintf("process reconciler failed: %v", err),
+						}
+					}
+				}
+			}
+			if result.Status == "" {
+				result.Status = tool.ProcessRecoveryFailed
+				result.Detail = "process reconciler returned no recovery status"
+			}
+			if result.Detail == "" {
+				result.Detail = string(result.Status)
+			}
+			reason := "restart process recovery: " + result.Detail
+			cleanup := "restart process recovery status: " + string(result.Status)
+			if _, err := journal.RecordActionRecovery(cmd.Ctx, action.ID, reason, cleanup); err != nil {
+				sendResult(cmd.Reply, err)
+				return
+			}
+		}
+		sendResult(cmd.Reply, nil)
 	})
 }
 
@@ -588,6 +640,21 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 	}
 	c.logf(slog.LevelInfo, "shutdown complete")
 	return c.Close()
+}
+
+// RecoverProcessActions reconciles durable process evidence through the
+// controller-owned recovery boundary without resolving the external outcome.
+func (c *Controller) RecoverProcessActions(ctx context.Context) error {
+	ctx = commandContext(ctx)
+	reply := make(chan error, 1)
+	if err := c.enqueue(ctx, &RecoverProcessActionsCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return err
+	}
+	return result
 }
 
 // UnsettledActions returns externally observable actions whose outcome was

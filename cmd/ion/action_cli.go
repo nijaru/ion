@@ -13,6 +13,7 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 type actionCommandError struct {
@@ -109,6 +110,7 @@ func runActionCommand(args []string, stdout io.Writer) (err error) {
 		ApprovalInteractive: false,
 		ActionJournal:       journal,
 		Workdir:             workdir,
+		ProcessReconciler:   tool.NewProcessReconciler(),
 	})
 	defer func() {
 		if closeErr := runtime.Close(); closeErr != nil {
@@ -121,6 +123,13 @@ func runActionCommand(args []string, stdout io.Writer) (err error) {
 		}
 	}()
 	recovery := agent.ActionRecovery(runtime)
+	processRecovery, ok := any(runtime).(agent.ProcessRecovery)
+	if !ok {
+		return actionCommandFailure(*jsonOutput, errors.New("runtime does not support process-backed action recovery"))
+	}
+	if err := processRecovery.RecoverProcessActions(ctx); err != nil {
+		return actionCommandFailure(*jsonOutput, fmt.Errorf("reconcile process-backed actions: %w", err))
+	}
 	unsettled, err := recovery.UnsettledActions(ctx)
 	if err != nil {
 		return actionCommandFailure(*jsonOutput, fmt.Errorf("load unsettled actions: %w", err))

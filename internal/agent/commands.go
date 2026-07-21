@@ -149,10 +149,10 @@ type ActionPrepareResult struct {
 // StartActionCmd records the durable start boundary before an executor is
 // allowed to cross into an external effect.
 type StartActionCmd struct {
-	Ctx            context.Context
-	Token          ActionToken
-	ProcessGroupID string
-	Reply          chan<- ActionStartResult
+	Ctx             context.Context
+	Token           ActionToken
+	ProcessIdentity string
+	Reply           chan<- ActionStartResult
 }
 
 func (StartActionCmd) command() {}
@@ -216,6 +216,15 @@ type ReconcileActionResult struct {
 	Action session.ActionRecord
 	Err    error
 }
+
+// RecoverProcessActionsCmd reconciles durable process identities before the
+// host presents unsettled actions to a user or allows another turn.
+type RecoverProcessActionsCmd struct {
+	Ctx   context.Context
+	Reply chan<- error
+}
+
+func (RecoverProcessActionsCmd) command() {}
 
 // --- Session administration commands ---
 

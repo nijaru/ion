@@ -98,8 +98,8 @@ func (m *JobManager) start(ctx context.Context, command string, run jobRunner) (
 	// action-boundary capabilities must follow the process that they authorize.
 	// Propagate those explicit values onto the runtime-owned job context while
 	// retaining JobManager shutdown as the cancellation parent.
-	if recorder, ok := ProcessGroupRecorderFromContext(ctx); ok {
-		jobCtx = WithProcessGroupRecorder(jobCtx, recorder)
+	if recorder, ok := ProcessIdentityRecorderFromContext(ctx); ok {
+		jobCtx = WithProcessIdentityRecorder(jobCtx, recorder)
 	}
 	if guard, ok := ActionPathGuardFromContext(ctx); ok {
 		jobCtx = WithActionPathGuard(jobCtx, guard.Paths)

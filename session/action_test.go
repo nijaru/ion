@@ -62,7 +62,7 @@ func TestActionJournalLifecycleIsDurableAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if started.State != ActionStarted || started.ProcessGroupID != "pg-1" {
+	if started.State != ActionStarted || started.ProcessIdentity != "pg-1" {
 		t.Fatalf("started record = %#v", started)
 	}
 	completed, err := store.FinishAction(ctx, record.ID, ActionCompleted, "result-1", "", "clean")
@@ -266,6 +266,45 @@ func TestActionJournalReconcilesIndeterminateOnlyWithEvidence(t *testing.T) {
 	}
 	if _, err := store.ReconcileAction(ctx, record.ID, ActionFailed, "", "", "", ""); err == nil {
 		t.Fatal("reconciliation without evidence unexpectedly succeeded")
+	}
+}
+
+func TestActionJournalRecordsProcessRecoveryWithoutResolvingOutcome(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	record := testActionRecord()
+	if _, err := store.PrepareAction(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthorizeAction(ctx, record.ID, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartAction(ctx, record.ID, "opaque-process-identity"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FinishAction(ctx, record.ID, ActionIndeterminate, "", "effect outcome is unknown", "executor cleanup pending"); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.RecordActionRecovery(ctx, record.ID, "restart process recovery: matching group terminated", "restart process recovery status: terminated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != ActionIndeterminate || recovered.ProcessIdentity != "opaque-process-identity" {
+		t.Fatalf("recovered action = %#v", recovered)
+	}
+	if !strings.Contains(recovered.Error, "restart process recovery: matching group terminated") || !strings.Contains(recovered.CleanupOutcome, "restart process recovery status: terminated") {
+		t.Fatalf("recovery evidence = %#v", recovered)
+	}
+	transitions, err := store.ActionTransitions(ctx, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := transitions[len(transitions)-1]
+	if last.From != ActionIndeterminate || last.To != ActionIndeterminate || last.Reason != "action recovery evidence recorded" {
+		t.Fatalf("recovery transition = %#v", last)
+	}
+	if _, err := store.RecordActionRecovery(ctx, record.ID, "", "cleanup"); err == nil {
+		t.Fatal("empty recovery reason unexpectedly succeeded")
 	}
 }
 

@@ -304,6 +304,14 @@ type ActionRecovery interface {
 	ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error)
 }
 
+// ProcessRecovery is the startup-only capability that reconciles durable
+// process identities before action evidence is presented. It is separate from
+// ActionRecovery so frontends and test doubles that only display/reconcile
+// actions do not acquire an OS lifecycle dependency.
+type ProcessRecovery interface {
+	RecoverProcessActions(ctx context.Context) error
+}
+
 // ResourceOwner exposes host-created runtime resources that must be closed
 // after the controller has stopped. Runtime.Close only terminates controller
 // activity; the composition root owns final resource closure.

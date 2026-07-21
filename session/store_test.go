@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -453,6 +454,74 @@ func TestSQLiteMigratesUnversionedStoreTransactionally(t *testing.T) {
 	}
 	if len(branch) != 2 || branch[0].ID() != "legacy-entry" {
 		t.Fatalf("migrated branch = %v, want legacy entry plus new entry", entryIDs(branch))
+	}
+}
+
+func TestSQLiteMigratesProcessGroupStorageToProcessIdentity(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "process-identity.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := strings.ReplaceAll(Schema, "process_identity", "process_group_id")
+	if _, err := raw.ExecContext(ctx, legacySchema); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, "PRAGMA user_version = 9"); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO actions(action_id, invocation_id, tool_name, operation, arguments, fingerprint, state, process_group_id, prepared_at)
+		VALUES('legacy-action', 'legacy-call', 'bash', 'run', '{"command":"true"}', 'legacy-fingerprint', 'started', 'legacy-process', 1)`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(path, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	action, err := store.GetAction(ctx, "legacy-action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.ProcessIdentity != "legacy-process" {
+		t.Fatalf("migrated process identity = %q", action.ProcessIdentity)
+	}
+	var oldColumns, newColumns int
+	rows, err := store.db.QueryContext(ctx, "PRAGMA table_info(actions)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		switch name {
+		case "process_group_id":
+			oldColumns++
+		case "process_identity":
+			newColumns++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	if oldColumns != 0 || newColumns != 1 {
+		t.Fatalf("process identity columns = old %d, new %d", oldColumns, newColumns)
 	}
 }
 

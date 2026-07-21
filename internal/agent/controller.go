@@ -12,6 +12,7 @@ import (
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // Controller implementation details for the stateful runtime. It owns the session, tools,
@@ -105,6 +106,9 @@ type ControllerConfig struct {
 	// Workdir is the explicit workspace root used for action identity and path
 	// canonicalization.
 	Workdir string
+	// ProcessReconciler is the host-owned OS boundary used during restart
+	// recovery. It never decides the external action outcome.
+	ProcessReconciler tool.ProcessReconciler
 
 	// CloseResources are host-created services such as external tool clients.
 	// The host invokes Controller.CloseResources after Runtime.Close.
@@ -131,38 +135,39 @@ func NewController(cfg ControllerConfig) *Controller {
 	}
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	h := &Controller{
-		session:          cfg.Session,
-		store:            cfg.Store,
-		durable:          cfg.Durable,
-		requireDurable:   cfg.RequireDurable,
-		tools:            toolMap,
-		active:           active,
-		model:            cfg.Model,
-		thinking:         cfg.Thinking,
-		sysprompt:        cfg.SysPrompt,
-		log:              cfg.Logger,
-		metrics:          cfg.Metrics,
-		promptTemplates:  cfg.PromptTemplates,
-		stream:           cfg.StreamFn,
-		auth:             cfg.Auth,
-		transport:        cfg.Transport,
-		timeout:          cfg.Timeout,
-		phase:            PhaseReady,
-		commands:         make(chan Command, controllerCommandCapacity),
-		commandStop:      make(chan struct{}),
-		completions:      make(chan turnCompletion, 1),
-		runtimeRequests:  make(chan runtimeRequest, runtimeOperationCapacity),
-		runtimeResults:   make(chan runtimeCompletion, 1),
-		runtimeContext:   runtimeContext,
-		runtimeCancel:    runtimeCancel,
-		eventHub:         newEventHub(),
-		done:             make(chan struct{}),
-		compaction:       cfg.Compaction,
-		contextWindow:    cfg.ContextWindow,
-		steeringMode:     cfg.SteeringMode,
-		followUpMode:     cfg.FollowUpMode,
-		queueCapacity:    cfg.QueueCapacity,
-		maxParallelTools: cfg.MaxParallelTools,
+		session:           cfg.Session,
+		store:             cfg.Store,
+		durable:           cfg.Durable,
+		requireDurable:    cfg.RequireDurable,
+		tools:             toolMap,
+		active:            active,
+		model:             cfg.Model,
+		thinking:          cfg.Thinking,
+		sysprompt:         cfg.SysPrompt,
+		log:               cfg.Logger,
+		metrics:           cfg.Metrics,
+		promptTemplates:   cfg.PromptTemplates,
+		stream:            cfg.StreamFn,
+		auth:              cfg.Auth,
+		transport:         cfg.Transport,
+		timeout:           cfg.Timeout,
+		phase:             PhaseReady,
+		commands:          make(chan Command, controllerCommandCapacity),
+		commandStop:       make(chan struct{}),
+		completions:       make(chan turnCompletion, 1),
+		runtimeRequests:   make(chan runtimeRequest, runtimeOperationCapacity),
+		runtimeResults:    make(chan runtimeCompletion, 1),
+		runtimeContext:    runtimeContext,
+		runtimeCancel:     runtimeCancel,
+		eventHub:          newEventHub(),
+		done:              make(chan struct{}),
+		compaction:        cfg.Compaction,
+		contextWindow:     cfg.ContextWindow,
+		steeringMode:      cfg.SteeringMode,
+		followUpMode:      cfg.FollowUpMode,
+		queueCapacity:     cfg.QueueCapacity,
+		maxParallelTools:  cfg.MaxParallelTools,
+		processReconciler: cfg.ProcessReconciler,
 	}
 	if h.steeringMode == "" {
 		h.steeringMode = "one-at-a-time"

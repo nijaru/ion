@@ -232,7 +232,7 @@ func (b *Bash) runCommand(
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	processRecorder, _ := ProcessGroupRecorderFromContext(runCtx)
+	processRecorder, _ := ProcessIdentityRecorderFromContext(runCtx)
 	startedCallback := func(pid int) error {
 		if processRecorder != nil {
 			if err := processRecorder(pid); err != nil {

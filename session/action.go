@@ -75,11 +75,14 @@ type ActionRecord struct {
 	ResultIdentity string
 	Error          string
 	CleanupOutcome string
-	ProcessGroupID string
-	PreparedAt     time.Time
-	AuthorizedAt   time.Time
-	StartedAt      time.Time
-	EndedAt        time.Time
+	// ProcessIdentity is an opaque, host-issued identity token for the
+	// process-group leader created at the effect boundary. The session layer
+	// stores it but never interprets or signals it.
+	ProcessIdentity string
+	PreparedAt      time.Time
+	AuthorizedAt    time.Time
+	StartedAt       time.Time
+	EndedAt         time.Time
 }
 
 // ActionJournal is the storage boundary for external-action evidence. Each
@@ -90,9 +93,10 @@ type ActionJournal interface {
 	PrepareAction(ctx context.Context, record ActionRecord) (ActionRecord, error)
 	AuthorizeAction(ctx context.Context, actionID, policyMode string) (ActionRecord, error)
 	DenyAction(ctx context.Context, actionID, reason string) (ActionRecord, error)
-	StartAction(ctx context.Context, actionID, processGroupID string) (ActionRecord, error)
+	StartAction(ctx context.Context, actionID, processIdentity string) (ActionRecord, error)
 	FinishAction(ctx context.Context, actionID string, state ActionState, resultIdentity, reason, cleanup string) (ActionRecord, error)
 	ReconcileAction(ctx context.Context, actionID string, state ActionState, verification, resultIdentity, reason, cleanup string) (ActionRecord, error)
+	RecordActionRecovery(ctx context.Context, actionID, reason, cleanup string) (ActionRecord, error)
 	GetAction(ctx context.Context, actionID string) (ActionRecord, error)
 	UnsettledActions(ctx context.Context) ([]ActionRecord, error)
 	ActionTransitions(ctx context.Context, actionID string) ([]ActionTransition, error)
@@ -275,7 +279,7 @@ func actionRecordTx(ctx context.Context, tx *sql.Tx, actionID string) (ActionRec
 	SELECT action_id, invocation_id, session_id, turn_id, tool_name, category, operation, arguments, fingerprint,
 	       metadata, preimages, cwd, paths, environment, network_intent, mcp_identity, policy_mode,
 		       state, authorization, result_identity, error, cleanup_outcome,
-		       process_group_id, prepared_at, authorized_at, started_at, ended_at
+		       process_identity, prepared_at, authorized_at, started_at, ended_at
 		FROM actions WHERE action_id = ?`, actionID)
 	record, err := scanActionRecord(row)
 	if err == sql.ErrNoRows {
@@ -299,7 +303,7 @@ func scanActionRecord(row interface{ Scan(...any) error }) (ActionRecord, error)
 		&arguments, &record.Fingerprint, &metadata, &preimages, &record.CWD, &paths, &environment,
 		&record.NetworkIntent, &record.MCPIdentity, &record.PolicyMode,
 		&record.State, &record.Authorization, &record.ResultIdentity,
-		&record.Error, &record.CleanupOutcome, &record.ProcessGroupID,
+		&record.Error, &record.CleanupOutcome, &record.ProcessIdentity,
 		&preparedAt, &authorizedAt, &startedAt, &endedAt,
 	); err != nil {
 		return ActionRecord{}, err
@@ -441,14 +445,14 @@ func (s *SQLiteStore) DenyAction(ctx context.Context, actionID, reason string) (
 	})
 }
 
-func (s *SQLiteStore) StartAction(ctx context.Context, actionID, processGroupID string) (ActionRecord, error) {
+func (s *SQLiteStore) StartAction(ctx context.Context, actionID, processIdentity string) (ActionRecord, error) {
 	return s.transitionAction(ctx, actionID, func(record *ActionRecord, now time.Time) error {
 		if record.State == ActionStarted {
-			if record.ProcessGroupID != "" && processGroupID != "" && record.ProcessGroupID != processGroupID {
-				return fmt.Errorf("%w: process group changed", ErrActionConflict)
+			if record.ProcessIdentity != "" && processIdentity != "" && record.ProcessIdentity != processIdentity {
+				return fmt.Errorf("%w: process identity changed", ErrActionConflict)
 			}
-			if record.ProcessGroupID == "" {
-				record.ProcessGroupID = processGroupID
+			if record.ProcessIdentity == "" {
+				record.ProcessIdentity = processIdentity
 			}
 			return nil
 		}
@@ -457,7 +461,7 @@ func (s *SQLiteStore) StartAction(ctx context.Context, actionID, processGroupID 
 		}
 		record.State = ActionStarted
 		record.StartedAt = now
-		record.ProcessGroupID = processGroupID
+		record.ProcessIdentity = processIdentity
 		return nil
 	})
 }
@@ -514,6 +518,36 @@ func (s *SQLiteStore) ReconcileAction(ctx context.Context, actionID string, stat
 	})
 }
 
+// RecordActionRecovery persists host-side cleanup evidence while deliberately
+// leaving an action indeterminate. A process can be terminated safely while
+// its external effect remains unknown; only explicit user verification may
+// move the action to a terminal outcome.
+func (s *SQLiteStore) RecordActionRecovery(ctx context.Context, actionID, reason, cleanup string) (ActionRecord, error) {
+	reason = strings.TrimSpace(reason)
+	cleanup = strings.TrimSpace(cleanup)
+	if reason == "" || cleanup == "" {
+		return ActionRecord{}, errors.New("process recovery reason and cleanup outcome are required")
+	}
+	return s.transitionAction(ctx, actionID, func(record *ActionRecord, _ time.Time) error {
+		if record.State != ActionIndeterminate {
+			return fmt.Errorf("%w: recover action %q from %s", ErrActionState, actionID, record.State)
+		}
+		record.Error = appendActionEvidence(record.Error, reason)
+		record.CleanupOutcome = appendActionEvidence(record.CleanupOutcome, cleanup)
+		return nil
+	})
+}
+
+func appendActionEvidence(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	if strings.Contains(existing, next) {
+		return existing
+	}
+	return existing + "; " + next
+}
+
 func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mutate func(*ActionRecord, time.Time) error) (ActionRecord, error) {
 	ctx = normalizeContext(ctx)
 	if actionID == "" {
@@ -540,7 +574,7 @@ func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mut
 	if record.State == before.State &&
 		record.Authorization == before.Authorization &&
 		record.PolicyMode == before.PolicyMode &&
-		record.ProcessGroupID == before.ProcessGroupID &&
+		record.ProcessIdentity == before.ProcessIdentity &&
 		record.ResultIdentity == before.ResultIdentity &&
 		record.Error == before.Error &&
 		record.CleanupOutcome == before.CleanupOutcome {
@@ -548,11 +582,11 @@ func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mut
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE actions SET policy_mode = ?, state = ?, authorization = ?,
-			result_identity = ?, error = ?, cleanup_outcome = ?, process_group_id = ?,
+			result_identity = ?, error = ?, cleanup_outcome = ?, process_identity = ?,
 			authorized_at = ?, started_at = ?, ended_at = ?
 		WHERE action_id = ?`,
 		record.PolicyMode, string(record.State), string(record.Authorization),
-		record.ResultIdentity, record.Error, record.CleanupOutcome, record.ProcessGroupID,
+		record.ResultIdentity, record.Error, record.CleanupOutcome, record.ProcessIdentity,
 		actionTimeMillis(record.AuthorizedAt), actionTimeMillis(record.StartedAt), actionTimeMillis(record.EndedAt),
 		actionID); err != nil {
 		return ActionRecord{}, classifySQLiteError("update action state", err)
@@ -570,6 +604,9 @@ func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mut
 }
 
 func actionTransitionReason(before, after ActionRecord) string {
+	if before.State == after.State && (before.Error != after.Error || before.CleanupOutcome != after.CleanupOutcome) {
+		return "action recovery evidence recorded"
+	}
 	if after.Error != "" {
 		return after.Error
 	}
@@ -609,7 +646,7 @@ func (s *SQLiteStore) GetAction(ctx context.Context, actionID string) (ActionRec
 		SELECT action_id, invocation_id, session_id, turn_id, tool_name, category, operation, arguments, fingerprint,
 		       metadata, preimages, cwd, paths, environment, network_intent, mcp_identity, policy_mode,
 		       state, authorization, result_identity, error, cleanup_outcome,
-		       process_group_id, prepared_at, authorized_at, started_at, ended_at
+		       process_identity, prepared_at, authorized_at, started_at, ended_at
 		FROM actions WHERE action_id = ?`, actionID))
 	if err == sql.ErrNoRows {
 		return ActionRecord{}, fmt.Errorf("%w: %s", ErrActionNotFound, actionID)
@@ -631,7 +668,7 @@ func (s *SQLiteStore) UnsettledActions(ctx context.Context) ([]ActionRecord, err
 		SELECT action_id, invocation_id, session_id, turn_id, tool_name, category, operation, arguments, fingerprint,
 		       metadata, preimages, cwd, paths, environment, network_intent, mcp_identity, policy_mode,
 		       state, authorization, result_identity, error, cleanup_outcome,
-		       process_group_id, prepared_at, authorized_at, started_at, ended_at
+		       process_identity, prepared_at, authorized_at, started_at, ended_at
 		FROM actions WHERE state IN (?, ?, ?, ?) ORDER BY prepared_at, action_id`,
 		string(ActionPrepared), string(ActionAuthorized), string(ActionStarted), string(ActionIndeterminate))
 	if err != nil {

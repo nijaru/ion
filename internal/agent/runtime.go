@@ -27,6 +27,7 @@ import (
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // controllerCommandCapacity bounds the typed command queue. A full queue
@@ -138,10 +139,11 @@ type Controller struct {
 	contextWindow int
 
 	// --- Safety ---
-	approvals      *ApprovalBroker
-	actionBoundary ActionBoundary
-	actionsEnabled bool
-	requireDurable bool
+	approvals         *ApprovalBroker
+	actionBoundary    ActionBoundary
+	actionsEnabled    bool
+	requireDurable    bool
+	processReconciler tool.ProcessReconciler
 }
 
 // Compile-time interface assertions.
@@ -158,6 +160,7 @@ var (
 	_ Compactor        = (*Controller)(nil)
 	_ ResourceOwner    = (*Controller)(nil)
 	_ ActionRecovery   = (*Controller)(nil)
+	_ ProcessRecovery  = (*Controller)(nil)
 )
 
 // run is the command loop goroutine. It is the sole mutator of Controller
@@ -222,6 +225,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleUnsettledActions(cmd)
 	case *ReconcileActionCmd:
 		c.handleReconcileAction(cmd)
+	case *RecoverProcessActionsCmd:
+		c.handleRecoverProcessActions(cmd)
 	case *SubscribeCmd:
 		c.handleSubscribe(cmd)
 	case *CompactCmd:
@@ -345,6 +350,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, UnsettledActionsResult{Err: ErrRuntimeClosed})
 	case *ReconcileActionCmd:
 		sendResult(cmd.Reply, ReconcileActionResult{Err: ErrRuntimeClosed})
+	case *RecoverProcessActionsCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
 	}
 }
 

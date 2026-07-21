@@ -11,10 +11,10 @@ type ActionPathGuard struct {
 	Paths []string
 }
 
-// ProcessGroupRecorder is called immediately after a process-backed effect
-// starts. A runtime action boundary uses it to durably associate the process
-// group with the already-started action for crash cleanup and recovery.
-type ProcessGroupRecorder func(pid int) error
+// ProcessIdentityRecorder is called immediately after a process-backed effect
+// starts. A runtime action boundary captures and durably associates the
+// operating-system identity of that process group before its first effect.
+type ProcessIdentityRecorder func(pid int) error
 
 // JobLifecycleRecorder lets the runtime action boundary distinguish a
 // background launch from a foreground result. Started is acknowledged before
@@ -28,7 +28,7 @@ type JobLifecycleRecorder struct {
 
 type actionPathGuardKey struct{}
 
-type processGroupRecorderKey struct{}
+type processIdentityRecorderKey struct{}
 
 type jobLifecycleRecorderKey struct{}
 
@@ -55,21 +55,21 @@ func ActionPathGuardFromContext(ctx context.Context) (ActionPathGuard, bool) {
 	return guard, true
 }
 
-// WithProcessGroupRecorder attaches the runtime-owned process identity hook
+// WithProcessIdentityRecorder attaches the runtime-owned process identity hook
 // to an effect callback context.
-func WithProcessGroupRecorder(ctx context.Context, recorder ProcessGroupRecorder) context.Context {
+func WithProcessIdentityRecorder(ctx context.Context, recorder ProcessIdentityRecorder) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, processGroupRecorderKey{}, recorder)
+	return context.WithValue(ctx, processIdentityRecorderKey{}, recorder)
 }
 
-// ProcessGroupRecorderFromContext retrieves the process identity hook.
-func ProcessGroupRecorderFromContext(ctx context.Context) (ProcessGroupRecorder, bool) {
+// ProcessIdentityRecorderFromContext retrieves the process identity hook.
+func ProcessIdentityRecorderFromContext(ctx context.Context) (ProcessIdentityRecorder, bool) {
 	if ctx == nil {
 		return nil, false
 	}
-	recorder, ok := ctx.Value(processGroupRecorderKey{}).(ProcessGroupRecorder)
+	recorder, ok := ctx.Value(processIdentityRecorderKey{}).(ProcessIdentityRecorder)
 	return recorder, ok && recorder != nil
 }
 

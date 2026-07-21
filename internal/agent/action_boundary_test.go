@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
+	"golang.org/x/sys/unix"
 )
 
 func TestJournalActionBoundaryBindsCanonicalActionIdentity(t *testing.T) {
@@ -348,12 +351,21 @@ func TestJournalActionBoundaryRecordsProcessGroupIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	process := exec.Command("/bin/sh", "-c", "sleep 30")
+	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unix.Kill(-process.Process.Pid, unix.SIGKILL)
+		_, _ = process.Process.Wait()
+	})
 	if _, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		recorder, ok := tool.ProcessGroupRecorderFromContext(ctx)
+		recorder, ok := tool.ProcessIdentityRecorderFromContext(ctx)
 		if !ok {
 			return session.ToolResultMessage{}, errors.New("process recorder missing from action context")
 		}
-		if err := recorder(4242); err != nil {
+		if err := recorder(process.Process.Pid); err != nil {
 			return session.ToolResultMessage{}, err
 		}
 		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: "ok"}}}, nil
@@ -364,8 +376,11 @@ func TestJournalActionBoundaryRecordsProcessGroupIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != session.ActionCompleted || record.ProcessGroupID != "4242" {
-		t.Fatalf("action process identity = %#v, want completed pgid 4242", record)
+	if record.State != session.ActionCompleted || record.ProcessIdentity == "" {
+		t.Fatalf("action process identity = %#v, want completed process identity", record)
+	}
+	if identity, err := tool.DecodeProcessIdentity(record.ProcessIdentity); err != nil || identity.PID != process.Process.Pid {
+		t.Fatalf("durable process identity = %q, err = %v", record.ProcessIdentity, err)
 	}
 }
 
@@ -430,7 +445,7 @@ func TestJournalActionBoundaryRecordsRealBashProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != session.ActionCompleted || record.ProcessGroupID == "" {
+	if record.State != session.ActionCompleted || record.ProcessIdentity == "" {
 		t.Fatalf("real bash action = %#v, want completed process group identity", record)
 	}
 }
@@ -471,7 +486,7 @@ func TestJournalActionBoundaryTracksBackgroundJobToTerminalState(t *testing.T) {
 			t.Fatal(err)
 		}
 		if record.State == session.ActionCompleted {
-			if record.ProcessGroupID == "" {
+			if record.ProcessIdentity == "" {
 				t.Fatalf("completed background action lost process group identity: %#v", record)
 			}
 			return

@@ -34,7 +34,7 @@ type SQLiteStore struct {
 
 var _ Store = (*SQLiteStore)(nil)
 
-const currentSchemaVersion = 9
+const currentSchemaVersion = 10
 
 const sessionLockWait = 500 * time.Millisecond
 
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS actions (
 	result_identity  TEXT NOT NULL DEFAULT '',
 	error            TEXT NOT NULL DEFAULT '',
 	cleanup_outcome  TEXT NOT NULL DEFAULT '',
-	process_group_id TEXT NOT NULL DEFAULT '',
+	process_identity TEXT NOT NULL DEFAULT '',
 	prepared_at      INTEGER NOT NULL,
 	authorized_at    INTEGER NOT NULL DEFAULT 0,
 	started_at       INTEGER NOT NULL DEFAULT 0,
@@ -304,6 +304,9 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 	if err := ensureColumn(ctx, tx, "actions", "preimages", "BLOB NOT NULL DEFAULT '[]'"); err != nil {
 		return rollback(err)
 	}
+	if err := ensureActionProcessIdentity(ctx, tx); err != nil {
+		return rollback(err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id);
 		CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
@@ -326,6 +329,45 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 		return classifySQLiteError("commit schema migration", err)
 	}
 	return nil
+}
+
+// ensureActionProcessIdentity performs the one intentional rename from the
+// pre-identity action schema. The stored value is opaque; preserving it keeps
+// interrupted actions recoverable while removing the misleading domain name.
+func ensureActionProcessIdentity(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(actions)")
+	if err != nil {
+		return fmt.Errorf("inspect actions schema: %w", err)
+	}
+	defer rows.Close()
+	var hasIdentity, hasGroup bool
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("inspect actions column: %w", err)
+		}
+		switch name {
+		case "process_identity":
+			hasIdentity = true
+		case "process_group_id":
+			hasGroup = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect actions columns: %w", err)
+	}
+	if hasIdentity {
+		return nil
+	}
+	if hasGroup {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE actions RENAME COLUMN process_group_id TO process_identity"); err != nil {
+			return fmt.Errorf("rename action process identity column: %w", err)
+		}
+		return nil
+	}
+	return ensureColumn(ctx, tx, "actions", "process_identity", "TEXT NOT NULL DEFAULT ''")
 }
 
 func backupBeforeMigration(ctx context.Context, db *sql.DB, path string, version int) error {
@@ -420,7 +462,7 @@ func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
 			result_identity TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
 			cleanup_outcome TEXT NOT NULL DEFAULT '',
-			process_group_id TEXT NOT NULL DEFAULT '',
+			process_identity TEXT NOT NULL DEFAULT '',
 			prepared_at INTEGER NOT NULL,
 			authorized_at INTEGER NOT NULL DEFAULT 0,
 			started_at INTEGER NOT NULL DEFAULT 0,
