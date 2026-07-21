@@ -97,7 +97,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env))
+		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env)).WithEnvironment(environmentKeys(cfg.Env))
 		validator, err := workvfs.NewValidator(command.Dir)
 		if err != nil {
 			cancel()
@@ -287,6 +287,15 @@ func overlayEnvironment(base []string, overrides map[string]string) []string {
 	}
 	slices.Sort(result)
 	return result
+}
+
+func environmentKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 func validateEnvironment(values map[string]string) error {

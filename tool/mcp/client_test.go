@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -293,6 +294,29 @@ func TestWrapperApprovalRequirementCanRequireOpaqueExternalTools(t *testing.T) {
 	}
 	if !ok || req.Category != "external" || req.Operation != "remote_action" || req.MCPIdentity == "" {
 		t.Fatalf("approval = %#v, ok=%v; want opaque external requirement", req, ok)
+	}
+}
+
+func TestWrapperApprovalRequirementBindsMCPCapabilities(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "off")
+	w := &wrapper{
+		client: (&Client{session: &fakeClientSession{}}).
+			WithEnvironment([]string{"ZED_TOKEN", "ION_MCP_KEY", "ION_MCP_KEY"}),
+		spec: llmSpec("remote_action"),
+	}
+
+	requirement, required, err := w.ApprovalRequirement(`{"msg":"hello"}`)
+	if err != nil {
+		t.Fatalf("ApprovalRequirement: %v", err)
+	}
+	if !required {
+		t.Fatal("MCP action did not require approval")
+	}
+	if requirement.NetworkIntent != "unrestricted" {
+		t.Fatalf("network intent = %q, want unrestricted", requirement.NetworkIntent)
+	}
+	if !slices.Equal(requirement.Environment, []string{"ION_MCP_KEY", "ZED_TOKEN"}) {
+		t.Fatalf("environment = %#v, want sorted explicit names", requirement.Environment)
 	}
 }
 

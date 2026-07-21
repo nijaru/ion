@@ -91,6 +91,14 @@ func sandboxNetworkIntent(mode SandboxMode) string {
 	return "denied-by-sandbox"
 }
 
+// SandboxNetworkIntent returns the network capability represented by a
+// sandbox mode. Action planners record this value in the approval fingerprint
+// so a change from a restricted process boundary to an unrestricted one cannot
+// reuse an earlier authorization.
+func SandboxNetworkIntent(mode SandboxMode) string {
+	return sandboxNetworkIntent(mode)
+}
+
 func sandboxSummary(mode SandboxMode) string {
 	switch mode {
 	case SandboxOff:

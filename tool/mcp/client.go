@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"iter"
 	"os/exec"
+	"slices"
+	"strings"
 
 	"github.com/go-json-experiment/json"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,9 +23,10 @@ type clientSession interface {
 // Client represents an MCP client session wrapped with Ion validation and
 // tool-registry adaptation.
 type Client struct {
-	session    clientSession
-	filePolicy *FilePolicy
-	identity   string
+	session     clientSession
+	filePolicy  *FilePolicy
+	identity    string
+	environment []string
 }
 
 // NewClient connects to an MCP server over the provided official SDK transport.
@@ -83,6 +86,26 @@ func (c *Client) WithIdentity(identity string) *Client {
 		return nil
 	}
 	c.identity = identity
+	return c
+}
+
+// WithEnvironment binds the names of explicitly configured server variables
+// to every remote action requirement. Values never enter model-visible or
+// journal payloads, but changing the exposed variable set changes action
+// identity and therefore requires fresh approval.
+func (c *Client) WithEnvironment(names []string) *Client {
+	if c == nil {
+		return nil
+	}
+	c.environment = c.environment[:0]
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			c.environment = append(c.environment, name)
+		}
+	}
+	slices.Sort(c.environment)
+	c.environment = slices.Compact(c.environment)
 	return c
 }
 
@@ -259,6 +282,8 @@ func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {
 			requirement.Resource = w.spec.Name
 		}
 	}
+	requirement.Environment = slices.Clone(w.client.environment)
+	requirement.NetworkIntent = tool.SandboxNetworkIntent(tool.CurrentSandboxMode())
 	requirement.MCPIdentity = w.mcpIdentity
 	if requirement.MCPIdentity == "" {
 		identityName := w.remoteName
