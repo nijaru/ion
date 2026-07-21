@@ -307,6 +307,7 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 // not proven. This is a direct store read — it does not go through the
 // command queue because it is read-only and the journal is goroutine-safe.
 func (c *Controller) UnsettledActions(ctx context.Context) ([]session.ActionRecord, error) {
+	ctx = commandContext(ctx)
 	journal, ok := c.store.(session.ActionJournal)
 	if !ok {
 		return nil, errors.New("session store does not support action recovery")
@@ -316,6 +317,7 @@ func (c *Controller) UnsettledActions(ctx context.Context) ([]session.ActionReco
 
 // ReconcileAction records the externally observed outcome of an action.
 func (c *Controller) ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error) {
+	ctx = commandContext(ctx)
 	journal, ok := c.store.(session.ActionJournal)
 	if !ok {
 		return session.ActionRecord{}, errors.New("session store does not support action recovery")
@@ -325,27 +327,34 @@ func (c *Controller) ReconcileAction(ctx context.Context, actionID string, state
 
 // ExportSessionBundle exports a session as a bundle.
 func (c *Controller) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
+	ctx = commandContext(ctx)
 	return c.exportSessionBundleDirect(ctx, sessionID)
 }
 
 // ImportSessionBundle imports a session bundle.
 func (c *Controller) ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error) {
+	ctx = commandContext(ctx)
 	return c.importSessionBundleDirect(ctx, bundle)
 }
 
 // ForkSession creates a new session rooted at a source.
 func (c *Controller) ForkSession(ctx context.Context, sourceID string) (string, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan ForkResult, 1)
 	cmd := &ForkSessionCmd{Ctx: ctx, SourceID: sourceID, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
 	return result.ID, result.Err
 }
 
 // Compact requests context compaction at a safe boundary.
 func (c *Controller) Compact(ctx context.Context) error {
+	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &CompactCmd{Ctx: ctx, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)
@@ -353,50 +362,67 @@ func (c *Controller) Compact(ctx context.Context) error {
 
 // NavigateTree moves the active session leaf.
 func (c *Controller) NavigateTree(ctx context.Context, targetID string, opts NavigateOptions) (NavigateResult, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan NavigateCmdResult, 1)
 	cmd := &NavigateCmd{Ctx: ctx, Target: targetID, Opts: opts, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return NavigateResult{}, err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return NavigateResult{}, err
+	}
 	return result.Result, result.Err
 }
 
 // AppendSessionInfo updates display metadata.
 func (c *Controller) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
 	cmd := &AppendSessionInfoCmd{Ctx: ctx, Name: name, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
 	return result.Name, result.Err
 }
 
 // AppendLabel writes a branch label.
 func (c *Controller) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
 	cmd := &AppendLabelCmd{Ctx: ctx, Target: targetID, Label: label, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
 	return result.Name, result.Err
 }
 
 // GetLabel reads a branch label.
 func (c *Controller) GetLabel(ctx context.Context, targetID string) (string, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
 	cmd := &GetLabelCmd{Ctx: ctx, Target: targetID, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
 	return result.Name, result.Err
 }
 
 // AppendMessage appends a message directly.
 func (c *Controller) AppendMessage(ctx context.Context, msg session.Message) error {
+	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &AppendMessageCmd{Ctx: ctx, Message: msg, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)
@@ -404,6 +430,7 @@ func (c *Controller) AppendMessage(ctx context.Context, msg session.Message) err
 
 // PersistEntry persists a non-turn entry.
 func (c *Controller) PersistEntry(ctx context.Context, entry session.Entry) error {
+	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &PersistEntryCmd{Ctx: ctx, Entry: entry, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)

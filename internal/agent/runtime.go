@@ -290,6 +290,7 @@ func (c *Controller) rejectCommand(cmd Command) {
 // context cancellation and closed state without performing I/O on the accept
 // path. Returns ErrQueueFull if the bounded queue is saturated.
 func (c *Controller) enqueue(ctx context.Context, cmd Command) error {
+	ctx = commandContext(ctx)
 	if ctx != nil {
 		select {
 		case <-ctx.Done():
@@ -297,10 +298,12 @@ func (c *Controller) enqueue(ctx context.Context, cmd Command) error {
 		default:
 		}
 	}
+	// Keep the closed check and non-blocking send under the same lock. Otherwise
+	// Close can drain the command queue and stop the loop between the check and
+	// the send, stranding an accepted caller forever.
 	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
+	defer c.mu.Unlock()
+	if c.closed {
 		return ErrRuntimeClosed
 	}
 	select {
@@ -313,6 +316,7 @@ func (c *Controller) enqueue(ctx context.Context, cmd Command) error {
 
 // enqueueSync sends a Command and waits for its typed error result.
 func (c *Controller) enqueueSync(ctx context.Context, cmd Command, reply chan error) error {
+	ctx = commandContext(ctx)
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return err
 	}
@@ -321,6 +325,24 @@ func (c *Controller) enqueueSync(ctx context.Context, cmd Command, reply chan er
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func commandContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func waitCommandReply[T any](ctx context.Context, reply <-chan T) (T, error) {
+	ctx = commandContext(ctx)
+	select {
+	case result := <-reply:
+		return result, nil
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
 	}
 }
 
@@ -462,26 +484,31 @@ func (c *Controller) cancelCurrentRun() {
 
 // Subscribe opens an independent bounded event stream.
 func (c *Controller) Subscribe(ctx context.Context, after EventCursor) (*EventSubscription, error) {
+	ctx = commandContext(ctx)
 	reply := make(chan SubscribeResult, 1)
 	cmd := &SubscribeCmd{Ctx: ctx, After: after, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return nil, err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
 	return result.Sub, result.Err
 }
 
 // Prompt submits a user message and runs a full agent turn.
 func (c *Controller) Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = commandContext(ctx)
 	reply := make(chan PromptResult, 1)
 	cmd := &PromptCmd{Ctx: ctx, Text: text, Images: cloneImageContents(images), Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return nil, err
 	}
-	result := <-reply
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
 	if result.Err != nil {
 		return result.Message, result.Err
 	}
@@ -544,6 +571,7 @@ func (c *Controller) SetModel(model llm.Model) error {
 
 // SetThinking changes the thinking level.
 func (c *Controller) SetThinking(ctx context.Context, level session.ThinkingLevel) error {
+	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &SetThinkingCmd{Ctx: ctx, Level: level, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)
@@ -561,6 +589,7 @@ func (c *Controller) SetTools(tools []Tool, active []string) error {
 
 // ActivateTools adds registered tools to the active set.
 func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
+	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &ActivateToolsCmd{Ctx: ctx, Names: names, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)

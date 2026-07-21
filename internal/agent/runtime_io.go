@@ -84,30 +84,38 @@ type runtimeCompletion struct {
 // result. The reply is buffered so a caller whose context is canceled cannot
 // strand the controller completion.
 func (c *Controller) requestRuntime(ctx context.Context, request runtimeRequest) runtimeResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = commandContext(ctx)
 	request.ctx = ctx
 	reply := make(chan runtimeResult, 1)
 	request.reply = reply
-	if runtimeMustComplete(request.kind) {
-		select {
-		case c.runtimeRequests <- request:
-		default:
-			return runtimeResult{err: ErrQueueFull}
-		case <-c.done:
-			return runtimeResult{err: ErrRuntimeClosed}
-		}
-	} else {
-		select {
-		case c.runtimeRequests <- request:
-		default:
+
+	// Keep the closed check and non-blocking send under the same lock. This
+	// prevents Close from draining the queue and stopping the command loop
+	// between the check and the send.
+	c.mu.Lock()
+	if c.closed && request.kind != runtimeAbortTurn {
+		c.mu.Unlock()
+		return runtimeResult{err: ErrRuntimeClosed}
+	}
+	select {
+	case c.runtimeRequests <- request:
+		c.mu.Unlock()
+	default:
+		c.mu.Unlock()
+		if !runtimeMustComplete(request.kind) {
 			select {
 			case <-ctx.Done():
 				return runtimeResult{err: ctx.Err()}
 			default:
-				return runtimeResult{err: ErrQueueFull}
 			}
+		}
+		return runtimeResult{err: ErrQueueFull}
+	}
+
+	if runtimeMustComplete(request.kind) {
+		select {
+		case result := <-reply:
+			return result
 		case <-c.done:
 			return runtimeResult{err: ErrRuntimeClosed}
 		}
@@ -115,6 +123,8 @@ func (c *Controller) requestRuntime(ctx context.Context, request runtimeRequest)
 	select {
 	case result := <-reply:
 		return result
+	case <-ctx.Done():
+		return runtimeResult{err: ctx.Err()}
 	case <-c.done:
 		return runtimeResult{err: ErrRuntimeClosed}
 	}
