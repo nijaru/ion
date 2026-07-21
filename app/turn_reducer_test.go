@@ -10,6 +10,19 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestTurnReducerSubmitIsCancelableBeforeTurnStart(t *testing.T) {
+	model := readyModel(t)
+	model.turnReducer().StartSubmit()
+	if !model.InFlight.Thinking || model.Progress.Mode != StateIonizing || model.Progress.Status != "Submitting..." {
+		t.Fatalf("submit state = thinking=%v mode=%v status=%q, want cancelable ionizing state", model.InFlight.Thinking, model.Progress.Mode, model.Progress.Status)
+	}
+
+	model.turnReducer().RejectSubmit("")
+	if model.InFlight.Thinking || model.Progress.Mode != StateReady || model.Progress.Status != "" {
+		t.Fatalf("rejected submit state = thinking=%v mode=%v status=%q, want ready idle state", model.InFlight.Thinking, model.Progress.Mode, model.Progress.Status)
+	}
+}
+
 func TestTurnReducerClearActiveStateCanKeepQueuedTurns(t *testing.T) {
 	model := readyModel(t)
 	tool := testToolEntry("tool", "partial", false)

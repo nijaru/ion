@@ -445,12 +445,25 @@ func (t TurnReducer) PopQueuedTurn() string {
 }
 
 func (t TurnReducer) StartSubmit() {
+	if t.inFlight != nil {
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+	}
 	if t.progress != nil {
 		t.progress.Mode = StateIonizing
 		t.progress.Status = "Submitting..."
 	}
 }
-func (t TurnReducer) RejectSubmit(reason string) {}
+func (t TurnReducer) RejectSubmit(reason string) {
+	if t.inFlight != nil {
+		t.inFlight.Thinking = false
+		t.inFlight.Canceling = false
+	}
+	if t.progress != nil {
+		t.progress.Mode = StateReady
+		t.progress.Status = ""
+	}
+}
 
 func (t TurnReducer) QueueTurn(text string) {
 	if t.inFlight != nil {

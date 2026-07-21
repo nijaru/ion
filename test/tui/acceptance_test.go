@@ -116,7 +116,11 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		program.Send(tea.KeyPressMsg{Text: "cancel this turn"})
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		waitAcceptanceSignal(t, provider.streamStarted, "provider stream start")
-		waitForAcceptanceOutput(t, output, "Streaming...", "cancelable TUI state")
+		// The provider signal proves the turn crossed into the blocked stream.
+		// Bubble Tea's incremental renderer may emit only a cursor delta for a
+		// transient status change, so the raw output is not a stable place to
+		// assert that the complete "Streaming..." string was written.
+		waitForAcceptanceOutputAny(t, output, "cancelable TUI state", "Submitting...", "Streaming...")
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 		time.Sleep(100 * time.Millisecond)
 		waitForAcceptanceOutput(t, output, "Canceled by user", "cancel settlement")
@@ -293,6 +297,22 @@ func waitForAcceptanceOutput(t *testing.T, output *acceptanceBuffer, needle, lab
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, needle, output.String())
+	return ""
+}
+
+func waitForAcceptanceOutputAny(t *testing.T, output *acceptanceBuffer, label string, needles ...string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		content := output.String()
+		for _, needle := range needles {
+			if strings.Contains(content, needle) {
+				return content
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, needles, output.String())
 	return ""
 }
 
