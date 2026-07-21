@@ -65,9 +65,9 @@ type Controller struct {
 
 	// --- Host resources ---
 	promptTemplates map[string]string
-	closeResources   []func() error
-	resourcesOnce    sync.Once
-	resourcesErr     error
+	closeResources  []func() error
+	resourcesOnce   sync.Once
+	resourcesErr    error
 
 	// --- Queues (Pi PendingMessageQueue x3) ---
 	steer    []session.Message
@@ -80,15 +80,18 @@ type Controller struct {
 	maxParallelTools int
 
 	// --- Lifecycle (owned by command goroutine, guarded by mu) ---
-	phase        Phase
-	closed       bool
-	mu           sync.Mutex // guards phase, closed, runCancel, runDone
-	commands     chan Command
-	commandStop  chan struct{}
+	phase       Phase
+	closed      bool
+	mu          sync.Mutex // guards phase, closed, runCancel, runDone
+	commands    chan Command
+	commandStop chan struct{}
 
 	// --- Active turn coordination ---
-	runCancel chan struct{} // closed to abort current run
-	runDone   chan struct{} // closed when run finishes
+	runCancel     chan struct{} // closed to abort current run
+	runCancelOnce *sync.Once
+	runDone       chan struct{} // closed when run finishes
+	turnWorkers   sync.WaitGroup
+	completions   chan turnCompletion
 
 	// --- Event delivery ---
 	eventHub *eventHub
@@ -145,6 +148,8 @@ func (c *Controller) run() {
 		select {
 		case cmd := <-c.commands:
 			c.dispatch(cmd)
+		case completion := <-c.completions:
+			c.handleTurnCompletion(completion)
 		case <-c.commandStop:
 			c.rejectQueued()
 			return
@@ -316,10 +321,10 @@ func (c *Controller) transitionPhase(from, to Phase) error {
 	return nil
 }
 
-// beginTurn reserves the controller for a new agent turn. Returns a cleanup
-// function that restores the phase to idle. Must be called from the command
-// goroutine.
-func (c *Controller) beginTurn() (func(), error) {
+// beginTurn reserves the controller for a new agent turn. The controller
+// retains the reservation until it processes the worker's typed completion.
+// Must be called from the command goroutine.
+func (c *Controller) beginTurn() (chan struct{}, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -330,26 +335,27 @@ func (c *Controller) beginTurn() (func(), error) {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("%w: phase=%s", ErrTurnActive, phase)
 	}
-	c.phase = PhaseStreaming
+	if c.phase == PhaseSettled {
+		if err := c.transitionPhase(PhaseSettled, PhaseReady); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
+	}
+	if err := c.transitionPhase(c.phase, PhaseStarting); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if err := c.transitionPhase(PhaseStarting, PhaseStreaming); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
 	c.runCancel = make(chan struct{})
+	c.runCancelOnce = new(sync.Once)
 	c.runDone = make(chan struct{})
 	runDone := c.runDone
+	c.turnWorkers.Add(1)
 	c.mu.Unlock()
-
-	return func() {
-		c.mu.Lock()
-		if c.phase == PhaseStreaming || c.phase == PhaseAwaitingApproval ||
-			c.phase == PhaseExecutingTool || c.phase == PhasePersisting ||
-			c.phase == PhaseRecovering || c.phase == PhaseSettled {
-			c.phase = PhaseReady
-		}
-		c.runCancel = nil
-		if c.runDone == runDone {
-			close(runDone)
-			c.runDone = nil
-		}
-		c.mu.Unlock()
-	}, nil
+	return runDone, nil
 }
 
 // beginExclusive reserves the controller for a non-turn operation (compaction,
@@ -368,6 +374,7 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 	c.phase = phase
 	c.runDone = make(chan struct{})
 	c.runCancel = make(chan struct{})
+	c.runCancelOnce = new(sync.Once)
 	done := c.runDone
 	c.mu.Unlock()
 
@@ -376,6 +383,7 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 		if c.phase == phase {
 			c.phase = PhaseReady
 			c.runCancel = nil
+			c.runCancelOnce = nil
 			if c.runDone == done {
 				close(done)
 				c.runDone = nil
@@ -383,6 +391,19 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 		}
 		c.mu.Unlock()
 	}, nil
+}
+
+// cancelCurrentRun signals the active operation exactly once. Cancellation is
+// intentionally separate from lifecycle finalization: the controller remains
+// responsible for closing runDone and publishing the terminal result.
+func (c *Controller) cancelCurrentRun() {
+	c.mu.Lock()
+	cancel := c.runCancel
+	once := c.runCancelOnce
+	c.mu.Unlock()
+	if cancel != nil && once != nil {
+		once.Do(func() { close(cancel) })
+	}
 }
 
 // --- Public Runtime interface methods ---
@@ -497,9 +518,10 @@ func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
 // command queue) because it needs to stop the command loop itself. It:
 //  1. Sets the closed flag
 //  2. Cancels any active run
-//  3. Closes commandStop (causes the run loop to exit)
-//  4. Waits for the run loop to finish
-//  5. Closes the event hub
+//  3. Waits for the active turn worker to report completion
+//  4. Closes commandStop (causes the run loop to exit)
+//  5. Waits for the run loop to finish
+//  6. Closes the event hub
 func (c *Controller) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -507,18 +529,27 @@ func (c *Controller) Close() error {
 		return nil
 	}
 	c.closed = true
-	close(c.commandStop)
-	cancel := c.runCancel
 	c.mu.Unlock()
 
 	// Cancel any active run.
-	if cancel != nil {
-		select {
-		case <-cancel:
-		default:
-			close(cancel)
+	c.cancelCurrentRun()
+
+	// Keep the command loop alive while the prompt worker publishes its typed
+	// completion. The completion handler owns phase, turn identity, and the
+	// runDone close; stopping the loop first would strand the worker.
+	c.turnWorkers.Wait()
+
+	c.mu.Lock()
+	if c.phase != PhaseClosed {
+		if err := c.transitionPhase(c.phase, PhaseClosed); err != nil {
+			// Shutdown is terminal even for an auxiliary operation whose legacy
+			// phase is not yet represented in the canonical transition table.
+			c.phase = PhaseClosed
 		}
 	}
+	c.mu.Unlock()
+
+	close(c.commandStop)
 
 	// Wait for the command loop to finish.
 	<-c.done

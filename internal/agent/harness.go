@@ -25,8 +25,6 @@ import (
 // *Direct handler implementations called by the typed dispatch.
 type Harness = Controller
 
-
-
 // pendingWrite is a buffered session mutation applied at turn boundary.
 // Pi reference: agent-harness.js pendSessionWrites (line 410-435).
 type pendingWrite struct {
@@ -152,6 +150,7 @@ func NewHarness(cfg HarnessConfig) *Harness {
 		phase:            PhaseIdle,
 		commands:         make(chan Command, controllerCommandCapacity),
 		commandStop:      make(chan struct{}),
+		completions:      make(chan turnCompletion, 1),
 		eventHub:         newEventHub(),
 		done:             make(chan struct{}),
 		compaction:       cfg.Compaction,
@@ -204,8 +203,6 @@ func hasExternalActionTool(tools []Tool) bool {
 	}
 	return false
 }
-
-
 
 // On registers a handler for a hook type. Returns an unsubscribe function.
 // Reference: Pi agent-harness.js on (line 962).
@@ -285,7 +282,6 @@ func cloneImageContents(images []session.ImageContent) []session.ImageContent {
 	return cloned
 }
 
-
 // runPrompt executes an accepted turn. Acceptance and phase reservation are
 // performed by the controller command loop before this worker starts.
 func (h *Harness) runPrompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
@@ -311,19 +307,6 @@ func (h *Harness) runPrompt(ctx context.Context, text string, images ...session.
 			h.discardAbortedTurnWrites()
 		}
 		h.mu.Lock()
-		if h.activeTurnID == activeTurnID {
-			h.activeTurnID = ""
-			h.activeTurnLeaf = ""
-			h.turnCommitted = false
-			h.turnAborted = false
-		}
-		h.phase = PhaseIdle
-		h.runCancel = nil
-		done := h.runDone
-		if done != nil {
-			close(done)
-			h.runDone = nil
-		}
 		modelID := h.model.ID
 		h.mu.Unlock()
 		if h.metrics != nil {
@@ -419,11 +402,7 @@ func (h *Harness) runPrompt(ctx context.Context, text string, images ...session.
 		}
 		persistErr = err
 		h.emit(&session.Error{Err: err})
-		select {
-		case <-cancel:
-		default:
-			close(cancel)
-		}
+		h.cancelCurrentRun()
 	}
 	// Build LoopConfig after the persistence failure callback exists so
 	// PrepareNextTurn can stop the run when a buffered write fails.
@@ -1598,7 +1577,6 @@ func (h *Harness) activateToolsDirect(ctx context.Context, names []string) error
 	return nil
 }
 
-
 // cancelActiveRun clears pending queues and signals the current run without
 // waiting for its provider or tools to return. The caller chooses the wait policy.
 func (h *Harness) cancelActiveRun() ([]session.Message, []session.Message, error) {
@@ -1615,19 +1593,10 @@ func (h *Harness) cancelActiveRun() ([]session.Message, []session.Message, error
 	h.mu.Unlock()
 
 	if cancel != nil {
-		select {
-		case <-cancel:
-		default:
-			close(cancel)
-		}
+		h.cancelCurrentRun()
 	}
 	return clearedSteer, clearedFollowUp, nil
 }
-
-
-
-
-
 
 // ExportSessionBundle performs explicit transport through the harness owner.
 func (h *Harness) exportSessionBundleDirect(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
@@ -1788,9 +1757,6 @@ func (h *Harness) logf(level slog.Level, msg string, attrs ...slog.Attr) {
 	a.AddAttrs(attrs...)
 	_ = h.log.Handler().Handle(context.Background(), a)
 }
-
-
-
 
 // AppendMessage appends a message directly to the session without running a turn.
 // Reference: Pi agent-harness.js appendMessage (line 614).

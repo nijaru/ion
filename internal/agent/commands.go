@@ -25,10 +25,10 @@ type Command interface {
 // PromptCmd submits a user message and runs a full agent turn. The reply
 // receives the final assistant message or a typed error.
 type PromptCmd struct {
-	Ctx     context.Context
-	Text    string
-	Images  []session.ImageContent
-	Reply   chan<- PromptResult
+	Ctx    context.Context
+	Text   string
+	Images []session.ImageContent
+	Reply  chan<- PromptResult
 }
 
 func (PromptCmd) command() {}
@@ -36,6 +36,17 @@ func (PromptCmd) command() {}
 type PromptResult struct {
 	Message session.Message
 	Err     *TurnError
+}
+
+// turnCompletion is the only result path from a prompt worker back to the
+// controller. The worker performs provider/session I/O, then waits for the
+// controller to finalize lifecycle state and acknowledge the completion.
+type turnCompletion struct {
+	runDone chan struct{}
+	reply   chan<- PromptResult
+	message session.Message
+	runErr  error
+	ack     chan struct{}
 }
 
 // SteerCmd queues a steering message injected before the next assistant
@@ -85,17 +96,17 @@ type AbortResult struct {
 // SetModelCmd switches the active model. Idle changes are durable before the
 // live value changes.
 type SetModelCmd struct {
-	Model  llm.Model
-	Reply  chan<- error
+	Model llm.Model
+	Reply chan<- error
 }
 
 func (SetModelCmd) command() {}
 
 // SetThinkingCmd changes the thinking level.
 type SetThinkingCmd struct {
-	Ctx    context.Context
-	Level  session.ThinkingLevel
-	Reply  chan<- error
+	Ctx   context.Context
+	Level session.ThinkingLevel
+	Reply chan<- error
 }
 
 func (SetThinkingCmd) command() {}
@@ -111,9 +122,9 @@ func (SetToolsCmd) command() {}
 
 // ActivateToolsCmd adds registered tools to the active set.
 type ActivateToolsCmd struct {
-	Ctx    context.Context
-	Names  []string
-	Reply  chan<- error
+	Ctx   context.Context
+	Names []string
+	Reply chan<- error
 }
 
 func (ActivateToolsCmd) command() {}
@@ -122,9 +133,9 @@ func (ActivateToolsCmd) command() {}
 
 // SubscribeCmd opens an independent bounded event stream.
 type SubscribeCmd struct {
-	Ctx    context.Context
-	After  EventCursor
-	Reply  chan<- SubscribeResult
+	Ctx   context.Context
+	After EventCursor
+	Reply chan<- SubscribeResult
 }
 
 func (SubscribeCmd) command() {}
@@ -159,9 +170,9 @@ type NavigateCmdResult struct {
 
 // AppendSessionInfoCmd updates display metadata for the active session.
 type AppendSessionInfoCmd struct {
-	Ctx    context.Context
-	Name   string
-	Reply  chan<- SessionInfoResult
+	Ctx   context.Context
+	Name  string
+	Reply chan<- SessionInfoResult
 }
 
 func (AppendSessionInfoCmd) command() {}
@@ -173,10 +184,10 @@ type SessionInfoResult struct {
 
 // AppendLabelCmd writes a branch label.
 type AppendLabelCmd struct {
-	Ctx     context.Context
-	Target  string
-	Label   string
-	Reply   chan<- SessionInfoResult
+	Ctx    context.Context
+	Target string
+	Label  string
+	Reply  chan<- SessionInfoResult
 }
 
 func (AppendLabelCmd) command() {}
@@ -201,9 +212,9 @@ func (AppendMessageCmd) command() {}
 
 // PersistEntryCmd persists a non-turn entry through the controller.
 type PersistEntryCmd struct {
-	Ctx    context.Context
-	Entry  session.Entry
-	Reply  chan<- error
+	Ctx   context.Context
+	Entry session.Entry
+	Reply chan<- error
 }
 
 func (PersistEntryCmd) command() {}
@@ -222,34 +233,10 @@ type ForkResult struct {
 	Err error
 }
 
-// --- Approval commands ---
-
-// ResolveApprovalCmd supplies the host's decision for a pending tool call.
-type ResolveApprovalCmd struct {
-	ID       string
-	Decision session.ApprovalDecision
-	Reply    chan<- error
-}
-
-func (ResolveApprovalCmd) command() {}
-
-// --- Lifecycle commands ---
-
-// CloseCmd initiates shutdown: cancel active run, drain workers, reject
-// queued commands, close event hub.
-type CloseCmd struct {
-	Reply chan<- error
-}
-
-func (CloseCmd) command() {}
-
 // commandResult is a helper for sending exactly one result on a reply channel.
 func sendResult[T any](reply chan<- T, result T) {
 	if reply == nil {
 		return
 	}
-	select {
-	case reply <- result:
-	default:
-	}
+	reply <- result
 }

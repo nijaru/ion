@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -32,6 +33,7 @@ func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts 
 	h.phase = PhaseBranchNav
 	h.runDone = make(chan struct{})
 	h.runCancel = make(chan struct{})
+	h.runCancelOnce = new(sync.Once)
 	runCancel := h.runCancel
 	model := h.model
 	thinking := h.thinking
@@ -44,6 +46,7 @@ func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts 
 		h.mu.Lock()
 		h.phase = PhaseIdle
 		h.runCancel = nil
+		h.runCancelOnce = nil
 		done := h.runDone
 		if done != nil {
 			close(done)

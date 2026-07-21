@@ -46,6 +46,14 @@ func TestHarnessCloseCancelsActiveProviderRequest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Prompt did not finish after Close cancellation")
 	}
+	if phase := h.currentPhase(); phase != PhaseClosed {
+		t.Fatalf("phase after Close = %s, want closed", phase)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.runDone != nil || h.runCancel != nil || h.activeTurnID != "" {
+		t.Fatalf("turn state retained after Close: done=%v cancel=%v turn=%q", h.runDone != nil, h.runCancel != nil, h.activeTurnID)
+	}
 }
 
 func TestHarnessShutdownHonorsDeadlineBeforeNonCooperativeProviderReturns(t *testing.T) {

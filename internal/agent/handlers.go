@@ -20,26 +20,83 @@ import (
 // --- Turn commands ---
 
 func (c *Controller) handlePrompt(cmd *PromptCmd) {
-	cleanup, err := c.beginTurn()
+	runDone, err := c.beginTurn()
 	if err != nil {
 		sendResult(cmd.Reply, PromptResult{Err: turnError(KindInternal, c.currentPhase(), RecoveryNone, err)})
 		return
 	}
 
 	go func() {
-		defer cleanup()
-		msg, runErr := c.runPrompt(cmd.Ctx, cmd.Text, cmd.Images...)
-		if runErr != nil {
-			var te *TurnError
-			if errors.As(runErr, &te) {
-				sendResult(cmd.Reply, PromptResult{Message: msg, Err: te})
-			} else {
-				sendResult(cmd.Reply, PromptResult{Message: msg, Err: turnError(KindProvider, c.currentPhase(), RecoveryAbort, runErr)})
+		defer c.turnWorkers.Done()
+		var (
+			msg    session.Message
+			runErr error
+		)
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					runErr = fmt.Errorf("turn worker panic: %v", recovered)
+				}
+			}()
+			msg, runErr = c.runPrompt(cmd.Ctx, cmd.Text, cmd.Images...)
+		}()
+		completion := turnCompletion{
+			runDone: runDone,
+			reply:   cmd.Reply,
+			message: msg,
+			runErr:  runErr,
+			ack:     make(chan struct{}),
+		}
+		c.completions <- completion
+		<-completion.ack
+	}()
+}
+
+// handleTurnCompletion is the single lifecycle finalizer for prompt workers.
+// It converts the raw worker error into the public typed result, closes the
+// turn wait channel, and only then acknowledges the worker.
+func (c *Controller) handleTurnCompletion(completion turnCompletion) {
+	c.mu.Lock()
+	result := PromptResult{Message: completion.message}
+	if completion.runErr != nil {
+		var turnErr *TurnError
+		if errors.As(completion.runErr, &turnErr) {
+			result.Err = turnErr
+		} else {
+			result.Err = turnError(KindProvider, c.phase, RecoveryAbort, completion.runErr)
+		}
+	}
+	if c.runDone == completion.runDone {
+		if c.closed {
+			if c.phase != PhaseClosed {
+				_ = c.transitionPhase(c.phase, PhaseClosed)
 			}
 		} else {
-			sendResult(cmd.Reply, PromptResult{Message: msg})
+			if completion.runErr != nil && c.phase == PhaseStreaming {
+				_ = c.transitionPhase(PhaseStreaming, PhaseRecovering)
+			} else if c.phase == PhaseStreaming {
+				_ = c.transitionPhase(PhaseStreaming, PhasePersisting)
+			}
+			if c.phase == PhasePersisting || c.phase == PhaseRecovering {
+				_ = c.transitionPhase(c.phase, PhaseSettled)
+			}
+			if c.phase == PhaseSettled {
+				_ = c.transitionPhase(PhaseSettled, PhaseReady)
+			}
 		}
-	}()
+		c.activeTurnID = ""
+		c.activeTurnLeaf = ""
+		c.turnCommitted = false
+		c.turnAborted = false
+		c.runCancel = nil
+		c.runCancelOnce = nil
+		close(completion.runDone)
+		c.runDone = nil
+	}
+	c.mu.Unlock()
+
+	sendResult(completion.reply, result)
+	close(completion.ack)
 }
 
 func (c *Controller) handleSteer(cmd *SteerCmd) {
@@ -169,7 +226,6 @@ func (c *Controller) ResolveApproval(id string, decision session.ApprovalDecisio
 	}
 	return c.approvals.Resolve(id, decision)
 }
-
 
 // --- Capability methods (non-Runtime interfaces) ---
 
@@ -363,6 +419,7 @@ func (c *Controller) GetThinkingLevel() session.ThinkingLevel {
 	defer c.mu.Unlock()
 	return c.thinking
 }
+
 // GetTools returns the tool map and active names.
 func (c *Controller) GetTools() (map[string]Tool, []string) {
 	c.mu.Lock()
