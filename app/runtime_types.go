@@ -544,15 +544,43 @@ func (t TurnReducer) RestoreRuntimePhase(phase agent.Phase) {
 		return
 	}
 	switch phase {
-	case agent.PhaseTurn:
+	case agent.PhaseReady, agent.PhaseSettled:
+		t.inFlight.Thinking = false
+		t.inFlight.Canceling = false
+		t.progress.Mode = StateReady
+		t.progress.Status = ""
+	case agent.PhaseStarting:
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+		t.progress.Mode = StateIonizing
+		t.progress.Status = "Submitting..."
+	case agent.PhaseStreaming:
 		t.inFlight.Thinking = true
 		t.inFlight.Canceling = false
 		t.progress.Mode = StateStreaming
 		t.progress.Status = "Streaming..."
-	case agent.PhaseCompaction:
+	case agent.PhaseAwaitingApproval:
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+		t.progress.Mode = StateWorking
+		t.progress.Status = "Awaiting approval..."
+	case agent.PhaseExecutingTool:
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+		t.progress.Mode = StateWorking
+		t.progress.Status = "Running tools..."
+	case agent.PhasePersisting:
 		t.progress.Compacting = true
 		t.progress.Mode = StateWorking
 		t.progress.Status = "Compacting context..."
+	case agent.PhaseRecovering:
+		t.inFlight.Thinking = false
+		t.progress.Mode = StateWorking
+		t.progress.Status = "Recovering..."
+	case agent.PhaseClosed:
+		t.inFlight.Thinking = false
+		t.progress.Mode = StateError
+		t.progress.Status = "Runtime closed"
 	}
 }
 

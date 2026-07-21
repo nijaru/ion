@@ -37,7 +37,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	// ToolExecStart is emitted before Execute; wait for the rendered busy state
 	// before testing the configured steer route so this remains deterministic on
 	// a loaded test runner.
-	waitForAcceptanceOutput(t, output, "Streaming...", "busy TUI state")
+	waitForAcceptanceOutput(t, output, "Working...", "busy tool TUI state")
 	program.Send(tea.KeyPressMsg{Text: "steer-now"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	// tea.Program.Send is asynchronous; let the runtime-owned steer command

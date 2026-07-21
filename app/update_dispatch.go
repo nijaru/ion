@@ -256,8 +256,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		m.Model.EventCursor = msg.subscription.Snapshot.Cursor
 		var snapshotCmd tea.Cmd
 		if msg.subscription.Snapshot.Resynced {
-			m.turnReducer().ClearActiveState(true)
-			m.turnReducer().RestoreRuntimePhase(msg.subscription.Snapshot.Phase)
+			m.applyAgentRuntimeSnapshot(msg.subscription.Snapshot)
 			snapshotCmd = m.terminalCommit().SwitchReplay(
 				nil,
 				msg.subscription.Snapshot.Branch,

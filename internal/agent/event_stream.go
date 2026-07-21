@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nijaru/ion/llm"
@@ -42,6 +43,29 @@ type QueueSnapshot struct {
 	Steer    []session.Message
 	FollowUp []session.Message
 	NextTurn []session.Message
+}
+
+// Texts returns the user-visible projection of each queue without exposing
+// runtime-owned message storage to a frontend. The runtime snapshot remains
+// the source of truth; callers receive independent strings only.
+func (q QueueSnapshot) Texts() (steer, followUp, nextTurn []string) {
+	return queueMessageTexts(q.Steer), queueMessageTexts(q.FollowUp), queueMessageTexts(q.NextTurn)
+}
+
+func queueMessageTexts(messages []session.Message) []string {
+	if len(messages) == 0 {
+		return nil
+	}
+	texts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if text := strings.TrimSpace(session.MessageText(message)); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) == 0 {
+		return nil
+	}
+	return texts
 }
 
 // RuntimeSnapshot is the authoritative renderable runtime projection returned

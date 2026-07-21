@@ -306,8 +306,11 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 			}
 			return sessionEventMsg{
 				generation: generation,
-				cursor:     agent.EventCursor{Stream: envelope.Stream, Next: envelope.Sequence + 1},
-				event:      envelope.Event,
+				// EventCursor.Next is the next sequence the reducer expects.
+				// The event itself must be compared at its own sequence; the
+				// reducer advances Next after accepting it.
+				cursor: agent.EventCursor{Stream: envelope.Stream, Next: envelope.Sequence},
+				event:  envelope.Event,
 			}
 		case <-done:
 			return streamClosedMsg{generation: generation, err: agent.ErrRuntimeClosed}

@@ -366,6 +366,10 @@ type ModelState struct {
 	// Runner is the agent runner (Harness). When set, the TUI uses it as the
 	// single turn and event owner.
 	Runner agent.Runtime
+	// ActiveTools is the runtime-owned active tool projection. It is refreshed
+	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
+	// registry-level startup description.
+	ActiveTools []string
 }
 
 // PickerState holds state for the various overlay pickers.
