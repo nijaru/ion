@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,43 @@ type abortReleasingPrintSession struct {
 	*printSession
 	unblock chan struct{}
 	once    sync.Once
+}
+
+type gatedPrintSession struct {
+	*printSession
+	release chan struct{}
+}
+
+func (s *gatedPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
+	<-s.release
+	return &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "done"}}}, nil
+}
+
+type signalWriter struct {
+	mu         sync.Mutex
+	buffer     bytes.Buffer
+	firstWrite chan struct{}
+	once       sync.Once
+}
+
+func (w *signalWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.firstWrite) })
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.Write(p)
+}
+
+func (w *signalWriter) WriteString(s string) (int, error) {
+	w.once.Do(func() { close(w.firstWrite) })
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.WriteString(s)
+}
+
+func (w *signalWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
 }
 
 func (s *abortReleasingPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
@@ -485,6 +523,105 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 	}
 	if got := out.String(); got != "hello world\n" {
 		t.Fatalf("text output = %q, want hello world newline", got)
+	}
+}
+
+func TestPrintModeStreamsTextBeforePromptSettles(t *testing.T) {
+	base := &printSession{events: make(chan agent.EventEnvelope, 2)}
+	base.events <- printEnvelope(session.MessageUpdate{
+		Delta:     session.TextDelta{Text: "partial"},
+		BlockType: "text",
+	})
+	base.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess := &gatedPrintSession{printSession: base, release: make(chan struct{})}
+	var out = &signalWriter{firstWrite: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- runPrintModeWithWriter(context.Background(), out, sess, "hello", "text")
+	}()
+
+	select {
+	case <-out.firstWrite:
+		if got := out.String(); got != "partial" {
+			t.Fatalf("streamed output = %q, want partial before settlement", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("print mode did not stream text before Prompt settled")
+	}
+	close(sess.release)
+	if err := <-done; err != nil {
+		t.Fatalf("runPrintMode returned error: %v", err)
+	}
+	if got := out.String(); got != "partial\n" {
+		t.Fatalf("final text output = %q, want partial newline", got)
+	}
+}
+
+func TestPrintModeWritesIonEvents(t *testing.T) {
+	sess := &printSession{events: make(chan agent.EventEnvelope, 4)}
+	sess.events <- agent.EventEnvelope{
+		Sequence: 7,
+		Event: session.ToolExecStart{
+			ToolCallID: "call-1",
+			Name:       "read",
+			Args:       []byte(`{"path":"README.md"}`),
+		},
+	}
+	sess.events <- agent.EventEnvelope{
+		Sequence: 8,
+		Event: session.MessageUpdate{
+			Delta:     session.TextDelta{Text: "done"},
+			BlockType: "text",
+		},
+	}
+	sess.events <- agent.EventEnvelope{
+		Sequence: 9,
+		Event: session.TurnEnd{
+			Base:    session.BaseNow(),
+			Message: &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "done"}}},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "events"); err != nil {
+		t.Fatalf("runPrintMode returned error: %v", err)
+	}
+
+	var events []structuredPrintEvent
+	decoder := json.NewDecoder(&out)
+	for {
+		var event structuredPrintEvent
+		err := decoder.Decode(&event)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode event stream %q: %v", out.String(), err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want 4: %s", len(events), out.String())
+	}
+	wantTypes := []string{"tool_start", "message_update", "turn_end", "result"}
+	for i, want := range wantTypes {
+		if events[i].Schema != printEventSchema || events[i].Index != uint64(i+1) || events[i].Type != want {
+			t.Fatalf("event[%d] = %#v, want schema/index/type %q", i, events[i], want)
+		}
+	}
+	if events[0].Sequence != 7 || events[1].Sequence != 8 || events[2].Sequence != 9 {
+		t.Fatalf("runtime sequences = %d, %d, %d; want 7, 8, 9", events[0].Sequence, events[1].Sequence, events[2].Sequence)
+	}
+	var result printResult
+	data, err := json.Marshal(events[3].Data)
+	if err != nil {
+		t.Fatalf("marshal result data: %v", err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode result data: %v", err)
+	}
+	if result.Response != "done" || !slices.Equal(result.ToolCalls, []string{"read"}) {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

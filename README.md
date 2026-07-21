@@ -112,7 +112,14 @@ ion -p "summarize this project"
 cat README.md | ion -p "summarize this"
 ion --continue -p "what did we do last?"
 ion --json -p "reply with ok"
+ion --output events -p "run the checks"
 ```
+
+Print mode uses the same runtime as the TUI. `--output text` streams the
+assistant response, `--output json` emits one final result summary, and
+`--output events` emits newline-delimited, versioned Ion lifecycle events plus
+a final result record. The events format is Ion-owned and is not a Pi session
+or JSONL compatibility protocol.
 
 Common TUI commands:
 

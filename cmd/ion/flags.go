@@ -110,7 +110,7 @@ func registerCLIFlags(fs *flag.FlagSet) cliFlags {
 		),
 		promptFlag:     fs.String("prompt", "", "Prompt to send in print mode"),
 		printShortFlag: fs.Bool("p", false, "Print response and exit (alias for --print)"),
-		outputFlag:     fs.String("output", "text", "Print mode output: text or json"),
+		outputFlag:     fs.String("output", "text", "Print mode output: text, json, or events"),
 		jsonFlag:       fs.Bool("json", false, "Emit JSON in print mode"),
 		timeoutFlag:    fs.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
 		exportSessionFlag: fs.String(

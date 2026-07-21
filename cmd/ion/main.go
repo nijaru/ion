@@ -605,8 +605,8 @@ func resolvePrintFlags(
 	if output == "" {
 		output = "text"
 	}
-	if output != "text" && output != "json" {
-		return false, "", "", fmt.Errorf("unsupported print output %q (want text or json)", output)
+	if output != "text" && output != "json" && output != "events" {
+		return false, "", "", fmt.Errorf("unsupported print output %q (want text, json, or events)", output)
 	}
 	if jsonOutput {
 		output = "json"
@@ -630,118 +630,6 @@ func resolvePrintFlags(
 	}
 
 	return printRequested, prompt, output, nil
-}
-
-func runPrintModeWithWriter(
-	ctx context.Context,
-	w io.Writer,
-	runner agent.Runtime,
-	prompt string,
-	output string,
-) error {
-	result, err := runPromptTurn(ctx, runner, prompt)
-	if err != nil {
-		return err
-	}
-	return writePrintResult(w, result, output)
-}
-
-func runPromptTurn(
-	ctx context.Context,
-	runner agent.Runtime,
-	prompt string,
-) (printResult, error) {
-	subscription, err := runner.Subscribe(ctx, agent.EventCursor{})
-	if err != nil {
-		return printResult{}, fmt.Errorf("subscribe runtime events: %w", err)
-	}
-	defer subscription.Close()
-	events := subscription.Events
-
-	var agentText strings.Builder
-	result := printResult{}
-	result.SessionID = runtimeSessionID(runner)
-
-	// Start the agent turn in a goroutine.
-	type promptOutcome struct {
-		msg session.Message
-		err error
-	}
-	outcomeCh := make(chan promptOutcome, 1)
-	go func() {
-		msg, err := runner.Prompt(ctx, prompt)
-		outcomeCh <- promptOutcome{msg, err}
-	}()
-
-	// Wait for BOTH Prompt to return AND TurnEnd to be seen.
-	var (
-		promptDone   bool
-		promptMsg    session.Message
-		turnFinished bool
-	)
-
-	for !promptDone || !turnFinished {
-		select {
-		case envelope, ok := <-events:
-			if !ok {
-				// Abort first: a runner may need the abort signal to release Prompt.
-				// Waiting for Prompt before aborting can deadlock print mode when the
-				// event producer fails while the provider call is still active.
-				if _, _, abortErr := runner.Abort(); abortErr != nil {
-					return printResult{}, fmt.Errorf(
-						"event stream closed before turn finished: abort turn: %w",
-						abortErr,
-					)
-				}
-				return printResult{}, fmt.Errorf("event stream closed before turn finished")
-			}
-			switch msg := envelope.Event.(type) {
-			case session.ToolExecStart:
-				result.ToolCalls = append(result.ToolCalls, msg.Name)
-			case session.MessageUpdate:
-				if msg.BlockType == "text" {
-					agentText.WriteString(session.DeltaText(msg.Delta))
-				}
-			case session.MessageEnd:
-				if session.MessageText(msg.Message) != "" {
-					agentText.Reset()
-					agentText.WriteString(session.MessageText(msg.Message))
-				}
-				if am, ok := msg.Message.(*session.AssistantMessage); ok {
-					result.InputTokens += am.Usage.Input
-					result.OutputTokens += am.Usage.Output
-					result.Cost += am.Usage.Cost.Total
-				}
-			case session.TurnEnd:
-				if msg.Error != nil {
-					_, _, _ = runner.Abort()
-					return printResult{}, fmt.Errorf("session error: %w", msg.Error)
-				}
-				turnFinished = true
-			}
-		case outcome := <-outcomeCh:
-			promptMsg = outcome.msg
-			promptDone = true
-			if outcome.err != nil {
-				return printResult{}, fmt.Errorf("submit turn: %w", outcome.err)
-			}
-		case <-ctx.Done():
-			_, _, _ = runner.Abort()
-			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
-		}
-	}
-
-	result.Response = agentText.String()
-	if strings.TrimSpace(result.Response) == "" {
-		if promptMsg != nil {
-			result.Response = session.MessageText(promptMsg)
-		}
-	}
-	if strings.TrimSpace(result.Response) == "" {
-		return printResult{}, fmt.Errorf("turn finished without assistant response")
-	}
-	result.SessionID = runtimeSessionID(runner)
-	return result, nil
 }
 
 func updatePrintSessionInfo(
@@ -797,7 +685,7 @@ func writePrintResult(w io.Writer, result printResult, output string) error {
 		enc := json.NewEncoder(w)
 		return enc.Encode(result)
 	default:
-		return fmt.Errorf("unsupported print output %q (want text or json)", output)
+		return fmt.Errorf("unsupported print output %q (want text, json, or events)", output)
 	}
 }
 
