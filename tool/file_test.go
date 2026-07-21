@@ -11,16 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"github.com/nijaru/ion/llm"
 )
 
 func newTestFileTool(t *testing.T, cwd string) *FileTool {
 	t.Helper()
 	return &FileTool{
-		cwd:        cwd,
-		checkpoint: ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints")),
-		opts:       LocalOperations{},
+		cwd:  cwd,
+		opts: LocalOperations{},
 	}
 }
 

@@ -33,14 +33,7 @@ func (e *Edit) ApprovalRequirement(args string) (Requirement, bool, error) {
 }
 
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
-	// Extract file path for queue key before full decode
-	input, err := decodeToolArgs[editInput]("edit", args)
-	if err != nil {
-		return "", err
-	}
-	return WithFileMutationQueue(input.Path, func() (string, error) {
-		return e.execute(ctx, args)
-	})
+	return e.execute(ctx, args)
 }
 
 func (e *Edit) execute(ctx context.Context, args string) (string, error) {
@@ -80,13 +73,6 @@ func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 	newContent, replacements, err := applyEditReplacements(input.Path, original, input.Edits)
 	if err != nil {
 		return "", err
-	}
-
-	if _, err := e.checkpointPaths(ctx, input.Path); err != nil {
-		return "", toolContextErr("edit", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", toolContextErr("edit", err)
 	}
 
 	if err := replaceFileWithinRoot(ctx, "edit", parentRoot, targetName, []byte(newContent), info.Mode().Perm()); err != nil {

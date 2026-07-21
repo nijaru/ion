@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,6 +169,54 @@ func TestJournalActionBoundaryRejectsChangedFilePreimageBeforeEffect(t *testing.
 		if transition.To == session.ActionStarted {
 			t.Fatalf("preimage rejection crossed start boundary: %#v", transitions)
 		}
+	}
+}
+
+func TestJournalActionBoundaryExecutesWorkspaceWriteAfterDurableStart(t *testing.T) {
+	ctx := t.Context()
+	workdir := t.TempDir()
+	store := newTestStore(t)
+	boundary := newJournalActionBoundary(
+		store, NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, workdir,
+	)
+	token, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
+		ToolName: "write", InvocationID: "call-write-file", SessionID: "session-1", TurnID: "turn-1",
+		Arguments: []byte(`{"path":"nested/result.txt","content":"durable\n"}`),
+		Requirement: ApprovalRequirement{
+			Category: "write", Operation: "write", Resource: "nested/result.txt", Paths: []string{"nested/result.txt"},
+		}, Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &tool.Write{FileTool: *tool.NewFileTool(workdir)}
+	result, err := boundary.Execute(ctx, token, func(execCtx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+		record, recordErr := store.GetAction(execCtx, token.ID)
+		if recordErr != nil {
+			return session.ToolResultMessage{}, recordErr
+		}
+		if record.State != session.ActionStarted {
+			return session.ToolResultMessage{}, fmt.Errorf("write crossed boundary in state %s", record.State)
+		}
+		output, writeErr := writer.Execute(execCtx, string(token.Record.Arguments))
+		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, writeErr
+	}, nil, nil)
+	if err != nil || result.IsError {
+		t.Fatalf("write result = %#v, err = %v", result, err)
+	}
+	content, err := os.ReadFile(filepath.Join(workdir, "nested", "result.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "durable\n" {
+		t.Fatalf("written content = %q", content)
+	}
+	record, err := store.GetAction(ctx, token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionCompleted {
+		t.Fatalf("action state = %s, want completed", record.State)
 	}
 }
 

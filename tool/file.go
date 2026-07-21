@@ -10,30 +10,20 @@ import (
 	"regexp"
 	"strings"
 
-	ionworkspace "github.com/nijaru/ion/internal/workspace"
 	"golang.org/x/text/unicode/norm"
 )
 
 type FileTool struct {
-	cwd        string
-	checkpoint *ionworkspace.CheckpointStore
-	opts       FileReader
+	cwd  string
+	opts FileReader
 }
 
 func NewFileTool(cwd string) *FileTool {
-	path, err := ionworkspace.DefaultCheckpointPath()
-	if err != nil {
-		return &FileTool{cwd: cwd, opts: LocalOperations{}}
-	}
-	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path), opts: LocalOperations{}}
+	return &FileTool{cwd: cwd, opts: LocalOperations{}}
 }
 
 func NewFileToolWithOperations(cwd string, opts FileReader) *FileTool {
-	path, err := ionworkspace.DefaultCheckpointPath()
-	if err != nil {
-		return &FileTool{cwd: cwd, opts: opts}
-	}
-	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path), opts: opts}
+	return &FileTool{cwd: cwd, opts: opts}
 }
 
 func (t *FileTool) absolutePath(target string) (string, error) {
@@ -110,33 +100,6 @@ func expandHomePath(target string) (string, error) {
 		return filepath.Join(home, strings.TrimPrefix(target, prefix)), nil
 	}
 	return target, nil
-}
-
-func (t *FileTool) relativePath(target string) (string, error) {
-	absPath, err := t.absolutePath(target)
-	if err != nil {
-		return "", err
-	}
-	absCwd, err := filepath.Abs(t.cwd)
-	if err != nil {
-		return "", err
-	}
-	relPath, err := filepath.Rel(absCwd, absPath)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(relPath), nil
-}
-
-func (t *FileTool) workspaceRelativePath(target string) (string, bool, error) {
-	relPath, err := t.relativePath(target)
-	if err != nil {
-		return "", false, err
-	}
-	if relPath == "." || filepath.IsLocal(relPath) {
-		return relPath, true, nil
-	}
-	return "", false, nil
 }
 
 func (t *FileTool) readPath(target string) (string, error) {
@@ -250,70 +213,6 @@ func (t *FileTool) enforceActionPath(ctx context.Context, path string) error {
 		}
 	}
 	return fmt.Errorf("mutation target %q is not the approved action target", path)
-}
-
-func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string, error) {
-	if t.checkpoint == nil {
-		return "", nil
-	}
-	relPaths := make([]string, 0, len(paths))
-	for _, path := range paths {
-		relPath, ok, err := t.checkpointPath(path)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			continue
-		}
-		relPaths = append(relPaths, relPath)
-	}
-	if len(relPaths) == 0 {
-		return "", nil
-	}
-	cp, err := t.checkpoint.Create(ctx, t.cwd, relPaths)
-	if err != nil {
-		return "", err
-	}
-	return cp.ID, nil
-}
-
-func (t *FileTool) checkpointPath(target string) (string, bool, error) {
-	relPath, ok, err := t.workspaceRelativePath(target)
-	if err != nil || !ok {
-		return "", ok, err
-	}
-	inside, err := t.realPathInsideWorkspace(target)
-	if err != nil {
-		return "", false, err
-	}
-	if !inside {
-		return "", false, nil
-	}
-	return relPath, true, nil
-}
-
-func (t *FileTool) realPathInsideWorkspace(target string) (bool, error) {
-	absCwd, err := filepath.Abs(t.cwd)
-	if err != nil {
-		return false, err
-	}
-	realCwd, err := filepath.EvalSymlinks(absCwd)
-	if err != nil {
-		realCwd = absCwd
-	}
-	absPath, err := t.absolutePath(target)
-	if err != nil {
-		return false, err
-	}
-	realPath, err := realPathForPossiblyMissingPath(absPath)
-	if err != nil {
-		return false, err
-	}
-	rel, err := filepath.Rel(realCwd, realPath)
-	if err != nil {
-		return false, nil
-	}
-	return rel == "." || filepath.IsLocal(rel), nil
 }
 
 func fileExists(path string) bool {

@@ -30,6 +30,7 @@ type journalActionBoundary struct {
 	mode        ApprovalMode
 	workdir     string
 	interactive bool
+	pathLocks   *actionPathLocks
 }
 
 func newJournalActionBoundary(
@@ -45,6 +46,7 @@ func newJournalActionBoundary(
 		mode:        mode,
 		interactive: interactive,
 		workdir:     filepath.Clean(workdir),
+		pathLocks:   newActionPathLocks(),
 	}
 }
 
@@ -190,6 +192,11 @@ func (b *journalActionBoundary) Execute(
 	if token == nil {
 		return invoke(ctx, signal, progress)
 	}
+	releasePathLocks := func() {}
+	if mutatingActionRecord(token.Record) {
+		releasePathLocks = b.pathLocks.acquire(token.Record.Paths)
+	}
+	defer releasePathLocks()
 	if err := revalidateActionPreimages(token.Record); err != nil {
 		boundaryErr := fmt.Errorf("action preimage validation: %w", err)
 		result := session.ToolResultMessage{
@@ -288,6 +295,10 @@ func mutatingAction(requirement ApprovalRequirement, operation string) bool {
 	category := strings.ToLower(strings.TrimSpace(requirement.Category))
 	operation = strings.ToLower(strings.TrimSpace(operation))
 	return category == "write" || operation == "write" || operation == "edit"
+}
+
+func mutatingActionRecord(record session.ActionRecord) bool {
+	return mutatingAction(ApprovalRequirement{Category: record.Category}, record.Operation)
 }
 
 func (b *journalActionBoundary) Finish(ctx context.Context, token *ActionToken, result ActionResult) error {

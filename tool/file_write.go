@@ -31,13 +31,7 @@ func (w *Write) ApprovalRequirement(args string) (Requirement, bool, error) {
 }
 
 func (w *Write) Execute(ctx context.Context, args string) (string, error) {
-	input, err := decodeToolArgs[writeInput]("write", args)
-	if err != nil {
-		return "", err
-	}
-	return WithFileMutationQueue(input.Path, func() (string, error) {
-		return w.execute(ctx, args)
-	})
+	return w.execute(ctx, args)
 }
 
 func (w *Write) execute(ctx context.Context, args string) (string, error) {
@@ -52,13 +46,6 @@ func (w *Write) execute(ctx context.Context, args string) (string, error) {
 	}
 	if err := w.enforceActionPath(ctx, absPath); err != nil {
 		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", toolContextErr("write", err)
-	}
-
-	if _, err := w.checkpointPaths(ctx, input.Path); err != nil {
-		return "", toolContextErr("write", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", toolContextErr("write", err)
