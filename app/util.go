@@ -170,6 +170,9 @@ func toolSurfaceSummary(surface ToolSurface) string {
 
 func runtimeStatusSummary(m Model) string {
 	lines := []string{"Permissions: confirm by default"}
+	if recovery := actionRecoverySummary(m.Model.Recovery); recovery != "" {
+		lines = append(lines, recovery)
+	}
 	if provider := m.runtimeProvider(); provider != "" {
 		lines = append(lines, "Provider: "+llm.DisplayName(provider)+" ("+provider+")")
 	}
@@ -200,6 +203,28 @@ func runtimeStatusSummary(m Model) string {
 			surface.ActiveNames = slices.Clone(m.Model.ActiveTools)
 		}
 		lines = append(lines, toolSurfaceSummary(surface))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func actionRecoverySummary(actions []session.ActionRecord) string {
+	if len(actions) == 0 {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("Action recovery: %d unsettled external action(s); verify before retry", len(actions))}
+	limit := min(len(actions), 8)
+	for _, action := range actions[:limit] {
+		line := fmt.Sprintf("- %s: %s %s", action.ID, action.Tool, action.State)
+		if reason := strings.Join(strings.Fields(action.Error), " "); reason != "" {
+			if len(reason) > 160 {
+				reason = reason[:160] + "..."
+			}
+			line += " — " + reason
+		}
+		lines = append(lines, line)
+	}
+	if len(actions) > limit {
+		lines = append(lines, fmt.Sprintf("- ... and %d more; see /actions", len(actions)-limit))
 	}
 	return strings.Join(lines, "\n")
 }

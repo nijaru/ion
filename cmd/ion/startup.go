@@ -422,10 +422,11 @@ func runtimeInfoForProvider(provider string, cfg *config.Config, store session.S
 // runtimeInfo is a minimal app.RuntimeInfo for native providers.
 // It holds config and store, but does not own a Session (the harness does).
 type runtimeInfo struct {
-	def     *llm.Definition
-	cfg     *config.Config
-	store   session.Store
-	surface app.ToolSurface
+	def      *llm.Definition
+	cfg      *config.Config
+	store    session.Store
+	surface  app.ToolSurface
+	recovery []session.ActionRecord
 }
 
 func (b *runtimeInfo) Name() string { return "ion" }
@@ -449,8 +450,14 @@ func (b *runtimeInfo) ContextLimit() int {
 }
 func (b *runtimeInfo) Bootstrap() app.Bootstrap {
 	entries, _ := b.store.Entries(context.Background())
+	status := fmt.Sprintf("%s/%s", b.Provider(), b.Model())
+	if len(b.recovery) > 0 {
+		status += fmt.Sprintf(" • %d unsettled external action(s); use /actions to inspect", len(b.recovery))
+	}
 	return app.Bootstrap{Entries: entries,
-		Status: fmt.Sprintf("%s/%s", b.Provider(), b.Model())}
+		Status:   status,
+		Recovery: append([]session.ActionRecord(nil), b.recovery...),
+	}
 }
 func (b *runtimeInfo) ToolSurface() app.ToolSurface {
 	surface := b.surface

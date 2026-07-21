@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
@@ -102,5 +103,95 @@ func TestStartupSetupRequiredRecognizesSetupBackend(t *testing.T) {
 	}
 	if startupSetupRequired(providerRuntimeInfo{provider: "openai"}) {
 		t.Fatal("materialized backend should not require startup setup")
+	}
+}
+
+func TestRuntimeInfoBootstrapSurfacesUnsettledActions(t *testing.T) {
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	defer store.Close()
+
+	info, err := runtimeInfoForProvider("ollama", &config.Config{Provider: "ollama", Model: "llama3"}, store)
+	if err != nil {
+		t.Fatalf("runtime info: %v", err)
+	}
+	native, ok := info.(*runtimeInfo)
+	if !ok {
+		t.Fatalf("runtime info type = %T, want *runtimeInfo", info)
+	}
+	native.recovery = []session.ActionRecord{{
+		ID:    "action-1",
+		Tool:  "bash",
+		State: session.ActionIndeterminate,
+	}}
+
+	boot := info.Bootstrap()
+	if !strings.Contains(boot.Status, "1 unsettled external action(s); use /actions to inspect") {
+		t.Fatalf("bootstrap status = %q, want recovery warning", boot.Status)
+	}
+	if len(boot.Recovery) != 1 || boot.Recovery[0].ID != "action-1" {
+		t.Fatalf("bootstrap recovery = %#v, want copied action", boot.Recovery)
+	}
+	boot.Recovery[0].ID = "mutated"
+	if native.recovery[0].ID != "action-1" {
+		t.Fatal("bootstrap recovery aliases runtime state")
+	}
+}
+
+func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledAction(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	defer store.Close()
+
+	record := session.ActionRecord{
+		ID:           "action-1",
+		InvocationID: "tool-call-1",
+		SessionID:    "session-1",
+		TurnID:       "turn-1",
+		Tool:         "bash",
+		Operation:    "run",
+		Arguments:    []byte(`{"command":"go test ./..."}`),
+		Metadata:     []byte(`{"source":"test"}`),
+		Preimages:    []byte(`[]`),
+		Fingerprint:  "sha256:action-1",
+		CWD:          t.TempDir(),
+		PolicyMode:   "confirm",
+	}
+	var journal session.ActionJournal = store
+	if _, err := journal.PrepareAction(context.Background(), record); err != nil {
+		t.Fatalf("prepare action: %v", err)
+	}
+	if _, err := journal.AuthorizeAction(context.Background(), record.ID, record.PolicyMode); err != nil {
+		t.Fatalf("authorize action: %v", err)
+	}
+	if _, err := journal.StartAction(context.Background(), record.ID, "test-process-group"); err != nil {
+		t.Fatalf("start action: %v", err)
+	}
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, sess, runner, err := openRuntime(
+		context.Background(),
+		store,
+		jobs,
+		t.TempDir(),
+		"main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		"",
+		false,
+		"",
+		"",
+		false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsettled external action") {
+		t.Fatalf("openRuntime error = %v, want print-mode recovery error", err)
+	}
+	if sess != nil || runner != nil {
+		t.Fatalf("failed runtime handles = (%v, %v), want nil", sess, runner)
 	}
 }

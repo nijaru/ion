@@ -524,6 +524,27 @@ func openRuntime(
 		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
 	})
+	closeUnusableRuntime := func(openErr error) error {
+		closeErr := errors.Join(harness.Close(), closeRuntimeResources())
+		if closeErr != nil {
+			return errors.Join(openErr, fmt.Errorf("close runtime after failed open: %w", closeErr))
+		}
+		return openErr
+	}
+	var recovery agent.ActionRecovery = harness
+	unsettled, recoveryErr := recovery.UnsettledActions(ctx)
+	if recoveryErr != nil {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("load unsettled actions: %w", recoveryErr))
+	}
+	if runtime, ok := info.(*runtimeInfo); ok {
+		runtime.recovery = append([]session.ActionRecord(nil), unsettled...)
+	}
+	if len(unsettled) > 0 && !interactive {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf(
+			"%d unsettled external action(s) require interactive verification before print mode",
+			len(unsettled),
+		))
+	}
 	if searchTool != nil {
 		searchTool.SetActivator(harness.ActivateTools)
 	}

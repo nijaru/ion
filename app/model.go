@@ -366,6 +366,10 @@ type ModelState struct {
 	// Runner is the agent runner (Controller). When set, the TUI uses it as the
 	// single turn and event owner.
 	Runner agent.Runtime
+	// Recovery contains startup action evidence that requires explicit
+	// verification before retry. The runtime remains the authority; this is a
+	// read-only frontend snapshot for status and /actions.
+	Recovery []session.ActionRecord
 	// ActiveTools is the runtime-owned active tool projection. It is refreshed
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
 	// registry-level startup description.
@@ -483,6 +487,7 @@ func New(
 			Info:     b,
 			Storage:  s,
 			Store:    store,
+			Recovery: append([]session.ActionRecord(nil), boot.Recovery...),
 			Switcher: switcher,
 			Catalog:  llm.NewModelCatalog(llm.ModelCatalogOptions{}),
 		},
