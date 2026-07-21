@@ -159,6 +159,36 @@ func TestPlanSandboxedBashAutoPrefersLinuxBubblewrapWhenAvailable(t *testing.T) 
 	}
 }
 
+func TestPlanSandboxedCommandPreservesArbitraryCommandArguments(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	prevLookPath := sandboxLookPath
+	prevPathExists := sandboxPathExists
+	sandboxGOOS = "linux"
+	sandboxLookPath = func(name string) (string, error) {
+		if name != "bwrap" {
+			t.Fatalf("lookPath called with %q, want bwrap", name)
+		}
+		return "/usr/bin/bwrap", nil
+	}
+	sandboxPathExists = func(string) bool { return false }
+	defer func() {
+		sandboxGOOS = prevGOOS
+		sandboxLookPath = prevLookPath
+		sandboxPathExists = prevPathExists
+	}()
+
+	plan, err := PlanSandboxedCommand("/tmp/workspace", "/usr/local/bin/mcp-server", []string{"--config", "file with spaces.json"}, SandboxBubblewrap)
+	if err != nil {
+		t.Fatalf("PlanSandboxedCommand error = %v", err)
+	}
+	if plan.Name != "/usr/bin/bwrap" || plan.Dir != "/tmp/workspace" {
+		t.Fatalf("plan = %#v, want bubblewrap in workspace", plan)
+	}
+	if len(plan.Args) < 3 || plan.Args[len(plan.Args)-3] != "/usr/local/bin/mcp-server" || plan.Args[len(plan.Args)-2] != "--config" || plan.Args[len(plan.Args)-1] != "file with spaces.json" {
+		t.Fatalf("plan args = %#v, want command and arguments preserved", plan.Args)
+	}
+}
+
 func TestExplicitSeatbeltFailsClosedWhenUnavailable(t *testing.T) {
 	prevGOOS := sandboxGOOS
 	prevLookPath := sandboxLookPath

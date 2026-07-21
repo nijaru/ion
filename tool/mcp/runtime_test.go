@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,6 +36,32 @@ func TestOwnedClientCloseIgnoresExpectedShutdownErrors(t *testing.T) {
 				t.Fatalf("ownedClient.Close() = %v, want nil for expected shutdown", err)
 			}
 		})
+	}
+}
+
+func TestOwnedClientCloseTerminatesProcessGroup(t *testing.T) {
+	command := exec.Command("/bin/sh", "-c", "sleep 30")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	cleaned := false
+	client := &ownedClient{
+		client:  &Client{session: &fakeClientSession{closeErr: context.Canceled}},
+		command: command,
+		cleanup: func() error {
+			cleaned = true
+			return nil
+		},
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("ownedClient.Close() = %v, want nil", err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("process group leader exited without termination")
+	}
+	if !cleaned {
+		t.Fatal("ownedClient.Close did not run sandbox cleanup")
 	}
 }
 
@@ -94,5 +122,15 @@ func TestOpenRejectsInvalidAndDuplicateServerNames(t *testing.T) {
 		if _, err := Open(t.Context(), t.TempDir(), configs); err == nil {
 			t.Fatalf("Open(%#v) unexpectedly succeeded", configs)
 		}
+	}
+}
+
+func TestOpenFailsClosedWhenSandboxConfigurationIsInvalid(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "invalid")
+	if _, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
+		Name:    "invalid-sandbox",
+		Command: "echo",
+	}}); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("Open with invalid sandbox mode error = %v, want fail-closed sandbox error", err)
 	}
 }

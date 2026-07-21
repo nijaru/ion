@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nijaru/ion/internal/workvfs"
@@ -72,17 +73,27 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 		}
 
 		serverCtx, cancel := context.WithCancel(context.Background())
-		command := exec.CommandContext(serverCtx, cfg.Command, cfg.Args...)
-		command.Dir, err = resolveDirectory(workdir, cfg.Directory)
+		directory, err := resolveDirectory(workdir, cfg.Directory)
 		if err != nil {
 			cancel()
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
+		plan, err := tool.PlanSandboxedCommand(directory, cfg.Command, cfg.Args, tool.CurrentSandboxMode())
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q sandbox: %w", name, err)
+		}
+		command := exec.CommandContext(serverCtx, plan.Name, plan.Args...)
+		command.Dir = plan.Dir
+		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		command.Env = overlayEnvironment(tool.NewEnvironmentPolicy("allowlist", nil).CommandEnvironment(), cfg.Env)
 		client, err := NewClient(ctx, &sdkmcp.CommandTransport{Command: command}, "ion", "0.0.1")
 		if err != nil {
 			cancel()
+			_ = terminateProcessGroup(command)
+			_ = plan.Cleanup()
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
@@ -91,6 +102,8 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 		if err != nil {
 			cancel()
 			_ = client.Close()
+			_ = terminateProcessGroup(command)
+			_ = plan.Cleanup()
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q workspace policy: %w", name, err)
 		}
@@ -103,6 +116,8 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 		if err != nil {
 			cancel()
 			_ = client.Close()
+			_ = terminateProcessGroup(command)
+			_ = plan.Cleanup()
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
@@ -111,12 +126,19 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			if _, exists := seenTools[toolName]; exists {
 				cancel()
 				_ = client.Close()
+				_ = terminateProcessGroup(command)
+				_ = plan.Cleanup()
 				runtime.Close()
 				return nil, fmt.Errorf("mcp tool %q is exposed by more than one server", toolName)
 			}
 			seenTools[toolName] = struct{}{}
 		}
-		runtime.clients = append(runtime.clients, &ownedClient{client: client, cancel: cancel})
+		runtime.clients = append(runtime.clients, &ownedClient{
+			client:  client,
+			cancel:  cancel,
+			command: command,
+			cleanup: plan.Cleanup,
+		})
 		runtime.tools = append(runtime.tools, discovered...)
 	}
 	slices.SortFunc(runtime.tools, func(a, b tool.Tool) int {
@@ -171,15 +193,19 @@ func (r *Runtime) Close() error {
 // Client.Close handles the protocol; cancel guarantees the command exits even
 // when a server does not finish its transport handshake cleanly.
 type ownedClient struct {
-	client *Client
-	cancel context.CancelFunc
+	client  *Client
+	cancel  context.CancelFunc
+	command *exec.Cmd
+	cleanup func() error
 }
 
 func (c *ownedClient) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.cancel()
+	if c.cancel != nil {
+		c.cancel()
+	}
 	err := c.client.Close()
 	// Canceling the command context intentionally terminates a stdio child;
 	// the SDK may surface that expected process exit as an ExitError or a
@@ -188,9 +214,26 @@ func (c *ownedClient) Close() error {
 	if errors.As(err, &exitErr) ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, sdkmcp.ErrConnectionClosed) {
+		err = nil
+	}
+	return errors.Join(err, terminateProcessGroup(c.command), callCleanup(c.cleanup))
+}
+
+func terminateProcessGroup(command *exec.Cmd) error {
+	if command == nil || command.Process == nil || command.Process.Pid <= 0 {
 		return nil
 	}
-	return err
+	if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("terminate MCP process group: %w", err)
+	}
+	return nil
+}
+
+func callCleanup(cleanup func() error) error {
+	if cleanup == nil {
+		return nil
+	}
+	return cleanup()
 }
 
 var serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)

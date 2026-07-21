@@ -34,6 +34,34 @@ type sandboxPlan struct {
 	cleanup func() error
 }
 
+// SandboxCommandPlan is the host-owned command construction result for a
+// sandboxed subprocess. Cleanup must run after the process exits.
+type SandboxCommandPlan struct {
+	Name    string
+	Args    []string
+	Dir     string
+	Cleanup func() error
+}
+
+// CurrentSandboxMode resolves the configured technical boundary. Invalid
+// values remain invalid so callers fail closed instead of silently selecting a
+// weaker backend.
+func CurrentSandboxMode() SandboxMode {
+	return resolveSandboxMode()
+}
+
+// PlanSandboxedCommand builds a sandboxed command without starting it. It is
+// used by host-owned subprocesses such as MCP servers as well as Bash.
+func PlanSandboxedCommand(cwd, name string, args []string, mode SandboxMode) (SandboxCommandPlan, error) {
+	plan, err := planSandboxedCommand(cwd, name, args, mode)
+	if err != nil {
+		return SandboxCommandPlan{}, err
+	}
+	return SandboxCommandPlan{
+		Name: plan.name, Args: append([]string(nil), plan.args...), Dir: plan.dir, Cleanup: plan.cleanup,
+	}, nil
+}
+
 func resolveSandboxMode() SandboxMode {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("ION_SANDBOX")))
 	switch raw {
@@ -101,26 +129,34 @@ func sandboxSummary(mode SandboxMode) string {
 }
 
 func planSandboxedBash(cwd, command string, mode SandboxMode) (sandboxPlan, error) {
+	name := "/bin/bash"
+	if mode == SandboxOff {
+		name = "bash"
+	}
+	return planSandboxedCommand(cwd, name, []string{"-c", command}, mode)
+}
+
+func planSandboxedCommand(cwd, name string, args []string, mode SandboxMode) (sandboxPlan, error) {
 	switch mode {
 	case SandboxOff:
 		return sandboxPlan{
-			name: "bash",
-			args: []string{"-c", command},
+			name: name,
+			args: append([]string(nil), args...),
 			dir:  cwd,
 		}, nil
 	case SandboxSeatbelt:
-		return planSeatbeltSandbox(cwd, command)
+		return planSeatbeltCommand(cwd, name, args)
 	case SandboxBubblewrap:
-		return planBubblewrapSandbox(cwd, command)
+		return planBubblewrapCommand(cwd, name, args)
 	case SandboxAuto:
 		if sandboxGOOS == "darwin" {
 			if _, err := sandboxLookPath("sandbox-exec"); err == nil {
-				return planSeatbeltSandbox(cwd, command)
+				return planSeatbeltCommand(cwd, name, args)
 			}
 		}
 		if sandboxGOOS == "linux" {
 			if _, err := sandboxLookPath("bwrap"); err == nil {
-				return planBubblewrapSandbox(cwd, command)
+				return planBubblewrapCommand(cwd, name, args)
 			}
 		}
 		return sandboxPlan{}, fmt.Errorf("automatic sandbox backend unavailable on %s", sandboxGOOS)
@@ -130,6 +166,10 @@ func planSandboxedBash(cwd, command string, mode SandboxMode) (sandboxPlan, erro
 }
 
 func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
+	return planSeatbeltCommand(cwd, "/bin/bash", []string{"-c", command})
+}
+
+func planSeatbeltCommand(cwd, name string, args []string) (sandboxPlan, error) {
 	if sandboxGOOS != "darwin" {
 		return sandboxPlan{}, fmt.Errorf("seatbelt sandbox unsupported on %s", sandboxGOOS)
 	}
@@ -153,7 +193,7 @@ func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
 	}
 	return sandboxPlan{
 		name: seatbelt,
-		args: []string{"-f", profile.Name(), "/bin/bash", "-c", command},
+		args: append([]string{"-f", profile.Name(), name}, args...),
 		dir:  cwd,
 		cleanup: func() error {
 			return os.Remove(profile.Name())
@@ -171,6 +211,7 @@ func seatbeltProfile(cwd string) string {
 (deny default)
 (allow process*)
 (allow signal (target self))
+(allow sysctl-read)
 (allow file-read*)
 (allow file-read* (subpath %s))
 (allow file-write*
@@ -181,6 +222,10 @@ func seatbeltProfile(cwd string) string {
 }
 
 func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
+	return planBubblewrapCommand(cwd, "/bin/bash", []string{"-c", command})
+}
+
+func planBubblewrapCommand(cwd, name string, args []string) (sandboxPlan, error) {
 	if sandboxGOOS != "linux" {
 		return sandboxPlan{}, fmt.Errorf("bubblewrap sandbox unsupported on %s", sandboxGOOS)
 	}
@@ -188,7 +233,7 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 	if err != nil {
 		return sandboxPlan{}, fmt.Errorf("bubblewrap unavailable: %w", err)
 	}
-	args := []string{
+	bwrapArgs := []string{
 		"--unshare-net",
 		"--bind", cwd, cwd,
 		"--chdir", cwd,
@@ -200,19 +245,13 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 		"--proc", "/proc",
 	}
 	if sandboxPathExists("/private/tmp") {
-		args = append(args, "--bind", "/private/tmp", "/private/tmp")
+		bwrapArgs = append(bwrapArgs, "--bind", "/private/tmp", "/private/tmp")
 	}
-	if sandboxGOOS == "darwin" {
-		args = append(
-			args,
-			"--ro-bind", "/System", "/System",
-			"--ro-bind", "/Library", "/Library",
-		)
-	}
-	args = append(args, "/bin/bash", "-c", command)
+	bwrapArgs = append(bwrapArgs, name)
+	bwrapArgs = append(bwrapArgs, args...)
 	return sandboxPlan{
 		name: bwrap,
-		args: args,
+		args: bwrapArgs,
 		dir:  cwd,
 	}, nil
 }
