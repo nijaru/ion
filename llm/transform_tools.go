@@ -45,7 +45,7 @@ func synthesizeMissingToolResults(req *Request) {
 		transformed = append(transformed, msg)
 
 		if msg.Role == RoleAssistant {
-			for _, call := range msg.Calls {
+			for _, call := range msg.BlocksToolCalls() {
 				pending = append(pending, pendingCall{
 					id:       call.ID,
 					name:     call.Function.Name,
@@ -102,10 +102,11 @@ func normalizeToolIDs(messages []Message) {
 		switch msg.Role {
 		case RoleAssistant:
 			clear(pending)
-			for j := range msg.Calls {
-				original := msg.Calls[j].ID
+			calls := msg.BlocksToolCalls()
+			for j := range calls {
+				original := calls[j].ID
 				normalized := uniqueToolCallID(original, used)
-				msg.Calls[j].ID = normalized
+				setToolCallID(msg, j, normalized)
 				pending[original] = append(pending[original], normalized)
 			}
 		case RoleTool:
@@ -120,6 +121,29 @@ func normalizeToolIDs(messages []Message) {
 		default:
 			clear(pending)
 		}
+	}
+}
+
+func setToolCallID(msg *Message, callIndex int, id string) {
+	if len(msg.Blocks) == 0 {
+		if callIndex < len(msg.Calls) {
+			msg.Calls[callIndex].ID = id
+		}
+		return
+	}
+
+	seen := 0
+	for i, block := range msg.Blocks {
+		call, ok := block.(ToolCallBlock)
+		if !ok {
+			continue
+		}
+		if seen == callIndex {
+			call.ID = id
+			msg.Blocks[i] = call
+			return
+		}
+		seen++
 	}
 }
 

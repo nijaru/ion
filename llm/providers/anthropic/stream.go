@@ -17,13 +17,15 @@ type Stream struct {
 		Err() error
 		Close() error
 	}
-	err        error
-	activeCall *llm.Call
-	targetName string
-	model      string
-	p          *Provider
-	ctx        context.Context
-	usage      llm.Usage
+	err           error
+	activeCall    *llm.Call
+	targetName    string
+	model         string
+	responseModel string
+	responseID    string
+	p             *Provider
+	ctx           context.Context
+	usage         llm.Usage
 }
 
 func (s *Stream) Next() (*llm.Chunk, bool) {
@@ -33,7 +35,13 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 		switch event.Type {
 		case "message_start":
 			msg := event.AsMessageStart()
-			return s.updateUsage(usageFromMessage(msg.Message.Usage)), true
+			s.responseModel = string(msg.Message.Model)
+			s.responseID = msg.Message.ID
+			chunk := s.updateUsage(usageFromMessage(msg.Message.Usage))
+			chunk.Model = s.model
+			chunk.ResponseModel = responseModel(s.responseModel, s.model)
+			chunk.ResponseID = s.responseID
+			return chunk, true
 		case "content_block_start":
 			chunk := s.contentBlockStart(event.AsContentBlockStart())
 			if chunk != nil {
@@ -68,14 +76,16 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 // mapStopReason maps Anthropic stop reasons to Ion's StopReason type.
 func mapStopReason(reason string) llm.StopReason {
 	switch reason {
-	case "end_turn":
+	case "end_turn", "stop_sequence", "pause_turn":
 		return llm.StopReasonStop
 	case "max_tokens":
 		return llm.StopReasonLength
 	case "tool_use":
 		return llm.StopReasonToolUse
+	case "refusal":
+		return llm.StopReasonError
 	default:
-		return llm.StopReasonStop
+		return ""
 	}
 }
 

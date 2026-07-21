@@ -186,6 +186,9 @@ func (m Message) BlocksToolCalls() []Call {
 // HasAssistantPayload reports whether an assistant message carries useful
 // model-visible payload.
 func (m Message) HasAssistantPayload() bool {
+	if len(m.Blocks) > 0 {
+		return true
+	}
 	return m.HasTextContent() ||
 		strings.TrimSpace(m.Reasoning) != "" ||
 		len(m.ThinkingBlocks) > 0 ||
@@ -344,7 +347,7 @@ type Response struct {
 	// Blocks holds structured content when available. When empty, the flat
 	// fields (Content, Reasoning, Calls, ThinkingBlocks) are authoritative.
 	Blocks     ContentBlocks `json:"blocks,omitzero"`
-	StopReason StopReason     `json:"stop_reason,omitzero"`
+	StopReason StopReason    `json:"stop_reason,omitzero"`
 
 	// Assistant message metadata.
 	API           string `json:"api,omitzero"`
@@ -446,21 +449,21 @@ type Usage struct {
 
 // Model describes an LLM model exposed by a provider.
 type Model struct {
-	ID            string        `json:"id"                       toml:"id"`
-	Name          string        `json:"name,omitzero"            toml:"name,omitzero"`          // Human-readable name
-	API           string        `json:"api,omitzero"             toml:"api,omitzero"`           // API type (anthropic-messages, openai-completions, etc.)
-	Provider      string        `json:"provider,omitzero"        toml:"provider,omitzero"`      // Provider slug (anthropic, openai, etc.)
-	BaseURL       string        `json:"base_url,omitzero"        toml:"base_url,omitzero"`      // Base URL for API calls
-	Reasoning     bool          `json:"reasoning,omitzero"       toml:"reasoning,omitzero"`     // Whether model supports reasoning
-	Input         []string      `json:"input,omitzero"           toml:"input,omitzero"`         // Input types (text, image)
-	MaxTokens     int           `json:"max_tokens,omitzero"      toml:"max_tokens,omitzero"`    // Maximum output tokens
-	Headers       map[string]string `json:"headers,omitzero"      toml:"headers,omitzero"`       // Custom headers for API calls
-	ContextWindow int           `json:"context_window,omitzero"  toml:"context_window,omitzero"`
-	CostPer1MIn   float64       `json:"cost_per_1m_in,omitzero"  toml:"cost_per_1m_in,omitzero"`
-	CostPer1MOut  float64       `json:"cost_per_1m_out,omitzero" toml:"cost_per_1m_out,omitzero"`
-	CostPer1MCacheRead  float64 `json:"cost_per_1m_cache_read,omitzero"  toml:"cost_per_1m_cache_read,omitzero"`
-	CostPer1MCacheWrite float64 `json:"cost_per_1m_cache_write,omitzero" toml:"cost_per_1m_cache_write,omitzero"`
-	Capabilities  *Capabilities `json:"capabilities,omitzero"    toml:"capabilities,omitzero"`
+	ID                  string            `json:"id"                       toml:"id"`
+	Name                string            `json:"name,omitzero"            toml:"name,omitzero"`       // Human-readable name
+	API                 string            `json:"api,omitzero"             toml:"api,omitzero"`        // API type (anthropic-messages, openai-completions, etc.)
+	Provider            string            `json:"provider,omitzero"        toml:"provider,omitzero"`   // Provider slug (anthropic, openai, etc.)
+	BaseURL             string            `json:"base_url,omitzero"        toml:"base_url,omitzero"`   // Base URL for API calls
+	Reasoning           bool              `json:"reasoning,omitzero"       toml:"reasoning,omitzero"`  // Whether model supports reasoning
+	Input               []string          `json:"input,omitzero"           toml:"input,omitzero"`      // Input types (text, image)
+	MaxTokens           int               `json:"max_tokens,omitzero"      toml:"max_tokens,omitzero"` // Maximum output tokens
+	Headers             map[string]string `json:"headers,omitzero"      toml:"headers,omitzero"`       // Custom headers for API calls
+	ContextWindow       int               `json:"context_window,omitzero"  toml:"context_window,omitzero"`
+	CostPer1MIn         float64           `json:"cost_per_1m_in,omitzero"  toml:"cost_per_1m_in,omitzero"`
+	CostPer1MOut        float64           `json:"cost_per_1m_out,omitzero" toml:"cost_per_1m_out,omitzero"`
+	CostPer1MCacheRead  float64           `json:"cost_per_1m_cache_read,omitzero"  toml:"cost_per_1m_cache_read,omitzero"`
+	CostPer1MCacheWrite float64           `json:"cost_per_1m_cache_write,omitzero" toml:"cost_per_1m_cache_write,omitzero"`
+	Capabilities        *Capabilities     `json:"capabilities,omitzero"    toml:"capabilities,omitzero"`
 	// ThinkingLevelMap maps thinking levels to provider-specific values.
 	// Missing keys use provider defaults. Empty map means no thinking support.
 	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero" toml:"thinking_level_map,omitzero"`

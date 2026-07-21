@@ -23,6 +23,12 @@ func (b *Base) IsTransient(err error) bool {
 			return true
 		}
 	}
+	if code, ok := llm.HTTPStatusCode(err); ok {
+		switch code {
+		case 429, 500, 502, 503, 504:
+			return true
+		}
+	}
 	return false
 }
 
@@ -40,6 +46,9 @@ func (b *Base) IsContextOverflow(err error) bool {
 		if apiErr.HTTPStatusCode == 400 && isContextOverflowMessage(apiErr.Message) {
 			return true
 		}
+	}
+	if code, ok := llm.HTTPStatusCode(err); ok && code == 400 {
+		return isContextOverflowMessage(err.Error())
 	}
 	return false
 }

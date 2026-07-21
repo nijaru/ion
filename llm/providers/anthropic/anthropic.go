@@ -79,7 +79,11 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	usage.Cost = p.Cost(ctx, prepared.Model, usage)
 
 	res := &llm.Response{
-		Usage: usage,
+		Usage:         usage,
+		Model:         prepared.Model,
+		ResponseModel: responseModel(string(resp.Model), prepared.Model),
+		ResponseID:    resp.ID,
+		StopReason:    mapStopReason(string(resp.StopReason)),
 	}
 
 	for _, block := range resp.Content {
@@ -179,4 +183,11 @@ func (p *Provider) Cost(ctx context.Context, model string, usage llm.Usage) floa
 		}
 	}
 	return 0.0
+}
+
+func responseModel(actual, requested string) string {
+	if actual != "" && actual != requested {
+		return actual
+	}
+	return ""
 }

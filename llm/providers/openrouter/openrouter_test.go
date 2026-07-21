@@ -371,6 +371,16 @@ func TestStreamUsageChunkPrefersOpenRouterRawCost(t *testing.T) {
 	}
 }
 
+func TestStreamMalformedEventIsReported(t *testing.T) {
+	stream := &openRouterStream{reader: strings.NewReader("data: {not-json}\n")}
+	if chunk, ok := stream.Next(); ok || chunk != nil {
+		t.Fatalf("Next() = (%#v, %v), want terminal error", chunk, ok)
+	}
+	if stream.Err() == nil {
+		t.Fatal("Err() = nil, want malformed SSE error")
+	}
+}
+
 func TestGenerateRequestDoesNotSetStreamTrue(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",

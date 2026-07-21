@@ -13,6 +13,7 @@ type OpenAIStream struct {
 	stream      *openai.ChatCompletionStream
 	err         error
 	activeCalls map[int]llm.Call // Track partial calls by their index in the response
+	model       string
 }
 
 func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
@@ -29,6 +30,9 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 		// Handle final usage chunk (which may have no choices)
 		if resp.Usage != nil {
 			return &llm.Chunk{
+				Model:         resp.Model,
+				ResponseModel: responseModel(resp.Model, s.model),
+				ResponseID:    resp.ID,
 				Usage: &llm.Usage{
 					InputTokens:  resp.Usage.PromptTokens,
 					OutputTokens: resp.Usage.CompletionTokens,
@@ -43,8 +47,11 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 
 		choice := resp.Choices[0]
 		chunk := &llm.Chunk{
-			Content:   choice.Delta.Content,
-			Reasoning: choice.Delta.ReasoningContent,
+			Content:       choice.Delta.Content,
+			Reasoning:     choice.Delta.ReasoningContent,
+			Model:         resp.Model,
+			ResponseModel: responseModel(resp.Model, s.model),
+			ResponseID:    resp.ID,
 		}
 
 		// Set stop reason from the provider finish reason.
@@ -118,6 +125,6 @@ func mapFinishReason(reason string) llm.StopReason {
 	case "content_filter":
 		return llm.StopReasonError
 	default:
-		return llm.StopReasonStop
+		return ""
 	}
 }

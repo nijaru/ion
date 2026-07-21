@@ -144,8 +144,8 @@ func TestStreamAccumulatorMixedBlockAndFlatToolCalls(t *testing.T) {
 	})
 	acc.Add(&llm.Chunk{
 		Calls: []llm.Call{{
-			ID:       "call-1",
-			Type:     "function",
+			ID:   "call-1",
+			Type: "function",
 			Function: struct {
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
@@ -180,5 +180,29 @@ func TestStreamAccumulatorMixedBlockAndFlatToolCalls(t *testing.T) {
 		t.Errorf("Blocks[2] = %T, want ToolCallBlock", resp.Blocks[2])
 	} else if tcb.ID != "call-1" || tcb.Name != "bash" {
 		t.Errorf("Blocks[2] = %+v, want ID=call-1 Name=bash", tcb)
+	}
+}
+
+func TestStreamAccumulatorPreservesCallsBesideTypedBlock(t *testing.T) {
+	var acc llm.StreamAccumulator
+	acc.Add(&llm.Chunk{
+		Content: "answer",
+		Block:   llm.TextBlock{Text: "answer"},
+		Calls: []llm.Call{{
+			ID:   "call-1",
+			Type: "function",
+			Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "read", Arguments: "{}"},
+		}},
+	})
+
+	resp := acc.Response()
+	if len(resp.Blocks) != 2 {
+		t.Fatalf("Blocks = %d, want text plus tool call", len(resp.Blocks))
+	}
+	if len(resp.ToolCalls()) != 1 || resp.ToolCalls()[0].ID != "call-1" {
+		t.Fatalf("ToolCalls = %#v, want call-1", resp.ToolCalls())
 	}
 }

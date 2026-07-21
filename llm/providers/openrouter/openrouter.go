@@ -107,7 +107,7 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openrouter: status %d: %s", httpResp.StatusCode, string(respBody))
+		return nil, llm.NewHTTPError("openrouter", httpResp.StatusCode, respBody)
 	}
 
 	var resp sashaoai.ChatCompletionResponse
@@ -128,8 +128,12 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	usage.Cost = p.Base.Cost(ctx, prepared.Model, usage)
 
 	return &llm.Response{
-		Blocks: p.buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
-		Usage:  usage,
+		Blocks:        p.buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
+		Usage:         usage,
+		Model:         prepared.Model,
+		ResponseModel: responseModel(resp.Model, prepared.Model),
+		ResponseID:    resp.ID,
+		StopReason:    mapFinishReason(string(choice.FinishReason)),
 	}, nil
 }
 
@@ -161,7 +165,7 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 	if httpResp.StatusCode != http.StatusOK {
 		defer httpResp.Body.Close()
 		respBody, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("openrouter: status %d: %s", httpResp.StatusCode, string(respBody))
+		return nil, llm.NewHTTPError("openrouter", httpResp.StatusCode, respBody)
 	}
 
 	return &openRouterStream{
@@ -171,6 +175,28 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		ctx:      ctx,
 		model:    prepared.Model,
 	}, nil
+}
+
+func responseModel(actual, requested string) string {
+	if actual != "" && actual != requested {
+		return actual
+	}
+	return ""
+}
+
+func mapFinishReason(reason string) llm.StopReason {
+	switch reason {
+	case "stop", "eos_token", "stop_sequence":
+		return llm.StopReasonStop
+	case "length", "max_tokens":
+		return llm.StopReasonLength
+	case "tool_calls", "function_call":
+		return llm.StopReasonToolUse
+	case "content_filter", "error":
+		return llm.StopReasonError
+	default:
+		return ""
+	}
 }
 
 func (p *Provider) client(req *llm.Request) *http.Client {

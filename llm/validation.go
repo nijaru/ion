@@ -40,7 +40,7 @@ func ValidateRequest(req *Request) error {
 		}
 		clear(pendingTools)
 		if msg.Role == RoleAssistant {
-			for _, call := range msg.Calls {
+			for _, call := range msg.BlocksToolCalls() {
 				if call.ID != "" {
 					pendingTools[call.ID]++
 				}

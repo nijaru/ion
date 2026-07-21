@@ -210,6 +210,7 @@ func TestGeneratePreservesReasoningContent(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"id": "chatcmpl-test",
 			"object": "chat.completion",
+			"model": "actual-model",
 			"choices": [{
 				"index": 0,
 				"message": {
@@ -243,6 +244,12 @@ func TestGeneratePreservesReasoningContent(t *testing.T) {
 	if resp.ReasoningContent() != "thinking through it" {
 		t.Fatalf("reasoning = %q, want thinking through it", resp.ReasoningContent())
 	}
+	if resp.ResponseID != "chatcmpl-test" || resp.ResponseModel != "actual-model" {
+		t.Fatalf("response metadata = id %q model %q", resp.ResponseID, resp.ResponseModel)
+	}
+	if resp.StopReason != llm.StopReasonStop {
+		t.Fatalf("stop reason = %q, want stop", resp.StopReason)
+	}
 }
 
 func TestStreamPreservesReasoningContent(t *testing.T) {
@@ -254,7 +261,7 @@ func TestStreamPreservesReasoningContent(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write(
 			[]byte(
-				`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking "}}]}
+				`data: {"id":"chatcmpl-test","model":"actual-model","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking "}}]}
 
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"through it"}}]}
 
@@ -297,6 +304,12 @@ data: [DONE]
 	}
 	if resp.Usage.TotalTokens != 7 {
 		t.Fatalf("total tokens = %d, want 7", resp.Usage.TotalTokens)
+	}
+	if resp.ResponseID != "chatcmpl-test" || resp.ResponseModel != "actual-model" {
+		t.Fatalf("response metadata = id %q model %q", resp.ResponseID, resp.ResponseModel)
+	}
+	if resp.StopReason != llm.StopReasonStop {
+		t.Fatalf("stop reason = %q, want stop", resp.StopReason)
 	}
 }
 

@@ -14,6 +14,12 @@ func TransformRequestForCapabilities(req *Request, caps Capabilities) {
 	if req == nil {
 		return
 	}
+	if !caps.Tools {
+		// Tool definitions are part of the provider request surface. A model
+		// that cannot call tools must never receive them, even when the
+		// neutral transcript still contains historical tool activity.
+		req.Tools = nil
+	}
 
 	if caps.SystemRole != RoleSystem {
 		rewriteSystemMessages(req, caps.SystemRole)

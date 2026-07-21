@@ -43,18 +43,19 @@ func (s *openRouterStream) Next() (*llm.Chunk, bool) {
 		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
 			return nil, false
 		}
 
 		var resp sashaoai.ChatCompletionStreamResponse
 		if err := json.Unmarshal([]byte(data), &resp); err != nil {
-			continue
+			s.err = err
+			return nil, false
 		}
 
 		// Handle final usage chunk (which may have no choices).
@@ -69,7 +70,12 @@ func (s *openRouterStream) Next() (*llm.Chunk, bool) {
 			} else if s.provider != nil {
 				usage.Cost = s.provider.Base.Cost(s.ctx, s.model, usage)
 			}
-			return &llm.Chunk{Usage: &usage}, true
+			return &llm.Chunk{
+				Model:         resp.Model,
+				ResponseModel: responseModel(resp.Model, s.model),
+				ResponseID:    resp.ID,
+				Usage:         &usage,
+			}, true
 		}
 
 		if len(resp.Choices) == 0 {
@@ -78,8 +84,14 @@ func (s *openRouterStream) Next() (*llm.Chunk, bool) {
 
 		choice := resp.Choices[0]
 		chunk := &llm.Chunk{
-			Content:   choice.Delta.Content,
-			Reasoning: choice.Delta.ReasoningContent,
+			Content:       choice.Delta.Content,
+			Reasoning:     choice.Delta.ReasoningContent,
+			Model:         resp.Model,
+			ResponseModel: responseModel(resp.Model, s.model),
+			ResponseID:    resp.ID,
+		}
+		if choice.FinishReason != "" {
+			chunk.StopReason = mapFinishReason(string(choice.FinishReason))
 		}
 
 		if len(choice.Delta.ToolCalls) > 0 {

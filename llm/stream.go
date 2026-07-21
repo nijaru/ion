@@ -1,10 +1,20 @@
 package llm
 
+import "errors"
+
 // GenerateFromStream collects chunks from a stream and assembles a Response.
 // It is intended for use by Provider implementations to avoid duplicating
 // the complex logic of assembling streaming chunks.
-func GenerateFromStream(s Stream) (*Response, error) {
-	defer s.Close()
+func GenerateFromStream(s Stream) (response *Response, err error) {
+	if s == nil {
+		return nil, errors.New("llm: nil stream")
+	}
+	defer func() {
+		if closeErr := s.Close(); err == nil && closeErr != nil {
+			response = nil
+			err = closeErr
+		}
+	}()
 	var acc StreamAccumulator
 
 	for {
@@ -69,25 +79,30 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 	}
 	if chunk.Block != nil {
 		a.addBlock(chunk.Block)
-	} else {
-		// Write to Blocks instead of flat fields.
+	}
+	// A provider may put one typed block and additional flat fields in the
+	// same delta (for example text plus tool-call fragments). Preserve both;
+	// the old mutually-exclusive branch silently dropped the additional data.
+	if _, ok := chunk.Block.(TextBlock); !ok {
 		if chunk.Content != "" {
 			a.addBlock(TextBlock{Text: chunk.Content})
 		}
+	}
+	if _, ok := chunk.Block.(ThinkingBlock); !ok {
 		if chunk.Reasoning != "" {
 			a.addBlock(ThinkingBlock{Thinking: chunk.Reasoning})
 		}
 		for _, block := range chunk.ThinkingBlocks {
 			a.addBlock(block)
 		}
-		for _, call := range chunk.Calls {
-			a.addBlock(ToolCallBlock{
-				ID:        call.ID,
-				Name:      call.Function.Name,
-				Arguments: call.Function.Arguments,
-				Type:      call.Type,
-			})
-		}
+	}
+	for _, call := range chunk.Calls {
+		a.addBlock(ToolCallBlock{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+			Type:      call.Type,
+		})
 	}
 	if chunk.Usage != nil {
 		a.resp.Usage = *chunk.Usage
@@ -149,5 +164,3 @@ func (a *StreamAccumulator) addBlock(block ContentBlock) {
 		a.resp.Blocks = append(a.resp.Blocks, b)
 	}
 }
-
-

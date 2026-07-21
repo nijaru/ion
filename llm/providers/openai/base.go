@@ -100,8 +100,12 @@ func (b *Base) Generate(ctx context.Context, req *llm.Request) (*llm.Response, e
 	usage.Cost = b.Cost(ctx, prepared.Model, usage)
 
 	return &llm.Response{
-		Usage:  usage,
-		Blocks: buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
+		Usage:         usage,
+		Blocks:        buildBlocks(choice.Message.Content, choice.Message.ReasoningContent, choice.Message.ToolCalls),
+		Model:         prepared.Model,
+		ResponseModel: responseModel(resp.Model, prepared.Model),
+		ResponseID:    resp.ID,
+		StopReason:    mapFinishReason(string(choice.FinishReason)),
 	}, nil
 }
 
@@ -124,5 +128,13 @@ func (b *Base) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	return &OpenAIStream{
 		stream:      stream,
 		activeCalls: make(map[int]llm.Call),
+		model:       prepared.Model,
 	}, nil
+}
+
+func responseModel(actual, requested string) string {
+	if actual != "" && actual != requested {
+		return actual
+	}
+	return ""
 }
