@@ -139,10 +139,11 @@ func (m *JobManager) start(ctx context.Context, command string, run jobRunner) (
 			return m.appendOutput(id, update)
 		})
 		readyOnce.Do(func() { ready <- err })
-		m.finish(id, result, err)
+		var lifecycleErr error
 		if lifecycle.Finished != nil {
-			lifecycle.Finished(result, err)
+			lifecycleErr = lifecycle.Finished(result, err)
 		}
+		m.finish(id, result, err, lifecycleErr)
 	}()
 
 	select {
@@ -181,7 +182,7 @@ func (m *JobManager) appendOutput(id string, update localOutputUpdate) error {
 	return nil
 }
 
-func (m *JobManager) finish(id, result string, err error) {
+func (m *JobManager) finish(id, result string, err, lifecycleErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record := m.jobs[id]
@@ -205,6 +206,13 @@ func (m *JobManager) finish(id, result string, err error) {
 	default:
 		record.info.Status = JobFailed
 		record.info.Error = err.Error()
+	}
+	if lifecycleErr != nil {
+		if record.info.Error == "" {
+			record.info.Error = lifecycleErr.Error()
+		} else {
+			record.info.Error = errors.Join(errors.New(record.info.Error), lifecycleErr).Error()
+		}
 	}
 	close(record.done)
 }

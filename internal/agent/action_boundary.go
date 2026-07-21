@@ -240,14 +240,17 @@ func (b *journalActionBoundary) Execute(
 			backgroundMu.Unlock()
 			return nil
 		},
-		Finished: func(output string, err error) {
+		Finished: func(output string, err error) error {
 			result := ActionResult{State: session.ActionCompleted, ResultIdentity: stringResultIdentity(output)}
 			if err != nil {
 				result.State = session.ActionIndeterminate
 				result.Error = fmt.Sprintf("background action outcome is indeterminate: %v", err)
 				result.CleanupOutcome = "background process group was reaped; verify external effects before retry"
 			}
-			_ = b.finish(b.durableContext(context.Background()), token, result)
+			if finishErr := b.finish(b.durableContext(context.Background()), token, result); finishErr != nil {
+				return fmt.Errorf("finalize background action %q: %w", token.ID, finishErr)
+			}
+			return nil
 		},
 	})
 	result, executeErr := invoke(effectCtx, signal, progress)

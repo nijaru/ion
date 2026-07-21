@@ -482,6 +482,71 @@ func TestJournalActionBoundaryTracksBackgroundJobToTerminalState(t *testing.T) {
 	t.Fatalf("background action did not reach terminal state: %#v", record)
 }
 
+func TestJournalActionBoundarySurfacesBackgroundFinalizeFailure(t *testing.T) {
+	t.Setenv("ION_SANDBOX", string(tool.SandboxOff))
+	ctx := t.Context()
+	workdir := t.TempDir()
+	store := newTestStore(t)
+	jobs := tool.NewJobManager()
+	t.Cleanup(func() { _ = jobs.Close() })
+	finishErr := errors.New("action journal is unavailable")
+	journal := &finishFailingActionJournal{ActionJournal: store, err: finishErr}
+	boundary := newJournalActionBoundary(
+		journal, NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, workdir,
+	)
+	token, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
+		ToolName: "bash", InvocationID: "call-background-finish-failure", SessionID: "session-1", TurnID: "turn-1",
+		Arguments: []byte(`{"command":"printf done; sleep 0.05","background":true}`),
+		Requirement: ApprovalRequirement{
+			Category: "execute", Operation: "bash", Resource: "printf done; sleep 0.05",
+			Metadata: map[string]any{"background": true},
+		}, Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bash := tool.NewBashWithEnvironmentAndJobs(workdir, tool.NewEnvironmentPolicy("inherit", nil), jobs)
+	result, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+		output, err := bash.Execute(ctx, `{"command":"printf done; sleep 0.05","background":true}`)
+		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
+	}, nil, nil)
+	if err != nil || result.IsError {
+		t.Fatalf("background launch result = %#v, err = %v", result, err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var job tool.JobSnapshot
+	for time.Now().Before(deadline) {
+		job, err = jobs.Get("job-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Error != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(job.Error, "finalize background action") || !strings.Contains(job.Error, finishErr.Error()) {
+		t.Fatalf("job error = %q, want surfaced finalize failure", job.Error)
+	}
+	record, err := store.GetAction(ctx, token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionStarted {
+		t.Fatalf("action state = %s, want started/unsettled after failed finalization", record.State)
+	}
+}
+
+type finishFailingActionJournal struct {
+	session.ActionJournal
+	err error
+}
+
+func (j *finishFailingActionJournal) FinishAction(context.Context, string, session.ActionState, string, string, string) (session.ActionRecord, error) {
+	return session.ActionRecord{}, j.err
+}
+
 func containsActionError(err error, text string) bool {
 	return err != nil && strings.Contains(err.Error(), text)
 }

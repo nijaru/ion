@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,5 +107,41 @@ func TestJobManagerBoundsCompletedHistory(t *testing.T) {
 	}
 	if _, err := manager.Get("job-1"); err == nil {
 		t.Fatal("old completed job remained after history pruning")
+	}
+}
+
+func TestJobManagerSurfacesLifecycleCompletionError(t *testing.T) {
+	manager := NewJobManager()
+	defer manager.Close()
+
+	lifecycleErr := errors.New("action journal unavailable")
+	ctx := WithJobLifecycleRecorder(context.Background(), JobLifecycleRecorder{
+		Finished: func(string, error) error { return lifecycleErr },
+	})
+	jobID, err := manager.start(ctx, "background action", func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
+		signal(123)
+		return "done", nil
+	})
+	if err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	var job JobSnapshot
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err = manager.Get(jobID)
+		if err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if job.Status == JobCompleted {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if job.Status != JobCompleted {
+		t.Fatalf("job status = %s, want completed process status", job.Status)
+	}
+	if !strings.Contains(job.Error, lifecycleErr.Error()) {
+		t.Fatalf("job error = %q, want lifecycle error", job.Error)
 	}
 }

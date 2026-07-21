@@ -19,10 +19,11 @@ type ProcessGroupRecorder func(pid int) error
 // JobLifecycleRecorder lets the runtime action boundary distinguish a
 // background launch from a foreground result. Started is acknowledged before
 // the job start call returns; Finished runs after the managed process has been
-// reaped.
+// reaped. A Finished error is retained on the job projection so asynchronous
+// journal failures remain visible to the user.
 type JobLifecycleRecorder struct {
 	Started  func(jobID string) error
-	Finished func(result string, err error)
+	Finished func(result string, err error) error
 }
 
 type actionPathGuardKey struct{}
