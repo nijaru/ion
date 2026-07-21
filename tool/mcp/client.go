@@ -23,10 +23,11 @@ type clientSession interface {
 // Client represents an MCP client session wrapped with Ion validation and
 // tool-registry adaptation.
 type Client struct {
-	session     clientSession
-	filePolicy  *FilePolicy
-	identity    string
-	environment []string
+	session       clientSession
+	filePolicy    *FilePolicy
+	identity      string
+	environment   []string
+	networkIntent string
 }
 
 // NewClient connects to an MCP server over the provided official SDK transport.
@@ -106,6 +107,17 @@ func (c *Client) WithEnvironment(names []string) *Client {
 	}
 	slices.Sort(c.environment)
 	c.environment = slices.Compact(c.environment)
+	return c
+}
+
+// WithNetworkIntent records the network capability actually enforced by the
+// server's process sandbox. It is included in every action requirement so a
+// policy change cannot reuse an older authorization.
+func (c *Client) WithNetworkIntent(intent string) *Client {
+	if c == nil {
+		return nil
+	}
+	c.networkIntent = strings.TrimSpace(intent)
 	return c
 }
 
@@ -283,7 +295,10 @@ func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {
 		}
 	}
 	requirement.Environment = slices.Clone(w.client.environment)
-	requirement.NetworkIntent = tool.SandboxNetworkIntent(tool.CurrentSandboxMode())
+	requirement.NetworkIntent = w.client.networkIntent
+	if requirement.NetworkIntent == "" {
+		requirement.NetworkIntent = tool.SandboxNetworkIntent(tool.CurrentSandboxMode())
+	}
 	requirement.MCPIdentity = w.mcpIdentity
 	if requirement.MCPIdentity == "" {
 		identityName := w.remoteName

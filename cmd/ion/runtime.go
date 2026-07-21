@@ -265,6 +265,9 @@ func openMCPRuntime(
 			Directory:      server.Directory,
 			Env:            cloneStringMap(server.Env),
 			ProtectedPaths: append([]string(nil), server.ProtectedPaths...),
+			ReadPaths:      append([]string(nil), server.ReadPaths...),
+			WritablePaths:  append([]string(nil), server.WritablePaths...),
+			AllowNetwork:   server.AllowNetwork,
 		})
 	}
 	return ionmcp.Open(ctx, workdir, servers)

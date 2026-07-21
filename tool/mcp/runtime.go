@@ -29,6 +29,9 @@ type ServerConfig struct {
 	Directory      string
 	Env            map[string]string
 	ProtectedPaths []string
+	ReadPaths      []string
+	WritablePaths  []string
+	AllowNetwork   bool
 }
 
 // Runtime owns MCP client sessions and the subprocess lifetimes behind them.
@@ -79,7 +82,37 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		plan, err := tool.PlanSandboxedCommand(directory, cfg.Command, cfg.Args, tool.CurrentSandboxMode())
+		validator, err := workvfs.NewValidator(directory)
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q workspace policy: %w", name, err)
+		}
+		directory = validator.Base()
+		protectedPaths, protectedAbsolute, err := normalizeCapabilityPaths(validator, cfg.ProtectedPaths, "protected")
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q: %w", name, err)
+		}
+		_, readAbsolute, err := normalizeCapabilityPaths(validator, cfg.ReadPaths, "read")
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q: %w", name, err)
+		}
+		_, writableAbsolute, err := normalizeCapabilityPaths(validator, cfg.WritablePaths, "writable")
+		if err != nil {
+			cancel()
+			runtime.Close()
+			return nil, fmt.Errorf("mcp server %q: %w", name, err)
+		}
+		plan, err := tool.PlanSandboxedCommandWithPolicy(directory, cfg.Command, cfg.Args, tool.CurrentSandboxMode(), tool.SandboxPolicy{
+			ReadPaths:      readAbsolute,
+			WritePaths:     writableAbsolute,
+			ProtectedPaths: protectedAbsolute,
+			AllowNetwork:   cfg.AllowNetwork,
+		})
 		if err != nil {
 			cancel()
 			runtime.Close()
@@ -97,19 +130,12 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env)).WithEnvironment(environmentKeys(cfg.Env))
-		validator, err := workvfs.NewValidator(command.Dir)
-		if err != nil {
-			cancel()
-			_ = client.Close()
-			_ = terminateProcessGroup(command)
-			_ = plan.Cleanup()
-			runtime.Close()
-			return nil, fmt.Errorf("mcp server %q workspace policy: %w", name, err)
-		}
+		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env, readAbsolute, writableAbsolute, cfg.AllowNetwork)).
+			WithEnvironment(environmentKeys(cfg.Env)).
+			WithNetworkIntent(tool.SandboxPolicyNetworkIntent(cfg.AllowNetwork))
 		client.WithFilePolicy(&FilePolicy{
 			Validator:       validator,
-			ProtectedPaths:  append([]string(nil), cfg.ProtectedPaths...),
+			ProtectedPaths:  protectedPaths,
 			RequireApproval: true,
 		})
 		discovered, err := client.discoverTools(ctx, name)
@@ -147,16 +173,47 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 	return runtime, nil
 }
 
-func serverIdentity(name, command string, args []string, directory string, environment map[string]string) string {
+func serverIdentity(name, command string, args []string, directory string, environment map[string]string, readPaths, writablePaths []string, allowNetwork bool) string {
 	payload, _ := json.Marshal(struct {
-		Name        string            `json:"name"`
-		Command     string            `json:"command"`
-		Directory   string            `json:"directory"`
-		Args        []string          `json:"args"`
-		Environment map[string]string `json:"environment"`
-	}{Name: name, Command: command, Directory: directory, Args: args, Environment: environment})
+		Name          string            `json:"name"`
+		Command       string            `json:"command"`
+		Directory     string            `json:"directory"`
+		Args          []string          `json:"args"`
+		Environment   map[string]string `json:"environment"`
+		ReadPaths     []string          `json:"read_paths"`
+		WritablePaths []string          `json:"writable_paths"`
+		AllowNetwork  bool              `json:"allow_network"`
+	}{Name: name, Command: command, Directory: directory, Args: args, Environment: environment, ReadPaths: readPaths, WritablePaths: writablePaths, AllowNetwork: allowNetwork})
 	digest := sha256.Sum256(payload)
 	return "mcp:server:" + name + ":" + hex.EncodeToString(digest[:8])
+}
+
+func normalizeCapabilityPaths(validator *workvfs.Validator, paths []string, kind string) (relative, absolute []string, err error) {
+	if len(paths) == 0 {
+		return nil, nil, nil
+	}
+	for _, raw := range paths {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		var rel string
+		if raw == "." || raw == "./" {
+			rel = "."
+		} else {
+			rel, err = validator.Validate(raw)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid %s capability path %q: %w", kind, raw, err)
+			}
+		}
+		relative = append(relative, rel)
+		absolute = append(absolute, filepath.Join(validator.Base(), rel))
+	}
+	slices.Sort(relative)
+	relative = slices.Compact(relative)
+	slices.Sort(absolute)
+	absolute = slices.Compact(absolute)
+	return relative, absolute, nil
 }
 
 // Tools returns a stable snapshot of discovered external tools.

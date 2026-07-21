@@ -134,3 +134,14 @@ func TestOpenFailsClosedWhenSandboxConfigurationIsInvalid(t *testing.T) {
 		t.Fatalf("Open with invalid sandbox mode error = %v, want fail-closed sandbox error", err)
 	}
 }
+
+func TestOpenFailsClosedWhenPerServerPolicyCannotBeEnforced(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "off")
+	if _, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
+		Name:    "unsandboxed",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPHelperProcess"},
+	}}); err == nil || !strings.Contains(err.Error(), "cannot be enforced") {
+		t.Fatalf("Open with unsandboxed MCP policy error = %v, want fail-closed policy error", err)
+	}
+}

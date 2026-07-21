@@ -944,6 +944,9 @@ func TestNormalizeMCPServers(t *testing.T) {
 		Directory:      "  ./workspace  ",
 		Env:            map[string]string{" TOKEN ": " secret ", "": "ignored"},
 		ProtectedPaths: []string{" .env ", ""},
+		ReadPaths:      []string{" ./vendor ", ""},
+		WritablePaths:  []string{" ./src ", ""},
+		AllowNetwork:   true,
 	}}}
 	normalizeConfig(cfg)
 	if len(cfg.MCPServers) != 1 {
@@ -961,6 +964,10 @@ func TestNormalizeMCPServers(t *testing.T) {
 	}
 	if len(server.ProtectedPaths) != 1 || server.ProtectedPaths[0] != ".env" {
 		t.Fatalf("normalized protected paths = %#v", server.ProtectedPaths)
+	}
+	if len(server.ReadPaths) != 1 || server.ReadPaths[0] != "./vendor" ||
+		len(server.WritablePaths) != 1 || server.WritablePaths[0] != "./src" || !server.AllowNetwork {
+		t.Fatalf("normalized capability policy = read=%#v writable=%#v network=%v", server.ReadPaths, server.WritablePaths, server.AllowNetwork)
 	}
 }
 

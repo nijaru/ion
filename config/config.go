@@ -36,6 +36,9 @@ type MCPServerConfig struct {
 	Directory      string            `toml:"directory,omitempty"`
 	Env            map[string]string `toml:"env,omitempty"`
 	ProtectedPaths []string          `toml:"protected_paths,omitempty"`
+	ReadPaths      []string          `toml:"read_paths,omitempty"`
+	WritablePaths  []string          `toml:"writable_paths,omitempty"`
+	AllowNetwork   bool              `toml:"allow_network,omitempty"`
 }
 
 type Config struct {
@@ -249,6 +252,8 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		server.Args = normalizeStringSlice(server.Args)
 		server.Env = normalizeStringMap(server.Env)
 		server.ProtectedPaths = normalizeStringSlice(server.ProtectedPaths)
+		server.ReadPaths = normalizeStringSlice(server.ReadPaths)
+		server.WritablePaths = normalizeStringSlice(server.WritablePaths)
 		normalized = append(normalized, server)
 	}
 	return normalized

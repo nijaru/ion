@@ -123,18 +123,38 @@ directory = "."
 EXAMPLE_TOKEN = "literal-value-for-the-server"
 ```
 
+MCP server sandboxes are read-only and network-denied by default. Grant only
+the capabilities that the server requires:
+
+```toml
+[[mcp_servers]]
+name = "workspace"
+command = "example-mcp"
+writable_paths = ["build", "tmp"]
+read_paths = ["vendor"]
+allow_network = true
+```
+
+MCP servers can read their configured directory and the minimal runtime paths
+needed by the selected sandbox. `read_paths` grants additional existing paths
+relative to the server directory. `writable_paths` are existing paths relative
+to that directory; `protected_paths` remain read-only even when a writable root
+covers them. `allow_network` is an explicit per-server capability. If the selected
+OS sandbox cannot enforce the requested policy—or `ION_SANDBOX=off` is set—Ion
+rejects the MCP runtime instead of silently widening its access.
+
 Configured servers connect and discover tools atomically during runtime
 startup. External tools are exposed under `mcp_<server>_<tool>` names, are
 active in normal tool modes, and remain outside session persistence. Ion
-validates remote names/descriptions, applies the configured workspace file
-policy, and rejects malformed servers, discovery failures, and tool-name
+validates remote names/descriptions, applies the enforced per-server sandbox
+and workspace file policy, and rejects malformed servers, discovery failures, and tool-name
 collisions instead of materializing a partial runtime. Every MCP call is an
 approval requirement in `confirm` mode, including tools that do not expose a
 file path. Server subprocesses run through the host sandbox and close with the
 harness during cancellation, shutdown, and runtime switching. The action
-fingerprint records the effective sandbox network capability and the names of
-explicitly configured server environment variables; their values never enter
-the model or journal.
+fingerprint records the enforced per-server network capability, writable path
+roots, and the names of explicitly configured server environment variables;
+their values never enter the model or journal.
 
 If Ion restarts after an external action began but its result was not durable,
 print mode fails closed and the TUI exposes the action through `/actions`.

@@ -320,6 +320,22 @@ func TestWrapperApprovalRequirementBindsMCPCapabilities(t *testing.T) {
 	}
 }
 
+func TestWrapperApprovalRequirementUsesEnforcedNetworkPolicy(t *testing.T) {
+	w := &wrapper{
+		client: (&Client{session: &fakeClientSession{}}).
+			WithNetworkIntent("allowed-by-server-policy"),
+		spec: llmSpec("remote_action"),
+	}
+
+	requirement, required, err := w.ApprovalRequirement(`{"msg":"hello"}`)
+	if err != nil {
+		t.Fatalf("ApprovalRequirement: %v", err)
+	}
+	if !required || requirement.NetworkIntent != "allowed-by-server-policy" {
+		t.Fatalf("network policy = %q, required=%v; want enforced allowed policy", requirement.NetworkIntent, required)
+	}
+}
+
 func TestNewClient_ConnectsOverOfficialTransport(t *testing.T) {
 	srv, _ := newTestServer()
 	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
