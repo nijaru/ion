@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,93 @@ func TestCompactEmpty(t *testing.T) {
 	}
 	if result != nil {
 		t.Error("expected nil result for empty session")
+	}
+}
+
+func TestCompactFailureLeavesCommittedContextUnchanged(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("history", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("recent", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	leafBefore := sess.GetLeafID()
+	entriesBefore, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Compact(context.Background(), sess, CompactOptions{
+		Model: "test",
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return nil, errors.New("summary provider unavailable")
+		},
+	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
+	if err == nil || !strings.Contains(err.Error(), "summarization failed") {
+		t.Fatalf("Compact error = %v, want summary failure", err)
+	}
+	if got := sess.GetLeafID(); got != leafBefore {
+		t.Fatalf("leaf after failed compaction = %q, want %q", got, leafBefore)
+	}
+	entriesAfter, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Fatalf("entry count after failed compaction = %d, want %d", len(entriesAfter), len(entriesBefore))
+	}
+}
+
+func TestCompactCommitsReplacementForReplay(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/session.db"
+	store, err := session.NewSQLiteStore(path, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("history", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("recent", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Compact(context.Background(), sess, CompactOptions{
+		Model: "test",
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "durable summary", StopReason: "stop"}}}, nil
+		},
+	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.FirstKeptEntryID == "" {
+		t.Fatalf("Compact result = %#v, want committed replacement", result)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := session.NewSQLiteStore(path, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	snapshot, err := session.NewSession(reopened, 64).BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 2 {
+		t.Fatalf("replayed message count = %d, want summary plus kept message", len(snapshot.Messages))
+	}
+	if !strings.Contains(session.EntryText(&session.MessageEntry{Message: snapshot.Messages[0]}), "durable summary") {
+		t.Fatalf("replayed summary = %q, want durable summary", session.EntryText(&session.MessageEntry{Message: snapshot.Messages[0]}))
+	}
+	if got := session.EntryText(&session.MessageEntry{Message: snapshot.Messages[1]}); got != "recent" {
+		t.Fatalf("replayed kept message = %q, want recent", got)
 	}
 }
 
