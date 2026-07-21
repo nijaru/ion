@@ -239,14 +239,17 @@ func (w *wrapper) ApprovalRequirement(args string) (Requirement, bool, error) {
 			resource = w.spec.Name
 		}
 		requirement = Requirement{
-			Category:  "mcp",
+			Category:  "external",
 			Operation: w.spec.Name,
 			Resource:  resource,
 		}
 	}
-	if requirement.Category == "" {
-		requirement.Category = "mcp"
-	}
+	// A remote MCP call is always an external action. FilePolicy may provide
+	// path hints for the approval display, but a server's name/description or
+	// argument shape cannot prove that its implementation is read-only or that
+	// it will honor a path. Keep that classification out of the enforcement
+	// boundary; the action planner and sandbox own the actual policy.
+	requirement.Category = "external"
 	if requirement.Operation == "" {
 		requirement.Operation = w.spec.Name
 	}

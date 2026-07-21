@@ -253,11 +253,14 @@ func TestWrapperApprovalRequirementUsesProtectedMCPPath(t *testing.T) {
 	if !ok {
 		t.Fatal("expected approval requirement")
 	}
-	if req.Category != string(categoryWrite) {
-		t.Fatalf("Category = %q, want %q", req.Category, categoryWrite)
+	if req.Category != "external" {
+		t.Fatalf("Category = %q, want external MCP action", req.Category)
 	}
 	if req.Resource != ".env" {
 		t.Fatalf("Resource = %q, want .env", req.Resource)
+	}
+	if len(req.Paths) != 1 || req.Paths[0] != ".env" {
+		t.Fatalf("Paths = %#v, want normalized protected path", req.Paths)
 	}
 }
 
@@ -271,7 +274,7 @@ func TestWrapperApprovalRequirementRequiresApprovalForOpaqueTools(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ApprovalRequirement: %v", err)
 	}
-	if !ok || req.Category != "mcp" || req.Operation != "echo" || req.Resource != "echo" || req.MCPIdentity == "" {
+	if !ok || req.Category != "external" || req.Operation != "echo" || req.Resource != "echo" || req.MCPIdentity == "" {
 		t.Fatalf("opaque approval = %#v, ok=%v; want an MCP action identity", req, ok)
 	}
 }
