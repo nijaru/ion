@@ -54,7 +54,8 @@ const (
 type ControllerConfig struct {
 	Session         session.Session
 	Store           session.Store
-	Durable         session.DurableStore // optional transactional turn journal
+	Durable         session.DurableStore // transactional turn journal for durable hosts
+	RequireDurable  bool                 // require the transactional turn boundary
 	Tools           []Tool
 	Active          []string // active tool names (subset of Tools); nil = all
 	Model           llm.Model
@@ -128,10 +129,12 @@ func NewController(cfg ControllerConfig) *Controller {
 			active = append(active, t.Name)
 		}
 	}
+	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	h := &Controller{
 		session:          cfg.Session,
 		store:            cfg.Store,
 		durable:          cfg.Durable,
+		requireDurable:   cfg.RequireDurable,
 		tools:            toolMap,
 		active:           active,
 		model:            cfg.Model,
@@ -148,6 +151,10 @@ func NewController(cfg ControllerConfig) *Controller {
 		commands:         make(chan Command, controllerCommandCapacity),
 		commandStop:      make(chan struct{}),
 		completions:      make(chan turnCompletion, 1),
+		runtimeRequests:  make(chan runtimeRequest, runtimeOperationCapacity),
+		runtimeResults:   make(chan runtimeCompletion, 1),
+		runtimeContext:   runtimeContext,
+		runtimeCancel:    runtimeCancel,
 		eventHub:         newEventHub(),
 		done:             make(chan struct{}),
 		compaction:       cfg.Compaction,
@@ -295,13 +302,14 @@ func (h *Controller) runPrompt(ctx context.Context, text string, images ...sessi
 		turnCommitted := h.turnCommitted
 		turnAborted := h.turnAborted
 		h.mu.Unlock()
-		if activeTurnID != "" && !turnCommitted && !turnAborted && h.durable != nil {
-			if err := h.durable.AbortTurn(context.Background(), activeTurnID, "turn ended before durable commit"); err != nil {
-				h.logf(slog.LevelError, "abort uncommitted turn failed", slog.String("turn_id", activeTurnID), slog.String("error", err.Error()))
+		if activeTurnID != "" && !turnCommitted && !turnAborted {
+			result := h.requestRuntime(context.Background(), runtimeRequest{
+				kind:   runtimeAbortTurn,
+				reason: "turn ended before durable commit",
+			})
+			if result.err != nil {
+				h.logf(slog.LevelError, "abort uncommitted turn failed", slog.String("turn_id", activeTurnID), slog.String("error", result.err.Error()))
 			}
-		}
-		if activeTurnID != "" && !turnCommitted {
-			h.discardAbortedTurnWrites()
 		}
 		h.mu.Lock()
 		modelID := h.model.ID
@@ -323,26 +331,23 @@ func (h *Controller) runPrompt(ctx context.Context, text string, images ...sessi
 		}
 	}
 
-	// Build turn context from session.
-	snap, err := h.session.BuildContext(ctx)
+	// Build turn context through the controller's read boundary. The worker
+	// receives an immutable snapshot; it does not read or mutate session state.
+	snap, err := h.requestContextSnapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
 	}
 
 	// Begin the durable turn before hooks or provider work. The accepted input
 	// and context leaf are recovery evidence even if setup, streaming, or
-	// cancellation prevents a commit.
-	if h.durable != nil {
-		turn, err := h.durable.BeginTurn(ctx, session.NewEntryID(), text, h.session.GetLeafID())
-		if err != nil {
-			return nil, fmt.Errorf("begin durable turn: %w", err)
-		}
-		h.mu.Lock()
-		h.activeTurnID = turn.ID
-		h.activeTurnLeaf = turn.LeafID
-		h.turnCommitted = false
-		h.turnAborted = false
-		h.mu.Unlock()
+	// cancellation prevents a commit. The operation crosses the same runtime
+	// boundary as message and terminal persistence.
+	if result := h.requestRuntime(ctx, runtimeRequest{
+		kind:   runtimeBeginTurn,
+		input:  text,
+		images: cloneImageContents(promptImages),
+	}); result.err != nil {
+		return nil, fmt.Errorf("begin durable turn: %w", result.err)
 	}
 
 	// Restore active state from session tree (survives replay).
@@ -398,7 +403,7 @@ func (h *Controller) runPrompt(ctx context.Context, text string, images ...sessi
 			return
 		}
 		persistErr = err
-		h.emit(&session.Error{Err: err})
+		_ = h.requestEvent(context.Background(), &session.Error{Err: err})
 		h.cancelCurrentRun()
 	}
 	// Build LoopConfig after the persistence failure callback exists so
@@ -532,100 +537,27 @@ func (h *Controller) handleEvent(ctx context.Context, e session.Event) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	switch e := e.(type) {
-	case session.TurnStart:
-		h.emit(e) // forward to TUI
-
-	case session.MessageStart:
-		h.emit(e)
-
+	request := runtimeRequest{kind: runtimePublish, event: e}
+	switch event := e.(type) {
 	case session.MessageEnd:
-		// Persist message to session tree BEFORE emitting to subscribers.
-		// Pi: orders appendMessage before emitAny so subscribers can BuildContext.
-		if err := h.persistMessage(ctx, e.Message); err != nil {
-			err = fmt.Errorf("persist message: %w", err)
-			h.logf(slog.LevelError, "persist message failed", slog.String("error", err.Error()))
-			return err
-		}
-		h.logMessage(e.Message)
-		h.emit(e)
-
+		request.kind = runtimePersistMessage
+		request.message = event.Message
+		request.timestamp = event.Timestamp
 	case session.TurnEnd:
-		h.mu.Lock()
-		hadPending := len(h.pending) > 0
-		h.mu.Unlock()
-		if err := h.flushPending(ctx); err != nil {
-			return err
-		}
-		// Emit SavePoint after durable writes (Pi: line ~480). HadPendingMutations
-		// must be captured BEFORE flush, otherwise always false.
-		h.emit(session.SavePoint{HadPendingMutations: hadPending})
-		// Auto-compaction check after turn ends.
-		if h.canCompactAfterTurn() && ShouldCompactAfterTurn(ctx, h.session, h.contextWindow, h.compaction) {
-			if err := h.compact(ctx); err != nil {
-				h.emit(&session.Error{Err: fmt.Errorf("auto-compact: %w", err)})
-			}
-		}
-		// Forward TurnEnd to the TUI so it can call handleTurnFinished.
-		h.emit(e)
-
+		request.kind = runtimeFlushPending
 	case session.AgentEnd:
-		if err := h.flushPending(ctx); err != nil {
-			return err
+		request.kind = runtimeFinalizeTurn
+		request.failed = terminalTurnFailure(event.Messages) != ""
+		request.reason = terminalTurnFailure(event.Messages)
+	}
+	result := h.requestRuntime(ctx, request)
+	if result.err != nil {
+		h.logf(slog.LevelError, "runtime event failed", slog.String("event", fmt.Sprintf("%T", e)), slog.String("error", result.err.Error()))
+		if _, ok := e.(session.MessageEnd); ok {
+			result.err = fmt.Errorf("persist message: %w", result.err)
 		}
-		if reason := terminalTurnFailure(e.Messages); reason != "" {
-			if err := h.abortTurn(ctx, reason); err != nil {
-				return err
-			}
-		} else if err := h.commitTurn(ctx); err != nil {
-			return err
-		}
-		h.mu.Lock()
-		nextCount := len(h.nextTurn)
-		h.mu.Unlock()
-		// DESIGN says Settled after agent_end; Pi emits AgentEnd then settled.
-		// Emit AgentEnd first (terminal), then Settled (idle signal).
-		h.emit(e) // AgentEnd is terminal per DESIGN §1.3
-		h.emit(session.Settled{NextTurnCount: nextCount})
-
-	default:
-		// Forward all other events (ToolExecStart, ToolExecEnd, etc.) to TUI.
-		h.emit(e)
+		return turnError(KindPersistence, PhasePersisting, RecoveryAbort, result.err)
 	}
-	return nil
-}
-
-// persistMessage appends conversation messages to the active durable turn.
-// Non-SQLite stores retain the existing façade path until their runtime
-// storage contract is migrated; production SQLite always takes the turn path.
-func (h *Controller) persistMessage(ctx context.Context, msg session.Message) error {
-	h.mu.Lock()
-	turnID := h.activeTurnID
-	parentID := h.activeTurnLeaf
-	durable := h.durable
-	h.mu.Unlock()
-	if durable == nil || turnID == "" {
-		_, err := h.session.AppendMessage(ctx, msg)
-		return err
-	}
-	entry := &session.MessageEntry{
-		EntryBase: session.EntryBase{
-			ID:        session.NewEntryID(),
-			ParentID:  parentID,
-			Timestamp: time.Now(),
-		},
-		Message: msg,
-	}
-	id, err := durable.AppendTurnEntry(ctx, turnID, entry)
-	if err != nil {
-		return err
-	}
-	h.mu.Lock()
-	if h.activeTurnID == turnID {
-		h.activeTurnLeaf = id
-	}
-	h.mu.Unlock()
 	return nil
 }
 
@@ -633,68 +565,7 @@ func (h *Controller) persistMessage(ctx context.Context, msg session.Message) er
 // projection when the current prompt has staged entries that are not replayable
 // yet.
 func (h *Controller) contextSnapshot(ctx context.Context) (session.ContextSnapshot, error) {
-	h.mu.Lock()
-	turnID := h.activeTurnID
-	durable := h.durable
-	h.mu.Unlock()
-	if durable != nil && turnID != "" {
-		entries, err := durable.TurnBranch(ctx, turnID)
-		if err != nil {
-			return session.ContextSnapshot{}, err
-		}
-		return session.ProjectContext(entries)
-	}
-	return h.session.BuildContext(ctx)
-}
-
-func (h *Controller) commitTurn(ctx context.Context) error {
-	h.mu.Lock()
-	turnID := h.activeTurnID
-	durable := h.durable
-	h.mu.Unlock()
-	if durable == nil || turnID == "" {
-		return nil
-	}
-	if err := durable.CommitTurn(ctx, turnID); err != nil {
-		return fmt.Errorf("commit durable turn: %w", err)
-	}
-	h.mu.Lock()
-	if h.activeTurnID == turnID {
-		h.turnCommitted = true
-	}
-	h.mu.Unlock()
-	return nil
-}
-
-func (h *Controller) abortTurn(ctx context.Context, reason string) error {
-	h.mu.Lock()
-	turnID := h.activeTurnID
-	durable := h.durable
-	h.mu.Unlock()
-	if durable == nil || turnID == "" {
-		return nil
-	}
-	if err := durable.AbortTurn(ctx, turnID, reason); err != nil {
-		return fmt.Errorf("abort durable turn: %w", err)
-	}
-	h.mu.Lock()
-	if h.activeTurnID == turnID {
-		h.turnAborted = true
-	}
-	h.mu.Unlock()
-	return nil
-}
-
-func (h *Controller) discardAbortedTurnWrites() {
-	h.mu.Lock()
-	pending := h.pending
-	h.pending = nil
-	h.mu.Unlock()
-	for _, write := range pending {
-		if write.onFailure != nil {
-			write.onFailure()
-		}
-	}
+	return h.requestContextSnapshot(ctx)
 }
 
 func (h *Controller) canCompactAfterTurn() bool {
@@ -707,7 +578,8 @@ func (h *Controller) compactAfterTurn(ctx context.Context) error {
 	if !h.canCompactAfterTurn() {
 		return errors.New("compaction cannot run inside an uncommitted durable turn")
 	}
-	return h.compact(ctx)
+	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeCompact})
+	return result.err
 }
 
 func terminalTurnFailure(messages []session.Message) string {
@@ -1157,9 +1029,9 @@ func (h *Controller) steerDirect(text string, images ...session.ImageContent) er
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if h.phase == PhaseReady {
+	if !h.phase.acceptsTurnInput() {
 		h.mu.Unlock()
-		return fmt.Errorf("cannot steer while idle")
+		return fmt.Errorf("%w: cannot steer in phase %s", ErrPhaseConflict, h.phase)
 	}
 	if err := h.appendQueued(&h.steer, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1185,9 +1057,9 @@ func (h *Controller) followUpDirect(text string, images ...session.ImageContent)
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if h.phase == PhaseReady {
+	if !h.phase.acceptsTurnInput() {
 		h.mu.Unlock()
-		return fmt.Errorf("cannot follow up while idle")
+		return fmt.Errorf("%w: cannot follow up in phase %s", ErrPhaseConflict, h.phase)
 	}
 	if err := h.appendQueued(&h.followUp, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1211,6 +1083,11 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
+	}
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+		phase := h.phase
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 	if err := h.appendQueued(&h.nextTurn, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1245,54 +1122,11 @@ func (h *Controller) emitQueueUpdate() {
 // --- buffered writes ---
 
 func (h *Controller) flushPending(ctx context.Context) error {
-	h.mu.Lock()
-	pending := h.pending
-	h.pending = nil
-	turnID := h.activeTurnID
-	turnLeaf := h.activeTurnLeaf
-	durable := h.durable
-	h.mu.Unlock()
-	for i, pw := range pending {
-		var err error
-		var writtenID string
-		if durable != nil && turnID != "" {
-			if pw.applyTurn == nil {
-				err = errors.New("pending write has no durable turn operation")
-			} else {
-				writtenID, err = pw.applyTurn(ctx, durable, turnID, turnLeaf)
-			}
-		} else if pw.applyStore != nil {
-			err = pw.applyStore(ctx, h.store)
-		} else {
-			err = pw.apply(ctx, h.session)
-		}
-		if err == nil {
-			if writtenID != "" {
-				turnLeaf = writtenID
-				h.mu.Lock()
-				if h.activeTurnID == turnID {
-					h.activeTurnLeaf = writtenID
-				}
-				h.mu.Unlock()
-			}
-			if pw.onSuccess != nil {
-				pw.onSuccess()
-			}
-			continue
-		}
-		if pw.onFailure != nil {
-			pw.onFailure()
-		}
-		err = fmt.Errorf("flush pending write: %w", err)
-		h.mu.Lock()
-		// Keep the failed write and everything after it ahead of writes queued
-		// concurrently, preserving retry order without losing mutations.
-		h.pending = append(pending[i:], h.pending...)
-		h.mu.Unlock()
-		h.logf(slog.LevelError, "flush pending write failed", slog.String("error", err.Error()))
-		return err
+	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeFlushPending})
+	if result.err != nil {
+		h.logf(slog.LevelError, "flush pending write failed", slog.String("error", result.err.Error()))
 	}
-	return nil
+	return result.err
 }
 
 func durableEntryBase(parentID string) session.EntryBase {
@@ -1334,6 +1168,10 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, h.phase)
+	}
 	oldModel := h.model
 	h.model = model
 	if model.Provider != oldModel.Provider || model.ID != oldModel.ID {
@@ -1369,6 +1207,11 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
+	}
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+		phase := h.phase
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 	idle := h.phase == PhaseReady
 	sess := h.session
@@ -1458,6 +1301,11 @@ func (h *Controller) setToolsDirect(tools []Tool, active []string) error {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+		phase := h.phase
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
+	}
 	toolMap := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		toolMap[t.Name] = t
@@ -1501,6 +1349,11 @@ func (h *Controller) activateToolsDirect(ctx context.Context, names []string) er
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
+	}
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+		phase := h.phase
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 
 	activeSet := make(map[string]struct{}, len(h.active)+len(names))
@@ -1582,6 +1435,11 @@ func (h *Controller) cancelActiveRun() ([]session.Message, []session.Message, er
 		h.mu.Unlock()
 		return nil, nil, errors.New("harness is closed")
 	}
+	if h.phase == PhasePersisting {
+		phase := h.phase
+		h.mu.Unlock()
+		return nil, nil, fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
+	}
 	clearedSteer := append([]session.Message(nil), h.steer...)
 	clearedFollowUp := append([]session.Message(nil), h.followUp...)
 	h.steer = nil
@@ -1633,54 +1491,6 @@ func (h *Controller) forkSessionDirect(ctx context.Context, sourceID string) (st
 		return "", errors.New("harness has no session store")
 	}
 	return ionexport.ForkSession(ctx, h.store, sourceID)
-}
-
-// Compact triggers context compaction while reserving the controller for the
-// operation. The internal compact method is used by an active turn only after
-// its caller has already established the lifecycle phase.
-func (h *Controller) compactDirect(ctx context.Context) error {
-	finish, err := h.beginExclusive(PhasePersisting)
-	if err != nil {
-		return err
-	}
-	defer finish()
-	return h.compact(ctx)
-}
-
-func (h *Controller) compact(ctx context.Context) error {
-	start := time.Now()
-	// Build auth from harness config.
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return errors.New("harness is closed")
-	}
-	model := h.model
-	thinking := h.thinking
-	h.mu.Unlock()
-	h.logf(slog.LevelInfo, "compact start", slog.String("model", model.ID))
-
-	var apiKey string
-	var authHeaders map[string]string
-	if h.auth != nil {
-		apiKey, authHeaders = h.auth(model)
-	}
-
-	_, err := Compact(ctx, h.session, CompactOptions{
-		Model:          model.ID,
-		ModelMaxTokens: model.MaxTokens,
-		APIKey:         apiKey,
-		Headers:        authHeaders,
-		ThinkingLevel:  thinking,
-		Convert:        DefaultConvert,
-		StreamFn:       h.stream,
-	}, h.compaction)
-	if err != nil {
-		h.logf(slog.LevelError, "compact failed", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()))
-		return fmt.Errorf("compact: %w", err)
-	}
-	h.logf(slog.LevelInfo, "compact end", slog.Duration("duration", time.Since(start)))
-	return nil
 }
 
 // logMessage logs a message at the appropriate level based on its type.

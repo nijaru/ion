@@ -57,6 +57,19 @@ func (p Phase) activeTurn() bool {
 	return false
 }
 
+// acceptsTurnInput reports phases where user input can still affect the
+// running engine. Persisting and recovering are terminal barriers: accepting
+// a setter or queue mutation there would publish events after Settled or
+// contradict the durable outcome being finalized.
+func (p Phase) acceptsTurnInput() bool {
+	switch p {
+	case PhaseStarting, PhaseStreaming, PhaseAwaitingApproval, PhaseExecutingTool:
+		return true
+	default:
+		return false
+	}
+}
+
 // legalTransition is the state machine. Pure function, no I/O.
 // Every transition must pass this check; the controller enforces it.
 func legalTransition(from, to Phase) bool {

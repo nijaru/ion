@@ -33,6 +33,11 @@ import (
 // returns ErrQueueFull so callers fail closed instead of blocking.
 const controllerCommandCapacity = 128
 
+// runtimeOperationCapacity bounds persistence/compaction requests waiting
+// behind the single ordered runtime I/O operation. Callers fail explicitly
+// once this boundary is full; requests are never silently dropped.
+const runtimeOperationCapacity = 64
+
 // Controller is the sole runtime mutation authority. One goroutine (run) owns
 // all state transitions. Public methods enqueue typed Commands and receive
 // results through reply channels.
@@ -89,10 +94,18 @@ type Controller struct {
 	// --- Active turn coordination ---
 	runCancel        chan struct{} // closed to abort current run
 	runCancelOnce    *sync.Once
+	runContext       context.Context
+	runContextCancel context.CancelFunc
 	runDone          chan struct{} // closed when run finishes
 	turnWorkers      sync.WaitGroup
 	operationWorkers sync.WaitGroup
 	completions      chan turnCompletion
+	runtimeRequests  chan runtimeRequest
+	runtimeResults   chan runtimeCompletion
+	runtimeBusy      bool
+	runtimeQueue     []runtimeRequest
+	runtimeContext   context.Context
+	runtimeCancel    context.CancelFunc
 
 	// --- Event delivery ---
 	eventHub *eventHub
@@ -103,6 +116,10 @@ type Controller struct {
 
 	// --- Buffered session writes during a run ---
 	pending []pendingWrite
+	// staged contains writes already appended to the active durable turn but
+	// not yet acknowledged by TurnCommit. They are requeued if that turn is
+	// aborted or its terminal write is indeterminate.
+	staged []pendingWrite
 
 	// --- Active turn identity ---
 	activeTurnID   string
@@ -124,6 +141,7 @@ type Controller struct {
 	approvals      *ApprovalBroker
 	actionBoundary ActionBoundary
 	actionsEnabled bool
+	requireDurable bool
 }
 
 // Compile-time interface assertions.
@@ -148,11 +166,20 @@ func (c *Controller) run() {
 	for {
 		select {
 		case cmd := <-c.commands:
-			c.dispatch(cmd)
+			if c.isClosed() {
+				c.rejectCommand(cmd)
+			} else {
+				c.dispatch(cmd)
+			}
 		case completion := <-c.completions:
 			c.handleTurnCompletion(completion)
+		case request := <-c.runtimeRequests:
+			c.handleRuntimeRequest(request)
+		case completion := <-c.runtimeResults:
+			c.handleRuntimeCompletion(completion)
 		case <-c.commandStop:
 			c.rejectQueued()
+			c.rejectRuntimeRequests()
 			return
 		}
 	}
@@ -322,10 +349,14 @@ func (c *Controller) transitionPhase(from, to Phase) error {
 	return nil
 }
 
-// beginTurn reserves the controller for a new agent turn. The controller
-// retains the reservation until it processes the worker's typed completion.
-// Must be called from the command goroutine.
-func (c *Controller) beginTurn() (chan struct{}, error) {
+// beginTurn reserves the controller for a new agent turn. The derived
+// context is canceled by Abort and Close as well as by the caller.
+// The controller retains the reservation until it processes the worker's
+// typed completion. Must be called from the command goroutine.
+func (c *Controller) beginTurn(parent context.Context) (chan struct{}, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -352,6 +383,9 @@ func (c *Controller) beginTurn() (chan struct{}, error) {
 	}
 	c.runCancel = make(chan struct{})
 	c.runCancelOnce = new(sync.Once)
+	turnContext, cancelContext := context.WithCancel(parent)
+	c.runContext = turnContext
+	c.runContextCancel = cancelContext
 	c.runDone = make(chan struct{})
 	runDone := c.runDone
 	c.turnWorkers.Add(1)
@@ -414,9 +448,13 @@ func (c *Controller) cancelCurrentRun() {
 	c.mu.Lock()
 	cancel := c.runCancel
 	once := c.runCancelOnce
+	cancelContext := c.runContextCancel
 	c.mu.Unlock()
 	if cancel != nil && once != nil {
 		once.Do(func() { close(cancel) })
+	}
+	if cancelContext != nil {
+		cancelContext()
 	}
 }
 
@@ -543,7 +581,11 @@ func (c *Controller) Close() error {
 		return nil
 	}
 	c.closed = true
+	runtimeCancel := c.runtimeCancel
 	c.mu.Unlock()
+	if runtimeCancel != nil {
+		runtimeCancel()
+	}
 
 	// Cancel any active run.
 	c.cancelCurrentRun()
@@ -552,6 +594,11 @@ func (c *Controller) Close() error {
 	// completion. The completion handler owns phase, turn identity, and the
 	// runDone close; stopping the loop first would strand the worker.
 	c.turnWorkers.Wait()
+
+	// Keep the command loop alive while runtime completions acknowledge every
+	// operation worker. Stopping it first can strand a worker after it has sent
+	// a completion and is waiting for the controller's acknowledgement.
+	c.operationWorkers.Wait()
 
 	c.mu.Lock()
 	if c.phase != PhaseClosed {
@@ -567,10 +614,6 @@ func (c *Controller) Close() error {
 
 	// Wait for the command loop to finish.
 	<-c.done
-
-	// Auxiliary operations may still be finishing after the command loop has
-	// stopped. Join them before closing the event hub or returning to the host.
-	c.operationWorkers.Wait()
 
 	// Close the event hub.
 	if c.eventHub != nil {

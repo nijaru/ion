@@ -509,6 +509,7 @@ func openRuntime(
 		Session:             sess,
 		Store:               store,
 		Durable:             durableStore,
+		RequireDurable:      true,
 		Model:               model,
 		Thinking:            thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:               agentTools,

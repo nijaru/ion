@@ -34,7 +34,7 @@ type SQLiteStore struct {
 
 var _ Store = (*SQLiteStore)(nil)
 
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 const sessionLockWait = 500 * time.Millisecond
 
@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS turns (
 	state      TEXT NOT NULL,
 	leaf_id    TEXT NOT NULL DEFAULT '',
 	input      TEXT NOT NULL DEFAULT '',
+	input_images BLOB NOT NULL DEFAULT '[]',
 	context_id TEXT NOT NULL DEFAULT '',
 	started_at INTEGER NOT NULL,
 	ended_at   INTEGER NOT NULL DEFAULT 0,
@@ -285,6 +286,9 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 	if err := ensureColumn(ctx, tx, "turns", "input", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return rollback(err)
 	}
+	if err := ensureColumn(ctx, tx, "turns", "input_images", "BLOB NOT NULL DEFAULT '[]'"); err != nil {
+		return rollback(err)
+	}
 	if err := ensureColumn(ctx, tx, "turns", "context_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return rollback(err)
 	}
@@ -387,6 +391,7 @@ func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
 			state TEXT NOT NULL,
 			leaf_id TEXT NOT NULL DEFAULT '',
 			input TEXT NOT NULL DEFAULT '',
+			input_images BLOB NOT NULL DEFAULT '[]',
 			context_id TEXT NOT NULL DEFAULT '',
 			started_at INTEGER NOT NULL,
 			ended_at INTEGER NOT NULL DEFAULT 0,

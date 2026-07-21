@@ -20,7 +20,7 @@ import (
 // --- Turn commands ---
 
 func (c *Controller) handlePrompt(cmd *PromptCmd) {
-	runDone, err := c.beginTurn()
+	runDone, err := c.beginTurn(cmd.Ctx)
 	if err != nil {
 		sendResult(cmd.Reply, PromptResult{Err: turnError(KindInternal, c.currentPhase(), RecoveryNone, err)})
 		return
@@ -28,6 +28,12 @@ func (c *Controller) handlePrompt(cmd *PromptCmd) {
 
 	go func() {
 		defer c.turnWorkers.Done()
+		c.mu.Lock()
+		turnContext := c.runContext
+		c.mu.Unlock()
+		if turnContext == nil {
+			turnContext = cmd.Ctx
+		}
 		var (
 			msg    session.Message
 			runErr error
@@ -38,7 +44,7 @@ func (c *Controller) handlePrompt(cmd *PromptCmd) {
 					runErr = fmt.Errorf("turn worker panic: %v", recovered)
 				}
 			}()
-			msg, runErr = c.runPrompt(cmd.Ctx, cmd.Text, cmd.Images...)
+			msg, runErr = c.runPrompt(turnContext, cmd.Text, cmd.Images...)
 		}()
 		completion := turnCompletion{
 			runDone: runDone,
@@ -90,6 +96,11 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		c.turnAborted = false
 		c.runCancel = nil
 		c.runCancelOnce = nil
+		if c.runContextCancel != nil {
+			c.runContextCancel()
+		}
+		c.runContext = nil
+		c.runContextCancel = nil
 		close(completion.runDone)
 		c.runDone = nil
 	}
@@ -162,8 +173,15 @@ func (c *Controller) handleSubscribe(cmd *SubscribeCmd) {
 }
 
 func (c *Controller) handleCompact(cmd *CompactCmd) {
+	finish, err := c.beginExclusive(PhasePersisting)
+	if err != nil {
+		sendResult(cmd.Reply, err)
+		return
+	}
 	c.startOperation(func() {
-		sendResult(cmd.Reply, c.compactDirect(cmd.Ctx))
+		defer finish()
+		result := c.requestRuntime(cmd.Ctx, runtimeRequest{kind: runtimeCompact, force: true})
+		sendResult(cmd.Reply, result.err)
 	})
 }
 

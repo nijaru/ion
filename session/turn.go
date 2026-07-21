@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -23,15 +24,16 @@ const (
 // messages. Entries belonging to a non-committed turn remain available for
 // recovery inspection but are excluded from Branch and BuildContext.
 type TurnRecord struct {
-	ID        string
-	Sequence  int64
-	State     TurnState
-	LeafID    string
-	Input     string
-	ContextID string
-	StartedAt time.Time
-	EndedAt   time.Time
-	Error     string
+	ID          string
+	Sequence    int64
+	State       TurnState
+	LeafID      string
+	Input       string
+	InputImages []ImageContent
+	ContextID   string
+	StartedAt   time.Time
+	EndedAt     time.Time
+	Error       string
 }
 
 // DurableStore is the storage boundary needed by the runtime controller. It
@@ -39,7 +41,7 @@ type TurnRecord struct {
 // persistence implementation or a compatibility protocol.
 type DurableStore interface {
 	Store
-	BeginTurn(ctx context.Context, turnID, input, contextID string) (TurnRecord, error)
+	BeginTurn(ctx context.Context, turnID, input string, inputImages []ImageContent, contextID string) (TurnRecord, error)
 	AppendTurnEntry(ctx context.Context, turnID string, entry Entry) (string, error)
 	TurnBranch(ctx context.Context, turnID string) ([]Entry, error)
 	CommitTurn(ctx context.Context, turnID string) error
@@ -58,7 +60,7 @@ func (s *SQLiteStore) TurnBranch(ctx context.Context, turnID string) ([]Entry, e
 		return nil, err
 	}
 	record, err := scanTurnRecord(s.db.QueryRowContext(ctx, `
-		SELECT turn_id, sequence, state, leaf_id, input, context_id, started_at, ended_at, error
+		SELECT turn_id, sequence, state, leaf_id, input, input_images, context_id, started_at, ended_at, error
 		FROM turns WHERE turn_id = ?`, turnID))
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -142,7 +144,7 @@ func recoverInterruptedTurns(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func (s *SQLiteStore) BeginTurn(ctx context.Context, turnID, input, contextID string) (TurnRecord, error) {
+func (s *SQLiteStore) BeginTurn(ctx context.Context, turnID, input string, inputImages []ImageContent, contextID string) (TurnRecord, error) {
 	ctx = normalizeContext(ctx)
 	if turnID == "" {
 		turnID = newID()
@@ -173,9 +175,14 @@ func (s *SQLiteStore) BeginTurn(ctx context.Context, turnID, input, contextID st
 	}
 	started := time.Now()
 	leaf := s.leaf
+	encodedImages, err := json.Marshal(inputImages)
+	if err != nil {
+		_ = tx.Rollback()
+		return TurnRecord{}, fmt.Errorf("encode turn input images: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO turns(turn_id,sequence,state,leaf_id,input,context_id,started_at)
-		VALUES(?,?,?,?,?,?,?)`, turnID, sequence, string(TurnStarted), leaf, input, contextID, started.UnixMilli()); err != nil {
+		INSERT INTO turns(turn_id,sequence,state,leaf_id,input,input_images,context_id,started_at)
+		VALUES(?,?,?,?,?,?,?,?)`, turnID, sequence, string(TurnStarted), leaf, input, encodedImages, contextID, started.UnixMilli()); err != nil {
 		_ = tx.Rollback()
 		return TurnRecord{}, classifySQLiteError("insert turn begin", err)
 	}
@@ -184,7 +191,7 @@ func (s *SQLiteStore) BeginTurn(ctx context.Context, turnID, input, contextID st
 	}
 	return TurnRecord{
 		ID: turnID, Sequence: sequence, State: TurnStarted, LeafID: leaf,
-		Input: input, ContextID: contextID, StartedAt: started,
+		Input: input, InputImages: cloneImageContents(inputImages), ContextID: contextID, StartedAt: started,
 	}, nil
 }
 
@@ -331,7 +338,7 @@ func (s *SQLiteStore) InterruptedTurns(ctx context.Context) ([]TurnRecord, error
 		return nil, ErrSessionClosed
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT turn_id, sequence, state, leaf_id, input, context_id, started_at, ended_at, error
+		SELECT turn_id, sequence, state, leaf_id, input, input_images, context_id, started_at, ended_at, error
 		FROM turns WHERE state = ? ORDER BY sequence ASC`, string(TurnInterrupted))
 	if err != nil {
 		return nil, fmt.Errorf("list interrupted turns: %w", err)
@@ -351,7 +358,7 @@ func (s *SQLiteStore) InterruptedTurns(ctx context.Context) ([]TurnRecord, error
 
 func turnRecordTx(ctx context.Context, tx *sql.Tx, turnID string) (TurnRecord, error) {
 	row := tx.QueryRowContext(ctx, `
-		SELECT turn_id, sequence, state, leaf_id, input, context_id, started_at, ended_at, error
+		SELECT turn_id, sequence, state, leaf_id, input, input_images, context_id, started_at, ended_at, error
 		FROM turns WHERE turn_id = ?`, turnID)
 	record, err := scanTurnRecord(row)
 	if err == sql.ErrNoRows {
@@ -366,18 +373,36 @@ func turnRecordTx(ctx context.Context, tx *sql.Tx, turnID string) (TurnRecord, e
 func scanTurnRecord(row interface{ Scan(...any) error }) (TurnRecord, error) {
 	var (
 		id, state, leaf, input, contextID, reason string
+		inputImages                               []byte
 		sequence, started, ended                  int64
 	)
-	if err := row.Scan(&id, &sequence, &state, &leaf, &input, &contextID, &started, &ended, &reason); err != nil {
+	if err := row.Scan(&id, &sequence, &state, &leaf, &input, &inputImages, &contextID, &started, &ended, &reason); err != nil {
 		return TurnRecord{}, err
+	}
+	var images []ImageContent
+	if len(inputImages) > 0 {
+		if err := json.Unmarshal(inputImages, &images); err != nil {
+			return TurnRecord{}, fmt.Errorf("decode turn input images: %w", err)
+		}
 	}
 	record := TurnRecord{
 		ID: id, Sequence: sequence, State: TurnState(state), LeafID: leaf,
-		Input: input, ContextID: contextID,
+		Input: input, InputImages: images, ContextID: contextID,
 		StartedAt: time.UnixMilli(started), Error: reason,
 	}
 	if ended != 0 {
 		record.EndedAt = time.UnixMilli(ended)
 	}
 	return record, nil
+}
+
+func cloneImageContents(images []ImageContent) []ImageContent {
+	if len(images) == 0 {
+		return nil
+	}
+	cloned := make([]ImageContent, len(images))
+	for i, image := range images {
+		cloned[i] = ImageContent{Data: append([]byte(nil), image.Data...), MimeType: image.MimeType}
+	}
+	return cloned
 }

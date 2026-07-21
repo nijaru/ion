@@ -585,11 +585,12 @@ func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record, err := store.BeginTurn(ctx, "turn-commit", "draft", "context-base")
+	images := []ImageContent{{Data: []byte("prompt-image"), MimeType: "image/png"}}
+	record, err := store.BeginTurn(ctx, "turn-commit", "draft", images, "context-base")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" || record.ContextID != "context-base" {
+	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" || len(record.InputImages) != 1 || string(record.InputImages[0].Data) != "prompt-image" || record.ContextID != "context-base" {
 		t.Fatalf("unexpected begin record: %+v", record)
 	}
 	draft := &MessageEntry{
@@ -647,7 +648,7 @@ func TestInterruptedTurnIsRetainedButExcludedFromReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := store.BeginTurn(ctx, "turn-interrupted", "draft", "context-base")
+	record, err := store.BeginTurn(ctx, "turn-interrupted", "draft", nil, "context-base")
 	if err != nil {
 		t.Fatal(err)
 	}
