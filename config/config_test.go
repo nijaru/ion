@@ -145,8 +145,8 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	if !cfg.RetryUntilCancelledEnabled() {
 		t.Fatal("retry_until_cancelled = false, want true")
 	}
-	if cfg.ToolEnvMode() != "inherit" {
-		t.Fatalf("tool_env = %q, want inherit", cfg.ToolEnvMode())
+	if cfg.ToolEnvMode() != "allowlist" {
+		t.Fatalf("tool_env = %q, want allowlist", cfg.ToolEnvMode())
 	}
 }
 

@@ -395,7 +395,7 @@ func Save(cfg *Config) error {
 	if out.ToolMode == "coding" {
 		out.ToolMode = ""
 	}
-	if out.ToolEnv == "inherit" {
+	if out.ToolEnv == "allowlist" {
 		out.ToolEnv = ""
 	}
 
@@ -654,7 +654,7 @@ func (c *Config) ActiveToolMode() string {
 
 func (c *Config) ToolEnvMode() string {
 	if c == nil {
-		return "inherit"
+		return "allowlist"
 	}
 	return normalizeToolEnv(c.ToolEnv)
 }
@@ -848,10 +848,14 @@ func normalizeToolMode(value string) string {
 
 func normalizeToolEnv(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "allowlist", "safe", "default":
+		return "allowlist"
+	case "inherit":
+		return "inherit"
 	case "inherit_without_provider_keys":
 		return "inherit_without_provider_keys"
 	default:
-		return "inherit"
+		return "allowlist"
 	}
 }
 

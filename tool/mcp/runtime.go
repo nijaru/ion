@@ -79,7 +79,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		command.Env = overlayEnvironment(os.Environ(), cfg.Env)
+		command.Env = overlayEnvironment(tool.NewEnvironmentPolicy("allowlist", nil).CommandEnvironment(), cfg.Env)
 		client, err := NewClient(ctx, &sdkmcp.CommandTransport{Command: command}, "ion", "0.0.1")
 		if err != nil {
 			cancel()

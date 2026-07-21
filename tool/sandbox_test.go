@@ -31,6 +31,17 @@ func TestResolveSandboxModeDefaultsToAuto(t *testing.T) {
 	}
 }
 
+func TestResolveSandboxModeRejectsUnknownConfiguration(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "not-a-sandbox")
+	got := resolveSandboxMode()
+	if got == SandboxAuto || got == SandboxOff {
+		t.Fatalf("unknown sandbox mode = %s, want fail-closed invalid mode", got)
+	}
+	if _, err := planSandboxedBash(t.TempDir(), "true", got); err == nil {
+		t.Fatal("unknown sandbox mode unexpectedly produced an executable plan")
+	}
+}
+
 func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 	prevGOOS := sandboxGOOS
 	prevLookPath := sandboxLookPath

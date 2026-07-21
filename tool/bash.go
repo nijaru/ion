@@ -26,7 +26,7 @@ var (
 func NewBash(cwd string) *Bash {
 	return NewBashWithEnvironment(
 		cwd,
-		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
+		NewEnvironmentPolicy(executorEnvironmentAllowlist, nil),
 	)
 }
 
@@ -107,7 +107,7 @@ func (b *Bash) ApprovalRequirement(args string) (Requirement, bool, error) {
 		Category:      "execute",
 		Operation:     "bash",
 		Resource:      input.Command,
-		Environment:   []string{b.executor.environment.Summary()},
+		Environment:   b.executor.environment.AllowedVariables(),
 		NetworkIntent: sandboxNetworkIntent(b.executor.sandbox),
 		Metadata: map[string]any{
 			"sandbox":     string(b.executor.sandbox),

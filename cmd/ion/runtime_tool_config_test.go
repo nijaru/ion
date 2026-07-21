@@ -46,6 +46,35 @@ func TestRuntimeCodingToolsConfigAppliesCredentialEnvironmentPolicy(t *testing.T
 	}
 }
 
+func TestRuntimeCodingToolsConfigUsesSafeEnvironmentByDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "secret")
+	t.Setenv("ION_RUNTIME_VISIBLE", "not-allowlisted")
+
+	codingConfig, err := runtimeCodingToolsConfig(&config.Config{}, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("runtimeCodingToolsConfig error = %v", err)
+	}
+	registry := tool.NewRegistry()
+	if err := tool.RegisterCodingTools(registry, codingConfig); err != nil {
+		t.Fatalf("RegisterCodingTools error = %v", err)
+	}
+	bash, ok := registry.Get("bash")
+	if !ok {
+		t.Fatal("bash was not registered")
+	}
+	output, err := bash.Execute(
+		context.Background(),
+		`{"command":"printf '%s:%s' \"$OPENAI_API_KEY\" \"$ION_RUNTIME_VISIBLE\""}`,
+	)
+	if err != nil {
+		t.Fatalf("bash execute error = %v", err)
+	}
+	if got, want := strings.TrimSpace(output), ":"; got != want {
+		t.Fatalf("default bash environment = %q, want both variables absent", got)
+	}
+}
+
 func TestRuntimeCodingToolsConfigGatesSkillRegistration(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workdir := t.TempDir()

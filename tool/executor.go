@@ -2,9 +2,11 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,6 +29,7 @@ type localOutputUpdate struct {
 const (
 	exitStdioGrace    = 100 * time.Millisecond
 	exitStdioMaxDrain = 2 * time.Second
+	processHandshake  = "IFS= read -r _ || exit 125\nexec \"$@\""
 )
 
 type localExecutor struct {
@@ -36,18 +39,23 @@ type localExecutor struct {
 }
 
 type EnvironmentPolicy struct {
-	mode string
-	deny map[string]struct{}
+	mode  string
+	allow map[string]struct{}
+	deny  map[string]struct{}
 }
 
 const (
+	executorEnvironmentAllowlist      = "allowlist"
 	executorEnvironmentInherit        = "inherit"
 	executorEnvironmentStripProviders = "inherit_without_provider_keys"
 )
 
 func NewEnvironmentPolicy(mode string, deny []string) EnvironmentPolicy {
-	policy := EnvironmentPolicy{mode: executorEnvironmentInherit}
-	if mode == executorEnvironmentStripProviders {
+	policy := NewAllowlistedEnvironmentPolicy(defaultEnvironmentAllowlist())
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case executorEnvironmentInherit:
+		policy.mode = executorEnvironmentInherit
+	case executorEnvironmentStripProviders:
 		policy.mode = executorEnvironmentStripProviders
 		policy.deny = make(map[string]struct{}, len(deny))
 		for _, key := range deny {
@@ -60,11 +68,61 @@ func NewEnvironmentPolicy(mode string, deny []string) EnvironmentPolicy {
 	return policy
 }
 
-func (p EnvironmentPolicy) Summary() string {
-	if p.mode == executorEnvironmentStripProviders {
-		return executorEnvironmentStripProviders
+// NewAllowlistedEnvironmentPolicy creates a policy that passes only the
+// explicitly named variables to a child process. It is the default runtime
+// posture; credentials are not available unless the caller names them.
+func NewAllowlistedEnvironmentPolicy(allow []string) EnvironmentPolicy {
+	allowed := make(map[string]struct{}, len(allow))
+	for _, key := range allow {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			allowed[key] = struct{}{}
+		}
 	}
-	return executorEnvironmentInherit
+	return EnvironmentPolicy{mode: executorEnvironmentAllowlist, allow: allowed}
+}
+
+func defaultEnvironmentAllowlist() []string {
+	return []string{
+		"COLORTERM", "GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT", "HOME",
+		"LANG", "LOGNAME", "PATH", "PWD", "SHELL", "TERM", "TERM_PROGRAM",
+		"TMPDIR", "USER",
+	}
+}
+
+func (p EnvironmentPolicy) Summary() string {
+	switch p.mode {
+	case executorEnvironmentInherit:
+		return executorEnvironmentInherit
+	case executorEnvironmentStripProviders:
+		return executorEnvironmentStripProviders
+	default:
+		return executorEnvironmentAllowlist
+	}
+}
+
+// AllowedVariables returns the policy identity recorded for approval. A star
+// denotes an explicit inheritance escape hatch and is never the default.
+func (p EnvironmentPolicy) AllowedVariables() []string {
+	if p.mode == executorEnvironmentInherit {
+		return []string{"*"}
+	}
+	if p.mode == executorEnvironmentStripProviders {
+		return []string{"*", "!provider-credentials"}
+	}
+	allowed := make([]string, 0, len(p.allow))
+	for key := range p.allow {
+		allowed = append(allowed, key)
+	}
+	slices.Sort(allowed)
+	return allowed
+}
+
+// CommandEnvironment returns the concrete environment for a child process.
+// A nil result intentionally means inherit; callers should use the default
+// allowlist policy unless they are implementing an explicit escape hatch.
+func (p EnvironmentPolicy) CommandEnvironment() []string {
+	return p.commandEnv()
 }
 
 func newLocalExecutorWithEnvironment(
@@ -79,10 +137,14 @@ func newLocalExecutorWithEnvironment(
 }
 
 func (p EnvironmentPolicy) commandEnv() []string {
-	if p.mode != executorEnvironmentStripProviders {
+	switch p.mode {
+	case executorEnvironmentInherit:
 		return nil
+	case executorEnvironmentStripProviders:
+		return FilterEnvironment(os.Environ(), p.deny)
+	default:
+		return FilterEnvironmentAllowlist(os.Environ(), p.allow)
 	}
-	return FilterEnvironment(os.Environ(), p.deny)
 }
 
 func FilterEnvironment(env []string, deny map[string]struct{}) []string {
@@ -104,19 +166,44 @@ func FilterEnvironment(env []string, deny map[string]struct{}) []string {
 	return out
 }
 
-func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, error) {
+// FilterEnvironmentAllowlist retains only variables named in allow. Invalid
+// environment entries are dropped instead of being forwarded ambiguously.
+func FilterEnvironmentAllowlist(env []string, allow map[string]struct{}) []string {
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if _, permitted := allow[key]; permitted {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func (e *localExecutor) Run(ctx context.Context, request localCommand) (result string, runErr error) {
 	plan, err := planSandboxedBash(request.CWD, request.Command, e.sandbox)
 	if err != nil {
 		return "", err
 	}
 	if plan.cleanup != nil {
-		defer func() { _ = plan.cleanup() }()
+		defer func() {
+			if cleanupErr := plan.cleanup(); cleanupErr != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("sandbox cleanup: %w", cleanupErr))
+			}
+		}()
 	}
 
-	cmd := e.opts.CommandContext(ctx, plan.name, plan.args...)
+	cmdArgs := append([]string{"-c", processHandshake, "ion-action", plan.name}, plan.args...)
+	cmd := e.opts.CommandContext(ctx, "/bin/sh", cmdArgs...)
 	cmd.Dir = plan.dir
 	cmd.Env = e.environment.commandEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	handshake, err := cmd.StdinPipe()
+	if err != nil {
+		return "", fmt.Errorf("process handshake pipe: %w", err)
+	}
 
 	stdout, stdoutWriter, err := pipeForCommand()
 	if err != nil {
@@ -133,12 +220,20 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	cmd.Stderr = stderrWriter
 
 	if err := cmd.Start(); err != nil {
+		_ = handshake.Close()
 		_ = stdoutWriter.Close()
 		_ = stderrWriter.Close()
 		return "", err
 	}
+	stopKill := context.AfterFunc(ctx, func() {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	})
+	defer stopKill()
 	if request.Started != nil {
 		if err := request.Started(cmd.Process.Pid); err != nil {
+			_ = handshake.Close()
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			_ = cmd.Wait()
 			_ = stdoutWriter.Close()
@@ -146,15 +241,23 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 			return "", fmt.Errorf("record process group: %w", err)
 		}
 	}
+	if _, err := io.WriteString(handshake, "ion-start\n"); err != nil {
+		_ = handshake.Close()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
+		return "", fmt.Errorf("release process handshake: %w", err)
+	}
+	if err := handshake.Close(); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
+		return "", fmt.Errorf("close process handshake: %w", err)
+	}
 	_ = stdoutWriter.Close()
 	_ = stderrWriter.Close()
-
-	stopKill := context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-	})
-	defer stopKill()
 
 	output := newBashOutputAccumulator(request.PersistFullOutput)
 	var mu sync.Mutex

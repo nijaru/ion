@@ -45,10 +45,12 @@ closed when no backend is available. Use `ION_SANDBOX=off` only as an explicit
 unsandboxed technical boundary.
 
 Shell environment inheritance is controlled by `tool_env` in
-`~/.ion/config.toml`. The default `inherit` passes the process environment to
-native Bash. `inherit_without_provider_keys` removes the provider credential
-environment variables known to Ion, plus a configured `auth_env_var`, while
-preserving normal development variables such as `PATH`.
+`~/.ion/config.toml`. The default `allowlist` passes only a small explicit
+non-secret runtime environment to native Bash; provider credentials and
+arbitrary host variables are excluded. `inherit_without_provider_keys` and
+`inherit` are explicit escape hatches, not safe defaults. MCP stdio servers
+start from the same allowlist and then receive only their explicitly
+configured overrides.
 
 Skill tools are runtime-configured rather than silently enabled. Set
 `skill_tools = "read"` to register and expose `read_skill`; `tool_mode =

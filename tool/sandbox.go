@@ -48,7 +48,7 @@ func resolveSandboxMode() SandboxMode {
 	case string(SandboxBubblewrap):
 		return SandboxBubblewrap
 	default:
-		return SandboxAuto
+		return SandboxMode("invalid")
 	}
 }
 
