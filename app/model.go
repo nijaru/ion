@@ -370,6 +370,9 @@ type ModelState struct {
 	// verification before retry. The runtime remains the authority; this is a
 	// read-only frontend snapshot for status and /actions.
 	Recovery []session.ActionRecord
+	// RecoveryRequest identifies an in-flight explicit action reconciliation.
+	// It prevents duplicate commands while the controller records evidence.
+	RecoveryRequest uint64
 	// ActiveTools is the runtime-owned active tool projection. It is refreshed
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
 	// registry-level startup description.

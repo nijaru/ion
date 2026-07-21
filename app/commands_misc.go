@@ -129,16 +129,6 @@ func (m Model) handleStatusCommand(fields []string) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(runtimeStatusSummary(m)))
 }
 
-func (m Model) handleActionsCommand(fields []string) (Model, tea.Cmd) {
-	if len(fields) != 1 {
-		return m, cmdError("usage: /actions")
-	}
-	if len(m.Model.Recovery) == 0 {
-		return m, m.terminalCommit().Entries(systemEntry("No unsettled external actions."))
-	}
-	return m, m.terminalCommit().Entries(systemEntry(actionRecoverySummary(m.Model.Recovery)))
-}
-
 func (m Model) handleChangelogCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) != 1 {
 		return m, cmdError("usage: /changelog")

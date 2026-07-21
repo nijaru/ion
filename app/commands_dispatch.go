@@ -148,7 +148,8 @@ func (m Model) localCommandBusy() bool {
 		m.Progress.Compacting ||
 		m.Model.RuntimeSwitchRequest != 0 ||
 		m.Picker.SetupSaveRequest != 0 ||
-		m.Model.SettingsRequest != 0
+		m.Model.SettingsRequest != 0 ||
+		m.Model.RecoveryRequest != 0
 }
 
 func (m Model) localCommandBusyMessage(action string) string {
@@ -160,6 +161,9 @@ func (m Model) localCommandBusyMessage(action string) string {
 	}
 	if m.Model.SettingsRequest != 0 {
 		return "Wait for settings to finish before " + action + "."
+	}
+	if m.Model.RecoveryRequest != 0 {
+		return "Wait for action reconciliation to finish before " + action + "."
 	}
 	return "Finish or cancel the current turn before " + action + "."
 }

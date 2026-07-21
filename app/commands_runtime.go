@@ -530,6 +530,11 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner
 	m.Model.Storage = msg.runtime.Handles.Storage
+	if msg.runtime.Handles.Info != nil {
+		boot := msg.runtime.Handles.Info.Bootstrap()
+		m.Model.Recovery = append([]session.ActionRecord(nil), boot.Recovery...)
+	}
+	m.Model.RecoveryRequest = 0
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
 	if msg.keybindings != nil {
 		m.Keybindings = msg.keybindings

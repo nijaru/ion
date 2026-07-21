@@ -174,6 +174,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 	case settingsCommandMsg:
 		next, cmd := m.handleSettingsCommandResult(msg)
 		return next, cmd, true
+
+	case actionReconciledMsg:
+		next, cmd := m.handleActionReconciled(msg)
+		return next, cmd, true
 	}
 
 	return m, nil, false
