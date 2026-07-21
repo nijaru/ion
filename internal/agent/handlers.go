@@ -137,9 +137,9 @@ func (c *Controller) handleSetModel(cmd *SetModelCmd) {
 }
 
 func (c *Controller) handleSetThinking(cmd *SetThinkingCmd) {
-	go func() {
+	c.startOperation(func() {
 		sendResult(cmd.Reply, c.setThinkingDirect(cmd.Ctx, cmd.Level))
-	}()
+	})
 }
 
 func (c *Controller) handleSetTools(cmd *SetToolsCmd) {
@@ -147,71 +147,71 @@ func (c *Controller) handleSetTools(cmd *SetToolsCmd) {
 }
 
 func (c *Controller) handleActivateTools(cmd *ActivateToolsCmd) {
-	go func() {
+	c.startOperation(func() {
 		sendResult(cmd.Reply, c.activateToolsDirect(cmd.Ctx, cmd.Names))
-	}()
+	})
 }
 
 // --- Session administration commands ---
 
 func (c *Controller) handleSubscribe(cmd *SubscribeCmd) {
-	go func() {
+	c.startOperation(func() {
 		sub, err := c.subscribeDirect(cmd.Ctx, cmd.After)
 		sendResult(cmd.Reply, SubscribeResult{Sub: sub, Err: err})
-	}()
+	})
 }
 
 func (c *Controller) handleCompact(cmd *CompactCmd) {
-	go func() {
+	c.startOperation(func() {
 		sendResult(cmd.Reply, c.compactDirect(cmd.Ctx))
-	}()
+	})
 }
 
 func (c *Controller) handleNavigate(cmd *NavigateCmd) {
-	go func() {
+	c.startOperation(func() {
 		result, err := c.navigateTreeDirect(cmd.Ctx, cmd.Target, cmd.Opts)
 		sendResult(cmd.Reply, NavigateCmdResult{Result: result, Err: err})
-	}()
+	})
 }
 
 func (c *Controller) handleAppendSessionInfo(cmd *AppendSessionInfoCmd) {
-	go func() {
+	c.startOperation(func() {
 		name, err := c.appendSessionInfoDirect(cmd.Ctx, cmd.Name)
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
-	}()
+	})
 }
 
 func (c *Controller) handleAppendLabel(cmd *AppendLabelCmd) {
-	go func() {
+	c.startOperation(func() {
 		name, err := c.appendLabelDirect(cmd.Ctx, cmd.Target, cmd.Label)
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
-	}()
+	})
 }
 
 func (c *Controller) handleGetLabel(cmd *GetLabelCmd) {
-	go func() {
+	c.startOperation(func() {
 		name, err := c.getLabelDirect(cmd.Ctx, cmd.Target)
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
-	}()
+	})
 }
 
 func (c *Controller) handleAppendMessage(cmd *AppendMessageCmd) {
-	go func() {
+	c.startOperation(func() {
 		sendResult(cmd.Reply, c.appendMessageDirect(cmd.Ctx, cmd.Message))
-	}()
+	})
 }
 
 func (c *Controller) handlePersistEntry(cmd *PersistEntryCmd) {
-	go func() {
+	c.startOperation(func() {
 		sendResult(cmd.Reply, c.persistEntryDirect(cmd.Ctx, cmd.Entry))
-	}()
+	})
 }
 
 func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
-	go func() {
+	c.startOperation(func() {
 		id, err := c.forkSessionDirect(cmd.Ctx, cmd.SourceID)
 		sendResult(cmd.Reply, ForkResult{ID: id, Err: err})
-	}()
+	})
 }
 
 // --- Approval commands ---

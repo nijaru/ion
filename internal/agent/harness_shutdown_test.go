@@ -56,6 +56,45 @@ func TestHarnessCloseCancelsActiveProviderRequest(t *testing.T) {
 	}
 }
 
+func TestHarnessCloseJoinsAuxiliaryOperation(t *testing.T) {
+	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
+	finish, err := h.beginExclusive(PhaseCompaction)
+	if err != nil {
+		t.Fatalf("begin exclusive: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.startOperation(func() {
+		close(started)
+		<-release
+		finish()
+	})
+	<-started
+
+	closed := make(chan error, 1)
+	go func() { closed <- h.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before auxiliary operation released: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join auxiliary operation")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.phase != PhaseClosed || h.runDone != nil || h.runCancel != nil {
+		t.Fatalf("auxiliary state retained after Close: phase=%s done=%v cancel=%v", h.phase, h.runDone != nil, h.runCancel != nil)
+	}
+}
+
 func TestHarnessShutdownHonorsDeadlineBeforeNonCooperativeProviderReturns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

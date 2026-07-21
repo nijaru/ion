@@ -87,11 +87,12 @@ type Controller struct {
 	commandStop chan struct{}
 
 	// --- Active turn coordination ---
-	runCancel     chan struct{} // closed to abort current run
-	runCancelOnce *sync.Once
-	runDone       chan struct{} // closed when run finishes
-	turnWorkers   sync.WaitGroup
-	completions   chan turnCompletion
+	runCancel        chan struct{} // closed to abort current run
+	runCancelOnce    *sync.Once
+	runDone          chan struct{} // closed when run finishes
+	turnWorkers      sync.WaitGroup
+	operationWorkers sync.WaitGroup
+	completions      chan turnCompletion
 
 	// --- Event delivery ---
 	eventHub *eventHub
@@ -380,17 +381,30 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 
 	return func() {
 		c.mu.Lock()
-		if c.phase == phase {
-			c.phase = PhaseReady
+		if c.runDone == done {
+			if c.phase == phase {
+				c.phase = PhaseReady
+			}
 			c.runCancel = nil
 			c.runCancelOnce = nil
-			if c.runDone == done {
-				close(done)
-				c.runDone = nil
-			}
+			close(done)
+			c.runDone = nil
 		}
 		c.mu.Unlock()
 	}, nil
+}
+
+// startOperation runs controller-owned external work while retaining a join
+// handle for shutdown. The caller is on the command goroutine, so registering
+// the worker under mu prevents Close from racing a late Add with Wait.
+func (c *Controller) startOperation(fn func()) {
+	c.mu.Lock()
+	c.operationWorkers.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.operationWorkers.Done()
+		fn()
+	}()
 }
 
 // cancelCurrentRun signals the active operation exactly once. Cancellation is
@@ -519,8 +533,8 @@ func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
 //  1. Sets the closed flag
 //  2. Cancels any active run
 //  3. Waits for the active turn worker to report completion
-//  4. Closes commandStop (causes the run loop to exit)
-//  5. Waits for the run loop to finish
+//  4. Marks the controller closed and stops command dispatch
+//  5. Waits for the command loop and auxiliary workers
 //  6. Closes the event hub
 func (c *Controller) Close() error {
 	c.mu.Lock()
@@ -553,6 +567,10 @@ func (c *Controller) Close() error {
 
 	// Wait for the command loop to finish.
 	<-c.done
+
+	// Auxiliary operations may still be finishing after the command loop has
+	// stopped. Join them before closing the event hub or returning to the host.
+	c.operationWorkers.Wait()
 
 	// Close the event hub.
 	if c.eventHub != nil {

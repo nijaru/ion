@@ -34,6 +34,7 @@ func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts 
 	h.runDone = make(chan struct{})
 	h.runCancel = make(chan struct{})
 	h.runCancelOnce = new(sync.Once)
+	done := h.runDone
 	runCancel := h.runCancel
 	model := h.model
 	thinking := h.thinking
@@ -44,11 +45,12 @@ func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts 
 
 	defer func() {
 		h.mu.Lock()
-		h.phase = PhaseIdle
+		if h.phase != PhaseClosed {
+			h.phase = PhaseIdle
+		}
 		h.runCancel = nil
 		h.runCancelOnce = nil
-		done := h.runDone
-		if done != nil {
+		if h.runDone == done {
 			close(done)
 			h.runDone = nil
 		}
