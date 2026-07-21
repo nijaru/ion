@@ -30,6 +30,19 @@ func TestApprovalBrokerTrustedAllowsWithoutRequest(t *testing.T) {
 	}
 }
 
+func TestApprovalBrokerUnknownModeFailsClosed(t *testing.T) {
+	broker := NewApprovalBroker(ApprovalMode("unexpected"), false, nil)
+	outcome := broker.Request(t.Context(), session.ApprovalRequest{
+		ToolName: "bash", Operation: "bash", Resource: "printf safe",
+	})
+	if outcome.decision != session.ApprovalDeny {
+		t.Fatalf("unknown approval mode decision = %s, want deny", outcome.decision)
+	}
+	if outcome.reason == "" {
+		t.Fatal("unknown approval mode denial did not explain unavailable approval")
+	}
+}
+
 func TestApprovalBrokerForcedRequestPromptsInTrustedMode(t *testing.T) {
 	events := make(chan session.Event, 2)
 	broker := NewApprovalBroker(ApprovalTrusted, true, func(event session.Event) {

@@ -103,6 +103,10 @@ func (b *Bash) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if input.Action != "run" {
 		return Requirement{}, false, nil
 	}
+	capabilities, err := sandboxCapabilityMetadata(b.cwd, b.executor.sandbox)
+	if err != nil {
+		return Requirement{}, false, fmt.Errorf("describe bash sandbox: %w", err)
+	}
 	return Requirement{
 		Category:      "execute",
 		Operation:     "bash",
@@ -110,9 +114,10 @@ func (b *Bash) ApprovalRequirement(args string) (Requirement, bool, error) {
 		Environment:   b.executor.environment.AllowedVariables(),
 		NetworkIntent: sandboxNetworkIntent(b.executor.sandbox),
 		Metadata: map[string]any{
-			"sandbox":     string(b.executor.sandbox),
-			"environment": b.executor.environment.Summary(),
-			"background":  input.Background,
+			"sandbox":        string(b.executor.sandbox),
+			"sandbox_policy": capabilities,
+			"environment":    b.executor.environment.Summary(),
+			"background":     input.Background,
 		},
 	}, true, nil
 }

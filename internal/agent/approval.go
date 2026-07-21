@@ -51,8 +51,13 @@ func NewApprovalBroker(
 	interactive bool,
 	emit func(session.Event),
 ) *ApprovalBroker {
-	if mode != ApprovalConfirm {
-		mode = ApprovalTrusted
+	switch mode {
+	case ApprovalConfirm, ApprovalTrusted:
+	default:
+		// Constructors are an independent safety boundary; do not rely on the
+		// host config normalizer to protect callers that build a controller
+		// directly.
+		mode = ApprovalConfirm
 	}
 	return &ApprovalBroker{
 		mode:        mode,

@@ -194,32 +194,60 @@ func planSandboxedBash(cwd, command string, mode SandboxMode) (sandboxPlan, erro
 }
 
 func planSandboxedCommand(cwd, name string, args []string, mode SandboxMode) (sandboxPlan, error) {
-	switch mode {
-	case SandboxOff:
+	if mode == SandboxOff {
 		return sandboxPlan{
 			name: name,
 			args: append([]string(nil), args...),
 			dir:  cwd,
 		}, nil
-	case SandboxSeatbelt:
-		return planSeatbeltCommand(cwd, name, args)
-	case SandboxBubblewrap:
-		return planBubblewrapCommand(cwd, name, args)
-	case SandboxAuto:
-		if sandboxGOOS == "darwin" {
-			if _, err := sandboxLookPath("sandbox-exec"); err == nil {
-				return planSeatbeltCommand(cwd, name, args)
-			}
-		}
-		if sandboxGOOS == "linux" {
-			if _, err := sandboxLookPath("bwrap"); err == nil {
-				return planBubblewrapCommand(cwd, name, args)
-			}
-		}
-		return sandboxPlan{}, fmt.Errorf("automatic sandbox backend unavailable on %s", sandboxGOOS)
-	default:
-		return sandboxPlan{}, fmt.Errorf("unsupported sandbox mode %q", mode)
 	}
+	return planSandboxedCommandWithPolicy(cwd, name, args, mode, defaultSandboxPolicy(cwd))
+}
+
+// defaultSandboxPolicy is the native shell capability boundary. The shell
+// can read and write the workspace and the planner grants only the stable
+// runtime paths needed to start the selected command. It cannot read the
+// user's home directory or reach the network unless the caller explicitly
+// selects SandboxOff.
+func defaultSandboxPolicy(cwd string) SandboxPolicy {
+	return SandboxPolicy{WritePaths: []string{cwd}}
+}
+
+// sandboxCapabilityMetadata returns the exact capability description that is
+// bound into a native shell action's fingerprint. It is derived from the same
+// normalized policy used to build the OS command, so approval cannot be
+// reused after a material boundary change.
+func sandboxCapabilityMetadata(cwd string, mode SandboxMode) (map[string]any, error) {
+	if mode == SandboxOff {
+		return map[string]any{
+			"backend":         string(SandboxOff),
+			"read_paths":      []string{"*"},
+			"write_paths":     []string{"*"},
+			"protected_paths": []string{},
+			"network":         "unrestricted",
+		}, nil
+	}
+	root, err := normalizeSandboxRoot(cwd)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := normalizeSandboxPolicy(root, defaultSandboxPolicy(root))
+	if err != nil {
+		return nil, err
+	}
+	readPaths := sandboxReadPaths(root, "/bin/bash", policy.ReadPaths)
+	temporaryPaths := []string{"/tmp"}
+	if sandboxPathExists("/private/tmp") {
+		temporaryPaths = append(temporaryPaths, "/private/tmp")
+	}
+	return map[string]any{
+		"backend":         sandboxSummary(mode),
+		"read_paths":      readPaths,
+		"write_paths":     policy.WritePaths,
+		"temporary_paths": temporaryPaths,
+		"protected_paths": policy.ProtectedPaths,
+		"network":         "denied",
+	}, nil
 }
 
 func planSandboxedCommandWithPolicy(
@@ -228,24 +256,28 @@ func planSandboxedCommandWithPolicy(
 	mode SandboxMode,
 	policy SandboxPolicy,
 ) (sandboxPlan, error) {
-	policy, err := normalizeSandboxPolicy(cwd, policy)
+	root, err := normalizeSandboxRoot(cwd)
+	if err != nil {
+		return sandboxPlan{}, err
+	}
+	policy, err = normalizeSandboxPolicy(root, policy)
 	if err != nil {
 		return sandboxPlan{}, err
 	}
 	switch mode {
 	case SandboxSeatbelt:
-		return planSeatbeltCommandWithPolicy(cwd, name, args, policy)
+		return planSeatbeltCommandWithPolicy(root, name, args, policy)
 	case SandboxBubblewrap:
-		return planBubblewrapCommandWithPolicy(cwd, name, args, policy)
+		return planBubblewrapCommandWithPolicy(root, name, args, policy)
 	case SandboxAuto:
 		if sandboxGOOS == "darwin" {
 			if _, err := sandboxLookPath("sandbox-exec"); err == nil {
-				return planSeatbeltCommandWithPolicy(cwd, name, args, policy)
+				return planSeatbeltCommandWithPolicy(root, name, args, policy)
 			}
 		}
 		if sandboxGOOS == "linux" {
 			if _, err := sandboxLookPath("bwrap"); err == nil {
-				return planBubblewrapCommandWithPolicy(cwd, name, args, policy)
+				return planBubblewrapCommandWithPolicy(root, name, args, policy)
 			}
 		}
 		return sandboxPlan{}, fmt.Errorf("automatic sandbox backend unavailable on %s", sandboxGOOS)
@@ -254,6 +286,23 @@ func planSandboxedCommandWithPolicy(
 	default:
 		return sandboxPlan{}, fmt.Errorf("unsupported sandbox mode %q", mode)
 	}
+}
+
+func normalizeSandboxRoot(cwd string) (string, error) {
+	root, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolve sandbox workspace: %w", err)
+	}
+	root = filepath.Clean(root)
+	// macOS exposes temporary directories through /var -> /private/var. Use
+	// the physical root in both the profile and Cmd.Dir so the OS policy sees
+	// the same path that the child resolves. Keep synthetic test roots intact.
+	if sandboxPathExists(root) {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = filepath.Clean(resolved)
+		}
+	}
+	return root, nil
 }
 
 func normalizeSandboxPolicy(cwd string, policy SandboxPolicy) (SandboxPolicy, error) {
@@ -313,6 +362,11 @@ func normalizeSandboxPaths(root string, paths []string, kind string) ([]string, 
 			return nil, fmt.Errorf("resolve %s sandbox path %q: %w", kind, raw, err)
 		}
 		path = filepath.Clean(path)
+		if sandboxPathExists(path) {
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				path = filepath.Clean(resolved)
+			}
+		}
 		if !sandboxPathWithin(root, path) && path != root {
 			return nil, fmt.Errorf("%s sandbox path %q escapes workspace %q", kind, raw, root)
 		}
@@ -338,35 +392,7 @@ func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
 }
 
 func planSeatbeltCommand(cwd, name string, args []string) (sandboxPlan, error) {
-	if sandboxGOOS != "darwin" {
-		return sandboxPlan{}, fmt.Errorf("seatbelt sandbox unsupported on %s", sandboxGOOS)
-	}
-	seatbelt, err := sandboxLookPath("sandbox-exec")
-	if err != nil {
-		return sandboxPlan{}, fmt.Errorf("seatbelt sandbox unavailable: %w", err)
-	}
-	profile, err := os.CreateTemp("", "ion-seatbelt-*.sb")
-	if err != nil {
-		return sandboxPlan{}, fmt.Errorf("create seatbelt profile: %w", err)
-	}
-	profileText := seatbeltProfile(cwd)
-	if _, err := profile.WriteString(profileText); err != nil {
-		_ = profile.Close()
-		_ = os.Remove(profile.Name())
-		return sandboxPlan{}, fmt.Errorf("write seatbelt profile: %w", err)
-	}
-	if err := profile.Close(); err != nil {
-		_ = os.Remove(profile.Name())
-		return sandboxPlan{}, fmt.Errorf("close seatbelt profile: %w", err)
-	}
-	return sandboxPlan{
-		name: seatbelt,
-		args: append([]string{"-f", profile.Name(), name}, args...),
-		dir:  cwd,
-		cleanup: func() error {
-			return os.Remove(profile.Name())
-		},
-	}, nil
+	return planSandboxedCommandWithPolicy(cwd, name, args, SandboxSeatbelt, defaultSandboxPolicy(cwd))
 }
 
 func planSeatbeltCommandWithPolicy(cwd, name string, args []string, policy SandboxPolicy) (sandboxPlan, error) {
@@ -401,23 +427,7 @@ func planSeatbeltCommandWithPolicy(cwd, name string, args []string, policy Sandb
 }
 
 func seatbeltProfile(cwd string) string {
-	quoted := strconv.Quote(cwd)
-	// macOS system processes may resolve dependencies outside a finite list of
-	// stable paths (for example, through dyld caches and private framework paths).
-	// A filtered read rule aborts sandbox-exec on those resolutions, so keep reads
-	// unrestricted while retaining the write and network restrictions below.
-	return fmt.Sprintf(`(version 1)
-(deny default)
-(allow process*)
-(allow signal (target self))
-(allow sysctl-read)
-(allow file-read*)
-(allow file-read* (subpath %s))
-(allow file-write*
-  (subpath "/tmp")
-  (subpath "/private/tmp")
-  (subpath %s))
-`, quoted, quoted)
+	return seatbeltProfileWithPolicy(cwd, "/bin/bash", defaultSandboxPolicy(cwd))
 }
 
 func seatbeltProfileWithPolicy(cwd, name string, policy SandboxPolicy) string {
@@ -431,6 +441,12 @@ func seatbeltProfileWithPolicy(cwd, name string, policy SandboxPolicy) string {
 (allow file-read-metadata (subpath "/var"))
 (allow file-write* (subpath "/tmp") (subpath "/private/tmp"))
 `)
+	// getcwd/stat walks the directory chain above the workspace. Permit access
+	// only to those exact ancestor directory objects; granting a subpath rule
+	// there would make sibling workspaces and home-directory contents visible.
+	for _, parent := range sandboxParentPaths(cwd) {
+		fmt.Fprintf(&builder, "(allow file-read* (literal %s))\n", strconv.Quote(parent))
+	}
 	for _, commandPath := range sandboxCommandPaths(name) {
 		fmt.Fprintf(&builder, "(allow process-exec (literal %s))\n", strconv.Quote(commandPath))
 		fmt.Fprintf(&builder, "(allow file-map-executable (subpath %s))\n", strconv.Quote(filepath.Dir(commandPath)))
@@ -452,6 +468,19 @@ func seatbeltProfileWithPolicy(cwd, name string, policy SandboxPolicy) string {
 		fmt.Fprintf(&builder, "(deny file-write* (subpath %s))\n", strconv.Quote(path))
 	}
 	return builder.String()
+}
+
+func sandboxParentPaths(path string) []string {
+	path = filepath.Clean(path)
+	var parents []string
+	for parent := filepath.Dir(path); parent != path; parent = filepath.Dir(parent) {
+		parents = append(parents, parent)
+		if parent == string(filepath.Separator) {
+			break
+		}
+	}
+	slices.Sort(parents)
+	return slices.Compact(parents)
 }
 
 func sandboxReadPaths(cwd, name string, configured []string) []string {
@@ -502,34 +531,7 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 }
 
 func planBubblewrapCommand(cwd, name string, args []string) (sandboxPlan, error) {
-	if sandboxGOOS != "linux" {
-		return sandboxPlan{}, fmt.Errorf("bubblewrap sandbox unsupported on %s", sandboxGOOS)
-	}
-	bwrap, err := sandboxLookPath("bwrap")
-	if err != nil {
-		return sandboxPlan{}, fmt.Errorf("bubblewrap unavailable: %w", err)
-	}
-	bwrapArgs := []string{
-		"--unshare-net",
-		"--bind", cwd, cwd,
-		"--chdir", cwd,
-		"--ro-bind", "/bin", "/bin",
-		"--ro-bind", "/usr", "/usr",
-		"--ro-bind", "/etc", "/etc",
-		"--bind", "/tmp", "/tmp",
-		"--dev", "/dev",
-		"--proc", "/proc",
-	}
-	if sandboxPathExists("/private/tmp") {
-		bwrapArgs = append(bwrapArgs, "--bind", "/private/tmp", "/private/tmp")
-	}
-	bwrapArgs = append(bwrapArgs, name)
-	bwrapArgs = append(bwrapArgs, args...)
-	return sandboxPlan{
-		name: bwrap,
-		args: bwrapArgs,
-		dir:  cwd,
-	}, nil
+	return planSandboxedCommandWithPolicy(cwd, name, args, SandboxBubblewrap, defaultSandboxPolicy(cwd))
 }
 
 func planBubblewrapCommandWithPolicy(cwd, name string, args []string, policy SandboxPolicy) (sandboxPlan, error) {

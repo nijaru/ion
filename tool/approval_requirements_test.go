@@ -8,6 +8,16 @@ func TestNativeMutatingToolsDeclareApprovalRequirements(t *testing.T) {
 	if err != nil || !ok || req.Category != "execute" || req.Resource != "go test ./..." {
 		t.Fatalf("bash approval = %#v, %v, %v", req, ok, err)
 	}
+	capabilities, ok := req.Metadata["sandbox_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("bash approval sandbox policy = %#v, want capability map", req.Metadata["sandbox_policy"])
+	}
+	if got := capabilities["network"]; got != "denied" {
+		t.Fatalf("bash sandbox network = %#v, want denied", got)
+	}
+	if readPaths, ok := capabilities["read_paths"].([]string); !ok || len(readPaths) == 0 || readPaths[0] == "*" {
+		t.Fatalf("bash sandbox read paths = %#v, want bounded paths", capabilities["read_paths"])
+	}
 	if _, ok, err := bash.ApprovalRequirement(`{"action":"list"}`); err != nil || ok {
 		t.Fatalf("bash list approval = %v, %v, want no requirement", err, ok)
 	}

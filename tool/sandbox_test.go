@@ -89,6 +89,9 @@ func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 			t.Fatalf("seatbelt profile missing %q: %s", want, profile)
 		}
 	}
+	if strings.Contains(profile, "(allow file-read*)\n") {
+		t.Fatalf("native shell profile grants unrestricted reads: %s", profile)
+	}
 }
 
 func TestSeatbeltProfileQuotesWorkspacePath(t *testing.T) {
@@ -118,7 +121,7 @@ func TestPlanSandboxedBashAutoPrefersDarwinSeatbeltWhenAvailable(t *testing.T) {
 		sandboxLookPath = prevLookPath
 	}()
 
-	plan, err := planSandboxedBash("/tmp/workspace", "pwd", SandboxAuto)
+	plan, err := planSandboxedBash(t.TempDir(), "pwd", SandboxAuto)
 	if err != nil {
 		t.Fatalf("planSandboxedBash(auto darwin) error = %v", err)
 	}
@@ -173,18 +176,25 @@ func TestPlanSandboxedCommandPreservesArbitraryCommandArguments(t *testing.T) {
 		}
 		return "/usr/bin/bwrap", nil
 	}
-	sandboxPathExists = func(string) bool { return false }
+	root := t.TempDir()
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxPathExists = func(path string) bool {
+		return path == root || path == resolvedRoot
+	}
 	defer func() {
 		sandboxGOOS = prevGOOS
 		sandboxLookPath = prevLookPath
 		sandboxPathExists = prevPathExists
 	}()
 
-	plan, err := PlanSandboxedCommand("/tmp/workspace", "/usr/local/bin/mcp-server", []string{"--config", "file with spaces.json"}, SandboxBubblewrap)
+	plan, err := PlanSandboxedCommand(root, "/usr/local/bin/mcp-server", []string{"--config", "file with spaces.json"}, SandboxBubblewrap)
 	if err != nil {
 		t.Fatalf("PlanSandboxedCommand error = %v", err)
 	}
-	if plan.Name != "/usr/bin/bwrap" || plan.Dir != "/tmp/workspace" {
+	if plan.Name != "/usr/bin/bwrap" || plan.Dir != resolvedRoot {
 		t.Fatalf("plan = %#v, want bubblewrap in workspace", plan)
 	}
 	if len(plan.Args) < 3 || plan.Args[len(plan.Args)-3] != "/usr/local/bin/mcp-server" || plan.Args[len(plan.Args)-2] != "--config" || plan.Args[len(plan.Args)-1] != "file with spaces.json" {
@@ -281,6 +291,10 @@ func TestPlanSandboxedCommandWithPolicyProtectsWritablePath(t *testing.T) {
 
 	root := t.TempDir()
 	protected := filepath.Join(root, ".env")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(protected, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -292,10 +306,11 @@ func TestPlanSandboxedCommandWithPolicyProtectsWritablePath(t *testing.T) {
 		t.Fatalf("PlanSandboxedCommandWithPolicy: %v", err)
 	}
 	joined := strings.Join(plan.Args, " ")
-	if !strings.Contains(joined, "--bind "+root+" "+root) {
+	if !strings.Contains(joined, "--bind "+resolvedRoot+" "+resolvedRoot) {
 		t.Fatalf("writable policy missing workspace bind: %#v", plan.Args)
 	}
-	if !strings.Contains(joined, "--ro-bind "+protected+" "+protected) {
+	resolvedProtected := filepath.Join(resolvedRoot, ".env")
+	if !strings.Contains(joined, "--ro-bind "+resolvedProtected+" "+resolvedProtected) {
 		t.Fatalf("protected path missing read-only overlay: %#v", plan.Args)
 	}
 }
