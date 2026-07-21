@@ -57,12 +57,12 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	time.Sleep(200 * time.Millisecond)
+	waitForAcceptanceOutput(t, output, "routing_ [current]", "loaded session tree")
 	for range 5 {
 		program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	time.Sleep(50 * time.Millisecond)
+	waitForAcceptanceOutput(t, output, "Summarize branch?", "branch summary prompt")
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitForAcceptanceOutput(t, output, "--- moved to branch ---", "branch replay")
 
@@ -122,8 +122,9 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		// assert that the complete "Streaming..." string was written.
 		waitForAcceptanceOutputAny(t, output, "cancelable TUI state", "Submitting...", "Streaming...")
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-		time.Sleep(100 * time.Millisecond)
 		waitForAcceptanceOutput(t, output, "Canceled by user", "cancel settlement")
+		waitForAcceptanceIdle(t, harness)
+		time.Sleep(25 * time.Millisecond)
 		program.Quit()
 		model := waitAcceptanceProgram(t, result)
 		if model.InFlight.Thinking {
@@ -284,6 +285,18 @@ func waitAcceptanceSignal(t *testing.T, signal <-chan struct{}, label string) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", label)
 	}
+}
+
+func waitForAcceptanceIdle(t *testing.T, harness *agent.Controller) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if harness.IsIdle() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("runtime remained busy after cancellation")
 }
 
 func waitForAcceptanceOutput(t *testing.T, output *acceptanceBuffer, needle, label string) string {
