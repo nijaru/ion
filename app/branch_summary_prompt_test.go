@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -66,5 +68,32 @@ func TestBranchSummaryNavigationResultClosesPromptAndTree(t *testing.T) {
 	model, _ = model.handleTreePickerMove(treePickerMoveMsg{})
 	if model.Picker.Tree != nil || model.Picker.BranchSummary != nil {
 		t.Fatalf("after successful navigation tree=%v prompt=%v, want both closed", model.Picker.Tree, model.Picker.BranchSummary)
+	}
+}
+
+func TestBranchSummaryNavigationCancelSurfacesAbortError(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runner = &stubRunner{abortErr: errors.New("runtime is closed")}
+	model.Picker.Tree = &treePickerState{}
+	model.Picker.BranchSummary = &branchSummaryPromptState{
+		targetID:   "target",
+		navigating: true,
+	}
+
+	model, cmd := model.handleBranchSummaryPromptKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("cancel did not return an abort command")
+	}
+	if model.Picker.BranchSummary == nil || !model.Picker.BranchSummary.navigating {
+		t.Fatal("failed cancellation should keep navigation state until its result arrives")
+	}
+
+	msg := cmd()
+	local, ok := msg.(localErrorMsg)
+	if !ok || local.err == nil {
+		t.Fatalf("cancel message = %#v, want local error", msg)
+	}
+	if !strings.Contains(local.err.Error(), "cancel branch navigation: runtime is closed") {
+		t.Fatalf("cancel error = %v, want contextual runtime error", local.err)
 	}
 }

@@ -138,6 +138,7 @@ func (s *stubSession) Close() error {
 
 type stubRunner struct {
 	aborts       int
+	abortErr     error
 	steers       []string
 	followUps    []string
 	steerErr     error
@@ -175,7 +176,7 @@ func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
 func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
-	return nil, nil, nil
+	return nil, nil, r.abortErr
 }
 func (r *stubRunner) WaitForIdle()               {}
 func (r *stubRunner) Close() error               { return nil }
@@ -245,8 +246,7 @@ func (b stubBackend) Model() string {
 func (b stubBackend) ContextLimit() int { return b.contextLimit }
 func (b stubBackend) Bootstrap() Bootstrap {
 	return Bootstrap{
-		Entries: []session.Entry{&session.LabelEntry{EntryBase: session.EntryBase{ID: "boot"}, Label: "boot"}},
-		Status:  "ready",
+		Status: "ready",
 	}
 }
 func (b stubBackend) Session() session.Session { return b.sess }

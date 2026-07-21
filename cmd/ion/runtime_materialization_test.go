@@ -123,7 +123,7 @@ func TestOpenRuntimeDoesNotMoveLeafWhenMaterializationFails(t *testing.T) {
 }
 
 func TestStartupSetupRequiredRecognizesSetupBackend(t *testing.T) {
-	if !startupSetupRequired(app.NewSetupRuntime(&config.Config{Provider: "openai"}, nil, "missing")) {
+	if !startupSetupRequired(app.NewSetupRuntime(&config.Config{Provider: "openai"}, "missing")) {
 		t.Fatal("setup backend should require startup setup")
 	}
 	if startupSetupRequired(providerRuntimeInfo{provider: "openai"}) {
@@ -138,7 +138,7 @@ func TestRuntimeInfoBootstrapSurfacesUnsettledActions(t *testing.T) {
 	}
 	defer store.Close()
 
-	info, err := runtimeInfoForProvider("ollama", &config.Config{Provider: "ollama", Model: "llama3"}, store)
+	info, err := runtimeInfoForProvider("ollama", &config.Config{Provider: "ollama", Model: "llama3"})
 	if err != nil {
 		t.Fatalf("runtime info: %v", err)
 	}

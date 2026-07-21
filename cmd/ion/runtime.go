@@ -308,22 +308,21 @@ func openRuntime(
 		interactive = approvalInteractive[0]
 	}
 	sess := session.NewSession(store, 64)
-	storage := app.RuntimeStorage(sess)
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, nil
+		return app.NewSetupRuntime(&runtimeCfg, err.Error()), nil, nil, nil
 	}
 	durableStore, ok := store.(session.DurableStore)
 	if !ok {
-		return app.NewSetupRuntime(&runtimeCfg, storage, "session store does not support durable turns"), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, "session store does not support durable turns"), nil, nil,
 			fmt.Errorf("session store does not support durable turns")
 	}
 	actionJournal, ok := store.(session.ActionJournal)
 	if !ok {
-		return app.NewSetupRuntime(&runtimeCfg, storage, "session store does not support durable action journaling"), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, "session store does not support durable action journaling"), nil, nil,
 			fmt.Errorf("session store does not support durable action journaling")
 	}
-	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, storage)
+	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -340,14 +339,14 @@ func openRuntime(
 		// Keep startup recoverable for the TUI, but never present an incomplete
 		// runtime as accepted. Callers must handle the error before installing
 		// or persisting this setup runtime.
-		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, err.Error()), nil, nil,
 			fmt.Errorf("initialize provider: %w", err)
 	}
 	provider = providerWithRetryPolicy(provider, &runtimeCfg)
 
 	mcpRuntime, err := openMCPRuntime(ctx, cwd, runtimeCfg.MCPServers)
 	if err != nil {
-		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+		return app.NewSetupRuntime(&runtimeCfg, err.Error()), nil, nil, err
 	}
 	var memoryStore *ionmemory.Store
 	closeRuntimeResources := func() error {
@@ -365,7 +364,7 @@ func openRuntime(
 	}
 	setupFailure := func(openErr error) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
 		openErr = cleanupOpenError(openErr)
-		return app.NewSetupRuntime(&runtimeCfg, storage, openErr.Error()), nil, nil, openErr
+		return app.NewSetupRuntime(&runtimeCfg, openErr.Error()), nil, nil, openErr
 	}
 	if runtimeCfg.MemoryToolMode() == "on" {
 		dataDir, err := config.DefaultDataDir()

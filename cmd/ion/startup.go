@@ -393,7 +393,7 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func runtimeInfoForProvider(provider string, cfg *config.Config, store app.RuntimeEntryReader) (app.RuntimeInfo, error) {
+func runtimeInfoForProvider(provider string, cfg *config.Config) (app.RuntimeInfo, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
@@ -402,10 +402,7 @@ func runtimeInfoForProvider(provider string, cfg *config.Config, store app.Runti
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
-	if store == nil {
-		return nil, fmt.Errorf("session store does not support runtime storage projection")
-	}
-	return &runtimeInfo{def: &def, cfg: cfg, store: store}, nil
+	return &runtimeInfo{def: &def, cfg: cfg}, nil
 }
 
 // runtimeInfo is a minimal app.RuntimeInfo for native providers.
@@ -413,7 +410,6 @@ func runtimeInfoForProvider(provider string, cfg *config.Config, store app.Runti
 type runtimeInfo struct {
 	def      *llm.Definition
 	cfg      *config.Config
-	store    app.RuntimeEntryReader
 	surface  app.ToolSurface
 	recovery []session.ActionRecord
 }
@@ -438,12 +434,11 @@ func (b *runtimeInfo) ContextLimit() int {
 	return 0
 }
 func (b *runtimeInfo) Bootstrap() app.Bootstrap {
-	entries, _ := b.store.Entries(context.Background())
 	status := fmt.Sprintf("%s/%s", b.Provider(), b.Model())
 	if len(b.recovery) > 0 {
 		status += fmt.Sprintf(" • %d unsettled external action(s); use /actions to inspect", len(b.recovery))
 	}
-	return app.Bootstrap{Entries: entries,
+	return app.Bootstrap{
 		Status:   status,
 		Recovery: append([]session.ActionRecord(nil), b.recovery...),
 	}

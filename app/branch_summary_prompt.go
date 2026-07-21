@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -38,7 +39,9 @@ func (m Model) handleBranchSummaryPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd
 			}
 			runner := m.Model.Runner
 			return m, func() tea.Msg {
-				_, _, _ = runner.Abort()
+				if _, _, err := runner.Abort(); err != nil {
+					return localErrorMsg{err: fmt.Errorf("cancel branch navigation: %w", err)}
+				}
 				return nil
 			}
 		}
