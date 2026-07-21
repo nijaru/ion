@@ -46,17 +46,6 @@ func (p Phase) String() string {
 	return "unknown"
 }
 
-// Legacy phase aliases — bridge old harness.go/controller.go code to the new
-// enum during the rewrite. These map old coarse phases to the closest new
-// phase and will be deleted when harness.go is replaced.
-const (
-	PhaseIdle       = PhaseReady
-	PhaseTurn       = PhaseStreaming
-	PhaseCompaction = PhasePersisting
-	PhaseBranchNav  = PhaseRecovering
-	PhaseSessionOp  = PhaseReady
-)
-
 // activeTurn reports whether the phase belongs to an in-flight turn.
 // Ready and Settled are idle states; Closed is terminal.
 func (p Phase) activeTurn() bool {
@@ -196,12 +185,12 @@ func turnError(kind ErrorKind, phase Phase, recovery RecoveryAction, cause error
 
 // Typed sentinel errors for common conditions.
 var (
-	ErrQueueFull       = errors.New("runtime input queue is full")
-	ErrRuntimeClosed   = errors.New("runtime is closed")
-	ErrPhaseConflict   = errors.New("command conflicts with current phase")
-	ErrTurnActive      = errors.New("a turn is already active")
-	ErrNoActiveTurn    = errors.New("no active turn")
-	ErrActionBoundary  = errors.New("external action boundary is unavailable")
+	ErrQueueFull      = errors.New("runtime input queue is full")
+	ErrRuntimeClosed  = errors.New("runtime is closed")
+	ErrPhaseConflict  = errors.New("command conflicts with current phase")
+	ErrTurnActive     = errors.New("a turn is already active")
+	ErrNoActiveTurn   = errors.New("no active turn")
+	ErrActionBoundary = errors.New("external action boundary is unavailable")
 )
 
 // Subscription errors — moved here from event_stream.go to consolidate all

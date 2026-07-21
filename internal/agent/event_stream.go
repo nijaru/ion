@@ -130,7 +130,7 @@ type eventHub struct {
 // Subscribe is now in runtime.go — it sends a SubscribeCmd through the
 // typed command queue and calls subscribeDirect from the command goroutine.
 
-func (h *Harness) subscribeDirect(ctx context.Context, after EventCursor) (*EventSubscription, error) {
+func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*EventSubscription, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -363,7 +363,7 @@ type ModelState struct {
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
-	// Runner is the agent runner (Harness). When set, the TUI uses it as the
+	// Runner is the agent runner (Controller). When set, the TUI uses it as the
 	// single turn and event owner.
 	Runner agent.Runtime
 	// ActiveTools is the runtime-owned active tool projection. It is refreshed
@@ -691,7 +691,7 @@ func (m Model) WithCheckpoints(checkpoints CheckpointController) Model {
 	return m
 }
 
-// WithRunner sets the agent runner (Harness) for the model. The TUI uses the
+// WithRunner sets the agent runner (Controller) for the model. The TUI uses the
 // Runner for turn execution and events rather than duplicating session state.
 func (m Model) WithRunner(r agent.Runtime) Model {
 	m.Model.Runner = r

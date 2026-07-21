@@ -14,7 +14,7 @@ func TestHarnessProviderRequestsUseStableSessionIdentity(t *testing.T) {
 	sess := session.NewSession(store, 64)
 	var mu sync.Mutex
 	var requestIDs []string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "test"},

@@ -9,7 +9,7 @@ import (
 
 // watchEvents gives tests an independent subscription without reintroducing
 // the runtime's removed callback/listener delivery path.
-func watchEvents(t *testing.T, h *Harness, fn func(session.Event)) func() {
+func watchEvents(t *testing.T, h *Controller, fn func(session.Event)) func() {
 	t.Helper()
 	sub, err := h.Subscribe(context.Background(), EventCursor{})
 	if err != nil {

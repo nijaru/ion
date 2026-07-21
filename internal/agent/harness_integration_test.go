@@ -30,7 +30,7 @@ func TestHarnessIntegration_MultiTurn(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -76,7 +76,7 @@ func TestHarnessIntegration_DurableTurnCommitAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := session.NewSession(store, 0)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Durable: store,
@@ -126,7 +126,7 @@ func TestHarnessIntegration_DurableCancelledTurnDoesNotReplay(t *testing.T) {
 	}
 	sess := session.NewSession(store, 0)
 	started := make(chan struct{})
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Durable: store,
@@ -199,7 +199,7 @@ func TestHarnessIntegration_Streaming(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -268,7 +268,7 @@ func TestHarnessIntegration_ToolCalling(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -320,7 +320,7 @@ func TestHarnessIntegration_PersistenceRoundtrip(t *testing.T) {
 				{Content: "persisted response", StopReason: "stop"},
 			}}, nil
 		}
-		h := NewHarness(HarnessConfig{
+		h := NewController(ControllerConfig{
 			Session:  sess,
 			Model:    llm.Model{ID: "test"},
 			StreamFn: streamFn,
@@ -378,7 +378,7 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -437,7 +437,7 @@ func TestHarnessIntegration_Cancel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -455,7 +455,7 @@ func TestHarnessIntegration_Cancel(t *testing.T) {
 	<-started
 	h.Abort()
 
-	// Harness must return to idle.
+	// Controller must return to idle.
 	<-hPromptDone
 
 	// Verify harness can accept new prompt.
@@ -465,7 +465,7 @@ func TestHarnessIntegration_Cancel(t *testing.T) {
 		}}, nil
 	}
 
-	h2 := NewHarness(HarnessConfig{
+	h2 := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn2,
@@ -494,7 +494,7 @@ func TestHarnessIntegration_ConcurrentSubscribers(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -537,7 +537,7 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	// Pre-fill session with messages to exceed the small context window.
 	// Use a single harness for all pre-fill turns.
 	func() {
-		h := NewHarness(HarnessConfig{
+		h := NewController(ControllerConfig{
 			Session: sess,
 			Model:   llm.Model{ID: "test"},
 			StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -568,7 +568,7 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:       sess,
 		Model:         llm.Model{ID: "test"},
 		StreamFn:      streamFn,
@@ -637,7 +637,7 @@ func TestHarnessIntegration_Steering(t *testing.T) {
 		},
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -698,7 +698,7 @@ func TestHarnessIntegration_FollowUp(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -769,7 +769,7 @@ func TestHarnessIntegration_ToolFailure(t *testing.T) {
 		},
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -861,7 +861,7 @@ func TestHarnessIntegration_SequentialTools(t *testing.T) {
 		},
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -899,7 +899,7 @@ func TestHarnessIntegration_SessionResume(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -927,7 +927,7 @@ func TestHarnessIntegration_SessionResume(t *testing.T) {
 
 	sess2 := session.NewSession(store2, 64)
 
-	h2 := NewHarness(HarnessConfig{
+	h2 := NewController(ControllerConfig{
 		Session:  sess2,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -1022,7 +1022,7 @@ func TestHarnessIntegration_QueueDrainUpdate(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -1100,7 +1100,7 @@ func TestHarnessIntegration_SingleAgentEndOnOverflowRetry(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:       sess,
 		Model:         llm.Model{ID: "test"},
 		StreamFn:      streamFn,
@@ -1146,7 +1146,7 @@ func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -1235,7 +1235,7 @@ func TestHarnessIntegration_SequentialPrep_MixedBlockAllow(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,

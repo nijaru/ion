@@ -13,7 +13,7 @@ func TestHarnessProviderRequestsUseConfiguredThinkingLevel(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 	var effort string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -40,7 +40,7 @@ func TestHarnessThinkingChangeIsDurableBeforeNextPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var effort string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -92,7 +92,7 @@ func TestHarnessThinkingChangeFailureLeavesLiveStateUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	failing := &thinkingFailureSession{Session: base, fail: true}
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  failing,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -122,11 +122,11 @@ func TestHarnessActiveThinkingFailureRollsBackAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	failing := &thinkingFailureSession{Session: base, fail: true}
-	var harness *Harness
+	var harness *Controller
 	var requests []string
 	started := make(chan struct{})
 	release := make(chan struct{})
-	harness = NewHarness(HarnessConfig{
+	harness = NewController(ControllerConfig{
 		Session:  failing,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -175,7 +175,7 @@ func TestHarnessProviderRequestsLeaveAutoUnset(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 	var effort string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},

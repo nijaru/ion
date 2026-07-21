@@ -21,7 +21,7 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 	var hookCalls int
 	configuredTransport := http.RoundTripper(http.DefaultTransport)
 	hookTransport := http.RoundTripper(&http.Transport{})
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model: llm.Model{

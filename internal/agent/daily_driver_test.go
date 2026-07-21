@@ -40,7 +40,7 @@ func TestDailyDriverSubmitToolPersistReplay(t *testing.T) {
 	}
 
 	events := make(chan session.Event, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Durable: store,
@@ -109,7 +109,7 @@ collected:
 		t.Fatalf("replayed context missing persisted tool result: %v", messageTypeList(snapshot.Messages))
 	}
 
-	h2 := NewHarness(HarnessConfig{
+	h2 := NewController(ControllerConfig{
 		Session: sess2,
 		Store:   store2,
 		Durable: store2,

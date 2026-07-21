@@ -9,7 +9,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// INVARIANT: Harness.Prompt produces an assistant message and persists it.
+// INVARIANT: Controller.Prompt produces an assistant message and persists it.
 func TestHarnessPrompt(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
@@ -20,7 +20,7 @@ func TestHarnessPrompt(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -50,7 +50,7 @@ func TestHarnessPrompt(t *testing.T) {
 	}
 }
 
-// INVARIANT: Harness blocks concurrent prompts (single active run).
+// INVARIANT: Controller blocks concurrent prompts (single active run).
 func TestHarnessSingleActiveRun(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
@@ -61,7 +61,7 @@ func TestHarnessSingleActiveRun(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -74,7 +74,7 @@ func TestHarnessSingleActiveRun(t *testing.T) {
 	}
 }
 
-// INVARIANT: Harness emits events to the TUI channel.
+// INVARIANT: Controller emits events to the TUI channel.
 func TestHarnessEmitsEvents(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
@@ -85,7 +85,7 @@ func TestHarnessEmitsEvents(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -143,7 +143,7 @@ func TestHarnessAfterProviderResponseHook(t *testing.T) {
 		}}, nil
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,

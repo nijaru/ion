@@ -10,7 +10,7 @@ import (
 )
 
 func TestEmitHookRunsAllHandlersAndJoinsErrors(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: session.NewSession(newTestStore(t), 64)})
+	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
 	defer func() { _ = h.Close() }()
 
 	first := errors.New("first hook failed")
@@ -38,7 +38,7 @@ func TestEmitHookRunsAllHandlersAndJoinsErrors(t *testing.T) {
 }
 
 func TestHarnessAfterToolCallHookErrorReachesLoopPatch(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: session.NewSession(newTestStore(t), 64)})
+	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
 	defer func() { _ = h.Close() }()
 
 	h.On(HookToolResult, func(any) (any, error) {

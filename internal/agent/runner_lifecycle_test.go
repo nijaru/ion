@@ -10,7 +10,7 @@ import (
 
 func TestRunnerPersistEntryAdvancesLeaf(t *testing.T) {
 	store := newTestStore(t)
-	h := NewHarness(HarnessConfig{Session: session.NewSession(store, 64), Store: store})
+	h := NewController(ControllerConfig{Session: session.NewSession(store, 64), Store: store})
 	if _, err := h.Session().AppendMessage(context.Background(), session.NewUserText("prior", time.Now())); err != nil {
 		t.Fatalf("append prior message: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestRunnerPersistEntryAdvancesLeaf(t *testing.T) {
 
 func TestRunnerPendingEntriesRemainOrdered(t *testing.T) {
 	store := newTestStore(t)
-	h := NewHarness(HarnessConfig{Session: session.NewSession(store, 64), Store: store})
-	h.phase = PhaseTurn
+	h := NewController(ControllerConfig{Session: session.NewSession(store, 64), Store: store})
+	h.phase = PhaseStreaming
 	first := &session.CustomEntry{EntryBase: session.EntryBase{ID: "pending-one", Timestamp: time.Now()}, Type: "pending"}
 	second := &session.CustomEntry{EntryBase: session.EntryBase{ID: "pending-two", Timestamp: time.Now()}, Type: "pending"}
 	if err := h.PersistEntry(context.Background(), first); err != nil {
@@ -49,7 +49,7 @@ func TestRunnerPendingEntriesRemainOrdered(t *testing.T) {
 	if err := h.PersistEntry(context.Background(), second); err != nil {
 		t.Fatalf("queue second: %v", err)
 	}
-	h.phase = PhaseIdle
+	h.phase = PhaseReady
 	h.flushPending(context.Background())
 	branch, err := store.Branch(context.Background())
 	if err != nil {
@@ -71,7 +71,7 @@ func entryIDs(entries []session.Entry) []string {
 
 func TestRunnerMutationsRejectAfterClose(t *testing.T) {
 	store := newTestStore(t)
-	h := NewHarness(HarnessConfig{Session: session.NewSession(store, 64), Store: store})
+	h := NewController(ControllerConfig{Session: session.NewSession(store, 64), Store: store})
 	if err := h.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

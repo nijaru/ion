@@ -6,12 +6,12 @@ import (
 )
 
 func TestHarnessInputQueuesAreBounded(t *testing.T) {
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:       newTestSession(t),
 		QueueCapacity: 1,
 	})
 	defer h.Close()
-	h.phase = PhaseTurn
+	h.phase = PhaseStreaming
 
 	if err := h.Steer("first"); err != nil {
 		t.Fatalf("first steer: %v", err)

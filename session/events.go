@@ -176,7 +176,7 @@ func (ApprovalResolution) isEvent() {}
 func (TurnEnd) isEvent()            {}
 func (AgentEnd) isEvent()           {}
 
-// --- Harness lifecycle events (Pi-aligned). ---
+// --- Controller lifecycle events (Pi-aligned). ---
 
 // UpdateSource identifies why a harness setting changed.
 type UpdateSource string

@@ -33,7 +33,7 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	}
 
 	var request llm.Request
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "summary-model", MaxTokens: 2048},
@@ -113,7 +113,7 @@ func TestNavigateTreeCancellationLeavesSessionUnchanged(t *testing.T) {
 	}
 	oldLeafID := sess.GetLeafID()
 	started := make(chan struct{})
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "summary-model"},

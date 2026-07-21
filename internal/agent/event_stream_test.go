@@ -10,7 +10,7 @@ import (
 )
 
 func TestEventStreamBroadcastsIndependentOrderedSubscriptions(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()
 
 	first, err := h.Subscribe(context.Background(), EventCursor{})
@@ -40,7 +40,7 @@ func TestEventStreamBroadcastsIndependentOrderedSubscriptions(t *testing.T) {
 }
 
 func TestEventStreamDetachesSlowSubscriberAtBound(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()
 
 	sub, err := h.Subscribe(context.Background(), EventCursor{})
@@ -63,7 +63,7 @@ func TestEventStreamDetachesSlowSubscriberAtBound(t *testing.T) {
 }
 
 func TestEventStreamResubscriptionReturnsFreshSnapshot(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()
 
 	first, err := h.Subscribe(context.Background(), EventCursor{})
@@ -88,7 +88,7 @@ func TestEventStreamResubscriptionReturnsFreshSnapshot(t *testing.T) {
 }
 
 func TestEventStreamCloseDoesNotBlockWithoutSubscribers(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	done := make(chan error, 1)
 	go func() { done <- h.Close() }()
 	select {

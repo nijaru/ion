@@ -30,7 +30,7 @@ type pendingApproval struct {
 	result  chan approvalOutcome
 }
 
-// ApprovalBroker owns the pending-decision protocol for one Harness. It is
+// ApprovalBroker owns the pending-decision protocol for one Controller. It is
 // deliberately runtime-only: the durable result is the tool error/success
 // message emitted after the decision.
 type ApprovalBroker struct {

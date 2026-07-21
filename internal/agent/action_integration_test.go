@@ -66,7 +66,7 @@ func TestHarnessRoutesEffectThroughDurableActionBoundary(t *testing.T) {
 		},
 	}
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:             sess,
 		Store:               store,
 		Durable:             store,

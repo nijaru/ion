@@ -151,8 +151,7 @@ changes, update it by explicit decision before changing structural code.
   turn phases, tools, queues, context, compaction/recovery,
   model/thinking/tool state, hooks, policy, event ordering, and persistence
   coordination. `internal/agent/loop.go` remains a stateless turn engine;
-  `Harness` is only the current implementation surface being migrated into
-  this controller contract.
+  `Controller` is the concrete runtime implementation of this contract.
 - Frontends consume `agent.Runtime` for submit/stream/control and request
   narrow optional capabilities for session administration. Do not recreate a
   broad `Runner` interface or make the TUI depend on controller internals.

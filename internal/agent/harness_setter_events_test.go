@@ -11,7 +11,7 @@ import (
 
 func TestHarnessSettersEmitLifecycleUpdates(t *testing.T) {
 	store := newTestStore(t)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: session.NewSession(store, 64),
 		Store:   store,
 		Model:   llm.Model{Provider: "old-provider", ID: "old-model"},

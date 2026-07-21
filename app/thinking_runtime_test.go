@@ -38,7 +38,7 @@ func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) 
 	sess := session.NewSession(store, 64)
 	defer store.Close()
 	var observedEffort string
-	runner := agent.NewHarness(agent.HarnessConfig{
+	runner := agent.NewController(agent.ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -225,7 +225,7 @@ func TestAutoThinkingCommandPersistsProviderDefaultAndUsesItNextTurn(t *testing.
 	sess := session.NewSession(store, 64)
 	defer store.Close()
 	var observedEffort string
-	runner := agent.NewHarness(agent.HarnessConfig{
+	runner := agent.NewController(agent.ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},

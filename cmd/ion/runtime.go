@@ -331,7 +331,7 @@ func openRuntime(
 		)
 	}
 
-	// Create a Provider and Harness for turn execution.
+	// Create a Provider and Controller for turn execution.
 	provider, err := providers.NewProviderFromConfig(&runtimeCfg)
 	if err != nil {
 		// Keep startup recoverable for the TUI, but never present an incomplete
@@ -505,7 +505,7 @@ func openRuntime(
 
 	sess := session.NewSession(store, 64)
 
-	harness := agent.NewHarness(agent.HarnessConfig{
+	harness := agent.NewController(agent.ControllerConfig{
 		Session:             sess,
 		Store:               store,
 		Durable:             durableStore,

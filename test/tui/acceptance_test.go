@@ -19,7 +19,7 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// TestDeterministicTUIAcceptance exercises the real Harness behind the TUI.
+// TestDeterministicTUIAcceptance exercises the real Controller behind the TUI.
 // It is intentionally provider-independent: the fake stream drives the same
 // submit/event/tool/persist path that live providers use, while the program
 // output proves terminal commits are not lost.
@@ -76,7 +76,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	}
 	closeAcceptanceHarness(t, harness, store)
 
-	// Close/reopen the real SQLite store and run through a fresh Harness. The
+	// Close/reopen the real SQLite store and run through a fresh Controller. The
 	// fake provider records the reconstructed context, proving replay/resume
 	// before the new prompt is sent.
 	provider2 := newAcceptanceProvider(acceptanceResume)
@@ -85,7 +85,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 		t.Fatalf("reopen acceptance store: %v", err)
 	}
 	sess2 := session.NewSession(store2, 128)
-	harness2 := agent.NewHarness(agent.HarnessConfig{
+	harness2 := agent.NewController(agent.ControllerConfig{
 		Session:  sess2,
 		Store:    store2,
 		Durable:  store2,
@@ -319,7 +319,7 @@ func newAcceptanceHarness(
 	path string,
 	provider *acceptanceProvider,
 	withTool bool,
-) (*session.SQLiteStore, session.Session, *agent.Harness) {
+) (*session.SQLiteStore, session.Session, *agent.Controller) {
 	t.Helper()
 	store, err := session.NewSQLiteStore(path, "acceptance")
 	if err != nil {
@@ -330,7 +330,7 @@ func newAcceptanceHarness(
 	if withTool {
 		tools = []agent.Tool{acceptanceTool(provider)}
 	}
-	harness := agent.NewHarness(agent.HarnessConfig{
+	harness := agent.NewController(agent.ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Durable:  store,
@@ -341,7 +341,7 @@ func newAcceptanceHarness(
 	return store, sess, harness
 }
 
-func closeAcceptanceHarness(t *testing.T, harness *agent.Harness, store *session.SQLiteStore) {
+func closeAcceptanceHarness(t *testing.T, harness *agent.Controller, store *session.SQLiteStore) {
 	t.Helper()
 	if err := harness.Close(); err != nil {
 		t.Fatalf("close acceptance harness: %v", err)

@@ -262,7 +262,7 @@ func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
 	model.Progress.Status = "stale"
 
 	model.turnReducer().ClearActiveState(true)
-	model.turnReducer().RestoreRuntimePhase(agent.PhaseTurn)
+	model.turnReducer().RestoreRuntimePhase(agent.PhaseStreaming)
 
 	if !model.InFlight.Thinking || model.InFlight.Canceling {
 		t.Fatalf("in-flight state = %#v, want active and not canceling", model.InFlight)
@@ -272,7 +272,7 @@ func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
 	}
 
 	model.turnReducer().ClearActiveState(true)
-	model.turnReducer().RestoreRuntimePhase(agent.PhaseCompaction)
+	model.turnReducer().RestoreRuntimePhase(agent.PhasePersisting)
 	if !model.Progress.Compacting || model.Progress.Mode != StateWorking || model.Progress.Status != "Compacting context..." {
 		t.Fatalf("compaction progress = %#v, want compacting runtime projection", model.Progress)
 	}

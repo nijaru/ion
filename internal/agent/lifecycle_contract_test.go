@@ -22,7 +22,7 @@ import (
 
 // ----- Helpers to collect events from a Prompt -----
 
-func collectWithSubscribe(t *testing.T, h *Harness, prompt string) ([]session.Event, error) {
+func collectWithSubscribe(t *testing.T, h *Controller, prompt string) ([]session.Event, error) {
 	var events []session.Event
 	var mu sync.Mutex
 	unsub := watchEvents(t, h, func(e session.Event) {
@@ -92,7 +92,7 @@ func eventTypeName(e session.Event) string {
 func TestLifecycle_MessageStartBeforeEnd(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -169,7 +169,7 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 			}{Name: "echo", Arguments: `{}`}}}, StopReason: "toolUse"},
 		}}, nil
 	}
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
@@ -220,7 +220,7 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 func TestLifecycle_SingleAgentEnd_Normal(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -251,7 +251,7 @@ func TestLifecycle_SingleAgentEnd_Normal(t *testing.T) {
 func TestLifecycle_NoEventsAfterAgentEnd(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -294,7 +294,7 @@ func TestLifecycle_NoEventsAfterAgentEnd(t *testing.T) {
 func TestLifecycle_SingleAgentEnd_OnPanic(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -332,7 +332,7 @@ func TestLifecycle_PersistBeforeEmit(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -465,7 +465,7 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 	// RunLoop with an empty TurnContext and a failing StreamFn must still emit AgentEnd without touching store.
 
 	sess := session.NewSession(newTestStore(t), 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -496,7 +496,7 @@ func TestLifecycle_LoopStateless(t *testing.T) {
 func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -546,7 +546,7 @@ func TestLifecycle_SettledOrdering(t *testing.T) {
 	// After 1B fix: Settled after AgentEnd, matching Pi and events.go doc.
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -597,7 +597,7 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	// subscriber observes the same lifecycle.
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {

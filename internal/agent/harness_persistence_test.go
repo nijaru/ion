@@ -38,7 +38,7 @@ func TestHarnessPersistenceFailureIsTerminalAndNotAcknowledged(t *testing.T) {
 	base := session.NewSession(store, 64)
 	failing := &failingPersistenceSession{Session: base, failMessage: 2}
 	var providerCalls atomic.Int32
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: failing,
 		Store:   store,
 		Model:   llm.Model{ID: "test"},
@@ -95,7 +95,7 @@ func TestHarnessFailedPendingWriteIsRetainedForRetry(t *testing.T) {
 	base := session.NewSession(store, 64)
 	failing := &failingPersistenceSession{Session: base}
 	failing.failModel.Store(true)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: failing,
 		Store:   store,
 		Model:   llm.Model{ID: "initial"},

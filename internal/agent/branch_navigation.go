@@ -19,18 +19,18 @@ Summary of that exploration:
 // NavigateTree moves the session leaf and optionally summarizes the abandoned
 // branch. The harness owns the phase and model call; Session owns validation,
 // leaf persistence, and the branch_summary entry.
-func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts NavigateOptions) (result NavigateResult, err error) {
+func (h *Controller) navigateTreeDirect(ctx context.Context, targetID string, opts NavigateOptions) (result NavigateResult, err error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return result, errors.New("harness is closed")
 	}
-	if h.phase != PhaseIdle {
+	if h.phase != PhaseReady {
 		phase := h.phase
 		h.mu.Unlock()
 		return result, fmt.Errorf("harness is busy (phase=%s)", phase)
 	}
-	h.phase = PhaseBranchNav
+	h.phase = PhaseRecovering
 	h.runDone = make(chan struct{})
 	h.runCancel = make(chan struct{})
 	h.runCancelOnce = new(sync.Once)
@@ -46,7 +46,7 @@ func (h *Harness) navigateTreeDirect(ctx context.Context, targetID string, opts 
 	defer func() {
 		h.mu.Lock()
 		if h.phase != PhaseClosed {
-			h.phase = PhaseIdle
+			h.phase = PhaseReady
 		}
 		h.runCancel = nil
 		h.runCancelOnce = nil
@@ -112,7 +112,7 @@ func navigationCanceled(ctx context.Context, cancel <-chan struct{}) bool {
 // ancestor, in chronological order. This mirrors Pi's
 // collectEntriesForBranchSummary and deliberately runs before MoveTo changes
 // the session leaf.
-func (h *Harness) collectBranchEntries(ctx context.Context, oldLeafID, targetID string) ([]session.Entry, error) {
+func (h *Controller) collectBranchEntries(ctx context.Context, oldLeafID, targetID string) ([]session.Entry, error) {
 	if oldLeafID == "" {
 		return nil, nil
 	}
@@ -153,7 +153,7 @@ func (h *Harness) collectBranchEntries(ctx context.Context, oldLeafID, targetID 
 	return entries, nil
 }
 
-func (h *Harness) summarizeBranch(
+func (h *Controller) summarizeBranch(
 	ctx context.Context,
 	runCancel <-chan struct{},
 	entries []session.Entry,

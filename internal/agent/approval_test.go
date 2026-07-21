@@ -269,7 +269,7 @@ func TestApprovalBrokerShutdownOverridesCachedAlways(t *testing.T) {
 func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:             sess,
 		Store:               store,
 		ApprovalMode:        ApprovalConfirm,
@@ -314,7 +314,7 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:             sess,
 		Store:               store,
 		ApprovalMode:        ApprovalTrusted,
@@ -364,7 +364,7 @@ func TestDeniedApprovalPersistsRecoverableToolResult(t *testing.T) {
 	var streamMu sync.Mutex
 	streamCalls := 0
 	executed := false
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:             sess,
 		Store:               store,
 		ApprovalMode:        ApprovalConfirm,
@@ -446,7 +446,7 @@ func TestHarnessClosesRuntimeResourcesExactlyOnce(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 	closed := 0
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		CloseResources: []func() error{func() error {

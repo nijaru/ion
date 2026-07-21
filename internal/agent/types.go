@@ -1,5 +1,5 @@
 // Package agent implements the stateless turn engine (RunLoop) and the
-// stateful Harness that owns active-session lifecycle. The loop is a pure
+// stateful Controller that owns active-session lifecycle. The loop is a pure
 // function of its arguments — no persistence, no tree, no retry. Events are
 // the sole output.
 //

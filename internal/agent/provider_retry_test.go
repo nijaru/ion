@@ -47,7 +47,7 @@ func TestHarnessEmitsRuntimeProviderRetryEvent(t *testing.T) {
 		MaxInterval: time.Nanosecond,
 		Multiplier:  1,
 	}
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: retry.Stream,

@@ -32,7 +32,7 @@ func TestHarnessPromptPersistsAndConvertsImageAttachments(t *testing.T) {
 		}
 		return &mockStream{chunks: []*llm.Chunk{{Content: "seen", StopReason: "stop"}}}, nil
 	}
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session:  sess,
 		Store:    store,
 		Model:    llm.Model{ID: "test"},
@@ -77,7 +77,7 @@ func TestHarnessPromptPersistsAndConvertsImageAttachments(t *testing.T) {
 	}
 
 	if err := h.Close(); err != nil {
-		t.Fatalf("Harness.Close: %v", err)
+		t.Fatalf("Controller.Close: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("store.Close: %v", err)

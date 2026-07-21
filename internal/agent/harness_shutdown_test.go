@@ -11,7 +11,7 @@ import (
 
 func TestHarnessCloseCancelsActiveProviderRequest(t *testing.T) {
 	started := make(chan struct{})
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: newTestSession(t),
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
@@ -57,8 +57,8 @@ func TestHarnessCloseCancelsActiveProviderRequest(t *testing.T) {
 }
 
 func TestHarnessCloseJoinsAuxiliaryOperation(t *testing.T) {
-	h := NewHarness(HarnessConfig{Session: newTestSession(t)})
-	finish, err := h.beginExclusive(PhaseCompaction)
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
+	finish, err := h.beginExclusive(PhasePersisting)
 	if err != nil {
 		t.Fatalf("begin exclusive: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestHarnessCloseJoinsAuxiliaryOperation(t *testing.T) {
 func TestHarnessShutdownHonorsDeadlineBeforeNonCooperativeProviderReturns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: newTestSession(t),
 		Model:   llm.Model{ID: "test"},
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {

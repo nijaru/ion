@@ -18,7 +18,7 @@ func TestHarnessActivateToolsAddsDeferredToolForNextTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requested []string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "test"},
@@ -96,7 +96,7 @@ func TestHarnessActivateToolsDuringRunPersistsForNextTurn(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var requests [][]string
-	h := NewHarness(HarnessConfig{
+	h := NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "test"},
@@ -144,7 +144,7 @@ func TestHarnessSearchActivationUpdatesToolsWithinRun(t *testing.T) {
 	if _, err := sess.AppendActiveToolsChange(context.Background(), []string{"search_tools"}); err != nil {
 		t.Fatal(err)
 	}
-	var harness *Harness
+	var harness *Controller
 	var requests [][]string
 	search := Tool{
 		Name: "search_tools",
@@ -155,7 +155,7 @@ func TestHarnessSearchActivationUpdatesToolsWithinRun(t *testing.T) {
 			return session.ToolResultMessage{ToolName: "search_tools", Content: []session.Content{session.TextContent{Text: "deferred"}}}, nil
 		},
 	}
-	harness = NewHarness(HarnessConfig{
+	harness = NewController(ControllerConfig{
 		Session: sess,
 		Store:   store,
 		Model:   llm.Model{ID: "test"},
