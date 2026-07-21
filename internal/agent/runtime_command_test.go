@@ -22,6 +22,32 @@ func TestControllerCommandBoundaryAcceptsNilContext(t *testing.T) {
 	}
 }
 
+func TestControllerRoutesSessionTransportThroughCommands(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("transport", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	h := NewController(ControllerConfig{Session: sess, Store: store})
+	defer h.Close()
+
+	bundle, err := h.ExportSessionBundle(context.Background(), sess.GetLeafID())
+	if err != nil {
+		t.Fatalf("ExportSessionBundle: %v", err)
+	}
+	if len(bundle.Sessions) != 1 || len(bundle.Sessions[0].Events) == 0 {
+		t.Fatalf("exported bundle = %#v, want one non-empty session", bundle)
+	}
+	bundle.RootSessionID = ""
+	imported, err := h.ImportSessionBundle(context.Background(), bundle)
+	if err != nil {
+		t.Fatalf("ImportSessionBundle: %v", err)
+	}
+	if imported == "" {
+		t.Fatal("ImportSessionBundle returned an empty leaf ID")
+	}
+}
+
 type blockingLabelSession struct {
 	session.Session
 	started chan struct{}

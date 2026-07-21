@@ -226,6 +226,10 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handlePersistEntry(cmd)
 	case *ForkSessionCmd:
 		c.handleForkSession(cmd)
+	case *ExportSessionBundleCmd:
+		c.handleExportSessionBundle(cmd)
+	case *ImportSessionBundleCmd:
+		c.handleImportSessionBundle(cmd)
 	default:
 		panic(fmt.Sprintf("unhandled command type %T", cmd))
 	}
@@ -283,6 +287,10 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *ForkSessionCmd:
 		sendResult(cmd.Reply, ForkResult{Err: ErrRuntimeClosed})
+	case *ExportSessionBundleCmd:
+		sendResult(cmd.Reply, ExportSessionResult{Err: ErrRuntimeClosed})
+	case *ImportSessionBundleCmd:
+		sendResult(cmd.Reply, ImportSessionResult{Err: ErrRuntimeClosed})
 	}
 }
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -229,6 +230,36 @@ type ForkSessionCmd struct {
 func (ForkSessionCmd) command() {}
 
 type ForkResult struct {
+	ID  string
+	Err error
+}
+
+// ExportSessionBundleCmd exports a session through the controller-owned
+// administration boundary.
+type ExportSessionBundleCmd struct {
+	Ctx       context.Context
+	SessionID string
+	Reply     chan<- ExportSessionResult
+}
+
+func (ExportSessionBundleCmd) command() {}
+
+type ExportSessionResult struct {
+	Bundle ionexport.SessionBundle
+	Err    error
+}
+
+// ImportSessionBundleCmd imports a session through the controller-owned
+// administration boundary.
+type ImportSessionBundleCmd struct {
+	Ctx    context.Context
+	Bundle ionexport.SessionBundle
+	Reply  chan<- ImportSessionResult
+}
+
+func (ImportSessionBundleCmd) command() {}
+
+type ImportSessionResult struct {
 	ID  string
 	Err error
 }

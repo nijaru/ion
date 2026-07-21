@@ -232,6 +232,20 @@ func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
 	})
 }
 
+func (c *Controller) handleExportSessionBundle(cmd *ExportSessionBundleCmd) {
+	c.startOperation(func() {
+		bundle, err := c.exportSessionBundleDirect(cmd.Ctx, cmd.SessionID)
+		sendResult(cmd.Reply, ExportSessionResult{Bundle: bundle, Err: err})
+	})
+}
+
+func (c *Controller) handleImportSessionBundle(cmd *ImportSessionBundleCmd) {
+	c.startOperation(func() {
+		id, err := c.importSessionBundleDirect(cmd.Ctx, cmd.Bundle)
+		sendResult(cmd.Reply, ImportSessionResult{ID: id, Err: err})
+	})
+}
+
 // --- Approval commands ---
 
 // ResolveApproval supplies the host's decision for a pending tool call.
@@ -328,13 +342,31 @@ func (c *Controller) ReconcileAction(ctx context.Context, actionID string, state
 // ExportSessionBundle exports a session as a bundle.
 func (c *Controller) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
 	ctx = commandContext(ctx)
-	return c.exportSessionBundleDirect(ctx, sessionID)
+	reply := make(chan ExportSessionResult, 1)
+	cmd := &ExportSessionBundleCmd{Ctx: ctx, SessionID: sessionID, Reply: reply}
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return ionexport.SessionBundle{}, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return ionexport.SessionBundle{}, err
+	}
+	return result.Bundle, result.Err
 }
 
 // ImportSessionBundle imports a session bundle.
 func (c *Controller) ImportSessionBundle(ctx context.Context, bundle ionexport.SessionBundle) (string, error) {
 	ctx = commandContext(ctx)
-	return c.importSessionBundleDirect(ctx, bundle)
+	reply := make(chan ImportSessionResult, 1)
+	cmd := &ImportSessionBundleCmd{Ctx: ctx, Bundle: bundle, Reply: reply}
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return "", err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
+	return result.ID, result.Err
 }
 
 // ForkSession creates a new session rooted at a source.

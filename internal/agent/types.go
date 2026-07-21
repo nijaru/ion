@@ -271,7 +271,9 @@ type Runtime interface {
 	NextTurn(text string, images ...session.ImageContent) error
 
 	// Abort cancels the current turn and clears steering/follow-up queues.
-	// Returns the cleared messages.
+	// It returns after the cancellation request is accepted; the runtime remains
+	// busy until terminal lifecycle persistence and settlement complete. Returns
+	// the cleared messages.
 	Abort() ([]session.Message, []session.Message, error)
 
 	// SetModel switches the active model. It rejects a closed runtime.
