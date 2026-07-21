@@ -23,7 +23,8 @@ func TestJournalActionBoundaryBindsCanonicalActionIdentity(t *testing.T) {
 	)
 	requirement := ApprovalRequirement{
 		Category: "write", Operation: "write", Resource: "nested/../main.go",
-		Metadata: map[string]any{"surface": "editor", "revision": 1},
+		Environment: []string{"A", "B"},
+		Metadata:    map[string]any{"surface": "editor", "revision": 1},
 	}
 	token, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
 		ToolName: "write", InvocationID: "call-1", Arguments: []byte(`{"path":"nested/../main.go","content":"x"}`),
@@ -59,6 +60,20 @@ func TestJournalActionBoundaryBindsCanonicalActionIdentity(t *testing.T) {
 	}
 	if string(token.Record.Metadata) != `{"revision":1,"surface":"editor"}` {
 		t.Fatalf("canonical metadata = %s", token.Record.Metadata)
+	}
+	equivalent, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
+		ToolName: " write ", InvocationID: "call-equivalent", Arguments: []byte(`{"content":"x","path":"nested/../main.go"}`),
+		SessionID: "session-1", TurnID: "turn-1",
+		Requirement: ApprovalRequirement{
+			Category: "WRITE", Operation: "WRITE", Paths: []string{"main.go", "nested/../main.go"},
+			Environment: []string{"B", "A", "A"}, Metadata: map[string]any{"revision": 1, "surface": "editor"},
+		}, Required: true,
+	})
+	if err != nil {
+		t.Fatalf("equivalent prepare and authorize: %v", err)
+	}
+	if equivalent.Record.Fingerprint != token.Record.Fingerprint {
+		t.Fatalf("equivalent action fingerprint = %s, want %s", equivalent.Record.Fingerprint, token.Record.Fingerprint)
 	}
 	if err := boundary.Start(ctx, token); err != nil {
 		t.Fatalf("start: %v", err)
@@ -144,6 +159,88 @@ func TestJournalActionBoundaryRejectsChangedFilePreimageBeforeEffect(t *testing.
 	}
 	if record.State != session.ActionFailed || !strings.Contains(record.Error, "preimage") {
 		t.Fatalf("action after preimage rejection = %#v", record)
+	}
+	transitions, err := store.ActionTransitions(ctx, token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range transitions {
+		if transition.To == session.ActionStarted {
+			t.Fatalf("preimage rejection crossed start boundary: %#v", transitions)
+		}
+	}
+}
+
+func TestControllerRoutesActionTransitionsThroughRuntimeOwner(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	h := NewController(ControllerConfig{
+		Session:             sess,
+		Store:               store,
+		Durable:             store,
+		ActionJournal:       store,
+		ApprovalMode:        ApprovalTrusted,
+		ApprovalInteractive: false,
+		Workdir:             t.TempDir(),
+	})
+	t.Cleanup(func() { _ = h.Close() })
+
+	coordinator, err := h.actionCoordinator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := coordinator.PrepareAndAuthorize(ctx, ActionRequest{
+		ToolName: "write", InvocationID: "call-controller", SessionID: sess.Meta().ID,
+		TurnID: "turn-controller", Arguments: []byte(`{"path":"main.go","content":"ok"}`),
+		Requirement: ApprovalRequirement{
+			Category: "write", Operation: "write", Resource: "main.go", Paths: []string{"main.go"},
+		}, Required: true,
+	})
+	if err != nil {
+		t.Fatalf("prepare through controller: %v", err)
+	}
+	if err := coordinator.Start(ctx, token); err != nil {
+		t.Fatalf("start through controller: %v", err)
+	}
+	if err := coordinator.Finish(ctx, token, ActionResult{ResultIdentity: "result-controller"}); err != nil {
+		t.Fatalf("finish through controller: %v", err)
+	}
+	record, err := store.GetAction(ctx, token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionCompleted {
+		t.Fatalf("action state = %s, want completed", record.State)
+	}
+}
+
+func TestJournalActionBoundaryCancellationAfterStartIsIndeterminate(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+	boundary := newJournalActionBoundary(
+		store, NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, t.TempDir(),
+	)
+	token, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
+		ToolName: "bash", InvocationID: "call-cancel-started", SessionID: "session-1", TurnID: "turn-1",
+		Arguments:   []byte(`{"command":"true"}`),
+		Requirement: ApprovalRequirement{Category: "execute", Operation: "bash", Resource: "true"}, Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := boundary.Start(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := boundary.Cancel(ctx, token, "user canceled"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	record, err := store.GetAction(ctx, token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionIndeterminate {
+		t.Fatalf("cancelled started action = %s, want indeterminate", record.State)
 	}
 }
 

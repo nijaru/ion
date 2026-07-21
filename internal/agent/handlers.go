@@ -163,6 +163,86 @@ func (c *Controller) handleActivateTools(cmd *ActivateToolsCmd) {
 	})
 }
 
+// --- Action commands ---
+
+// Action transitions are accepted by the controller and performed by joined
+// operation workers. This keeps journal and approval I/O off the command loop
+// while preserving one runtime-owned entry point for every transition.
+func (c *Controller) handlePrepareAction(cmd *PrepareActionCmd) {
+	c.startOperation(func() {
+		coordinator, err := c.actionCoordinator()
+		if err != nil {
+			sendResult(cmd.Reply, ActionPrepareResult{Err: err})
+			return
+		}
+		token, err := coordinator.prepareAndAuthorizeDirect(cmd.Ctx, cmd.Request)
+		sendResult(cmd.Reply, ActionPrepareResult{Token: token, Err: err})
+	})
+}
+
+func (c *Controller) handleStartAction(cmd *StartActionCmd) {
+	c.startOperation(func() {
+		coordinator, err := c.actionCoordinator()
+		if err != nil {
+			sendResult(cmd.Reply, ActionStartResult{Err: err})
+			return
+		}
+		token := cmd.Token
+		err = coordinator.startDirect(cmd.Ctx, &token, cmd.ProcessGroupID)
+		sendResult(cmd.Reply, ActionStartResult{Token: &token, Err: err})
+	})
+}
+
+func (c *Controller) handleFinishAction(cmd *FinishActionCmd) {
+	c.startOperation(func() {
+		coordinator, err := c.actionCoordinator()
+		if err == nil {
+			token := cmd.Token
+			err = coordinator.finishDirect(cmd.Ctx, &token, cmd.Result)
+		}
+		sendResult(cmd.Reply, err)
+	})
+}
+
+func (c *Controller) handleCancelAction(cmd *CancelActionCmd) {
+	c.startOperation(func() {
+		coordinator, err := c.actionCoordinator()
+		if err == nil {
+			token := cmd.Token
+			err = coordinator.cancelDirect(cmd.Ctx, &token, cmd.Reason)
+		}
+		sendResult(cmd.Reply, err)
+	})
+}
+
+func (c *Controller) handleUnsettledActions(cmd *UnsettledActionsCmd) {
+	c.startOperation(func() {
+		journal, err := c.actionJournal()
+		if err != nil {
+			sendResult(cmd.Reply, UnsettledActionsResult{Err: err})
+			return
+		}
+		actions, err := journal.UnsettledActions(cmd.Ctx)
+		sendResult(cmd.Reply, UnsettledActionsResult{Actions: actions, Err: err})
+	})
+}
+
+func (c *Controller) handleReconcileAction(cmd *ReconcileActionCmd) {
+	c.startOperation(func() {
+		journal, err := c.actionJournal()
+		if err == nil {
+			var action session.ActionRecord
+			action, err = journal.ReconcileAction(
+				cmd.Ctx, cmd.ActionID, cmd.State, cmd.Verification,
+				cmd.ResultIdentity, cmd.Reason, cmd.Cleanup,
+			)
+			sendResult(cmd.Reply, ReconcileActionResult{Action: action, Err: err})
+			return
+		}
+		sendResult(cmd.Reply, ReconcileActionResult{Err: err})
+	})
+}
+
 // --- Session administration commands ---
 
 func (c *Controller) handleSubscribe(cmd *SubscribeCmd) {
@@ -318,25 +398,35 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 }
 
 // UnsettledActions returns externally observable actions whose outcome was
-// not proven. This is a direct store read — it does not go through the
-// command queue because it is read-only and the journal is goroutine-safe.
+// not proven through the controller-owned recovery boundary.
 func (c *Controller) UnsettledActions(ctx context.Context) ([]session.ActionRecord, error) {
 	ctx = commandContext(ctx)
-	journal, ok := c.store.(session.ActionJournal)
-	if !ok {
-		return nil, errors.New("session store does not support action recovery")
+	reply := make(chan UnsettledActionsResult, 1)
+	if err := c.enqueue(ctx, &UnsettledActionsCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return nil, err
 	}
-	return journal.UnsettledActions(ctx)
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Actions, result.Err
 }
 
 // ReconcileAction records the externally observed outcome of an action.
 func (c *Controller) ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error) {
 	ctx = commandContext(ctx)
-	journal, ok := c.store.(session.ActionJournal)
-	if !ok {
-		return session.ActionRecord{}, errors.New("session store does not support action recovery")
+	reply := make(chan ReconcileActionResult, 1)
+	if err := c.enqueue(ctx, &ReconcileActionCmd{
+		Ctx: ctx, ActionID: actionID, State: state, Verification: verification,
+		ResultIdentity: resultIdentity, Reason: reason, Cleanup: cleanup, Reply: reply,
+	}); err != nil {
+		return session.ActionRecord{}, err
 	}
-	return journal.ReconcileAction(ctx, actionID, state, verification, resultIdentity, reason, cleanup)
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return session.ActionRecord{}, err
+	}
+	return result.Action, result.Err
 }
 
 // ExportSessionBundle exports a session as a bundle.

@@ -130,6 +130,93 @@ type ActivateToolsCmd struct {
 
 func (ActivateToolsCmd) command() {}
 
+// PrepareActionCmd routes action planning, durable preparation, approval, and
+// authorization through the controller-owned safety coordinator. Tool
+// workers never mutate the action journal directly.
+type PrepareActionCmd struct {
+	Ctx     context.Context
+	Request ActionRequest
+	Reply   chan<- ActionPrepareResult
+}
+
+func (PrepareActionCmd) command() {}
+
+type ActionPrepareResult struct {
+	Token *ActionToken
+	Err   error
+}
+
+// StartActionCmd records the durable start boundary before an executor is
+// allowed to cross into an external effect.
+type StartActionCmd struct {
+	Ctx            context.Context
+	Token          ActionToken
+	ProcessGroupID string
+	Reply          chan<- ActionStartResult
+}
+
+func (StartActionCmd) command() {}
+
+type ActionStartResult struct {
+	Token *ActionToken
+	Err   error
+}
+
+// FinishActionCmd records the terminal outcome of a started action.
+type FinishActionCmd struct {
+	Ctx    context.Context
+	Token  ActionToken
+	Result ActionResult
+	Reply  chan<- error
+}
+
+func (FinishActionCmd) command() {}
+
+// CancelActionCmd records cancellation only when the action has not crossed
+// its durable start boundary. A started action is conservatively indeterminate.
+type CancelActionCmd struct {
+	Ctx    context.Context
+	Token  ActionToken
+	Reason string
+	Reply  chan<- error
+}
+
+func (CancelActionCmd) command() {}
+
+// UnsettledActionsCmd reads recoverable action evidence through the runtime
+// owner rather than exposing the store to frontends.
+type UnsettledActionsCmd struct {
+	Ctx   context.Context
+	Reply chan<- UnsettledActionsResult
+}
+
+func (UnsettledActionsCmd) command() {}
+
+type UnsettledActionsResult struct {
+	Actions []session.ActionRecord
+	Err     error
+}
+
+// ReconcileActionCmd records explicit verifier evidence for an indeterminate
+// action through the runtime owner.
+type ReconcileActionCmd struct {
+	Ctx            context.Context
+	ActionID       string
+	State          session.ActionState
+	Verification   string
+	ResultIdentity string
+	Reason         string
+	Cleanup        string
+	Reply          chan<- ReconcileActionResult
+}
+
+func (ReconcileActionCmd) command() {}
+
+type ReconcileActionResult struct {
+	Action session.ActionRecord
+	Err    error
+}
+
 // --- Session administration commands ---
 
 // SubscribeCmd opens an independent bounded event stream.

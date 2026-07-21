@@ -477,6 +477,8 @@ func (s *SQLiteStore) FinishAction(ctx context.Context, actionID string, state A
 			if record.State != ActionStarted {
 				return fmt.Errorf("%w: finish action %q from %s", ErrActionState, actionID, record.State)
 			}
+		} else if state == ActionCancelled && record.State == ActionStarted {
+			return fmt.Errorf("%w: cancellation crossed the start boundary for action %q", ErrActionState, actionID)
 		} else if record.State != ActionPrepared && record.State != ActionAuthorized && record.State != ActionStarted {
 			return fmt.Errorf("%w: finish action %q from %s", ErrActionState, actionID, record.State)
 		}

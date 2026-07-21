@@ -268,3 +268,24 @@ func TestActionJournalReconcilesIndeterminateOnlyWithEvidence(t *testing.T) {
 		t.Fatal("reconciliation without evidence unexpectedly succeeded")
 	}
 }
+
+func TestActionJournalRejectsCancellationAfterStart(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	record := testActionRecord()
+	if _, err := store.PrepareAction(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthorizeAction(ctx, record.ID, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartAction(ctx, record.ID, "pg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FinishAction(ctx, record.ID, ActionCancelled, "", "user canceled", ""); !errors.Is(err, ErrActionState) {
+		t.Fatalf("cancel after start error = %v, want ErrActionState", err)
+	}
+	if _, err := store.FinishAction(ctx, record.ID, ActionIndeterminate, "", "cancellation crossed start boundary", ""); err != nil {
+		t.Fatalf("indeterminate after start: %v", err)
+	}
+}

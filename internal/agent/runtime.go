@@ -208,6 +208,18 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleSetTools(cmd)
 	case *ActivateToolsCmd:
 		c.handleActivateTools(cmd)
+	case *PrepareActionCmd:
+		c.handlePrepareAction(cmd)
+	case *StartActionCmd:
+		c.handleStartAction(cmd)
+	case *FinishActionCmd:
+		c.handleFinishAction(cmd)
+	case *CancelActionCmd:
+		c.handleCancelAction(cmd)
+	case *UnsettledActionsCmd:
+		c.handleUnsettledActions(cmd)
+	case *ReconcileActionCmd:
+		c.handleReconcileAction(cmd)
 	case *SubscribeCmd:
 		c.handleSubscribe(cmd)
 	case *CompactCmd:
@@ -291,6 +303,18 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, ExportSessionResult{Err: ErrRuntimeClosed})
 	case *ImportSessionBundleCmd:
 		sendResult(cmd.Reply, ImportSessionResult{Err: ErrRuntimeClosed})
+	case *PrepareActionCmd:
+		sendResult(cmd.Reply, ActionPrepareResult{Err: ErrRuntimeClosed})
+	case *StartActionCmd:
+		sendResult(cmd.Reply, ActionStartResult{Err: ErrRuntimeClosed})
+	case *FinishActionCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
+	case *CancelActionCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
+	case *UnsettledActionsCmd:
+		sendResult(cmd.Reply, UnsettledActionsResult{Err: ErrRuntimeClosed})
+	case *ReconcileActionCmd:
+		sendResult(cmd.Reply, ReconcileActionResult{Err: ErrRuntimeClosed})
 	}
 }
 

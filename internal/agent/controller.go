@@ -181,7 +181,8 @@ func NewController(cfg ControllerConfig) *Controller {
 	}
 	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
 	if cfg.ActionJournal != nil {
-		h.actionBoundary = newJournalActionBoundary(
+		h.actionBoundary = newControllerActionCoordinator(
+			h,
 			cfg.ActionJournal, h.approvals, cfg.ApprovalMode,
 			cfg.ApprovalInteractive, cfg.Workdir,
 		)
@@ -190,7 +191,8 @@ func NewController(cfg ControllerConfig) *Controller {
 		// A runtime with effect-capable tools but no journal is still wired to
 		// the boundary so execution fails closed instead of falling back to the
 		// legacy ephemeral approval path.
-		h.actionBoundary = newJournalActionBoundary(
+		h.actionBoundary = newControllerActionCoordinator(
+			h,
 			nil, h.approvals, cfg.ApprovalMode, cfg.ApprovalInteractive, cfg.Workdir,
 		)
 	}

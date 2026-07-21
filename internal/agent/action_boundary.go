@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 // Tool implementations remain effectful executors; they do not write action
 // records or decide whether an action is authorized.
 type journalActionBoundary struct {
+	controller  *Controller
 	journal     session.ActionJournal
 	approvals   *ApprovalBroker
 	mode        ApprovalMode
@@ -46,7 +48,36 @@ func newJournalActionBoundary(
 	}
 }
 
+func newControllerActionCoordinator(
+	controller *Controller,
+	journal session.ActionJournal,
+	approvals *ApprovalBroker,
+	mode ApprovalMode,
+	interactive bool,
+	workdir string,
+) *journalActionBoundary {
+	boundary := newJournalActionBoundary(journal, approvals, mode, interactive, workdir)
+	boundary.controller = controller
+	return boundary
+}
+
 func (b *journalActionBoundary) PrepareAndAuthorize(ctx context.Context, request ActionRequest) (*ActionToken, error) {
+	if b != nil && b.controller != nil {
+		request = cloneActionRequest(request)
+		reply := make(chan ActionPrepareResult, 1)
+		if err := b.controller.enqueue(ctx, &PrepareActionCmd{Ctx: ctx, Request: request, Reply: reply}); err != nil {
+			return nil, err
+		}
+		result, err := waitCommandReply(ctx, reply)
+		if err != nil {
+			return nil, err
+		}
+		return result.Token, result.Err
+	}
+	return b.prepareAndAuthorizeDirect(ctx, request)
+}
+
+func (b *journalActionBoundary) prepareAndAuthorizeDirect(ctx context.Context, request ActionRequest) (*ActionToken, error) {
 	if !request.Required {
 		return nil, nil
 	}
@@ -105,10 +136,37 @@ func (b *journalActionBoundary) PrepareAndAuthorize(ctx context.Context, request
 }
 
 func (b *journalActionBoundary) Start(ctx context.Context, token *ActionToken) error {
+	return b.start(ctx, token, "")
+}
+
+func (b *journalActionBoundary) start(ctx context.Context, token *ActionToken, processGroupID string) error {
 	if token == nil {
 		return nil
 	}
-	started, err := b.journal.StartAction(ctx, token.ID, "")
+	if b != nil && b.controller != nil {
+		reply := make(chan ActionStartResult, 1)
+		if err := b.controller.enqueue(ctx, &StartActionCmd{
+			Ctx: ctx, Token: cloneActionToken(*token), ProcessGroupID: processGroupID, Reply: reply,
+		}); err != nil {
+			return err
+		}
+		result, err := waitCommandReply(ctx, reply)
+		if err != nil {
+			return err
+		}
+		if result.Token != nil {
+			*token = *result.Token
+		}
+		return result.Err
+	}
+	return b.startDirect(ctx, token, processGroupID)
+}
+
+func (b *journalActionBoundary) startDirect(ctx context.Context, token *ActionToken, processGroupID string) error {
+	if token == nil {
+		return nil
+	}
+	started, err := b.journal.StartAction(ctx, token.ID, processGroupID)
 	if err != nil {
 		// Do not finalize this as an ordinary failure. A storage commit can be
 		// durable even when its caller observes an error; recovery must inspect
@@ -132,14 +190,6 @@ func (b *journalActionBoundary) Execute(
 	if token == nil {
 		return invoke(ctx, signal, progress)
 	}
-	if err := b.Start(ctx, token); err != nil {
-		return session.ToolResultMessage{
-			ToolCallID: token.Record.InvocationID,
-			ToolName:   token.Record.Tool,
-			Content:    []session.Content{session.TextContent{Text: err.Error()}},
-			IsError:    true,
-		}, err
-	}
 	if err := revalidateActionPreimages(token.Record); err != nil {
 		boundaryErr := fmt.Errorf("action preimage validation: %w", err)
 		result := session.ToolResultMessage{
@@ -148,24 +198,33 @@ func (b *journalActionBoundary) Execute(
 			Content:    []session.Content{session.TextContent{Text: boundaryErr.Error()}},
 			IsError:    true,
 		}
-		finishErr := b.Finish(ctx, token, ActionResult{State: session.ActionFailed, Error: boundaryErr.Error()})
+		finishErr := b.finish(ctx, token, ActionResult{State: session.ActionFailed, Error: boundaryErr.Error()})
 		if finishErr != nil {
 			return result, errors.Join(boundaryErr, finishErr)
 		}
 		return result, boundaryErr
 	}
+	if err := b.start(ctx, token, ""); err != nil {
+		return session.ToolResultMessage{
+			ToolCallID: token.Record.InvocationID,
+			ToolName:   token.Record.Tool,
+			Content:    []session.Content{session.TextContent{Text: err.Error()}},
+			IsError:    true,
+		}, err
+	}
 	effectCtx := tool.WithActionPathGuard(ctx, token.Record.Paths)
 	var processRecordErr error
+	var processRecordMu sync.Mutex
 	var backgroundMu sync.Mutex
 	backgroundJob := false
 	effectCtx = tool.WithProcessGroupRecorder(effectCtx, func(pid int) error {
-		started, err := b.journal.StartAction(ctx, token.ID, strconv.Itoa(pid))
+		err := b.start(b.durableContext(ctx), token, strconv.Itoa(pid))
 		if err != nil {
+			processRecordMu.Lock()
 			processRecordErr = err
-			return err
+			processRecordMu.Unlock()
 		}
-		token.Record = started
-		return nil
+		return err
 	})
 	effectCtx = tool.WithJobLifecycleRecorder(effectCtx, tool.JobLifecycleRecorder{
 		Started: func(string) error {
@@ -181,7 +240,7 @@ func (b *journalActionBoundary) Execute(
 				result.Error = fmt.Sprintf("background action outcome is indeterminate: %v", err)
 				result.CleanupOutcome = "background process group was reaped; verify external effects before retry"
 			}
-			_ = b.Finish(context.Background(), token, result)
+			_ = b.finish(b.durableContext(context.Background()), token, result)
 		},
 	})
 	result, executeErr := invoke(effectCtx, signal, progress)
@@ -208,12 +267,15 @@ func (b *journalActionBoundary) Execute(
 		}
 		actionResult.CleanupOutcome = "effect may have occurred; verification is required before retry"
 	}
-	if processRecordErr != nil {
+	processRecordMu.Lock()
+	processRecordFailure := processRecordErr
+	processRecordMu.Unlock()
+	if processRecordFailure != nil {
 		actionResult.State = session.ActionIndeterminate
-		actionResult.Error = fmt.Sprintf("process group identity was not durably recorded: %v", processRecordErr)
+		actionResult.Error = fmt.Sprintf("process group identity was not durably recorded: %v", processRecordFailure)
 		actionResult.CleanupOutcome = "executor terminated process after identity recording failure"
 	}
-	if finishErr := b.Finish(ctx, token, actionResult); finishErr != nil {
+	if finishErr := b.finish(b.durableContext(ctx), token, actionResult); finishErr != nil {
 		if executeErr != nil {
 			return result, errors.Join(executeErr, finishErr)
 		}
@@ -229,6 +291,69 @@ func mutatingAction(requirement ApprovalRequirement, operation string) bool {
 }
 
 func (b *journalActionBoundary) Finish(ctx context.Context, token *ActionToken, result ActionResult) error {
+	return b.finish(ctx, token, result)
+}
+
+func (b *journalActionBoundary) finish(ctx context.Context, token *ActionToken, result ActionResult) error {
+	if token == nil {
+		return nil
+	}
+	if result.State == "" {
+		result.State = session.ActionCompleted
+		if result.Error != "" {
+			result.State = session.ActionFailed
+		}
+	}
+	if b != nil && b.controller != nil {
+		durableCtx := b.durableContext(ctx)
+		reply := make(chan error, 1)
+		if err := b.controller.enqueue(durableCtx, &FinishActionCmd{
+			Ctx: durableCtx, Token: cloneActionToken(*token), Result: result, Reply: reply,
+		}); err != nil {
+			return err
+		}
+		return waitCommandReplyError(durableCtx, reply)
+	}
+	if _, err := b.journal.FinishAction(ctx, token.ID, result.State, result.ResultIdentity, result.Error, result.CleanupOutcome); err != nil {
+		return fmt.Errorf("finish action: %w", err)
+	}
+	return nil
+}
+
+func (b *journalActionBoundary) Cancel(ctx context.Context, token *ActionToken, reason string) error {
+	if token == nil {
+		return nil
+	}
+	if b != nil && b.controller != nil {
+		durableCtx := b.durableContext(ctx)
+		reply := make(chan error, 1)
+		if err := b.controller.enqueue(durableCtx, &CancelActionCmd{
+			Ctx: durableCtx, Token: cloneActionToken(*token), Reason: reason, Reply: reply,
+		}); err != nil {
+			return err
+		}
+		return waitCommandReplyError(durableCtx, reply)
+	}
+	return b.cancelDirect(ctx, token, reason)
+}
+
+func (b *journalActionBoundary) cancelDirect(ctx context.Context, token *ActionToken, reason string) error {
+	if token == nil {
+		return nil
+	}
+	state := session.ActionCancelled
+	if token.Record.State == session.ActionStarted {
+		state = session.ActionIndeterminate
+		if reason == "" {
+			reason = "action cancellation crossed the start boundary; outcome is indeterminate"
+		} else {
+			reason = "action cancellation crossed the start boundary: " + reason
+		}
+	}
+	return b.finishDirect(ctx, token, ActionResult{State: state, Error: reason})
+}
+
+func (b *journalActionBoundary) finishDirect(ctx context.Context, token *ActionToken, result ActionResult) error {
 	if token == nil {
 		return nil
 	}
@@ -244,15 +369,81 @@ func (b *journalActionBoundary) Finish(ctx context.Context, token *ActionToken, 
 	return nil
 }
 
-func (b *journalActionBoundary) Cancel(ctx context.Context, token *ActionToken, reason string) error {
-	if token == nil {
-		return nil
+func (b *journalActionBoundary) durableContext(fallback context.Context) context.Context {
+	if b == nil || b.controller == nil {
+		return fallback
 	}
-	return b.Finish(ctx, token, ActionResult{State: session.ActionCancelled, Error: reason})
+	b.controller.mu.Lock()
+	ctx := b.controller.runtimeContext
+	b.controller.mu.Unlock()
+	if ctx != nil {
+		return ctx
+	}
+	return fallback
+}
+
+func waitCommandReplyError(ctx context.Context, reply <-chan error) error {
+	err, waitErr := waitCommandReply(ctx, reply)
+	if waitErr != nil {
+		return waitErr
+	}
+	return err
+}
+
+func cloneActionToken(token ActionToken) ActionToken {
+	token.Record.Arguments = slices.Clone(token.Record.Arguments)
+	token.Record.Metadata = slices.Clone(token.Record.Metadata)
+	token.Record.Preimages = slices.Clone(token.Record.Preimages)
+	token.Record.Paths = slices.Clone(token.Record.Paths)
+	token.Record.Environment = slices.Clone(token.Record.Environment)
+	return token
+}
+
+func cloneActionRequest(request ActionRequest) ActionRequest {
+	request.Arguments = slices.Clone(request.Arguments)
+	requirement := request.Requirement
+	requirement.Paths = slices.Clone(requirement.Paths)
+	requirement.Environment = slices.Clone(requirement.Environment)
+	if requirement.Metadata != nil {
+		requirement.Metadata = cloneActionMetadata(requirement.Metadata)
+	}
+	request.Requirement = requirement
+	return request
+}
+
+func cloneActionMetadata(metadata map[string]any) map[string]any {
+	clone := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		clone[key] = value
+	}
+	return clone
+}
+
+func (c *Controller) actionJournal() (session.ActionJournal, error) {
+	if c == nil || c.store == nil {
+		return nil, errors.New("session store does not support action recovery")
+	}
+	journal, ok := c.store.(session.ActionJournal)
+	if !ok || journal == nil {
+		return nil, errors.New("session store does not support action recovery")
+	}
+	return journal, nil
+}
+
+func (c *Controller) actionCoordinator() (*journalActionBoundary, error) {
+	if c == nil || c.actionBoundary == nil {
+		return nil, errors.New("external action coordinator is unavailable")
+	}
+	coordinator, ok := c.actionBoundary.(*journalActionBoundary)
+	if !ok || coordinator == nil {
+		return nil, errors.New("external action coordinator is unavailable")
+	}
+	return coordinator, nil
 }
 
 func (b *journalActionBoundary) prepareRecord(request ActionRequest) (session.ActionRecord, error) {
-	if strings.TrimSpace(request.ToolName) == "" {
+	toolName := strings.TrimSpace(request.ToolName)
+	if toolName == "" {
 		return session.ActionRecord{}, errors.New("action tool name is required")
 	}
 	if strings.TrimSpace(request.InvocationID) == "" {
@@ -264,7 +455,8 @@ func (b *journalActionBoundary) prepareRecord(request ActionRequest) (session.Ac
 	if strings.TrimSpace(request.TurnID) == "" {
 		return session.ActionRecord{}, errors.New("action turn ID is required")
 	}
-	operation := strings.TrimSpace(request.Requirement.Operation)
+	category := strings.ToLower(strings.TrimSpace(request.Requirement.Category))
+	operation := strings.ToLower(strings.TrimSpace(request.Requirement.Operation))
 	if operation == "" {
 		return session.ActionRecord{}, errors.New("action operation is required")
 	}
@@ -302,8 +494,8 @@ func (b *journalActionBoundary) prepareRecord(request ActionRequest) (session.Ac
 	if err != nil {
 		return session.ActionRecord{}, fmt.Errorf("normalize action metadata: %w", err)
 	}
-	environment := slices.Clone(request.Requirement.Environment)
-	networkIntent := strings.TrimSpace(request.Requirement.NetworkIntent)
+	environment := canonicalStringList(request.Requirement.Environment)
+	networkIntent := strings.ToLower(strings.TrimSpace(request.Requirement.NetworkIntent))
 	mcpIdentity := strings.TrimSpace(request.Requirement.MCPIdentity)
 	identity := struct {
 		Tool          string          `json:"tool"`
@@ -319,7 +511,7 @@ func (b *journalActionBoundary) prepareRecord(request ActionRequest) (session.Ac
 		MCPIdentity   string          `json:"mcp_identity"`
 		PolicyMode    string          `json:"policy_mode"`
 	}{
-		Tool: request.ToolName, Category: strings.TrimSpace(request.Requirement.Category),
+		Tool: toolName, Category: category,
 		Operation: operation, Arguments: arguments, Metadata: metadata, Preimages: preimages, CWD: cwd, Paths: paths,
 		Environment: environment, NetworkIntent: networkIntent,
 		MCPIdentity: mcpIdentity, PolicyMode: string(b.mode),
@@ -349,8 +541,8 @@ func (b *journalActionBoundary) prepareRecord(request ActionRequest) (session.Ac
 		InvocationID:  request.InvocationID,
 		SessionID:     request.SessionID,
 		TurnID:        request.TurnID,
-		Tool:          request.ToolName,
-		Category:      strings.TrimSpace(request.Requirement.Category),
+		Tool:          toolName,
+		Category:      category,
 		Operation:     operation,
 		Arguments:     arguments,
 		Metadata:      metadata,
@@ -394,23 +586,34 @@ func isTerminalActionState(state session.ActionState) bool {
 }
 
 func (b *journalActionBoundary) canonicalWorkdir(requestCWD string) (string, error) {
-	root := strings.TrimSpace(requestCWD)
-	if root == "" {
-		root = b.workdir
-	}
-	if root == "" {
+	workspace := strings.TrimSpace(b.workdir)
+	if workspace == "" {
 		return "", errors.New("action working directory is required")
 	}
-	abs, err := filepath.Abs(root)
+	workspaceAbs, err := filepath.Abs(workspace)
 	if err != nil {
 		return "", fmt.Errorf("resolve action working directory: %w", err)
 	}
-	abs = filepath.Clean(abs)
-	resolved, err := filepath.EvalSymlinks(abs)
+	workspaceResolved, err := filepath.EvalSymlinks(filepath.Clean(workspaceAbs))
 	if err != nil {
 		return "", fmt.Errorf("resolve action working directory: %w", err)
 	}
-	return filepath.Clean(resolved), nil
+	requested := strings.TrimSpace(requestCWD)
+	if requested == "" {
+		return filepath.Clean(workspaceResolved), nil
+	}
+	requestedAbs, err := filepath.Abs(requested)
+	if err != nil {
+		return "", fmt.Errorf("resolve action working directory: %w", err)
+	}
+	requestedResolved, err := filepath.EvalSymlinks(filepath.Clean(requestedAbs))
+	if err != nil {
+		return "", fmt.Errorf("resolve action working directory: %w", err)
+	}
+	if !pathWithin(workspaceResolved, requestedResolved) {
+		return "", fmt.Errorf("action working directory %q escapes workspace %q", requestCWD, workspaceResolved)
+	}
+	return filepath.Clean(requestedResolved), nil
 }
 
 func (b *journalActionBoundary) canonicalPaths(cwd string, requirement ApprovalRequirement, operation string) ([]string, error) {
@@ -426,7 +629,25 @@ func (b *journalActionBoundary) canonicalPaths(cwd string, requirement ApprovalR
 		}
 		canonical = append(canonical, resolved)
 	}
-	return canonical, nil
+	slices.Sort(canonical)
+	return slices.Compact(canonical), nil
+}
+
+func canonicalStringList(values []string) []string {
+	canonical := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			canonical = append(canonical, value)
+		}
+	}
+	sort.Strings(canonical)
+	return slices.Compact(canonical)
+}
+
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func canonicalWorkspacePath(root, raw string) (string, error) {
@@ -438,8 +659,7 @@ func canonicalWorkspacePath(root, raw string) (string, error) {
 		path = filepath.Join(root, path)
 	}
 	path = filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !pathWithin(root, path) {
 		return "", fmt.Errorf("action path %q escapes workspace %q", raw, root)
 	}
 	resolved, err := resolvePathWithMissingLeaf(path)
