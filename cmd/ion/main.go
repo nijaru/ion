@@ -854,7 +854,25 @@ func isStdinPipe() bool {
 }
 
 func runTopLevelCommand(args []string, stdout, stderr io.Writer) (bool, int) {
-	if len(args) == 0 || args[0] != "skill" {
+	if len(args) == 0 {
+		return false, 0
+	}
+	if args[0] == "actions" {
+		err := runActionCommand(args[1:], stdout)
+		if err == nil {
+			return true, 0
+		}
+		var actionErr *actionCommandError
+		if errors.As(err, &actionErr) && actionErr.JSON {
+			_ = json.NewEncoder(stdout).Encode(struct {
+				Error string `json:"error"`
+			}{Error: actionErr.Error()})
+		} else {
+			fmt.Fprintf(stderr, "%v\n", err)
+		}
+		return true, 1
+	}
+	if args[0] != "skill" {
 		return false, 0
 	}
 	if err := runSkillCommand(args[1:], stdout); err != nil {

@@ -130,8 +130,24 @@ validates remote names/descriptions, applies the configured workspace file
 policy, and rejects malformed servers, discovery failures, and tool-name
 collisions instead of materializing a partial runtime. Every MCP call is an
 approval requirement in `confirm` mode, including tools that do not expose a
-file path. Server subprocesses close with the harness during cancellation,
-shutdown, and runtime switching.
+file path. Server subprocesses run through the host sandbox and close with the
+harness during cancellation, shutdown, and runtime switching. The action
+fingerprint records the effective sandbox network capability and the names of
+explicitly configured server environment variables; their values never enter
+the model or journal.
+
+If Ion restarts after an external action began but its result was not durable,
+print mode fails closed and the TUI exposes the action through `/actions`.
+Reconcile it only with explicit operator evidence:
+
+```text
+/actions reconcile <action-id> completed <evidence>
+ion actions --json list
+ion actions --json reconcile <action-id> completed <evidence>
+```
+
+The CLI recovery command is provider-independent and emits redacted action
+views; it never retries the external operation.
 
 Native `read` returns model-visible text file contents with line numbers. For
 supported images (`png`, `jpeg`, `gif`, `webp`), it returns a text note plus an
@@ -167,8 +183,9 @@ tool with a narrower command, path, or line range.
 Native `write` remains separate from targeted edits. Native `edit` accepts an
 `edits` array for one or more exact replacements in a single file. It validates
 every replacement against the original file content, rejects overlapping edits,
-checkpoints once, writes one temporary file, and finalizes with one rename.
-Cross-file changes should be emitted as separate serialized tool calls.
+and relies on the runtime action boundary for preimage capture, serialization,
+atomic replacement, and result verification. Cross-file changes should be
+emitted as separate serialized tool calls.
 
 Ion keeps its model-visible tool wrappers as the native coding-tool boundary.
 Those wrappers own product-level names, line-numbered reads, ripgrep search,
@@ -180,13 +197,12 @@ registry plus `read_skill`; it owns install UX, trust policy, prompt exposure,
 and whether skill tools are model-visible at all. Ion's current `/skills`
 command is read-only discovery, not activation.
 
-Native `write` and `edit` create pre-change checkpoints before they mutate
-files. Checkpoints are kept as recovery metadata and are scoped to the
-canonical workspace. Use `/rewind` to list recent checkpoints, then
-`/rewind <checkpoint-id>` to preview the paths that would change. Restoration
-requires the explicit `/rewind <checkpoint-id> --apply` command. Rewind changes
-files only; it does not erase or rewrite session history, and it refuses
-checkpoints from another workspace.
+`/rewind` is a separate explicit checkpoint capability; writes and edits do not
+create checkpoints as a hidden side effect. Use `/rewind` to list recent
+checkpoints, then `/rewind <checkpoint-id>` to preview the paths that would
+change. Restoration requires the explicit `/rewind <checkpoint-id> --apply`
+command. Rewind changes files only; it does not erase or rewrite session
+history, and it refuses checkpoints from another workspace.
 
 Structured edits require exact `old_string` matches inside `edits[]`, paired
 with `new_string`. `replace_all` and `expected_replacements` control repeated
