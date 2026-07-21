@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,30 @@ import (
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
+
+func TestCloseRuntimeResourcesAfterErrorPreservesBothFailures(t *testing.T) {
+	openErr := errors.New("open failed")
+	closeErr := errors.New("close failed")
+
+	got := closeRuntimeResourcesAfterError(openErr, func() error { return closeErr })
+	if !errors.Is(got, openErr) {
+		t.Fatalf("combined error = %v, want original error", got)
+	}
+	if !errors.Is(got, closeErr) {
+		t.Fatalf("combined error = %v, want cleanup error", got)
+	}
+	if !strings.Contains(got.Error(), "close runtime resources after failed setup") {
+		t.Fatalf("combined error = %v, want cleanup context", got)
+	}
+}
+
+func TestCloseRuntimeResourcesAfterErrorReturnsOpenErrorWhenCleanupSucceeds(t *testing.T) {
+	openErr := errors.New("open failed")
+	got := closeRuntimeResourcesAfterError(openErr, func() error { return nil })
+	if got != openErr {
+		t.Fatalf("combined error = %v, want original error", got)
+	}
+}
 
 func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

@@ -42,6 +42,13 @@ func closeRuntimeHandles(
 	return errors.Join(errs...)
 }
 
+func closeRuntimeResourcesAfterError(openErr error, closeResources func() error) error {
+	if closeErr := closeResources(); closeErr != nil {
+		return errors.Join(openErr, fmt.Errorf("close runtime resources after failed setup: %w", closeErr))
+	}
+	return openErr
+}
+
 // loadPromptTemplates reads global and project-local .md prompt templates.
 // Global templates are loaded first and retain precedence on name collisions.
 func loadPromptTemplates(cwd string) map[string]string {
@@ -353,16 +360,21 @@ func openRuntime(
 		}
 		return errors.Join(closeErrs...)
 	}
+	cleanupOpenError := func(openErr error) error {
+		return closeRuntimeResourcesAfterError(openErr, closeRuntimeResources)
+	}
+	setupFailure := func(openErr error) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
+		openErr = cleanupOpenError(openErr)
+		return app.NewSetupRuntime(&runtimeCfg, storage, openErr.Error()), nil, nil, openErr
+	}
 	if runtimeCfg.MemoryToolMode() == "on" {
 		dataDir, err := config.DefaultDataDir()
 		if err != nil {
-			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+			return setupFailure(err)
 		}
 		memoryStore, err = ionmemory.Open(filepath.Join(dataDir, "memory.db"))
 		if err != nil {
-			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+			return setupFailure(err)
 		}
 	}
 
@@ -374,25 +386,20 @@ func openRuntime(
 	toolRegistry := tool.NewRegistry()
 	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, jobs)
 	if err != nil {
-		_ = closeRuntimeResources()
-		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+		return setupFailure(err)
 	}
 	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
-		_ = closeRuntimeResources()
-		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil,
-			fmt.Errorf("register coding tools: %w", err)
+		return setupFailure(fmt.Errorf("register coding tools: %w", err))
 	}
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
-			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+			return setupFailure(err)
 		}
 	}
 	for _, external := range mcpRuntime.Tools() {
 		if _, exists := toolRegistry.Get(external.Spec().Name); exists {
-			_ = closeRuntimeResources()
 			err := fmt.Errorf("MCP tool name %q collides with an existing tool", external.Spec().Name)
-			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
+			return setupFailure(err)
 		}
 		toolRegistry.Register(external)
 	}
@@ -480,8 +487,7 @@ func openRuntime(
 		cwd,
 	)
 	if err != nil {
-		_ = closeRuntimeResources()
-		return nil, nil, nil, fmt.Errorf("build system prompt: %w", err)
+		return nil, nil, nil, cleanupOpenError(fmt.Errorf("build system prompt: %w", err))
 	}
 
 	// Resume only after every fallible runtime-materialization step has
@@ -491,12 +497,10 @@ func openRuntime(
 	if sessionID != "" {
 		sqliteStore, ok := store.(*session.SQLiteStore)
 		if !ok {
-			_ = closeRuntimeResources()
-			return nil, nil, nil, fmt.Errorf("session store does not support concrete resume")
+			return nil, nil, nil, cleanupOpenError(fmt.Errorf("session store does not support concrete resume"))
 		}
 		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			_ = closeRuntimeResources()
-			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+			return nil, nil, nil, cleanupOpenError(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
 		}
 	}
 
