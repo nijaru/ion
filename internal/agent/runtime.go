@@ -147,7 +147,9 @@ type Controller struct {
 // Compile-time interface assertions.
 var (
 	_ Runtime          = (*Controller)(nil)
-	_ SessionOwner     = (*Controller)(nil)
+	_ SessionReader    = (*Controller)(nil)
+	_ SessionCatalog   = (*Controller)(nil)
+	_ InputHistory     = (*Controller)(nil)
 	_ EntryPersister   = (*Controller)(nil)
 	_ SessionNamer     = (*Controller)(nil)
 	_ SessionForker    = (*Controller)(nil)
@@ -242,6 +244,20 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleExportSessionBundle(cmd)
 	case *ImportSessionBundleCmd:
 		c.handleImportSessionBundle(cmd)
+	case *SessionBranchCmd:
+		c.handleSessionBranch(cmd)
+	case *SessionTreeCmd:
+		c.handleSessionTree(cmd)
+	case *SessionCatalogListCmd:
+		c.handleSessionCatalogList(cmd)
+	case *SessionCatalogLookupCmd:
+		c.handleSessionCatalogLookup(cmd)
+	case *SessionCatalogUpdateCmd:
+		c.handleSessionCatalogUpdate(cmd)
+	case *InputHistoryGetCmd:
+		c.handleInputHistoryGet(cmd)
+	case *InputHistoryAddCmd:
+		c.handleInputHistoryAdd(cmd)
 	default:
 		panic(fmt.Sprintf("unhandled command type %T", cmd))
 	}
@@ -303,6 +319,20 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, ExportSessionResult{Err: ErrRuntimeClosed})
 	case *ImportSessionBundleCmd:
 		sendResult(cmd.Reply, ImportSessionResult{Err: ErrRuntimeClosed})
+	case *SessionBranchCmd:
+		sendResult(cmd.Reply, SessionBranchResult{Err: ErrRuntimeClosed})
+	case *SessionTreeCmd:
+		sendResult(cmd.Reply, SessionTreeResult{Err: ErrRuntimeClosed})
+	case *SessionCatalogListCmd:
+		sendResult(cmd.Reply, SessionCatalogListResult{Err: ErrRuntimeClosed})
+	case *SessionCatalogLookupCmd:
+		sendResult(cmd.Reply, SessionCatalogLookupResult{Err: ErrRuntimeClosed})
+	case *SessionCatalogUpdateCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
+	case *InputHistoryGetCmd:
+		sendResult(cmd.Reply, InputHistoryGetResult{Err: ErrRuntimeClosed})
+	case *InputHistoryAddCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *PrepareActionCmd:
 		sendResult(cmd.Reply, ActionPrepareResult{Err: ErrRuntimeClosed})
 	case *StartActionCmd:

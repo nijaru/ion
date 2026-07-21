@@ -47,12 +47,17 @@ func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Messa
 }
 
 func (s *printSession) ID() string                                  { return "print-test" }
+func (s *printSession) SessionID() string                           { return s.ID() }
 func (s *printSession) Meta() session.Metadata                      { return session.Metadata{} }
 func (s *printSession) SessionName(context.Context) (string, error) { return "", nil }
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
-func (s *printSession) Branch(context.Context) ([]session.Entry, error)           { return nil, nil }
+func (s *printSession) Branch(context.Context) ([]session.Entry, error)        { return nil, nil }
+func (s *printSession) SessionBranch(context.Context) ([]session.Entry, error) { return nil, nil }
+func (s *printSession) SessionTree(context.Context) (agent.SessionTreeSnapshot, error) {
+	return agent.SessionTreeSnapshot{}, nil
+}
 func (s *printSession) BranchAt(context.Context, string) ([]session.Entry, error) { return nil, nil }
 func (s *printSession) AppendMessage(context.Context, session.Message) (string, error) {
 	return "", nil

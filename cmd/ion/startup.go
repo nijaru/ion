@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -368,32 +369,18 @@ func firstNonEmpty(values ...string) string {
 
 func applySessionConfigFromMetadata(
 	ctx context.Context,
-	store session.Store,
-	cwd string,
+	catalog agent.SessionCatalog,
 	sessionID string,
 	cfg *config.Config,
 ) error {
-	if store == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
+	if catalog == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
-	if _, err := store.GetEntry(ctx, sessionID); err != nil {
+	info, err := catalog.GetSessionInfo(ctx, sessionID)
+	if err != nil {
 		return fmt.Errorf("failed to inspect session %s metadata: %w", sessionID, err)
 	}
-	catalog, ok := store.(sessionCatalogReader)
-	if !ok {
-		return fmt.Errorf("session store does not support session catalog")
-	}
-	sessions, err := catalog.ListSessions(ctx, cwd)
-	if err != nil {
-		return fmt.Errorf("failed to list sessions: %w", err)
-	}
-	var storedModel string
-	for _, info := range sessions {
-		if info.ID() == sessionID {
-			storedModel = info.Model
-			break
-		}
-	}
+	storedModel := info.Model
 	provider, model := splitSessionModelName(storedModel)
 	if provider == "" {
 		return nil
@@ -406,15 +393,17 @@ func applySessionConfigFromMetadata(
 	return nil
 }
 
-func runtimeInfoForProvider(provider string, cfg *config.Config, store session.Store) (app.RuntimeInfo, error) {
+func runtimeInfoForProvider(provider string, cfg *config.Config, store app.RuntimeEntryReader) (app.RuntimeInfo, error) {
 	provider = llm.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
 	}
-
 	def, ok := llm.Lookup(provider)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
+	}
+	if store == nil {
+		return nil, fmt.Errorf("session store does not support runtime storage projection")
 	}
 	return &runtimeInfo{def: &def, cfg: cfg, store: store}, nil
 }
@@ -424,7 +413,7 @@ func runtimeInfoForProvider(provider string, cfg *config.Config, store session.S
 type runtimeInfo struct {
 	def      *llm.Definition
 	cfg      *config.Config
-	store    session.Store
+	store    app.RuntimeEntryReader
 	surface  app.ToolSurface
 	recovery []session.ActionRecord
 }

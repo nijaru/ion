@@ -47,7 +47,7 @@ func (s *OpenAIStream) Next() (*llm.Chunk, bool) {
 			Reasoning: choice.Delta.ReasoningContent,
 		}
 
-		// Set stop reason from finish reason (Pi parity)
+		// Set stop reason from the provider finish reason.
 		if choice.FinishReason != "" {
 			chunk.StopReason = mapFinishReason(string(choice.FinishReason))
 		}

@@ -311,11 +311,37 @@ type ResourceOwner interface {
 	CloseResources() error
 }
 
-// SessionOwner exposes the current session for read-only projections. It is an
-// optional capability rather than part of Runtime because the runtime host is
-// the eventual owner of session lifetime.
-type SessionOwner interface {
-	Session() session.Session
+// SessionReader exposes only read-only active-session projections. Queries
+// enter the controller command boundary; callers never receive the mutable
+// session façade or store.
+type SessionReader interface {
+	SessionID() string
+	SessionBranch(ctx context.Context) ([]session.Entry, error)
+	SessionTree(ctx context.Context) (SessionTreeSnapshot, error)
+}
+
+// SessionTreeSnapshot is the immutable data needed to render the active
+// session tree. The app owns only its display projection.
+type SessionTreeSnapshot struct {
+	LeafID  string
+	Entries []session.Entry
+}
+
+// SessionCatalog is the narrow host/runtime capability for session picker and
+// catalog metadata operations. A host may provide it before a runtime exists;
+// an active controller may provide the same capability through its command
+// boundary.
+type SessionCatalog interface {
+	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
+	GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error)
+	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
+}
+
+// InputHistory is the narrow capability for workspace-scoped composer history.
+// It is deliberately separate from the session tree and runtime transcript.
+type InputHistory interface {
+	GetInputs(ctx context.Context, workdir string, n int) ([]string, error)
+	AddInput(ctx context.Context, workdir, input string) error
 }
 
 // EntryPersister persists a non-turn entry through the runtime controller.

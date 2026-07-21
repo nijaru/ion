@@ -169,11 +169,6 @@ func (r inputReducer) finishDeferredEnter() {
 
 const maxInputHistoryEntries = 200
 
-type inputHistoryStore interface {
-	GetInputs(ctx context.Context, workdir string, n int) ([]string, error)
-	AddInput(ctx context.Context, workdir string, input string) error
-}
-
 // Model-level input methods (delegate to inputReducer).
 
 func (m *Model) updateComposer(msg tea.Msg) tea.Cmd {
@@ -213,14 +208,10 @@ func (m *Model) appendInputHistory(text string) (string, bool) {
 }
 
 func (m *Model) loadInputHistory(ctx context.Context) {
-	if m.Model.Store == nil || strings.TrimSpace(m.App.Workdir) == "" {
+	if m.Model.InputHistory == nil || strings.TrimSpace(m.App.Workdir) == "" {
 		return
 	}
-	store, ok := m.Model.Store.(inputHistoryStore)
-	if !ok {
-		return
-	}
-	inputs, err := store.GetInputs(ctx, m.App.Workdir, maxInputHistoryEntries)
+	inputs, err := m.Model.InputHistory.GetInputs(ctx, m.App.Workdir, maxInputHistoryEntries)
 	if err != nil {
 		return
 	}
@@ -229,16 +220,12 @@ func (m *Model) loadInputHistory(ctx context.Context) {
 }
 
 func (m Model) persistInputHistory(ctx context.Context, text string) tea.Cmd {
-	if m.Model.Store == nil || strings.TrimSpace(m.App.Workdir) == "" {
-		return nil
-	}
-	store, ok := m.Model.Store.(inputHistoryStore)
-	if !ok {
+	if m.Model.InputHistory == nil || strings.TrimSpace(m.App.Workdir) == "" {
 		return nil
 	}
 	workdir := m.App.Workdir
 	return func() tea.Msg {
-		if err := store.AddInput(ctx, workdir, text); err != nil {
+		if err := m.Model.InputHistory.AddInput(ctx, workdir, text); err != nil {
 			return localErrorMsg{err: fmt.Errorf("persist input history: %w", err)}
 		}
 		return nil

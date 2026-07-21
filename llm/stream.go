@@ -45,7 +45,7 @@ type Chunk struct {
 	// consumers should keep the latest value rather than summing chunks.
 	Usage *Usage `json:"usage,omitempty"`
 
-	// Assistant message metadata (Pi parity).
+	// Assistant message metadata.
 	// Set on the final chunk to propagate provider/model context to the response.
 	StopReason    StopReason `json:"stop_reason,omitempty"`
 	Model         string     `json:"model,omitempty"`
@@ -92,7 +92,7 @@ func (a *StreamAccumulator) Add(chunk *Chunk) {
 	if chunk.Usage != nil {
 		a.resp.Usage = *chunk.Usage
 	}
-	// Propagate assistant message metadata (Pi parity)
+	// Propagate assistant message metadata.
 	if chunk.StopReason != "" {
 		a.resp.StopReason = chunk.StopReason
 	}
@@ -149,6 +149,5 @@ func (a *StreamAccumulator) addBlock(block ContentBlock) {
 		a.resp.Blocks = append(a.resp.Blocks, b)
 	}
 }
-
 
 

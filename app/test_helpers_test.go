@@ -376,7 +376,7 @@ func readyModelWithSwitcher(t *testing.T, observed *[]string) Model {
 	t.Helper()
 	sess := newStubSession("stub")
 	b := stubBackend{sess: sess, provider: "openai", model: "gpt-4.1"}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 		*observed = append(*observed, cfg.Model)
 		newSess := newStubSession(sessionID)
 		newBackend := stubBackend{sess: newSess, provider: cfg.Provider, model: cfg.Model}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -29,7 +30,14 @@ func TestLoadSessionTreeProjectsPersistedLineageAndChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tree, err := loadSessionTree(ctx, store, rootID)
+	entries, err := store.Entries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := loadSessionTree(agent.SessionTreeSnapshot{
+		LeafID:  rootID,
+		Entries: entries,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

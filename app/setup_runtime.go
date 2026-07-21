@@ -8,16 +8,16 @@ import (
 )
 
 // setupRuntime is a minimal RuntimeInfo used before the user configures a provider
-// and model. It shows a bootstrap status message and holds the store + config
-// for later materialization. It has no session or runner — the TUI shows a
-// setup prompt until the user runs /provider and /model.
+// and model. It shows a bootstrap status message and holds a read-only entry
+// reader plus config for later materialization. It has no session or runner —
+// the TUI shows a setup prompt until the user runs /provider and /model.
 type setupRuntime struct {
 	cfg   *config.Config
-	store session.Store
+	store RuntimeEntryReader
 	msg   string
 }
 
-func NewSetupRuntime(cfg *config.Config, store session.Store, msg string) *setupRuntime {
+func NewSetupRuntime(cfg *config.Config, store RuntimeEntryReader, msg string) *setupRuntime {
 	return &setupRuntime{cfg: cfg, store: store, msg: msg}
 }
 

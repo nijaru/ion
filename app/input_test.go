@@ -74,7 +74,7 @@ func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
-	var inputStore inputHistoryStore = store
+	var inputStore agent.InputHistory = store
 	cwd := t.TempDir()
 	for _, input := range []string{"first prompt", "second prompt"} {
 		if err := inputStore.AddInput(ctx, cwd, input); err != nil {
@@ -113,7 +113,7 @@ func TestSubmitTextPersistsInputHistory(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer store.Close()
-	var inputStore inputHistoryStore = store
+	var inputStore agent.InputHistory = store
 	cwd := t.TempDir()
 	model := New(
 		stubBackend{
@@ -162,7 +162,7 @@ func TestPersistInputHistoryReturnsBeforeStoreWriteCompletes(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	model := readyModel(t)
-	model.Model.Store = store
+	model.Model.InputHistory = store
 	model.App.Workdir = t.TempDir()
 
 	returned := make(chan tea.Cmd, 1)
@@ -334,7 +334,7 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 }
 
 func TestCtrlCCancelsRunningTurn(t *testing.T) {
-	// Pi parity: Ctrl+C clears editor, Escape cancels running turn.
+	// Ctrl+C clears the editor; Escape cancels a running turn.
 	// This test verifies Escape cancels running turn.
 	runner := &stubRunner{}
 	model := readyModel(t)
@@ -768,7 +768,7 @@ func TestCtrlLCyclesPrimaryAndFastPreset(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 			observedModels = append(observedModels, cfg.Model)
 			resolved := *cfg
 			newBackend := stubBackend{provider: resolved.Provider, model: resolved.Model}
@@ -833,7 +833,7 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 		"/tmp/test",
 		"main",
 		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+		func(ctx context.Context, cfg *config.Config, sessionID string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 			t.Fatal("busy preset toggle should not switch runtimes")
 			return nil, nil, nil, nil
 		},

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 
@@ -41,16 +42,8 @@ type treePickerMoveMsg struct {
 }
 
 func (m Model) openTreePicker() (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		m.showTreeUnavailable()
-		return m, nil
-	}
-	if m.activeSession() == nil {
-		m.showTreeUnavailable()
-		return m, nil
-	}
-	leafID := m.Model.Store.GetLeafID()
-	if leafID == "" {
+	reader, ok := m.Model.Runner.(agent.SessionReader)
+	if !ok {
 		m.showTreeUnavailable()
 		return m, nil
 	}
@@ -58,20 +51,20 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 	m.Picker.Tree = &treePickerState{loading: true}
 
 	return m, func() tea.Msg {
-		tree, err := loadSessionTree(context.Background(), m.Model.Store, leafID)
+		snapshot, err := reader.SessionTree(context.Background())
+		tree := SessionTree{}
+		if err == nil {
+			tree, err = loadSessionTree(snapshot)
+		}
 		return treePickerLoadedMsg{tree: tree, err: err}
 	}
 }
 
-// loadSessionTree projects the persisted entry graph into the picker view.
-// Store owns the graph; app owns this display projection. Keeping the
-// projection here avoids adding a UI-shaped interface to session or making
-// SQLite import app types.
-func loadSessionTree(ctx context.Context, store session.Store, leafID string) (SessionTree, error) {
-	entries, err := store.Entries(ctx)
-	if err != nil {
-		return SessionTree{}, err
-	}
+// loadSessionTree projects the controller-owned session snapshot into the
+// picker view. The app owns only this display projection.
+func loadSessionTree(snapshot agent.SessionTreeSnapshot) (SessionTree, error) {
+	entries := snapshot.Entries
+	leafID := snapshot.LeafID
 
 	byID := make(map[string]session.Entry, len(entries))
 	for _, entry := range entries {
@@ -121,7 +114,7 @@ func (m Model) closeTreePicker() Model {
 }
 
 func (m Model) showTreeUnavailable() {
-	msg := "session tree is not available (no store, no session, or unsupported)"
+	msg := "session tree is not available (no active runtime or unsupported capability)"
 	m.terminalCommit().Entries(systemEntry("⚠ " + msg))
 }
 
@@ -267,15 +260,16 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "ctrl+r":
-		// Refresh tree from store.
-		if m.Model.Store != nil {
-			if m.activeSession() != nil {
-				m.Picker.Tree.loading = true
-				leafID := m.Model.Store.GetLeafID()
-				return m, func() tea.Msg {
-					tree, err := loadSessionTree(context.Background(), m.Model.Store, leafID)
-					return treePickerLoadedMsg{tree: tree, err: err}
+		// Refresh tree through the active runtime projection.
+		if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
+			m.Picker.Tree.loading = true
+			return m, func() tea.Msg {
+				snapshot, err := reader.SessionTree(context.Background())
+				tree := SessionTree{}
+				if err == nil {
+					tree, err = loadSessionTree(snapshot)
 				}
+				return treePickerLoadedMsg{tree: tree, err: err}
 			}
 		}
 	}
@@ -298,33 +292,30 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	}
 	// Close tree picker and replay entries from the new branch position.
 	m = m.closeTreePicker()
-	if m.activeSession() == nil {
-		return m, nil
-	}
 	return m, m.replayCurrentBranch()
 }
 
 // replayCurrentBranch loads entries from the current session branch and replays them.
 func (m Model) replayCurrentBranch() tea.Cmd {
-	sess := m.activeSession()
-	store := m.Model.Store
-	if sess == nil {
+	reader, ok := m.Model.Runner.(agent.SessionReader)
+	if !ok {
 		return nil
 	}
 	return func() tea.Msg {
-		var entries []session.Entry
-		if store != nil {
-			entries, _ = store.Branch(context.Background())
-		}
-		return replayBranchMsg{entries: entries}
+		entries, err := reader.SessionBranch(context.Background())
+		return replayBranchMsg{entries: entries, err: err}
 	}
 }
 
 type replayBranchMsg struct {
 	entries []session.Entry
+	err     error
 }
 
 func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		return m.handleLocalError(fmt.Errorf("load selected branch: %w", msg.err))
+	}
 	var lines []string
 	lines = append(lines, "--- moved to branch ---")
 	if len(msg.entries) > 0 {

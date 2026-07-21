@@ -59,6 +59,14 @@ func (s *testStore) ListSessions(_ context.Context, _ string) ([]session.Session
 	}
 	return s.sessions, nil
 }
+func (s *testStore) GetSessionInfo(_ context.Context, id string) (session.SessionInfoEntry, error) {
+	for _, info := range s.sessions {
+		if info.ID() == id {
+			return info, nil
+		}
+	}
+	return session.SessionInfoEntry{}, os.ErrNotExist
+}
 func (s *testStore) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error {
 	return nil
 }

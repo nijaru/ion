@@ -22,16 +22,21 @@ type sessionBundleImporter interface {
 	ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error)
 }
 
+type sessionBundleExporter interface {
+	ExportSessionBundle(context.Context, string) (ionexport.SessionBundle, error)
+}
+
 func (m Model) exportSession() (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		return m, cmdError("no store available")
+	exporter, ok := m.Model.Runner.(sessionBundleExporter)
+	if !ok {
+		return m, cmdError("active runtime does not support export")
 	}
-	if m.activeSession() == nil {
+	sessionID := m.currentMaterializedSessionID()
+	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
-		bundle, err := ionexport.ExportSessionBundle(context.Background(), m.Model.Store, sessionID)
+		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -48,15 +53,16 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 }
 
 func (m Model) exportSessionHTML() (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		return m, cmdError("no store available")
+	exporter, ok := m.Model.Runner.(sessionBundleExporter)
+	if !ok {
+		return m, cmdError("active runtime does not support export")
 	}
-	if m.activeSession() == nil {
+	sessionID := m.currentMaterializedSessionID()
+	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.activeSession().ID()
 	return m, func() tea.Msg {
-		bundle, err := ionexport.ExportSessionBundle(context.Background(), m.Model.Store, sessionID)
+		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
 		if err != nil {
 			return localErrorMsg{err: err}
 		}
@@ -177,10 +183,14 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	if m.Model.Runner == nil {
 		return m, cmdError("active runtime does not support clone")
 	}
-	if m.activeSession() == nil {
+	exporter, ok := m.Model.Runner.(sessionBundleExporter)
+	if !ok {
+		return m, cmdError("active runtime does not support export")
+	}
+	sessionID := m.currentMaterializedSessionID()
+	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
-	sessionID := m.activeSession().ID()
 	runner := m.Model.Runner
 	importer, ok := runner.(sessionBundleImporter)
 	if !ok {
@@ -188,7 +198,7 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	}
 	return m, func() tea.Msg {
 		ctx := context.Background()
-		bundle, err := ionexport.ExportSessionBundle(ctx, m.Model.Store, sessionID)
+		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
 			return localErrorMsg{err: fmt.Errorf("export session: %w", err)}
 		}
@@ -253,7 +263,7 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, sess persistenceAdapter) tea.Cmd {
+func loadSessionUsageCmd(generation uint64, sess RuntimeStorage) tea.Cmd {
 	if sess == nil {
 		return nil
 	}
@@ -325,8 +335,8 @@ func (m Model) sessionInfoNotice() (string, error) {
 		if sessionID == "" {
 			sessionID = strings.TrimSpace(m.Model.Storage.ID())
 		}
-	} else if m.activeSession() != nil {
-		sessionID = strings.TrimSpace(m.activeSession().ID())
+	} else if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
+		sessionID = strings.TrimSpace(reader.SessionID())
 	}
 	if sessionID == "" {
 		sessionID = "none"
@@ -487,19 +497,15 @@ func (m Model) handleNameCommand(fields []string) (Model, tea.Cmd) {
 }
 
 func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
-	if m.activeSession() == nil {
-		return m, cmdError("no active session")
-	}
-	if m.Model.Store == nil {
-		return m, cmdError("no store available")
-	}
 	runner := m.Model.Runner
 	labels, ok := runner.(agent.SessionLabels)
 	if !ok {
 		return m, cmdError("active runtime does not support labels")
 	}
-	store := m.Model.Store
-	leafID := store.GetLeafID()
+	leafID := strings.TrimSpace(m.Model.LeafID)
+	if leafID == "" {
+		return m, cmdError("current session leaf is unavailable")
+	}
 
 	if len(fields) < 2 {
 		// Show current label.

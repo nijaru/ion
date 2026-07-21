@@ -11,7 +11,7 @@ import (
 func TestRunnerPersistEntryAdvancesLeaf(t *testing.T) {
 	store := newTestStore(t)
 	h := NewController(ControllerConfig{Session: session.NewSession(store, 64), Store: store})
-	if _, err := h.Session().AppendMessage(context.Background(), session.NewUserText("prior", time.Now())); err != nil {
+	if err := h.AppendMessage(context.Background(), session.NewUserText("prior", time.Now())); err != nil {
 		t.Fatalf("append prior message: %v", err)
 	}
 	entry := &session.CustomEntry{

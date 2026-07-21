@@ -87,7 +87,7 @@ type Message struct {
 	// Call GetContentBlocks() to get a unified view.
 	Blocks ContentBlocks `json:"blocks,omitzero"`
 
-	// Assistant message metadata (Pi parity).
+	// Assistant message metadata.
 	// These fields are set on assistant messages to track provider/model context.
 	API           string     `json:"api,omitzero"`
 	Provider      string     `json:"provider,omitzero"`
@@ -346,7 +346,7 @@ type Response struct {
 	Blocks     ContentBlocks `json:"blocks,omitzero"`
 	StopReason StopReason     `json:"stop_reason,omitzero"`
 
-	// Assistant message metadata (Pi parity).
+	// Assistant message metadata.
 	API           string `json:"api,omitzero"`
 	Provider      string `json:"provider,omitzero"`
 	Model         string `json:"model,omitzero"`

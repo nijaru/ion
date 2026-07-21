@@ -294,7 +294,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		sessionID = forkedID
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
-		if err := applySessionConfigFromMetadata(ctx, store, cwd, sessionID, cfg); err != nil {
+		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
 			fmt.Fprintf(stderr, "%v\n", err)
 			return 1
 		}
@@ -373,7 +373,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			output,
 		)
 		if runErr == nil {
-			runErr = updatePrintSessionInfo(ctx, store, runner, cwd, branch, runtimeCfg, prompt)
+			runErr = updatePrintSessionInfo(ctx, runner, cwd, branch, runtimeCfg, prompt)
 		}
 		closeErr := jobs.Close()
 		closeErr = errors.Join(closeErr, closeRuntimeHandles(runner, store))
@@ -404,7 +404,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			startupEntries = entries
 		}
 	}
-	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.RuntimeInfo, agent.Runtime, session.Session, error) {
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (app.RuntimeInfo, agent.Runtime, app.RuntimeStorage, error) {
 		switchedBackend, switchedSession, switchedRunner, err := openRuntime(
 			ctx,
 			store,
@@ -573,15 +573,15 @@ func runtimeHandlesForClose(
 	return fallbackRunner
 }
 
-func runtimeSession(runner agent.Runtime) session.Session {
+func runtimeSessionID(runner agent.Runtime) string {
 	if runner == nil {
-		return nil
+		return ""
 	}
-	owner, ok := runner.(agent.SessionOwner)
+	reader, ok := runner.(agent.SessionReader)
 	if !ok {
-		return nil
+		return ""
 	}
-	return owner.Session()
+	return strings.TrimSpace(reader.SessionID())
 }
 
 type printResult struct {
@@ -660,9 +660,7 @@ func runPromptTurn(
 
 	var agentText strings.Builder
 	result := printResult{}
-	if sess := runtimeSession(runner); sess != nil {
-		result.SessionID = sess.ID()
-	}
+	result.SessionID = runtimeSessionID(runner)
 
 	// Start the agent turn in a goroutine.
 	type promptOutcome struct {
@@ -742,26 +740,22 @@ func runPromptTurn(
 	if strings.TrimSpace(result.Response) == "" {
 		return printResult{}, fmt.Errorf("turn finished without assistant response")
 	}
-	if sess := runtimeSession(runner); sess != nil {
-		result.SessionID = sess.ID()
-	}
+	result.SessionID = runtimeSessionID(runner)
 	return result, nil
 }
 
 func updatePrintSessionInfo(
 	ctx context.Context,
-	store session.Store,
 	runner agent.Runtime,
 	cwd string,
 	branch string,
 	cfg *config.Config,
 	prompt string,
 ) error {
-	sess := runtimeSession(runner)
-	if store == nil || runner == nil || sess == nil || cfg == nil {
+	id := runtimeSessionID(runner)
+	if runner == nil || id == "" || cfg == nil {
 		return nil
 	}
-	id := sess.ID()
 	if id == "" || id == "ion" {
 		return nil
 	}
@@ -769,9 +763,9 @@ func updatePrintSessionInfo(
 	if preview == "" {
 		return nil
 	}
-	catalog, ok := store.(sessionCatalogWriter)
+	catalog, ok := runner.(agent.SessionCatalog)
 	if !ok {
-		return fmt.Errorf("session store does not support session catalog")
+		return fmt.Errorf("runtime does not support session catalog")
 	}
 	now := time.Now()
 	return catalog.UpdateSession(ctx, session.SessionInfoEntry{

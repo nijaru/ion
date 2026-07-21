@@ -326,6 +326,111 @@ func (c *Controller) handleImportSessionBundle(cmd *ImportSessionBundleCmd) {
 	})
 }
 
+func (c *Controller) handleSessionBranch(cmd *SessionBranchCmd) {
+	c.startOperation(func() {
+		if c.session == nil {
+			sendResult(cmd.Reply, SessionBranchResult{Err: errors.New("session is unavailable")})
+			return
+		}
+		entries, err := c.session.Branch(cmd.Ctx)
+		sendResult(cmd.Reply, SessionBranchResult{Entries: entries, Err: err})
+	})
+}
+
+func (c *Controller) handleSessionTree(cmd *SessionTreeCmd) {
+	c.startOperation(func() {
+		if c.store == nil {
+			sendResult(cmd.Reply, SessionTreeResult{Err: errors.New("session store is unavailable")})
+			return
+		}
+		ctx := commandContext(cmd.Ctx)
+		// GetLeafID and Entries are separate Store reads. A navigation can
+		// commit between them, so only publish a pair after confirming that
+		// the selected leaf remained stable. Never hand the picker a mixed
+		// snapshot that can mark the wrong entry as current.
+		for attempt := 0; attempt < 3; attempt++ {
+			leafID := c.store.GetLeafID()
+			entries, err := c.store.Entries(ctx)
+			if err != nil {
+				sendResult(cmd.Reply, SessionTreeResult{
+					Tree: SessionTreeSnapshot{LeafID: leafID},
+					Err:  err,
+				})
+				return
+			}
+			if c.store.GetLeafID() == leafID {
+				sendResult(cmd.Reply, SessionTreeResult{
+					Tree: SessionTreeSnapshot{LeafID: leafID, Entries: entries},
+				})
+				return
+			}
+			if err := ctx.Err(); err != nil {
+				sendResult(cmd.Reply, SessionTreeResult{Err: err})
+				return
+			}
+		}
+		sendResult(cmd.Reply, SessionTreeResult{Err: ErrSessionTreeChanged})
+	})
+}
+
+func (c *Controller) handleSessionCatalogList(cmd *SessionCatalogListCmd) {
+	c.startOperation(func() {
+		catalog, ok := c.store.(SessionCatalog)
+		if !ok {
+			sendResult(cmd.Reply, SessionCatalogListResult{Err: errors.New("session store does not support session catalog")})
+			return
+		}
+		sessions, err := catalog.ListSessions(cmd.Ctx, cmd.Workdir)
+		sendResult(cmd.Reply, SessionCatalogListResult{Sessions: sessions, Err: err})
+	})
+}
+
+func (c *Controller) handleSessionCatalogLookup(cmd *SessionCatalogLookupCmd) {
+	c.startOperation(func() {
+		catalog, ok := c.store.(SessionCatalog)
+		if !ok {
+			sendResult(cmd.Reply, SessionCatalogLookupResult{Err: errors.New("session store does not support session catalog")})
+			return
+		}
+		info, err := catalog.GetSessionInfo(cmd.Ctx, cmd.SessionID)
+		sendResult(cmd.Reply, SessionCatalogLookupResult{Info: info, Err: err})
+	})
+}
+
+func (c *Controller) handleSessionCatalogUpdate(cmd *SessionCatalogUpdateCmd) {
+	c.startOperation(func() {
+		catalog, ok := c.store.(SessionCatalog)
+		if !ok {
+			sendResult(cmd.Reply, errors.New("session store does not support session catalog"))
+			return
+		}
+		sendResult(cmd.Reply, catalog.UpdateSession(cmd.Ctx, cmd.Info))
+	})
+}
+
+func (c *Controller) handleInputHistoryGet(cmd *InputHistoryGetCmd) {
+	c.startOperation(func() {
+		history, ok := c.store.(InputHistory)
+		if !ok {
+			sendResult(cmd.Reply, InputHistoryGetResult{Err: errors.New("session store does not support input history")})
+			return
+		}
+		inputs, err := history.GetInputs(cmd.Ctx, cmd.Workdir, cmd.Limit)
+		sendResult(cmd.Reply, InputHistoryGetResult{Inputs: inputs, Err: err})
+	})
+}
+
+func (c *Controller) handleInputHistoryAdd(cmd *InputHistoryAddCmd) {
+	c.startOperation(func() {
+		history, ok := c.store.(InputHistory)
+		if !ok {
+			sendResult(cmd.Reply, errors.New("session store does not support input history"))
+			return
+		}
+		sendResult(cmd.Reply, history.AddInput(cmd.Ctx, cmd.Workdir, cmd.Input))
+	})
+}
+
 // --- Approval commands ---
 
 // ResolveApproval supplies the host's decision for a pending tool call.
@@ -341,14 +446,97 @@ func (c *Controller) ResolveApproval(id string, decision session.ApprovalDecisio
 
 // --- Capability methods (non-Runtime interfaces) ---
 
-// Session returns the active session for read-only projections.
-func (c *Controller) Session() session.Session {
-	return c.session
+// SessionID returns the immutable identity of the active session. It does not
+// expose the mutable session façade or storage owner.
+func (c *Controller) SessionID() string {
+	if c == nil || c.session == nil {
+		return ""
+	}
+	return c.session.ID()
 }
 
-// Store returns the session store.
-func (c *Controller) Store() session.Store {
-	return c.store
+// SessionBranch reads the active branch through the controller command queue.
+func (c *Controller) SessionBranch(ctx context.Context) ([]session.Entry, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionBranchResult, 1)
+	if err := c.enqueue(ctx, &SessionBranchCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Entries, result.Err
+}
+
+// SessionTree reads the active tree through the controller command queue.
+func (c *Controller) SessionTree(ctx context.Context) (SessionTreeSnapshot, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionTreeResult, 1)
+	if err := c.enqueue(ctx, &SessionTreeCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return SessionTreeSnapshot{}, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return SessionTreeSnapshot{}, err
+	}
+	return result.Tree, result.Err
+}
+
+// ListSessions reads the session catalog through the controller command queue.
+func (c *Controller) ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionCatalogListResult, 1)
+	if err := c.enqueue(ctx, &SessionCatalogListCmd{Ctx: ctx, Workdir: workdir, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Sessions, result.Err
+}
+
+// GetSessionInfo reads one session catalog entry through the controller.
+func (c *Controller) GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionCatalogLookupResult, 1)
+	if err := c.enqueue(ctx, &SessionCatalogLookupCmd{Ctx: ctx, SessionID: sessionID, Reply: reply}); err != nil {
+		return session.SessionInfoEntry{}, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return session.SessionInfoEntry{}, err
+	}
+	return result.Info, result.Err
+}
+
+// UpdateSession persists catalog metadata through the controller.
+func (c *Controller) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
+	ctx = commandContext(ctx)
+	reply := make(chan error, 1)
+	return c.enqueueSync(ctx, &SessionCatalogUpdateCmd{Ctx: ctx, Info: info, Reply: reply}, reply)
+}
+
+// GetInputs reads bounded composer history through the controller.
+func (c *Controller) GetInputs(ctx context.Context, workdir string, limit int) ([]string, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan InputHistoryGetResult, 1)
+	if err := c.enqueue(ctx, &InputHistoryGetCmd{Ctx: ctx, Workdir: workdir, Limit: limit, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Inputs, result.Err
+}
+
+// AddInput appends one composer-history item through the controller.
+func (c *Controller) AddInput(ctx context.Context, workdir, input string) error {
+	ctx = commandContext(ctx)
+	reply := make(chan error, 1)
+	return c.enqueueSync(ctx, &InputHistoryAddCmd{Ctx: ctx, Workdir: workdir, Input: input, Reply: reply}, reply)
 }
 
 // CloseResources closes host-created resources after the controller has

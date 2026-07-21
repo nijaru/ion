@@ -77,7 +77,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.pasteImageFromClipboard()
 
 	case "ctrl+c":
-		// Pi parity: Ctrl+C always clears editor.
+		// Ctrl+C clears a non-empty editor.
 		// Escape cancels/aborts. Ctrl+D exits when empty.
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
@@ -111,7 +111,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "esc":
-		// Pi parity: double-Escape opens tree/fork when idle.
+		// Double Escape opens tree/fork when idle.
 		if !m.InFlight.Thinking && m.Input.Pending == pendingActionNone {
 			now := time.Now()
 			if !m.Picker.LastEscAt.IsZero() && now.Sub(m.Picker.LastEscAt) < 500*time.Millisecond {

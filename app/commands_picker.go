@@ -386,10 +386,8 @@ func (m Model) startupPickerCmd() tea.Cmd {
 	if sessionPicker := m.Picker.Session; sessionPicker != nil &&
 		sessionPicker.loading &&
 		sessionPicker.request != 0 &&
-		m.Model.Store != nil {
-		if store, ok := m.Model.Store.(sessionCatalogReader); ok {
-			return loadSessionPickerItems(sessionPicker.request, store, m.App.Workdir)
-		}
+		m.Model.SessionCatalog != nil {
+		return loadSessionPickerItems(sessionPicker.request, m.Model.SessionCatalog, m.App.Workdir)
 	}
 
 	return nil

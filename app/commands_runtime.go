@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,14 +16,14 @@ import (
 )
 
 func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		return m, cmdError("session store not available")
+	if m.Model.SessionCatalog == nil {
+		return m, cmdError("session catalog not available")
 	}
 
 	switchID := m.runtimeRequest().begin("Loading session...")
-	store := m.Model.Store
+	catalog := m.Model.SessionCatalog
 	return m, func() tea.Msg {
-		cfg, err := m.storedSessionConfig(context.Background(), store, sessionID)
+		cfg, err := m.storedSessionConfig(context.Background(), catalog, sessionID)
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
@@ -36,35 +37,17 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 func (m Model) storedSessionConfig(
 	ctx context.Context,
-	store session.Store,
+	catalog agent.SessionCatalog,
 	sessionID string,
 ) (*config.Config, error) {
-	if _, err := store.GetEntry(ctx, sessionID); err != nil {
+	if catalog == nil {
+		return nil, fmt.Errorf("session catalog is unavailable")
+	}
+	info, err := catalog.GetSessionInfo(ctx, sessionID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to find session %s: %w", sessionID, err)
 	}
-	var model string
-	if lookup, ok := store.(sessionCatalogLookup); ok {
-		info, err := lookup.GetSessionInfo(ctx, sessionID)
-		if err == nil {
-			model = info.Model
-		}
-	}
-	if model == "" {
-		catalog, ok := store.(sessionCatalogReader)
-		if !ok {
-			return nil, fmt.Errorf("session store does not support session catalog")
-		}
-		sessions, err := catalog.ListSessions(ctx, m.App.Workdir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list sessions: %w", err)
-		}
-		for _, info := range sessions {
-			if info.ID() == sessionID {
-				model = info.Model
-				break
-			}
-		}
-	}
+	model := info.Model
 	provider, modelName := splitStoredSessionModel(model)
 	if provider == "" || modelName == "" {
 		return nil, fmt.Errorf("session %s is missing provider/model metadata", sessionID)
@@ -354,7 +337,7 @@ func pickScopedModel(
 	currentModel string,
 	forward bool,
 ) (config.ScopedModel, bool) {
-	// Filter by auth availability (Pi parity)
+	// Filter by authentication availability.
 	models = filterScopedModelsByAuth(models)
 	if len(models) <= 1 {
 		return config.ScopedModel{}, false
@@ -389,11 +372,11 @@ func (m Model) currentMaterializedSessionID() string {
 	if id != "" {
 		return id
 	}
-	if m.activeSession() == nil {
-		return ""
-	}
 	if m.Model.Storage == nil {
-		return m.activeSession().ID()
+		if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
+			return strings.TrimSpace(reader.SessionID())
+		}
+		return ""
 	}
 	return strings.TrimSpace(m.Model.Storage.ID())
 }
@@ -493,7 +476,23 @@ func (m Model) resumeRuntimeCommand(
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
-		resumeBranch := currentBranchName(m.App.Branch, result.Runtime.Handles.Storage)
+		storage := result.Runtime.Handles.Storage
+		if storage == nil {
+			closeErr := closeRuntimeHandles(result.Runtime.Handles)
+			return runtimeSwitchErrorMsg{
+				switchID: switchID,
+				err:      errors.Join(errors.New("resumed runtime has no storage"), closeErr),
+			}
+		}
+		entries, err := storage.Entries(context.Background())
+		if err != nil {
+			closeErr := closeRuntimeHandles(result.Runtime.Handles)
+			return runtimeSwitchErrorMsg{
+				switchID: switchID,
+				err:      errors.Join(fmt.Errorf("load resumed session: %w", err), closeErr),
+			}
+		}
+		resumeBranch := currentBranchName(m.App.Branch, storage)
 		printLines := []string{m.runtimeHeaderLine(result.Runtime.Handles.Info)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
 			printLines = append(printLines, header)
@@ -504,7 +503,7 @@ func (m Model) resumeRuntimeCommand(
 			runtime:       result.Runtime,
 			previous:      result.Previous,
 			printLines:    printLines,
-			replayEntries: func() []session.Entry { e, _ := result.GetEntries(context.Background(), m.Model.Store); return e }(),
+			replayEntries: entries,
 			notice:        session.EntryText(notice),
 			showStatus:    false,
 		}
@@ -539,6 +538,15 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner
 	m.Model.Storage = msg.runtime.Handles.Storage
+	m.Model.SessionCatalog = nil
+	m.Model.InputHistory = nil
+	m.Model.LeafID = ""
+	if catalog, ok := msg.runtime.Handles.Runner.(agent.SessionCatalog); ok {
+		m.Model.SessionCatalog = catalog
+	}
+	if history, ok := msg.runtime.Handles.Runner.(agent.InputHistory); ok {
+		m.Model.InputHistory = history
+	}
 	if msg.runtime.Handles.Info != nil {
 		boot := msg.runtime.Handles.Info.Bootstrap()
 		m.Model.Recovery = append([]session.ActionRecord(nil), boot.Recovery...)
@@ -612,7 +620,7 @@ func closeRuntimeHandles(handles Handles) error {
 	return CloseHandles(handles)
 }
 
-func currentBranchName(defaultBranch string, sess persistenceAdapter) string {
+func currentBranchName(defaultBranch string, sess RuntimeStorage) string {
 	if sess == nil {
 		return defaultBranch
 	}

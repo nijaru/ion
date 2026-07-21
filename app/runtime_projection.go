@@ -10,6 +10,7 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	if snapshot.SessionID != "" {
 		m.Model.Runtime.SessionID = snapshot.SessionID
 	}
+	m.Model.LeafID = snapshot.LeafID
 	m.Model.Runtime.Materialized = true
 	if snapshot.Model.Provider != "" {
 		m.Model.Runtime.Provider = snapshot.Model.Provider

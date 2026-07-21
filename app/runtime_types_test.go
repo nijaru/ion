@@ -8,7 +8,6 @@ import (
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
-	"github.com/nijaru/ion/session"
 )
 
 type trackingRuntimeRunner struct {
@@ -48,7 +47,7 @@ func TestSwitchRejectsIncompleteRuntimeWithoutPersisting(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
 	saved := false
-	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 		return stubBackend{provider: "openai", model: "gpt-4.1"}, newRunner, nil, nil
 	}
 	input.SaveState = func(config.RuntimeStateUpdate) error {
@@ -75,9 +74,9 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 	oldRunner := &trackingRuntimeRunner{}
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
-	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 		handles := completeRuntimeHandles(newRunner)
-		return handles.Info, handles.Runner, handles.Storage.(session.Session), nil
+		return handles.Info, handles.Runner, handles.Storage, nil
 	}
 	input.SaveState = func(config.RuntimeStateUpdate) error {
 		return errors.New("state store unavailable")
@@ -98,9 +97,9 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
-	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 		handles := completeRuntimeHandles(newRunner)
-		return handles.Info, handles.Runner, handles.Storage.(session.Session), nil
+		return handles.Info, handles.Runner, handles.Storage, nil
 	}
 	saved := false
 	input.SaveState = func(update config.RuntimeStateUpdate) error {
@@ -128,7 +127,7 @@ func TestResumeRejectsIncompleteRuntimeWithoutPersisting(t *testing.T) {
 		Transition: NewTransition(cfg, cfg, PresetPrimary, ""),
 		Current:    completeRuntimeHandles(oldRunner),
 		SessionID:  "resume",
-		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 			return stubBackend{provider: "openai", model: "gpt-4.1"}, nil, newStorage, nil
 		},
 	}

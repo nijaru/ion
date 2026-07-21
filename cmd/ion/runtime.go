@@ -25,14 +25,6 @@ import (
 	ionmcp "github.com/nijaru/ion/tool/mcp"
 )
 
-type sessionCatalogReader interface {
-	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
-}
-
-type sessionCatalogWriter interface {
-	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
-}
-
 func closeRuntimeHandles(
 	runner agent.Runtime,
 	store session.Store,
@@ -94,10 +86,10 @@ func loadPromptTemplatesFromDirs(dirs []string) map[string]string {
 
 func recentSessionForContinue(
 	ctx context.Context,
-	store sessionCatalogReader,
+	catalog agent.SessionCatalog,
 	cwd string,
 ) (*session.SessionInfoEntry, error) {
-	sessions, err := store.ListSessions(ctx, cwd)
+	sessions, err := catalog.ListSessions(ctx, cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +152,7 @@ func startupSessionID(
 	if !continueRequested {
 		return "", nil
 	}
-	catalog, ok := store.(sessionCatalogReader)
+	catalog, ok := store.(agent.SessionCatalog)
 	if !ok {
 		return "", fmt.Errorf("session store does not support session catalog")
 	}
@@ -305,22 +297,23 @@ func openRuntime(
 	if len(approvalInteractive) > 0 {
 		interactive = approvalInteractive[0]
 	}
+	sess := session.NewSession(store, 64)
+	storage := app.RuntimeStorage(sess)
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, nil
+		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, nil
 	}
 	durableStore, ok := store.(session.DurableStore)
 	if !ok {
-		return app.NewSetupRuntime(&runtimeCfg, store, "session store does not support durable turns"), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, storage, "session store does not support durable turns"), nil, nil,
 			fmt.Errorf("session store does not support durable turns")
 	}
 	actionJournal, ok := store.(session.ActionJournal)
 	if !ok {
-		return app.NewSetupRuntime(&runtimeCfg, store, "session store does not support durable action journaling"), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, storage, "session store does not support durable action journaling"), nil, nil,
 			fmt.Errorf("session store does not support durable action journaling")
 	}
-
-	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, store)
+	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg, storage)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -337,14 +330,14 @@ func openRuntime(
 		// Keep startup recoverable for the TUI, but never present an incomplete
 		// runtime as accepted. Callers must handle the error before installing
 		// or persisting this setup runtime.
-		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil,
+		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil,
 			fmt.Errorf("initialize provider: %w", err)
 	}
 	provider = providerWithRetryPolicy(provider, &runtimeCfg)
 
 	mcpRuntime, err := openMCPRuntime(ctx, cwd, runtimeCfg.MCPServers)
 	if err != nil {
-		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 	}
 	var memoryStore *ionmemory.Store
 	closeRuntimeResources := func() error {
@@ -361,12 +354,12 @@ func openRuntime(
 		dataDir, err := config.DefaultDataDir()
 		if err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 		}
 		memoryStore, err = ionmemory.Open(filepath.Join(dataDir, "memory.db"))
 		if err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 		}
 	}
 
@@ -379,7 +372,7 @@ func openRuntime(
 	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, jobs)
 	if err != nil {
 		_ = closeRuntimeResources()
-		return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+		return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 	}
 	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
 		// Non-fatal: start without tools if registration fails.
@@ -388,14 +381,14 @@ func openRuntime(
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
 			_ = closeRuntimeResources()
-			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 		}
 	}
 	for _, external := range mcpRuntime.Tools() {
 		if _, exists := toolRegistry.Get(external.Spec().Name); exists {
 			_ = closeRuntimeResources()
 			err := fmt.Errorf("MCP tool name %q collides with an existing tool", external.Spec().Name)
-			return app.NewSetupRuntime(&runtimeCfg, store, err.Error()), nil, nil, err
+			return app.NewSetupRuntime(&runtimeCfg, storage, err.Error()), nil, nil, err
 		}
 		toolRegistry.Register(external)
 	}
@@ -502,8 +495,6 @@ func openRuntime(
 			return nil, nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 		}
 	}
-
-	sess := session.NewSession(store, 64)
 
 	harness := agent.NewController(agent.ControllerConfig{
 		Session:             sess,

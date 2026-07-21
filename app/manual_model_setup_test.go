@@ -10,7 +10,6 @@ import (
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
-	"github.com/nijaru/ion/session"
 )
 
 type modelCatalogStub struct {
@@ -280,7 +279,7 @@ func TestManualModelPromptCommitsArbitraryModelID(t *testing.T) {
 
 func TestManualModelPromptRestoresRetryAfterSwitchFailure(t *testing.T) {
 	model := readyModel(t).WithConfig(&config.Config{Provider: "moonshot"})
-	model.Model.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error) {
+	model.Model.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
 		return nil, nil, nil, errors.New("provider unavailable")
 	}
 	model.Picker.Setup = &setupPromptState{

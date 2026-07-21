@@ -218,16 +218,16 @@ func (b *acceptanceBuffer) String() string {
 
 func startAcceptanceProgram(
 	t *testing.T,
-	store session.Store,
+	catalog agent.SessionCatalog,
 	sess session.Session,
 	runner agent.Runtime,
 ) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
-	return startAcceptanceProgramWithJobs(t, store, sess, runner, nil)
+	return startAcceptanceProgramWithJobs(t, catalog, sess, runner, nil)
 }
 
 func startAcceptanceProgramWithJobs(
 	t *testing.T,
-	store session.Store,
+	catalog agent.SessionCatalog,
 	sess session.Session,
 	runner agent.Runtime,
 	jobs app.JobController,
@@ -235,7 +235,7 @@ func startAcceptanceProgramWithJobs(
 	t.Helper()
 	backend := newSmokeBackend("complete")
 	cfg := &config.Config{Provider: "fake", Model: "fake-model", BusyInput: "steer"}
-	model := app.New(backend, sess, store, "/tmp/ion-acceptance", "main", "test", nil).
+	model := app.New(backend, sess, catalog, "/tmp/ion-acceptance", "main", "test", nil).
 		WithRunner(runner).
 		WithJobs(jobs).
 		WithConfig(cfg)

@@ -838,9 +838,9 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	return nil
 }
 
-// GetSessionInfo returns one catalog record by its session/leaf ID.
-// It is a concrete catalog lookup for transport boundaries; Store intentionally
-// remains focused on the active tree and does not grow a catalog interface.
+// GetSessionInfo returns one catalog record by its session/leaf ID. The
+// concrete store supplies the optional SessionCatalog capability; Store itself
+// remains focused on the active tree.
 func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInfoEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

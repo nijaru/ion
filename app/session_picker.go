@@ -15,36 +15,18 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-type sessionCatalogReader interface {
-	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
-}
-
-type sessionCatalogLookup interface {
-	GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error)
-}
-
-type sessionCatalogWriter interface {
-	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
-}
-
 func (m Model) openSessionPicker() (Model, tea.Cmd) {
-	if m.Model.Store == nil {
-		m.pickerReducer().showSessionUnavailable()
-		return m, nil
-	}
-
-	store, ok := m.Model.Store.(sessionCatalogReader)
-	if !ok {
+	if m.Model.SessionCatalog == nil {
 		m.pickerReducer().showSessionUnavailable()
 		return m, nil
 	}
 	requestID := m.pickerReducer().beginSessionLoad()
-	return m, loadSessionPickerItems(requestID, store, m.App.Workdir)
+	return m, loadSessionPickerItems(requestID, m.Model.SessionCatalog, m.App.Workdir)
 }
 
-func loadSessionPickerItems(requestID uint64, store sessionCatalogReader, workdir string) tea.Cmd {
+func loadSessionPickerItems(requestID uint64, catalog agent.SessionCatalog, workdir string) tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := store.ListSessions(context.Background(), workdir)
+		sessions, err := catalog.ListSessions(context.Background(), workdir)
 		return sessionPickerLoadedMsg{requestID: requestID, sessions: sessions, err: err}
 	}
 }
@@ -67,12 +49,12 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+n":
-		// Pi parity: Ctrl+N toggles named session filter
+		// Ctrl+N toggles the named-session filter.
 		m.Picker.Session.namedOnly = !m.Picker.Session.namedOnly
 		m.pickerReducer().refreshSessionFilter(m.App.Workdir)
 		return m, nil
 	case "ctrl+s":
-		// Pi parity: Ctrl+S cycles sort mode
+		// Ctrl+S cycles the session-list sort mode.
 		m.Picker.Session.sortMode = (m.Picker.Session.sortMode + 1) % 3
 		m.pickerReducer().refreshSessionFilter(m.App.Workdir)
 		return m, nil

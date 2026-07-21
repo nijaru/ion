@@ -213,15 +213,33 @@ const (
 	SetupPromptModelID
 )
 
+// RuntimeEntryReader is the read-only bootstrap projection needed to render
+// persisted entries before an active runtime exists.
+type RuntimeEntryReader interface {
+	Entries(context.Context) ([]session.Entry, error)
+}
+
+// RuntimeStorage is the narrow host/runtime projection used by the TUI.
+// It deliberately excludes mutation, tree navigation, and lifecycle methods;
+// those belong to the active agent runtime or the host composition root.
+type RuntimeStorage interface {
+	RuntimeEntryReader
+	ID() string
+	Meta() session.Metadata
+	Usage(context.Context) (session.Usage, error)
+}
+
 // Handles holds resolved runtime references.
 type Handles struct {
 	Info    RuntimeInfo
 	Runner  agent.Runtime
-	Storage persistenceAdapter
+	Storage RuntimeStorage
 }
 
-// Switcher creates a new runtime info object, harness, and storage session for model switching.
-type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, session.Session, error)
+// Switcher creates a new runtime info object, harness, and narrow storage
+// projection for model switching. The host retains ownership of the concrete
+// session and closes it separately.
+type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error)
 
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
@@ -242,13 +260,6 @@ type SwitchResult struct {
 	Previous Handles
 }
 
-func (r SwitchResult) GetEntries(ctx context.Context, store session.Store) ([]session.Entry, error) {
-	if store == nil {
-		return nil, nil
-	}
-	return store.Entries(ctx)
-}
-
 // ResumeInput holds the parameters for resuming a session.
 type ResumeInput struct {
 	Switcher   Switcher
@@ -256,7 +267,6 @@ type ResumeInput struct {
 	Current    Handles
 	SaveState  func(update config.RuntimeStateUpdate) error
 	Context    context.Context
-	Store      session.Store
 	SessionID  string
 }
 
@@ -377,11 +387,12 @@ func CloseHandles(handles Handles) error {
 
 // GetSessionState returns the active harness session ID if available.
 func GetSessionState(h Handles) (string, bool) {
-	owner, ok := h.Runner.(agent.SessionOwner)
-	if !ok || owner.Session() == nil {
+	reader, ok := h.Runner.(agent.SessionReader)
+	if !ok {
 		return "", false
 	}
-	return owner.Session().ID(), true
+	id := strings.TrimSpace(reader.SessionID())
+	return id, id != ""
 }
 
 // IsLocalBusyStatus returns true if the status indicates local activity.

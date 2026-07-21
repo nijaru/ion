@@ -214,8 +214,8 @@ type sessionPickerState struct {
 	err       string
 	loading   bool
 	request   uint64
-	namedOnly bool            // Pi parity: filter to named sessions only
-	sortMode  sessionSortMode // Pi parity: sort mode for session list
+	namedOnly bool            // Filter to named sessions only
+	sortMode  sessionSortMode // Current session-list sort mode
 }
 
 // sessionSortMode represents the sort mode for the session picker.
@@ -326,15 +326,6 @@ type AppState struct {
 	PrintedTranscript bool
 }
 
-// persistenceAdapter is the narrow TUI capability for display-only session writes
-// and reads. The harness remains the owner of the active session and turn state.
-type persistenceAdapter interface {
-	ID() string
-	Meta() session.Metadata
-	Entries(context.Context) ([]session.Entry, error)
-	Usage(context.Context) (session.Usage, error)
-}
-
 // ConfigLoader loads the effective process configuration for /reload. The
 // command host may inject process-lifetime overrides (for example CLI flags)
 // while app retains config.Load as the standalone default.
@@ -343,11 +334,12 @@ type ConfigLoader func() (*config.Config, error)
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
 	Info                 RuntimeInfo
-	Storage              persistenceAdapter
+	Storage              RuntimeStorage
+	SessionCatalog       agent.SessionCatalog
+	InputHistory         agent.InputHistory
 	Jobs                 JobController
 	Memory               MemoryController
 	Checkpoints          CheckpointController
-	Store                session.Store
 	Switcher             Switcher
 	ConfigLoader         ConfigLoader
 	Catalog              ModelCatalog
@@ -377,6 +369,9 @@ type ModelState struct {
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
 	// registry-level startup description.
 	ActiveTools []string
+	// LeafID is the current runtime-selected tree leaf from the authoritative
+	// event snapshot. It is a render/query hint, never a mutation authority.
+	LeafID string
 }
 
 // PickerState holds state for the various overlay pickers.
@@ -449,8 +444,8 @@ type Model struct {
 
 func New(
 	b RuntimeInfo,
-	s session.Session,
-	store session.Store,
+	storage RuntimeStorage,
+	catalog agent.SessionCatalog,
 	workdir, branch, version string,
 	switcher Switcher,
 ) Model {
@@ -487,12 +482,12 @@ func New(
 			ActivePreset: PresetPrimary,
 		},
 		Model: ModelState{
-			Info:     b,
-			Storage:  s,
-			Store:    store,
-			Recovery: append([]session.ActionRecord(nil), boot.Recovery...),
-			Switcher: switcher,
-			Catalog:  llm.NewModelCatalog(llm.ModelCatalogOptions{}),
+			Info:           b,
+			Storage:        storage,
+			SessionCatalog: catalog,
+			Recovery:       append([]session.ActionRecord(nil), boot.Recovery...),
+			Switcher:       switcher,
+			Catalog:        llm.NewModelCatalog(llm.ModelCatalogOptions{}),
 		},
 		InFlight: InFlightState{},
 		Progress: ProgressState{
@@ -521,12 +516,15 @@ func New(
 		m.progressReducer().setReasoningEffort(config.DefaultReasoningEffort)
 	}
 
-	if s != nil {
-		if usage, err := s.Usage(context.Background()); err == nil {
+	if storage != nil {
+		if usage, err := storage.Usage(context.Background()); err == nil {
 			m.progressReducer().applySessionUsage(usage.Input, usage.Output, usage.Cost.Total)
 		}
 	}
-	m.loadInputHistory(context.Background())
+	if history, ok := catalog.(agent.InputHistory); ok {
+		m.Model.InputHistory = history
+		m.loadInputHistory(context.Background())
+	}
 
 	return m
 }
@@ -703,6 +701,14 @@ func (m Model) WithCheckpoints(checkpoints CheckpointController) Model {
 // Runner for turn execution and events rather than duplicating session state.
 func (m Model) WithRunner(r agent.Runtime) Model {
 	m.Model.Runner = r
+	m.Model.SessionCatalog = nil
+	m.Model.InputHistory = nil
+	if catalog, ok := r.(agent.SessionCatalog); ok {
+		m.Model.SessionCatalog = catalog
+	}
+	if history, ok := r.(agent.InputHistory); ok {
+		m.Model.InputHistory = history
+	}
 	return m
 }
 func (m Model) configurationStatus() string {
@@ -1024,14 +1030,6 @@ func (m *Model) refreshRuntimeSessionSnapshot() {
 	sessionID, materialized := GetSessionState(m.Handles())
 	m.Model.Runtime.SessionID = sessionID
 	m.Model.Runtime.Materialized = materialized
-}
-
-func (m Model) activeSession() session.Session {
-	owner, ok := m.Model.Runner.(agent.SessionOwner)
-	if !ok {
-		return nil
-	}
-	return owner.Session()
 }
 
 func (m Model) Handles() Handles {

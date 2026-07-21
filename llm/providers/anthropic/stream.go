@@ -47,7 +47,7 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 		case "message_delta":
 			delta := event.AsMessageDelta()
 			chunk := s.updateUsage(usageFromMessageDelta(delta.Usage))
-			// Set stop reason from message delta (Pi parity)
+			// Set stop reason from the message delta.
 			if delta.Delta.StopReason != "" {
 				chunk.StopReason = mapStopReason(string(delta.Delta.StopReason))
 			}

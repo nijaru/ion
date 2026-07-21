@@ -110,7 +110,7 @@ func TestHarnessEmitsEvents(t *testing.T) {
 		case envelope := <-sub.Events:
 			e := envelope.Event
 			events = append(events, e)
-			// AgentEnd now precedes Settled (Pi parity), so wait for Settled or timeout after AgentEnd.
+			// AgentEnd now precedes Settled; wait for Settled or timeout after AgentEnd.
 			if _, ok := e.(session.Settled); ok {
 				goto afterSettled
 			}

@@ -745,48 +745,44 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 }
 
 func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
-	if m.Model.Store == nil {
+	catalog := m.Model.SessionCatalog
+	if catalog == nil {
 		return nil
 	}
-	info, ok := m.currentSessionInfo(context.Background())
+	reader, ok := m.Model.Runner.(agent.SessionReader)
 	if !ok {
 		return nil
 	}
-	store, ok := m.Model.Store.(sessionCatalogWriter)
-	if !ok {
+	id := strings.TrimSpace(reader.SessionID())
+	if id == "" || id == "ion" {
 		return nil
 	}
+	workdir := m.App.Workdir
+	branch := m.App.Branch
+	modelName := m.currentSessionModelName()
 	return func() tea.Msg {
-		if err := store.UpdateSession(context.Background(), info); err != nil {
+		entries, err := reader.SessionBranch(context.Background())
+		if err != nil {
+			return localErrorMsg{err: fmt.Errorf("load session branch for catalog: %w", err)}
+		}
+		info, ok := sessionInfoFromBranch(
+			id, workdir, branch, modelName, entries, time.Now(),
+		)
+		if !ok {
+			return nil
+		}
+		if err := catalog.UpdateSession(context.Background(), info); err != nil {
 			return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}
 		}
 		return nil
 	}
 }
 
-func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry, bool) {
-	id := ""
-	if m.Model.Store != nil {
-		id = m.Model.Store.GetLeafID()
-	}
-	if id == "" && m.activeSession() != nil {
-		id = m.activeSession().ID()
-	}
-	if id == "" || id == "ion" {
-		return session.SessionInfoEntry{}, false
-	}
-
-	var entries []session.Entry
-	var err error
-	if m.activeSession() != nil {
-		entries, err = m.activeSession().Branch(ctx)
-	} else if m.Model.Store != nil {
-		entries, err = m.Model.Store.Branch(ctx)
-	}
-	if err != nil {
-		return session.SessionInfoEntry{}, false
-	}
-
+func sessionInfoFromBranch(
+	id, workdir, branch, modelName string,
+	entries []session.Entry,
+	now time.Time,
+) (session.SessionInfoEntry, bool) {
 	firstUser := ""
 	lastUser := ""
 	for _, entry := range entries {
@@ -811,13 +807,13 @@ func (m Model) currentSessionInfo(ctx context.Context) (session.SessionInfoEntry
 	}
 
 	return session.SessionInfoEntry{
-		EntryBase:   session.EntryBase{ID: id, Timestamp: time.Now()},
-		Workdir:     m.App.Workdir,
-		Model:       m.currentSessionModelName(),
-		Branch:      m.App.Branch,
+		EntryBase:   session.EntryBase{ID: id, Timestamp: now},
+		Workdir:     workdir,
+		Model:       modelName,
+		Branch:      branch,
 		Name:        truncateRunes(firstUser, 80),
 		LastPreview: truncateRunes(lastUser, 120),
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   now,
 	}, true
 }
 

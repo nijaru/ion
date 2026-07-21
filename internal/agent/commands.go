@@ -351,6 +351,95 @@ type ImportSessionResult struct {
 	Err error
 }
 
+// SessionBranchCmd reads the current active branch through the controller.
+type SessionBranchCmd struct {
+	Ctx   context.Context
+	Reply chan<- SessionBranchResult
+}
+
+func (SessionBranchCmd) command() {}
+
+type SessionBranchResult struct {
+	Entries []session.Entry
+	Err     error
+}
+
+// SessionTreeCmd reads the active session tree and selected leaf through the
+// controller. The app receives a projection, never the store.
+type SessionTreeCmd struct {
+	Ctx   context.Context
+	Reply chan<- SessionTreeResult
+}
+
+func (SessionTreeCmd) command() {}
+
+type SessionTreeResult struct {
+	Tree SessionTreeSnapshot
+	Err  error
+}
+
+// SessionCatalogListCmd lists sessions for a workdir.
+type SessionCatalogListCmd struct {
+	Ctx     context.Context
+	Workdir string
+	Reply   chan<- SessionCatalogListResult
+}
+
+func (SessionCatalogListCmd) command() {}
+
+type SessionCatalogListResult struct {
+	Sessions []session.SessionInfoEntry
+	Err      error
+}
+
+// SessionCatalogLookupCmd reads one session catalog entry.
+type SessionCatalogLookupCmd struct {
+	Ctx       context.Context
+	SessionID string
+	Reply     chan<- SessionCatalogLookupResult
+}
+
+func (SessionCatalogLookupCmd) command() {}
+
+type SessionCatalogLookupResult struct {
+	Info session.SessionInfoEntry
+	Err  error
+}
+
+// SessionCatalogUpdateCmd persists one session catalog entry.
+type SessionCatalogUpdateCmd struct {
+	Ctx   context.Context
+	Info  session.SessionInfoEntry
+	Reply chan<- error
+}
+
+func (SessionCatalogUpdateCmd) command() {}
+
+// InputHistoryGetCmd reads bounded composer history.
+type InputHistoryGetCmd struct {
+	Ctx     context.Context
+	Workdir string
+	Limit   int
+	Reply   chan<- InputHistoryGetResult
+}
+
+func (InputHistoryGetCmd) command() {}
+
+type InputHistoryGetResult struct {
+	Inputs []string
+	Err    error
+}
+
+// InputHistoryAddCmd appends one composer history item.
+type InputHistoryAddCmd struct {
+	Ctx     context.Context
+	Workdir string
+	Input   string
+	Reply   chan<- error
+}
+
+func (InputHistoryAddCmd) command() {}
+
 // commandResult is a helper for sending exactly one result on a reply channel.
 func sendResult[T any](reply chan<- T, result T) {
 	if reply == nil {

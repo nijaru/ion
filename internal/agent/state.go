@@ -211,4 +211,5 @@ var (
 var (
 	ErrSubscriptionLagged = errors.New("runtime event subscription lagged")
 	ErrSnapshotChanged    = errors.New("runtime snapshot changed during subscription")
+	ErrSessionTreeChanged = errors.New("session tree changed during projection")
 )

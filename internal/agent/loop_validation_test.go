@@ -186,7 +186,7 @@ func TestValidateArgsSupportsTupleItems(t *testing.T) {
 	}
 }
 
-func TestValidateArgsCoercesPiCompatiblePrimitiveValues(t *testing.T) {
+func TestValidateArgsCoercesPrimitiveValues(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
