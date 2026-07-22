@@ -21,12 +21,22 @@ func (m Model) openSessionPicker() (Model, tea.Cmd) {
 		return m, nil
 	}
 	requestID := m.pickerReducer().beginSessionLoad()
-	return m, loadSessionPickerItems(requestID, m.Model.SessionCatalog, m.App.Workdir)
+	return m, loadSessionPickerItems(
+		requestID,
+		m.Model.SessionCatalog,
+		m.App.Workdir,
+		m.runtimeOperationContext(),
+	)
 }
 
-func loadSessionPickerItems(requestID uint64, catalog agent.SessionCatalog, workdir string) tea.Cmd {
+func loadSessionPickerItems(
+	requestID uint64,
+	catalog agent.SessionCatalog,
+	workdir string,
+	ctx context.Context,
+) tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := catalog.ListSessions(context.Background(), workdir)
+		sessions, err := catalog.ListSessions(ctx, workdir)
 		return sessionPickerLoadedMsg{requestID: requestID, sessions: sessions, err: err}
 	}
 }

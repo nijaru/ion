@@ -25,11 +25,19 @@ func (r *recordingForkRunner) ForkSession(ctx context.Context, parentID string) 
 }
 
 type cancelAwareSessionCatalog struct {
-	started chan struct{}
+	started     chan struct{}
+	listStarted chan struct{}
+	listContext context.Context
 }
 
-func (c *cancelAwareSessionCatalog) ListSessions(context.Context, string) ([]session.SessionInfoEntry, error) {
-	return nil, nil
+func (c *cancelAwareSessionCatalog) ListSessions(ctx context.Context, _ string) ([]session.SessionInfoEntry, error) {
+	c.listContext = ctx
+	if c.listStarted == nil {
+		return nil, nil
+	}
+	close(c.listStarted)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (c *cancelAwareSessionCatalog) GetSessionInfo(context.Context, string) (session.SessionInfoEntry, error) {
@@ -481,6 +489,34 @@ func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stale catalog update ignored runtime cancellation")
+	}
+}
+
+func TestSessionPickerUsesCancelableRuntimeContext(t *testing.T) {
+	model := readyModel(t)
+	catalog := &cancelAwareSessionCatalog{listStarted: make(chan struct{})}
+	model.Model.SessionCatalog = catalog
+
+	updated, cmd := model.openSessionPicker()
+	if cmd == nil {
+		t.Fatal("session picker returned no load command")
+	}
+	expectedContext := updated.runtimeOperationContext()
+	resultCh := make(chan any, 1)
+	go func() { resultCh <- cmd() }()
+	select {
+	case <-catalog.listStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session picker list did not start")
+	}
+	if catalog.listContext != expectedContext {
+		t.Fatalf("session picker context = %v, want accepted runtime context", catalog.listContext)
+	}
+
+	updated.rotateRuntimeContext()
+	result, ok := (<-resultCh).(sessionPickerLoadedMsg)
+	if !ok || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled session picker result = %#v, want context cancellation", result)
 	}
 }
 
