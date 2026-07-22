@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	ionexport "github.com/nijaru/ion/internal/export"
@@ -525,7 +526,7 @@ func (h *Controller) runPrompt(ctx context.Context, text string, images ...sessi
 	if reason := terminalTurnFailure(msgs); reason != "" {
 		return assistant, &TurnError{
 			Phase:    PhaseStreaming,
-			Kind:     KindTool,
+			Kind:     terminalTurnFailureKind(msgs),
 			Cause:    errors.New(reason),
 			Recovery: RecoveryAbort,
 		}
@@ -605,6 +606,31 @@ func terminalTurnFailure(messages []session.Message) string {
 		return ""
 	}
 	return ""
+}
+
+func terminalTurnFailureKind(messages []session.Message) ErrorKind {
+	for i := len(messages) - 1; i >= 0; i-- {
+		assistant, ok := messages[i].(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.StopReason == session.StopReasonAborted {
+			return KindCancellation
+		}
+		if isCancellationFailure(assistant.Error) {
+			return KindCancellation
+		}
+		return KindProvider
+	}
+	return KindProvider
+}
+
+func isCancellationFailure(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(reason, "context canceled") ||
+		strings.Contains(reason, "context cancelled") ||
+		strings.Contains(reason, "deadline exceeded") ||
+		strings.Contains(reason, "response aborted")
 }
 
 func turnOutcomeForMessages(messages []session.Message) TurnOutcome {

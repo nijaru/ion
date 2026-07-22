@@ -693,6 +693,14 @@ func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
 	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" || len(record.InputImages) != 1 || string(record.InputImages[0].Data) != "prompt-image" || record.ContextID != "context-base" {
 		t.Fatalf("unexpected begin record: %+v", record)
 	}
+	gotRecord, err := store.GetTurn(ctx, record.ID)
+	if err != nil || gotRecord.State != TurnStarted {
+		t.Fatalf("GetTurn(started) = (%+v, %v), want started record", gotRecord, err)
+	}
+	latestRecord, err := store.LatestTurn(ctx)
+	if err != nil || latestRecord.ID != record.ID {
+		t.Fatalf("LatestTurn(started) = (%+v, %v), want %q", latestRecord, err, record.ID)
+	}
 	draft := &MessageEntry{
 		EntryBase: EntryBase{ID: "draft-commit", ParentID: baseID, Timestamp: time.Now()},
 		Message:   NewUserText("draft", time.Now()),
@@ -730,6 +738,10 @@ func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
 	}
 	if len(branch) != 2 || branch[1].ID() != draft.ID() {
 		t.Fatalf("committed branch = %v, want draft appended", entryIDs(branch))
+	}
+	gotRecord, err = store.GetTurn(ctx, record.ID)
+	if err != nil || gotRecord.State != TurnCommitted || gotRecord.EndedAt.IsZero() {
+		t.Fatalf("GetTurn(committed) = (%+v, %v), want ended committed record", gotRecord, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -769,6 +781,10 @@ func TestInterruptedTurnIsRetainedButExcludedFromReplay(t *testing.T) {
 	}
 	defer reopened.Close()
 	replayed := NewSession(reopened, 0)
+	gotRecord, err := reopened.GetTurn(ctx, record.ID)
+	if err != nil || gotRecord.State != TurnInterrupted || gotRecord.EndedAt.IsZero() {
+		t.Fatalf("GetTurn(interrupted) = (%+v, %v), want ended interrupted record", gotRecord, err)
+	}
 	turns, err := reopened.InterruptedTurns(ctx)
 	if err != nil {
 		t.Fatal(err)

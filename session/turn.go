@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,7 @@ type TurnRecord struct {
 type DurableStore interface {
 	Store
 	BeginTurn(ctx context.Context, turnID, input string, inputImages []ImageContent, contextID string) (TurnRecord, error)
+	GetTurn(ctx context.Context, turnID string) (TurnRecord, error)
 	AppendTurnEntry(ctx context.Context, turnID string, entry Entry) (string, error)
 	TurnBranch(ctx context.Context, turnID string) ([]Entry, error)
 	CommitTurn(ctx context.Context, turnID string) error
@@ -117,6 +119,53 @@ func (s *SQLiteStore) TurnBranch(ctx context.Context, turnID string) ([]Entry, e
 }
 
 var _ DurableStore = (*SQLiteStore)(nil)
+
+// GetTurn reads authoritative lifecycle evidence for one durable turn. It is
+// separate from replay: started, aborted, and interrupted turns remain
+// inspectable even though only committed entries enter the session branch.
+func (s *SQLiteStore) GetTurn(ctx context.Context, turnID string) (TurnRecord, error) {
+	ctx = normalizeContext(ctx)
+	if strings.TrimSpace(turnID) == "" {
+		return TurnRecord{}, fmt.Errorf("turn ID is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return TurnRecord{}, err
+	}
+	record, err := scanTurnRecord(s.db.QueryRowContext(ctx, `
+		SELECT turn_id, sequence, state, leaf_id, input, input_images, context_id, started_at, ended_at, error
+		FROM turns WHERE turn_id = ?`, turnID))
+	if err == sql.ErrNoRows {
+		return TurnRecord{}, fmt.Errorf("%w: %s", ErrTurnNotFound, turnID)
+	}
+	if err != nil {
+		return TurnRecord{}, fmt.Errorf("read turn %q: %w", turnID, err)
+	}
+	return record, nil
+}
+
+// LatestTurn returns the most recently started durable turn. It is intended
+// for recovery and diagnostics after a runtime has settled; callers that know
+// the turn identity should use GetTurn instead.
+func (s *SQLiteStore) LatestTurn(ctx context.Context) (TurnRecord, error) {
+	ctx = normalizeContext(ctx)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return TurnRecord{}, err
+	}
+	record, err := scanTurnRecord(s.db.QueryRowContext(ctx, `
+		SELECT turn_id, sequence, state, leaf_id, input, input_images, context_id, started_at, ended_at, error
+		FROM turns ORDER BY sequence DESC LIMIT 1`))
+	if err == sql.ErrNoRows {
+		return TurnRecord{}, fmt.Errorf("%w: no turns", ErrTurnNotFound)
+	}
+	if err != nil {
+		return TurnRecord{}, fmt.Errorf("read latest turn: %w", err)
+	}
+	return record, nil
+}
 
 func normalizeContext(ctx context.Context) context.Context {
 	if ctx == nil {

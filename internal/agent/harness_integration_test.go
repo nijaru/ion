@@ -137,17 +137,21 @@ func TestHarnessIntegration_DurableCancelledTurnDoesNotReplay(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	})
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		_, _ = h.Prompt(ctx, "do not replay")
-		close(done)
+		_, err := h.Prompt(ctx, "do not replay")
+		done <- err
 	}()
 	<-started
 	h.SetModel(llm.Model{ID: "must-not-commit"})
 	if _, _, err := h.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	turnErr := <-done
+	var typedErr *TurnError
+	if !errors.As(turnErr, &typedErr) || typedErr.Kind != KindCancellation || typedErr.Recovery != RecoveryAbort {
+		t.Fatalf("cancelled prompt error = %v, want cancellation TurnError", turnErr)
+	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +392,7 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 	// Turn 1 fails.
 	msg1, err := h.Prompt(context.Background(), "first")
 	var turnErr *TurnError
-	if !errors.As(err, &turnErr) || turnErr.Kind != KindTool || turnErr.Recovery != RecoveryAbort {
+	if !errors.As(err, &turnErr) || turnErr.Kind != KindProvider || turnErr.Recovery != RecoveryAbort {
 		t.Fatalf("turn 1 error = %v, want failed TurnError", err)
 	}
 	if msg1 == nil {
