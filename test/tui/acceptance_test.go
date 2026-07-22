@@ -338,6 +338,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	waitAcceptanceSignal(t, initialProvider.started, "initial runtime provider")
 	waitForAcceptanceOutput(t, output, "model-a-output", "initial runtime output")
 	leafID := waitForAcceptanceSessionInfo(t, store, store)
+	waitForAcceptanceIdle(t, initialRunner)
 
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -350,6 +351,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, modelBProvider.started, "model-b provider")
 	waitForAcceptanceOutput(t, output, "model-b-output", "model-b runtime output")
+	waitForAcceptanceIdle(t, switchResult.runner)
 
 	program.Send(tea.KeyPressMsg{Text: "/resume " + leafID})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -363,6 +365,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	waitAcceptanceSignal(t, resumedProvider.started, "resumed runtime provider")
 	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
 	postResumeLeafID := waitForAcceptanceSessionInfo(t, store, store)
+	waitForAcceptanceIdle(t, resumeResult.runner)
 	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
