@@ -202,6 +202,24 @@ model capability and the streamed event. Set `ION_LIVE_REQUIRE_THINKING=1` to
 require thinking deltas from both profiles. These checks still require the
 opt-in live run and do not replace provider failure/cancellation evidence.
 
+The failure probes are separate opt-in requests. They require the same
+explicit profiles and are never enabled by `ION_LIVE_SMOKE=1` alone:
+
+```sh
+ION_LIVE_AUTH_FAILURE=1 ION_LIVE_SMOKE=1 \
+go test ./cmd/ion -run TestLiveProviderAuthenticationFailure -count=1 -timeout 90s -v
+
+ION_LIVE_CANCELLATION=1 ION_LIVE_SMOKE=1 \
+go test ./cmd/ion -run TestLiveProviderCancellation -count=1 -timeout 120s -v
+```
+
+The auth probe uses an invalid runtime-only token and reports only the
+provider/status classification. The cancellation probe sends a real request,
+then aborts at the response-body boundary and checks the aborted terminal event
+plus no durable replay. Controlled adapter tests cover deterministic 429,
+malformed, and overflow behavior separately; none of these probes replaces the
+required two-provider evidence record.
+
 ## License
 
 [MIT](LICENSE)
