@@ -22,8 +22,9 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 
 	switchID := m.runtimeRequest().begin("Loading session...")
 	catalog := m.Model.SessionCatalog
+	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
-		cfg, err := m.storedSessionConfig(context.Background(), catalog, sessionID)
+		cfg, err := m.storedSessionConfig(ctx, catalog, sessionID)
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
@@ -415,9 +416,10 @@ func (m Model) switchRuntimeCommandWithOptions(
 	switcher := m.Model.Switcher
 	current := m.Handles()
 	requestID := m.runtimeRequest().begin("Switching runtime...")
+	ctx := m.runtimeRequestOperationContext()
 
 	return m, func() tea.Msg {
-		result, err := Switch(context.Background(), SwitchInput{
+		result, err := Switch(ctx, SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
 			Current:         current,
@@ -432,7 +434,7 @@ func (m Model) switchRuntimeCommandWithOptions(
 				retry:    options.retrySetup,
 			}
 		}
-		leafID, err := selectedRuntimeLeafID(context.Background(), result.Runtime.Handles.Runner)
+		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
@@ -465,8 +467,9 @@ func (m Model) resumeRuntimeCommand(
 	switcher := m.Model.Switcher
 	current := m.Handles()
 	switchID := m.runtimeRequest().begin("Switching runtime...")
+	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
-		result, err := Resume(context.Background(), ResumeInput{
+		result, err := Resume(ctx, ResumeInput{
 			Switcher:   switcher,
 			Transition: transition,
 			Current:    current,
@@ -476,7 +479,7 @@ func (m Model) resumeRuntimeCommand(
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
-		leafID, err := selectedRuntimeLeafID(context.Background(), result.Runtime.Handles.Runner)
+		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
@@ -492,7 +495,7 @@ func (m Model) resumeRuntimeCommand(
 				err:      errors.Join(errors.New("resumed runtime has no storage"), closeErr),
 			}
 		}
-		entries, err := storage.Entries(context.Background())
+		entries, err := storage.Entries(ctx)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{

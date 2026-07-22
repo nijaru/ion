@@ -390,12 +390,17 @@ type ModelState struct {
 	// runtimeContext scopes asynchronous projection work to the accepted
 	// runtime generation. Runtime replacement cancels it before installing the
 	// next generation so stale writes cannot cross the projection boundary.
-	runtimeContext       context.Context
-	runtimeCancel        context.CancelFunc
-	RuntimeSwitchRequest uint64
-	SettingsRequest      uint64
-	MemoryRequest        uint64
-	CheckpointRequest    uint64
+	runtimeContext context.Context
+	runtimeCancel  context.CancelFunc
+	// runtimeRequestContext scopes in-flight runtime construction to the
+	// accepted runtime that requested it. Replacement cancels the parent
+	// runtime context; request completion clears this child separately.
+	runtimeRequestContext context.Context
+	runtimeRequestCancel  context.CancelFunc
+	RuntimeSwitchRequest  uint64
+	SettingsRequest       uint64
+	MemoryRequest         uint64
+	CheckpointRequest     uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
@@ -585,6 +590,13 @@ func (m Model) runtimeOperationContext() context.Context {
 		return m.Model.runtimeContext
 	}
 	return context.Background()
+}
+
+func (m Model) runtimeRequestOperationContext() context.Context {
+	if m.Model.runtimeRequestContext != nil {
+		return m.Model.runtimeRequestContext
+	}
+	return m.runtimeOperationContext()
 }
 
 func (m *Model) rotateRuntimeContext() {
@@ -978,7 +990,7 @@ func (m Model) handleRuntimeTransitionCommitted(
 	}
 	transition := msg.transition.WithHandles(m.Handles())
 	if transition.PersistReasoning && m.Model.Runner != nil {
-		if err := m.Model.Runner.SetThinking(context.Background(), thinkingLevelForRuntime(transition.Snapshot.Reasoning)); err != nil {
+		if err := m.Model.Runner.SetThinking(m.runtimeOperationContext(), thinkingLevelForRuntime(transition.Snapshot.Reasoning)); err != nil {
 			previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
 			if transition.PreviousReasoning != nil {
 				previous = *transition.PreviousReasoning

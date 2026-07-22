@@ -795,6 +795,11 @@ func (m *Model) runtimeRequest() runtimeRequestController {
 }
 
 func (c runtimeRequestController) begin(status string) uint64 {
+	if c.model.Model.runtimeRequestCancel != nil {
+		c.model.Model.runtimeRequestCancel()
+	}
+	c.model.Model.runtimeRequestContext, c.model.Model.runtimeRequestCancel =
+		context.WithCancel(c.model.runtimeOperationContext())
 	decision := BeginRuntimeRequest(RuntimeRequestBeginInput{
 		Current: c.model.Model.RuntimeSwitchRequest,
 		Status:  status,
@@ -816,6 +821,11 @@ func (c runtimeRequestController) finish(requestID uint64) bool {
 		return false
 	}
 	c.model.Model.RuntimeSwitchRequest = decision.Active
+	if c.model.Model.runtimeRequestCancel != nil {
+		c.model.Model.runtimeRequestCancel()
+		c.model.Model.runtimeRequestCancel = nil
+		c.model.Model.runtimeRequestContext = nil
+	}
 	if decision.ClearLocalStatus {
 		c.model.progressReducer().clearLocalBusyStatus()
 	}
@@ -825,6 +835,11 @@ func (c runtimeRequestController) finish(requestID uint64) bool {
 func (c runtimeRequestController) clear() {
 	decision := ClearRuntimeRequest()
 	c.model.Model.RuntimeSwitchRequest = decision.Active
+	if c.model.Model.runtimeRequestCancel != nil {
+		c.model.Model.runtimeRequestCancel()
+		c.model.Model.runtimeRequestCancel = nil
+		c.model.Model.runtimeRequestContext = nil
+	}
 	if decision.ClearLocalStatus {
 		c.model.progressReducer().clearLocalBusyStatus()
 	}
