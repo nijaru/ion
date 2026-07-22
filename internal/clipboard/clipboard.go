@@ -3,6 +3,7 @@ package clipboard
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -43,23 +44,23 @@ func readMacOSClipboard() (*ImageData, error) {
 	cmd := exec.Command("osascript", "-e", script)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	if err := cmd.Run(); err != nil {
 		// Try alternative method with pngpaste
 		return readMacOSClipboardAlt()
 	}
-	
+
 	data := stdout.Bytes()
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no image in clipboard")
 	}
-	
+
 	// Save to temp file
 	tmpFile, err := saveToTempFile(data, "png")
 	if err != nil {
 		return nil, fmt.Errorf("failed to save temp file: %w", err)
 	}
-	
+
 	return &ImageData{
 		Bytes:    data,
 		MimeType: "image/png",
@@ -73,24 +74,24 @@ func readMacOSClipboardAlt() (*ImageData, error) {
 	if _, err := exec.LookPath("pngpaste"); err != nil {
 		return readMacOSClipboardNative()
 	}
-	
+
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("ion-clipboard-%s.png", randomID()))
 	cmd := exec.Command("pngpaste", tmpFile)
-	
+
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("pngpaste failed: %w", err)
 	}
-	
+
 	data, err := os.ReadFile(tmpFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read temp file: %w", err)
 	}
-	
+
 	if len(data) == 0 {
 		os.Remove(tmpFile)
 		return nil, fmt.Errorf("no image in clipboard")
 	}
-	
+
 	return &ImageData{
 		Bytes:    data,
 		MimeType: "image/png",
@@ -115,25 +116,25 @@ if let data = pasteboard.data(forType: .png) {
 		return nil, fmt.Errorf("failed to write swift script: %w", err)
 	}
 	defer os.Remove(tmpSwift)
-	
+
 	cmd := exec.Command("swift", tmpSwift)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("swift clipboard read failed: %w", err)
 	}
-	
+
 	data := stdout.Bytes()
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no image in clipboard")
 	}
-	
+
 	tmpFile, err := saveToTempFile(data, "png")
 	if err != nil {
 		return nil, fmt.Errorf("failed to save temp file: %w", err)
 	}
-	
+
 	return &ImageData{
 		Bytes:    data,
 		MimeType: "image/png",
@@ -147,7 +148,7 @@ func readLinuxClipboard() (*ImageData, error) {
 	if os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
 		return readWaylandClipboard()
 	}
-	
+
 	// Try xclip for X11
 	return readX11Clipboard()
 }
@@ -158,38 +159,38 @@ func readWaylandClipboard() (*ImageData, error) {
 	cmd := exec.Command("wl-paste", "--list-types")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	if err := cmd.Run(); err != nil {
 		// Fall back to xclip
 		return readX11Clipboard()
 	}
-	
+
 	types := strings.Split(stdout.String(), "\n")
 	mimeType := selectImageType(types)
 	if mimeType == "" {
 		return readX11Clipboard()
 	}
-	
+
 	// Read image data
 	cmd = exec.Command("wl-paste", "--type", mimeType, "--no-newline")
 	stdout.Reset()
 	cmd.Stdout = &stdout
-	
+
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("wl-paste failed: %w", err)
 	}
-	
+
 	data := stdout.Bytes()
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no image in clipboard")
 	}
-	
+
 	ext := extensionForMimeType(mimeType)
 	tmpFile, err := saveToTempFile(data, ext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save temp file: %w", err)
 	}
-	
+
 	return &ImageData{
 		Bytes:    data,
 		MimeType: mimeType,
@@ -201,41 +202,41 @@ func readWaylandClipboard() (*ImageData, error) {
 func readX11Clipboard() (*ImageData, error) {
 	// Try common image types
 	imageTypes := []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
-	
+
 	for _, mimeType := range imageTypes {
 		cmd := exec.Command("xclip", "-selection", "clipboard", "-t", mimeType, "-o")
 		var stdout bytes.Buffer
 		cmd.Stdout = &stdout
-		
+
 		if err := cmd.Run(); err != nil {
 			continue
 		}
-		
+
 		data := stdout.Bytes()
 		if len(data) == 0 {
 			continue
 		}
-		
+
 		ext := extensionForMimeType(mimeType)
 		tmpFile, err := saveToTempFile(data, ext)
 		if err != nil {
 			return nil, fmt.Errorf("failed to save temp file: %w", err)
 		}
-		
+
 		return &ImageData{
 			Bytes:    data,
 			MimeType: mimeType,
 			FilePath: tmpFile,
 		}, nil
 	}
-	
+
 	return nil, fmt.Errorf("no image in clipboard")
 }
 
 // selectImageType selects the best image MIME type from available types.
 func selectImageType(types []string) string {
 	preferred := []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
-	
+
 	for _, p := range preferred {
 		for _, t := range types {
 			t = strings.TrimSpace(t)
@@ -247,7 +248,7 @@ func selectImageType(types []string) string {
 			}
 		}
 	}
-	
+
 	// Try any image type
 	for _, t := range types {
 		t = strings.TrimSpace(t)
@@ -255,7 +256,7 @@ func selectImageType(types []string) string {
 			return t
 		}
 	}
-	
+
 	return ""
 }
 
@@ -293,43 +294,49 @@ func randomID() string {
 
 // WriteClipboardText writes text to the system clipboard.
 func WriteClipboardText(text string) error {
+	return WriteClipboardTextContext(context.Background(), text)
+}
+
+// WriteClipboardTextContext writes text to the system clipboard and stops the
+// helper process when ctx is canceled.
+func WriteClipboardTextContext(ctx context.Context, text string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return writeMacOSClipboard(text)
+		return writeMacOSClipboard(ctx, text)
 	case "linux":
-		return writeLinuxClipboard(text)
+		return writeLinuxClipboard(ctx, text)
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 }
 
 // writeMacOSClipboard writes text to macOS clipboard using pbcopy.
-func writeMacOSClipboard(text string) error {
-	cmd := exec.Command("pbcopy")
+func writeMacOSClipboard(ctx context.Context, text string) error {
+	cmd := exec.CommandContext(ctx, "pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }
 
 // writeLinuxClipboard writes text to Linux clipboard.
-func writeLinuxClipboard(text string) error {
+func writeLinuxClipboard(ctx context.Context, text string) error {
 	// Check for Wayland
 	if os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
-		return writeWaylandClipboard(text)
+		return writeWaylandClipboard(ctx, text)
 	}
 	// Try xclip for X11
-	return writeX11Clipboard(text)
+	return writeX11Clipboard(ctx, text)
 }
 
 // writeWaylandClipboard writes text using wl-copy.
-func writeWaylandClipboard(text string) error {
-	cmd := exec.Command("wl-copy")
+func writeWaylandClipboard(ctx context.Context, text string) error {
+	cmd := exec.CommandContext(ctx, "wl-copy")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }
 
 // writeX11Clipboard writes text using xclip.
-func writeX11Clipboard(text string) error {
-	cmd := exec.Command("xclip", "-selection", "clipboard")
+func writeX11Clipboard(ctx context.Context, text string) error {
+	cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }

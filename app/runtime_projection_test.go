@@ -296,6 +296,33 @@ func TestStaleSessionInfoCannotRenderNewRuntime(t *testing.T) {
 	}
 }
 
+func TestStaleClipboardResultCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionCopied(sessionCopiedMsg{
+		generation: 1,
+	})
+	if cmd != nil {
+		t.Fatal("stale clipboard result returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale clipboard result rendered into the new runtime")
+	}
+
+	next, cmd = model.handleSessionCopied(sessionCopiedMsg{
+		generation: 1,
+		err:        errors.New("old clipboard failure"),
+	})
+	if cmd != nil {
+		t.Fatal("stale clipboard error returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale clipboard error rendered into the new runtime")
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}

@@ -153,7 +153,10 @@ func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-type sessionCopiedMsg struct{}
+type sessionCopiedMsg struct {
+	generation uint64
+	err        error
+}
 
 func (m Model) copyLastResponse() (Model, tea.Cmd) {
 	if m.Model.Runner == nil && m.Model.Storage == nil {
@@ -161,10 +164,15 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 	}
 	runner := m.Model.Runner
 	storage := m.Model.Storage
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		projection, err := loadSessionProjection(context.Background(), runner, storage)
+		projection, err := loadSessionProjection(ctx, runner, storage)
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to get active session: %w", err)}
+			return sessionCopiedMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to get active session: %w", err),
+			}
 		}
 		var lastResponse string
 		for i := len(projection.Branch) - 1; i >= 0; i-- {
@@ -174,16 +182,31 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 			}
 		}
 		if lastResponse == "" {
-			return localErrorMsg{err: fmt.Errorf("no assistant response to copy")}
+			return sessionCopiedMsg{
+				generation: generation,
+				err:        fmt.Errorf("no assistant response to copy"),
+			}
 		}
-		if err := ionclipboard.WriteClipboardText(lastResponse); err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to copy: %w", err)}
+		if err := ctx.Err(); err != nil {
+			return sessionCopiedMsg{generation: generation, err: err}
 		}
-		return sessionCopiedMsg{}
+		if err := ionclipboard.WriteClipboardTextContext(ctx, lastResponse); err != nil {
+			return sessionCopiedMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to copy: %w", err),
+			}
+		}
+		return sessionCopiedMsg{generation: generation}
 	}
 }
 
-func (m Model) handleSessionCopied(sessionCopiedMsg) (Model, tea.Cmd) {
+func (m Model) handleSessionCopied(msg sessionCopiedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
 	return m, nil
 }
