@@ -811,7 +811,7 @@ func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerIt
 	return m.switchRuntimeCommand(
 		transition,
 		notice,
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 	)
 }

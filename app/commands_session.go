@@ -31,7 +31,7 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support export")
 	}
-	sessionID := m.currentMaterializedSessionID()
+	sessionID := m.currentResumeLeafID()
 	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
@@ -57,7 +57,7 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support export")
 	}
-	sessionID := m.currentMaterializedSessionID()
+	sessionID := m.currentResumeLeafID()
 	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
@@ -187,7 +187,7 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support export")
 	}
-	sessionID := m.currentMaterializedSessionID()
+	sessionID := m.currentResumeLeafID()
 	if sessionID == "" {
 		return m, cmdError("no active session")
 	}

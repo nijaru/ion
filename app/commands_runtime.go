@@ -96,7 +96,7 @@ func (m Model) switchPresetCommand(preset Preset) (Model, tea.Cmd) {
 	return m.switchRuntimeCommand(
 		transition,
 		notice,
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 	)
 }
@@ -142,7 +142,7 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	return m.switchRuntimeCommand(
 		transition,
 		notice,
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 	)
 }
@@ -210,7 +210,7 @@ func (m Model) cyclePresetFallback(
 	return m.switchRuntimeCommand(
 		transition,
 		notice,
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 	)
 }
@@ -364,25 +364,16 @@ func pickScopedModel(
 	return models[idx], true
 }
 
-func (m Model) currentMaterializedSessionID() string {
-	id := ""
-	if m.Model.Runtime.Materialized {
-		id = m.Model.Runtime.SessionID
-	}
-	if id != "" {
-		return id
-	}
-	if m.Model.Storage == nil {
-		if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
-			return strings.TrimSpace(reader.SessionID())
-		}
-		return ""
-	}
-	return strings.TrimSpace(m.Model.Storage.ID())
+// currentResumeLeafID returns the durable tree leaf that the host must select
+// when it replaces or resumes the active runtime. Runtime.SessionID is the
+// stable store identity; it is not an entry ID and cannot be passed to
+// SQLiteStore.ResumeSession.
+func (m Model) currentResumeLeafID() string {
+	return strings.TrimSpace(m.Model.LeafID)
 }
 
 func (m Model) ResumeSessionID() string {
-	return m.currentMaterializedSessionID()
+	return m.currentResumeLeafID()
 }
 
 func (m Model) switchRuntimeCommand(

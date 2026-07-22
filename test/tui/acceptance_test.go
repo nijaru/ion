@@ -285,6 +285,117 @@ func TestDeterministicTUIAcceptanceNarrowTerminal(t *testing.T) {
 	closeAcceptanceHarness(t, harness, store)
 }
 
+func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := t.TempDir() + "/switches.db"
+	store, err := session.NewSQLiteStore(path, "stable-runtime-id")
+	if err != nil {
+		t.Fatalf("open switching store: %v", err)
+	}
+	initialProvider := newAcceptanceTextProvider("model-a-output")
+	resumedProvider := newAcceptanceTextProvider("model-a-resumed-output")
+	modelBProvider := newAcceptanceTextProvider("model-b-output")
+	postResumeModelBProvider := newAcceptanceTextProvider("post-resume-model-b-output")
+	modelBSwitches := 0
+	initialSession := session.NewSession(store, 128)
+	initialConfig := &config.Config{Provider: "openai", Model: "model-a", BusyInput: "steer"}
+	initialRunner := newAcceptanceRuntime(store, initialSession, initialConfig, initialProvider)
+	switches := make(chan acceptanceRuntimeSwitch, 4)
+	switcher := func(ctx context.Context, cfg *config.Config, leafID string) (app.RuntimeInfo, agent.Runtime, app.RuntimeStorage, error) {
+		if leafID != "" {
+			if err := store.ResumeSession(ctx, leafID); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		provider := resumedProvider
+		if cfg.Model == "model-b" {
+			provider = modelBProvider
+			if modelBSwitches > 0 {
+				provider = postResumeModelBProvider
+			}
+			modelBSwitches++
+		}
+		switchedSession := session.NewSession(store, 128)
+		runner := newAcceptanceRuntime(store, switchedSession, cfg, provider)
+		switches <- acceptanceRuntimeSwitch{model: cfg.Model, leafID: leafID, runner: runner}
+		return acceptanceBackend(cfg), runner, switchedSession, nil
+	}
+
+	model := app.New(
+		acceptanceBackend(initialConfig),
+		initialSession,
+		store,
+		t.TempDir(),
+		"main",
+		"test",
+		switcher,
+	).WithRunner(initialRunner).WithConfig(initialConfig)
+	program, output, result := startAcceptanceAppProgram(t, model)
+
+	program.Send(tea.KeyPressMsg{Text: "initial runtime turn"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitAcceptanceSignal(t, initialProvider.started, "initial runtime provider")
+	waitForAcceptanceOutput(t, output, "model-a-output", "initial runtime output")
+	leafID := store.GetLeafID()
+	if leafID == "" {
+		t.Fatal("initial turn did not materialize a tree leaf")
+	}
+	waitForAcceptanceSessionInfo(t, store, leafID)
+
+	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "Model set to model-b", "model switch notice")
+	switchResult := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
+	if switchResult.leafID != leafID {
+		t.Fatalf("model switch leaf = %q, want current leaf %q", switchResult.leafID, leafID)
+	}
+	program.Send(tea.KeyPressMsg{Text: "after model switch"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitAcceptanceSignal(t, modelBProvider.started, "model-b provider")
+	waitForAcceptanceOutput(t, output, "model-b-output", "model-b runtime output")
+
+	program.Send(tea.KeyPressMsg{Text: "/resume " + leafID})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "--- resumed ---", "session resume replay boundary")
+	resumeResult := waitAcceptanceRuntimeSwitch(t, switches, "model-a")
+	if resumeResult.leafID != leafID {
+		t.Fatalf("resume leaf = %q, want selected leaf %q", resumeResult.leafID, leafID)
+	}
+	program.Send(tea.KeyPressMsg{Text: "after session resume"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitAcceptanceSignal(t, resumedProvider.started, "resumed runtime provider")
+	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
+	postResumeLeafID := store.GetLeafID()
+	if postResumeLeafID == "" {
+		t.Fatal("resumed turn did not materialize a tree leaf")
+	}
+	waitForAcceptanceSessionInfo(t, store, postResumeLeafID)
+	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
+	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutputAfter(t, output, "Model set to model-b", modelSwitchNoticeCount, "post-resume model switch notice")
+	postResumeSwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
+	if postResumeSwitch.leafID != postResumeLeafID {
+		t.Fatalf("post-resume model switch leaf = %q, want %q", postResumeSwitch.leafID, postResumeLeafID)
+	}
+	program.Send(tea.KeyPressMsg{Text: "after post-resume model switch"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitAcceptanceSignal(t, postResumeModelBProvider.started, "post-resume model-b provider")
+	waitForAcceptanceOutput(t, output, "post-resume-model-b-output", "post-resume model-b runtime output")
+
+	program.Quit()
+	finalModel := waitAcceptanceProgram(t, result)
+	if got := finalModel.Model.Info.Model(); got != "model-b" {
+		t.Fatalf("final runtime model = %q, want model-b after post-resume switch", got)
+	}
+	finalRunner, ok := finalModel.Model.Runner.(*agent.Controller)
+	if !ok {
+		t.Fatalf("final runtime runner = %T, want *agent.Controller", finalModel.Model.Runner)
+	}
+	closeAcceptanceHarness(t, finalRunner, store)
+}
+
 type acceptanceResult struct {
 	model tea.Model
 	err   error
@@ -345,6 +456,14 @@ func startAcceptanceProgramWithJobs(
 		WithRunner(runner).
 		WithJobs(jobs).
 		WithConfig(cfg)
+	return startAcceptanceAppProgram(t, model)
+}
+
+func startAcceptanceAppProgram(
+	t *testing.T,
+	model app.Model,
+) (*tea.Program, *acceptanceBuffer, <-chan acceptanceResult) {
+	t.Helper()
 	output := &acceptanceBuffer{}
 	program := tea.NewProgram(
 		&model,
@@ -362,6 +481,43 @@ func startAcceptanceProgramWithJobs(
 	time.Sleep(20 * time.Millisecond)
 	program.Send(tea.WindowSizeMsg{Width: 120, Height: 40})
 	return program, output, result
+}
+
+type acceptanceRuntimeSwitch struct {
+	model  string
+	leafID string
+	runner *agent.Controller
+}
+
+func waitAcceptanceRuntimeSwitch(
+	t *testing.T,
+	switches <-chan acceptanceRuntimeSwitch,
+	wantModel string,
+) acceptanceRuntimeSwitch {
+	t.Helper()
+	select {
+	case result := <-switches:
+		if result.model != wantModel {
+			t.Fatalf("runtime switch model = %q, want %q", result.model, wantModel)
+		}
+		return result
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for runtime switch to %s", wantModel)
+		return acceptanceRuntimeSwitch{}
+	}
+}
+
+func waitForAcceptanceSessionInfo(t *testing.T, catalog agent.SessionCatalog, leafID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err := catalog.GetSessionInfo(context.Background(), leafID)
+		if err == nil && info.ID() == leafID {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for catalog entry %q", leafID)
 }
 
 type acceptanceJobs struct {
@@ -415,6 +571,26 @@ func waitForAcceptanceOutput(t *testing.T, output *acceptanceBuffer, needle, lab
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, needle, output.String())
+	return ""
+}
+
+func waitForAcceptanceOutputAfter(
+	t *testing.T,
+	output *acceptanceBuffer,
+	needle string,
+	previousCount int,
+	label string,
+) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		content := output.String()
+		if strings.Count(content, needle) > previousCount {
+			return content
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s %q after %d occurrences\noutput:\n%s", label, needle, previousCount, output.String())
 	return ""
 }
 
@@ -490,12 +666,58 @@ func closeAcceptanceHarness(t *testing.T, harness *agent.Controller, store *sess
 }
 
 func acceptanceModel() llm.Model {
+	return acceptanceModelNamed("fake", "fake-model")
+}
+
+func acceptanceModelNamed(provider, model string) llm.Model {
 	return llm.Model{
-		ID:            "fake-model",
-		Provider:      "fake",
+		ID:            model,
+		Provider:      provider,
 		API:           "fake",
 		ContextWindow: 128000,
 	}
+}
+
+func acceptanceBackend(cfg *config.Config) *smokeBackend {
+	backend := newSmokeBackend("complete")
+	if cfg != nil {
+		copy := *cfg
+		backend.cfg = &copy
+	}
+	return backend
+}
+
+func newAcceptanceRuntime(
+	store *session.SQLiteStore,
+	sess session.Session,
+	cfg *config.Config,
+	provider *acceptanceTextProvider,
+) *agent.Controller {
+	return agent.NewController(agent.ControllerConfig{
+		Session:  sess,
+		Store:    store,
+		Durable:  store,
+		Model:    acceptanceModelNamed(cfg.Provider, cfg.Model),
+		StreamFn: provider.stream,
+	})
+}
+
+type acceptanceTextProvider struct {
+	response string
+	started  chan struct{}
+	once     sync.Once
+}
+
+func newAcceptanceTextProvider(response string) *acceptanceTextProvider {
+	return &acceptanceTextProvider{
+		response: response,
+		started:  make(chan struct{}),
+	}
+}
+
+func (p *acceptanceTextProvider) stream(context.Context, *llm.Request) (llm.Stream, error) {
+	p.once.Do(func() { close(p.started) })
+	return &acceptanceStream{chunks: []*llm.Chunk{{Content: p.response, StopReason: "stop"}}}, nil
 }
 
 type acceptanceMode string

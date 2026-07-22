@@ -19,6 +19,13 @@ type localErrorMsg struct {
 	err error
 }
 
+type runtimeLeafSnapshotMsg struct {
+	generation uint64
+	leafID     string
+	info       *session.SessionInfoEntry
+	err        error
+}
+
 // Product session control owns the Ion side of the active-turn lifecycle.
 // Key handlers and renderers should delegate here instead of making their own
 // submit, cancel, queue, or settlement decisions.
@@ -104,10 +111,15 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 			"persist routing decision",
 			m.routingDecision("use_model", "active_preset", ""),
 		)
+		// The routing decision is an auxiliary durable entry appended after the
+		// completed turn. Refresh the selected leaf only after that write so a
+		// subsequent runtime replacement resumes the complete branch.
+		leafCmd := m.persistCurrentSessionInfoCmd()
+		routingAndLeafCmd := sequenceCmds(routingCmd, leafCmd)
 		if msg.rearm || m.InFlight.Thinking {
-			return m, batchCmds(routingCmd, historyCmd, m.awaitSessionEvent())
+			return m, batchCmds(routingAndLeafCmd, historyCmd, m.awaitSessionEvent())
 		}
-		return m, sequenceCmds(routingCmd, historyCmd)
+		return m, sequenceCmds(routingAndLeafCmd, historyCmd)
 	}
 	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
@@ -805,35 +817,43 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 
 func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	catalog := m.Model.SessionCatalog
-	if catalog == nil {
-		return nil
-	}
 	reader, ok := m.Model.Runner.(agent.SessionReader)
 	if !ok {
 		return nil
 	}
-	id := strings.TrimSpace(reader.SessionID())
-	if id == "" || id == "ion" {
-		return nil
-	}
+	generation := m.Model.EventGeneration
 	workdir := m.App.Workdir
 	branch := m.App.Branch
 	modelName := m.currentSessionModelName()
 	return func() tea.Msg {
+		tree, err := reader.SessionTree(context.Background())
+		if err != nil {
+			return runtimeLeafSnapshotMsg{
+				generation: generation,
+				err:        fmt.Errorf("load session tree for catalog: %w", err),
+			}
+		}
+		id := strings.TrimSpace(tree.LeafID)
+		if id == "" {
+			return runtimeLeafSnapshotMsg{generation: generation}
+		}
 		entries, err := reader.SessionBranch(context.Background())
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("load session branch for catalog: %w", err)}
+			return runtimeLeafSnapshotMsg{
+				generation: generation,
+				err:        fmt.Errorf("load session branch for catalog: %w", err),
+			}
 		}
-		info, ok := sessionInfoFromBranch(
-			id, workdir, branch, modelName, entries, time.Now(),
-		)
-		if !ok {
-			return nil
+		var info *session.SessionInfoEntry
+		if catalog != nil {
+			candidate, ok := sessionInfoFromBranch(
+				id, workdir, branch, modelName, entries, time.Now(),
+			)
+			if ok {
+				info = &candidate
+			}
 		}
-		if err := catalog.UpdateSession(context.Background(), info); err != nil {
-			return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}
-		}
-		return nil
+		return runtimeLeafSnapshotMsg{generation: generation, leafID: id, info: info}
 	}
 }
 

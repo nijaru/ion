@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -56,6 +57,27 @@ func TestPrintModeUsesTheDurableRuntime(t *testing.T) {
 	}
 	if got := out.String(); got != "hello, world\n" {
 		t.Fatalf("print output = %q, want streamed response", got)
+	}
+	leafID := store.GetLeafID()
+	if leafID == "" {
+		t.Fatal("print turn did not materialize a session leaf")
+	}
+	if err := updatePrintSessionInfo(
+		ctx,
+		runner,
+		t.TempDir(),
+		"main",
+		&config.Config{Provider: "fake", Model: "fake-model"},
+		"say hello",
+	); err != nil {
+		t.Fatalf("persist print session catalog: %v", err)
+	}
+	info, err := store.GetSessionInfo(ctx, leafID)
+	if err != nil {
+		t.Fatalf("load print session catalog by leaf: %v", err)
+	}
+	if info.ID() != leafID || info.LastPreview != "say hello" {
+		t.Fatalf("print session catalog = %#v, want leaf %q and prompt preview", info, leafID)
 	}
 
 	if err := runner.Close(); err != nil {

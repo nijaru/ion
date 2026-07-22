@@ -82,7 +82,7 @@ func (m Model) handleReloadConfigLoaded(msg reloadConfigLoadedMsg) (Model, tea.C
 	return m.switchRuntimeCommandWithOptions(
 		transition,
 		systemEntry("Configuration reloaded"),
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 		runtimeSwitchOptions{keybindings: msg.keybindings},
 	)
@@ -169,7 +169,7 @@ func (m Model) handleModelCommand(fields []string) (Model, tea.Cmd) {
 	}
 	return m.switchRuntimeCommand(transition,
 		systemEntry("Model set to "+name),
-		m.currentMaterializedSessionID(),
+		m.currentResumeLeafID(),
 		false,
 	)
 }

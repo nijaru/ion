@@ -584,6 +584,18 @@ func runtimeSessionID(runner agent.Runtime) string {
 	return strings.TrimSpace(reader.SessionID())
 }
 
+func runtimeLeafID(ctx context.Context, runner agent.Runtime) (string, error) {
+	reader, ok := runner.(agent.SessionReader)
+	if !ok {
+		return "", fmt.Errorf("runtime does not expose a session tree")
+	}
+	tree, err := reader.SessionTree(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read runtime session tree: %w", err)
+	}
+	return strings.TrimSpace(tree.LeafID), nil
+}
+
 type printResult struct {
 	SessionID    string   `json:"session_id,omitempty"`
 	Response     string   `json:"response"`
@@ -640,11 +652,14 @@ func updatePrintSessionInfo(
 	cfg *config.Config,
 	prompt string,
 ) error {
-	id := runtimeSessionID(runner)
-	if runner == nil || id == "" || cfg == nil {
+	if runner == nil || cfg == nil {
 		return nil
 	}
-	if id == "" || id == "ion" {
+	id, err := runtimeLeafID(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if id == "" {
 		return nil
 	}
 	preview := strings.TrimSpace(prompt)

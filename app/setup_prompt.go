@@ -172,7 +172,7 @@ func (m Model) commitSetupPrompt() (Model, tea.Cmd) {
 		return m.switchRuntimeCommandWithOptions(
 			transition,
 			systemEntry("Model set to "+model),
-			m.currentMaterializedSessionID(),
+			m.currentResumeLeafID(),
 			false,
 			runtimeSwitchOptions{retrySetup: &retry},
 		)

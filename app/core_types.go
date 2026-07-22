@@ -33,7 +33,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/primary", Description: "Switch to primary preset"},
 	{Name: "/fast", Description: "Switch to fast preset"},
 	{Name: "/resume", Description: "Resume a session"},
-	{Name: "/model", Description: "Switch model"},
+	{Name: "/model", Description: "Switch model", Idle: SlashCommandIdleAlways},
 	{Name: "/thinking", Description: "Toggle thinking"},
 	{Name: "/provider", Description: "Switch provider"},
 	{Name: "/login", Description: "Log in to a provider"},

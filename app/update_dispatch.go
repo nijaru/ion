@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -93,6 +96,27 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 	case localErrorMsg:
 		next, cmd := m.handleLocalError(msg.err)
 		return next, cmd, true
+
+	case runtimeLeafSnapshotMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			next, cmd := m.handleLocalError(msg.err)
+			return next, cmd, true
+		}
+		m.Model.LeafID = strings.TrimSpace(msg.leafID)
+		if msg.info == nil || m.Model.SessionCatalog == nil {
+			return m, nil, true
+		}
+		catalog := m.Model.SessionCatalog
+		info := *msg.info
+		return m, func() tea.Msg {
+			if err := catalog.UpdateSession(context.Background(), info); err != nil {
+				return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}
+			}
+			return nil
+		}, true
 
 	case approvalResolveMsg:
 		next, cmd := m.handleApprovalResolve(msg)
