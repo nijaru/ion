@@ -2,16 +2,11 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/nijaru/ion/config"
 )
@@ -61,22 +56,6 @@ type Definition struct {
 	Aliases                []string
 }
 
-type localProbeResult struct {
-	endpoint string
-	ready    bool
-	checked  time.Time
-}
-
-var (
-	localProbeMu    sync.RWMutex
-	localProbeCache = map[string]localProbeResult{}
-)
-
-const (
-	localProbeTTL     = 5 * time.Second
-	localProbeTimeout = 300 * time.Millisecond
-)
-
 func All() []Definition {
 	return slices.Clone(definitions)
 }
@@ -116,30 +95,6 @@ func DisplayName(id string) string {
 
 func IsOpenAICompatible(id string) bool {
 	return ResolveID(id) == OpenAICompatibleID
-}
-
-func ResolvedEndpoint(cfg *config.Config) string {
-	return ResolvedEndpointContext(context.Background(), cfg)
-}
-
-func ResolvedEndpointContext(ctx context.Context, cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	def, ok := Lookup(cfg.Provider)
-	if !ok {
-		return ""
-	}
-	if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" && def.SupportsCustomEndpoint {
-		return endpoint
-	}
-	if def.ID == OpenAICompatibleID {
-		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
-			return endpoint
-		}
-		return ""
-	}
-	return strings.TrimSpace(def.DefaultEndpoint)
 }
 
 func ResolvedAuthEnvVar(cfg *config.Config) string {
@@ -253,14 +208,11 @@ func ResolvedHeaders(cfg *config.Config) map[string]string {
 	return headers
 }
 
-func CredentialState(cfg *config.Config, def Definition) (string, bool) {
-	return CredentialStateContext(context.Background(), cfg, def)
-}
-
 func CredentialStateContext(
 	ctx context.Context,
 	cfg *config.Config,
 	def Definition,
+	resolver *EndpointResolver,
 ) (string, bool) {
 	if def.ID == OpenAICompatibleID {
 		configuredEndpoint := ""
@@ -270,14 +222,13 @@ func CredentialStateContext(
 		if RequiresAuth(cfg, def) && ResolvedAuthToken(cfg, def) == "" {
 			return fmt.Sprintf("Set %s", MissingAuthDetail(cfg, def)), false
 		}
-		if configuredEndpoint == "" {
-			if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
+		if resolver != nil {
+			if endpoint, ok := resolver.Probe(ctx, cfg); ok {
 				return "Ready at " + summarizeEndpoint(endpoint), true
 			}
-			return "Set endpoint", false
 		}
-		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
-			return "Ready at " + summarizeEndpoint(endpoint), true
+		if configuredEndpoint == "" {
+			return "Set endpoint", false
 		}
 		return "Not running", false
 	}
@@ -316,21 +267,6 @@ func GroupName(def Definition) string {
 		return "Local / custom"
 	default:
 		return ""
-	}
-}
-
-func SortRank(cfg *config.Config, def Definition) int {
-	_, ready := CredentialState(cfg, def)
-	isLocal := def.Kind == KindLocal || def.ID == OpenAICompatibleID
-	switch {
-	case ready && !isLocal:
-		return 0
-	case ready && isLocal:
-		return 1
-	case !ready && isLocal:
-		return 2
-	default:
-		return 3
 	}
 }
 
@@ -408,149 +344,6 @@ func EndpointDisplayName(raw string) string {
 		return ""
 	}
 	return summarizeEndpoint(value)
-}
-
-func ProbeLocalAPI(ctx context.Context, cfg *config.Config) (string, bool) {
-	return probeLocalAPI(ctx, cfg, true)
-}
-
-func ProbeLocalAPIFresh(ctx context.Context, cfg *config.Config) (string, bool) {
-	return probeLocalAPI(ctx, cfg, false)
-}
-
-func CachedLocalAPIState(cfg *config.Config) (endpoint string, ready bool, ok bool) {
-	for _, target := range localAPIProbeTargets(cfg) {
-		if target == "" {
-			continue
-		}
-		cached, hit := localProbeCached(target)
-		if !hit {
-			continue
-		}
-		return cached.endpoint, cached.ready, true
-	}
-	return "", false, false
-}
-
-func probeLocalAPI(ctx context.Context, cfg *config.Config, useCache bool) (string, bool) {
-	for _, endpoint := range localAPIProbeTargets(cfg) {
-		if endpoint == "" {
-			continue
-		}
-		if useCache {
-			if cached, ok := localProbeCached(endpoint); ok {
-				if cached.ready {
-					return cached.endpoint, true
-				}
-				continue
-			}
-		}
-		ready := probeOpenAICompatibleEndpoint(ctx, endpoint, cfg)
-		storeLocalProbe(endpoint, ready)
-		if ready {
-			return endpoint, true
-		}
-	}
-	return "", false
-}
-
-func localAPIProbeTargets(cfg *config.Config) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 4)
-	add := func(raw string) {
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			return
-		}
-		value = strings.TrimRight(value, "/")
-		if _, ok := seen[value]; ok {
-			return
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-
-	if cfg != nil && IsOpenAICompatible(cfg.Provider) {
-		add(cfg.Endpoint)
-		if strings.TrimSpace(cfg.Endpoint) != "" {
-			return out
-		}
-	}
-	add("http://127.0.0.1:1234/v1")
-	add("http://127.0.0.1:8000/v1")
-	add("http://127.0.0.1:8080/v1")
-	return out
-}
-
-func localProbeCached(endpoint string) (localProbeResult, bool) {
-	localProbeMu.RLock()
-	defer localProbeMu.RUnlock()
-	result, ok := localProbeCache[endpoint]
-	if !ok {
-		return localProbeResult{}, false
-	}
-	if time.Since(result.checked) > localProbeTTL {
-		return localProbeResult{}, false
-	}
-	return result, true
-}
-
-func storeLocalProbe(endpoint string, ready bool) {
-	localProbeMu.Lock()
-	defer localProbeMu.Unlock()
-	localProbeCache[endpoint] = localProbeResult{
-		endpoint: endpoint,
-		ready:    ready,
-		checked:  time.Now(),
-	}
-}
-
-func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string, cfg *config.Config) bool {
-	reqCtx := ctx
-	if _, ok := reqCtx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		reqCtx, cancel = context.WithTimeout(reqCtx, localProbeTimeout)
-		defer cancel()
-	}
-	req, err := http.NewRequestWithContext(
-		reqCtx,
-		http.MethodGet,
-		strings.TrimRight(endpoint, "/")+"/models",
-		nil,
-	)
-	if err != nil {
-		return false
-	}
-	req.Header.Set("User-Agent", "ion/0.0.0")
-	if cfg != nil {
-		if def, ok := Lookup(cfg.Provider); ok {
-			if token := ResolvedAuthToken(cfg, def); token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
-			for key, value := range ResolvedHeaders(cfg) {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false
-	}
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	return json.Unmarshal(body, &payload) == nil
 }
 
 var definitions = []Definition{

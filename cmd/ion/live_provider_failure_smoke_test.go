@@ -45,7 +45,8 @@ func TestLiveProviderAuthenticationFailure(t *testing.T) {
 	// negative probe. The provider must authenticate with the runtime-only
 	// invalid token below.
 	providerConfig.ExtraHeaders = nil
-	provider, err := providers.NewProviderFromConfig(&providerConfig)
+	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
+	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct auth probe provider %q: %v", profile.provider, err)
 	}
@@ -176,7 +177,8 @@ func TestLiveProviderCancellation(t *testing.T) {
 		t.Fatal("live cancellation probe needs an auth-backed provider profile")
 	}
 	providerConfig := profile.providerConfig
-	provider, err := providers.NewProviderFromConfig(&providerConfig)
+	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
+	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct cancellation provider %q: %v", profile.provider, err)
 	}

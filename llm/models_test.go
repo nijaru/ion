@@ -86,7 +86,7 @@ func TestQueryModelsForConfigReportsStaleCacheExplicitly(t *testing.T) {
 	}
 
 	catalog.providerModelsMu.Lock()
-	key := providerCacheKey(cfg)
+	key := catalog.providerCacheKey(cfg)
 	cached := catalog.providerModelsCacheMap[key]
 	cached.UpdatedAt = time.Now().Add(-2 * time.Hour).Unix()
 	catalog.providerModelsCacheMap[key] = cached
@@ -371,6 +371,7 @@ func TestListModelsForConfigWrapsDeadlineWithoutRawContextText(t *testing.T) {
 }
 
 func TestModelCacheTTLUsesShortTTLForLocalCatalogs(t *testing.T) {
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 	shortTTLConfigs := []*config.Config{
 		{Provider: "local-api"},
 		{Provider: "ollama"},
@@ -378,23 +379,24 @@ func TestModelCacheTTLUsesShortTTLForLocalCatalogs(t *testing.T) {
 		{Provider: "openai-compatible", Endpoint: "http://localhost:8080/v1"},
 	}
 	for _, cfg := range shortTTLConfigs {
-		if got := modelCacheTTL(cfg); got != localModelCacheTTL {
+		if got := catalog.modelCacheTTL(cfg); got != localModelCacheTTL {
 			t.Fatalf("modelCacheTTL(%#v) = %v, want %v", cfg, got, localModelCacheTTL)
 		}
 	}
 
 	remoteTTL := time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
-	if got := modelCacheTTL(&config.Config{Provider: "openrouter"}); got != remoteTTL {
+	if got := catalog.modelCacheTTL(&config.Config{Provider: "openrouter"}); got != remoteTTL {
 		t.Fatalf("remote modelCacheTTL = %v, want %v", got, remoteTTL)
 	}
 }
 
 func TestCachedFreshForConfigExpiresLocalCatalogsSooner(t *testing.T) {
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
 	updatedAt := time.Now().Add(-30 * time.Second).Unix()
-	if cachedFreshForConfig(updatedAt, &config.Config{Provider: "local-api"}) {
+	if catalog.cachedFreshForConfig(updatedAt, &config.Config{Provider: "local-api"}) {
 		t.Fatal("local-api cache stayed fresh past local TTL")
 	}
-	if !cachedFreshForConfig(updatedAt, &config.Config{Provider: "openrouter"}) {
+	if !catalog.cachedFreshForConfig(updatedAt, &config.Config{Provider: "openrouter"}) {
 		t.Fatal("remote catalog cache expired before default TTL")
 	}
 }

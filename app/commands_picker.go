@@ -21,11 +21,14 @@ func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
 	}
 }
 
-func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config) error {
+func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config, resolver *llm.EndpointResolver) error {
 	if cfg == nil || !llm.IsOpenAICompatible(cfg.Provider) {
 		return nil
 	}
-	if _, ready := llm.ProbeLocalAPIFresh(ctx, cfg); ready {
+	if resolver == nil {
+		return errors.New("OpenAI-compatible endpoint resolver is unavailable")
+	}
+	if _, ready := resolver.ProbeFresh(ctx, cfg); ready {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Endpoint) != "" {
@@ -372,6 +375,7 @@ func (m Model) startupPickerCmd() tea.Cmd {
 				overlay.cfg,
 				overlay.Preset(),
 				overlay.loadContext,
+				m.Model.EndpointResolver,
 			)
 		}
 		return loadAllModelPickerItems(
@@ -398,6 +402,7 @@ func checkModelPickerSetup(
 	cfg *config.Config,
 	preset Preset,
 	loadContext context.Context,
+	resolver *llm.EndpointResolver,
 ) tea.Cmd {
 	cfgCopy := config.Config{}
 	if cfg != nil {
@@ -407,7 +412,7 @@ func checkModelPickerSetup(
 		loadContext = context.Background()
 	}
 	return func() tea.Msg {
-		setup, err := providerSetupPrompt(loadContext, &cfgCopy)
+		setup, err := providerSetupPrompt(loadContext, &cfgCopy, resolver)
 		return modelPickerSetupResolvedMsg{
 			requestID: requestID,
 			cfg:       cfgCopy,
@@ -663,7 +668,7 @@ func (m Model) openProviderSetupPicker() (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	items := providerItems(cfg)
+	items := providerItems(cfg, m.Model.EndpointResolver)
 	m.clearProgressError()
 	m.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
 		title:    "Provider setup",
@@ -841,7 +846,7 @@ func (m Model) handleProviderCommand(name string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-	setup, err := providerSetupPrompt(context.Background(), updated)
+	setup, err := providerSetupPrompt(context.Background(), updated, m.Model.EndpointResolver)
 	if err != nil {
 		return m, cmdError(err.Error())
 	}

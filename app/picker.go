@@ -24,16 +24,16 @@ type ModelCatalog interface {
 
 const pickerPageSize = 8
 
-func providerItems(cfg *config.Config) []pickerItem {
+func providerItems(cfg *config.Config, resolver *llm.EndpointResolver) []pickerItem {
 	items := make([]pickerItem, 0, len(llm.Native()))
 	for _, def := range llm.Native() {
 		if !llm.ShowInPicker(cfg, def) {
 			continue
 		}
-		items = append(items, buildProviderItem(cfg, def))
+		items = append(items, buildProviderItem(cfg, def, resolver))
 	}
 	slices.SortFunc(items, func(a, b pickerItem) int {
-		if rankA, rankB := providerSortRank(cfg, a.Value), providerSortRank(cfg, b.Value); rankA != rankB {
+		if rankA, rankB := providerSortRank(cfg, a.Value, resolver), providerSortRank(cfg, b.Value, resolver); rankA != rankB {
 			return rankA - rankB
 		}
 		if cmp := strings.Compare(a.Group, b.Group); cmp != 0 {
@@ -142,8 +142,8 @@ func modelOrg(id string) string {
 	return left
 }
 
-func buildProviderItem(cfg *config.Config, def llm.Definition) pickerItem {
-	detail, tone, ready := providerDetail(cfg, def)
+func buildProviderItem(cfg *config.Config, def llm.Definition, resolver *llm.EndpointResolver) pickerItem {
+	detail, tone, ready := providerDetail(cfg, def, resolver)
 	label, detail := providerItemLabelAndDetail(cfg, def, detail)
 	group := llm.GroupName(def)
 	if !ready && strings.HasPrefix(detail, "Set ") {
@@ -198,14 +198,15 @@ func providerItemEndpointDisplay(cfg *config.Config, detail string) string {
 	return ""
 }
 
-func providerDetail(cfg *config.Config, def llm.Definition) (string, pickerTone, bool) {
+func providerDetail(cfg *config.Config, def llm.Definition, resolver *llm.EndpointResolver) (string, pickerTone, bool) {
 	if def.ID == llm.OpenAICompatibleID {
-		return openAICompatibleProviderDetail(cfg, def)
+		return openAICompatibleProviderDetail(cfg, def, resolver)
 	}
 	detail, ready := llm.CredentialStateContext(
 		context.Background(),
 		cfgForProvider(cfg, def.ID),
 		def,
+		resolver,
 	)
 	if ready || !strings.HasPrefix(detail, "Set ") {
 		return detail, pickerToneDefault, ready
@@ -216,6 +217,7 @@ func providerDetail(cfg *config.Config, def llm.Definition) (string, pickerTone,
 func openAICompatibleProviderDetail(
 	cfg *config.Config,
 	def llm.Definition,
+	resolver *llm.EndpointResolver,
 ) (string, pickerTone, bool) {
 	providerCfg := cfgForProvider(cfg, def.ID)
 	if llm.RequiresAuth(providerCfg, def) &&
@@ -224,7 +226,7 @@ func openAICompatibleProviderDetail(
 			pickerToneWarn,
 			false
 	}
-	if endpoint, ready, ok := llm.CachedLocalAPIState(providerCfg); ok {
+	if endpoint, ready, ok := resolver.CachedState(providerCfg); ok {
 		if ready {
 			return "Ready at " + llm.EndpointDisplayName(endpoint), pickerToneDefault, true
 		}
@@ -236,12 +238,12 @@ func openAICompatibleProviderDetail(
 	return "Set endpoint", pickerToneWarn, false
 }
 
-func providerSortRank(cfg *config.Config, provider string) int {
+func providerSortRank(cfg *config.Config, provider string, resolver *llm.EndpointResolver) int {
 	def, ok := llm.Lookup(provider)
 	if !ok {
 		return 99
 	}
-	_, _, ready := providerDetail(cfg, def)
+	_, _, ready := providerDetail(cfg, def, resolver)
 	isLocal := def.Kind == llm.KindLocal || def.ID == llm.OpenAICompatibleID
 	rank := 3
 	switch {

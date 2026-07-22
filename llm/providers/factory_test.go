@@ -32,7 +32,7 @@ func TestNewProviderFromConfigUsesRuntimeAPIKeyOverride(t *testing.T) {
 		Endpoint:               "https://example.test/v1",
 		APIKeyOverride:         "runtime-key",
 		APIKeyOverrideProvider: "openai",
-	})
+	}, llm.NewEndpointResolver(llm.EndpointResolverOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestNewProviderFromConfigWiresModelCapabilities(t *testing.T) {
 					ReasoningKind: tt.reasoningKind,
 					SystemRole:    tt.systemRole,
 				}},
-			})
+			}, llm.NewEndpointResolver(llm.EndpointResolverOptions{}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +117,7 @@ func TestNewProviderFromConfigRejectsInvalidModelCapability(t *testing.T) {
 			Pattern:    "model",
 			SystemRole: "assistant",
 		}},
-	})
+	}, llm.NewEndpointResolver(llm.EndpointResolverOptions{}))
 	if err == nil || !strings.Contains(err.Error(), "invalid system role") {
 		t.Fatalf("error = %v, want invalid system role", err)
 	}

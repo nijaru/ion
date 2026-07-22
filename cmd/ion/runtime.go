@@ -297,6 +297,7 @@ func openRuntime(
 	jobs *tool.JobManager,
 	cwd, branch string,
 	cfg *config.Config,
+	endpointResolver *llm.EndpointResolver,
 	sessionID string,
 	persistResumedSessionModel bool,
 	systemPromptOverride string,
@@ -309,7 +310,7 @@ func openRuntime(
 	}
 	sess := session.NewSession(store, 64)
 	runtimeCfg := *cfg
-	if err := resolveStartupConfig(&runtimeCfg); err != nil {
+	if err := resolveStartupConfig(&runtimeCfg, endpointResolver); err != nil {
 		return app.NewSetupRuntime(&runtimeCfg, err.Error()), nil, nil, nil
 	}
 	durableStore, ok := store.(session.DurableStore)
@@ -334,7 +335,7 @@ func openRuntime(
 	}
 
 	// Create a Provider and Controller for turn execution.
-	provider, err := providers.NewProviderFromConfig(&runtimeCfg)
+	provider, err := providers.NewProviderFromConfig(&runtimeCfg, endpointResolver)
 	if err != nil {
 		// Keep startup recoverable for the TUI, but never present an incomplete
 		// runtime as accepted. Callers must handle the error before installing

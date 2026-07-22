@@ -363,6 +363,7 @@ type ModelState struct {
 	Switcher               Switcher
 	ConfigLoader           ConfigLoader
 	Catalog                ModelCatalog
+	EndpointResolver       *llm.EndpointResolver
 	Config                 *config.Config
 	Runtime                Snapshot
 	EventGeneration        uint64
@@ -508,7 +509,7 @@ func New(
 			SessionCatalog:         catalog,
 			Recovery:               append([]session.ActionRecord(nil), boot.Recovery...),
 			Switcher:               switcher,
-			Catalog:                llm.NewModelCatalog(llm.ModelCatalogOptions{}),
+			EndpointResolver:       llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 			EventSubscriptionState: &eventSubscriptionState{},
 		},
 		InFlight: InFlightState{},
@@ -525,6 +526,9 @@ func New(
 		st:           st,
 		GitWatcher:   gitwatch.New(workdir),
 	}
+	m.Model.Catalog = llm.NewModelCatalog(llm.ModelCatalogOptions{
+		EndpointResolver: m.Model.EndpointResolver,
+	})
 
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
 		m.App.ActivePreset = PresetFromString(*state.ActivePreset)
@@ -570,6 +574,14 @@ func (m Model) WithConfigLoader(loader ConfigLoader) Model {
 // WithModelCatalog installs the host-owned provider/model discovery service.
 func (m Model) WithModelCatalog(catalog ModelCatalog) Model {
 	m.Model.Catalog = catalog
+	return m
+}
+
+// WithEndpointResolver installs the host-owned local endpoint resolver used by
+// provider setup and model pickers. It must be the same resolver used by the
+// injected model catalog and runtime provider construction.
+func (m Model) WithEndpointResolver(resolver *llm.EndpointResolver) Model {
+	m.Model.EndpointResolver = resolver
 	return m
 }
 
@@ -956,7 +968,7 @@ func (m Model) persistedReasoningEffort(preset Preset) string {
 	return m.Model.Config.ReasoningEffort
 }
 
-func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKind, error) {
+func providerSetupPrompt(ctx context.Context, cfg *config.Config, resolver *llm.EndpointResolver) (SetupPromptKind, error) {
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
 		return 0, nil
 	}
@@ -970,7 +982,7 @@ func providerSetupPrompt(ctx context.Context, cfg *config.Config) (SetupPromptKi
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
 			return SetupPromptAPIKey, nil
 		}
-		if err := ensureProviderReadyForSelection(ctx, cfg); err != nil {
+		if err := ensureProviderReadyForSelection(ctx, cfg, resolver); err != nil {
 			return SetupPromptEndpoint, nil
 		}
 		if missingAuth {

@@ -90,18 +90,22 @@ type ModelCatalog struct {
 	modelListHTTPClient    *http.Client
 	dataDir                string
 
-	metadataMu      sync.RWMutex
-	metadataCache   map[string]ModelMetadata
-	metadataFetcher func(context.Context, string, string) (ModelMetadata, error)
+	metadataMu       sync.RWMutex
+	metadataCache    map[string]ModelMetadata
+	metadataFetcher  func(context.Context, string, string) (ModelMetadata, error)
+	endpointResolver *EndpointResolver
 }
 
 type ModelCatalogOptions struct {
 	// DataDir controls the on-disk model and metadata cache directory. Empty
 	// uses Ion's default data directory.
 	DataDir string
-	// HTTPClient is used for all provider and models.dev requests. Empty uses
-	// http.DefaultClient.
+	// HTTPClient is used for all provider and models.dev requests. Empty uses an
+	// Ion-owned client with the default transport.
 	HTTPClient *http.Client
+	// EndpointResolver owns local endpoint probing for this host. Hosts that
+	// share a catalog and provider runtime should inject the same resolver.
+	EndpointResolver *EndpointResolver
 }
 
 func NewModelCatalog(opts ModelCatalogOptions) *ModelCatalog {
@@ -115,7 +119,11 @@ func NewModelCatalog(opts ModelCatalogOptions) *ModelCatalog {
 	}
 	client := opts.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Transport: http.DefaultTransport}
+	}
+	endpointResolver := opts.EndpointResolver
+	if endpointResolver == nil {
+		endpointResolver = NewEndpointResolver(EndpointResolverOptions{HTTPClient: client})
 	}
 	catalog := &ModelCatalog{
 		providerModelsCacheMap: make(map[string]providerModelsCache),
@@ -129,6 +137,7 @@ func NewModelCatalog(opts ModelCatalogOptions) *ModelCatalog {
 		modelListHTTPClient:    client,
 		dataDir:                filepath.Clean(dataDir),
 		metadataCache:          make(map[string]ModelMetadata),
+		endpointResolver:       endpointResolver,
 	}
 	catalog.providerCatalogFetcher = catalog.fetchModels
 	catalog.modelsDevFetcher = catalog.fetchModelsDevCreated
@@ -161,7 +170,7 @@ func (c *ModelCatalog) CachedModelsForConfig(cfg *config.Config) ([]ModelMetadat
 		return nil, false, false
 	}
 
-	key := providerCacheKey(cfg)
+	key := c.providerCacheKey(cfg)
 	c.providerModelsMu.RLock()
 	cached, ok := c.providerModelsCacheMap[key]
 	c.providerModelsMu.RUnlock()
@@ -170,7 +179,7 @@ func (c *ModelCatalog) CachedModelsForConfig(cfg *config.Config) ([]ModelMetadat
 	}
 	models := cloneModelMetadataSlice(cached.Models)
 	sortModels(models)
-	return models, cachedFreshForConfig(cached.UpdatedAt, cfg), true
+	return models, c.cachedFreshForConfig(cached.UpdatedAt, cfg), true
 }
 
 func (c *ModelCatalog) ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
@@ -191,11 +200,11 @@ func (c *ModelCatalog) QueryModelsForConfig(ctx context.Context, cfg *config.Con
 	ctx, cancel, timeout := withModelListTimeout(ctx)
 	defer cancel()
 
-	key := providerCacheKey(cfg)
+	key := c.providerCacheKey(cfg)
 	c.providerModelsMu.RLock()
 	cached, ok := c.providerModelsCacheMap[key]
 	c.providerModelsMu.RUnlock()
-	if ok && cachedFreshForConfig(cached.UpdatedAt, cfg) {
+	if ok && c.cachedFreshForConfig(cached.UpdatedAt, cfg) {
 		return ModelListResult{
 			Models:    cloneModelMetadataSlice(cached.Models),
 			UpdatedAt: time.Unix(cached.UpdatedAt, 0),
@@ -403,7 +412,7 @@ func (c *ModelCatalog) fetchModels(
 		return c.geminiFetcher(ctx, cfg)
 	case "ollama":
 		if cfg != nil && strings.TrimSpace(cfg.Endpoint) != "" {
-			endpoint := ResolvedEndpointContext(ctx, cfg)
+			endpoint := c.endpointResolver.Resolve(ctx, cfg)
 			def, _ := Lookup(provider)
 			return c.fetchOpenAICompatibleModels(
 				ctx,
@@ -415,7 +424,7 @@ func (c *ModelCatalog) fetchModels(
 		}
 		return c.ollamaFetcher(ctx, cfg)
 	case OpenAICompatibleID:
-		endpoint := ResolvedEndpointContext(ctx, cfg)
+		endpoint := c.endpointResolver.Resolve(ctx, cfg)
 		if endpoint == "" {
 			return nil, fmt.Errorf("OpenAI-compatible endpoint is not configured")
 		}
@@ -432,7 +441,7 @@ func (c *ModelCatalog) fetchModels(
 		if !ok || def.Family != FamilyOpenAI {
 			return nil, fmt.Errorf("no model listing available for provider %s", provider)
 		}
-		endpoint := ResolvedEndpointContext(ctx, cfg)
+		endpoint := c.endpointResolver.Resolve(ctx, cfg)
 		if endpoint == "" {
 			return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 		}
@@ -522,7 +531,7 @@ func (c *ModelCatalog) fetchOpenAIModels(ctx context.Context, cfg *config.Config
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
-	endpoint := catalogBaseURL(ctx, cfg, "https://api.openai.com/v1")
+	endpoint := c.catalogBaseURL(ctx, cfg, "https://api.openai.com/v1")
 	headers := catalogHeaders(cfg)
 	headers["Authorization"] = "Bearer " + apiKey
 
@@ -555,7 +564,7 @@ func (c *ModelCatalog) fetchAnthropicModels(ctx context.Context, cfg *config.Con
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
-	endpoint := catalogBaseURL(ctx, cfg, "https://api.anthropic.com/v1")
+	endpoint := c.catalogBaseURL(ctx, cfg, "https://api.anthropic.com/v1")
 	headers := catalogHeaders(cfg)
 	headers["X-Api-Key"] = apiKey
 	headers["anthropic-version"] = "2023-06-01"
@@ -589,7 +598,7 @@ func (c *ModelCatalog) fetchOpenRouterModels(ctx context.Context, cfg *config.Co
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s not set", MissingAuthDetail(cfg, def))
 	}
-	endpoint := catalogBaseURL(ctx, cfg, "https://openrouter.ai/api/v1")
+	endpoint := c.catalogBaseURL(ctx, cfg, "https://openrouter.ai/api/v1")
 	headers := catalogHeaders(cfg)
 	headers["Authorization"] = "Bearer " + apiKey
 
@@ -750,10 +759,10 @@ func (c *ModelCatalog) fetchOpenAICompatibleModels(
 	return sortModels(models), nil
 }
 
-func catalogBaseURL(ctx context.Context, cfg *config.Config, fallback string) string {
+func (c *ModelCatalog) catalogBaseURL(ctx context.Context, cfg *config.Config, fallback string) string {
 	if cfg != nil {
 		if def, ok := Lookup(cfg.Provider); ok && def.SupportsCustomEndpoint {
-			if endpoint := ResolvedEndpointContext(ctx, cfg); endpoint != "" {
+			if endpoint := c.endpointResolver.Resolve(ctx, cfg); endpoint != "" {
 				return endpoint
 			}
 		}
@@ -781,8 +790,8 @@ func parseMillionCost(raw string) (float64, bool) {
 	return value * 1_000_000, true
 }
 
-func cachedFreshForConfig(updatedAt int64, cfg *config.Config) bool {
-	return cachedFreshWithin(updatedAt, modelCacheTTL(cfg))
+func (c *ModelCatalog) cachedFreshForConfig(updatedAt int64, cfg *config.Config) bool {
+	return cachedFreshWithin(updatedAt, c.modelCacheTTL(cfg))
 }
 
 func cachedFreshWithin(updatedAt int64, ttl time.Duration) bool {
@@ -792,7 +801,7 @@ func cachedFreshWithin(updatedAt int64, ttl time.Duration) bool {
 	return time.Since(time.Unix(updatedAt, 0)) < ttl
 }
 
-func modelCacheTTL(cfg *config.Config) time.Duration {
+func (c *ModelCatalog) modelCacheTTL(cfg *config.Config) time.Duration {
 	if cfg == nil {
 		return time.Duration(config.DefaultModelCacheTTLSeconds()) * time.Second
 	}
@@ -802,7 +811,7 @@ func modelCacheTTL(cfg *config.Config) time.Duration {
 		return localModelCacheTTL
 	}
 	endpoint := strings.ToLower(
-		strings.TrimSpace(ResolvedEndpointContext(context.Background(), cfg)),
+		strings.TrimSpace(c.endpointResolver.Resolve(context.Background(), cfg)),
 	)
 	if strings.Contains(endpoint, "://localhost") ||
 		strings.Contains(endpoint, "://127.") ||
@@ -1111,12 +1120,12 @@ func normalizeOllamaBaseURL(raw string) string {
 	return "http://" + strings.TrimRight(base, "/")
 }
 
-func providerCacheKey(cfg *config.Config) string {
+func (c *ModelCatalog) providerCacheKey(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
 	provider := ResolveID(cfg.Provider)
-	endpoint := ResolvedEndpointContext(context.Background(), cfg)
+	endpoint := c.endpointResolver.Resolve(context.Background(), cfg)
 	authEnv := ResolvedAuthEnvVar(cfg)
 	def, _ := Lookup(provider)
 	auth := ResolvedAuthToken(cfg, def)

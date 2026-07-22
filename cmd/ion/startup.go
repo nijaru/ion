@@ -220,7 +220,7 @@ var (
 	)
 )
 
-func resolveStartupConfig(cfg *config.Config) error {
+func resolveStartupConfig(cfg *config.Config, endpointResolver *llm.EndpointResolver) error {
 	cfg.Provider = llm.ResolveID(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
@@ -233,7 +233,8 @@ func resolveStartupConfig(cfg *config.Config) error {
 	if !ok {
 		return fmt.Errorf("unsupported provider %q", cfg.Provider)
 	}
-	if llm.RequiresEndpoint(cfg) && llm.ResolvedEndpoint(cfg) == "" {
+	if llm.RequiresEndpoint(cfg) &&
+		(endpointResolver == nil || endpointResolver.Resolve(context.Background(), cfg) == "") {
 		return fmt.Errorf("%s requires endpoint configuration", def.DisplayName)
 	}
 

@@ -92,7 +92,10 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	applyCLITrustModeOverride(cfg, cli.trustModeOverride())
 	cfg.APIKeyOverride = cli.apiKeyOverride()
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
-	catalog := llm.NewModelCatalog(llm.ModelCatalogOptions{})
+	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
+	catalog := llm.NewModelCatalog(llm.ModelCatalogOptions{
+		EndpointResolver: endpointResolver,
+	})
 	selectionRequested := cli.sessionID() != "" || cli.resumeID() != "" ||
 		cli.resumeShortID() != "" || cli.continueRequested() || openResumePicker
 	forkRequested := cli.forkRequested()
@@ -225,6 +228,8 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		width, height := terminalSize(stdout)
 		pickerModel := app.New(nil, nil, store, cwd, branch, displayVersion, nil).
 			WithConfig(cfg).
+			WithModelCatalog(catalog).
+			WithEndpointResolver(endpointResolver).
 			WithSize(width, height).
 			WithSessionPreStartupMode()
 
@@ -324,6 +329,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		cwd,
 		branch,
 		runtimeCfg,
+		endpointResolver,
 		sessionID,
 		persistResumedSessionModel,
 		cli.systemPromptOverride(),
@@ -412,6 +418,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			cwd,
 			currentBranch(),
 			cfg,
+			endpointResolver,
 			sessionID,
 			true,
 			cli.systemPromptOverride(),
@@ -450,6 +457,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	model := app.New(b, sess, store, cwd, branch, displayVersion, switcher).
 		WithRunner(runner).
 		WithModelCatalog(catalog).
+		WithEndpointResolver(endpointResolver).
 		WithJobs(tuiJobController{manager: jobs}).
 		WithMemory(tuiMemoryController{path: memoryPath, scope: cwd}).
 		WithConfigLoader(reloadConfig).

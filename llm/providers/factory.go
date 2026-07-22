@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -16,9 +17,12 @@ import (
 // NewProviderFromConfig creates an llm.Provider from a config.Config.
 // Model metadata (context limits, pricing) is resolved separately by the caller
 // to avoid a circular dependency between providers and models.
-func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
+func NewProviderFromConfig(cfg *config.Config, resolver *llm.EndpointResolver) (llm.Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("endpoint resolver is required")
 	}
 
 	providerName := strings.TrimSpace(cfg.Provider)
@@ -32,7 +36,7 @@ func NewProviderFromConfig(cfg *config.Config) (llm.Provider, error) {
 	}
 
 	apiKey := llm.ResolvedAuthToken(cfg, def)
-	endpoint := llm.ResolvedEndpoint(cfg)
+	endpoint := resolver.Resolve(context.Background(), cfg)
 	modelRegistry, err := modelRegistryFromConfig(cfg)
 	if err != nil {
 		return nil, err

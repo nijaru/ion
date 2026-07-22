@@ -11,6 +11,7 @@ import (
 
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -55,6 +56,7 @@ func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 		"/tmp/ion-test",
 		"main",
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 		"target-session",
 		false,
 		"",
@@ -109,6 +111,7 @@ func TestOpenRuntimeDoesNotMoveLeafWhenMaterializationFails(t *testing.T) {
 		"/tmp/ion-test",
 		"main",
 		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 		targetID,
 		false,
 		promptDir,
@@ -207,6 +210,7 @@ func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledAction(t *testing.T) {
 		t.TempDir(),
 		"main",
 		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 		"",
 		false,
 		"",

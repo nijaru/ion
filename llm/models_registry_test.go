@@ -127,7 +127,7 @@ func TestCachedContextLimitForConfigUsesProviderModelCache(t *testing.T) {
 	}
 
 	catalog.providerModelsMu.Lock()
-	catalog.providerModelsCacheMap[providerCacheKey(cfg)] = providerModelsCache{
+	catalog.providerModelsCacheMap[catalog.providerCacheKey(cfg)] = providerModelsCache{
 		UpdatedAt: time.Now().Unix(),
 		Models: []ModelMetadata{{
 			ID:           "vendor/model",

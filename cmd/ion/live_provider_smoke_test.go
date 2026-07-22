@@ -142,7 +142,8 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	defer cancel()
 
 	providerConfig := profile.providerConfig
-	provider, err := providers.NewProviderFromConfig(&providerConfig)
+	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
+	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct provider %q: %v", profile.provider, err)
 	}
@@ -250,7 +251,7 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	// Constructing a fresh controller against the reopened durable session
 	// proves restart composition without making a second paid provider call.
 	restartedProviderConfig := profile.providerConfig
-	restartedProvider, err := providers.NewProviderFromConfig(&restartedProviderConfig)
+	restartedProvider, err := providers.NewProviderFromConfig(&restartedProviderConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct provider for restart: %v", err)
 	}

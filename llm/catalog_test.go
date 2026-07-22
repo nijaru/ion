@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,10 +14,12 @@ import (
 	"github.com/nijaru/ion/config"
 )
 
+func newTestEndpointResolver() *EndpointResolver {
+	return NewEndpointResolver(EndpointResolverOptions{})
+}
+
 func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
+	resolver := newTestEndpointResolver()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -32,12 +36,70 @@ func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
 		Endpoint: srv.URL + "/v1",
 	}
 
-	endpoint, ok := ProbeLocalAPI(context.Background(), cfg)
+	endpoint, ok := resolver.Probe(context.Background(), cfg)
 	if !ok {
 		t.Fatal("expected local api probe to succeed")
 	}
 	if endpoint != srv.URL+"/v1" {
 		t.Fatalf("probe endpoint = %q, want %q", endpoint, srv.URL+"/v1")
+	}
+}
+
+func TestEndpointResolverInstancesOwnProbeCaches(t *testing.T) {
+	ready := false
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if !ready {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"local-model"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{Provider: "openai-compatible", Endpoint: srv.URL + "/v1"}
+	first := newTestEndpointResolver()
+	if _, ok := first.Probe(context.Background(), cfg); ok {
+		t.Fatal("expected first resolver probe to fail while server is unavailable")
+	}
+	ready = true
+	if _, ok := first.Probe(context.Background(), cfg); ok {
+		t.Fatal("expected first resolver to retain its cached failure")
+	}
+
+	second := newTestEndpointResolver()
+	if endpoint, ok := second.Probe(context.Background(), cfg); !ok || endpoint != srv.URL+"/v1" {
+		t.Fatalf("second resolver probe = (%q, %v), want server endpoint and ready", endpoint, ok)
+	}
+	if requests != 2 {
+		t.Fatalf("probe requests = %d, want one request per resolver", requests)
+	}
+}
+
+func TestEndpointResolverUsesInjectedHTTPClient(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if req.URL.String() != "http://probe.invalid/v1/models" {
+			return nil, fmt.Errorf("unexpected probe URL %q", req.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"local-model"}]}`)),
+			Request:    req,
+		}, nil
+	})}
+	resolver := NewEndpointResolver(EndpointResolverOptions{HTTPClient: client})
+	cfg := &config.Config{Provider: "openai-compatible", Endpoint: "http://probe.invalid/v1"}
+
+	if endpoint, ok := resolver.Probe(context.Background(), cfg); !ok || endpoint != cfg.Endpoint {
+		t.Fatalf("injected client probe = (%q, %v), want configured endpoint and ready", endpoint, ok)
+	}
+	if requests != 1 {
+		t.Fatalf("injected client requests = %d, want 1", requests)
 	}
 }
 
@@ -89,9 +151,7 @@ func TestCatalogModelListingsHaveAnExecutableDispatch(t *testing.T) {
 }
 
 func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
+	resolver := newTestEndpointResolver()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -105,7 +165,7 @@ func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 		Endpoint: srv.URL + "/v1",
 	}
 
-	detail, ready := CredentialStateContext(context.Background(), cfg, def)
+	detail, ready := CredentialStateContext(context.Background(), cfg, def, resolver)
 	if !ready {
 		t.Fatal("expected local api to be ready")
 	}
@@ -115,9 +175,7 @@ func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 }
 
 func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
+	resolver := newTestEndpointResolver()
 
 	def := mustLookup(t, "openai-compatible")
 	cfg := &config.Config{
@@ -125,7 +183,7 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 		Endpoint: "http://127.0.0.1:1/v1",
 	}
 
-	detail, ready := CredentialStateContext(context.Background(), cfg, def)
+	detail, ready := CredentialStateContext(context.Background(), cfg, def, resolver)
 	if ready {
 		t.Fatal("expected local api to be unavailable")
 	}
@@ -135,9 +193,7 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 }
 
 func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
+	resolver := newTestEndpointResolver()
 
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,10 +206,10 @@ func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
 		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
-	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+	if _, ok := resolver.Probe(context.Background(), cfg); ok {
 		t.Fatal("expected local api probe to fail")
 	}
-	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+	if _, ok := resolver.Probe(context.Background(), cfg); ok {
 		t.Fatal("expected cached local api probe to fail")
 	}
 	if requests != 1 {
@@ -162,9 +218,7 @@ func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
 }
 
 func TestProbeLocalAPIFreshBypassesCachedFailure(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
+	resolver := newTestEndpointResolver()
 
 	ready := false
 	requests := 0
@@ -183,11 +237,11 @@ func TestProbeLocalAPIFreshBypassesCachedFailure(t *testing.T) {
 		Provider: "openai-compatible",
 		Endpoint: srv.URL + "/v1",
 	}
-	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+	if _, ok := resolver.Probe(context.Background(), cfg); ok {
 		t.Fatal("expected cached probe to fail while server is unavailable")
 	}
 	ready = true
-	if _, ok := ProbeLocalAPIFresh(context.Background(), cfg); !ok {
+	if _, ok := resolver.ProbeFresh(context.Background(), cfg); !ok {
 		t.Fatal("expected fresh probe to bypass cached failure")
 	}
 	if requests != 2 {
@@ -200,19 +254,21 @@ func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.
 		Provider: "openrouter",
 		Endpoint: "http://fedora:8080/v1",
 	}
-	if got := ResolvedEndpoint(cfg); got != "https://openrouter.ai/api/v1" {
+	resolver := newTestEndpointResolver()
+	if got := resolver.Resolve(context.Background(), cfg); got != "https://openrouter.ai/api/v1" {
 		t.Fatalf("resolved endpoint = %q, want OpenRouter default", got)
 	}
 
 	cfg.Provider = "openai-compatible"
-	if got := ResolvedEndpoint(cfg); got != "http://fedora:8080/v1" {
+	if got := resolver.Resolve(context.Background(), cfg); got != "http://fedora:8080/v1" {
 		t.Fatalf("openai-compatible endpoint = %q, want configured endpoint", got)
 	}
 }
 
 func TestProbeLocalAPIDoesNotFallbackFromConfiguredOpenAICompatibleEndpoint(t *testing.T) {
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{
+	resolver := newTestEndpointResolver()
+	resolver.mu.Lock()
+	resolver.cache = map[string]localProbeResult{
 		"http://fedora:11434/v1": {
 			endpoint: "http://fedora:11434/v1",
 			ready:    false,
@@ -224,13 +280,13 @@ func TestProbeLocalAPIDoesNotFallbackFromConfiguredOpenAICompatibleEndpoint(t *t
 			checked:  time.Now(),
 		},
 	}
-	localProbeMu.Unlock()
+	resolver.mu.Unlock()
 
 	cfg := &config.Config{
 		Provider: "openai-compatible",
 		Endpoint: "http://fedora:11434/v1",
 	}
-	if got, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+	if got, ok := resolver.Probe(context.Background(), cfg); ok {
 		t.Fatalf("probe endpoint = %q, want no fallback from configured endpoint", got)
 	}
 }
@@ -265,7 +321,7 @@ func TestCredentialStateDoesNotUseCustomAuthForDefaultProviders(t *testing.T) {
 		AuthEnvVar: "LOCAL_API_KEY",
 	}
 	def := mustLookup(t, "openrouter")
-	detail, ready := CredentialState(cfg, def)
+	detail, ready := CredentialStateContext(context.Background(), cfg, def, nil)
 	if ready || detail != "Set OPENROUTER_API_KEY" {
 		t.Fatalf("credential state = (%q, %v), want Set OPENROUTER_API_KEY false", detail, ready)
 	}
@@ -279,7 +335,8 @@ func TestCredentialStateDoesNotUseCustomAuthForDefaultProviders(t *testing.T) {
 	cfg.Provider = "openai-compatible"
 	cfg.Endpoint = srv.URL + "/v1"
 	def = mustLookup(t, "openai-compatible")
-	detail, ready = CredentialState(cfg, def)
+	resolver := newTestEndpointResolver()
+	detail, ready = CredentialStateContext(context.Background(), cfg, def, resolver)
 	if !ready || !strings.HasPrefix(detail, "Ready at ") {
 		t.Fatalf("custom credential state = (%q, %v), want Ready at ... true", detail, ready)
 	}
@@ -330,7 +387,7 @@ func TestCredentialStateUsesStoredProviderCredential(t *testing.T) {
 	}
 
 	def := mustLookup(t, "openai")
-	detail, ready := CredentialState(&config.Config{Provider: "openai"}, def)
+	detail, ready := CredentialStateContext(context.Background(), &config.Config{Provider: "openai"}, def, nil)
 	if !ready || detail != "Ready" {
 		t.Fatalf("credential state = (%q, %v), want Ready true", detail, ready)
 	}
@@ -341,7 +398,7 @@ func TestCredentialStateUsesStoredProviderCredential(t *testing.T) {
 
 func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
 	cfg := &config.Config{Provider: "zai"}
-	if got := ResolvedEndpoint(cfg); got != "https://api.z.ai/api/paas/v4" {
+	if got := newTestEndpointResolver().Resolve(context.Background(), cfg); got != "https://api.z.ai/api/paas/v4" {
 		t.Fatalf("zai endpoint = %q, want Z.AI OpenAI-compatible endpoint", got)
 	}
 }
@@ -362,9 +419,6 @@ func TestLocalAPIAliasResolvesToOpenAICompatiblePickerEntry(t *testing.T) {
 
 func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	custom := mustLookup(t, "openai-compatible")
-	localProbeMu.Lock()
-	localProbeCache = map[string]localProbeResult{}
-	localProbeMu.Unlock()
 	if headers := ResolvedHeaders(nil); headers != nil {
 		t.Fatalf("headers = %#v, want nil", headers)
 	}
@@ -373,12 +427,12 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	}
 	probeCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	detail, ready := CredentialStateContext(probeCtx, nil, custom)
+	detail, ready := CredentialStateContext(probeCtx, nil, custom, nil)
 	if ready || detail != "Set endpoint" {
 		t.Fatalf("custom credential state = (%q, %v), want Set endpoint false", detail, ready)
 	}
 	direct := mustLookup(t, "openai")
-	detail, ready = CredentialStateContext(context.Background(), nil, direct)
+	detail, ready = CredentialStateContext(context.Background(), nil, direct, nil)
 	if ready || detail != "Set OPENAI_API_KEY" {
 		t.Fatalf("direct credential state = (%q, %v), want Set OPENAI_API_KEY false", detail, ready)
 	}
