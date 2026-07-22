@@ -213,8 +213,9 @@ reference-backed product charter is captured in
 ai/research/agent-reference-matrix.md; the ideal architecture is frozen in
 ai/DESIGN.md and tracked by completed task tk-uyfo. The implementation audit
 tk-03v2 and session durability task tk-mkmt are complete; the active bounded
-implementation task is tk-gwp7 (runtime/controller), with tk-kw1m and tk-k6gf
-gated behind it.
+implementation task is tk-k6gf (core daily-driver proof). The live-provider
+task tk-h5yr is blocked by it; the safety/release audit tk-kw1m and the
+architecture-convergence follow-ups are also explicitly gated behind it.
 Keep tasks atomic, demoable, and acceptance-tested. Log findings while fresh,
 and do not reopen completed design work unless new evidence requires an
 explicit target change.
