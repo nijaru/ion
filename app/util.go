@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -290,7 +289,9 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 type debugLogWrittenMsg struct {
-	path string
+	generation uint64
+	path       string
+	err        error
 }
 
 // handleDebugCommand writes a debug log to a file for troubleshooting. The
@@ -302,10 +303,18 @@ func (m Model) handleDebugCommand() (Model, tea.Cmd) {
 	}
 	runner := m.Model.Runner
 	storage := m.Model.Storage
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		projection, err := loadSessionProjection(context.Background(), runner, storage)
+		projection, err := loadSessionProjection(ctx, runner, storage)
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to load debug session projection: %w", err)}
+			return debugLogWrittenMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to load debug session projection: %w", err),
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return debugLogWrittenMsg{generation: generation, err: fmt.Errorf("write debug log: %w", err)}
 		}
 
 		var b strings.Builder
@@ -356,16 +365,31 @@ func (m Model) handleDebugCommand() (Model, tea.Cmd) {
 
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to get home dir: %w", err)}
+			return debugLogWrittenMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to get home dir: %w", err),
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return debugLogWrittenMsg{generation: generation, err: fmt.Errorf("write debug log: %w", err)}
 		}
 		debugDir := filepath.Join(home, ".ion")
 		if err := os.MkdirAll(debugDir, 0o755); err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to create debug dir: %w", err)}
+			return debugLogWrittenMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to create debug dir: %w", err),
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return debugLogWrittenMsg{generation: generation, err: fmt.Errorf("write debug log: %w", err)}
 		}
 		debugPath := filepath.Join(debugDir, "debug.log")
 		if err := os.WriteFile(debugPath, []byte(b.String()), 0o644); err != nil {
-			return localErrorMsg{err: fmt.Errorf("failed to write debug log: %w", err)}
+			return debugLogWrittenMsg{
+				generation: generation,
+				err:        fmt.Errorf("failed to write debug log: %w", err),
+			}
 		}
-		return debugLogWrittenMsg{path: debugPath}
+		return debugLogWrittenMsg{generation: generation, path: debugPath}
 	}
 }

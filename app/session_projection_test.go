@@ -13,11 +13,13 @@ import (
 
 type projectionTestRunner struct {
 	*stubRunner
-	projection agent.SessionProjection
-	err        error
+	projection    agent.SessionProjection
+	projectionCtx context.Context
+	err           error
 }
 
-func (r *projectionTestRunner) SessionProjection(context.Context) (agent.SessionProjection, error) {
+func (r *projectionTestRunner) SessionProjection(ctx context.Context) (agent.SessionProjection, error) {
+	r.projectionCtx = ctx
 	return r.projection, r.err
 }
 

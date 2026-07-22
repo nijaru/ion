@@ -75,6 +75,13 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case debugLogWrittenMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			next, cmd := m.handleLocalError(msg.err)
+			return next, cmd, true
+		}
 		return m, m.terminalCommit().Entries(systemEntry("Debug log written to " + msg.path)), true
 
 	case sessionUsageLoadedMsg:

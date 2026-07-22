@@ -1,8 +1,14 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nijaru/ion/internal/agent"
 
 	"github.com/nijaru/ion/session"
 )
@@ -51,5 +57,74 @@ func TestActionRecoverySummaryRequiresVerification(t *testing.T) {
 	}
 	if actionRecoverySummary(nil) != "" {
 		t.Fatal("empty recovery should not add a summary")
+	}
+}
+
+func TestDebugCommandUsesRuntimeOperationContext(t *testing.T) {
+	model := readyModel(t)
+	runner := &projectionTestRunner{
+		stubRunner: &stubRunner{},
+		projection: agent.SessionProjection{ID: "debug-session"},
+	}
+	model.Model.Runner = runner
+	expectedContext := model.Model.runtimeContext
+
+	updated, cmd := model.handleDebugCommand()
+	if cmd == nil {
+		t.Fatal("debug command returned no command")
+	}
+	result, ok := cmd().(debugLogWrittenMsg)
+	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
+		t.Fatalf("debug result = %#v", result)
+	}
+	if runner.projectionCtx != expectedContext {
+		t.Fatalf("debug projection context = %v, want accepted runtime context", runner.projectionCtx)
+	}
+	if _, err := os.Stat(result.path); err != nil {
+		t.Fatalf("debug log %q: %v", result.path, err)
+	}
+	if _, cmd := updated.update(result); cmd == nil {
+		t.Fatal("current debug completion did not render a terminal notice")
+	}
+}
+
+func TestStaleDebugResultCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.update(debugLogWrittenMsg{
+		generation: 1,
+		path:       "/old-runtime/.ion/debug.log",
+		err:        errors.New("old runtime debug failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale debug result returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale debug result rendered into the new runtime")
+	}
+}
+
+func TestDebugCommandStopsBeforeWritingAfterCancellation(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runner = &projectionTestRunner{
+		stubRunner: &stubRunner{},
+		projection: agent.SessionProjection{ID: "debug-session"},
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	model.Model.runtimeCancel()
+
+	_, cmd := model.handleDebugCommand()
+	if cmd == nil {
+		t.Fatal("debug command returned no command")
+	}
+	result, ok := cmd().(debugLogWrittenMsg)
+	if !ok || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled debug result = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ion", "debug.log")); !os.IsNotExist(err) {
+		t.Fatalf("canceled debug wrote a log, stat error = %v", err)
 	}
 }
