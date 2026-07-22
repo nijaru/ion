@@ -248,6 +248,26 @@ func TestStaleTurnCommandsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	}
 }
 
+func TestStaleSessionCostCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd, handled := model.dispatchAppControlMessage(sessionCostMsg{
+		generation: 1,
+		notice:     "old runtime cost",
+	})
+	if !handled {
+		t.Fatal("stale session cost was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale session cost returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session cost rendered into the new runtime")
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}

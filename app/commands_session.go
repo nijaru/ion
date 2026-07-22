@@ -280,6 +280,12 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 }
 
 func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
@@ -311,14 +317,19 @@ func (m Model) sessionCostCmd() tea.Cmd {
 	runner := m.Model.Runner
 	storage := m.Model.Storage
 	progress := m.Progress
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
 		inputTokens := progress.TokensSent
 		outputTokens := progress.TokensReceived
 		totalCost := progress.TotalCost
 		if runner != nil || storage != nil {
-			projection, err := loadSessionProjection(context.Background(), runner, storage)
+			projection, err := loadSessionProjection(ctx, runner, storage)
 			if err != nil {
-				return localErrorMsg{err: fmt.Errorf("failed to load active session usage: %w", err)}
+				return sessionCostMsg{
+					generation: generation,
+					err:        fmt.Errorf("failed to load active session usage: %w", err),
+				}
 			}
 			inputTokens = projection.Usage.Input
 			outputTokens = projection.Usage.Output
@@ -328,12 +339,16 @@ func (m Model) sessionCostCmd() tea.Cmd {
 			if m.Model.Config != nil &&
 				(m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
 				return sessionCostMsg{
-					notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+					generation: generation,
+					notice:     m.costBudgetNotice(inputTokens, outputTokens, totalCost),
 				}
 			}
-			return sessionCostMsg{notice: "No API cost tracked for this session"}
+			return sessionCostMsg{generation: generation, notice: "No API cost tracked for this session"}
 		}
-		return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
+		return sessionCostMsg{
+			generation: generation,
+			notice:     m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+		}
 	}
 }
 

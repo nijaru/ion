@@ -167,7 +167,9 @@ type sessionCompactedMsg struct {
 }
 
 type sessionCostMsg struct {
-	notice string
+	generation uint64
+	notice     string
+	err        error
 }
 
 type sessionUsageLoadedMsg struct {

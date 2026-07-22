@@ -129,7 +129,7 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	}
 
 	costMsg, ok := model.sessionCostCmd()().(sessionCostMsg)
-	if !ok || !strings.Contains(costMsg.notice, "cost: $0.400000") {
+	if !ok || costMsg.generation != model.Model.EventGeneration || !strings.Contains(costMsg.notice, "cost: $0.400000") {
 		t.Fatalf("cost message = %#v, want runtime projection cost", model.sessionCostCmd()())
 	}
 	if storage.reads != 0 {
