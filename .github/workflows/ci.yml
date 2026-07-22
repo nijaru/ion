@@ -28,7 +28,7 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep tmux
+          sudo apt-get install -y bubblewrap ripgrep tmux
 
       - name: Test
         run: go test ./... -count=1 -timeout 300s
@@ -41,6 +41,9 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Linux sandbox boundary
+        run: go test ./tool -run '^TestBubblewrapBashEnforcesWorkspaceBoundary$' -count=1 -timeout 120s
 
       - name: TUI and terminal acceptance
         run: bash scripts/smoke/p1-scenario-traces.sh
