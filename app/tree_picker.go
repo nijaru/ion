@@ -31,14 +31,16 @@ type treePickerEntry struct {
 
 // treePickerLoadedMsg carries the loaded session tree.
 type treePickerLoadedMsg struct {
-	tree SessionTree
-	err  error
+	generation uint64
+	tree       SessionTree
+	err        error
 }
 
 // treePickerMoveMsg confirms that a NavigateTree operation completed.
 type treePickerMoveMsg struct {
-	err       error
-	cancelled bool
+	generation uint64
+	err        error
+	cancelled  bool
 }
 
 func (m Model) openTreePicker() (Model, tea.Cmd) {
@@ -49,14 +51,16 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 	}
 
 	m.Picker.Tree = &treePickerState{loading: true}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 
 	return m, func() tea.Msg {
-		snapshot, err := reader.SessionTree(context.Background())
+		snapshot, err := reader.SessionTree(ctx)
 		tree := SessionTree{}
 		if err == nil {
 			tree, err = loadSessionTree(snapshot)
 		}
-		return treePickerLoadedMsg{tree: tree, err: err}
+		return treePickerLoadedMsg{generation: generation, tree: tree, err: err}
 	}
 }
 
@@ -120,6 +124,9 @@ func (m Model) showTreeUnavailable() {
 
 // handleTreePickerLoaded processes the loaded session tree.
 func (m Model) handleTreePickerLoaded(msg treePickerLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err != nil {
 		m.Picker.Tree = &treePickerState{
 			err:     msg.err.Error(),
@@ -263,13 +270,15 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Refresh tree through the active runtime projection.
 		if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
 			m.Picker.Tree.loading = true
+			generation := m.Model.EventGeneration
+			ctx := m.runtimeOperationContext()
 			return m, func() tea.Msg {
-				snapshot, err := reader.SessionTree(context.Background())
+				snapshot, err := reader.SessionTree(ctx)
 				tree := SessionTree{}
 				if err == nil {
 					tree, err = loadSessionTree(snapshot)
 				}
-				return treePickerLoadedMsg{tree: tree, err: err}
+				return treePickerLoadedMsg{generation: generation, tree: tree, err: err}
 			}
 		}
 	}
@@ -279,6 +288,9 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 // handleTreePickerMove processes a tree navigation result.
 func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.cancelled || errors.Is(msg.err, context.Canceled) {
 		m.Picker.BranchSummary = nil
 		m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
@@ -301,18 +313,24 @@ func (m Model) replayCurrentBranch() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
-		entries, err := reader.SessionBranch(context.Background())
-		return replayBranchMsg{entries: entries, err: err}
+		entries, err := reader.SessionBranch(ctx)
+		return replayBranchMsg{generation: generation, entries: entries, err: err}
 	}
 }
 
 type replayBranchMsg struct {
-	entries []session.Entry
-	err     error
+	generation uint64
+	entries    []session.Entry
+	err        error
 }
 
 func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err != nil {
 		return m.handleLocalError(fmt.Errorf("load selected branch: %w", msg.err))
 	}

@@ -128,6 +128,8 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 	prompt.err = ""
 	targetID := prompt.targetID
 	runner := m.Model.Runner
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	navigator, ok := runner.(agent.SessionNavigator)
 	if !ok {
 		prompt.navigating = false
@@ -135,7 +137,7 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 		return m, nil
 	}
 	return m, func() tea.Msg {
-		_, err := navigator.NavigateTree(context.Background(), targetID, opts)
-		return treePickerMoveMsg{err: err, cancelled: errors.Is(err, context.Canceled)}
+		_, err := navigator.NavigateTree(ctx, targetID, opts)
+		return treePickerMoveMsg{generation: generation, err: err, cancelled: errors.Is(err, context.Canceled)}
 	}
 }
