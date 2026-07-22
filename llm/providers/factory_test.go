@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
@@ -13,6 +15,17 @@ import (
 
 type authCaptureTransport struct {
 	authorization string
+}
+
+type cancelAwareTransport struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (t *cancelAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.once.Do(func() { close(t.started) })
+	<-req.Context().Done()
+	return nil, req.Context().Err()
 }
 
 func (t *authCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -26,7 +39,7 @@ func (t *authCaptureTransport) RoundTrip(req *http.Request) (*http.Response, err
 }
 
 func TestNewProviderFromConfigUsesRuntimeAPIKeyOverride(t *testing.T) {
-	provider, err := NewProviderFromConfig(&config.Config{
+	provider, err := NewProviderFromConfig(context.Background(), &config.Config{
 		Provider:               "openai",
 		Model:                  "test-model",
 		Endpoint:               "https://example.test/v1",
@@ -83,7 +96,7 @@ func TestNewProviderFromConfigWiresModelCapabilities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider, err := NewProviderFromConfig(&config.Config{
+			provider, err := NewProviderFromConfig(context.Background(), &config.Config{
 				Provider:               tt.provider,
 				Model:                  tt.model,
 				APIKeyOverride:         "test-key",
@@ -111,7 +124,7 @@ func TestNewProviderFromConfigWiresModelCapabilities(t *testing.T) {
 }
 
 func TestNewProviderFromConfigRejectsInvalidModelCapability(t *testing.T) {
-	_, err := NewProviderFromConfig(&config.Config{
+	_, err := NewProviderFromConfig(context.Background(), &config.Config{
 		Provider: "openai",
 		Models: []config.ModelDef{{
 			Pattern:    "model",
@@ -120,5 +133,36 @@ func TestNewProviderFromConfigRejectsInvalidModelCapability(t *testing.T) {
 	}, llm.NewEndpointResolver(llm.EndpointResolverOptions{}))
 	if err == nil || !strings.Contains(err.Error(), "invalid system role") {
 		t.Fatalf("error = %v, want invalid system role", err)
+	}
+}
+
+func TestNewProviderFromConfigPropagatesCancellationToEndpointProbe(t *testing.T) {
+	transport := &cancelAwareTransport{started: make(chan struct{})}
+	resolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewProviderFromConfig(ctx, &config.Config{
+			Provider: "openai-compatible",
+			Model:    "qwen",
+		}, resolver)
+		done <- err
+	}()
+
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider construction did not start endpoint probing")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("provider construction ignored canceled endpoint probe context")
 	}
 }

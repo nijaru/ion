@@ -46,7 +46,7 @@ func TestLiveProviderAuthenticationFailure(t *testing.T) {
 	// invalid token below.
 	providerConfig.ExtraHeaders = nil
 	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
-	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
+	provider, err := providers.NewProviderFromConfig(t.Context(), &providerConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct auth probe provider %q: %v", profile.provider, err)
 	}
@@ -178,7 +178,7 @@ func TestLiveProviderCancellation(t *testing.T) {
 	}
 	providerConfig := profile.providerConfig
 	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
-	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
+	provider, err := providers.NewProviderFromConfig(t.Context(), &providerConfig, endpointResolver)
 	if err != nil {
 		t.Fatalf("construct cancellation provider %q: %v", profile.provider, err)
 	}
