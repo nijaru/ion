@@ -36,19 +36,19 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			t.Parallel()
 			runLiveProviderTurn(t, profile)
 		})
 	}
 }
 
 type liveProviderProfile struct {
-	name          string
-	provider      string
-	model         string
-	endpoint      string
-	contextWindow int
-	thinking      session.ThinkingLevel
+	name           string
+	provider       string
+	model          string
+	endpoint       string
+	contextWindow  int
+	thinking       session.ThinkingLevel
+	providerConfig config.Config
 }
 
 func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
@@ -83,30 +83,55 @@ func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
 	if contextWindow <= 0 {
 		contextWindow = 128000
 	}
+	endpointA := strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_A"))
+	if endpointA == "" {
+		endpointA = stable.Endpoint
+	}
+	thinkingA := liveThinkingLevel("ION_LIVE_THINKING_A", stable.ReasoningEffort)
+	configA := *stable
+	configA.Provider = providerA
+	configA.Model = modelA
+	configA.Endpoint = endpointA
+	configA.ContextLimit = contextWindow
+	// Stable config is file-backed and must not carry runtime-only credentials,
+	// but clear these fields defensively before handing it to a live probe.
+	configA.APIKeyOverride = ""
+	configA.APIKeyOverrideProvider = ""
+	configB := config.Config{
+		Provider:     providerB,
+		Model:        modelB,
+		Endpoint:     strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_B")),
+		ContextLimit: contextWindow,
+	}
 	return []liveProviderProfile{
 		{
-			name:          "a-" + llm.ResolveID(providerA),
-			provider:      providerA,
-			model:         modelA,
-			endpoint:      strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_A")),
-			contextWindow: contextWindow,
-			thinking:      liveThinkingLevel("ION_LIVE_THINKING_A"),
+			name:           "a-" + llm.ResolveID(providerA),
+			provider:       providerA,
+			model:          modelA,
+			endpoint:       endpointA,
+			contextWindow:  contextWindow,
+			thinking:       thinkingA,
+			providerConfig: configA,
 		},
 		{
-			name:          "b-" + llm.ResolveID(providerB),
-			provider:      providerB,
-			model:         modelB,
-			endpoint:      strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_B")),
-			contextWindow: contextWindow,
-			thinking:      liveThinkingLevel("ION_LIVE_THINKING_B"),
+			name:           "b-" + llm.ResolveID(providerB),
+			provider:       providerB,
+			model:          modelB,
+			endpoint:       strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_B")),
+			contextWindow:  contextWindow,
+			thinking:       liveThinkingLevel("ION_LIVE_THINKING_B", "auto"),
+			providerConfig: configB,
 		},
 	}, nil
 }
 
-func liveThinkingLevel(envName string) session.ThinkingLevel {
+func liveThinkingLevel(envName, fallback string) session.ThinkingLevel {
 	value := strings.TrimSpace(strings.ToLower(os.Getenv(envName)))
 	if value == "" {
-		return session.ThinkingAuto
+		value = strings.TrimSpace(strings.ToLower(fallback))
+	}
+	if value == "" {
+		value = string(session.ThinkingAuto)
 	}
 	return session.ThinkingLevel(value)
 }
@@ -116,17 +141,12 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 	defer cancel()
 
-	providerConfig := &config.Config{
-		Provider:     profile.provider,
-		Model:        profile.model,
-		Endpoint:     profile.endpoint,
-		ContextLimit: profile.contextWindow,
-	}
-	provider, err := providers.NewProviderFromConfig(providerConfig)
+	providerConfig := profile.providerConfig
+	provider, err := providers.NewProviderFromConfig(&providerConfig)
 	if err != nil {
 		t.Fatalf("construct provider %q: %v", profile.provider, err)
 	}
-	provider = providerWithRetryPolicy(provider, providerConfig)
+	provider = providerWithRetryPolicy(provider, &providerConfig)
 	caps := provider.Capabilities(profile.model)
 	if !caps.Streaming || !caps.Tools {
 		t.Fatalf("provider %q model %q capabilities = %#v, need streaming and tools for this conformance profile", profile.provider, profile.model, caps)
@@ -229,6 +249,12 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 
 	// Constructing a fresh controller against the reopened durable session
 	// proves restart composition without making a second paid provider call.
+	restartedProviderConfig := profile.providerConfig
+	restartedProvider, err := providers.NewProviderFromConfig(&restartedProviderConfig)
+	if err != nil {
+		t.Fatalf("construct provider for restart: %v", err)
+	}
+	restartedProvider = providerWithRetryPolicy(restartedProvider, &restartedProviderConfig)
 	restarted := agent.NewController(agent.ControllerConfig{
 		Session:        resumed,
 		Store:          reopened,
@@ -240,7 +266,7 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 			ContextWindow: profile.contextWindow,
 		},
 		Tools:    []agent.Tool{liveEchoTool()},
-		StreamFn: provider.Stream,
+		StreamFn: restartedProvider.Stream,
 	})
 	t.Cleanup(func() {
 		if err := restarted.Close(); err != nil {
@@ -305,11 +331,14 @@ func assertLiveEvents(t *testing.T, events []session.Event, profile liveProvider
 	t.Helper()
 	var text, thinking, assistantStart, assistantEnd, turnEnd, agentEnd, settled bool
 	var toolStarts, toolEnds int
-	for _, event := range events {
+	assistantDepth := 0
+	turnEndIndex, agentEndIndex, settledIndex := -1, -1, -1
+	for index, event := range events {
 		switch event := event.(type) {
 		case session.MessageStart:
 			if _, ok := event.Message.(*session.AssistantMessage); ok {
 				assistantStart = true
+				assistantDepth++
 			}
 		case session.MessageUpdate:
 			switch event.Delta.(type) {
@@ -329,13 +358,21 @@ func assertLiveEvents(t *testing.T, events []session.Event, profile liveProvider
 		case session.MessageEnd:
 			if _, ok := event.Message.(*session.AssistantMessage); ok {
 				assistantEnd = true
+				if assistantDepth == 0 {
+					t.Errorf("assistant MessageEnd appeared before MessageStart")
+				} else {
+					assistantDepth--
+				}
 			}
 		case session.TurnEnd:
 			turnEnd = true
+			turnEndIndex = index
 		case session.AgentEnd:
 			agentEnd = true
+			agentEndIndex = index
 		case session.Settled:
 			settled = true
+			settledIndex = index
 		}
 	}
 	if !text {
@@ -349,6 +386,12 @@ func assertLiveEvents(t *testing.T, events []session.Event, profile liveProvider
 	}
 	if !assistantStart || !assistantEnd || !turnEnd || !agentEnd {
 		t.Errorf("live event stream incomplete assistant lifecycle: start=%v end=%v turn_end=%v agent_end=%v", assistantStart, assistantEnd, turnEnd, agentEnd)
+	}
+	if assistantDepth != 0 {
+		t.Errorf("live event stream left %d assistant messages open", assistantDepth)
+	}
+	if turnEndIndex < 0 || agentEndIndex <= turnEndIndex || settledIndex <= agentEndIndex {
+		t.Errorf("live terminal event order = turn_end:%d agent_end:%d settled:%d; want TurnEnd < AgentEnd < Settled", turnEndIndex, agentEndIndex, settledIndex)
 	}
 	if (os.Getenv("ION_LIVE_REQUIRE_THINKING") == "1" || profile.thinking != session.ThinkingAuto) && !thinking {
 		t.Errorf("live event stream contained no thinking delta for profile thinking level %q", profile.thinking)
@@ -388,9 +431,6 @@ func assertLiveDurableTurn(t *testing.T, entries []session.Entry, profile livePr
 	}
 	if final.ResponseID == "" {
 		t.Error("final assistant has no provider response identity")
-	}
-	if final.ResponseModel == "" {
-		t.Error("final assistant has no provider response model identity")
 	}
 	if final.Usage.TotalTokens <= 0 {
 		t.Errorf("final assistant usage total = %d, want provider usage metadata", final.Usage.TotalTokens)

@@ -81,7 +81,7 @@ func TestLoadLiveProviderProfilesUsesStableConfigOnlyForProfileA(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("provider = \"anthropic\"\nmodel = \"claude-sonnet-4\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("provider = \"anthropic\"\nmodel = \"claude-sonnet-4\"\nendpoint = \"https://stable.example/v1\"\nauth_env_var = \"STABLE_LIVE_KEY\"\n[extra_headers]\nX-Stable = \"preserved\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ION_LIVE_PROVIDER_B", "gemini")
@@ -93,6 +93,11 @@ func TestLoadLiveProviderProfilesUsesStableConfigOnlyForProfileA(t *testing.T) {
 	}
 	if profiles[0].provider != "anthropic" || profiles[0].model != "claude-sonnet-4" {
 		t.Fatalf("profile A = %#v, want stable config values", profiles[0])
+	}
+	if profiles[0].providerConfig.Endpoint != "https://stable.example/v1" ||
+		profiles[0].providerConfig.AuthEnvVar != "STABLE_LIVE_KEY" ||
+		profiles[0].providerConfig.ExtraHeaders["X-Stable"] != "preserved" {
+		t.Fatalf("profile A provider config = %#v, want stable endpoint/auth/header", profiles[0].providerConfig)
 	}
 	if profiles[1].provider != "gemini" || profiles[1].model != "gemini-2.5-flash" {
 		t.Fatalf("profile B = %#v, want explicit environment values", profiles[1])
