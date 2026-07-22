@@ -828,12 +828,14 @@ func (c runtimeRequestController) clear() {
 type persistenceController struct {
 	runner     agent.Runtime
 	generation uint64
+	ctx        context.Context
 }
 
 func (m Model) persistenceController() persistenceController {
 	return persistenceController{
 		runner:     m.Model.Runner,
 		generation: m.Model.EventGeneration,
+		ctx:        m.runtimeOperationContext(),
 	}
 }
 
@@ -853,7 +855,7 @@ func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
 				err:        fmt.Errorf("%s: runtime does not support entry persistence", action),
 			}
 		}
-		if err := persister.PersistEntry(context.Background(), entry); err != nil {
+		if err := persister.PersistEntry(c.ctx, entry); err != nil {
 			return persistEntryResultMsg{
 				generation: c.generation,
 				err:        fmt.Errorf("%s: %w", action, err),

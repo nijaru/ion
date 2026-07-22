@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -50,6 +51,7 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	runner := &stubRunner{}
 	model := readyModel(t)
 	model.Model.Runner = runner
+	expectedContext := model.Model.runtimeContext
 
 	cmd := model.persistenceController().appendEntry("persist test", StoreSystem{
 		Type:    "system",
@@ -64,6 +66,9 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	if len(runner.appends) != 1 {
 		t.Fatalf("appends = %#v, want one append", runner.appends)
 	}
+	if len(runner.appendCtxs) != 1 || runner.appendCtxs[0] != expectedContext {
+		t.Fatalf("append contexts = %#v, want accepted runtime context", runner.appendCtxs)
+	}
 
 	runner.appendErr = errors.New("disk full")
 	cmd = model.persistenceController().appendEntry("persist test", StoreSystem{
@@ -77,6 +82,28 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 	}
 	if !strings.Contains(localErr.err.Error(), "persist test: disk full") {
 		t.Fatalf("persist error = %v, want wrapped append error", localErr.err)
+	}
+}
+
+func TestPersistenceControllerStopsOnCanceledRuntimeContext(t *testing.T) {
+	runner := &stubRunner{}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.Model.runtimeCancel()
+
+	cmd := model.persistenceController().appendEntry("persist test", StoreSystem{
+		Type:    "system",
+		Content: "canceled",
+	})
+	if cmd == nil {
+		t.Fatal("appendEntry returned nil for storage-backed model")
+	}
+	msg, ok := cmd().(persistEntryResultMsg)
+	if !ok || !errors.Is(msg.err, context.Canceled) {
+		t.Fatalf("canceled append result = %#v, want context cancellation", msg)
+	}
+	if len(runner.appends) != 0 {
+		t.Fatalf("canceled append wrote entries = %#v", runner.appends)
 	}
 }
 

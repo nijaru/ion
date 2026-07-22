@@ -150,6 +150,7 @@ type stubRunner struct {
 	promptErr    error
 	appends      []session.Entry
 	appendErr    error
+	appendCtxs   []context.Context
 	navigates    int
 	navigateID   string
 	navigateOpts agent.NavigateOptions
@@ -192,7 +193,11 @@ func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel)
 }
 func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error     { return nil }
 func (r *stubRunner) ActivateTools(context.Context, []string) error { return nil }
-func (r *stubRunner) PersistEntry(_ context.Context, entry session.Entry) error {
+func (r *stubRunner) PersistEntry(ctx context.Context, entry session.Entry) error {
+	r.appendCtxs = append(r.appendCtxs, ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if r.appendErr != nil {
 		return r.appendErr
 	}
