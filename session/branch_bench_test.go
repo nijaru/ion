@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ func BenchmarkSQLiteBranch256(b *testing.B) {
 	}
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := b.Context()
 	parentID := ""
 	for i := 0; i < 256; i++ {
 		id := fmt.Sprintf("entry-%03d", i)
@@ -34,7 +33,7 @@ func BenchmarkSQLiteBranch256(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := store.Branch(ctx); err != nil {
 			b.Fatal(err)
 		}

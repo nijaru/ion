@@ -40,23 +40,25 @@ else
   printf 'hyperfine not found; startup-check ran once without statistical timing\n'
 fi
 
-phase_note "TUI reducer/render hot paths"
-run go test ./internal/app -run '^$' \
-  -bench 'Benchmark(P1StartupReadyShell|P1EventToViewActiveTool|P1BurstAgentDeltaReduction|View|Render|Ranked)' \
+phase_note "TUI render hot paths"
+run go test ./app -run '^$' \
+  -bench '^Benchmark(ModelViewReadyShell|ModelViewStreamingTranscript|RenderMarkdownLongDocument)$' \
   -benchmem -count "$COUNT"
 
-phase_note "storage replay/projection and session-list paths"
-run go test ./internal/storage -run '^$' \
-  -bench 'BenchmarkCantoStore(DisplayProjection|ListSessions)' \
+phase_note "session persistence and branch navigation"
+run go test ./session -run '^$' \
+  -bench '^BenchmarkSQLiteBranch256$' \
   -benchmem -count "$COUNT"
-
-phase_note "prompt and P1 tool budget"
-run go test ./internal/backend/canto -run TestPromptPreludeBudgetReport -count=1 -v
 
 cat <<'EOF'
 
-P1 performance proof finished.
+Ion performance baseline finished.
 
-Record this output in ai/review/p1-performance-proof-2026-05-23.md with the
-machine, run count, datasets, and any follow-up tasks for regressions.
+The current baseline covers startup readiness, TUI shell/stream rendering,
+Markdown rendering, and SQLite branch navigation. Provider latency, tool
+dispatch, compaction, subprocess teardown, and clean shutdown remain separate
+measurements until current representative benchmarks exist.
+
+Record this output with the machine, run count, datasets, and any follow-up
+tasks for regressions.
 EOF
