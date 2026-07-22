@@ -47,6 +47,9 @@ that provider. You can also use `/model <id>` at any time.
 Ion supports direct API-key providers and custom OpenAI-compatible endpoints.
 OpenAI-compatible `/v1` APIs are the usual interface for local model servers,
 hosted gateways, and self-managed inference services.
+Ion does not currently use OpenAI or Codex subscription OAuth credentials;
+authentication is API-key based or supplied through an OpenAI-compatible
+endpoint configuration.
 
 Most users do not need a config file. Use `~/.ion/config.toml` only for custom
 endpoints, stable defaults, or provider settings you want outside the TUI.
@@ -186,12 +189,17 @@ it never accepts or persists API keys:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
-ION_LIVE_MODEL_A=deepseek/deepseek-v4-pro \
-ION_LIVE_PROVIDER_B=gemini \
-ION_LIVE_MODEL_B=gemini-2.5-flash \
+ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_PROVIDER_B=openai-compatible \
+ION_LIVE_MODEL_B=qwen3.6:27b \
+ION_LIVE_ENDPOINT_B=http://fedora:8080/v1 \
 ION_LIVE_SMOKE=1 \
 go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 ```
+
+The example uses a local Fedora Qwen endpoint for the second adapter. Run it
+only when that endpoint and its credentials are available; it is separate from
+the cheaper paid/free Laguna basic smoke below.
 
 For a low-cost same-model endpoint comparison, the basic smoke permits the
 paid and free OpenRouter variants. It checks streamed text, settlement,
