@@ -105,7 +105,7 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	model.Model.Runner = runner
 	model.Model.Storage = storage
 
-	notice, err := model.sessionInfoNotice()
+	notice, err := model.sessionInfoNotice(context.Background())
 	if err != nil {
 		t.Fatalf("session info notice: %v", err)
 	}

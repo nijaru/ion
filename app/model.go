@@ -181,7 +181,9 @@ type sessionUsageLoadedMsg struct {
 }
 
 type localEntriesMsg struct {
-	entries []session.Entry
+	generation uint64
+	entries    []session.Entry
+	err        error
 }
 
 type terminalCommitLinesMsg struct {

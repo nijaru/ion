@@ -103,6 +103,12 @@ func (c terminalCommitController) SwitchReplay(
 }
 
 func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	return m, m.terminalCommit().Entries(msg.entries...)
 }
 

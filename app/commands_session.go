@@ -353,19 +353,22 @@ func (m Model) sessionCostCmd() tea.Cmd {
 }
 
 func (m Model) sessionInfoCmd() tea.Cmd {
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
-		notice, err := m.sessionInfoNotice()
+		notice, err := m.sessionInfoNotice(ctx)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return localEntriesMsg{generation: generation, err: err}
 		}
 		return localEntriesMsg{
-			entries: []session.Entry{systemEntry(notice)},
+			generation: generation,
+			entries:    []session.Entry{systemEntry(notice)},
 		}
 	}
 }
 
-func (m Model) sessionInfoNotice() (string, error) {
-	projection, err := loadSessionProjection(context.Background(), m.Model.Runner, m.Model.Storage)
+func (m Model) sessionInfoNotice(ctx context.Context) (string, error) {
+	projection, err := loadSessionProjection(ctx, m.Model.Runner, m.Model.Storage)
 	if err != nil {
 		return "", err
 	}

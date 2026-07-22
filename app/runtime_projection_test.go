@@ -268,6 +268,34 @@ func TestStaleSessionCostCannotRenderNewRuntime(t *testing.T) {
 	}
 }
 
+func TestStaleSessionInfoCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleLocalEntries(localEntriesMsg{
+		generation: 1,
+		entries:    []session.Entry{systemEntry("old runtime session")},
+	})
+	if cmd != nil {
+		t.Fatal("stale session info returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session info rendered into the new runtime")
+	}
+
+	next, cmd = model.handleLocalEntries(localEntriesMsg{
+		generation: 1,
+		err:        errors.New("old runtime session read failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale session info error returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session info error rendered into the new runtime")
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}
