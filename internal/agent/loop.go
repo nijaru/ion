@@ -1719,9 +1719,19 @@ func newFailureMessage(model llm.Model, err error, aborted bool, thinking sessio
 func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.AssistantMessage {
 	resp := acc.Response()
 	msg := session.AssistantMessage{
-		Model:      model.ID,
-		StopReason: session.StopReason(resp.StopReason),
-		Timestamp:  time.Now(),
+		API:           resp.API,
+		Provider:      resp.Provider,
+		Model:         model.ID,
+		ResponseModel: resp.ResponseModel,
+		ResponseID:    resp.ResponseID,
+		StopReason:    session.StopReason(resp.StopReason),
+		Timestamp:     time.Now(),
+	}
+	if msg.API == "" {
+		msg.API = model.API
+	}
+	if msg.Provider == "" {
+		msg.Provider = model.Provider
 	}
 	for _, b := range resp.Blocks {
 		switch b := b.(type) {
@@ -1755,6 +1765,12 @@ func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model, thinking 
 		},
 		Timestamp:     time.Now(),
 		ThinkingLevel: thinking,
+	}
+	if msg.API == "" {
+		msg.API = model.API
+	}
+	if msg.Provider == "" {
+		msg.Provider = model.Provider
 	}
 	for _, b := range resp.Blocks {
 		switch b := b.(type) {

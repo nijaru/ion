@@ -76,6 +76,8 @@ func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
 	if llm.ResolveID(providerA) == llm.ResolveID(providerB) {
 		return nil, fmt.Errorf("live provider A and B must use materially different provider adapters, got %q and %q", providerA, providerB)
 	}
+	providerA = llm.ResolveID(providerA)
+	providerB = llm.ResolveID(providerB)
 
 	contextWindow := stable.ContextLimit
 	if contextWindow <= 0 {
@@ -124,6 +126,11 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	if err != nil {
 		t.Fatalf("construct provider %q: %v", profile.provider, err)
 	}
+	provider = providerWithRetryPolicy(provider, providerConfig)
+	caps := provider.Capabilities(profile.model)
+	if !caps.Streaming || !caps.Tools {
+		t.Fatalf("provider %q model %q capabilities = %#v, need streaming and tools for this conformance profile", profile.provider, profile.model, caps)
+	}
 
 	path := filepath.Join(t.TempDir(), "live.db")
 	store, err := session.NewSQLiteStore(path, "live-"+profile.name)
@@ -139,7 +146,6 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 		Model: llm.Model{
 			ID:            profile.model,
 			Provider:      profile.provider,
-			API:           profile.provider,
 			BaseURL:       profile.endpoint,
 			ContextWindow: profile.contextWindow,
 		},
@@ -228,7 +234,6 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 		Model: llm.Model{
 			ID:            profile.model,
 			Provider:      profile.provider,
-			API:           profile.provider,
 			ContextWindow: profile.contextWindow,
 		},
 		Tools:    []agent.Tool{liveEchoTool()},
@@ -295,10 +300,14 @@ func drainLiveEvents(sub *agent.EventSubscription) []session.Event {
 
 func assertLiveEvents(t *testing.T, events []session.Event) {
 	t.Helper()
-	var text, thinking, settled bool
+	var text, thinking, assistantStart, assistantEnd, turnEnd, agentEnd, settled bool
 	var toolStarts, toolEnds int
 	for _, event := range events {
 		switch event := event.(type) {
+		case session.MessageStart:
+			if _, ok := event.Message.(*session.AssistantMessage); ok {
+				assistantStart = true
+			}
 		case session.MessageUpdate:
 			switch event.Delta.(type) {
 			case session.TextDelta:
@@ -314,6 +323,14 @@ func assertLiveEvents(t *testing.T, events []session.Event) {
 			if event.Result.ToolName == "ion_live_echo" && !event.Result.IsError {
 				toolEnds++
 			}
+		case session.MessageEnd:
+			if _, ok := event.Message.(*session.AssistantMessage); ok {
+				assistantEnd = true
+			}
+		case session.TurnEnd:
+			turnEnd = true
+		case session.AgentEnd:
+			agentEnd = true
 		case session.Settled:
 			settled = true
 		}
@@ -326,6 +343,9 @@ func assertLiveEvents(t *testing.T, events []session.Event) {
 	}
 	if !settled {
 		t.Error("live event stream contained no Settled event")
+	}
+	if !assistantStart || !assistantEnd || !turnEnd || !agentEnd {
+		t.Errorf("live event stream incomplete assistant lifecycle: start=%v end=%v turn_end=%v agent_end=%v", assistantStart, assistantEnd, turnEnd, agentEnd)
 	}
 	if os.Getenv("ION_LIVE_REQUIRE_THINKING") == "1" && !thinking {
 		t.Error("live event stream contained no thinking delta; set a reasoning-capable profile or unset ION_LIVE_REQUIRE_THINKING")
@@ -359,6 +379,9 @@ func assertLiveDurableTurn(t *testing.T, entries []session.Entry, profile livePr
 	final := assistants[len(assistants)-1]
 	if final.Model != profile.model {
 		t.Errorf("final assistant model = %q, want requested %q", final.Model, profile.model)
+	}
+	if final.Provider != profile.provider {
+		t.Errorf("final assistant provider = %q, want %q", final.Provider, profile.provider)
 	}
 	if final.ResponseID == "" {
 		t.Error("final assistant has no provider response identity")

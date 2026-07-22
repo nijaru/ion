@@ -377,7 +377,13 @@ func openRuntime(
 		}
 	}
 
-	model := llm.Model{ID: runtimeCfg.Model}
+	// Provider identity belongs to the runtime's resolved provider, not to an
+	// adapter response: several wire APIs omit that field in streaming chunks.
+	// Persisting the resolved identity keeps assistant messages and replayed
+	// context provider-neutral and attributable. Leave API empty until the
+	// provider exposes its actual wire family; a provider slug is not an API
+	// type.
+	model := llm.Model{ID: runtimeCfg.Model, Provider: provider.ID()}
 
 	// Register coding tools and convert to agent.Tool. Runtime policy belongs
 	// here so the shell and optional skill surface cannot silently diverge from

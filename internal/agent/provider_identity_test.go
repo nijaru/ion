@@ -57,3 +57,65 @@ func TestHarnessProviderRequestsUseStableSessionIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessAssistantMessagesPreserveResolvedProviderMetadata(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model: llm.Model{
+			ID:       "model-identity",
+			API:      "openai-completions",
+			Provider: "provider-identity",
+		},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "ok", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	events, err := collectWithSubscribe(t, h, "preserve identity")
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	streamed := false
+	for _, event := range events {
+		start, ok := event.(session.MessageStart)
+		if !ok {
+			continue
+		}
+		assistant, ok := start.Message.(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.API != "openai-completions" || assistant.Provider != "provider-identity" {
+			t.Fatalf("streamed assistant metadata = API %q provider %q, want resolved model metadata", assistant.API, assistant.Provider)
+		}
+		streamed = true
+		break
+	}
+	if !streamed {
+		t.Fatal("no assistant MessageStart event")
+	}
+
+	entries, err := store.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("read persisted entries: %v", err)
+	}
+	for _, entry := range entries {
+		messageEntry, ok := entry.(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		assistant, ok := messageEntry.Message.(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.API != "openai-completions" || assistant.Provider != "provider-identity" {
+			t.Fatalf("persisted assistant metadata = API %q provider %q, want resolved model metadata", assistant.API, assistant.Provider)
+		}
+		return
+	}
+	t.Fatal("no persisted assistant message")
+}
