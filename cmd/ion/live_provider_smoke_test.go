@@ -41,6 +41,28 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	}
 }
 
+// TestLiveBasicTurn is the low-cost provider smoke used while onboarding a
+// model or endpoint. It deliberately permits two profiles from the same
+// adapter so a paid/free endpoint comparison can exercise text streaming,
+// settlement, persistence, and replay without claiming full provider
+// conformance.
+func TestLiveBasicTurn(t *testing.T) {
+	if os.Getenv("ION_LIVE_BASIC") != "1" {
+		t.Skip("set ION_LIVE_BASIC=1 to run the opt-in basic live-provider smoke")
+	}
+
+	profiles, err := loadLiveProviderProfilesAllowSameAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range profiles {
+		profile := profile
+		t.Run(profile.name, func(t *testing.T) {
+			runLiveProviderBasicTurn(t, profile)
+		})
+	}
+}
+
 type liveProviderProfile struct {
 	name           string
 	provider       string
@@ -52,6 +74,14 @@ type liveProviderProfile struct {
 }
 
 func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
+	return loadLiveProviderProfilesWithDistinctAdapter(true)
+}
+
+func loadLiveProviderProfilesAllowSameAdapter() ([]liveProviderProfile, error) {
+	return loadLiveProviderProfilesWithDistinctAdapter(false)
+}
+
+func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([]liveProviderProfile, error) {
 	stable, err := config.LoadStable()
 	if err != nil {
 		return nil, fmt.Errorf("load stable config for live provider A: %w", err)
@@ -73,7 +103,7 @@ func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
 	if providerB == "" || modelB == "" {
 		return nil, fmt.Errorf("live provider B needs ION_LIVE_PROVIDER_B and ION_LIVE_MODEL_B; two explicit provider profiles are required")
 	}
-	if llm.ResolveID(providerA) == llm.ResolveID(providerB) {
+	if requireDistinctAdapter && llm.ResolveID(providerA) == llm.ResolveID(providerB) {
 		return nil, fmt.Errorf("live provider A and B must use materially different provider adapters, got %q and %q", providerA, providerB)
 	}
 	providerA = llm.ResolveID(providerA)
@@ -278,6 +308,126 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 		t.Fatalf("close restarted live runtime: %v", err)
 	}
 	t.Logf("live profile passed turn/tool/metadata/durable-replay: provider=%s model=%s", profile.provider, profile.model)
+}
+
+func runLiveProviderBasicTurn(t *testing.T, profile liveProviderProfile) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	providerConfig := profile.providerConfig
+	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
+	provider, err := providers.NewProviderFromConfig(&providerConfig, endpointResolver)
+	if err != nil {
+		t.Fatalf("construct provider %q: %v", profile.provider, err)
+	}
+	provider = providerWithRetryPolicy(provider, &providerConfig)
+	if !provider.Capabilities(profile.model).Streaming {
+		t.Fatalf("provider %q model %q does not advertise streaming", profile.provider, profile.model)
+	}
+
+	path := filepath.Join(t.TempDir(), "live-basic.db")
+	store, err := session.NewSQLiteStore(path, "live-basic-"+profile.name)
+	if err != nil {
+		t.Fatalf("open durable store: %v", err)
+	}
+	sess := session.NewSession(store, 128)
+	runner := agent.NewController(agent.ControllerConfig{
+		Session:        sess,
+		Store:          store,
+		Durable:        store,
+		RequireDurable: true,
+		Model: llm.Model{
+			ID:            profile.model,
+			Provider:      profile.provider,
+			BaseURL:       profile.endpoint,
+			ContextWindow: profile.contextWindow,
+		},
+		Thinking: profile.thinking,
+		StreamFn: provider.Stream,
+	})
+	t.Cleanup(func() {
+		if err := runner.Close(); err != nil {
+			t.Errorf("cleanup basic live runtime: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("cleanup basic live store: %v", err)
+		}
+	})
+
+	sub, err := runner.Subscribe(ctx, agent.EventCursor{})
+	if err != nil {
+		t.Fatalf("subscribe before basic live turn: %v", err)
+	}
+	t.Cleanup(sub.Close)
+	response, promptErr := runner.Prompt(ctx, `Reply with the exact marker "ion-basic-ok".`)
+	events := drainLiveEvents(sub)
+	if promptErr != nil {
+		t.Fatalf("basic live turn through %s/%s: %v", profile.provider, profile.model, promptErr)
+	}
+	if response == nil || !strings.Contains(session.MessageText(response), "ion-basic-ok") {
+		t.Fatalf("basic live response = %#v, want marker ion-basic-ok", response)
+	}
+	assertBasicLiveEvents(t, events)
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("read basic live durable entries: %v", err)
+	}
+	var final *session.AssistantMessage
+	for _, entry := range entries {
+		messageEntry, ok := entry.(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		if assistant, ok := messageEntry.Message.(*session.AssistantMessage); ok {
+			final = assistant
+		}
+	}
+	if final == nil || !strings.Contains(session.MessageText(final), "ion-basic-ok") {
+		t.Fatalf("basic durable response = %#v, want marker ion-basic-ok", final)
+	}
+
+	if err := runner.Close(); err != nil {
+		t.Fatalf("close basic live runtime: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close basic live store: %v", err)
+	}
+	reopened, err := session.NewSQLiteStore(path, "reopened-basic-identity-is-ignored")
+	if err != nil {
+		t.Fatalf("reopen basic live store: %v", err)
+	}
+	defer reopened.Close()
+	snapshot, err := session.NewSession(reopened, 128).BuildContext(ctx)
+	if err != nil {
+		t.Fatalf("build basic context after restart: %v", err)
+	}
+	if !containsLiveText(snapshot.Messages, "ion-basic-ok") {
+		t.Fatalf("basic replay lost response marker: %s", liveMessageSummary(snapshot.Messages))
+	}
+	t.Logf("basic live profile passed text/settlement/persistence/replay: provider=%s model=%s", profile.provider, profile.model)
+}
+
+func assertBasicLiveEvents(t *testing.T, events []session.Event) {
+	t.Helper()
+	text, settled := false, false
+	for _, event := range events {
+		switch event := event.(type) {
+		case session.MessageUpdate:
+			if _, ok := event.Delta.(session.TextDelta); ok {
+				text = true
+			}
+		case session.Settled:
+			settled = true
+		}
+	}
+	if !text {
+		t.Error("basic live event stream contained no text delta")
+	}
+	if !settled {
+		t.Error("basic live event stream contained no Settled event")
+	}
 }
 
 func liveEchoTool() agent.Tool {

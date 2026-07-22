@@ -193,6 +193,20 @@ ION_LIVE_SMOKE=1 \
 go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 ```
 
+For a low-cost same-model endpoint comparison, the basic smoke permits the
+paid and free OpenRouter variants. It checks streamed text, settlement,
+SQLite persistence, and replay; it is a provider smoke, not the full
+materially-different-provider conformance gate:
+
+```sh
+ION_LIVE_PROVIDER_A=openrouter \
+ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_PROVIDER_B=openrouter \
+ION_LIVE_MODEL_B=poolside/laguna-s-2.1:free \
+ION_LIVE_BASIC=1 \
+go test ./cmd/ion -run TestLiveBasicTurn -count=1 -timeout 120s -v
+```
+
 Set `ION_PHASE1_LIVE=1` with the same four profile variables to include the
 live TUI/tmux pass in `scripts/smoke/phase1-acceptance.sh`.
 
