@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	ionexport "github.com/nijaru/ion/internal/export"
 )
 
 type sessionNamingTestRunner struct {
@@ -18,6 +20,9 @@ type sessionNamingTestRunner struct {
 	labelLeaf  string
 	labelValue string
 	labelErr   error
+	exportCtx  context.Context
+	exportID   string
+	exportErr  error
 }
 
 func (r *sessionNamingTestRunner) AppendSessionInfo(ctx context.Context, name string) (string, error) {
@@ -37,6 +42,12 @@ func (r *sessionNamingTestRunner) AppendLabel(ctx context.Context, leafID, label
 	r.labelLeaf = leafID
 	r.labelValue = label
 	return "", r.labelErr
+}
+
+func (r *sessionNamingTestRunner) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
+	r.exportCtx = ctx
+	r.exportID = sessionID
+	return ionexport.SessionBundle{}, r.exportErr
 }
 
 func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
@@ -117,6 +128,51 @@ func TestStaleSessionLabelCannotRenderNewRuntime(t *testing.T) {
 	}
 	if next.App.PrintedTranscript {
 		t.Fatal("stale session label rendered into the new runtime")
+	}
+}
+
+func TestSessionExportUsesRuntimeOperationContext(t *testing.T) {
+	t.Chdir(t.TempDir())
+	model := readyModel(t)
+	model.Model.LeafID = "session-1"
+	expectedContext := model.Model.runtimeContext
+	runner := &sessionNamingTestRunner{}
+	model.Model.Runner = runner
+
+	updated, cmd := model.exportSession()
+	if cmd == nil {
+		t.Fatal("session export did not return a command")
+	}
+	result, ok := cmd().(sessionExportedMsg)
+	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
+		t.Fatalf("session export result = %#v", result)
+	}
+	if runner.exportCtx != expectedContext || runner.exportID != "session-1" {
+		t.Fatalf("session export request = context %v, ID %q", runner.exportCtx, runner.exportID)
+	}
+	if _, err := os.Stat(result.filename); err != nil {
+		t.Fatalf("export file %q: %v", result.filename, err)
+	}
+	if _, cmd := updated.handleSessionExported(result); cmd != nil {
+		t.Fatal("current session export returned an unexpected command")
+	}
+}
+
+func TestStaleSessionExportCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionExported(sessionExportedMsg{
+		generation: 1,
+		filename:   "old-runtime.json",
+		err:        errors.New("old runtime export failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale session export returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session export rendered into the new runtime")
 	}
 }
 

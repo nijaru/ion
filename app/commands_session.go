@@ -35,20 +35,22 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
 		data, err := json.Marshal(bundle)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
 		filename := fmt.Sprintf("session-%s.json", sessionID)
 		if err := os.WriteFile(filename, data, 0644); err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
-		return sessionExportedMsg{filename: filename}
+		return sessionExportedMsg{generation: generation, filename: filename}
 	}
 }
 
@@ -61,28 +63,38 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 	if sessionID == "" {
 		return m, cmdError("no active session")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		bundle, err := exporter.ExportSessionBundle(context.Background(), sessionID)
+		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
 		htmlContent, err := ionexport.BundleToHTML(bundle)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
 		filename := fmt.Sprintf("session-%s.html", sessionID[:min(8, len(sessionID))])
 		if err := os.WriteFile(filename, []byte(htmlContent), 0644); err != nil {
-			return localErrorMsg{err: err}
+			return sessionExportedMsg{generation: generation, err: err}
 		}
-		return sessionExportedMsg{filename: filename}
+		return sessionExportedMsg{generation: generation, filename: filename}
 	}
 }
 
 type sessionExportedMsg struct {
-	filename string
+	generation uint64
+	filename   string
+	err        error
 }
 
 func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
 	return m, nil
 }
