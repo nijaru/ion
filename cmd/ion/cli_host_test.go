@@ -58,3 +58,25 @@ func TestRunCLIParserErrorReturnsArgumentExitCode(t *testing.T) {
 		t.Fatalf("parser-error stderr = %q, want unknown-flag diagnostic", stderr.String())
 	}
 }
+
+func TestRunCLIPrintWithoutProviderKeepsStdoutClean(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ION_PROVIDER", "")
+	t.Setenv("ION_MODEL", "")
+	t.Setenv("ION_REASONING_EFFORT", "")
+
+	var stdout, stderr bytes.Buffer
+	if code := runCLI(
+		[]string{"--no-session", "--print", "--prompt", "hello"},
+		&stdout,
+		&stderr,
+	); code != 1 {
+		t.Fatalf("print without provider code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("print without provider stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "print mode error: no provider configured") {
+		t.Fatalf("print without provider stderr = %q, want actionable diagnostic", stderr.String())
+	}
+}

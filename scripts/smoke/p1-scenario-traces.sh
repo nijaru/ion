@@ -66,6 +66,11 @@ run_layer smoke_resume_persistence persistence \
     -run '^(TestPrintMode(UsesTheDurableRuntime|StructuredPrintModeUsesTheDurableRuntime)|TestDailyDriverSubmitToolPersistReplay)$' \
     -count=1 -timeout 180s
 
+run_layer cli_exit_semantics cli \
+  go test ./cmd/ion \
+    -run '^TestRunCLIPrintWithoutProviderKeepsStdoutClean$' \
+    -count=1 -timeout 180s
+
 run_layer real_terminal_pty pty scripts/smoke/tmux-minimal-harness.sh
 
 printf '\nP1 scenario trace passed: %s\n' "$TRACE"
