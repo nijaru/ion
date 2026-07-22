@@ -33,37 +33,37 @@ run_layer() {
 
 run_layer tool_provider_history provider \
   go test ./internal/agent \
-    -run '^(TestAgentEventsAndLoop|TestSessionAdapterQueuesAndCancel)$' \
+    -run '^(TestHarnessIntegration_(ToolCalling|Steering|FollowUp)|TestDailyDriverSubmitToolPersistReplay)$' \
     -count=1 -timeout 180s
 
 run_layer event_order_and_settlement event \
-  go test ./internal/app \
-    -run '^(TestQueuedInputUpdateOwnsBackendQueueProjection|TestQueuedSteeringRendersAboveComposer|TestQueuedFollowUpRendersAboveComposer)$' \
+  go test ./app \
+    -run '^(TestBusyInputControlErrorIsVisibleAndRestoresDraft|TestBusyInputFollowUpSuccessUsesRuntimeCommand|TestAwaitSessionEventDeduplicatesPendingSubscription)$' \
     -count=1 -timeout 180s
 
 run_layer cancel_and_recovery event \
-  go test ./internal/app \
-    -run '^(TestCancelledTurnDrainsLateEventsUntilNextTurnStarts|TestCancelTurnCmdCallsBackend)$' \
+  go test ./app \
+    -run '^(TestEscCancelsRunningTurn|TestCtrlCCancelsRunningTurn|TestTerminalCommitOwnsBubbleTeaPrintBoundary)$' \
     -count=1 -timeout 180s
 
 run_layer resume_provider_history provider \
-  go test ./internal/storage \
-    -run '^(TestCantoStoreEntriesRecoverToolResultFromLifecycle|TestCantoStoreEntriesPreserveCantoToolCompletedErrors)$' \
+  go test ./internal/agent ./session \
+    -run '^(TestHarnessIntegration_(DurableTurnCommitAndReplay|SessionResume)|TestSQLiteResumeSession)$' \
     -count=1 -timeout 180s
 
 run_layer display_model display \
-  go test ./internal/app \
-    -run '^(TestP1InlineScenarioMatrix|TestMinimalHarnessAcceptanceFinalStateAndReplay|TestCoreLoopSmoke(CancelPersistsTerminalEntry|ProviderLimitErrorPersistsForResume|RetryStatusPersistsForResume|BudgetCancellationPersistsForResume))$' \
+  go test ./test/tui \
+    -run '^(TestDeterministicTUIAcceptance|TestDeterministicTUIAcceptanceCancelAndError|TestDeterministicTUIAcceptanceJobs)$' \
     -count=1 -timeout 180s
 
 run_layer timeout_surfacing timeout \
-  go test ./cmd/ion ./internal/tools \
-    -run '^(TestPrintModeCancelsTurnOnTimeout|TestBashTimeoutKillsProcessGroup)$' \
+  go test ./cmd/ion ./tool \
+    -run '^(TestPrintMode(CancelsTurnOnTimeout|TimeoutIsActionable)|TestBashTimeoutKillsProcessGroup)$' \
     -count=1 -timeout 180s
 
 run_layer smoke_resume_persistence persistence \
-  go test ./test/tui ./internal/storage \
-    -run '^(TestSmokeBackendPersistsNativeTranscriptForResume|TestCantoStoreDisplayReplaySharesProviderHistorySource)$' \
+  go test ./cmd/ion ./internal/agent \
+    -run '^(TestPrintMode(UsesTheDurableRuntime|StructuredPrintModeUsesTheDurableRuntime)|TestDailyDriverSubmitToolPersistReplay)$' \
     -count=1 -timeout 180s
 
 run_layer real_terminal_pty pty scripts/smoke/tmux-minimal-harness.sh

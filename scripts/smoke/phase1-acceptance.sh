@@ -29,13 +29,13 @@ if [[ "${ION_PHASE1_RACE:-0}" == "1" ]]; then
   run go test -race \
     ./cmd/ion \
     ./internal/agent \
-    ./internal/app \
-    ./internal/backend \
-    ./internal/config \
-    ./providers \
+    ./app \
+    ./config \
+    ./llm \
     ./session \
-    ./internal/storage \
-    ./internal/tools \
+    ./tool \
+    ./tool/mcp \
+    ./test/tui \
     -count=1 -timeout 300s
 fi
 
