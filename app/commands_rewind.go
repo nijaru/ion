@@ -17,13 +17,15 @@ func (m Model) handleRewindCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError("workspace checkpoints are unavailable")
 	}
 	requestID := (&m).beginCheckpointRequest()
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	switch {
 	case len(fields) == 1:
-		return m, checkpointListCmd(m.Model.Checkpoints, requestID)
+		return m, checkpointListCmd(ctx, generation, m.Model.Checkpoints, requestID)
 	case len(fields) == 2:
-		return m, checkpointPlanCmd(m.Model.Checkpoints, requestID, fields[1])
+		return m, checkpointPlanCmd(ctx, generation, m.Model.Checkpoints, requestID, fields[1])
 	case len(fields) == 3 && fields[2] == "--apply":
-		return m, checkpointRestoreCmd(m.Model.Checkpoints, requestID, fields[1])
+		return m, checkpointRestoreCmd(ctx, generation, m.Model.Checkpoints, requestID, fields[1])
 	default:
 		return m, cmdError("usage: /rewind [checkpoint-id [--apply]]")
 	}
@@ -34,29 +36,29 @@ func (m *Model) beginCheckpointRequest() uint64 {
 	return m.Model.CheckpointRequest
 }
 
-func checkpointListCmd(controller CheckpointController, requestID uint64) tea.Cmd {
+func checkpointListCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64) tea.Cmd {
 	return func() tea.Msg {
-		items, err := controller.List(context.Background(), checkpointListLimit)
-		return checkpointListMsg{requestID: requestID, items: items, err: err}
+		items, err := controller.List(ctx, checkpointListLimit)
+		return checkpointListMsg{generation: generation, requestID: requestID, items: items, err: err}
 	}
 }
 
-func checkpointPlanCmd(controller CheckpointController, requestID uint64, id string) tea.Cmd {
+func checkpointPlanCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64, id string) tea.Cmd {
 	return func() tea.Msg {
-		plan, err := controller.Plan(context.Background(), id)
-		return checkpointPlanMsg{requestID: requestID, plan: plan, err: err}
+		plan, err := controller.Plan(ctx, id)
+		return checkpointPlanMsg{generation: generation, requestID: requestID, plan: plan, err: err}
 	}
 }
 
-func checkpointRestoreCmd(controller CheckpointController, requestID uint64, id string) tea.Cmd {
+func checkpointRestoreCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64, id string) tea.Cmd {
 	return func() tea.Msg {
-		report, err := controller.Restore(context.Background(), id)
-		return checkpointRestoredMsg{requestID: requestID, id: id, report: report, err: err}
+		report, err := controller.Restore(ctx, id)
+		return checkpointRestoredMsg{generation: generation, requestID: requestID, id: id, report: report, err: err}
 	}
 }
 
 func (m Model) handleCheckpointList(msg checkpointListMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.CheckpointRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.CheckpointRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -66,7 +68,7 @@ func (m Model) handleCheckpointList(msg checkpointListMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleCheckpointPlan(msg checkpointPlanMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.CheckpointRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.CheckpointRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -76,7 +78,7 @@ func (m Model) handleCheckpointPlan(msg checkpointPlanMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleCheckpointRestored(msg checkpointRestoredMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.CheckpointRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.CheckpointRequest {
 		return m, nil
 	}
 	if msg.err != nil {

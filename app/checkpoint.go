@@ -38,20 +38,23 @@ type CheckpointController interface {
 }
 
 type checkpointListMsg struct {
-	requestID uint64
-	items     []CheckpointInfo
-	err       error
+	generation uint64
+	requestID  uint64
+	items      []CheckpointInfo
+	err        error
 }
 
 type checkpointPlanMsg struct {
-	requestID uint64
-	plan      CheckpointPlan
-	err       error
+	generation uint64
+	requestID  uint64
+	plan       CheckpointPlan
+	err        error
 }
 
 type checkpointRestoredMsg struct {
-	requestID uint64
-	id        string
-	report    CheckpointReport
-	err       error
+	generation uint64
+	requestID  uint64
+	id         string
+	report     CheckpointReport
+	err        error
 }

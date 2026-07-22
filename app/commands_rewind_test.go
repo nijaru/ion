@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 type stubCheckpointController struct {
@@ -16,6 +18,26 @@ type stubCheckpointController struct {
 	planned  []string
 	restored []string
 	err      error
+}
+
+type cancelAwareCheckpointController struct {
+	restoreStarted chan struct{}
+	restoreContext context.Context
+}
+
+func (c *cancelAwareCheckpointController) List(context.Context, int) ([]CheckpointInfo, error) {
+	return nil, nil
+}
+
+func (c *cancelAwareCheckpointController) Plan(context.Context, string) (CheckpointPlan, error) {
+	return CheckpointPlan{}, nil
+}
+
+func (c *cancelAwareCheckpointController) Restore(ctx context.Context, _ string) (CheckpointReport, error) {
+	c.restoreContext = ctx
+	close(c.restoreStarted)
+	<-ctx.Done()
+	return CheckpointReport{}, ctx.Err()
 }
 
 func (s *stubCheckpointController) List(_ context.Context, limit int) ([]CheckpointInfo, error) {
@@ -143,5 +165,42 @@ func TestRewindIgnoresStaleAsyncResults(t *testing.T) {
 	}
 	if updated.Model.CheckpointRequest != 2 {
 		t.Fatalf("checkpoint request = %d, want 2", updated.Model.CheckpointRequest)
+	}
+}
+
+func TestRewindRestoreUsesCancelableRuntimeContext(t *testing.T) {
+	controller := &cancelAwareCheckpointController{restoreStarted: make(chan struct{})}
+	model := readyModel(t).WithCheckpoints(controller)
+	model, cmd := model.handleCommand("/rewind cp-1 --apply")
+	if cmd == nil {
+		t.Fatal("restore command returned nil")
+	}
+	expectedContext := model.runtimeOperationContext()
+	resultCh := make(chan tea.Msg, 1)
+	go func() { resultCh <- cmd() }()
+	select {
+	case <-controller.restoreStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restore did not start")
+	}
+	if controller.restoreContext != expectedContext {
+		t.Fatalf("restore context = %v, want accepted runtime context", controller.restoreContext)
+	}
+
+	model.rotateRuntimeContext()
+	model.Model.EventGeneration++
+	result, ok := (<-resultCh).(checkpointRestoredMsg)
+	if !ok || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled restore result = %#v, want context cancellation", result)
+	}
+	if result.generation == model.Model.EventGeneration {
+		t.Fatalf("canceled restore retained current generation %d", result.generation)
+	}
+	updated, next := model.update(result)
+	if next != nil {
+		t.Fatal("stale canceled restore returned a command")
+	}
+	if updated.Model.CheckpointRequest != model.Model.CheckpointRequest {
+		t.Fatalf("stale restore changed checkpoint request: got %d want %d", updated.Model.CheckpointRequest, model.Model.CheckpointRequest)
 	}
 }
