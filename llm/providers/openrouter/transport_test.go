@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 type openRouterTransport struct {
 	responses   []string
 	statusCodes []int
+	retryAfter  []string
 	calls       int
 }
 
@@ -24,7 +26,11 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		status = t.statusCodes[index]
 	}
 	t.calls++
-	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
+	header := make(http.Header)
+	if index < len(t.retryAfter) {
+		header.Set("Retry-After", t.retryAfter[index])
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: header, Request: req}, nil
 }
 
 func TestRequestTransportUsedForGenerateAndStream(t *testing.T) {
@@ -58,6 +64,7 @@ func TestRetryProviderRetriesOpenRouterRateLimitBeforeStreaming(t *testing.T) {
 			"data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\ndata: [DONE]\n\n",
 		},
 		statusCodes: []int{http.StatusTooManyRequests, http.StatusOK},
+		retryAfter:  []string{"1", ""},
 	}
 	provider := NewProvider(llm.ProviderConfig{
 		APIKey:      "test",
@@ -92,6 +99,34 @@ func TestRetryProviderRetriesOpenRouterRateLimitBeforeStreaming(t *testing.T) {
 	}
 	if len(retries) != 1 || retries[0].Attempt != 1 {
 		t.Fatalf("retry events = %#v, want one attempt-1 event", retries)
+	}
+}
+
+func TestOpenRouterCarriesRetryAfterIntoHTTPError(t *testing.T) {
+	transport := &openRouterTransport{
+		responses:   []string{`{"error":{"message":"rate limited"}}`},
+		statusCodes: []int{http.StatusTooManyRequests},
+		retryAfter:  []string{"2"},
+	}
+	provider := NewProvider(llm.ProviderConfig{
+		APIKey:      "test",
+		APIEndpoint: "https://example.test/v1",
+		Models:      []llm.Model{{ID: "test", Capabilities: &llm.Capabilities{Streaming: true}}},
+	})
+	_, err := provider.Stream(t.Context(), &llm.Request{
+		Model:     "test",
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		Transport: transport,
+	})
+	if err == nil {
+		t.Fatal("Stream() error = nil, want HTTP error")
+	}
+	var httpErr *llm.HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("Stream() error = %T, want *llm.HTTPError", err)
+	}
+	if got := httpErr.RetryAfter(); got != 2*time.Second {
+		t.Fatalf("RetryAfter() = %s, want 2s", got)
 	}
 }
 

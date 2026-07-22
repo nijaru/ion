@@ -46,7 +46,7 @@ func (p *retryProviderStub) CountTokens(context.Context, string, []Message) (int
 func (p *retryProviderStub) Cost(context.Context, string, Usage) float64 { return 0 }
 func (p *retryProviderStub) Capabilities(string) Capabilities            { return Capabilities{} }
 func (p *retryProviderStub) IsTransient(err error) bool {
-	return errors.Is(err, retryTransientErr) || IsTransientTransportError(err)
+	return errors.Is(err, retryTransientErr) || IsRateLimit(err) || IsTransientTransportError(err)
 }
 func (p *retryProviderStub) IsContextOverflow(error) bool { return false }
 
@@ -179,5 +179,30 @@ func TestRetryProviderDoesNotRetryPermanentFailure(t *testing.T) {
 	}
 	if got := provider.streamCalls.Load(); got != 1 {
 		t.Fatalf("stream attempts = %d, want 1", got)
+	}
+}
+
+func TestRetryProviderUsesBoundedServerRetryAfter(t *testing.T) {
+	provider := &retryProviderStub{
+		streamErrors: []error{NewHTTPErrorWithRetryAfter("test", 429, nil, 2*time.Second)},
+	}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+	retry.Config.MinInterval = time.Millisecond
+	retry.Config.MaxInterval = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var event RetryEvent
+	streamCtx := WithRetryObserver(ctx, func(got RetryEvent) {
+		event = got
+		cancel()
+	})
+	_, err := retry.Stream(streamCtx, &Request{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream() error = %v, want context.Canceled", err)
+	}
+	if event.Delay != retry.Config.MaxInterval {
+		t.Fatalf("retry delay = %s, want configured max %s", event.Delay, retry.Config.MaxInterval)
 	}
 }

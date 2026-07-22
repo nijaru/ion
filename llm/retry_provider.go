@@ -81,6 +81,10 @@ type RetryProvider struct {
 	Config RetryConfig
 }
 
+type retryAfterProviderError interface {
+	RetryAfter() time.Duration
+}
+
 // NewRetryProvider creates a new provider with the default retry policy.
 func NewRetryProvider(p Provider) *RetryProvider {
 	return &RetryProvider{
@@ -130,6 +134,18 @@ func notifyRetry(ctx context.Context, cfg RetryConfig, event RetryEvent) {
 	if observer := retryObserver(ctx); observer != nil {
 		observer(event)
 	}
+}
+
+func retryDelay(cfg RetryConfig, interval time.Duration, err error) time.Duration {
+	delay := interval
+	var retryAfter retryAfterProviderError
+	if errors.As(err, &retryAfter) && retryAfter.RetryAfter() > delay {
+		delay = retryAfter.RetryAfter()
+	}
+	if delay > cfg.MaxInterval {
+		return cfg.MaxInterval
+	}
+	return delay
 }
 
 func retryExhausted(attempts int, err error) error {
@@ -184,8 +200,9 @@ func (r *RetryProvider) Generate(ctx context.Context, req *Request) (*Response, 
 			return nil, retryExhausted(i+1, err)
 		}
 
-		notifyRetry(ctx, cfg, RetryEvent{Attempt: i + 1, Delay: interval, Err: err})
-		if err := waitForRetry(ctx, interval); err != nil {
+		delay := retryDelay(cfg, interval, err)
+		notifyRetry(ctx, cfg, RetryEvent{Attempt: i + 1, Delay: delay, Err: err})
+		if err := waitForRetry(ctx, delay); err != nil {
 			return nil, err
 		}
 		interval = time.Duration(float64(interval) * cfg.Multiplier)
@@ -212,8 +229,9 @@ func (r *RetryProvider) Stream(ctx context.Context, req *Request) (Stream, error
 			return nil, retryExhausted(i+1, err)
 		}
 
-		notifyRetry(ctx, cfg, RetryEvent{Attempt: i + 1, Delay: interval, Err: err})
-		if err := waitForRetry(ctx, interval); err != nil {
+		delay := retryDelay(cfg, interval, err)
+		notifyRetry(ctx, cfg, RetryEvent{Attempt: i + 1, Delay: delay, Err: err})
+		if err := waitForRetry(ctx, delay); err != nil {
 			return nil, err
 		}
 		interval = time.Duration(float64(interval) * cfg.Multiplier)

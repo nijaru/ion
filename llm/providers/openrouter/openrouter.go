@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers/openai"
@@ -107,7 +108,8 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, llm.NewHTTPError("openrouter", httpResp.StatusCode, respBody)
+		retryAfter, _ := llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"), time.Now())
+		return nil, llm.NewHTTPErrorWithRetryAfter("openrouter", httpResp.StatusCode, respBody, retryAfter)
 	}
 
 	var resp sashaoai.ChatCompletionResponse
@@ -165,7 +167,8 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 	if httpResp.StatusCode != http.StatusOK {
 		defer httpResp.Body.Close()
 		respBody, _ := io.ReadAll(httpResp.Body)
-		return nil, llm.NewHTTPError("openrouter", httpResp.StatusCode, respBody)
+		retryAfter, _ := llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"), time.Now())
+		return nil, llm.NewHTTPErrorWithRetryAfter("openrouter", httpResp.StatusCode, respBody, retryAfter)
 	}
 
 	return &openRouterStream{
