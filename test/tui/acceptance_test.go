@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
@@ -246,6 +247,41 @@ func TestDeterministicTUIAcceptanceJobs(t *testing.T) {
 
 	program.Quit()
 	_ = waitAcceptanceProgram(t, result)
+	closeAcceptanceHarness(t, harness, store)
+}
+
+func TestDeterministicTUIAcceptanceNarrowTerminal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := t.TempDir() + "/narrow.db"
+	provider := newAcceptanceProvider(acceptanceError)
+	store, sess, harness := newAcceptanceHarness(t, path, provider, false)
+	program, output, result := startAcceptanceProgram(t, store, sess, harness)
+
+	const width = 32
+	program.Send(tea.WindowSizeMsg{Width: width, Height: 24})
+	program.Send(tea.KeyPressMsg{Text: "write a sentence that must wrap in a narrow terminal"})
+	waitForAcceptanceOutput(t, output, "write a sentence", "narrow composer prefix")
+	waitForAcceptanceOutput(t, output, "narrow terminal", "narrow composer suffix")
+
+	program.Quit()
+	model := waitAcceptanceProgram(t, result)
+	if model.App.Width != width || model.App.Height != 24 {
+		t.Fatalf("terminal size = %dx%d, want %dx%d", model.App.Width, model.App.Height, width, 24)
+	}
+	if got := model.Input.Composer.Value(); got != "write a sentence that must wrap in a narrow terminal" {
+		t.Fatalf("composer value = %q, want the complete narrow-terminal prompt", got)
+	}
+	if got := model.Input.Composer.Height(); got < 2 {
+		t.Fatalf("composer height = %d, want soft-wrapped input to occupy multiple rows", got)
+	}
+
+	view := ansi.Strip(model.View().Content)
+	for lineNumber, line := range strings.Split(view, "\n") {
+		if got := ansi.StringWidth(line); got > width {
+			t.Fatalf("rendered line %d width = %d, want <= %d:\n%s", lineNumber+1, got, width, view)
+		}
+	}
 	closeAcceptanceHarness(t, harness, store)
 }
 
