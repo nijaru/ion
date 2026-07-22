@@ -148,12 +148,18 @@ type blockingInputStore struct {
 	resumeOnlyStore
 	started chan struct{}
 	release chan struct{}
+	ctxs    []context.Context
 }
 
 func (s *blockingInputStore) AddInput(ctx context.Context, cwd, content string) error {
+	s.ctxs = append(s.ctxs, ctx)
 	close(s.started)
-	<-s.release
-	return nil
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func TestPersistInputHistoryReturnsBeforeStoreWriteCompletes(t *testing.T) {
@@ -203,6 +209,65 @@ func TestPersistInputHistoryReturnsBeforeStoreWriteCompletes(t *testing.T) {
 	close(store.release)
 	if msg := <-done; msg != nil {
 		t.Fatalf("input history command result = %T, want nil", msg)
+	}
+}
+
+func TestPersistInputHistoryUsesRuntimeContextAndFencesStaleErrors(t *testing.T) {
+	store := &blockingInputStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.InputHistory = store
+	model.App.Workdir = t.TempDir()
+	expectedContext := model.Model.runtimeContext
+
+	cmd := model.persistInputHistory(expectedContext, "hello")
+	if cmd == nil {
+		t.Fatal("persistInputHistory returned nil command")
+	}
+	close(store.release)
+	if msg := cmd(); msg != nil {
+		t.Fatalf("input history result = %T, want nil on success", msg)
+	}
+	if len(store.ctxs) != 1 || store.ctxs[0] != expectedContext {
+		t.Fatalf("input history contexts = %#v, want accepted runtime context", store.ctxs)
+	}
+
+	model.Model.EventGeneration = 2
+	next, updateCmd := model.update(inputHistoryResultMsg{
+		generation: 1,
+		err:        errors.New("old runtime history failed"),
+	})
+	if updateCmd != nil {
+		t.Fatal("stale input history result returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale input history result rendered into the new runtime")
+	}
+}
+
+func TestPersistInputHistoryStopsOnCanceledRuntimeContext(t *testing.T) {
+	store := &blockingInputStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.InputHistory = store
+	model.App.Workdir = t.TempDir()
+	ctx, cancel := context.WithCancel(model.Model.runtimeContext)
+	cancel()
+
+	cmd := model.persistInputHistory(ctx, "hello")
+	if cmd == nil {
+		t.Fatal("persistInputHistory returned nil command")
+	}
+	result, ok := cmd().(inputHistoryResultMsg)
+	if !ok || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled input history result = %#v", result)
+	}
+	if result.generation != model.Model.EventGeneration {
+		t.Fatalf("canceled input history generation = %d, want %d", result.generation, model.Model.EventGeneration)
 	}
 }
 

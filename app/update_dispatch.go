@@ -120,6 +120,16 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleLocalError(msg.err)
 		return next, cmd, true
 
+	case inputHistoryResultMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			next, cmd := m.handleLocalError(msg.err)
+			return next, cmd, true
+		}
+		return m, nil, true
+
 	case runtimeCatalogUpdateMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true

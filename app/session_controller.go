@@ -36,6 +36,11 @@ type persistEntryResultMsg struct {
 	err        error
 }
 
+type inputHistoryResultMsg struct {
+	generation uint64
+	err        error
+}
+
 // Product session control owns the Ion side of the active-turn lifecycle.
 // Key handlers and renderers should delegate here instead of making their own
 // submit, cancel, queue, or settlement decisions.
@@ -81,7 +86,7 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 		historyText, historyChanged := m.appendInputHistory(text)
 		var historyCmd tea.Cmd
 		if historyChanged {
-			historyCmd = m.persistInputHistory(context.Background(), historyText)
+			historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
 		}
 		m.resetComposerDraft()
 		m, cmd := m.handleCommand(text)
@@ -138,7 +143,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		historyText, historyChanged := m.appendInputHistory(msg.text)
 		var historyCmd tea.Cmd
 		if historyChanged {
-			historyCmd = m.persistInputHistory(context.Background(), historyText)
+			historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
 		}
 		routingCmd := m.persistEntryCmd(
 			"persist routing decision",

@@ -224,9 +224,13 @@ func (m Model) persistInputHistory(ctx context.Context, text string) tea.Cmd {
 		return nil
 	}
 	workdir := m.App.Workdir
+	generation := m.Model.EventGeneration
 	return func() tea.Msg {
 		if err := m.Model.InputHistory.AddInput(ctx, workdir, text); err != nil {
-			return localErrorMsg{err: fmt.Errorf("persist input history: %w", err)}
+			return inputHistoryResultMsg{
+				generation: generation,
+				err:        fmt.Errorf("persist input history: %w", err),
+			}
 		}
 		return nil
 	}
