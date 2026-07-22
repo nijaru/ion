@@ -258,6 +258,13 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 }
 
 func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.progressReducer().completeCompaction()
+		return m.handleLocalError(msg.err)
+	}
 	m.progressReducer().completeCompaction()
 	cmds := []tea.Cmd{m.terminalCommit().Entries(systemEntry(msg.notice))}
 	if queued := m.turnReducer().PopQueuedTurn(); queued != "" {
@@ -480,11 +487,16 @@ func (m Model) handleCompactCommand() (Model, tea.Cmd) {
 		return m, cmdError("active runtime does not support compaction")
 	}
 	m.progressReducer().beginCompaction()
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		if err := compactor.Compact(context.Background()); err != nil {
-			return localErrorMsg{err: err}
+		if err := compactor.Compact(ctx); err != nil {
+			return sessionCompactedMsg{generation: generation, err: err}
 		}
-		return sessionCompactedMsg{notice: "Compacted current session context"}
+		return sessionCompactedMsg{
+			generation: generation,
+			notice:     "Compacted current session context",
+		}
 	}
 }
 

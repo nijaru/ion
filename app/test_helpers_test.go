@@ -144,6 +144,7 @@ type stubRunner struct {
 	steerErr     error
 	followUpErr  error
 	compacts     int
+	compactErr   error
 	promptTexts  []string
 	promptImages [][]session.ImageContent
 	promptErr    error
@@ -215,7 +216,7 @@ func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error
 func (r *stubRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
 func (r *stubRunner) Compact(_ context.Context) error {
 	r.compacts++
-	return nil
+	return r.compactErr
 }
 
 // --- stubBackend implements RuntimeInfo ---
