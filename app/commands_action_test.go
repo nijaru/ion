@@ -12,6 +12,7 @@ type actionRecoveryTestRunner struct {
 	stubRunner
 	action session.ActionRecord
 	err    error
+	ctx    context.Context
 	got    struct {
 		id           string
 		state        session.ActionState
@@ -23,7 +24,8 @@ func (r *actionRecoveryTestRunner) UnsettledActions(context.Context) ([]session.
 	return []session.ActionRecord{r.action}, nil
 }
 
-func (r *actionRecoveryTestRunner) ReconcileAction(_ context.Context, id string, state session.ActionState, verification, _, _, _ string) (session.ActionRecord, error) {
+func (r *actionRecoveryTestRunner) ReconcileAction(ctx context.Context, id string, state session.ActionState, verification, _, _, _ string) (session.ActionRecord, error) {
+	r.ctx = ctx
 	r.got.id = id
 	r.got.state = state
 	r.got.verification = verification
@@ -36,6 +38,7 @@ func (r *actionRecoveryTestRunner) ReconcileAction(_ context.Context, id string,
 
 func TestActionsCommandReconcilesWithExplicitEvidence(t *testing.T) {
 	model := readyModel(t)
+	expectedContext := model.Model.runtimeContext
 	runner := &actionRecoveryTestRunner{action: session.ActionRecord{
 		ID: "action-1", Tool: "bash", State: session.ActionIndeterminate,
 	}}
@@ -67,6 +70,47 @@ func TestActionsCommandReconcilesWithExplicitEvidence(t *testing.T) {
 	}
 	if runner.got.id != "action-1" || runner.got.state != session.ActionCompleted || runner.got.verification != "operator verified result" {
 		t.Fatalf("reconcile request = %#v, want exact action and evidence", runner.got)
+	}
+	if runner.ctx != expectedContext {
+		t.Fatal("reconciliation did not receive the runtime operation context")
+	}
+}
+
+func TestStaleActionReconciliationCannotMutateNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Model.RecoveryRequest = 1
+	model.Model.Recovery = []session.ActionRecord{{
+		ID:    "new-action",
+		State: session.ActionIndeterminate,
+	}}
+
+	next, cmd := model.handleActionReconciled(actionReconciledMsg{
+		generation: 1,
+		requestID:  1,
+		action: session.ActionRecord{
+			ID:    "new-action",
+			State: session.ActionCompleted,
+		},
+	})
+	if cmd != nil {
+		t.Fatal("stale reconciliation returned a command")
+	}
+	if next.Model.RecoveryRequest != 1 || len(next.Model.Recovery) != 1 ||
+		next.Model.Recovery[0].State != session.ActionIndeterminate {
+		t.Fatalf("stale reconciliation mutated recovery projection: request=%d recovery=%#v", next.Model.RecoveryRequest, next.Model.Recovery)
+	}
+
+	next, cmd = model.handleActionReconciled(actionReconciledMsg{
+		generation: 1,
+		requestID:  1,
+		err:        errors.New("old journal failure"),
+	})
+	if cmd != nil {
+		t.Fatal("stale reconciliation error returned a command")
+	}
+	if next.Model.RecoveryRequest != 1 {
+		t.Fatal("stale reconciliation error cleared the new request")
 	}
 }
 

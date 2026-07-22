@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -11,9 +10,10 @@ import (
 )
 
 type actionReconciledMsg struct {
-	requestID uint64
-	action    session.ActionRecord
-	err       error
+	generation uint64
+	requestID  uint64
+	action     session.ActionRecord
+	err        error
 }
 
 func (m Model) handleActionsCommand(fields []string) (Model, tea.Cmd) {
@@ -65,16 +65,23 @@ func (m Model) handleActionsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	m.Model.RecoveryRequest++
 	requestID := m.Model.RecoveryRequest
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
 		action, err := resolver.ReconcileAction(
-			context.Background(), actionID, state, evidence, "", "", "",
+			ctx, actionID, state, evidence, "", "", "",
 		)
-		return actionReconciledMsg{requestID: requestID, action: action, err: err}
+		return actionReconciledMsg{
+			generation: generation,
+			requestID:  requestID,
+			action:     action,
+			err:        err,
+		}
 	}
 }
 
 func (m Model) handleActionReconciled(msg actionReconciledMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.RecoveryRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.RecoveryRequest {
 		return m, nil
 	}
 	m.Model.RecoveryRequest = 0
