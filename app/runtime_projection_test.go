@@ -323,6 +323,46 @@ func TestStaleClipboardResultCannotRenderNewRuntime(t *testing.T) {
 	}
 }
 
+func TestStaleSessionImportAndCloneCannotResumeNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	imported, cmd := model.handleSessionImported(sessionImportedMsg{
+		generation: 1,
+		sessionID:  "old-import",
+		filename:   "old.json",
+	})
+	if cmd != nil {
+		t.Fatal("stale import returned a resume command")
+	}
+	if imported.App.PrintedTranscript {
+		t.Fatal("stale import rendered into the new runtime")
+	}
+
+	cloned, cmd := model.handleSessionCloned(sessionClonedMsg{
+		generation:   1,
+		newSessionID: "old-clone",
+	})
+	if cmd != nil {
+		t.Fatal("stale clone returned a resume command")
+	}
+	if cloned.App.PrintedTranscript {
+		t.Fatal("stale clone rendered into the new runtime")
+	}
+
+	failedImport, cmd := model.handleSessionImported(sessionImportedMsg{
+		generation: 1,
+		err:        errors.New("old import failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale import error returned a command")
+	}
+	if failedImport.App.PrintedTranscript {
+		t.Fatal("stale import error rendered into the new runtime")
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}

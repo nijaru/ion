@@ -96,30 +96,47 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support import")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(filename)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionImportedMsg{generation: generation, err: err}
 		}
 		var bundle ionexport.SessionBundle
 		if err := json.Unmarshal(data, &bundle); err != nil {
-			return localErrorMsg{err: fmt.Errorf("decode Ion session bundle: %w", err)}
+			return sessionImportedMsg{
+				generation: generation,
+				err:        fmt.Errorf("decode Ion session bundle: %w", err),
+			}
 		}
 		bundle.RootSessionID = ""
-		imported, err := importer.ImportSessionBundle(context.Background(), bundle)
+		imported, err := importer.ImportSessionBundle(ctx, bundle)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionImportedMsg{generation: generation, err: err}
 		}
-		return sessionImportedMsg{sessionID: imported, filename: filename}
+		return sessionImportedMsg{
+			generation: generation,
+			sessionID:  imported,
+			filename:   filename,
+		}
 	}
 }
 
 type sessionImportedMsg struct {
-	sessionID string
-	filename  string
+	generation uint64
+	sessionID  string
+	filename   string
+	err        error
 }
 
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	notice := fmt.Sprintf("Imported %d session(s) from %s", 1, msg.filename)
 	commit := m.terminalCommit().Entries(systemEntry(notice))
 	resumeModel, resumeCmd := m.resumeStoredSessionByID(msg.sessionID)
@@ -228,30 +245,48 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support import")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		ctx := context.Background()
 		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("export session: %w", err)}
+			return sessionClonedMsg{
+				generation: generation,
+				err:        fmt.Errorf("export session: %w", err),
+			}
 		}
 		// Clear the root session ID so import creates a new session
 		bundle.RootSessionID = ""
 		imported, err := importer.ImportSessionBundle(ctx, bundle)
 		if err != nil {
-			return localErrorMsg{err: fmt.Errorf("import session: %w", err)}
+			return sessionClonedMsg{
+				generation: generation,
+				err:        fmt.Errorf("import session: %w", err),
+			}
 		}
 		if len(imported) == 0 {
-			return localErrorMsg{err: fmt.Errorf("no sessions imported")}
+			return sessionClonedMsg{
+				generation: generation,
+				err:        fmt.Errorf("no sessions imported"),
+			}
 		}
-		return sessionClonedMsg{newSessionID: imported}
+		return sessionClonedMsg{generation: generation, newSessionID: imported}
 	}
 }
 
 type sessionClonedMsg struct {
+	generation   uint64
 	newSessionID string
+	err          error
 }
 
 func (m Model) handleSessionCloned(msg sessionClonedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	cmd := m.terminalCommit().Entries(systemEntry("Cloned session " + msg.newSessionID))
 	resumeModel, resumeCmd := m.resumeStoredSessionByID(msg.newSessionID)
 	return resumeModel, tea.Sequence(cmd, resumeCmd)
