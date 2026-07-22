@@ -11,6 +11,19 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+type recordingForkRunner struct {
+	*stubRunner
+	forkContext   context.Context
+	forkParentID  string
+	forkSessionID string
+}
+
+func (r *recordingForkRunner) ForkSession(ctx context.Context, parentID string) (string, error) {
+	r.forkContext = ctx
+	r.forkParentID = parentID
+	return r.forkSessionID, nil
+}
+
 type cancelAwareSessionCatalog struct {
 	started chan struct{}
 }
@@ -293,6 +306,67 @@ func TestStaleSessionInfoCannotRenderNewRuntime(t *testing.T) {
 	}
 	if next.App.PrintedTranscript {
 		t.Fatal("stale session info error rendered into the new runtime")
+	}
+}
+
+func TestStaleSessionForkCannotResumeNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionForked(sessionForkedMsg{
+		generation: 1,
+		sessionID:  "old-fork",
+	})
+	if cmd != nil {
+		t.Fatal("stale session fork returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session fork resumed into the new runtime")
+	}
+
+	next, cmd = model.handleSessionForked(sessionForkedMsg{
+		generation: 1,
+		err:        errors.New("old fork failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale session fork error returned a command")
+	}
+	if next.Progress.Status != model.Progress.Status {
+		t.Fatalf("stale session fork error changed status to %q", next.Progress.Status)
+	}
+}
+
+func TestSessionForkUsesRuntimeOperationContext(t *testing.T) {
+	model := readyModel(t)
+	runner := &recordingForkRunner{
+		stubRunner:    &stubRunner{},
+		forkSessionID: "forked",
+	}
+	model.Model.Runner = runner
+	generation := model.Model.EventGeneration
+
+	next, cmd := model.forkSessionFromPicker("parent")
+	if cmd == nil {
+		t.Fatal("session fork did not return a command")
+	}
+	if next.Picker.Session != nil {
+		t.Fatal("session picker remained open while fork was running")
+	}
+
+	result := cmd()
+	msg, ok := result.(sessionForkedMsg)
+	if !ok {
+		t.Fatalf("fork command returned %T, want sessionForkedMsg", result)
+	}
+	if msg.generation != generation || msg.sessionID != "forked" {
+		t.Fatalf("fork result = %#v, want generation %d and forked session", msg, generation)
+	}
+	if runner.forkContext != model.Model.runtimeContext {
+		t.Fatal("session fork did not receive the runtime operation context")
+	}
+	if runner.forkParentID != "parent" {
+		t.Fatalf("fork parent ID = %q, want parent", runner.forkParentID)
 	}
 }
 

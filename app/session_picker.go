@@ -398,22 +398,28 @@ func (m Model) forkSessionFromPicker(parentID string) (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	m.pickerReducer().closeSession()
 	return m, func() tea.Msg {
-		sessionID, err := forker.ForkSession(context.Background(), parentID)
+		sessionID, err := forker.ForkSession(ctx, parentID)
 		if err != nil {
-			return sessionForkedMsg{err: err}
+			return sessionForkedMsg{generation: generation, err: err}
 		}
-		return sessionForkedMsg{sessionID: sessionID}
+		return sessionForkedMsg{generation: generation, sessionID: sessionID}
 	}
 }
 
 type sessionForkedMsg struct {
-	sessionID string
-	err       error
+	generation uint64
+	sessionID  string
+	err        error
 }
 
 func (m Model) handleSessionForked(msg sessionForkedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err != nil {
 		m.progressReducer().setStatus("Fork failed: " + msg.err.Error())
 		return m, nil
