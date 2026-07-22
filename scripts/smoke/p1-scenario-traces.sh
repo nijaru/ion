@@ -53,7 +53,7 @@ run_layer resume_provider_history provider \
 
 run_layer display_model display \
   go test ./test/tui \
-    -run '^(TestDeterministicTUIAcceptance|TestDeterministicTUIAcceptanceCancelAndError|TestDeterministicTUIAcceptanceJobs)$' \
+    -run '^(TestDeterministicTUIAcceptance|TestDeterministicTUIAcceptanceApproval|TestDeterministicTUIAcceptanceCancelAndError|TestDeterministicTUIAcceptanceJobs)$' \
     -count=1 -timeout 180s
 
 run_layer timeout_surfacing timeout \

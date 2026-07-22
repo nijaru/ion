@@ -151,6 +151,75 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 	})
 }
 
+func TestDeterministicTUIAcceptanceApproval(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := t.TempDir() + "/approval.db"
+	provider := newAcceptanceProvider(acceptanceApproval)
+	store, err := session.NewSQLiteStore(path, "approval")
+	if err != nil {
+		t.Fatalf("open approval store: %v", err)
+	}
+	sess := session.NewSession(store, 128)
+	harness := agent.NewController(agent.ControllerConfig{
+		Session:             sess,
+		Store:               store,
+		Durable:             store,
+		ActionJournal:       store,
+		Workdir:             t.TempDir(),
+		ApprovalMode:        agent.ApprovalConfirm,
+		ApprovalInteractive: true,
+		Model:               acceptanceModel(),
+		Tools:               []agent.Tool{acceptanceApprovalTool(provider)},
+		StreamFn:            provider.stream,
+	})
+	program, output, result := startAcceptanceProgram(t, store, sess, harness)
+
+	program.Send(tea.KeyPressMsg{Text: "write the protected file"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "Tool approval required", "approval prompt")
+	waitForAcceptanceOutput(t, output, "main.go", "approval resource")
+	select {
+	case <-provider.toolStarted:
+		t.Fatal("approval-gated tool executed before user approval")
+	default:
+	}
+
+	program.Send(tea.KeyPressMsg{Text: "y"})
+	select {
+	case <-provider.toolStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for approved tool execution\noutput:\n%s", output.String())
+	}
+	waitForAcceptanceOutput(t, output, "approved-output", "approved assistant response")
+	waitForAcceptanceIdle(t, harness)
+
+	program.Quit()
+	model := waitAcceptanceProgram(t, result)
+	if model.Picker.Approval != nil {
+		t.Fatal("approval prompt remained after approval resolution")
+	}
+	entries, err := sess.Entries(t.Context())
+	if err != nil {
+		t.Fatalf("load approval entries: %v", err)
+	}
+	foundToolResult := false
+	for _, entry := range entries {
+		messageEntry, ok := entry.(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		result, ok := messageEntry.Message.(*session.ToolResultMessage)
+		if ok && result.ToolName == "write" && !result.IsError {
+			foundToolResult = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("approved tool result was not persisted: entries=%d", len(entries))
+	}
+	closeAcceptanceHarness(t, harness, store)
+}
+
 func TestDeterministicTUIAcceptanceJobs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	path := t.TempDir() + "/jobs.db"
@@ -400,6 +469,7 @@ const (
 	acceptanceResume   acceptanceMode = "resume"
 	acceptanceCancel   acceptanceMode = "cancel"
 	acceptanceError    acceptanceMode = "error"
+	acceptanceApproval acceptanceMode = "approval"
 )
 
 type acceptanceProvider struct {
@@ -457,6 +527,21 @@ func (p *acceptanceProvider) stream(ctx context.Context, req *llm.Request) (llm.
 		return nil, ctx.Err()
 	case acceptanceError:
 		return nil, errors.New("deterministic provider failure")
+	case acceptanceApproval:
+		if call == 1 {
+			return &acceptanceStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{{
+					ID:   "approval-call-1",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "write", Arguments: `{"path":"main.go"}`},
+				}},
+				StopReason: "toolUse",
+			}}}, nil
+		}
+		return &acceptanceStream{chunks: []*llm.Chunk{{Content: "approved-output", StopReason: "stop"}}}, nil
 	default:
 		return nil, fmt.Errorf("unknown acceptance mode %q", p.mode)
 	}
@@ -508,6 +593,29 @@ func acceptanceTool(provider *acceptanceProvider) agent.Tool {
 			case <-signal:
 				return session.ToolResultMessage{}, context.Canceled
 			}
+		},
+	}
+}
+
+func acceptanceApprovalTool(provider *acceptanceProvider) agent.Tool {
+	return agent.Tool{
+		Name:           "write",
+		Description:    "Write deterministic protected content",
+		RequiresAction: true,
+		Parameters:     `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`,
+		ApprovalRequirement: func(json.RawMessage) (agent.ApprovalRequirement, bool, error) {
+			return agent.ApprovalRequirement{
+				Category:  "write",
+				Operation: "write",
+				Resource:  "main.go",
+			}, true, nil
+		},
+		Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			provider.toolOnce.Do(func() { close(provider.toolStarted) })
+			return session.ToolResultMessage{
+				ToolName: "write",
+				Content:  []session.Content{session.TextContent{Text: "protected-write-complete"}},
+			}, nil
 		},
 	}
 }
