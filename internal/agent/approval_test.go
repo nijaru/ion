@@ -325,6 +325,146 @@ func TestHarnessApprovalGateWiresRequirementAndResolution(t *testing.T) {
 	}
 }
 
+func newPendingControllerApproval(
+	t *testing.T,
+	runContext context.Context,
+) (*Controller, <-chan *ToolCallDecision, session.ApprovalRequest) {
+	t.Helper()
+	h := NewController(ControllerConfig{
+		Session:             newTestSession(t),
+		ApprovalMode:        ApprovalConfirm,
+		ApprovalInteractive: true,
+		Tools: []Tool{{
+			Name: "write",
+			ApprovalRequirement: func(json.RawMessage) (ApprovalRequirement, bool, error) {
+				return ApprovalRequirement{Category: "write", Operation: "write", Resource: "main.go"}, true, nil
+			},
+		}},
+	})
+	sub, err := h.Subscribe(t.Context(), EventCursor{})
+	if err != nil {
+		_ = h.Close()
+		t.Fatalf("subscribe approval events: %v", err)
+	}
+	decisionCh := make(chan *ToolCallDecision, 1)
+	loopCfg := h.buildLoopConfig(runContext, h.buildTools(), nil)
+	go func() {
+		decisionCh <- loopCfg.BeforeToolCall(ToolCallContext{
+			RunContext: runContext,
+			ToolCall:   &session.ToolCall{ID: "call-1", Name: "write"},
+			Args:       json.RawMessage(`{"path":"main.go"}`),
+		})
+	}()
+	select {
+	case envelope := <-sub.Events:
+		request, ok := envelope.Event.(session.ApprovalRequest)
+		if !ok {
+			sub.Close()
+			_ = h.Close()
+			t.Fatalf("approval event = %T, want ApprovalRequest", envelope.Event)
+		}
+		t.Cleanup(func() {
+			sub.Close()
+			_ = h.Close()
+		})
+		return h, decisionCh, request
+	case <-time.After(time.Second):
+		sub.Close()
+		_ = h.Close()
+		t.Fatal("timed out waiting for approval request")
+		return nil, nil, session.ApprovalRequest{}
+	}
+}
+
+func TestControllerApprovalResolveVsCloseHasOneTerminalDecision(t *testing.T) {
+	h, decisionCh, request := newPendingControllerApproval(t, context.Background())
+	start := make(chan struct{})
+	resolveDone := make(chan error, 1)
+	closeDone := make(chan error, 1)
+	go func() {
+		<-start
+		resolveDone <- h.ResolveApproval(request.ID, session.ApprovalAllow)
+	}()
+	go func() {
+		<-start
+		closeDone <- h.Close()
+	}()
+	close(start)
+
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	resolveErr := <-resolveDone
+	decision := <-decisionCh
+	if decision == nil {
+		if resolveErr != nil {
+			t.Fatalf("ResolveApproval failed but decision was allowed: %v", resolveErr)
+		}
+	} else {
+		if !decision.Block {
+			t.Fatalf("unexpected non-blocking approval decision: %#v", decision)
+		}
+		if resolveErr == nil {
+			t.Fatalf("ResolveApproval succeeded but decision was blocked: %#v", decision)
+		}
+	}
+	if err := h.ResolveApproval(request.ID, session.ApprovalAllow); err == nil {
+		t.Fatal("stale approval resolution unexpectedly succeeded after close")
+	}
+}
+
+func TestControllerApprovalResolveVsCancelHasOneTerminalDecision(t *testing.T) {
+	runContext, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	h, decisionCh, request := newPendingControllerApproval(t, runContext)
+	start := make(chan struct{})
+	resolveDone := make(chan error, 1)
+	go func() {
+		<-start
+		resolveDone <- h.ResolveApproval(request.ID, session.ApprovalAllow)
+	}()
+	go func() {
+		<-start
+		cancel()
+	}()
+	close(start)
+
+	resolveErr := <-resolveDone
+	decision := <-decisionCh
+	if decision == nil {
+		if resolveErr != nil {
+			t.Fatalf("ResolveApproval failed but cancellation allowed: %v", resolveErr)
+		}
+	} else {
+		if !decision.Block {
+			t.Fatalf("unexpected non-blocking cancellation decision: %#v", decision)
+		}
+		if resolveErr == nil {
+			t.Fatalf("ResolveApproval succeeded but cancellation blocked: %#v", decision)
+		}
+	}
+}
+
+func TestControllerApprovalResolutionBypassesSaturatedCommandQueue(t *testing.T) {
+	h, decisionCh, request := newPendingControllerApproval(t, context.Background())
+	h.mu.Lock()
+	for len(h.commands) < cap(h.commands) {
+		h.commands <- &SetModelCmd{Model: llm.Model{ID: "queued"}}
+	}
+	if got, want := len(h.commands), cap(h.commands); got != want {
+		h.mu.Unlock()
+		t.Fatalf("controller command queue length = %d, want capacity %d", got, want)
+	}
+	h.mu.Unlock()
+
+	if err := h.ResolveApproval(request.ID, session.ApprovalAllow); err != nil {
+		t.Fatalf("ResolveApproval with saturated command queue: %v", err)
+	}
+	if decision := <-decisionCh; decision != nil {
+		t.Fatalf("approval decision = %#v, want nil allow decision", decision)
+	}
+}
+
 func TestHarnessForcedApprovalOverridesTrustedMode(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

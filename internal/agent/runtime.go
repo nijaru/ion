@@ -686,6 +686,14 @@ func (c *Controller) Close() error {
 	c.closed = true
 	runtimeCancel := c.runtimeCancel
 	c.mu.Unlock()
+	// Close the synchronous approval lane independently of turn-context
+	// cancellation. A pending decision must be denied even when it was opened
+	// with a context that does not belong to the active turn, and new requests
+	// must fail closed as soon as the runtime accepts shutdown.
+	var approvalErr error
+	if c.approvals != nil {
+		approvalErr = c.approvals.Close()
+	}
 	if runtimeCancel != nil {
 		runtimeCancel()
 	}
@@ -723,7 +731,7 @@ func (c *Controller) Close() error {
 		c.eventHub.close()
 	}
 
-	return nil
+	return approvalErr
 }
 
 // debugRun is a temporary debug helper.

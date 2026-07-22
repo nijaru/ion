@@ -551,9 +551,12 @@ func (c *Controller) handleInputHistoryAdd(cmd *InputHistoryAddCmd) {
 // --- Approval commands ---
 
 // ResolveApproval supplies the host's decision for a pending tool call.
-// This is a direct broker call — it does not go through the command queue
-// because the approval broker is already goroutine-safe and the decision
-// must be delivered immediately without queueing latency.
+//
+// Approval resolution is the runtime's synchronous control lane. It is a
+// direct broker call, not a command-queue operation: the broker is owned by
+// this controller, is goroutine-safe, and must wake a waiting tool
+// immediately. Controller.Close closes the same lane first, so a close-vs-
+// resolve race produces one terminal decision and never leaves a tool blocked.
 func (c *Controller) ResolveApproval(id string, decision session.ApprovalDecision) error {
 	if c == nil || c.approvals == nil {
 		return errors.New("approval broker is unavailable")
