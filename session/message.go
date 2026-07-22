@@ -9,8 +9,6 @@ import (
 
 // Message is the single domain message type, discriminated by role.
 // It is the currency of the agent loop and the stored form of the session tree.
-// Translated from Pi's pi-ai Message union (UserMessage | AssistantMessage | ToolResultMessage).
-//
 // The interface is sealed via isMessage; type switches over Message are exhaustive.
 type Message interface {
 	isMessage()
@@ -27,7 +25,7 @@ type UserMessage struct {
 
 // AssistantMessage is a model response. Content is Text/Thinking/ToolCall blocks.
 // Failure is encoded in-message: StopReason is error|aborted and Error is non-empty,
-// rather than thrown — matching Pi's loop contract.
+// rather than thrown — matching the runtime turn contract.
 type AssistantMessage struct {
 	Content       []Content // Text | Thinking | ToolCall
 	API           string
@@ -38,12 +36,12 @@ type AssistantMessage struct {
 	Usage         Usage
 	StopReason    StopReason
 	Error         string // non-empty iff StopReason is error or aborted
-	ThinkingLevel ThinkingLevel // per-message thinking level; Pi tracks this on AssistantMessage
+	ThinkingLevel ThinkingLevel // per-message reasoning level
 	Timestamp     time.Time
 }
 
-// ToolResultMessage is the result of executing a tool call. It is a peer message
-// (role toolResult), not a content block — matching Pi's model.
+// ToolResultMessage is the result of executing a tool call. It is a peer
+// message (role "tool_result"), not a content block.
 type ToolResultMessage struct {
 	ToolCallID string
 	ToolName   string
@@ -51,7 +49,7 @@ type ToolResultMessage struct {
 	Content    []Content // Text | Image
 	Details    json.RawMessage
 	IsError    bool
-	Terminate  bool    // Pi: result.terminate — when true, agent should stop after tool batch
+	Terminate  bool    // stop the agent after this tool batch when true
 	Timestamp  time.Time
 }
 
@@ -68,9 +66,7 @@ func NewUserText(text string, ts time.Time) *UserMessage {
 	return &UserMessage{Content: []Content{TextContent{Text: text}}, Timestamp: ts}
 }
 
-// Summary format constants — match Pi's harness/messages.js formatting so
-// LLM context is equivalent.
-// Reference: Pi harness/messages.js lines 1-12.
+// Summary delimiters are part of Ion's compaction and branch-context contract.
 const (
 	CompactionSummaryPrefix = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n"
 	CompactionSummarySuffix = "\n</summary>"
@@ -79,7 +75,6 @@ const (
 )
 
 // CustomMessage wraps arbitrary content for display or auxiliary persistence.
-// Reference: Pi messages.js createCustomMessage (line 37).
 type CustomMessage struct {
 	CustomType string
 	Content    []Content
@@ -116,7 +111,7 @@ type ImageContent struct {
 }
 
 // ToolCall is a tool invocation requested by the assistant. Arguments are the parsed
-// JSON arguments (Pi stores Record<string,any>; map[string]any is the Go equivalent).
+// JSON arguments are stored as a map because tool payloads are arbitrary JSON.
 type ToolCall struct {
 	ID        string
 	Name      string

@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Custom JSON marshal/unmarshal for Message (discriminated by "role" field).
-// Pi stores messages as JSON with role as discriminator.
+// Custom JSON marshal/unmarshal for Message using the persisted role
+// discriminator.
 
 func (m *UserMessage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {

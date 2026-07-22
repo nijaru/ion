@@ -6,10 +6,8 @@ import "time"
 // entries; a Message is the dominant entry kind, but metadata changes (model
 // switches, compaction markers, branch summaries) are distinct kinds.
 //
-// Translated from Pi's session entry model (entry.type discriminates: message,
-// model_change, thinking_level_change, active_tools_change, compaction,
-// branch_summary, label, session_info, custom). The interface is sealed via
-// isEntry; type switches are exhaustive within this package.
+// Each concrete entry carries one durable session-tree record. The interface is
+// sealed via isEntry; type switches are exhaustive within this package.
 type Entry interface {
 	isEntry()
 	ID() string
@@ -87,7 +85,6 @@ type CustomEntry struct {
 
 // LeafEntry records a change in the session leaf pointer (tree navigation).
 // BuildContext skips this entry — it's metadata, not a message.
-// Pi equivalent: "leaf" entry kind recorded in flushPendingSessionWrites.
 type LeafEntry struct {
 	EntryBase
 	TargetID string // the entry ID the leaf moved to

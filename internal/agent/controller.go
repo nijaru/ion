@@ -49,9 +49,6 @@ const (
 	HookToolResult            = "tool_result"
 )
 
-// QueueUpdate was moved to session/events.go as part of Phase B harness parity.
-// The session.QueueUpdate carries full []Message arrays, not just counts.
-
 // ControllerConfig holds construction-time configuration for a Controller.
 type ControllerConfig struct {
 	Session         session.Session
@@ -194,9 +191,8 @@ func NewController(cfg ControllerConfig) *Controller {
 		)
 		h.actionsEnabled = true
 	} else if hasExternalActionTool(cfg.Tools) {
-		// A runtime with effect-capable tools but no journal is still wired to
-		// the boundary so execution fails closed instead of falling back to the
-		// legacy ephemeral approval path.
+		// A runtime with effect-capable tools but no journal still installs the
+		// boundary so execution fails closed rather than using approval alone.
 		h.actionBoundary = newControllerActionCoordinator(
 			h,
 			nil, h.approvals, cfg.ApprovalMode, cfg.ApprovalInteractive, cfg.Workdir,

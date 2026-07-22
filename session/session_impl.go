@@ -81,9 +81,8 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 				activeTools = e.ActiveTools
 			}
 		case *MessageEntry:
-			// Pi: assistant messages carry the authoritative provider/model,
-			// so the active model is recovered even without an explicit ModelChangeEntry.
-			// Reference: Pi session.js buildSessionContext line 15-16.
+			// Assistant messages carry the authoritative provider/model, so the
+			// active model is recovered even without an explicit ModelChangeEntry.
 			if am, ok := e.Message.(*AssistantMessage); ok && activeModel == "" && am.Model != "" {
 				activeModel = am.Model
 			}
@@ -111,7 +110,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 
 	var msgs []Message
 
-	// Prepend compaction summary if present (Pi: COMPACTION_SUMMARY_PREFIX/SUFFIX wrapping).
+	// Prepend the compaction summary when one is present.
 	if lastCompaction != nil && lastCompaction.Summary != "" {
 		msgs = append(msgs, NewUserText(
 			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix, time.Now()))
@@ -128,7 +127,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 					BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp))
 			}
 		case *CustomMessageEntry:
-			// Pi: custom_message entries project as CustomMessage in context.
+			// Custom message entries project as CustomMessage in context.
 			msgs = append(msgs, &CustomMessage{
 				CustomType: e.CustomType,
 				Content:    e.Content,

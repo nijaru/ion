@@ -18,7 +18,7 @@ type Event interface {
 	isEvent()
 }
 
-// --- Core events (Pi-aligned). ---
+// --- Core events. ---
 
 // AgentStart opens a run. Origin tags root vs child for the future subagent seam.
 type AgentStart struct {
@@ -176,7 +176,7 @@ func (ApprovalResolution) isEvent() {}
 func (TurnEnd) isEvent()            {}
 func (AgentEnd) isEvent()           {}
 
-// --- Controller lifecycle events (Pi-aligned). ---
+// --- Controller lifecycle events. ---
 
 // UpdateSource identifies why a harness setting changed.
 type UpdateSource string
@@ -204,7 +204,6 @@ type ToolsUpdate struct {
 
 // QueueUpdate is emitted when steer/followUp/nextTurn queues change.
 // Carries full queued messages, not just counts.
-// Reference: Pi agent-harness.js emitQueueUpdate (line 249).
 type QueueUpdate struct {
 	Steer    []Message
 	FollowUp []Message
@@ -212,19 +211,16 @@ type QueueUpdate struct {
 }
 
 // Settled is emitted after agent_end, signaling the harness is back to idle.
-// Reference: Pi agent-harness.js (line ~487).
 type Settled struct {
 	NextTurnCount int
 }
 
 // SavePoint is emitted after turn_end flush, signaling all writes are durable.
-// Reference: Pi agent-harness.js (line ~480).
 type SavePoint struct {
 	HadPendingMutations bool
 }
 
 // Abort is emitted when the current run is aborted, carrying cleared queues.
-// Reference: Pi agent-harness.js (line ~905).
 type Abort struct {
 	ClearedSteer    []Message
 	ClearedFollowUp []Message

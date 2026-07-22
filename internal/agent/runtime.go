@@ -714,8 +714,8 @@ func (c *Controller) Close() error {
 	c.mu.Lock()
 	if c.phase != PhaseClosed {
 		if err := c.transitionPhase(c.phase, PhaseClosed); err != nil {
-			// Shutdown is terminal even for an auxiliary operation whose legacy
-			// phase is not yet represented in the canonical transition table.
+			// Shutdown is terminal even for an auxiliary operation whose phase is
+			// not yet represented in the canonical transition table.
 			c.phase = PhaseClosed
 		}
 	}
@@ -733,5 +733,3 @@ func (c *Controller) Close() error {
 
 	return approvalErr
 }
-
-// debugRun is a temporary debug helper.
