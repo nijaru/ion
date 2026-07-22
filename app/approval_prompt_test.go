@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestApprovalPromptRendersAndResolvesAlways(t *testing.T) {
 		t.Fatal("approval key did not return resolver command")
 	}
 	result, ok := cmd().(approvalResolveMsg)
-	if !ok || result.err != nil {
+	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
 		t.Fatalf("approval command result = %#v", result)
 	}
 	if runner.calls != 1 || runner.decision != session.ApprovalAlways {
@@ -71,6 +72,27 @@ func TestApprovalPromptRendersAndResolvesAlways(t *testing.T) {
 	})
 	if model.Picker.Approval != nil {
 		t.Fatal("approval prompt remained after resolution")
+	}
+}
+
+func TestStaleApprovalResolutionCannotCancelNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Progress.Status = "new runtime"
+	model.Picker.Approval = &approvalPromptState{
+		request:   session.ApprovalRequest{ID: "new-approval"},
+		resolving: true,
+	}
+
+	next, cmd := model.handleApprovalResolve(approvalResolveMsg{
+		generation: 1,
+		err:        errors.New("old approval failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale approval result returned a command")
+	}
+	if next.Picker.Approval == nil || next.Progress.Status != "new runtime" {
+		t.Fatalf("stale approval result mutated new runtime: picker=%#v status=%q", next.Picker.Approval, next.Progress.Status)
 	}
 }
 

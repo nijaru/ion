@@ -61,7 +61,8 @@ type clearPendingMsg struct {
 type deferredEnterMsg struct{}
 
 type approvalResolveMsg struct {
-	err error
+	generation uint64
+	err        error
 }
 
 type fileReferenceCompletionMsg struct {

@@ -273,10 +273,11 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{purpose: pickerPurposeModel}
 	model.Picker.Session = &sessionPickerState{items: []sessionPickerItem{{}}}
 	model.Picker.Setup = &setupPromptState{kind: SetupPromptAPIKey}
+	model.Picker.Approval = &approvalPromptState{request: session.ApprovalRequest{ID: "approval-1"}}
 
 	model.pickerReducer().closeAll()
 
-	if model.Picker.Overlay != nil || model.Picker.Session != nil || model.Picker.Setup != nil {
+	if model.Picker.Overlay != nil || model.Picker.Session != nil || model.Picker.Setup != nil || model.Picker.Approval != nil {
 		t.Fatalf("picker state = %#v, want all surfaces closed", model.Picker)
 	}
 }

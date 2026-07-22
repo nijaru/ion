@@ -36,12 +36,19 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	prompt.resolving = true
 	requestID := prompt.request.ID
+	generation := m.Model.EventGeneration
 	return m, func() tea.Msg {
-		return approvalResolveMsg{err: resolver.ResolveApproval(requestID, decision)}
+		return approvalResolveMsg{
+			generation: generation,
+			err:        resolver.ResolveApproval(requestID, decision),
+		}
 	}
 }
 
 func (m Model) handleApprovalResolve(msg approvalResolveMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err == nil {
 		return m, nil
 	}
