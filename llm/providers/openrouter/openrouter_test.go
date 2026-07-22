@@ -3,6 +3,9 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -368,6 +371,77 @@ func TestStreamUsageChunkPrefersOpenRouterRawCost(t *testing.T) {
 	}
 	if got, want := chunk.Usage.Cost, 0.0042; got != want {
 		t.Fatalf("Cost = %.6f, want %.6f", got, want)
+	}
+}
+
+func TestStreamAssemblesFragmentedToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			"{\"id\":\"resp-1\",\"model\":\"actual-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"ion_live_echo\",\"arguments\":\"{\\\"text\\\":\\\"live-\"}}]}}]}",
+			"{\"id\":\"resp-1\",\"model\":\"actual-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"check\\\"}\"}}]}}]}",
+			"{\"id\":\"resp-1\",\"model\":\"actual-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+			"{\"id\":\"resp-1\",\"model\":\"actual-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}",
+		}
+		for _, event := range events {
+			_, _ = fmt.Fprintln(w, "data: "+event)
+			_, _ = fmt.Fprintln(w)
+		}
+		_, _ = fmt.Fprintln(w, "data: [DONE]")
+		_, _ = fmt.Fprintln(w)
+	}))
+	defer server.Close()
+
+	provider := NewProvider(llm.ProviderConfig{
+		APIKey:      "test-key",
+		APIEndpoint: server.URL + "/v1",
+		Models: []llm.Model{{
+			ID: "test/model",
+			Capabilities: &llm.Capabilities{
+				Streaming: true,
+				Tools:     true,
+			},
+		}},
+	})
+	stream, err := provider.Stream(t.Context(), &llm.Request{
+		Model:    "test/model",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "call the tool"}},
+		Tools: []*llm.Spec{{
+			Name:        "ion_live_echo",
+			Description: "echo text",
+			Parameters:  map[string]any{"type": "object"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	response, err := llm.GenerateFromStream(stream)
+	if err != nil {
+		t.Fatalf("GenerateFromStream: %v", err)
+	}
+	calls := response.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls = %#v, want one assembled call", calls)
+	}
+	call := calls[0]
+	if call.ID != "call-1" || call.Function.Name != "ion_live_echo" {
+		t.Fatalf("assembled call identity = %#v", call)
+	}
+	if call.Function.Arguments != `{"text":"live-check"}` {
+		t.Fatalf("assembled call arguments = %q, want complete JSON", call.Function.Arguments)
+	}
+	if response.StopReason != llm.StopReasonToolUse {
+		t.Fatalf("stop reason = %q, want tool use", response.StopReason)
+	}
+	if response.ResponseID != "resp-1" || response.ResponseModel != "actual-model" {
+		t.Fatalf("response metadata = id %q model %q", response.ResponseID, response.ResponseModel)
+	}
+	if response.Usage.TotalTokens != 8 {
+		t.Fatalf("usage total = %d, want 8", response.Usage.TotalTokens)
 	}
 }
 
