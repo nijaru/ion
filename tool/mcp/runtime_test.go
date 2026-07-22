@@ -66,6 +66,62 @@ func TestOwnedClientCloseTerminatesProcessGroup(t *testing.T) {
 	}
 }
 
+func TestOwnedClientCloseSurfacesSandboxCleanupFailure(t *testing.T) {
+	command := exec.Command("/bin/sh", "-c", "sleep 30")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	cleanupErr := errors.New("sandbox cleanup failed")
+	cleaned := false
+	client := &ownedClient{
+		client:  &Client{session: &fakeClientSession{}},
+		command: command,
+		cleanup: func() error {
+			cleaned = true
+			return cleanupErr
+		},
+	}
+
+	err := client.Close()
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("ownedClient.Close() = %v, want sandbox cleanup error", err)
+	}
+	if !cleaned {
+		t.Fatal("ownedClient.Close did not run sandbox cleanup after process termination")
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("process group leader exited cleanly; expected termination")
+	}
+}
+
+func TestRuntimeCloseJoinsClientCleanupFailures(t *testing.T) {
+	first := errors.New("first sandbox cleanup failed")
+	second := errors.New("second sandbox cleanup failed")
+	runtime := &Runtime{clients: []*ownedClient{
+		{
+			client: &Client{session: &fakeClientSession{}},
+			cleanup: func() error {
+				return first
+			},
+		},
+		{
+			client: &Client{session: &fakeClientSession{}},
+			cleanup: func() error {
+				return second
+			},
+		},
+	}}
+
+	err := runtime.Close()
+	if !errors.Is(err, first) || !errors.Is(err, second) {
+		t.Fatalf("Runtime.Close() = %v, want both cleanup errors", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("second Runtime.Close() = %v, want nil", err)
+	}
+}
+
 func TestMCPParentWatchKillsGroupWhenIonPipeCloses(t *testing.T) {
 	childControl, parentControl, err := os.Pipe()
 	if err != nil {
