@@ -28,10 +28,24 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep
+          sudo apt-get install -y ripgrep tmux
 
       - name: Test
         run: go test ./... -count=1 -timeout 300s
 
+      - name: Race
+        run: go test -race ./... -count=1 -timeout 900s
+
       - name: Vet
         run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: TUI and terminal acceptance
+        run: bash scripts/smoke/p1-scenario-traces.sh
+
+      - name: Performance baseline
+        run: |
+          ION_PERF_COUNT=1 ION_PERF_HYPERFINE_RUNS=3 \
+            bash scripts/smoke/p1-performance-proof.sh
