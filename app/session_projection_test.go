@@ -20,6 +20,9 @@ type projectionTestRunner struct {
 
 func (r *projectionTestRunner) SessionProjection(ctx context.Context) (agent.SessionProjection, error) {
 	r.projectionCtx = ctx
+	if err := ctx.Err(); err != nil {
+		return agent.SessionProjection{}, err
+	}
 	return r.projection, r.err
 }
 
@@ -122,12 +125,16 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 		}
 	}
 
-	usageMsg, ok := loadSessionUsageCmd(7, runner, storage)().(sessionUsageLoadedMsg)
+	usageCtx := context.Background()
+	usageMsg, ok := loadSessionUsageCmd(usageCtx, 7, runner, storage)().(sessionUsageLoadedMsg)
 	if !ok {
-		t.Fatalf("usage message type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(7, runner, storage)())
+		t.Fatalf("usage message type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(usageCtx, 7, runner, storage)())
 	}
 	if usageMsg.err != nil || usageMsg.generation != 7 || usageMsg.input != 8 || usageMsg.output != 4 || usageMsg.cost != 0.4 {
 		t.Fatalf("usage message = %#v, want runtime projection usage", usageMsg)
+	}
+	if runner.projectionCtx != usageCtx {
+		t.Fatalf("usage projection context = %v, want supplied context", runner.projectionCtx)
 	}
 
 	costMsg, ok := model.sessionCostCmd()().(sessionCostMsg)
@@ -136,5 +143,22 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	}
 	if storage.reads != 0 {
 		t.Fatalf("active command storage reads = %d, want zero", storage.reads)
+	}
+}
+
+func TestLoadSessionUsageStopsOnCanceledRuntimeContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	runner := &projectionTestRunner{stubRunner: &stubRunner{}}
+
+	result, ok := loadSessionUsageCmd(ctx, 4, runner, nil)().(sessionUsageLoadedMsg)
+	if !ok {
+		t.Fatalf("usage result type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(ctx, 4, runner, nil)())
+	}
+	if result.generation != 4 || result.err == nil {
+		t.Fatalf("canceled usage result = %#v, want generation and cancellation error", result)
+	}
+	if runner.projectionCtx != ctx {
+		t.Fatalf("canceled usage context = %v, want supplied context", runner.projectionCtx)
 	}
 }

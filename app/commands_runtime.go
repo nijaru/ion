@@ -632,7 +632,12 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 	if msg.runtime.Handles.Runner != nil || msg.runtime.Handles.Storage != nil {
 		cmds = append(
 			cmds,
-			loadSessionUsageCmd(m.Model.EventGeneration, msg.runtime.Handles.Runner, msg.runtime.Handles.Storage),
+			loadSessionUsageCmd(
+				m.runtimeOperationContext(),
+				m.Model.EventGeneration,
+				msg.runtime.Handles.Runner,
+				msg.runtime.Handles.Storage,
+			),
 		)
 	}
 	return append(cmds, m.awaitSessionEvent())

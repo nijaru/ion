@@ -369,12 +369,17 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, runner agent.Runtime, storage RuntimeStorage) tea.Cmd {
+func loadSessionUsageCmd(
+	ctx context.Context,
+	generation uint64,
+	runner agent.Runtime,
+	storage RuntimeStorage,
+) tea.Cmd {
 	if runner == nil && storage == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		projection, err := loadSessionProjection(context.Background(), runner, storage)
+		projection, err := loadSessionProjection(ctx, runner, storage)
 		return sessionUsageLoadedMsg{
 			generation: generation,
 			input:      projection.Usage.Input,
