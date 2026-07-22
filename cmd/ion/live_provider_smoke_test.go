@@ -131,6 +131,9 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	if !caps.Streaming || !caps.Tools {
 		t.Fatalf("provider %q model %q capabilities = %#v, need streaming and tools for this conformance profile", profile.provider, profile.model, caps)
 	}
+	if profile.thinking != session.ThinkingAuto && !caps.SupportsReasoningControl(string(profile.thinking)) {
+		t.Fatalf("provider %q model %q does not advertise configured thinking level %q: %#v", profile.provider, profile.model, profile.thinking, caps)
+	}
 
 	path := filepath.Join(t.TempDir(), "live.db")
 	store, err := session.NewSQLiteStore(path, "live-"+profile.name)
@@ -183,7 +186,7 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 		t.Fatalf("live turn through %s/%s: %v", profile.provider, profile.model, promptErr)
 	}
 
-	assertLiveEvents(t, events)
+	assertLiveEvents(t, events, profile)
 	if response == nil {
 		t.Fatal("live Prompt returned a nil response")
 	}
@@ -298,7 +301,7 @@ func drainLiveEvents(sub *agent.EventSubscription) []session.Event {
 	}
 }
 
-func assertLiveEvents(t *testing.T, events []session.Event) {
+func assertLiveEvents(t *testing.T, events []session.Event, profile liveProviderProfile) {
 	t.Helper()
 	var text, thinking, assistantStart, assistantEnd, turnEnd, agentEnd, settled bool
 	var toolStarts, toolEnds int
@@ -347,8 +350,8 @@ func assertLiveEvents(t *testing.T, events []session.Event) {
 	if !assistantStart || !assistantEnd || !turnEnd || !agentEnd {
 		t.Errorf("live event stream incomplete assistant lifecycle: start=%v end=%v turn_end=%v agent_end=%v", assistantStart, assistantEnd, turnEnd, agentEnd)
 	}
-	if os.Getenv("ION_LIVE_REQUIRE_THINKING") == "1" && !thinking {
-		t.Error("live event stream contained no thinking delta; set a reasoning-capable profile or unset ION_LIVE_REQUIRE_THINKING")
+	if (os.Getenv("ION_LIVE_REQUIRE_THINKING") == "1" || profile.thinking != session.ThinkingAuto) && !thinking {
+		t.Errorf("live event stream contained no thinking delta for profile thinking level %q", profile.thinking)
 	}
 }
 

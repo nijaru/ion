@@ -196,6 +196,12 @@ go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 Set `ION_PHASE1_LIVE=1` with the same four profile variables to include the
 live TUI/tmux pass in `scripts/smoke/phase1-acceptance.sh`.
 
+Set `ION_LIVE_THINKING_A` or `ION_LIVE_THINKING_B` to an explicit thinking
+level when a profile must prove reasoning deltas; the harness checks the
+model capability and the streamed event. Set `ION_LIVE_REQUIRE_THINKING=1` to
+require thinking deltas from both profiles. These checks still require the
+opt-in live run and do not replace provider failure/cancellation evidence.
+
 ## License
 
 [MIT](LICENSE)
