@@ -82,6 +82,72 @@ func TestSessionEventCursorAdvancesAfterAcceptedSequence(t *testing.T) {
 	}
 }
 
+func TestAwaitSessionEventDeduplicatesPendingSubscription(t *testing.T) {
+	model := readyModel(t)
+
+	first := model.awaitSessionEvent()
+	if first == nil {
+		t.Fatal("first subscription request is nil")
+	}
+	second := model.awaitSessionEvent()
+	if second != nil {
+		t.Fatal("duplicate subscription request was started while the first was pending")
+	}
+	if state := model.Model.EventSubscriptionState; state == nil || !state.pending {
+		t.Fatalf("subscription state = %#v, want pending", state)
+	}
+}
+
+func TestAwaitSessionEventDeduplicatesActiveReader(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventSubscription = &agent.EventSubscription{
+		Events: make(chan agent.EventEnvelope),
+	}
+
+	first := model.awaitSessionEvent()
+	if first == nil {
+		t.Fatal("first event reader is nil")
+	}
+	second := model.awaitSessionEvent()
+	if second != nil {
+		t.Fatal("duplicate event reader was started while the first was pending")
+	}
+	if state := model.Model.EventSubscriptionState; state == nil || !state.readerBusy {
+		t.Fatalf("subscription state = %#v, want active reader", state)
+	}
+}
+
+func TestStaleEventReaderCannotAdvanceRuntimeCursor(t *testing.T) {
+	model := readyModel(t)
+	stream := agent.EventStreamID{1}
+	model.Model.EventGeneration = 3
+	model.Model.EventCursor = agent.EventCursor{Stream: stream, Next: 7}
+	model.Model.EventSubscription = &agent.EventSubscription{}
+	state := model.Model.EventSubscriptionState
+	state.generation = 3
+	state.reader = 2
+	state.readerBusy = true
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(sessionEventMsg{
+		generation: 3,
+		reader:     1,
+		cursor:     agent.EventCursor{Stream: stream, Next: 7},
+		event:      session.SavePoint{},
+	})
+	if !handled {
+		t.Fatal("stale event reader was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale event reader started a replacement command")
+	}
+	if got := next.Model.EventCursor.Next; got != 7 {
+		t.Fatalf("cursor next = %d, want unchanged 7", got)
+	}
+	if !state.readerBusy {
+		t.Fatal("current event reader was marked idle by stale result")
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -316,6 +316,13 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
 	if m.Model.EventSubscription == nil {
+		if state := m.Model.EventSubscriptionState; state != nil {
+			if state.pending && state.generation == generation {
+				return nil
+			}
+			state.generation = generation
+			state.pending = true
+		}
 		runner := m.Model.Runner
 		after := m.Model.EventCursor
 		return func() tea.Msg {
@@ -333,6 +340,16 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		}
 	}
 	subscription := m.Model.EventSubscription
+	var reader uint64
+	if state := m.Model.EventSubscriptionState; state != nil {
+		if state.readerBusy && state.generation == generation {
+			return nil
+		}
+		state.generation = generation
+		state.reader++
+		reader = state.reader
+		state.readerBusy = true
+	}
 	var done <-chan struct{}
 	if m.Model.Runner != nil {
 		if source, ok := m.Model.Runner.(interface{ Done() <-chan struct{} }); ok {
@@ -347,6 +364,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 			}
 			return sessionEventMsg{
 				generation: generation,
+				reader:     reader,
 				// EventCursor.Next is the next sequence the reducer expects.
 				// The event itself must be compared at its own sequence; the
 				// reducer advances Next after accepting it.

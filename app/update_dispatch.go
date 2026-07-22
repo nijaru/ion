@@ -242,6 +242,9 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 			}
 			return m, nil, true
 		}
+		if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
+			state.pending = false
+		}
 		if msg.err != nil {
 			if errors.Is(msg.err, agent.ErrSnapshotChanged) {
 				return m, m.awaitSessionEvent(), true
@@ -274,6 +277,12 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
 		}
+		if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
+			if msg.reader != 0 && msg.reader != state.reader {
+				return m, nil, true
+			}
+			state.readerBusy = false
+		}
 		if msg.cursor != m.Model.EventCursor {
 			if m.Model.EventSubscription != nil {
 				m.Model.EventSubscription.Close()
@@ -288,6 +297,9 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 	case streamClosedMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
+		}
+		if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
+			state.readerBusy = false
 		}
 		if errors.Is(msg.err, agent.ErrSubscriptionLagged) {
 			m.Model.EventSubscription = nil

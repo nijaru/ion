@@ -26,6 +26,7 @@ const (
 
 type sessionEventMsg struct {
 	generation uint64
+	reader     uint64
 	cursor     agent.EventCursor
 	event      session.Event
 }
@@ -34,6 +35,18 @@ type runtimeSubscriptionMsg struct {
 	generation   uint64
 	subscription *agent.EventSubscription
 	err          error
+}
+
+// eventSubscriptionState prevents more than one asynchronous subscription
+// request from being in flight for a runtime generation. Init and a fast
+// submit can otherwise both call awaitSessionEvent before the first
+// subscription result reaches the Bubble Tea update loop; duplicate readers
+// race on one event stream and make cursor recovery discard events.
+type eventSubscriptionState struct {
+	generation uint64
+	pending    bool
+	reader     uint64
+	readerBusy bool
 }
 
 type streamClosedMsg struct {
@@ -340,25 +353,26 @@ type ConfigLoader func() (*config.Config, error)
 
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
-	Info                 RuntimeInfo
-	Storage              RuntimeStorage
-	SessionCatalog       agent.SessionCatalog
-	InputHistory         agent.InputHistory
-	Jobs                 JobController
-	Memory               MemoryController
-	Checkpoints          CheckpointController
-	Switcher             Switcher
-	ConfigLoader         ConfigLoader
-	Catalog              ModelCatalog
-	Config               *config.Config
-	Runtime              Snapshot
-	EventGeneration      uint64
-	EventCursor          agent.EventCursor
-	EventSubscription    *agent.EventSubscription
-	RuntimeSwitchRequest uint64
-	SettingsRequest      uint64
-	MemoryRequest        uint64
-	CheckpointRequest    uint64
+	Info                   RuntimeInfo
+	Storage                RuntimeStorage
+	SessionCatalog         agent.SessionCatalog
+	InputHistory           agent.InputHistory
+	Jobs                   JobController
+	Memory                 MemoryController
+	Checkpoints            CheckpointController
+	Switcher               Switcher
+	ConfigLoader           ConfigLoader
+	Catalog                ModelCatalog
+	Config                 *config.Config
+	Runtime                Snapshot
+	EventGeneration        uint64
+	EventCursor            agent.EventCursor
+	EventSubscription      *agent.EventSubscription
+	EventSubscriptionState *eventSubscriptionState
+	RuntimeSwitchRequest   uint64
+	SettingsRequest        uint64
+	MemoryRequest          uint64
+	CheckpointRequest      uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
@@ -489,12 +503,13 @@ func New(
 			ActivePreset: PresetPrimary,
 		},
 		Model: ModelState{
-			Info:           b,
-			Storage:        storage,
-			SessionCatalog: catalog,
-			Recovery:       append([]session.ActionRecord(nil), boot.Recovery...),
-			Switcher:       switcher,
-			Catalog:        llm.NewModelCatalog(llm.ModelCatalogOptions{}),
+			Info:                   b,
+			Storage:                storage,
+			SessionCatalog:         catalog,
+			Recovery:               append([]session.ActionRecord(nil), boot.Recovery...),
+			Switcher:               switcher,
+			Catalog:                llm.NewModelCatalog(llm.ModelCatalogOptions{}),
+			EventSubscriptionState: &eventSubscriptionState{},
 		},
 		InFlight: InFlightState{},
 		Progress: ProgressState{

@@ -192,6 +192,25 @@ wait_visible_contains() {
   done
 }
 
+wait_settled() {
+  local timeout="${1:-20}"
+  local start
+  start="$(date +%s)"
+  while true; do
+    capture_visible
+    if ! grep -Eq 'Submitting\.\.\.|Ionizing\.\.\.|Streaming\.\.\.|Working\.\.\.|Compacting context\.\.\.' "$CAPTURE"; then
+      return 0
+    fi
+    if (($(date +%s) - start >= timeout)); then
+      echo "timed out waiting for settled runtime" >&2
+      echo "--- capture ---" >&2
+      cat "$CAPTURE" >&2
+      exit 1
+    fi
+    sleep 0.5
+  done
+}
+
 start_ion() {
   local args="${1:-}"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -300,6 +319,7 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "• Bash" 30
   assert_visible_separator_line_count 2
   wait_contains "• done" 60
+  wait_settled 30
   assert_visible_separator_line_count 2
   trace_pass "submit_stream_tool"
 
@@ -307,6 +327,7 @@ send_deterministic_p1_tui_smoke() {
   send_line "exercise active local controls"
   wait_contains "Streaming..." 30
   wait_contains "controls done" 30
+  wait_settled 30
   send_line "/provider"
   wait_visible_contains "Provider setup" 30
   assert_visible_not_contains "Queued follow-up"
@@ -337,11 +358,12 @@ send_deterministic_p1_tui_smoke() {
   send_line "exercise active read-only commands"
   wait_contains "Streaming..." 30
   send_line "/status"
-  wait_contains "Permissions: trusted by default" 30
+  wait_contains "Permissions: confirm by default" 30
   assert_visible_not_contains "Queued follow-up"
   assert_visible_not_contains "› /status"
   assert_visible_separator_line_count 2
   wait_contains "controls done" 30
+  wait_settled 30
   assert_visible_separator_line_count 2
   trace_pass "active_read_only_commands"
 
@@ -366,6 +388,7 @@ send_deterministic_p1_tui_smoke() {
   wait_contains "• Write" 30
   wait_contains "• Edit" 30
   wait_contains "file tools done" 30
+  wait_settled 30
   assert_visible_separator_line_count_at_most 2
   trace_pass "file_tools"
 
@@ -379,6 +402,7 @@ send_deterministic_p1_tui_smoke() {
   assert_contains 'fmt.Println'
   assert_not_contains '```go'
   assert_visible_separator_line_count_at_most 2
+  wait_settled 30
   trace_pass "markdown_stream_commit"
 
   start_smoke_ion "session-picker"

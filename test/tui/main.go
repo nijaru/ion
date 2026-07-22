@@ -91,7 +91,7 @@ func run(mode, storeRoot, sessionID string, startupCheck bool) error {
 	fmt.Println(cwd + " • smoke")
 	fmt.Println()
 
-	runner := &smokeRunner{backend: smoke, sess: sess}
+	runner := &smokeRunner{backend: smoke, sess: sess, catalog: store}
 	model := app.New(smoke, sess, store, cwd, "smoke", "v0.0.0", nil).
 		WithRunner(runner).
 		WithConfig(cfg)
@@ -231,6 +231,7 @@ func (b *smokeBackend) Events() <-chan agent.EventEnvelope { return b.events }
 type smokeRunner struct {
 	backend *smokeBackend
 	sess    session.Session
+	catalog agent.SessionCatalog
 }
 
 func (r *smokeRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
@@ -257,11 +258,29 @@ func (r *smokeRunner) NextTurn(string, ...session.ImageContent) error { return n
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }
-func (r *smokeRunner) SetModel(llm.Model) error                                  { return nil }
-func (r *smokeRunner) SetThinking(context.Context, session.ThinkingLevel) error  { return nil }
-func (r *smokeRunner) SetTools([]agent.Tool, []string) error                     { return nil }
-func (r *smokeRunner) ActivateTools(context.Context, []string) error             { return nil }
-func (r *smokeRunner) Session() session.Session                                  { return r.sess }
+func (r *smokeRunner) SetModel(llm.Model) error                                 { return nil }
+func (r *smokeRunner) SetThinking(context.Context, session.ThinkingLevel) error { return nil }
+func (r *smokeRunner) SetTools([]agent.Tool, []string) error                    { return nil }
+func (r *smokeRunner) ActivateTools(context.Context, []string) error            { return nil }
+func (r *smokeRunner) Session() session.Session                                 { return r.sess }
+func (r *smokeRunner) ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error) {
+	if r.catalog == nil {
+		return nil, fmt.Errorf("session catalog unavailable")
+	}
+	return r.catalog.ListSessions(ctx, workdir)
+}
+func (r *smokeRunner) GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error) {
+	if r.catalog == nil {
+		return session.SessionInfoEntry{}, fmt.Errorf("session catalog unavailable")
+	}
+	return r.catalog.GetSessionInfo(ctx, sessionID)
+}
+func (r *smokeRunner) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
+	if r.catalog == nil {
+		return fmt.Errorf("session catalog unavailable")
+	}
+	return r.catalog.UpdateSession(ctx, info)
+}
 func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }
 func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
 func (r *smokeRunner) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {

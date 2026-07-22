@@ -563,6 +563,11 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	closeErr := closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
 	m.Model.EventCursor = agent.EventCursor{}
+	if state := m.Model.EventSubscriptionState; state != nil {
+		state.generation = m.Model.EventGeneration
+		state.pending = false
+		state.readerBusy = false
+	}
 	m.pickerReducer().closeAll()
 	m.clearProgressError()
 	if msg.runtime.Handles.Storage != nil {
