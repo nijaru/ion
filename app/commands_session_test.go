@@ -1,11 +1,66 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+type sessionNamingTestRunner struct {
+	stubRunner
+	ctx  context.Context
+	name string
+	err  error
+}
+
+func (r *sessionNamingTestRunner) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+	r.ctx = ctx
+	r.name = name
+	return "", r.err
+}
+
+func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
+	model := readyModel(t)
+	expectedContext := model.Model.runtimeContext
+	runner := &sessionNamingTestRunner{}
+	model.Model.Runner = runner
+
+	updated, cmd := model.nameSession("daily driver")
+	if cmd == nil {
+		t.Fatal("session name did not return a command")
+	}
+	result, ok := cmd().(sessionNamedMsg)
+	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
+		t.Fatalf("session name result = %#v", result)
+	}
+	if runner.ctx != expectedContext || runner.name != "daily driver" {
+		t.Fatalf("session name request = context %v, name %q", runner.ctx, runner.name)
+	}
+	if _, cmd := updated.handleSessionNamed(result); cmd != nil {
+		t.Fatal("current session name returned an unexpected command")
+	}
+}
+
+func TestStaleSessionNameCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionNamed(sessionNamedMsg{
+		generation: 1,
+		name:       "old runtime",
+		err:        errors.New("old runtime name failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale session name returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session name rendered into the new runtime")
+	}
+}
 
 func TestCompactCommandUsesRunner(t *testing.T) {
 	model := readyModel(t)

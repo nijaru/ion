@@ -152,20 +152,30 @@ func (m Model) nameSession(name string) (Model, tea.Cmd) {
 	if !ok {
 		return m, cmdError("active runtime does not support session naming")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		_, err := namer.AppendSessionInfo(context.Background(), name)
+		_, err := namer.AppendSessionInfo(ctx, name)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return sessionNamedMsg{generation: generation, err: err}
 		}
-		return sessionNamedMsg{name: name}
+		return sessionNamedMsg{generation: generation, name: name}
 	}
 }
 
 type sessionNamedMsg struct {
-	name string
+	generation uint64
+	name       string
+	err        error
 }
 
 func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
 	m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
 	return m, nil
 }
