@@ -360,6 +360,21 @@ type ImportSessionResult struct {
 	Err error
 }
 
+// SessionProjectionCmd reads the active session through the controller. The
+// result is one consistent view for frontend copy, usage, status, and replay
+// reads; it never exposes the session or storage owner.
+type SessionProjectionCmd struct {
+	Ctx   context.Context
+	Reply chan<- SessionProjectionResult
+}
+
+func (SessionProjectionCmd) command() {}
+
+type SessionProjectionResult struct {
+	Projection SessionProjection
+	Err        error
+}
+
 // SessionBranchCmd reads the current active branch through the controller.
 type SessionBranchCmd struct {
 	Ctx   context.Context

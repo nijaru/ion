@@ -71,6 +71,13 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleSessionCost(msg)
 		return next, cmd, true
 
+	case sessionCopiedMsg:
+		next, cmd := m.handleSessionCopied(msg)
+		return next, cmd, true
+
+	case debugLogWrittenMsg:
+		return m, m.terminalCommit().Entries(systemEntry("Debug log written to " + msg.path)), true
+
 	case sessionUsageLoadedMsg:
 		next, cmd := m.handleSessionUsageLoaded(msg)
 		return next, cmd, true

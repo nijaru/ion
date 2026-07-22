@@ -153,28 +153,37 @@ func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+type sessionCopiedMsg struct{}
+
 func (m Model) copyLastResponse() (Model, tea.Cmd) {
-	if m.Model.Storage == nil {
+	if m.Model.Runner == nil && m.Model.Storage == nil {
 		return m, cmdError("no active session")
 	}
-	entries, err := m.Model.Storage.Entries(context.Background())
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to get entries: %v", err))
-	}
-	// Find the last assistant message
-	var lastResponse string
-	for i := len(entries) - 1; i >= 0; i-- {
-		if session.EntryRole(entries[i]) == "assistant" {
-			lastResponse = session.EntryText(entries[i])
-			break
+	runner := m.Model.Runner
+	storage := m.Model.Storage
+	return m, func() tea.Msg {
+		projection, err := loadSessionProjection(context.Background(), runner, storage)
+		if err != nil {
+			return localErrorMsg{err: fmt.Errorf("failed to get active session: %w", err)}
 		}
+		var lastResponse string
+		for i := len(projection.Branch) - 1; i >= 0; i-- {
+			if session.EntryRole(projection.Branch[i]) == session.RoleAgent {
+				lastResponse = session.EntryText(projection.Branch[i])
+				break
+			}
+		}
+		if lastResponse == "" {
+			return localErrorMsg{err: fmt.Errorf("no assistant response to copy")}
+		}
+		if err := ionclipboard.WriteClipboardText(lastResponse); err != nil {
+			return localErrorMsg{err: fmt.Errorf("failed to copy: %w", err)}
+		}
+		return sessionCopiedMsg{}
 	}
-	if lastResponse == "" {
-		return m, cmdError("no assistant response to copy")
-	}
-	if err := ionclipboard.WriteClipboardText(lastResponse); err != nil {
-		return m, cmdError(fmt.Sprintf("failed to copy: %v", err))
-	}
+}
+
+func (m Model) handleSessionCopied(sessionCopiedMsg) (Model, tea.Cmd) {
 	m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
 	return m, nil
 }
@@ -263,17 +272,17 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry(msg.notice))
 }
 
-func loadSessionUsageCmd(generation uint64, sess RuntimeStorage) tea.Cmd {
-	if sess == nil {
+func loadSessionUsageCmd(generation uint64, runner agent.Runtime, storage RuntimeStorage) tea.Cmd {
+	if runner == nil && storage == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		usage, err := sess.Usage(context.Background())
+		projection, err := loadSessionProjection(context.Background(), runner, storage)
 		return sessionUsageLoadedMsg{
 			generation: generation,
-			input:      usage.Input,
-			output:     usage.Output,
-			cost:       usage.Cost.Total,
+			input:      projection.Usage.Input,
+			output:     projection.Usage.Output,
+			cost:       projection.Usage.Cost.Total,
 			err:        err,
 		}
 	}
@@ -288,18 +297,21 @@ func (m Model) handleSessionUsageLoaded(msg sessionUsageLoadedMsg) (Model, tea.C
 }
 
 func (m Model) sessionCostCmd() tea.Cmd {
+	runner := m.Model.Runner
+	storage := m.Model.Storage
+	progress := m.Progress
 	return func() tea.Msg {
-		inputTokens := m.Progress.TokensSent
-		outputTokens := m.Progress.TokensReceived
-		totalCost := m.Progress.TotalCost
-		if m.Model.Storage != nil {
-			usage, err := m.Model.Storage.Usage(context.Background())
+		inputTokens := progress.TokensSent
+		outputTokens := progress.TokensReceived
+		totalCost := progress.TotalCost
+		if runner != nil || storage != nil {
+			projection, err := loadSessionProjection(context.Background(), runner, storage)
 			if err != nil {
-				return localErrorMsg{err: fmt.Errorf("failed to load session usage: %w", err)}
+				return localErrorMsg{err: fmt.Errorf("failed to load active session usage: %w", err)}
 			}
-			inputTokens = usage.Input
-			outputTokens = usage.Output
-			totalCost = usage.Cost.Total
+			inputTokens = projection.Usage.Input
+			outputTokens = projection.Usage.Output
+			totalCost = projection.Usage.Cost.Total
 		}
 		if totalCost <= 0 {
 			if m.Model.Config != nil &&
@@ -327,16 +339,16 @@ func (m Model) sessionInfoCmd() tea.Cmd {
 }
 
 func (m Model) sessionInfoNotice() (string, error) {
+	projection, err := loadSessionProjection(context.Background(), m.Model.Runner, m.Model.Storage)
+	if err != nil {
+		return "", err
+	}
 	sessionID := ""
 	if m.Model.Runtime.Materialized {
 		sessionID = m.Model.Runtime.SessionID
 	}
-	if m.Model.Storage != nil {
-		if sessionID == "" {
-			sessionID = strings.TrimSpace(m.Model.Storage.ID())
-		}
-	} else if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
-		sessionID = strings.TrimSpace(reader.SessionID())
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(projection.ID)
 	}
 	if sessionID == "" {
 		sessionID = "none"
@@ -352,23 +364,13 @@ func (m Model) sessionInfoNotice() (string, error) {
 	}
 
 	inputTokens, outputTokens, totalCost := m.Progress.TokensSent, m.Progress.TokensReceived, m.Progress.TotalCost
-	var entries []session.Entry
-	if m.Model.Storage != nil {
-		usage, err := m.Model.Storage.Usage(context.Background())
-		if err != nil {
-			return "", fmt.Errorf("failed to load session usage: %w", err)
-		}
-		inputTokens = usage.Input
-		outputTokens = usage.Output
-		totalCost = usage.Cost.Total
-		loaded, err := m.Model.Storage.Entries(context.Background())
-		if err != nil {
-			return "", fmt.Errorf("failed to load session entries: %w", err)
-		}
-		entries = loaded
+	if m.Model.Runner != nil || m.Model.Storage != nil {
+		inputTokens = projection.Usage.Input
+		outputTokens = projection.Usage.Output
+		totalCost = projection.Usage.Cost.Total
 	}
 
-	counts := sessionEntryCounts(entries)
+	counts := sessionEntryCounts(projection.Branch)
 	lines := []string{
 		"Session",
 		"id: " + sessionID,
@@ -401,11 +403,11 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	for _, entry := range entries {
 		counts.total++
 		switch session.EntryRole(entry) {
-		case "user":
+		case session.RoleUser:
 			counts.user++
-		case "assistant":
+		case session.RoleAgent:
 			counts.agent++
-		case "tool_result":
+		case session.RoleTool:
 			counts.tool++
 		}
 	}

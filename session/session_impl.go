@@ -149,12 +149,10 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	}, nil
 }
 
-// Usage accumulates token counts from all AssistantMessages in the branch.
-func (s *sessionImpl) Usage(ctx context.Context) (Usage, error) {
-	entries, err := s.store.Branch(ctx)
-	if err != nil {
-		return Usage{}, err
-	}
+// UsageFromEntries accumulates token counts and cost from assistant messages
+// in a selected branch. The runtime uses it for active-turn projections that
+// may include entries staged in a durable turn.
+func UsageFromEntries(entries []Entry) Usage {
 	var total Usage
 	for _, e := range entries {
 		if me, ok := e.(*MessageEntry); ok {
@@ -172,7 +170,16 @@ func (s *sessionImpl) Usage(ctx context.Context) (Usage, error) {
 			}
 		}
 	}
-	return total, nil
+	return total
+}
+
+// Usage accumulates token counts from all AssistantMessages in the branch.
+func (s *sessionImpl) Usage(ctx context.Context) (Usage, error) {
+	entries, err := s.store.Branch(ctx)
+	if err != nil {
+		return Usage{}, err
+	}
+	return UsageFromEntries(entries), nil
 }
 
 // --- typed append helpers ---

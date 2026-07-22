@@ -219,9 +219,10 @@ type RuntimeEntryReader interface {
 	Entries(context.Context) ([]session.Entry, error)
 }
 
-// RuntimeStorage is the narrow host/runtime projection used by the TUI.
-// It deliberately excludes mutation, tree navigation, and lifecycle methods;
-// those belong to the active agent runtime or the host composition root.
+// RuntimeStorage is the narrow host/bootstrap projection used before an
+// active runtime exists. Active semantic reads go through the runtime's
+// SessionProjectionReader; this projection deliberately excludes mutation,
+// tree navigation, and lifecycle methods.
 type RuntimeStorage interface {
 	RuntimeEntryReader
 	ID() string

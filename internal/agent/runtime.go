@@ -149,6 +149,7 @@ type Controller struct {
 // Compile-time interface assertions.
 var (
 	_ Runtime          = (*Controller)(nil)
+	_ SessionProjectionReader = (*Controller)(nil)
 	_ SessionReader    = (*Controller)(nil)
 	_ SessionCatalog   = (*Controller)(nil)
 	_ InputHistory     = (*Controller)(nil)
@@ -249,6 +250,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleExportSessionBundle(cmd)
 	case *ImportSessionBundleCmd:
 		c.handleImportSessionBundle(cmd)
+	case *SessionProjectionCmd:
+		c.handleSessionProjection(cmd)
 	case *SessionBranchCmd:
 		c.handleSessionBranch(cmd)
 	case *SessionTreeCmd:
@@ -324,6 +327,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, ExportSessionResult{Err: ErrRuntimeClosed})
 	case *ImportSessionBundleCmd:
 		sendResult(cmd.Reply, ImportSessionResult{Err: ErrRuntimeClosed})
+	case *SessionProjectionCmd:
+		sendResult(cmd.Reply, SessionProjectionResult{Err: ErrRuntimeClosed})
 	case *SessionBranchCmd:
 		sendResult(cmd.Reply, SessionBranchResult{Err: ErrRuntimeClosed})
 	case *SessionTreeCmd:

@@ -289,83 +289,83 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// handleDebugCommand writes a debug log to a file for troubleshooting.
+type debugLogWrittenMsg struct {
+	path string
+}
+
+// handleDebugCommand writes a debug log to a file for troubleshooting. The
+// active-session section is read by the runtime projection command so debug
+// output cannot observe a different branch or hide an in-flight durable turn.
 func (m Model) handleDebugCommand() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, cmdError(m.localCommandBusyMessage("/debug"))
 	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Debug output at %s\n", time.Now().Format(time.RFC3339))
-	fmt.Fprintf(&b, "Go: %s\n", runtime.Version())
-	fmt.Fprintf(&b, "OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Fprintf(&b, "\n")
-
-	// Provider/model info
-	if provider := m.runtimeProvider(); provider != "" {
-		fmt.Fprintf(&b, "Provider: %s (%s)\n", llm.DisplayName(provider), provider)
-	}
-	if model := m.runtimeModel(); model != "" {
-		fmt.Fprintf(&b, "Model: %s\n", model)
-	}
-	if reasoning := m.Model.Runtime.Reasoning; reasoning != "" {
-		fmt.Fprintf(&b, "Thinking: %s\n", reasoning)
-	}
-	if preset := m.Model.Runtime.Preset; preset != "" {
-		fmt.Fprintf(&b, "Preset: %s\n", string(preset))
-	}
-	fmt.Fprintf(&b, "\n")
-
-	// Token usage
-	progress := m.Progress
-	fmt.Fprintf(&b, "Token usage:\n")
-	fmt.Fprintf(&b, "  Sent: %d\n", progress.TokensSent)
-	fmt.Fprintf(&b, "  Received: %d\n", progress.TokensReceived)
-	fmt.Fprintf(&b, "  Context: %d\n", progress.ContextTokens)
-	fmt.Fprintf(&b, "  Cost: $%.6f\n", progress.TotalCost)
-	fmt.Fprintf(&b, "\n")
-
-	// Session info
-	if m.Model.Storage != nil {
-		sessID := m.Model.Storage.ID()
-		fmt.Fprintf(&b, "Session: %s\n", sessID)
-		entries, err := m.Model.Storage.Entries(context.Background())
+	runner := m.Model.Runner
+	storage := m.Model.Storage
+	return m, func() tea.Msg {
+		projection, err := loadSessionProjection(context.Background(), runner, storage)
 		if err != nil {
-			fmt.Fprintf(&b, "  Error loading entries: %v\n", err)
-		} else {
-			fmt.Fprintf(&b, "Entries: %d\n", len(entries))
-			for i, e := range entries {
-				role := string(session.EntryRole(e))
+			return localErrorMsg{err: fmt.Errorf("failed to load debug session projection: %w", err)}
+		}
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "Debug output at %s\n", time.Now().Format(time.RFC3339))
+		fmt.Fprintf(&b, "Go: %s\n", runtime.Version())
+		fmt.Fprintf(&b, "OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		fmt.Fprintf(&b, "\n")
+
+		if provider := m.runtimeProvider(); provider != "" {
+			fmt.Fprintf(&b, "Provider: %s (%s)\n", llm.DisplayName(provider), provider)
+		}
+		if model := m.runtimeModel(); model != "" {
+			fmt.Fprintf(&b, "Model: %s\n", model)
+		}
+		if reasoning := m.Model.Runtime.Reasoning; reasoning != "" {
+			fmt.Fprintf(&b, "Thinking: %s\n", reasoning)
+		}
+		if preset := m.Model.Runtime.Preset; preset != "" {
+			fmt.Fprintf(&b, "Preset: %s\n", string(preset))
+		}
+		fmt.Fprintf(&b, "\n")
+
+		progress := m.Progress
+		fmt.Fprintf(&b, "Token usage:\n")
+		fmt.Fprintf(&b, "  Sent: %d\n", progress.TokensSent)
+		fmt.Fprintf(&b, "  Received: %d\n", progress.TokensReceived)
+		fmt.Fprintf(&b, "  Context: %d\n", progress.ContextTokens)
+		fmt.Fprintf(&b, "  Cost: $%.6f\n", progress.TotalCost)
+		fmt.Fprintf(&b, "\n")
+
+		if projection.ID != "" || len(projection.Branch) > 0 {
+			fmt.Fprintf(&b, "Session: %s\n", projection.ID)
+			fmt.Fprintf(&b, "Entries: %d\n", len(projection.Branch))
+			for i, e := range projection.Branch {
 				content := session.EntryContent(e)
 				if len(content) > 200 {
 					content = content[:200] + "..."
 				}
-				// JSON encode for safe output
 				entryJSON, _ := json.Marshal(map[string]any{
 					"index":   i,
-					"role":    role,
+					"role":    string(session.EntryRole(e)),
 					"content": content,
 				})
 				fmt.Fprintf(&b, "  %s\n", string(entryJSON))
 			}
 		}
-	}
-	fmt.Fprintf(&b, "\n")
+		fmt.Fprintf(&b, "\n")
 
-	// Write to file
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to get home dir: %v", err))
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return localErrorMsg{err: fmt.Errorf("failed to get home dir: %w", err)}
+		}
+		debugDir := filepath.Join(home, ".ion")
+		if err := os.MkdirAll(debugDir, 0o755); err != nil {
+			return localErrorMsg{err: fmt.Errorf("failed to create debug dir: %w", err)}
+		}
+		debugPath := filepath.Join(debugDir, "debug.log")
+		if err := os.WriteFile(debugPath, []byte(b.String()), 0o644); err != nil {
+			return localErrorMsg{err: fmt.Errorf("failed to write debug log: %w", err)}
+		}
+		return debugLogWrittenMsg{path: debugPath}
 	}
-	debugDir := filepath.Join(home, ".ion")
-	if mkErr := os.MkdirAll(debugDir, 0o755); mkErr != nil {
-		return m, cmdError(fmt.Sprintf("failed to create debug dir: %v", mkErr))
-	}
-	debugPath := filepath.Join(debugDir, "debug.log")
-	if writeErr := os.WriteFile(debugPath, []byte(b.String()), 0o644); writeErr != nil {
-		return m, cmdError(fmt.Sprintf("failed to write debug log: %v", writeErr))
-	}
-
-	msg := fmt.Sprintf("Debug log written to %s", debugPath)
-	return m, m.terminalCommit().Entries(systemEntry(msg))
 }

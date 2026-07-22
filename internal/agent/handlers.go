@@ -388,6 +388,61 @@ func (c *Controller) handleImportSessionBundle(cmd *ImportSessionBundleCmd) {
 	})
 }
 
+func (c *Controller) handleSessionProjection(cmd *SessionProjectionCmd) {
+	c.startOperation(func() {
+		projection, err := c.sessionProjectionDirect(cmd.Ctx)
+		sendResult(cmd.Reply, SessionProjectionResult{Projection: projection, Err: err})
+	})
+}
+
+func (c *Controller) sessionProjectionDirect(ctx context.Context) (SessionProjection, error) {
+	ctx = commandContext(ctx)
+	c.mu.Lock()
+	sess := c.session
+	durable := c.durable
+	turnID := c.activeTurnID
+	c.mu.Unlock()
+	if sess == nil {
+		return SessionProjection{}, errors.New("session is unavailable")
+	}
+
+	if durable != nil && turnID != "" {
+		entries, err := durable.TurnBranch(ctx, turnID)
+		if err != nil {
+			return SessionProjection{}, fmt.Errorf("read active turn branch: %w", err)
+		}
+		return newSessionProjection(sess.ID(), sess.GetLeafID(), entries), nil
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		leafID := sess.GetLeafID()
+		entries, err := sess.BranchAt(ctx, leafID)
+		if err != nil {
+			return SessionProjection{}, err
+		}
+		if sess.GetLeafID() == leafID {
+			return newSessionProjection(sess.ID(), leafID, entries), nil
+		}
+		if err := ctx.Err(); err != nil {
+			return SessionProjection{}, err
+		}
+	}
+	return SessionProjection{}, ErrSessionTreeChanged
+}
+
+func newSessionProjection(id, leafID string, entries []session.Entry) SessionProjection {
+	branch := append([]session.Entry(nil), entries...)
+	if len(branch) > 0 {
+		leafID = branch[len(branch)-1].ID()
+	}
+	return SessionProjection{
+		ID:     id,
+		LeafID: leafID,
+		Branch: branch,
+		Usage:  session.UsageFromEntries(branch),
+	}
+}
+
 func (c *Controller) handleSessionBranch(cmd *SessionBranchCmd) {
 	c.startOperation(func() {
 		if c.session == nil {
@@ -515,6 +570,22 @@ func (c *Controller) SessionID() string {
 		return ""
 	}
 	return c.session.ID()
+}
+
+// SessionProjection reads the active session through the controller command
+// queue. A durable active turn is projected from its staged branch; otherwise
+// the selected leaf is captured and verified across the branch read.
+func (c *Controller) SessionProjection(ctx context.Context) (SessionProjection, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionProjectionResult, 1)
+	if err := c.enqueue(ctx, &SessionProjectionCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return SessionProjection{}, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return SessionProjection{}, err
+	}
+	return result.Projection, result.Err
 }
 
 // SessionBranch reads the active branch through the controller command queue.

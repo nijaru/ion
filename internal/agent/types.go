@@ -319,13 +319,30 @@ type ResourceOwner interface {
 	CloseResources() error
 }
 
-// SessionReader exposes only read-only active-session projections. Queries
-// enter the controller command boundary; callers never receive the mutable
-// session façade or store.
+// SessionProjectionReader is the narrow read-only capability used by
+// frontends for active-session semantic reads.
+type SessionProjectionReader interface {
+	SessionProjection(ctx context.Context) (SessionProjection, error)
+}
+
+// SessionReader exposes read-only active-session projections and tree views.
+// Queries enter the controller command boundary; callers never receive the
+// mutable session façade or store.
 type SessionReader interface {
 	SessionID() string
 	SessionBranch(ctx context.Context) ([]session.Entry, error)
 	SessionTree(ctx context.Context) (SessionTreeSnapshot, error)
+}
+
+// SessionProjection is the immutable active-session view used by frontends
+// for semantic reads. Branch contains the selected branch and includes staged
+// entries while a durable turn is active; Usage is computed from that same
+// branch, so the two fields cannot describe different turn boundaries.
+type SessionProjection struct {
+	ID     string
+	LeafID string
+	Branch []session.Entry
+	Usage  session.Usage
 }
 
 // SessionTreeSnapshot is the immutable data needed to render the active
