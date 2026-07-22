@@ -26,6 +26,11 @@ type runtimeLeafSnapshotMsg struct {
 	err        error
 }
 
+type runtimeCatalogUpdateMsg struct {
+	generation uint64
+	err        error
+}
+
 // Product session control owns the Ion side of the active-turn lifecycle.
 // Key handlers and renderers should delegate here instead of making their own
 // submit, cancel, queue, or settlement decisions.
@@ -824,6 +829,7 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		return nil
 	}
 	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 	workdir := m.App.Workdir
 	branch := m.App.Branch
 	modelName := m.currentSessionModelName()
@@ -835,17 +841,17 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		)
 		if hasProjection {
 			var projection agent.SessionProjection
-			projection, err = projectionReader.SessionProjection(context.Background())
+			projection, err = projectionReader.SessionProjection(ctx)
 			if err == nil {
 				id = strings.TrimSpace(projection.LeafID)
 				entries = projection.Branch
 			}
 		} else {
 			var tree agent.SessionTreeSnapshot
-			tree, err = reader.SessionTree(context.Background())
+			tree, err = reader.SessionTree(ctx)
 			if err == nil {
 				id = strings.TrimSpace(tree.LeafID)
-				entries, err = reader.SessionBranch(context.Background())
+				entries, err = reader.SessionBranch(ctx)
 			}
 		}
 		if err != nil {

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -104,6 +103,16 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleLocalError(msg.err)
 		return next, cmd, true
 
+	case runtimeCatalogUpdateMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			next, cmd := m.handleLocalError(msg.err)
+			return next, cmd, true
+		}
+		return m, nil, true
+
 	case runtimeLeafSnapshotMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
@@ -118,11 +127,14 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		}
 		catalog := m.Model.SessionCatalog
 		info := *msg.info
+		ctx := m.runtimeOperationContext()
+		generation := msg.generation
 		return m, func() tea.Msg {
-			if err := catalog.UpdateSession(context.Background(), info); err != nil {
-				return localErrorMsg{err: fmt.Errorf("persist session info: %w", err)}
+			var err error
+			if updateErr := catalog.UpdateSession(ctx, info); updateErr != nil {
+				err = fmt.Errorf("persist session info: %w", updateErr)
 			}
-			return nil
+			return runtimeCatalogUpdateMsg{generation: generation, err: err}
 		}, true
 
 	case approvalResolveMsg:

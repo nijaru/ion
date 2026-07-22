@@ -565,6 +565,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	// Replacement is live before the previous runner is closed. This is the
 	// after-switch lifecycle boundary; Switch/Resume deliberately do not run
 	// teardown on construction failure.
+	m.rotateRuntimeContext()
 	m.runtimeRequest().clear()
 	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner

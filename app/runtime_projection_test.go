@@ -1,12 +1,33 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
+
+type cancelAwareSessionCatalog struct {
+	started chan struct{}
+}
+
+func (c *cancelAwareSessionCatalog) ListSessions(context.Context, string) ([]session.SessionInfoEntry, error) {
+	return nil, nil
+}
+
+func (c *cancelAwareSessionCatalog) GetSessionInfo(context.Context, string) (session.SessionInfoEntry, error) {
+	return session.SessionInfoEntry{}, nil
+}
+
+func (c *cancelAwareSessionCatalog) UpdateSession(ctx context.Context, _ session.SessionInfoEntry) error {
+	close(c.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
 
 func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	model := readyModel(t)
@@ -145,6 +166,53 @@ func TestStaleEventReaderCannotAdvanceRuntimeCursor(t *testing.T) {
 	}
 	if !state.readerBusy {
 		t.Fatal("current event reader was marked idle by stale result")
+	}
+}
+
+func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
+	model := readyModel(t)
+	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}
+	model.Model.SessionCatalog = catalog
+	model.Model.EventGeneration = 1
+
+	_, cmd, handled := model.dispatchAppControlMessage(runtimeLeafSnapshotMsg{
+		generation: 1,
+		leafID:     "leaf-1",
+		info: &session.SessionInfoEntry{
+			EntryBase: session.EntryBase{ID: "leaf-1"},
+			Model:     "old/model",
+		},
+	})
+	if !handled || cmd == nil {
+		t.Fatalf("catalog projection dispatch = (handled=%v, cmd=%v), want asynchronous command", handled, cmd != nil)
+	}
+
+	result := make(chan any, 1)
+	go func() { result <- cmd() }()
+	select {
+	case <-catalog.started:
+	case <-time.After(time.Second):
+		t.Fatal("catalog update did not start")
+	}
+
+	model.Model.RuntimeSwitchRequest = 1
+	model.applyRuntimeSwitched(runtimeSwitchedMsg{
+		switchID: 1,
+		runtime:  Accepted{},
+	})
+
+	select {
+	case msg := <-result:
+		update, ok := msg.(runtimeCatalogUpdateMsg)
+		if !ok || update.generation != 1 || !errors.Is(update.err, context.Canceled) {
+			t.Fatalf("catalog update result = %#v, want generation-1 canceled update", msg)
+		}
+		next, cmd, handled := model.dispatchAppControlMessage(msg)
+		if !handled || cmd != nil || next.Progress.LastError != "" {
+			t.Fatalf("stale catalog cancellation handling = (handled=%v, cmd=%v, error=%q), want ignored", handled, cmd != nil, next.Progress.LastError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale catalog update ignored runtime cancellation")
 	}
 }
 

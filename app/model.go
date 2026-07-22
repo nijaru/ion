@@ -371,10 +371,15 @@ type ModelState struct {
 	EventCursor            agent.EventCursor
 	EventSubscription      *agent.EventSubscription
 	EventSubscriptionState *eventSubscriptionState
-	RuntimeSwitchRequest   uint64
-	SettingsRequest        uint64
-	MemoryRequest          uint64
-	CheckpointRequest      uint64
+	// runtimeContext scopes asynchronous projection work to the accepted
+	// runtime generation. Runtime replacement cancels it before installing the
+	// next generation so stale writes cannot cross the projection boundary.
+	runtimeContext       context.Context
+	runtimeCancel        context.CancelFunc
+	RuntimeSwitchRequest uint64
+	SettingsRequest      uint64
+	MemoryRequest        uint64
+	CheckpointRequest    uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
@@ -472,6 +477,7 @@ func New(
 	workdir, branch, version string,
 	switcher Switcher,
 ) Model {
+	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = ""
@@ -512,6 +518,8 @@ func New(
 			Switcher:               switcher,
 			EndpointResolver:       llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 			EventSubscriptionState: &eventSubscriptionState{},
+			runtimeContext:         runtimeContext,
+			runtimeCancel:          runtimeCancel,
 		},
 		InFlight: InFlightState{},
 		Progress: ProgressState{
@@ -554,6 +562,20 @@ func New(
 	}
 
 	return m
+}
+
+func (m Model) runtimeOperationContext() context.Context {
+	if m.Model.runtimeContext != nil {
+		return m.Model.runtimeContext
+	}
+	return context.Background()
+}
+
+func (m *Model) rotateRuntimeContext() {
+	if m.Model.runtimeCancel != nil {
+		m.Model.runtimeCancel()
+	}
+	m.Model.runtimeContext, m.Model.runtimeCancel = context.WithCancel(context.Background())
 }
 
 // WithJobs installs the runtime-owned background-job projection used by the
