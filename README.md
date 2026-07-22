@@ -180,7 +180,21 @@ scripts/smoke/tmux-minimal-harness.sh
 ```
 
 Live provider smoke tests are gated behind environment variables and are not
-part of the default test run.
+part of the default test run. The opt-in test requires two materially
+different provider adapters and their normal credential environment variables;
+it never accepts or persists API keys:
+
+```sh
+ION_LIVE_PROVIDER_A=openrouter \
+ION_LIVE_MODEL_A=deepseek/deepseek-v4-pro \
+ION_LIVE_PROVIDER_B=gemini \
+ION_LIVE_MODEL_B=gemini-2.5-flash \
+ION_LIVE_SMOKE=1 \
+go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
+```
+
+Set `ION_PHASE1_LIVE=1` with the same four profile variables to include the
+live TUI/tmux pass in `scripts/smoke/phase1-acceptance.sh`.
 
 ## License
 

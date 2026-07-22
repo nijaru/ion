@@ -40,12 +40,23 @@ if [[ "${ION_PHASE1_RACE:-0}" == "1" ]]; then
 fi
 
 if [[ "${ION_PHASE1_LIVE:-0}" == "1" ]]; then
+  for required_live_var in ION_LIVE_PROVIDER_A ION_LIVE_MODEL_A ION_LIVE_PROVIDER_B ION_LIVE_MODEL_B; do
+    if [[ -z "${!required_live_var:-}" ]]; then
+      echo "ION_PHASE1_LIVE=1 requires $required_live_var; choose two explicit provider profiles" >&2
+      exit 2
+    fi
+  done
+
   phase_note "live backend/provider gate"
   run env ION_LIVE_SMOKE=1 \
     go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 
-  phase_note "live TUI/provider gate"
-  run env ION_TMUX_LIVE=1 scripts/smoke/tmux-minimal-harness.sh
+  phase_note "live TUI/provider gate for profile A"
+  run env \
+    ION_TMUX_LIVE=1 \
+    ION_TMUX_PROVIDER="$ION_LIVE_PROVIDER_A" \
+    ION_TMUX_MODEL="$ION_LIVE_MODEL_A" \
+    scripts/smoke/tmux-minimal-harness.sh
 else
   phase_note "live gates skipped; set ION_PHASE1_LIVE=1 for the Phase 1 exit gate"
 fi
