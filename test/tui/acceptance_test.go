@@ -337,11 +337,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, initialProvider.started, "initial runtime provider")
 	waitForAcceptanceOutput(t, output, "model-a-output", "initial runtime output")
-	leafID := store.GetLeafID()
-	if leafID == "" {
-		t.Fatal("initial turn did not materialize a tree leaf")
-	}
-	waitForAcceptanceSessionInfo(t, store, leafID)
+	leafID := waitForAcceptanceSessionInfo(t, store, store)
 
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -366,11 +362,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, resumedProvider.started, "resumed runtime provider")
 	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
-	postResumeLeafID := store.GetLeafID()
-	if postResumeLeafID == "" {
-		t.Fatal("resumed turn did not materialize a tree leaf")
-	}
-	waitForAcceptanceSessionInfo(t, store, postResumeLeafID)
+	postResumeLeafID := waitForAcceptanceSessionInfo(t, store, store)
 	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -507,17 +499,25 @@ func waitAcceptanceRuntimeSwitch(
 	}
 }
 
-func waitForAcceptanceSessionInfo(t *testing.T, catalog agent.SessionCatalog, leafID string) {
+func waitForAcceptanceSessionInfo(t *testing.T, catalog agent.SessionCatalog, store session.Store) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	lastLeafID := ""
 	for time.Now().Before(deadline) {
+		leafID := strings.TrimSpace(store.GetLeafID())
+		lastLeafID = leafID
+		if leafID == "" {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
 		info, err := catalog.GetSessionInfo(context.Background(), leafID)
 		if err == nil && info.ID() == leafID {
-			return
+			return leafID
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for catalog entry %q", leafID)
+	t.Fatalf("timed out waiting for catalog entry for current leaf %q", lastLeafID)
+	return lastLeafID
 }
 
 type acceptanceJobs struct {

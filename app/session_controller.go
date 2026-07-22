@@ -629,9 +629,6 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	if dispatch.ReloadGitDiff {
 		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
 	}
-	if cmd := m.persistCurrentSessionInfoCmd(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
 	if dispatch.AwaitNext {
 		cmds = append(cmds, m.awaitSessionEvent())
 	}
@@ -816,9 +813,14 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 }
 
 func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
+	// This command is scheduled after Prompt completion. TurnEnd is emitted
+	// before the controller commits the durable turn, so refreshing here keeps
+	// catalog metadata on the final committed leaf (including post-turn routing
+	// entries) instead of publishing a response-only predecessor.
 	catalog := m.Model.SessionCatalog
-	reader, ok := m.Model.Runner.(agent.SessionReader)
-	if !ok {
+	projectionReader, hasProjection := m.Model.Runner.(agent.SessionProjectionReader)
+	reader, hasTree := m.Model.Runner.(agent.SessionReader)
+	if !hasProjection && !hasTree {
 		return nil
 	}
 	generation := m.Model.EventGeneration
@@ -826,23 +828,34 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	branch := m.App.Branch
 	modelName := m.currentSessionModelName()
 	return func() tea.Msg {
-		tree, err := reader.SessionTree(context.Background())
+		var (
+			id      string
+			entries []session.Entry
+			err     error
+		)
+		if hasProjection {
+			var projection agent.SessionProjection
+			projection, err = projectionReader.SessionProjection(context.Background())
+			if err == nil {
+				id = strings.TrimSpace(projection.LeafID)
+				entries = projection.Branch
+			}
+		} else {
+			var tree agent.SessionTreeSnapshot
+			tree, err = reader.SessionTree(context.Background())
+			if err == nil {
+				id = strings.TrimSpace(tree.LeafID)
+				entries, err = reader.SessionBranch(context.Background())
+			}
+		}
 		if err != nil {
 			return runtimeLeafSnapshotMsg{
 				generation: generation,
-				err:        fmt.Errorf("load session tree for catalog: %w", err),
+				err:        fmt.Errorf("load session projection for catalog: %w", err),
 			}
 		}
-		id := strings.TrimSpace(tree.LeafID)
 		if id == "" {
 			return runtimeLeafSnapshotMsg{generation: generation}
-		}
-		entries, err := reader.SessionBranch(context.Background())
-		if err != nil {
-			return runtimeLeafSnapshotMsg{
-				generation: generation,
-				err:        fmt.Errorf("load session branch for catalog: %w", err),
-			}
 		}
 		var info *session.SessionInfoEntry
 		if catalog != nil {
