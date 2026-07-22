@@ -610,28 +610,34 @@ func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
 	if leafID == "" {
 		return m, cmdError("current session leaf is unavailable")
 	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
 
 	if len(fields) < 2 {
 		// Show current label.
 		return m, func() tea.Msg {
-			label, err := labels.GetLabel(context.Background(), leafID)
-			return labelShowMsg{label: label, err: err}
+			label, err := labels.GetLabel(ctx, leafID)
+			return labelShowMsg{generation: generation, label: label, err: err}
 		}
 	}
 	// Set label.
 	text := strings.Join(fields[1:], " ")
 	return m, func() tea.Msg {
-		_, err := labels.AppendLabel(context.Background(), leafID, text)
-		return labelShowMsg{label: text, err: err}
+		_, err := labels.AppendLabel(ctx, leafID, text)
+		return labelShowMsg{generation: generation, label: text, err: err}
 	}
 }
 
 type labelShowMsg struct {
-	label string
-	err   error
+	generation uint64
+	label      string
+	err        error
 }
 
 func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err != nil {
 		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ label: %v", msg.err)))
 		return m, nil

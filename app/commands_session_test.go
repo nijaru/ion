@@ -11,15 +11,32 @@ import (
 
 type sessionNamingTestRunner struct {
 	stubRunner
-	ctx  context.Context
-	name string
-	err  error
+	ctx        context.Context
+	name       string
+	err        error
+	labelCtx   context.Context
+	labelLeaf  string
+	labelValue string
+	labelErr   error
 }
 
 func (r *sessionNamingTestRunner) AppendSessionInfo(ctx context.Context, name string) (string, error) {
 	r.ctx = ctx
 	r.name = name
 	return "", r.err
+}
+
+func (r *sessionNamingTestRunner) GetLabel(ctx context.Context, leafID string) (string, error) {
+	r.labelCtx = ctx
+	r.labelLeaf = leafID
+	return r.labelValue, r.labelErr
+}
+
+func (r *sessionNamingTestRunner) AppendLabel(ctx context.Context, leafID, label string) (string, error) {
+	r.labelCtx = ctx
+	r.labelLeaf = leafID
+	r.labelValue = label
+	return "", r.labelErr
 }
 
 func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
@@ -59,6 +76,47 @@ func TestStaleSessionNameCannotRenderNewRuntime(t *testing.T) {
 	}
 	if next.App.PrintedTranscript {
 		t.Fatal("stale session name rendered into the new runtime")
+	}
+}
+
+func TestSessionLabelUsesRuntimeOperationContext(t *testing.T) {
+	model := readyModel(t)
+	model.Model.LeafID = "leaf-1"
+	expectedContext := model.Model.runtimeContext
+	runner := &sessionNamingTestRunner{}
+	model.Model.Runner = runner
+
+	updated, cmd := model.handleLabelCommand([]string{"/label", "release candidate"})
+	if cmd == nil {
+		t.Fatal("session label did not return a command")
+	}
+	result, ok := cmd().(labelShowMsg)
+	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
+		t.Fatalf("session label result = %#v", result)
+	}
+	if runner.labelCtx != expectedContext || runner.labelLeaf != "leaf-1" || runner.labelValue != "release candidate" {
+		t.Fatalf("session label request = context %v, leaf %q, label %q", runner.labelCtx, runner.labelLeaf, runner.labelValue)
+	}
+	if _, cmd := updated.handleLabelShow(result); cmd != nil {
+		t.Fatal("current session label returned an unexpected command")
+	}
+}
+
+func TestStaleSessionLabelCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleLabelShow(labelShowMsg{
+		generation: 1,
+		label:      "old runtime",
+		err:        errors.New("old runtime label failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale session label returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale session label rendered into the new runtime")
 	}
 }
 
