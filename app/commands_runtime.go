@@ -432,10 +432,19 @@ func (m Model) switchRuntimeCommandWithOptions(
 				retry:    options.retrySetup,
 			}
 		}
+		leafID, err := selectedRuntimeLeafID(context.Background(), result.Runtime.Handles.Runner)
+		if err != nil {
+			closeErr := closeRuntimeHandles(result.Runtime.Handles)
+			return runtimeSwitchErrorMsg{
+				switchID: requestID,
+				err:      errors.Join(fmt.Errorf("switch: read selected leaf: %w", err), closeErr),
+			}
+		}
 		return runtimeSwitchedMsg{
 			switchID:    requestID,
 			runtime:     result.Runtime,
 			previous:    result.Previous,
+			leafID:      leafID,
 			keybindings: options.keybindings,
 			notice:      session.EntryText(notice),
 			showStatus:  preserveSession,
@@ -467,6 +476,14 @@ func (m Model) resumeRuntimeCommand(
 		if err != nil {
 			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
+		leafID, err := selectedRuntimeLeafID(context.Background(), result.Runtime.Handles.Runner)
+		if err != nil {
+			closeErr := closeRuntimeHandles(result.Runtime.Handles)
+			return runtimeSwitchErrorMsg{
+				switchID: switchID,
+				err:      errors.Join(fmt.Errorf("resume: read selected leaf: %w", err), closeErr),
+			}
+		}
 		storage := result.Runtime.Handles.Storage
 		if storage == nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
@@ -493,12 +510,35 @@ func (m Model) resumeRuntimeCommand(
 			switchID:      switchID,
 			runtime:       result.Runtime,
 			previous:      result.Previous,
+			leafID:        leafID,
 			printLines:    printLines,
 			replayEntries: entries,
 			notice:        session.EntryText(notice),
 			showStatus:    false,
 		}
 	}
+}
+
+// selectedRuntimeLeafID captures the accepted runtime's authoritative leaf
+// before the TUI installs it. The asynchronous event subscription will
+// refresh this projection, but runtime replacement must not expose a window
+// where a fast follow-up command can observe an empty leaf.
+func selectedRuntimeLeafID(ctx context.Context, runner agent.Runtime) (string, error) {
+	if reader, ok := runner.(agent.SessionProjectionReader); ok {
+		projection, err := reader.SessionProjection(ctx)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(projection.LeafID), nil
+	}
+	if reader, ok := runner.(agent.SessionReader); ok {
+		tree, err := reader.SessionTree(ctx)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(tree.LeafID), nil
+	}
+	return "", nil
 }
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
@@ -531,7 +571,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	m.Model.Storage = msg.runtime.Handles.Storage
 	m.Model.SessionCatalog = nil
 	m.Model.InputHistory = nil
-	m.Model.LeafID = ""
+	m.Model.LeafID = strings.TrimSpace(msg.leafID)
 	if catalog, ok := msg.runtime.Handles.Runner.(agent.SessionCatalog); ok {
 		m.Model.SessionCatalog = catalog
 	}

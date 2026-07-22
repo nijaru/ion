@@ -87,6 +87,7 @@ type runtimeSwitchedMsg struct {
 	switchID      uint64
 	runtime       Accepted
 	previous      Handles
+	leafID        string
 	keybindings   *KeybindingsManager
 	printLines    []string
 	replayEntries []session.Entry
