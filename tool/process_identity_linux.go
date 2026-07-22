@@ -41,6 +41,9 @@ func (linuxProcessPlatform) inspect(pid int) (ProcessIdentity, error) {
 	if len(fields) <= 19 {
 		return ProcessIdentity{}, fmt.Errorf("%w: incomplete /proc stat", ErrProcessIdentityInvalid)
 	}
+	if fields[0] == "Z" || fields[0] == "X" {
+		return ProcessIdentity{}, ErrProcessNotFound
+	}
 	pgid, err := strconv.Atoi(fields[2])
 	if err != nil {
 		return ProcessIdentity{}, fmt.Errorf("%w: invalid process group: %v", ErrProcessIdentityInvalid, err)

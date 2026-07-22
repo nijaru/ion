@@ -485,7 +485,7 @@ func sandboxParentPaths(path string) []string {
 
 func sandboxReadPaths(cwd, name string, configured []string) []string {
 	paths := append([]string{cwd}, configured...)
-	for _, path := range []string{"/bin", "/sbin", "/usr", "/System", "/Library", "/etc", "/private/etc", "/dev", "/private/tmp"} {
+	for _, path := range []string{"/bin", "/sbin", "/usr", "/lib", "/lib64", "/System", "/Library", "/etc", "/private/etc", "/dev", "/private/tmp"} {
 		if sandboxPathExists(path) {
 			paths = append(paths, path)
 		}
@@ -559,7 +559,7 @@ func planBubblewrapCommandWithPolicy(cwd, name string, args []string, policy San
 		bwrapArgs = append(bwrapArgs, "--bind", "/private/tmp", "/private/tmp")
 	}
 	for _, path := range sandboxReadPaths(cwd, name, policy.ReadPaths) {
-		if path == cwd || path == "/bin" || path == "/usr" || path == "/etc" || path == "/private/tmp" {
+		if path == cwd || path == "/bin" || path == "/usr" || path == "/etc" || path == "/dev" || path == "/private/tmp" {
 			continue
 		}
 		if sandboxPathExists(path) {

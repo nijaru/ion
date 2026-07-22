@@ -2,8 +2,8 @@
 
 > [!NOTE]
 > Ion is a native Go coding agent. The core submit/stream/tool/cancel/persist/
-> resume path is covered by deterministic, race, and live terminal gates; some
-> advanced integrations remain deliberately opt-in or deferred.
+> resume path has deterministic and race coverage, while end-to-end live
+> provider, release, and some advanced integration gates remain in progress.
 
 Ion is a terminal coding agent for working on codebases from your shell. It
 opens an interactive chat UI, gives the model a small set of coding tools, and

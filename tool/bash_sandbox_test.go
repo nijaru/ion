@@ -70,6 +70,64 @@ func TestSeatbeltBashCannotReadOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestBubblewrapBashEnforcesWorkspaceBoundary(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is only available on Linux")
+	}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skipf("bubblewrap unavailable: %v", err)
+	}
+	t.Setenv("ION_SANDBOX", string(SandboxBubblewrap))
+
+	workspace := t.TempDir()
+	marker := filepath.Join(workspace, "workspace-marker")
+	writeCommand := "printf workspace-ok > '" + strings.ReplaceAll(marker, "'", "'\\''") + "'"
+	writeArgs, err := json.Marshal(map[string]string{"command": writeCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := NewBash(workspace).Execute(t.Context(), string(writeArgs)); err != nil {
+		t.Fatalf("workspace write failed: %v (output %q)", err, output)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read workspace marker: %v", err)
+	}
+	if string(data) != "workspace-ok" {
+		t.Fatalf("workspace marker = %q, want workspace-ok", data)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("home directory unavailable: %v", err)
+	}
+	secret, err := os.CreateTemp(home, ".ion-sandbox-credential-*")
+	if err != nil {
+		t.Skipf("cannot create home-directory fixture: %v", err)
+	}
+	secretPath := secret.Name()
+	t.Cleanup(func() { _ = os.Remove(secretPath) })
+	if _, err := secret.WriteString("outside-secret"); err != nil {
+		_ = secret.Close()
+		t.Fatal(err)
+	}
+	if err := secret.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readCommand := "cat '" + strings.ReplaceAll(secretPath, "'", "'\\''") + "'"
+	readArgs, err := json.Marshal(map[string]string{"command": readCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, runErr := NewBash(workspace).Execute(t.Context(), string(readArgs))
+	if runErr == nil {
+		t.Fatalf("home-directory read unexpectedly succeeded with output %q", output)
+	}
+	if strings.Contains(output, "outside-secret") {
+		t.Fatalf("home-directory secret leaked through Bubblewrap: %q", output)
+	}
+}
+
 func TestNewBashAppliesExplicitSandboxMode(t *testing.T) {
 	previousMode, hadMode := os.LookupEnv("ION_SANDBOX")
 	t.Cleanup(func() {

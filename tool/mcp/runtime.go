@@ -48,11 +48,13 @@ type Runtime struct {
 // watcher observes EOF and kills the whole process group. The server is kept
 // in the same group so descendants are contained as well.
 const mcpParentWatchScript = `( watcher() {
-	IFS= read -r _ <&3 || kill -KILL -- -$$
+	IFS= read -r _ <&3 || kill -KILL -$$
 }; watcher ) &
 watcher=$!
-"$@" <&0 >&1 2>&2 &
+exec 4<&0
+"$@" <&4 >&1 2>&2 &
 child=$!
+exec 4<&-
 wait "$child"
 status=$?
 kill "$watcher" 2>/dev/null || :
@@ -152,7 +154,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			cancel()
 			_ = parentControl.Close()
 			_ = terminateProcessGroup(command)
-			_ = plan.Cleanup()
+			_ = callCleanup(plan.Cleanup)
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
@@ -170,7 +172,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			_ = client.Close()
 			_ = parentControl.Close()
 			_ = terminateProcessGroup(command)
-			_ = plan.Cleanup()
+			_ = callCleanup(plan.Cleanup)
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
@@ -180,7 +182,7 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 				cancel()
 				_ = client.Close()
 				_ = terminateProcessGroup(command)
-				_ = plan.Cleanup()
+				_ = callCleanup(plan.Cleanup)
 				runtime.Close()
 				return nil, fmt.Errorf("mcp tool %q is exposed by more than one server", toolName)
 			}
