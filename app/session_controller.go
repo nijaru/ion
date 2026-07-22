@@ -31,6 +31,11 @@ type runtimeCatalogUpdateMsg struct {
 	err        error
 }
 
+type persistEntryResultMsg struct {
+	generation uint64
+	err        error
+}
+
 // Product session control owns the Ion side of the active-turn lifecycle.
 // Key handlers and renderers should delegate here instead of making their own
 // submit, cancel, queue, or settlement decisions.
@@ -85,26 +90,49 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 
 	m.turnReducer().StartSubmit()
 	m.resetComposerDraft()
-	return m, submitTurnCmd(m.Model.Runner, text, draft, images)
+	return m, submitTurnCmd(
+		m.Model.Runner,
+		m.runtimeOperationContext(),
+		m.Model.EventGeneration,
+		text,
+		draft,
+		images,
+	)
 }
 
-func submitTurnCmd(runner agent.Runtime, text, draft string, images []session.ImageContent) tea.Cmd {
+func submitTurnCmd(
+	runner agent.Runtime,
+	ctx context.Context,
+	generation uint64,
+	text, draft string,
+	images []session.ImageContent,
+) tea.Cmd {
 	images = cloneImageAttachments(images)
 	return func() tea.Msg {
 		if runner != nil {
-			_, err := runner.Prompt(context.Background(), text, images...)
-			return turnSubmitResultMsg{text: text, draft: draft, images: images, err: err}
+			_, err := runner.Prompt(ctx, text, images...)
+			return turnSubmitResultMsg{
+				generation: generation,
+				text:       text,
+				draft:      draft,
+				images:     images,
+				err:        err,
+			}
 		}
 		return turnSubmitResultMsg{
-			text:   text,
-			draft:  draft,
-			images: images,
-			err:    errors.New("turn execution requires a configured provider and model"),
+			generation: generation,
+			text:       text,
+			draft:      draft,
+			images:     images,
+			err:        errors.New("turn execution requires a configured provider and model"),
 		}
 	}
 }
 
 func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	m.refreshRuntimeSessionSnapshot()
 	if msg.err == nil {
 		historyText, historyChanged := m.appendInputHistory(msg.text)
@@ -136,6 +164,9 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 }
 
 func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	next, cmd := m.submitText(msg.text)
 	if !msg.rearmSessionEvents {
 		return next, cmd
@@ -178,10 +209,10 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 	}) {
 	case BusyInputRouteSteer:
 		m.resetComposerDraft()
-		return m, busyInputCmd(runner, "steer", text, images)
+		return m, busyInputCmd(runner, m.Model.EventGeneration, "steer", text, images)
 	case BusyInputRouteFollowUp:
 		m.resetComposerDraft()
-		return m, busyInputCmd(runner, "follow-up", text, images)
+		return m, busyInputCmd(runner, m.Model.EventGeneration, "follow-up", text, images)
 	default:
 		if len(images) > 0 {
 			return m, cmdError("image attachments require an active agent turn")
@@ -193,20 +224,21 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 	if m.InFlight.Thinking && !m.Progress.Compacting && m.Model.Runner != nil {
 		m.resetComposerDraft()
-		return m, busyInputCmd(m.Model.Runner, "follow-up", text, nil)
+		return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "follow-up", text, nil)
 	}
 	return m.queueBusyInputLocal(text)
 }
 
-func busyInputCmd(runner agent.Runtime, action, text string, images []session.ImageContent) tea.Cmd {
+func busyInputCmd(runner agent.Runtime, generation uint64, action, text string, images []session.ImageContent) tea.Cmd {
 	images = cloneImageAttachments(images)
 	return func() tea.Msg {
 		if runner == nil {
 			return busyInputResultMsg{
-				action: action,
-				text:   text,
-				images: images,
-				err:    errors.New("session unavailable"),
+				generation: generation,
+				action:     action,
+				text:       text,
+				images:     images,
+				err:        errors.New("session unavailable"),
 			}
 		}
 
@@ -219,11 +251,20 @@ func busyInputCmd(runner agent.Runtime, action, text string, images []session.Im
 		default:
 			err = fmt.Errorf("unsupported busy input action %q", action)
 		}
-		return busyInputResultMsg{action: action, text: text, images: images, err: err}
+		return busyInputResultMsg{
+			generation: generation,
+			action:     action,
+			text:       text,
+			images:     images,
+			err:        err,
+		}
 	}
 }
 
 func (m Model) handleBusyInputResult(msg busyInputResultMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err == nil {
 		return m, nil
 	}
@@ -296,23 +337,26 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 			Content: session.EntryText(entry),
 			TS:      now(),
 		}),
-		cancelTurnCmd(m.Model.Runner),
+		cancelTurnCmd(m.Model.Runner, m.Model.EventGeneration),
 	)
 }
 
-func cancelTurnCmd(runner agent.Runtime) tea.Cmd {
+func cancelTurnCmd(runner agent.Runtime, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil {
-			return turnCancelResultMsg{err: errors.New("session unavailable")}
+			return turnCancelResultMsg{generation: generation, err: errors.New("session unavailable")}
 		}
 		if _, _, err := runner.Abort(); err != nil {
-			return turnCancelResultMsg{err: err}
+			return turnCancelResultMsg{generation: generation, err: err}
 		}
-		return turnCancelResultMsg{}
+		return turnCancelResultMsg{generation: generation}
 	}
 }
 
 func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
 	if msg.err != nil {
 		return m, persistErrorCmd("cancel turn", msg.err)
 	}
@@ -352,7 +396,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 			if !ok {
 				return runtimeSubscriptionMsg{generation: generation, err: errors.New("runtime subscription unavailable")}
 			}
-			subscription, err := source.Subscribe(context.Background(), after)
+			subscription, err := source.Subscribe(m.runtimeOperationContext(), after)
 			return runtimeSubscriptionMsg{generation: generation, subscription: subscription, err: err}
 		}
 	}
@@ -625,6 +669,7 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	if dispatch.Action == TurnFinishedDispatchSubmitLocal {
 		cmds = append(cmds, func() tea.Msg {
 			return queuedTurnMsg{
+				generation:         m.Model.EventGeneration,
 				text:               dispatch.Text,
 				rearmSessionEvents: dispatch.RearmSessionEvents,
 			}
@@ -781,11 +826,15 @@ func (c runtimeRequestController) clear() {
 }
 
 type persistenceController struct {
-	runner agent.Runtime
+	runner     agent.Runtime
+	generation uint64
 }
 
 func (m Model) persistenceController() persistenceController {
-	return persistenceController{runner: m.Model.Runner}
+	return persistenceController{
+		runner:     m.Model.Runner,
+		generation: m.Model.EventGeneration,
+	}
 }
 
 func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
@@ -794,17 +843,35 @@ func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
 	}
 	entry, err := normalizePersistedEntry(raw)
 	if err != nil {
-		return persistErrorCmd(action, err)
+		return persistEntryErrorCmd(action, c.generation, err)
 	}
 	return func() tea.Msg {
 		persister, ok := c.runner.(agent.EntryPersister)
 		if !ok {
-			return localErrorMsg{err: fmt.Errorf("%s: runtime does not support entry persistence", action)}
+			return persistEntryResultMsg{
+				generation: c.generation,
+				err:        fmt.Errorf("%s: runtime does not support entry persistence", action),
+			}
 		}
 		if err := persister.PersistEntry(context.Background(), entry); err != nil {
-			return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
+			return persistEntryResultMsg{
+				generation: c.generation,
+				err:        fmt.Errorf("%s: %w", action, err),
+			}
 		}
 		return nil
+	}
+}
+
+func persistEntryErrorCmd(action string, generation uint64, err error) tea.Cmd {
+	if err == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return persistEntryResultMsg{
+			generation: generation,
+			err:        fmt.Errorf("%s: %w", action, err),
+		}
 	}
 }
 

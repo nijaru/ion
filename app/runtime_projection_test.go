@@ -169,6 +169,85 @@ func TestStaleEventReaderCannotAdvanceRuntimeCursor(t *testing.T) {
 	}
 }
 
+func TestStaleTurnCommandsCannotMutateNewRuntimeGeneration(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Input.Composer.SetValue("new draft")
+	model.Input.Images = []session.ImageContent{{Data: []byte("new"), MimeType: "text/plain"}}
+
+	staleSubmit, cmd := model.handleTurnSubmitResult(turnSubmitResultMsg{
+		generation: 1,
+		draft:      "old draft",
+		images:     []session.ImageContent{{Data: []byte("old")}},
+		err:        errors.New("old runtime failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale submit result returned a command")
+	}
+	if got := staleSubmit.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("stale submit changed composer to %q", got)
+	}
+	if got := string(staleSubmit.Input.Images[0].Data); got != "new" {
+		t.Fatalf("stale submit changed images to %q", got)
+	}
+
+	staleBusy, cmd := model.handleBusyInputResult(busyInputResultMsg{
+		generation: 1,
+		action:     "follow-up",
+		text:       "old follow-up",
+		images:     []session.ImageContent{{Data: []byte("old")}},
+		err:        errors.New("old runtime failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale busy-input result returned a command")
+	}
+	if got := staleBusy.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("stale busy-input result changed composer to %q", got)
+	}
+
+	staleCancel, cmd := model.handleTurnCancelResult(turnCancelResultMsg{
+		generation: 1,
+		err:        errors.New("old runtime failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale cancel result returned a command")
+	}
+	if got := staleCancel.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("stale cancel result changed composer to %q", got)
+	}
+
+	runner := &stubRunner{}
+	model.Model.Runner = runner
+	staleQueued, cmd := model.handleQueuedTurn(queuedTurnMsg{
+		generation: 1,
+		text:       "old queued turn",
+	})
+	if cmd != nil {
+		t.Fatal("stale queued turn returned a command")
+	}
+	if len(runner.promptTexts) != 0 {
+		t.Fatalf("stale queued turn submitted prompts %#v", runner.promptTexts)
+	}
+	if got := staleQueued.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("stale queued turn changed composer to %q", got)
+	}
+
+	model.Progress.Status = "new runtime"
+	next, cmd, handled := model.dispatchAppControlMessage(persistEntryResultMsg{
+		generation: 1,
+		err:        errors.New("old persistence failed"),
+	})
+	if !handled {
+		t.Fatal("stale persistence result was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale persistence result returned a command")
+	}
+	if got := next.Progress.Status; got != "new runtime" {
+		t.Fatalf("stale persistence result changed status to %q", got)
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}

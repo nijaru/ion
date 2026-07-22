@@ -262,7 +262,11 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 	cmds := []tea.Cmd{m.terminalCommit().Entries(systemEntry(msg.notice))}
 	if queued := m.turnReducer().PopQueuedTurn(); queued != "" {
 		cmds = append(cmds, func() tea.Msg {
-			return queuedTurnMsg{text: queued, rearmSessionEvents: false}
+			return queuedTurnMsg{
+				generation:         m.Model.EventGeneration,
+				text:               queued,
+				rearmSessionEvents: false,
+			}
 		})
 	}
 	return m, tea.Sequence(cmds...)

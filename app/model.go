@@ -194,27 +194,31 @@ type gitBranchChangedMsg struct {
 }
 
 type queuedTurnMsg struct {
+	generation         uint64
 	text               string
 	rearmSessionEvents bool
 }
 
 type busyInputResultMsg struct {
-	action string
-	text   string
-	images []session.ImageContent
-	err    error
+	generation uint64
+	action     string
+	text       string
+	images     []session.ImageContent
+	err        error
 }
 
 type turnSubmitResultMsg struct {
-	text   string
-	draft  string
-	images []session.ImageContent
-	err    error
-	rearm  bool
+	generation uint64
+	text       string
+	draft      string
+	images     []session.ImageContent
+	err        error
+	rearm      bool
 }
 
 type turnCancelResultMsg struct {
-	err error
+	generation uint64
+	err        error
 }
 
 type sessionPickerItem struct {

@@ -71,12 +71,12 @@ func TestPersistenceControllerAppendsEntriesAndReportsErrors(t *testing.T) {
 		Content: "failed",
 	})
 	msg := cmd()
-	localErr, ok := msg.(localErrorMsg)
+	localErr, ok := msg.(persistEntryResultMsg)
 	if !ok {
-		t.Fatalf("appendEntry message = %#v, want localErrorMsg", msg)
+		t.Fatalf("appendEntry message = %#v, want persistEntryResultMsg", msg)
 	}
 	if !strings.Contains(localErr.err.Error(), "persist test: disk full") {
-		t.Fatalf("local error = %v, want wrapped append error", localErr.err)
+		t.Fatalf("persist error = %v, want wrapped append error", localErr.err)
 	}
 }
 

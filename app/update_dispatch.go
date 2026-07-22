@@ -103,6 +103,16 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleLocalError(msg.err)
 		return next, cmd, true
 
+	case persistEntryResultMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
+		if msg.err == nil {
+			return m, nil, true
+		}
+		next, cmd := m.handleLocalError(msg.err)
+		return next, cmd, true
+
 	case runtimeCatalogUpdateMsg:
 		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
