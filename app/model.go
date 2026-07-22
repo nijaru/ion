@@ -65,6 +65,11 @@ type approvalResolveMsg struct {
 	err        error
 }
 
+type branchNavigationCancelMsg struct {
+	generation uint64
+	err        error
+}
+
 type fileReferenceCompletionMsg struct {
 	requestID uint64
 	text      string

@@ -89,11 +89,29 @@ func TestBranchSummaryNavigationCancelSurfacesAbortError(t *testing.T) {
 	}
 
 	msg := cmd()
-	local, ok := msg.(localErrorMsg)
-	if !ok || local.err == nil {
-		t.Fatalf("cancel message = %#v, want local error", msg)
+	cancel, ok := msg.(branchNavigationCancelMsg)
+	if !ok || cancel.err == nil {
+		t.Fatalf("cancel message = %#v, want branch navigation cancellation", msg)
 	}
-	if !strings.Contains(local.err.Error(), "cancel branch navigation: runtime is closed") {
-		t.Fatalf("cancel error = %v, want contextual runtime error", local.err)
+	if !strings.Contains(cancel.err.Error(), "cancel branch navigation: runtime is closed") {
+		t.Fatalf("cancel error = %v, want contextual runtime error", cancel.err)
+	}
+}
+
+func TestStaleBranchNavigationCancelCannotRenderNewRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Progress.Status = "new runtime"
+	model.Picker.BranchSummary = &branchSummaryPromptState{navigating: true}
+
+	next, cmd := model.handleBranchNavigationCancel(branchNavigationCancelMsg{
+		generation: 1,
+		err:        errors.New("old runtime abort failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale branch navigation cancellation returned a command")
+	}
+	if next.Progress.Status != "new runtime" || next.Picker.BranchSummary == nil {
+		t.Fatalf("stale branch navigation cancellation mutated new runtime: status=%q prompt=%#v", next.Progress.Status, next.Picker.BranchSummary)
 	}
 }

@@ -151,6 +151,10 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleApprovalResolve(msg)
 		return next, cmd, true
 
+	case branchNavigationCancelMsg:
+		next, cmd := m.handleBranchNavigationCancel(msg)
+		return next, cmd, true
+
 	case localEntriesMsg:
 		next, cmd := m.handleLocalEntries(msg)
 		return next, cmd, true

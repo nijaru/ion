@@ -38,11 +38,15 @@ func (m Model) handleBranchSummaryPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd
 				return m, nil
 			}
 			runner := m.Model.Runner
+			generation := m.Model.EventGeneration
 			return m, func() tea.Msg {
 				if _, _, err := runner.Abort(); err != nil {
-					return localErrorMsg{err: fmt.Errorf("cancel branch navigation: %w", err)}
+					return branchNavigationCancelMsg{
+						generation: generation,
+						err:        fmt.Errorf("cancel branch navigation: %w", err),
+					}
 				}
-				return nil
+				return branchNavigationCancelMsg{generation: generation}
 			}
 		}
 		return m, nil
@@ -74,6 +78,16 @@ func (m Model) handleBranchSummaryPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd
 			prompt.custom = true
 			prompt.err = ""
 		}
+	}
+	return m, nil
+}
+
+func (m Model) handleBranchNavigationCancel(msg branchNavigationCancelMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
 	}
 	return m, nil
 }
