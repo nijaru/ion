@@ -496,20 +496,6 @@ func openRuntime(
 		return nil, nil, nil, cleanupOpenError(fmt.Errorf("build system prompt: %w", err))
 	}
 
-	// Resume only after every fallible runtime-materialization step has
-	// completed. The store is shared with the current runtime during TUI
-	// replacement, so moving its leaf earlier would violate Switch's guarantee
-	// that a failed replacement leaves the current runtime untouched.
-	if sessionID != "" {
-		sqliteStore, ok := store.(*session.SQLiteStore)
-		if !ok {
-			return nil, nil, nil, cleanupOpenError(fmt.Errorf("session store does not support concrete resume"))
-		}
-		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			return nil, nil, nil, cleanupOpenError(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
-		}
-	}
-
 	harness := agent.NewController(agent.ControllerConfig{
 		Session:             sess,
 		Store:               store,
@@ -557,6 +543,19 @@ func openRuntime(
 			"%d unsettled external action(s) require interactive verification before print mode",
 			len(unsettled),
 		))
+	}
+	// Resume only after every fallible runtime-materialization and recovery
+	// check has completed. The store is shared with the current runtime during
+	// TUI replacement, so moving its leaf earlier could leave a rejected target
+	// installed after a failed replacement.
+	if sessionID != "" {
+		sqliteStore, ok := store.(*session.SQLiteStore)
+		if !ok {
+			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("session store does not support concrete resume"))
+		}
+		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
+			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
+		}
 	}
 	if searchTool != nil {
 		searchTool.SetActivator(harness.ActivateTools)

@@ -168,13 +168,26 @@ func TestRuntimeInfoBootstrapSurfacesUnsettledActions(t *testing.T) {
 	}
 }
 
-func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledAction(t *testing.T) {
+func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledActionWithoutMovingLeaf(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store, err := session.NewSQLiteStore(":memory:", "ion")
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	defer store.Close()
+
+	sess := session.NewSession(store, 8)
+	oldID, err := sess.AppendMessage(context.Background(), session.NewUserText("old", time.Now()))
+	if err != nil {
+		t.Fatalf("append old entry: %v", err)
+	}
+	targetID, err := sess.AppendMessage(context.Background(), session.NewUserText("target", time.Now()))
+	if err != nil {
+		t.Fatalf("append target entry: %v", err)
+	}
+	if err := store.SetLeafID(oldID); err != nil {
+		t.Fatalf("restore old leaf: %v", err)
+	}
 
 	record := session.ActionRecord{
 		ID:           "action-1",
@@ -211,7 +224,7 @@ func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledAction(t *testing.T) {
 		"main",
 		&config.Config{Provider: "ollama", Model: "llama3"},
 		llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
-		"",
+		targetID,
 		false,
 		"",
 		"",
@@ -222,5 +235,8 @@ func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledAction(t *testing.T) {
 	}
 	if sess != nil || runner != nil {
 		t.Fatalf("failed runtime handles = (%v, %v), want nil", sess, runner)
+	}
+	if leaf := store.GetLeafID(); leaf != oldID {
+		t.Fatalf("failed runtime replacement moved leaf to %q, want %q", leaf, oldID)
 	}
 }
