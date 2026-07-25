@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,9 +32,26 @@ func (e *echoTool) Execute(_ context.Context, _ string) (string, error) {
 	return "echo: hello", nil
 }
 
+type environmentTool struct{}
+
+func (environmentTool) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "env",
+		Description: "Reports selected environment values for boundary tests.",
+		Parameters:  map[string]any{"type": "object"},
+	}
+}
+
+func (environmentTool) Execute(context.Context, string) (string, error) {
+	return fmt.Sprintf("%s:%s", os.Getenv("OPENAI_API_KEY"), os.Getenv("ION_MCP_VISIBLE")), nil
+}
+
 func newTestServer() (*Server, *tool.Registry) {
 	reg := tool.NewRegistry()
 	reg.Register(&echoTool{name: "echo"})
+	if os.Getenv("ION_MCP_HELPER_ENV") == "1" {
+		reg.Register(environmentTool{})
+	}
 	return NewServer(reg, "test", "0.1"), reg
 }
 

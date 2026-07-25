@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nijaru/ion/tool"
 )
 
 func TestMCPHelperProcess(t *testing.T) {
@@ -209,6 +210,46 @@ func TestOpenDiscoversAndClosesStdioRuntime(t *testing.T) {
 	}
 	if err := replacement.Close(); err != nil {
 		t.Fatalf("rebuild Close: %v", err)
+	}
+}
+
+func TestOpenMCPStdioDoesNotInheritHostProviderCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "host-secret")
+	runtime, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
+		Name:    "test",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPHelperProcess"},
+		Env: map[string]string{
+			"ION_MCP_HELPER":     "1",
+			"ION_MCP_HELPER_ENV": "1",
+			"ION_MCP_VISIBLE":    "configured",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	var (
+		environment tool.Tool
+		found       bool
+	)
+	for _, candidate := range runtime.Tools() {
+		if candidate.Spec().Name == "mcp_test_env" {
+			environment = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Open did not discover the environment probe")
+	}
+	value, err := environment.Execute(t.Context(), `{}`)
+	if err != nil {
+		t.Fatalf("environment probe: %v", err)
+	}
+	if value != ":configured" {
+		t.Fatalf("MCP child environment = %q, want host credential omitted and explicit value retained", value)
 	}
 }
 
