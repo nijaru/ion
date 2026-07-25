@@ -189,7 +189,7 @@ it never accepts or persists API keys:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
-ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_MODEL_A=poolside/lacuna-s-2.1 \
 ION_LIVE_PROVIDER_B=openai-compatible \
 ION_LIVE_MODEL_B=qwen3.6:27b \
 ION_LIVE_ENDPOINT_B=http://fedora:8080/v1 \
@@ -199,7 +199,7 @@ go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 
 The example uses a local Fedora Qwen endpoint for the second adapter. Run it
 only when that endpoint and its credentials are available; it is separate from
-the cheaper paid/free Laguna basic smoke below.
+the cheaper paid/free Lacuna basic smoke below.
 
 For a low-cost same-model endpoint comparison, the basic smoke permits the
 paid and free OpenRouter variants. It checks streamed text, settlement,
@@ -208,9 +208,9 @@ materially-different-provider conformance gate:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
-ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_MODEL_A=poolside/lacuna-s-2.1 \
 ION_LIVE_PROVIDER_B=openrouter \
-ION_LIVE_MODEL_B=poolside/laguna-s-2.1:free \
+ION_LIVE_MODEL_B=poolside/lacuna-s-2.1:free \
 ION_LIVE_BASIC=1 \
 go test ./cmd/ion -run TestLiveBasicTurn -count=1 -timeout 120s -v
 ```

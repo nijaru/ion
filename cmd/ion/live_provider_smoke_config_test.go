@@ -51,9 +51,9 @@ func TestLoadLiveProviderProfilesRejectsSameAdapterAliases(t *testing.T) {
 func TestLoadLiveProviderProfilesAllowsSameAdapterForBasicSmoke(t *testing.T) {
 	clearLiveProfileEnv(t)
 	t.Setenv("ION_LIVE_PROVIDER_A", "openrouter")
-	t.Setenv("ION_LIVE_MODEL_A", "poolside/laguna-s-2.1")
+	t.Setenv("ION_LIVE_MODEL_A", "poolside/lacuna-s-2.1")
 	t.Setenv("ION_LIVE_PROVIDER_B", "openrouter")
-	t.Setenv("ION_LIVE_MODEL_B", "poolside/laguna-s-2.1:free")
+	t.Setenv("ION_LIVE_MODEL_B", "poolside/lacuna-s-2.1:free")
 
 	profiles, err := loadLiveProviderProfilesAllowSameAdapter()
 	if err != nil {
