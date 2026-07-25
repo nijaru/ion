@@ -42,6 +42,13 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Clean install and version smoke
+        run: |
+          install_dir="${RUNNER_TEMP}/ion-bin"
+          mkdir -p "$install_dir"
+          GOBIN="$install_dir" go install ./cmd/ion
+          "$install_dir/ion" --version
+
       - name: Linux sandbox boundary
         run: go test ./tool -run '^TestBubblewrapBashEnforcesWorkspaceBoundary$' -count=1 -timeout 120s
 
