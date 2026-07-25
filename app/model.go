@@ -414,6 +414,11 @@ type ModelState struct {
 	// RecoveryRequest identifies an in-flight explicit action reconciliation.
 	// It prevents duplicate commands while the controller records evidence.
 	RecoveryRequest uint64
+	// InterruptedTurns contains startup-recovered turn evidence. It is a
+	// frontend snapshot only; the runtime remains the authority for settling it.
+	InterruptedTurns []session.TurnRecord
+	// InterruptedTurnRequest identifies an in-flight explicit turn discard.
+	InterruptedTurnRequest uint64
 	// ActiveTools is the runtime-owned active tool projection. It is refreshed
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
 	// registry-level startup description.
@@ -536,6 +541,7 @@ func New(
 			Storage:                storage,
 			SessionCatalog:         catalog,
 			Recovery:               append([]session.ActionRecord(nil), boot.Recovery...),
+			InterruptedTurns:       append([]session.TurnRecord(nil), boot.InterruptedTurns...),
 			Switcher:               switcher,
 			EndpointResolver:       llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 			EventSubscriptionState: &eventSubscriptionState{},

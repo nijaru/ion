@@ -305,6 +305,48 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 	})
 }
 
+func (c *Controller) handleInterruptedTurns(cmd *InterruptedTurnsCmd) {
+	c.startOperation(func() {
+		if c.durable == nil {
+			sendResult(cmd.Reply, InterruptedTurnsResult{Err: errors.New("runtime does not support durable turns")})
+			return
+		}
+		turns, err := c.durable.InterruptedTurns(cmd.Ctx)
+		sendResult(cmd.Reply, InterruptedTurnsResult{Turns: turns, Err: err})
+	})
+}
+
+func (c *Controller) handleAbortInterruptedTurn(cmd *AbortInterruptedTurnCmd) {
+	c.startOperation(func() {
+		if c.durable == nil {
+			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: errors.New("runtime does not support durable turns")})
+			return
+		}
+		turnID := strings.TrimSpace(cmd.TurnID)
+		if turnID == "" {
+			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: errors.New("turn ID is required")})
+			return
+		}
+		record, err := c.durable.GetTurn(cmd.Ctx, turnID)
+		if err != nil {
+			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: err})
+			return
+		}
+		if record.State != session.TurnInterrupted {
+			sendResult(cmd.Reply, AbortInterruptedTurnResult{
+				Err: fmt.Errorf("turn %q is %s; only interrupted turns can be discarded", turnID, record.State),
+			})
+			return
+		}
+		if err := c.durable.AbortTurn(cmd.Ctx, turnID, strings.TrimSpace(cmd.Reason)); err != nil {
+			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: err})
+			return
+		}
+		record, err = c.durable.GetTurn(cmd.Ctx, turnID)
+		sendResult(cmd.Reply, AbortInterruptedTurnResult{Turn: record, Err: err})
+	})
+}
+
 // --- Session administration commands ---
 
 func (c *Controller) handleSubscribe(cmd *SubscribeCmd) {
@@ -742,6 +784,38 @@ func (c *Controller) UnsettledActions(ctx context.Context) ([]session.ActionReco
 		return nil, err
 	}
 	return result.Actions, result.Err
+}
+
+// InterruptedTurns returns durable turn records recovered from an interrupted
+// process through the runtime-owned storage boundary.
+func (c *Controller) InterruptedTurns(ctx context.Context) ([]session.TurnRecord, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan InterruptedTurnsResult, 1)
+	if err := c.enqueue(ctx, &InterruptedTurnsCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Turns, result.Err
+}
+
+// AbortInterruptedTurn explicitly settles one startup-recovered turn. It does
+// not publish that turn's input or staged entries into conversation history.
+func (c *Controller) AbortInterruptedTurn(ctx context.Context, turnID, reason string) (session.TurnRecord, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan AbortInterruptedTurnResult, 1)
+	if err := c.enqueue(ctx, &AbortInterruptedTurnCmd{
+		Ctx: ctx, TurnID: turnID, Reason: reason, Reply: reply,
+	}); err != nil {
+		return session.TurnRecord{}, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return session.TurnRecord{}, err
+	}
+	return result.Turn, result.Err
 }
 
 // ReconcileAction records the externally observed outcome of an action.

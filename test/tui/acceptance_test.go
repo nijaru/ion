@@ -260,6 +260,63 @@ func TestDeterministicTUIAcceptanceFailureRecovery(t *testing.T) {
 	})
 }
 
+func TestDeterministicTUIAcceptanceInterruptedTurnRecovery(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	path := t.TempDir() + "/interrupted.db"
+	initial, err := session.NewSQLiteStore(path, "interrupted")
+	if err != nil {
+		t.Fatalf("open initial recovery store: %v", err)
+	}
+	turn, err := initial.BeginTurn(ctx, "interrupted-turn", "draft after process restart", nil, "context-1")
+	if err != nil {
+		t.Fatalf("begin interrupted turn: %v", err)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatalf("close initial recovery store: %v", err)
+	}
+
+	store, err := session.NewSQLiteStore(path, "interrupted")
+	if err != nil {
+		t.Fatalf("reopen recovery store: %v", err)
+	}
+	sess := session.NewSession(store, 128)
+	harness := agent.NewController(agent.ControllerConfig{
+		Session:  sess,
+		Store:    store,
+		Durable:  store,
+		Model:    acceptanceModel(),
+		StreamFn: newAcceptanceTextProvider("unused").stream,
+	})
+	backend := newSmokeBackend("complete")
+	backend.boot = app.Bootstrap{
+		Status:           "[smoke] ready",
+		InterruptedTurns: []session.TurnRecord{turn},
+	}
+	model := app.New(backend, sess, store, t.TempDir(), "main", "test", nil).
+		WithRunner(harness).
+		WithConfig(&config.Config{Provider: "fake", Model: "fake-model"})
+	program, output, result := startAcceptanceAppProgram(t, model)
+
+	program.Send(tea.KeyPressMsg{Text: "/turns"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "interrupted-turn", "interrupted turn list")
+	program.Send(tea.KeyPressMsg{Text: "/turns abort interrupted-turn"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "Discarded interrupted turn interrupted-turn.", "interrupted turn discard")
+	settled, err := store.GetTurn(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("read discarded turn: %v", err)
+	}
+	if settled.State != session.TurnAborted {
+		t.Fatalf("discarded turn state = %s, want aborted", settled.State)
+	}
+
+	program.Quit()
+	_ = waitAcceptanceProgram(t, result)
+	closeAcceptanceHarness(t, harness, store)
+}
+
 func runAcceptanceFailureRecovery(t *testing.T, mode acceptanceMode, firstNotice, secondOutput string) {
 	t.Helper()
 	path := t.TempDir() + "/recovery.db"

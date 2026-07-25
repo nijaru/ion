@@ -7,8 +7,9 @@ import (
 // Bootstrap is the initial projection shown before the TUI has received
 // runtime events. It belongs to the host application, not the agent loop.
 type Bootstrap struct {
-	Status   string
-	Recovery []session.ActionRecord
+	Status           string
+	Recovery         []session.ActionRecord
+	InterruptedTurns []session.TurnRecord
 }
 
 // RuntimeInfo describes the configured runtime for host and TUI presentation.

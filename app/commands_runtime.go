@@ -576,6 +576,8 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	m.Model.SessionCatalog = nil
 	m.Model.InputHistory = nil
 	m.Model.LeafID = strings.TrimSpace(msg.leafID)
+	m.Model.Recovery = nil
+	m.Model.InterruptedTurns = nil
 	if catalog, ok := msg.runtime.Handles.Runner.(agent.SessionCatalog); ok {
 		m.Model.SessionCatalog = catalog
 	}
@@ -585,8 +587,10 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	if msg.runtime.Handles.Info != nil {
 		boot := msg.runtime.Handles.Info.Bootstrap()
 		m.Model.Recovery = append([]session.ActionRecord(nil), boot.Recovery...)
+		m.Model.InterruptedTurns = append([]session.TurnRecord(nil), boot.InterruptedTurns...)
 	}
 	m.Model.RecoveryRequest = 0
+	m.Model.InterruptedTurnRequest = 0
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
 	if msg.keybindings != nil {
 		m.Keybindings = msg.keybindings

@@ -304,6 +304,15 @@ type ActionRecovery interface {
 	ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error)
 }
 
+// TurnRecovery is the optional runtime capability for inspecting and
+// explicitly settling turns recovered from an interrupted process. Interrupted
+// turns are never replayed as conversation; the user must choose whether to
+// discard their durable recovery evidence.
+type TurnRecovery interface {
+	InterruptedTurns(ctx context.Context) ([]session.TurnRecord, error)
+	AbortInterruptedTurn(ctx context.Context, turnID, reason string) (session.TurnRecord, error)
+}
+
 // ProcessRecovery is the startup-only capability that reconciles durable
 // process identities before action evidence is presented. It is separate from
 // ActionRecovery so frontends and test doubles that only display/reconcile

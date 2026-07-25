@@ -242,6 +242,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 	case actionReconciledMsg:
 		next, cmd := m.handleActionReconciled(msg)
 		return next, cmd, true
+
+	case interruptedTurnAbortedMsg:
+		next, cmd := m.handleInterruptedTurnAborted(msg)
+		return next, cmd, true
 	}
 
 	return m, nil, false

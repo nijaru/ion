@@ -45,6 +45,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/rewind", Description: "Preview or restore a workspace checkpoint", Args: "[checkpoint-id [--apply]]", Idle: SlashCommandIdleAlways},
 	{Name: "/status", Description: "Show runtime status", Idle: -1},
 	{Name: "/actions", Description: "List or reconcile unsettled external actions", Args: "[reconcile <action-id> <completed|failed> <evidence>]", Idle: SlashCommandIdleWithArgs},
+	{Name: "/turns", Description: "List or discard interrupted turns", Args: "[abort <turn-id>]", Idle: SlashCommandIdleWithArgs},
 	{Name: "/changelog", Description: "Show changelog", Idle: -1},
 	{Name: "/skills", Description: "List or search skills", Idle: -1},
 	{Name: "/new", Description: "Start a new session"},

@@ -148,6 +148,7 @@ type smokeBackend struct {
 	mode   string
 	events chan agent.EventEnvelope
 	cfg    *config.Config
+	boot   app.Bootstrap
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -182,6 +183,9 @@ func (b *smokeBackend) Model() string {
 func (b *smokeBackend) ContextLimit() int { return 262144 }
 
 func (b *smokeBackend) Bootstrap() app.Bootstrap {
+	if b.boot.Status != "" || len(b.boot.InterruptedTurns) > 0 || len(b.boot.Recovery) > 0 {
+		return b.boot
+	}
 	return app.Bootstrap{Status: "[smoke] ready"}
 }
 

@@ -172,6 +172,9 @@ func runtimeStatusSummary(m Model) string {
 	if recovery := actionRecoverySummary(m.Model.Recovery); recovery != "" {
 		lines = append(lines, recovery)
 	}
+	if interrupted := interruptedTurnSummary(m.Model.InterruptedTurns); interrupted != "" {
+		lines = append(lines, interrupted)
+	}
 	if provider := m.runtimeProvider(); provider != "" {
 		lines = append(lines, "Provider: "+llm.DisplayName(provider)+" ("+provider+")")
 	}
@@ -224,6 +227,28 @@ func actionRecoverySummary(actions []session.ActionRecord) string {
 	}
 	if len(actions) > limit {
 		lines = append(lines, fmt.Sprintf("- ... and %d more; see /actions", len(actions)-limit))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func interruptedTurnSummary(turns []session.TurnRecord) string {
+	if len(turns) == 0 {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("Interrupted turns: %d retained and excluded from replay; use /turns to inspect", len(turns))}
+	limit := min(len(turns), 8)
+	for _, turn := range turns[:limit] {
+		input := strings.Join(strings.Fields(turn.Input), " ")
+		if input == "" {
+			input = "(no input)"
+		}
+		if len(input) > 120 {
+			input = input[:120] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", turn.ID, input))
+	}
+	if len(turns) > limit {
+		lines = append(lines, fmt.Sprintf("- ... and %d more; see /turns", len(turns)-limit))
 	}
 	return strings.Join(lines, "\n")
 }

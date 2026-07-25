@@ -538,10 +538,27 @@ func openRuntime(
 	if runtime, ok := info.(*runtimeInfo); ok {
 		runtime.recovery = append([]session.ActionRecord(nil), unsettled...)
 	}
+	turnRecovery, ok := any(harness).(agent.TurnRecovery)
+	if !ok {
+		return nil, nil, nil, closeUnusableRuntime(errors.New("runtime does not support interrupted-turn recovery"))
+	}
+	interruptedTurns, interruptedErr := turnRecovery.InterruptedTurns(ctx)
+	if interruptedErr != nil {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("load interrupted turns: %w", interruptedErr))
+	}
+	if runtime, ok := info.(*runtimeInfo); ok {
+		runtime.interruptedTurns = append([]session.TurnRecord(nil), interruptedTurns...)
+	}
 	if len(unsettled) > 0 && !interactive {
 		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf(
 			"%d unsettled external action(s) require interactive verification before print mode",
 			len(unsettled),
+		))
+	}
+	if len(interruptedTurns) > 0 && !interactive {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf(
+			"%d interrupted turn(s) require interactive recovery before print mode; use /turns",
+			len(interruptedTurns),
 		))
 	}
 	// Resume only after every fallible runtime-materialization and recovery

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nijaru/ion/session"
 )
 
 func TestRuntimeSwitchInstallsHarnessRunner(t *testing.T) {
@@ -14,6 +16,8 @@ func TestRuntimeSwitchInstallsHarnessRunner(t *testing.T) {
 	oldRunner := &stubRunner{}
 	newRunner := &stubRunner{}
 	model.Model.Runner = oldRunner
+	model.Model.Recovery = []session.ActionRecord{{ID: "old-action"}}
+	model.Model.InterruptedTurns = []session.TurnRecord{{ID: "old-turn", State: session.TurnInterrupted}}
 
 	model, _ = model.handleRuntimeSwitched(runtimeSwitchedMsg{
 		switchID: 1,
@@ -22,6 +26,9 @@ func TestRuntimeSwitchInstallsHarnessRunner(t *testing.T) {
 	})
 	if model.Model.Runner != newRunner {
 		t.Fatalf("runner = %p, want switched harness %p", model.Model.Runner, newRunner)
+	}
+	if len(model.Model.Recovery) != 0 || len(model.Model.InterruptedTurns) != 0 {
+		t.Fatalf("runtime replacement retained old recovery projection: actions=%#v turns=%#v", model.Model.Recovery, model.Model.InterruptedTurns)
 	}
 }
 

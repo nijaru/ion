@@ -160,6 +160,7 @@ var (
 	_ Compactor               = (*Controller)(nil)
 	_ ResourceOwner           = (*Controller)(nil)
 	_ ActionRecovery          = (*Controller)(nil)
+	_ TurnRecovery            = (*Controller)(nil)
 	_ ProcessRecovery         = (*Controller)(nil)
 )
 
@@ -227,6 +228,10 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleReconcileAction(cmd)
 	case *RecoverProcessActionsCmd:
 		c.handleRecoverProcessActions(cmd)
+	case *InterruptedTurnsCmd:
+		c.handleInterruptedTurns(cmd)
+	case *AbortInterruptedTurnCmd:
+		c.handleAbortInterruptedTurn(cmd)
 	case *SubscribeCmd:
 		c.handleSubscribe(cmd)
 	case *CompactCmd:
@@ -348,6 +353,10 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, ReconcileActionResult{Err: ErrRuntimeClosed})
 	case *RecoverProcessActionsCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
+	case *InterruptedTurnsCmd:
+		sendResult(cmd.Reply, InterruptedTurnsResult{Err: ErrRuntimeClosed})
+	case *AbortInterruptedTurnCmd:
+		sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: ErrRuntimeClosed})
 	}
 }
 

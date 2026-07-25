@@ -154,17 +154,30 @@ func TestRuntimeInfoBootstrapSurfacesUnsettledActions(t *testing.T) {
 		Tool:  "bash",
 		State: session.ActionIndeterminate,
 	}}
+	native.interruptedTurns = []session.TurnRecord{{
+		ID: "turn-1", State: session.TurnInterrupted, Input: "draft after restart",
+	}}
 
 	boot := info.Bootstrap()
 	if !strings.Contains(boot.Status, "1 unsettled external action(s); use /actions to inspect") {
 		t.Fatalf("bootstrap status = %q, want recovery warning", boot.Status)
 	}
+	if !strings.Contains(boot.Status, "1 interrupted turn(s) retained; use /turns to inspect") {
+		t.Fatalf("bootstrap status = %q, want interrupted-turn warning", boot.Status)
+	}
 	if len(boot.Recovery) != 1 || boot.Recovery[0].ID != "action-1" {
 		t.Fatalf("bootstrap recovery = %#v, want copied action", boot.Recovery)
+	}
+	if len(boot.InterruptedTurns) != 1 || boot.InterruptedTurns[0].ID != "turn-1" {
+		t.Fatalf("bootstrap interrupted turns = %#v, want copied turn", boot.InterruptedTurns)
 	}
 	boot.Recovery[0].ID = "mutated"
 	if native.recovery[0].ID != "action-1" {
 		t.Fatal("bootstrap recovery aliases runtime state")
+	}
+	boot.InterruptedTurns[0].ID = "mutated"
+	if native.interruptedTurns[0].ID != "turn-1" {
+		t.Fatal("bootstrap interrupted turns aliases runtime state")
 	}
 }
 
@@ -238,5 +251,48 @@ func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledActionWithoutMovingLeaf(
 	}
 	if leaf := store.GetLeafID(); leaf != oldID {
 		t.Fatalf("failed runtime replacement moved leaf to %q, want %q", leaf, oldID)
+	}
+}
+
+func TestOpenRuntimeFailsClosedForPrintModeWithInterruptedTurn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "ion.db")
+	initial, err := session.NewSQLiteStore(path, "ion")
+	if err != nil {
+		t.Fatalf("open initial store: %v", err)
+	}
+	if _, err := initial.BeginTurn(context.Background(), "interrupted-turn", "draft after restart", nil, "context-1"); err != nil {
+		t.Fatalf("begin interrupted turn: %v", err)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatalf("close initial store: %v", err)
+	}
+	store, err := session.NewSQLiteStore(path, "ion")
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store.Close()
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, sess, runner, err := openRuntime(
+		context.Background(),
+		store,
+		jobs,
+		t.TempDir(),
+		"main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
+		"",
+		false,
+		"",
+		"",
+		false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "interrupted turn") {
+		t.Fatalf("openRuntime error = %v, want print-mode interrupted-turn recovery error", err)
+	}
+	if sess != nil || runner != nil {
+		t.Fatalf("failed runtime handles = (%v, %v), want nil", sess, runner)
 	}
 }

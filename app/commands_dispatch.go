@@ -84,6 +84,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleStatusCommand(fields)
 	case "/actions":
 		return m.handleActionsCommand(fields)
+	case "/turns":
+		return m.handleTurnsCommand(fields)
 	case "/changelog":
 		return m.handleChangelogCommand(fields)
 	case "/skills":
@@ -149,7 +151,8 @@ func (m Model) localCommandBusy() bool {
 		m.Model.RuntimeSwitchRequest != 0 ||
 		m.Picker.SetupSaveRequest != 0 ||
 		m.Model.SettingsRequest != 0 ||
-		m.Model.RecoveryRequest != 0
+		m.Model.RecoveryRequest != 0 ||
+		m.Model.InterruptedTurnRequest != 0
 }
 
 func (m Model) localCommandBusyMessage(action string) string {
@@ -164,6 +167,9 @@ func (m Model) localCommandBusyMessage(action string) string {
 	}
 	if m.Model.RecoveryRequest != 0 {
 		return "Wait for action reconciliation to finish before " + action + "."
+	}
+	if m.Model.InterruptedTurnRequest != 0 {
+		return "Wait for interrupted-turn recovery to finish before " + action + "."
 	}
 	return "Finish or cancel the current turn before " + action + "."
 }

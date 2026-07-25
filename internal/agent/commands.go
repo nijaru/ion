@@ -226,6 +226,37 @@ type RecoverProcessActionsCmd struct {
 
 func (RecoverProcessActionsCmd) command() {}
 
+// InterruptedTurnsCmd reads durable turns that were recovered after an
+// interrupted process. The runtime owns the storage boundary; frontends do
+// not query the store directly.
+type InterruptedTurnsCmd struct {
+	Ctx   context.Context
+	Reply chan<- InterruptedTurnsResult
+}
+
+func (InterruptedTurnsCmd) command() {}
+
+type InterruptedTurnsResult struct {
+	Turns []session.TurnRecord
+	Err   error
+}
+
+// AbortInterruptedTurnCmd explicitly settles one recovered turn without
+// adding its input or staged entries to model-visible conversation history.
+type AbortInterruptedTurnCmd struct {
+	Ctx    context.Context
+	TurnID string
+	Reason string
+	Reply  chan<- AbortInterruptedTurnResult
+}
+
+func (AbortInterruptedTurnCmd) command() {}
+
+type AbortInterruptedTurnResult struct {
+	Turn session.TurnRecord
+	Err  error
+}
+
 // --- Session administration commands ---
 
 // SubscribeCmd opens an independent bounded event stream.
