@@ -148,9 +148,6 @@ type stubRunner struct {
 	promptTexts  []string
 	promptImages [][]session.ImageContent
 	promptErr    error
-	appends      []session.Entry
-	appendErr    error
-	appendCtxs   []context.Context
 	navigates    int
 	navigateID   string
 	navigateOpts agent.NavigateOptions
@@ -191,19 +188,8 @@ func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel)
 	r.thinking = append(r.thinking, level)
 	return nil
 }
-func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error     { return nil }
-func (r *stubRunner) ActivateTools(context.Context, []string) error { return nil }
-func (r *stubRunner) PersistEntry(ctx context.Context, entry session.Entry) error {
-	r.appendCtxs = append(r.appendCtxs, ctx)
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if r.appendErr != nil {
-		return r.appendErr
-	}
-	r.appends = append(r.appends, entry)
-	return nil
-}
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error                 { return nil }
+func (r *stubRunner) ActivateTools(context.Context, []string) error             { return nil }
 func (r *stubRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
 func (r *stubRunner) ForkSession(context.Context, string) (string, error)       { return "", nil }
 func (r *stubRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {

@@ -222,7 +222,6 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 		waitForAcceptanceOutput(t, output, "Canceled by user", "cancel settlement")
 		waitForAcceptanceIdle(t, harness)
-		time.Sleep(25 * time.Millisecond)
 		program.Quit()
 		model := waitAcceptanceProgram(t, result)
 		if model.InFlight.Thinking {
@@ -247,6 +246,89 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		}
 		closeAcceptanceHarness(t, harness, store)
 	})
+}
+
+func TestDeterministicTUIAcceptanceFailureRecovery(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	t.Run("cancel then success", func(t *testing.T) {
+		runAcceptanceFailureRecovery(t, acceptanceCancelThenComplete, "Canceled by user", "after-cancel-output")
+	})
+
+	t.Run("provider error then success", func(t *testing.T) {
+		runAcceptanceFailureRecovery(t, acceptanceErrorThenComplete, "deterministic provider failure", "after-error-output")
+	})
+}
+
+func runAcceptanceFailureRecovery(t *testing.T, mode acceptanceMode, firstNotice, secondOutput string) {
+	t.Helper()
+	path := t.TempDir() + "/recovery.db"
+	provider := newAcceptanceProvider(mode)
+	store, sess, harness := newAcceptanceHarness(t, path, provider, false)
+	program, output, result := startAcceptanceProgram(t, store, sess, harness)
+
+	program.Send(tea.KeyPressMsg{Text: "first turn must fail"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if mode == acceptanceCancelThenComplete {
+		waitAcceptanceSignal(t, provider.streamStarted, "recovery cancellation stream start")
+		waitForAcceptanceOutputAny(t, output, "recovery cancelable TUI state", "Submitting...", "Streaming...")
+		program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	}
+	waitForAcceptanceOutput(t, output, firstNotice, "first failure settlement")
+	waitForAcceptanceIdle(t, harness)
+	aborted, err := store.LatestTurn(context.Background())
+	if err != nil {
+		t.Fatalf("read aborted turn: %v", err)
+	}
+	if aborted.State != session.TurnAborted || strings.TrimSpace(aborted.Error) == "" {
+		t.Fatalf("aborted turn = %+v, want durable aborted state with error", aborted)
+	}
+	if got := strings.TrimSpace(store.GetLeafID()); got != "" {
+		t.Fatalf("leaf after aborted turn = %q, want unchanged empty leaf", got)
+	}
+
+	program.Send(tea.KeyPressMsg{Text: "second turn must recover"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, secondOutput, "recovered assistant output")
+	waitForAcceptanceIdle(t, harness)
+	leafID := strings.TrimSpace(store.GetLeafID())
+	if leafID == "" {
+		t.Fatal("recovered turn did not advance the durable leaf")
+	}
+	leaf, err := store.GetEntry(context.Background(), leafID)
+	if err != nil {
+		t.Fatalf("read recovered leaf: %v", err)
+	}
+	message, ok := leaf.(*session.MessageEntry)
+	if !ok {
+		t.Fatalf("recovered leaf = %T, want assistant message", leaf)
+	}
+	assistant, ok := message.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(session.EntryContent(leaf), secondOutput) || assistant.StopReason != session.StopReasonEndTurn {
+		t.Fatalf("recovered leaf = %#v, want successful assistant output", leaf)
+	}
+
+	program.Quit()
+	_ = waitAcceptanceProgram(t, result)
+	closeAcceptanceHarness(t, harness, store)
+
+	reopened, err := session.NewSQLiteStore(path, "acceptance")
+	if err != nil {
+		t.Fatalf("reopen recovery store: %v", err)
+	}
+	defer reopened.Close()
+	if got := strings.TrimSpace(reopened.GetLeafID()); got != leafID {
+		t.Fatalf("reopened recovery leaf = %q, want %q", got, leafID)
+	}
+	branch, err := reopened.Branch(context.Background())
+	if err != nil {
+		t.Fatalf("read recovered branch: %v", err)
+	}
+	for _, entry := range branch {
+		if strings.Contains(session.EntryContent(entry), firstNotice) {
+			t.Fatalf("aborted failure leaked into replay branch: %#v", entry)
+		}
+	}
 }
 
 func TestDeterministicTUIAcceptanceApproval(t *testing.T) {
@@ -853,11 +935,13 @@ func (p *acceptanceTextProvider) stream(context.Context, *llm.Request) (llm.Stre
 type acceptanceMode string
 
 const (
-	acceptanceComplete acceptanceMode = "complete"
-	acceptanceResume   acceptanceMode = "resume"
-	acceptanceCancel   acceptanceMode = "cancel"
-	acceptanceError    acceptanceMode = "error"
-	acceptanceApproval acceptanceMode = "approval"
+	acceptanceComplete           acceptanceMode = "complete"
+	acceptanceResume             acceptanceMode = "resume"
+	acceptanceCancel             acceptanceMode = "cancel"
+	acceptanceError              acceptanceMode = "error"
+	acceptanceCancelThenComplete acceptanceMode = "cancel_then_complete"
+	acceptanceErrorThenComplete  acceptanceMode = "error_then_complete"
+	acceptanceApproval           acceptanceMode = "approval"
 )
 
 type acceptanceProvider struct {
@@ -914,11 +998,17 @@ func (p *acceptanceProvider) stream(ctx context.Context, req *llm.Request) (llm.
 		}}}, nil
 	case acceptanceResume:
 		return &acceptanceStream{chunks: []*llm.Chunk{{Content: "resumed-output", StopReason: "stop"}}}, nil
-	case acceptanceCancel:
+	case acceptanceCancel, acceptanceCancelThenComplete:
+		if p.mode == acceptanceCancelThenComplete && call > 1 {
+			return &acceptanceStream{chunks: []*llm.Chunk{{Content: "after-cancel-output", StopReason: "stop"}}}, nil
+		}
 		p.streamOnce.Do(func() { close(p.streamStarted) })
 		<-ctx.Done()
 		return nil, ctx.Err()
-	case acceptanceError:
+	case acceptanceError, acceptanceErrorThenComplete:
+		if p.mode == acceptanceErrorThenComplete && call > 1 {
+			return &acceptanceStream{chunks: []*llm.Chunk{{Content: "after-error-output", StopReason: "stop"}}}, nil
+		}
 		return nil, errors.New("deterministic provider failure")
 	case acceptanceApproval:
 		if call == 1 {

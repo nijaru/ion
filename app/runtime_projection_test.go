@@ -252,21 +252,6 @@ func TestStaleTurnCommandsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	if got := staleQueued.Input.Composer.Value(); got != "new draft" {
 		t.Fatalf("stale queued turn changed composer to %q", got)
 	}
-
-	model.Progress.Status = "new runtime"
-	next, cmd, handled := model.dispatchAppControlMessage(persistEntryResultMsg{
-		generation: 1,
-		err:        errors.New("old persistence failed"),
-	})
-	if !handled {
-		t.Fatal("stale persistence result was not handled")
-	}
-	if cmd != nil {
-		t.Fatal("stale persistence result returned a command")
-	}
-	if got := next.Progress.Status; got != "new runtime" {
-		t.Fatalf("stale persistence result changed status to %q", got)
-	}
 }
 
 func TestStaleSessionCostCannotRenderNewRuntime(t *testing.T) {

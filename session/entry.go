@@ -75,8 +75,9 @@ type SessionInfoEntry struct {
 	LastPreview string
 }
 
-// CustomEntry is an extension point for auxiliary persisted data
-// (token-usage rows, status, subagent links).
+// CustomEntry is an extension point for auxiliary persisted data with an
+// explicit owner and reader. Opaque custom entries are excluded from model
+// context projection.
 type CustomEntry struct {
 	EntryBase
 	Type string

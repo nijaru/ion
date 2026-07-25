@@ -196,23 +196,13 @@ type ErrorSettlementInput struct {
 }
 
 type ErrorSettlementDecision struct {
-	PersistSystem bool
-	AwaitNext     bool
-	DisplayError  string
-	EntryContent  string
+	AwaitNext    bool
+	DisplayError string
+	EntryContent string
 }
 
 func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
 	return ErrorSettlementDecision{DisplayError: input.Err.Error()}
-}
-
-// --- Store persistence entries ---
-
-type StoreSystem struct {
-	session.EntryBase
-	Type    string
-	Content string
-	TS      int64
 }
 
 // --- Session tree ---

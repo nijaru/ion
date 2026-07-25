@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,11 +26,6 @@ type runtimeLeafSnapshotMsg struct {
 }
 
 type runtimeCatalogUpdateMsg struct {
-	generation uint64
-	err        error
-}
-
-type persistEntryResultMsg struct {
 	generation uint64
 	err        error
 }
@@ -329,11 +323,6 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
-		m.persistEntryCmd("persist cancellation", StoreSystem{
-			Type:    "system",
-			Content: session.EntryText(entry),
-			TS:      now(),
-		}),
 		cancelTurnCmd(m.Model.Runner, m.Model.EventGeneration),
 	)
 }
@@ -355,7 +344,7 @@ func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) 
 		return m, nil
 	}
 	if msg.err != nil {
-		return m, persistErrorCmd("cancel turn", msg.err)
+		return m, cmdError(fmt.Sprintf("cancel turn: %v", msg.err))
 	}
 	return m, nil
 }
@@ -583,14 +572,7 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 // handleStreamClosed displays a stream-closed system entry.
 func (m Model) handleStreamClosed() (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
-	var cmds []tea.Cmd
-	cmds = append(cmds, m.terminalCommit().Entries(entryIf))
-	cmds = append(cmds, m.persistEntryCmd("persist stream close error", StoreSystem{
-		Type:    "system",
-		Content: session.EntryText(entryIf),
-		TS:      now(),
-	}))
-	return m, sequenceCmds(cmds...)
+	return m, m.terminalCommit().Entries(entryIf)
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
@@ -603,13 +585,6 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 
 	m.turnReducer().FailTurn(decision.DisplayError, time.Now())
-	if decision.PersistSystem {
-		cmds = append(cmds, m.persistEntryCmd("persist session error", StoreSystem{
-			Type:    "system",
-			Content: session.EntryText(entry),
-			TS:      now(),
-		}))
-	}
 
 	if decision.AwaitNext {
 		cmds = append(cmds, m.awaitSessionEvent())
@@ -815,67 +790,6 @@ func (c runtimeRequestController) clear() {
 	}
 }
 
-type persistenceController struct {
-	runner     agent.Runtime
-	generation uint64
-	ctx        context.Context
-}
-
-func (m Model) persistenceController() persistenceController {
-	return persistenceController{
-		runner:     m.Model.Runner,
-		generation: m.Model.EventGeneration,
-		ctx:        m.runtimeOperationContext(),
-	}
-}
-
-func (c persistenceController) appendEntry(action string, raw any) tea.Cmd {
-	if c.runner == nil {
-		return nil
-	}
-	entry, err := normalizePersistedEntry(raw)
-	if err != nil {
-		return persistEntryErrorCmd(action, c.generation, err)
-	}
-	return func() tea.Msg {
-		persister, ok := c.runner.(agent.EntryPersister)
-		if !ok {
-			return persistEntryResultMsg{
-				generation: c.generation,
-				err:        fmt.Errorf("%s: runtime does not support entry persistence", action),
-			}
-		}
-		if err := persister.PersistEntry(c.ctx, entry); err != nil {
-			return persistEntryResultMsg{
-				generation: c.generation,
-				err:        fmt.Errorf("%s: %w", action, err),
-			}
-		}
-		return nil
-	}
-}
-
-func persistEntryErrorCmd(action string, generation uint64, err error) tea.Cmd {
-	if err == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		return persistEntryResultMsg{
-			generation: generation,
-			err:        fmt.Errorf("%s: %w", action, err),
-		}
-	}
-}
-
-func persistErrorCmd(action string, err error) tea.Cmd {
-	if err == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
-	}
-}
-
 func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	// This command is scheduled after Prompt completion. TurnEnd is emitted
 	// before the controller commits the durable turn, so refreshing here keeps
@@ -996,41 +910,6 @@ func (m Model) currentSessionModelName() string {
 		return provider
 	}
 	return provider + "/" + model
-}
-
-func (m Model) persistEntryCmd(action string, entry any) tea.Cmd {
-	return m.persistenceController().appendEntry(action, entry)
-}
-
-func normalizePersistedEntry(raw any) (session.Entry, error) {
-	if entry, ok := raw.(session.Entry); ok {
-		return entry, nil
-	}
-
-	var (
-		typeName string
-		parentID string
-	)
-	switch entry := raw.(type) {
-	case StoreSystem:
-		typeName, parentID = "store_system", entry.EntryBase.ParentID
-	default:
-		return nil, fmt.Errorf("unsupported persistence entry %T", raw)
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s: %w", typeName, err)
-	}
-	now := time.Now()
-	return &session.CustomEntry{
-		EntryBase: session.EntryBase{
-			ID:        fmt.Sprintf("%s-%d", typeName, now.UnixNano()),
-			ParentID:  parentID,
-			Timestamp: now,
-		},
-		Type: typeName,
-		Data: data,
-	}, nil
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
