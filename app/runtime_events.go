@@ -196,7 +196,6 @@ type ErrorSettlementInput struct {
 }
 
 type ErrorSettlementDecision struct {
-	RoutingStop   *ErrorRoutingStop
 	PersistSystem bool
 	AwaitNext     bool
 	DisplayError  string
@@ -205,29 +204,6 @@ type ErrorSettlementDecision struct {
 
 func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
 	return ErrorSettlementDecision{DisplayError: input.Err.Error()}
-}
-
-type ErrorRoutingStop struct {
-	Reason     string
-	StopReason string
-}
-
-// StoreRoutingDecision persists a routing decision entry.
-type StoreRoutingDecision struct {
-	session.EntryBase
-	Type           string
-	Decision       string
-	Reason         string
-	ModelSlot      string
-	Provider       string
-	Model          string
-	Reasoning      string
-	MaxSessionCost float64
-	MaxTurnCost    float64
-	SessionCost    float64
-	TurnCost       float64
-	StopReason     string
-	TS             time.Time
 }
 
 // --- Store persistence entries ---

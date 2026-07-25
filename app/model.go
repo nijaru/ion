@@ -877,31 +877,6 @@ func (m Model) costBudgetLabel(cost float64) string {
 	return fmt.Sprintf("$%.3f/$%.3f", cost, m.Model.Config.MaxSessionCost)
 }
 
-func (m Model) routingDecision(decision, reason, stopReason string) StoreRoutingDecision {
-	provider := m.runtimeProvider()
-	model := m.runtimeModel()
-	var maxSessionCost, maxTurnCost float64
-	if m.Model.Config != nil {
-		maxSessionCost = m.Model.Config.MaxSessionCost
-		maxTurnCost = m.Model.Config.MaxTurnCost
-	}
-	return StoreRoutingDecision{
-		Type:           "routing_decision",
-		Decision:       decision,
-		Reason:         reason,
-		ModelSlot:      m.activePreset().String(),
-		Provider:       provider,
-		Model:          model,
-		Reasoning:      normalizeThinkingValue(m.Progress.ReasoningEffort),
-		MaxSessionCost: maxSessionCost,
-		MaxTurnCost:    maxTurnCost,
-		SessionCost:    m.Progress.TotalCost,
-		TurnCost:       m.Progress.CurrentTurnCost,
-		StopReason:     stopReason,
-		TS:             time.Now(),
-	}
-}
-
 func (m Model) runtimeHeaderLine(_ RuntimeInfo) string {
 	version := strings.TrimSpace(m.App.Version)
 	if version == "" {

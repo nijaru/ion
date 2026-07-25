@@ -51,6 +51,20 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	if !provider.requestContains("steer-now") {
 		t.Fatal("busy input was not delivered to the next provider request")
 	}
+	branchBeforeTree, err := store.Branch(context.Background())
+	if err != nil {
+		t.Fatalf("read persisted acceptance branch: %v", err)
+	}
+	finalOutputPersisted := false
+	for _, entry := range branchBeforeTree {
+		if strings.Contains(session.EntryContent(entry), "final-output") {
+			finalOutputPersisted = true
+			break
+		}
+	}
+	if !finalOutputPersisted {
+		t.Fatal("final assistant output was rendered but not persisted in the session branch")
+	}
 
 	// Exercise the actual tree picker: current leaf -> parent -> no-summary
 	// navigation -> replay. The store-backed projection is what makes this
@@ -58,9 +72,41 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	waitForAcceptanceIdle(t, harness)
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitForAcceptanceOutput(t, output, "routing_ [current]", "loaded session tree")
-	for range 5 {
+	currentLeafID := strings.TrimSpace(store.GetLeafID())
+	if len(currentLeafID) < 8 {
+		t.Fatalf("acceptance session leaf = %q, want a durable entry ID", currentLeafID)
+	}
+	waitForAcceptanceOutput(t, output, currentLeafID[:8]+" [current]", "loaded session tree")
+	entries, err := store.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("read acceptance entries: %v", err)
+	}
+	byID := make(map[string]session.Entry, len(entries))
+	for _, entry := range entries {
+		byID[entry.ID()] = entry
+	}
+	currentEntry, ok := byID[currentLeafID]
+	if !ok {
+		t.Fatalf("acceptance session leaf %q is missing from the persisted tree", currentLeafID)
+	}
+	var lineage []session.Entry
+	for parentID := currentEntry.ParentID(); parentID != ""; {
+		parent, ok := byID[parentID]
+		if !ok {
+			t.Fatalf("acceptance tree parent %q is missing", parentID)
+		}
+		lineage = append(lineage, parent)
+		parentID = parent.ParentID()
+	}
+	if len(lineage) == 0 {
+		t.Fatalf("acceptance session leaf %q has no persisted lineage", currentLeafID)
+	}
+	// The picker renders the root first after the current leaf. Walk to the
+	// direct parent so the replay summary retains all earlier tool context.
+	// Send is asynchronous; acknowledge each cursor move before the next one.
+	for index := len(lineage) - 1; index >= 0; index-- {
 		program.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+		waitForAcceptanceTreeCursor(t, output, lineage[index])
 	}
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitForAcceptanceOutput(t, output, "Summarize branch?", "branch summary prompt")
@@ -97,8 +143,8 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	program2.Send(tea.KeyPressMsg{Text: "resume from the persisted branch"})
 	program2.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitForAcceptanceOutput(t, output2, "resumed-output", "resumed assistant output")
-	if !provider2.requestContains("final-output") || !provider2.requestContains("tool-output") {
-		t.Fatalf("resumed provider request did not contain the persisted branch context: %s", provider2.requestSummary())
+	if !provider2.requestContains("tool-output") {
+		t.Fatalf("resumed provider request did not contain the selected branch context: %s", provider2.requestSummary())
 	}
 	program2.Quit()
 	_ = waitAcceptanceProgram(t, result2)
@@ -364,7 +410,7 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, resumedProvider.started, "resumed runtime provider")
 	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
-	postResumeLeafID := waitForAcceptanceSessionInfo(t, store, store)
+	postResumeLeafID := waitForAcceptanceSessionInfoAfter(t, store, store, resumeResult.leafID)
 	waitForAcceptanceIdle(t, resumeResult.runner)
 	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
@@ -503,13 +549,22 @@ func waitAcceptanceRuntimeSwitch(
 }
 
 func waitForAcceptanceSessionInfo(t *testing.T, catalog agent.SessionCatalog, store session.Store) string {
+	return waitForAcceptanceSessionInfoAfter(t, catalog, store, "")
+}
+
+func waitForAcceptanceSessionInfoAfter(
+	t *testing.T,
+	catalog agent.SessionCatalog,
+	store session.Store,
+	previousLeafID string,
+) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	lastLeafID := ""
 	for time.Now().Before(deadline) {
 		leafID := strings.TrimSpace(store.GetLeafID())
 		lastLeafID = leafID
-		if leafID == "" {
+		if leafID == "" || leafID == previousLeafID {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -575,6 +630,27 @@ func waitForAcceptanceOutput(t *testing.T, output *acceptanceBuffer, needle, lab
 	}
 	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, needle, output.String())
 	return ""
+}
+
+func waitForAcceptanceTreeCursor(t *testing.T, output *acceptanceBuffer, entry session.Entry) {
+	t.Helper()
+	title := session.EntryTitle(entry)
+	if title == "" {
+		title = entry.ID()
+		if len(title) > 8 {
+			title = title[:8]
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(ansi.Strip(output.String()), "\n") {
+			if strings.Contains(line, "›") && strings.Contains(line, title) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for tree cursor on %q\noutput:\n%s", title, output.String())
 }
 
 func waitForAcceptanceOutputAfter(

@@ -145,19 +145,11 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		if historyChanged {
 			historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
 		}
-		routingCmd := m.persistEntryCmd(
-			"persist routing decision",
-			m.routingDecision("use_model", "active_preset", ""),
-		)
-		// The routing decision is an auxiliary durable entry appended after the
-		// completed turn. Refresh the selected leaf only after that write so a
-		// subsequent runtime replacement resumes the complete branch.
 		leafCmd := m.persistCurrentSessionInfoCmd()
-		routingAndLeafCmd := sequenceCmds(routingCmd, leafCmd)
 		if msg.rearm || m.InFlight.Thinking {
-			return m, batchCmds(routingAndLeafCmd, historyCmd, m.awaitSessionEvent())
+			return m, batchCmds(leafCmd, historyCmd, m.awaitSessionEvent())
 		}
-		return m, sequenceCmds(routingAndLeafCmd, historyCmd)
+		return m, sequenceCmds(leafCmd, historyCmd)
 	}
 	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
@@ -610,19 +602,6 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 
-	if decision.RoutingStop != nil {
-		cmds = append(
-			cmds,
-			m.persistEntryCmd(
-				"persist routing stop",
-				m.routingDecision(
-					"stop",
-					decision.RoutingStop.Reason,
-					decision.RoutingStop.StopReason,
-				),
-			),
-		)
-	}
 	m.turnReducer().FailTurn(decision.DisplayError, time.Now())
 	if decision.PersistSystem {
 		cmds = append(cmds, m.persistEntryCmd("persist session error", StoreSystem{
@@ -909,8 +888,8 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	// This command is scheduled after Prompt completion. TurnEnd is emitted
 	// before the controller commits the durable turn, so refreshing here keeps
-	// catalog metadata on the final committed leaf (including post-turn routing
-	// entries) instead of publishing a response-only predecessor.
+	// catalog metadata on the final committed leaf instead of publishing a
+	// response-only predecessor.
 	catalog := m.Model.SessionCatalog
 	projectionReader, hasProjection := m.Model.Runner.(agent.SessionProjectionReader)
 	reader, hasTree := m.Model.Runner.(agent.SessionReader)
@@ -1042,8 +1021,6 @@ func normalizePersistedEntry(raw any) (session.Entry, error) {
 		parentID string
 	)
 	switch entry := raw.(type) {
-	case StoreRoutingDecision:
-		typeName, parentID = "routing_decision", entry.EntryBase.ParentID
 	case StoreSystem:
 		typeName, parentID = "store_system", entry.EntryBase.ParentID
 	case StoreTokenUsage:

@@ -76,7 +76,7 @@ type SessionInfoEntry struct {
 }
 
 // CustomEntry is an extension point for auxiliary persisted data
-// (token-usage rows, status, routing decisions, subagent links).
+// (token-usage rows, status, subagent links).
 type CustomEntry struct {
 	EntryBase
 	Type string
