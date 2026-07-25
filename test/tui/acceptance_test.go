@@ -51,6 +51,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	if !provider.requestContains("steer-now") {
 		t.Fatal("busy input was not delivered to the next provider request")
 	}
+	waitForAcceptanceIdle(t, harness)
 	branchBeforeTree, err := store.Branch(context.Background())
 	if err != nil {
 		t.Fatalf("read persisted acceptance branch: %v", err)
@@ -69,13 +70,34 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	// Exercise the actual tree picker: current leaf -> parent -> no-summary
 	// navigation -> replay. The store-backed projection is what makes this
 	// work with the production SQLite store, not only with test fakes.
-	waitForAcceptanceIdle(t, harness)
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	currentLeafID := strings.TrimSpace(store.GetLeafID())
 	if len(currentLeafID) < 8 {
 		t.Fatalf("acceptance session leaf = %q, want a durable entry ID", currentLeafID)
 	}
+	leafEntry, err := store.GetEntry(context.Background(), currentLeafID)
+	if err != nil {
+		t.Fatalf("read acceptance current leaf: %v", err)
+	}
+	messageEntry, ok := leafEntry.(*session.MessageEntry)
+	if !ok {
+		t.Fatalf("acceptance current leaf = %T, want final assistant message", leafEntry)
+	}
+	assistantEntry, ok := messageEntry.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(session.EntryContent(leafEntry), "final-output") {
+		t.Fatalf("acceptance current leaf = %#v, want final assistant output", leafEntry)
+	}
+	if assistantEntry.Usage.Input != 17 || assistantEntry.Usage.Output != 9 || assistantEntry.Usage.Cost.Total != 0.0123 {
+		t.Fatalf("acceptance current leaf usage = %#v, want input=17 output=9 cost=0.0123", assistantEntry.Usage)
+	}
+	usage, err := sess.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("read acceptance branch usage: %v", err)
+	}
+	if usage.Input != 22 || usage.Output != 11 || usage.TotalTokens != 33 || usage.Cost.Total != 0.0168 {
+		t.Fatalf("acceptance branch usage = %#v, want input=22 output=11 total=33 cost=0.0168", usage)
+	}
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	waitForAcceptanceOutput(t, output, currentLeafID[:8]+" [current]", "loaded session tree")
 	entries, err := store.Entries(context.Background())
 	if err != nil {
@@ -112,6 +134,10 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	waitForAcceptanceOutput(t, output, "Summarize branch?", "branch summary prompt")
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitForAcceptanceOutput(t, output, "--- moved to branch ---", "branch replay")
+	selectedLeafID := strings.TrimSpace(store.GetLeafID())
+	if selectedLeafID == "" || selectedLeafID == currentLeafID {
+		t.Fatalf("acceptance selected leaf = %q, want a new branch-navigation leaf", selectedLeafID)
+	}
 
 	program.Quit()
 	model := waitAcceptanceProgram(t, result)
@@ -131,6 +157,21 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen acceptance store: %v", err)
 	}
+	if got := strings.TrimSpace(store2.GetLeafID()); got != selectedLeafID {
+		t.Fatalf("reopened acceptance leaf = %q, want selected branch leaf %q", got, selectedLeafID)
+	}
+	reopenedFinal, err := store2.GetEntry(context.Background(), currentLeafID)
+	if err != nil {
+		t.Fatalf("read reopened final assistant: %v", err)
+	}
+	reopenedMessage, ok := reopenedFinal.(*session.MessageEntry)
+	if !ok {
+		t.Fatalf("reopened final entry = %T, want assistant message", reopenedFinal)
+	}
+	reopenedAssistant, ok := reopenedMessage.Message.(*session.AssistantMessage)
+	if !ok || reopenedAssistant.Usage.Input != 17 || reopenedAssistant.Usage.Output != 9 || reopenedAssistant.Usage.Cost.Total != 0.0123 {
+		t.Fatalf("reopened final usage = %#v, want input=17 output=9 cost=0.0123", reopenedAssistant.Usage)
+	}
 	sess2 := session.NewSession(store2, 128)
 	harness2 := agent.NewController(agent.ControllerConfig{
 		Session:  sess2,
@@ -145,6 +186,16 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	waitForAcceptanceOutput(t, output2, "resumed-output", "resumed assistant output")
 	if !provider2.requestContains("tool-output") {
 		t.Fatalf("resumed provider request did not contain the selected branch context: %s", provider2.requestSummary())
+	}
+	if provider2.requestContains("final-output") {
+		t.Fatalf("resumed provider request retained abandoned final output: %s", provider2.requestSummary())
+	}
+	resumedUsage, err := sess2.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("read reopened selected-branch usage: %v", err)
+	}
+	if resumedUsage.Input != 5 || resumedUsage.Output != 2 || resumedUsage.TotalTokens != 7 || resumedUsage.Cost.Total != 0.0045 {
+		t.Fatalf("reopened selected-branch usage = %#v, want input=5 output=2 total=7 cost=0.0045", resumedUsage)
 	}
 	program2.Quit()
 	_ = waitAcceptanceProgram(t, result2)
@@ -853,9 +904,14 @@ func (p *acceptanceProvider) stream(ctx context.Context, req *llm.Request) (llm.
 			return &acceptanceStream{chunks: []*llm.Chunk{{
 				Calls:      []llm.Call{{ID: "call-1", Type: "function", Function: function}},
 				StopReason: "toolUse",
+				Usage:      &llm.Usage{InputTokens: 5, OutputTokens: 2, TotalTokens: 7, Cost: 0.0045},
 			}}}, nil
 		}
-		return &acceptanceStream{chunks: []*llm.Chunk{{Content: "final-output", StopReason: "stop"}}}, nil
+		return &acceptanceStream{chunks: []*llm.Chunk{{
+			Content:    "final-output",
+			StopReason: "stop",
+			Usage:      &llm.Usage{InputTokens: 17, OutputTokens: 9, TotalTokens: 26, Cost: 0.0123},
+		}}}, nil
 	case acceptanceResume:
 		return &acceptanceStream{chunks: []*llm.Chunk{{Content: "resumed-output", StopReason: "stop"}}}, nil
 	case acceptanceCancel:

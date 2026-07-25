@@ -215,15 +215,6 @@ type StoreSystem struct {
 	TS      int64
 }
 
-type StoreTokenUsage struct {
-	session.EntryBase
-	Type   string
-	Input  int
-	Output int
-	Cost   float64
-	TS     int64
-}
-
 // --- Session tree ---
 
 type SessionTree struct {

@@ -682,8 +682,9 @@ func assistantErrorText(entry session.Entry) string {
 }
 
 func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
-	// Token usage rides on MessageEnd (one per model call, including tool-use turns).
-	// Also commit the assistant to mark the turn as having an assistant response.
+	// Token usage rides on the durable assistant message (one per model call,
+	// including tool-use turns). Also commit the assistant to mark the turn as
+	// having an assistant response.
 	m.turnReducer().ApplyTokenUsage(msg.Message)
 	if _, isAssistant := msg.Message.(*session.AssistantMessage); isAssistant {
 		m.turnReducer().CommitAgentMessage(msg.Message)
@@ -701,16 +702,6 @@ func (m Model) handleMessageEnd(msg session.MessageEnd) (Model, tea.Cmd) {
 			m, cancelCmd = m.cancelRunningTurn(reason)
 			cmds = append(cmds, cancelCmd)
 		}
-	}
-	in, out, cost := session.TokenUsage(msg.Message)
-	if in > 0 || out > 0 || cost > 0 {
-		cmds = append(cmds, m.persistEntryCmd("persist token usage", StoreTokenUsage{
-			Type:   "token_usage",
-			Input:  in,
-			Output: out,
-			Cost:   cost,
-			TS:     entryUnix(msg.When()),
-		}))
 	}
 	cmds = append(cmds, m.awaitSessionEvent())
 	return m, sequenceCmds(cmds...)
@@ -1023,8 +1014,6 @@ func normalizePersistedEntry(raw any) (session.Entry, error) {
 	switch entry := raw.(type) {
 	case StoreSystem:
 		typeName, parentID = "store_system", entry.EntryBase.ParentID
-	case StoreTokenUsage:
-		typeName, parentID = "store_token_usage", entry.EntryBase.ParentID
 	default:
 		return nil, fmt.Errorf("unsupported persistence entry %T", raw)
 	}
@@ -1076,11 +1065,4 @@ func batchCmds(cmds ...tea.Cmd) tea.Cmd {
 	default:
 		return tea.Batch(filtered...)
 	}
-}
-
-func entryUnix(timestamp time.Time) int64 {
-	if timestamp.IsZero() {
-		return now()
-	}
-	return timestamp.UTC().Unix()
 }

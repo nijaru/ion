@@ -1762,6 +1762,7 @@ func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model, thinking 
 			CacheRead:   resp.Usage.CacheReadTokens,
 			CacheWrite:  resp.Usage.CacheCreationTokens,
 			TotalTokens: resp.Usage.TotalTokens,
+			Cost:        session.Cost{Total: resp.Usage.Cost},
 		},
 		Timestamp:     time.Now(),
 		ThinkingLevel: thinking,
