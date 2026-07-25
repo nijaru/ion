@@ -189,7 +189,6 @@ func (s *printSession) SetThinking(context.Context, session.ThinkingLevel) error
 func (s *printSession) SetTools(_ []agent.Tool, _ []string) error                { return nil }
 func (s *printSession) ActivateTools(context.Context, []string) error            { return nil }
 func (s *printSession) Session() session.Session                                 { return s }
-func (s *printSession) PersistEntry(context.Context, session.Entry) error        { return nil }
 func (s *printSession) ForkSession(context.Context, string) (string, error) {
 	return "", nil
 }

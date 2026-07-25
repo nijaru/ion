@@ -307,15 +307,6 @@ type AppendMessageCmd struct {
 
 func (AppendMessageCmd) command() {}
 
-// PersistEntryCmd persists a non-turn entry through the controller.
-type PersistEntryCmd struct {
-	Ctx   context.Context
-	Entry session.Entry
-	Reply chan<- error
-}
-
-func (PersistEntryCmd) command() {}
-
 // ForkSessionCmd creates a new session rooted at a source.
 type ForkSessionCmd struct {
 	Ctx      context.Context

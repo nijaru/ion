@@ -1606,53 +1606,6 @@ func (h *Controller) appendMessageDirect(ctx context.Context, msg session.Messag
 	return err
 }
 
-func appendRunnerEntry(ctx context.Context, store session.Store, entry session.Entry) error {
-	if custom, ok := entry.(*session.CustomEntry); ok && custom.ParentID() == "" {
-		copy := *custom
-		copy.EntryBase.ParentID = store.GetLeafID()
-		entry = &copy
-	}
-	_, err := store.AppendLeafEntry(ctx, entry)
-	return err
-}
-
-// PersistEntry persists an auxiliary entry through the harness-owned session.
-func (h *Controller) persistEntryDirect(ctx context.Context, entry session.Entry) error {
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return errors.New("harness is closed")
-	}
-	if h.store == nil {
-		h.mu.Unlock()
-		return errors.New("harness has no session store")
-	}
-	if h.phase != PhaseReady {
-		h.pending = append(h.pending, pendingWrite{
-			applyStore: func(ctx context.Context, store session.Store) error {
-				return appendRunnerEntry(ctx, store, entry)
-			},
-			applyTurn: func(ctx context.Context, store session.DurableStore, turnID, parentID string) (string, error) {
-				attached, err := reparentDurableEntry(entry, parentID)
-				if err != nil {
-					return "", err
-				}
-				return appendDurableEntry(ctx, store, turnID, parentID, attached)
-			},
-		})
-		h.mu.Unlock()
-		return nil
-	}
-	store := h.store
-	h.mu.Unlock()
-	finish, err := h.beginExclusive(PhaseReady)
-	if err != nil {
-		return err
-	}
-	defer finish()
-	return appendRunnerEntry(ctx, store, entry)
-}
-
 // AppendSessionInfo persists the session display name.
 func (h *Controller) appendSessionInfoDirect(ctx context.Context, name string) (string, error) {
 	finish, err := h.beginExclusive(PhaseReady)

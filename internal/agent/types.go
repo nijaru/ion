@@ -369,11 +369,6 @@ type InputHistory interface {
 	AddInput(ctx context.Context, workdir, input string) error
 }
 
-// EntryPersister persists a non-turn entry through the runtime controller.
-type EntryPersister interface {
-	PersistEntry(ctx context.Context, entry session.Entry) error
-}
-
 // SessionNamer updates the display metadata for the active session.
 type SessionNamer interface {
 	AppendSessionInfo(ctx context.Context, name string) (string, error)

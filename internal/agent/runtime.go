@@ -148,20 +148,19 @@ type Controller struct {
 
 // Compile-time interface assertions.
 var (
-	_ Runtime          = (*Controller)(nil)
+	_ Runtime                 = (*Controller)(nil)
 	_ SessionProjectionReader = (*Controller)(nil)
-	_ SessionReader    = (*Controller)(nil)
-	_ SessionCatalog   = (*Controller)(nil)
-	_ InputHistory     = (*Controller)(nil)
-	_ EntryPersister   = (*Controller)(nil)
-	_ SessionNamer     = (*Controller)(nil)
-	_ SessionForker    = (*Controller)(nil)
-	_ SessionNavigator = (*Controller)(nil)
-	_ SessionLabels    = (*Controller)(nil)
-	_ Compactor        = (*Controller)(nil)
-	_ ResourceOwner    = (*Controller)(nil)
-	_ ActionRecovery   = (*Controller)(nil)
-	_ ProcessRecovery  = (*Controller)(nil)
+	_ SessionReader           = (*Controller)(nil)
+	_ SessionCatalog          = (*Controller)(nil)
+	_ InputHistory            = (*Controller)(nil)
+	_ SessionNamer            = (*Controller)(nil)
+	_ SessionForker           = (*Controller)(nil)
+	_ SessionNavigator        = (*Controller)(nil)
+	_ SessionLabels           = (*Controller)(nil)
+	_ Compactor               = (*Controller)(nil)
+	_ ResourceOwner           = (*Controller)(nil)
+	_ ActionRecovery          = (*Controller)(nil)
+	_ ProcessRecovery         = (*Controller)(nil)
 )
 
 // run is the command loop goroutine. It is the sole mutator of Controller
@@ -242,8 +241,6 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleGetLabel(cmd)
 	case *AppendMessageCmd:
 		c.handleAppendMessage(cmd)
-	case *PersistEntryCmd:
-		c.handlePersistEntry(cmd)
 	case *ForkSessionCmd:
 		c.handleForkSession(cmd)
 	case *ExportSessionBundleCmd:
@@ -318,8 +315,6 @@ func (c *Controller) rejectCommand(cmd Command) {
 	case *GetLabelCmd:
 		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
 	case *AppendMessageCmd:
-		sendResult(cmd.Reply, ErrRuntimeClosed)
-	case *PersistEntryCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *ForkSessionCmd:
 		sendResult(cmd.Reply, ForkResult{Err: ErrRuntimeClosed})

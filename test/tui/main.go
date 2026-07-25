@@ -281,7 +281,6 @@ func (r *smokeRunner) UpdateSession(ctx context.Context, info session.SessionInf
 	}
 	return r.catalog.UpdateSession(ctx, info)
 }
-func (r *smokeRunner) PersistEntry(context.Context, session.Entry) error         { return nil }
 func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
 func (r *smokeRunner) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
 	return agent.NavigateResult{}, nil

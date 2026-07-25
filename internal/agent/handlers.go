@@ -361,12 +361,6 @@ func (c *Controller) handleAppendMessage(cmd *AppendMessageCmd) {
 	})
 }
 
-func (c *Controller) handlePersistEntry(cmd *PersistEntryCmd) {
-	c.startOperation(func() {
-		sendResult(cmd.Reply, c.persistEntryDirect(cmd.Ctx, cmd.Entry))
-	})
-}
-
 func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
 	c.startOperation(func() {
 		id, err := c.forkSessionDirect(cmd.Ctx, cmd.SourceID)
@@ -891,14 +885,6 @@ func (c *Controller) AppendMessage(ctx context.Context, msg session.Message) err
 	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &AppendMessageCmd{Ctx: ctx, Message: msg, Reply: reply}
-	return c.enqueueSync(ctx, cmd, reply)
-}
-
-// PersistEntry persists a non-turn entry.
-func (c *Controller) PersistEntry(ctx context.Context, entry session.Entry) error {
-	ctx = commandContext(ctx)
-	reply := make(chan error, 1)
-	cmd := &PersistEntryCmd{Ctx: ctx, Entry: entry, Reply: reply}
 	return c.enqueueSync(ctx, cmd, reply)
 }
 
