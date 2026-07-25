@@ -239,8 +239,6 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleAppendLabel(cmd)
 	case *GetLabelCmd:
 		c.handleGetLabel(cmd)
-	case *AppendMessageCmd:
-		c.handleAppendMessage(cmd)
 	case *ForkSessionCmd:
 		c.handleForkSession(cmd)
 	case *ExportSessionBundleCmd:
@@ -314,8 +312,6 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
 	case *GetLabelCmd:
 		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
-	case *AppendMessageCmd:
-		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *ForkSessionCmd:
 		sendResult(cmd.Reply, ForkResult{Err: ErrRuntimeClosed})
 	case *ExportSessionBundleCmd:

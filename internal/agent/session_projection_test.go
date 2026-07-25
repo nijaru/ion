@@ -14,8 +14,13 @@ import (
 
 func TestControllerSessionProjectionCapabilities(t *testing.T) {
 	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	ctx := t.Context()
+	if _, err := sess.AppendMessage(ctx, session.NewUserText("hello", time.Now())); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
 	controller := NewController(ControllerConfig{
-		Session: session.NewSession(store, 64),
+		Session: sess,
 		Store:   store,
 	})
 	t.Cleanup(func() {
@@ -24,10 +29,6 @@ func TestControllerSessionProjectionCapabilities(t *testing.T) {
 		}
 	})
 
-	ctx := t.Context()
-	if err := controller.AppendMessage(ctx, session.NewUserText("hello", time.Now())); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
 	branch, err := controller.SessionBranch(ctx)
 	if err != nil {
 		t.Fatalf("session branch: %v", err)
@@ -48,7 +49,7 @@ func TestControllerSessionProjectionCapabilities(t *testing.T) {
 		Usage:     session.Usage{Input: 3, Output: 5, TotalTokens: 8, Cost: session.Cost{Total: 0.25}},
 		Timestamp: time.Now(),
 	}
-	if err := controller.AppendMessage(ctx, assistant); err != nil {
+	if _, err := sess.AppendMessage(ctx, assistant); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 

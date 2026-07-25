@@ -298,15 +298,6 @@ type GetLabelCmd struct {
 
 func (GetLabelCmd) command() {}
 
-// AppendMessageCmd appends a message directly (used by template prompts).
-type AppendMessageCmd struct {
-	Ctx     context.Context
-	Message session.Message
-	Reply   chan<- error
-}
-
-func (AppendMessageCmd) command() {}
-
 // ForkSessionCmd creates a new session rooted at a source.
 type ForkSessionCmd struct {
 	Ctx      context.Context

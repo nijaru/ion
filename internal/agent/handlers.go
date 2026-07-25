@@ -355,12 +355,6 @@ func (c *Controller) handleGetLabel(cmd *GetLabelCmd) {
 	})
 }
 
-func (c *Controller) handleAppendMessage(cmd *AppendMessageCmd) {
-	c.startOperation(func() {
-		sendResult(cmd.Reply, c.appendMessageDirect(cmd.Ctx, cmd.Message))
-	})
-}
-
 func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
 	c.startOperation(func() {
 		id, err := c.forkSessionDirect(cmd.Ctx, cmd.SourceID)
@@ -878,14 +872,6 @@ func (c *Controller) GetLabel(ctx context.Context, targetID string) (string, err
 		return "", err
 	}
 	return result.Name, result.Err
-}
-
-// AppendMessage appends a message directly.
-func (c *Controller) AppendMessage(ctx context.Context, msg session.Message) error {
-	ctx = commandContext(ctx)
-	reply := make(chan error, 1)
-	cmd := &AppendMessageCmd{Ctx: ctx, Message: msg, Reply: reply}
-	return c.enqueueSync(ctx, cmd, reply)
 }
 
 // PromptFromTemplate renders a named template with the given variables.

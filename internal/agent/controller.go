@@ -1594,18 +1594,6 @@ func (h *Controller) logf(level slog.Level, msg string, attrs ...slog.Attr) {
 	_ = h.log.Handler().Handle(context.Background(), a)
 }
 
-// AppendMessage appends a message directly to the session without running a turn.
-// Reference: Pi agent-harness.js appendMessage (line 614).
-func (h *Controller) appendMessageDirect(ctx context.Context, msg session.Message) error {
-	finish, err := h.beginExclusive(PhaseReady)
-	if err != nil {
-		return err
-	}
-	defer finish()
-	_, err = h.session.AppendMessage(ctx, msg)
-	return err
-}
-
 // AppendSessionInfo persists the session display name.
 func (h *Controller) appendSessionInfoDirect(ctx context.Context, name string) (string, error) {
 	finish, err := h.beginExclusive(PhaseReady)
