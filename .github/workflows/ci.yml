@@ -30,6 +30,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap ripgrep tmux
 
+      - name: Install Go formatters
+        run: |
+          tool_dir="${RUNNER_TEMP}/ion-go-tools"
+          GOBIN="$tool_dir" go install github.com/segmentio/golines@v0.15.0
+          GOBIN="$tool_dir" go install mvdan.cc/gofumpt@v0.10.0
+          echo "$tool_dir" >> "$GITHUB_PATH"
+
+      - name: Go format
+        run: scripts/go-format.sh --check
+
       - name: Test
         run: go test ./... -count=1 -timeout 300s
 

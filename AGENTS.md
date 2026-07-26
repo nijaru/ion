@@ -137,6 +137,26 @@ owner or an unverified lifecycle guarantee.
 - Tests must verify behavior and invariants, not names, existence, or legacy
   implementation details.
 
+## Go formatting and static checks
+
+The repository formatter is `golines` with `gofumpt` as its base formatter.
+Use the checked-in wrapper so local and CI commands share the same file set and
+line-length policy:
+
+    scripts/go-format.sh
+    scripts/go-format.sh --check
+
+The default maximum line length is 120 and can be overridden for a deliberate
+local experiment with `ION_GO_MAX_LEN`. Do not use plain `gofmt` as the final
+formatter. Keep formatting-only changes in their own commit, separate from
+behavioral refactors, so review can distinguish mechanical movement from
+ownership or correctness changes.
+
+Quality-convergence slices should also run `go test ./...`, the relevant race
+suite, `go vet ./...`, `staticcheck ./...`, and `govulncheck ./...`. A check that
+is not yet green belongs in the active `tk` task with its concrete finding and
+unblock condition; do not hide an unresolved gate behind a broad cleanup.
+
 ## Target architecture constraints
 
 ai/DESIGN.md is the current authoritative architecture. If the ideal target
@@ -213,9 +233,11 @@ reference-backed product charter is captured in
 ai/research/agent-reference-matrix.md; the ideal architecture is frozen in
 ai/DESIGN.md and tracked by completed task tk-uyfo. The implementation audit
 tk-03v2 and session durability task tk-mkmt are complete; the active bounded
-implementation task is tk-k6gf (core daily-driver proof). The live-provider
-task tk-h5yr is blocked by it; the safety/release audit tk-kw1m and the
-architecture-convergence follow-ups are also explicitly gated behind it.
+implementation task tk-k6gf (core daily-driver proof) is complete. The active
+bounded convergence task is tk-1qp1 (Go quality and formatter gates). The
+live-provider task tk-h5yr is deferred, as are the P2 cache and
+architecture-convergence follow-ups; do not select them merely because a
+recent article made caching visible.
 Keep tasks atomic, demoable, and acceptance-tested. Log findings while fresh,
 and do not reopen completed design work unless new evidence requires an
 explicit target change.
