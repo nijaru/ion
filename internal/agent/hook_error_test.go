@@ -37,6 +37,34 @@ func TestEmitHookRunsAllHandlersAndJoinsErrors(t *testing.T) {
 	}
 }
 
+func TestHookUnsubscribeSurvivesLaterRegistration(t *testing.T) {
+	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
+	defer func() { _ = h.Close() }()
+
+	firstCalls := 0
+	unsubscribe := h.On("test", func(any) (any, error) {
+		firstCalls++
+		return nil, nil
+	})
+	secondCalls := 0
+	h.On("test", func(any) (any, error) {
+		secondCalls++
+		return nil, nil
+	})
+
+	unsubscribe()
+	unsubscribe()
+	if _, err := h.emitHook("test", nil); err != nil {
+		t.Fatal(err)
+	}
+	if firstCalls != 0 {
+		t.Fatalf("unsubscribed hook calls = %d, want 0", firstCalls)
+	}
+	if secondCalls != 1 {
+		t.Fatalf("remaining hook calls = %d, want 1", secondCalls)
+	}
+}
+
 func TestHarnessAfterToolCallHookErrorReachesLoopPatch(t *testing.T) {
 	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
 	defer func() { _ = h.Close() }()

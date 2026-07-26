@@ -34,21 +34,6 @@ type pendingWrite struct {
 	onFailure  func()
 }
 
-// HookHandler is a function registered for a hook type. It receives a payload
-// and returns a patch (nil if no change) or an error.
-// Reference: Pi agent-harness.js hooks (line 944-960).
-type HookHandler func(payload any) (patch any, err error)
-
-// Hook type constants matching Pi's hook names.
-const (
-	HookBeforeProviderRequest = "before_provider_request"
-	HookBeforeProviderPayload = "before_provider_payload"
-	HookAfterProviderResponse = "after_provider_response"
-	HookBeforeAgentStart      = "before_agent_start"
-	HookBeforeToolCall        = "before_tool_call"
-	HookToolResult            = "tool_result"
-)
-
 // ControllerConfig holds construction-time configuration for a Controller.
 type ControllerConfig struct {
 	Session         session.Session
@@ -180,7 +165,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		h.maxParallelTools = 8
 	}
 	if h.hooks == nil {
-		h.hooks = make(map[string][]HookHandler)
+		h.hooks = make(map[string][]hookRegistration)
 	}
 	h.approvals = NewApprovalBroker(cfg.ApprovalMode, cfg.ApprovalInteractive, h.emit)
 	if cfg.ActionJournal != nil {
@@ -210,45 +195,6 @@ func hasExternalActionTool(tools []Tool) bool {
 		}
 	}
 	return false
-}
-
-// On registers a handler for a hook type. Returns an unsubscribe function.
-// Reference: Pi agent-harness.js on (line 962).
-func (h *Controller) On(hookType string, handler HookHandler) func() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.hooks[hookType] = append(h.hooks[hookType], handler)
-	ptr := &h.hooks[hookType][len(h.hooks[hookType])-1]
-	return func() {
-		h.mu.Lock()
-		*ptr = nil
-		h.mu.Unlock()
-	}
-}
-
-// emitHook fans out a payload to all handlers registered for hookType.
-// Returns collected patches. Uses snapshot-and-release to avoid reentry deadlock.
-func (h *Controller) emitHook(hookType string, payload any) (patches []any, err error) {
-	h.mu.Lock()
-	snapshot := make([]HookHandler, 0, len(h.hooks[hookType]))
-	for _, fn := range h.hooks[hookType] {
-		if fn != nil {
-			snapshot = append(snapshot, fn)
-		}
-	}
-	h.mu.Unlock()
-	var hookErrors []error
-	for _, fn := range snapshot {
-		patch, fnErr := fn(payload)
-		if fnErr != nil {
-			hookErrors = append(hookErrors, fnErr)
-			continue
-		}
-		if patch != nil {
-			patches = append(patches, patch)
-		}
-	}
-	return patches, errors.Join(hookErrors...)
 }
 
 // emit publishes an event through the controller-owned bounded subscription

@@ -113,7 +113,8 @@ type Controller struct {
 	done     chan struct{}
 
 	// --- Hooks (Pi on/emitHook pattern) ---
-	hooks map[string][]HookHandler
+	hooks      map[string][]hookRegistration
+	nextHookID uint64
 
 	// --- Buffered session writes during a run ---
 	pending []pendingWrite
