@@ -40,7 +40,8 @@ func TestRunLoopLifecycleEvents(t *testing.T) {
 		}}, nil
 	}
 
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{SystemPrompt: "test"},
 		LoopConfig{
@@ -71,7 +72,8 @@ func TestRunLoopSingleAgentEnd(t *testing.T) {
 		}}, nil
 	}
 
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
@@ -96,7 +98,8 @@ func TestRunLoopReturnsNewMessages(t *testing.T) {
 		}}, nil
 	}
 
-	msgs := RunLoop(context.Background(),
+	msgs := RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
@@ -124,7 +127,8 @@ func TestRunLoopTerminalFailure(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	msgs := RunLoop(context.Background(),
+	msgs := RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
@@ -162,7 +166,8 @@ func TestRunLoopAbort(t *testing.T) {
 		}}, nil
 	}
 
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},
@@ -183,13 +188,20 @@ func TestRunLoopPreCancelledSignalSkipsProvider(t *testing.T) {
 	called := false
 	signal := make(chan struct{})
 	close(signal)
-	RunLoop(context.Background(), []session.Message{session.NewUserText("cancel", time.Now())}, TurnContext{}, LoopConfig{
-		Model: llm.Model{ID: "test"},
-		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
-			called = true
-			return nil, nil
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("cancel", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				called = true
+				return nil, nil
+			},
 		},
-	}, func(session.Event) {}, signal)
+		func(session.Event) {},
+		signal,
+	)
 	if called {
 		t.Fatal("provider called for pre-cancelled run")
 	}
@@ -204,8 +216,22 @@ func TestRunLoopIsStateless(t *testing.T) {
 		return &mockStream{chunks: []*llm.Chunk{{StopReason: "stop"}}}, nil
 	}
 	// Each call is independent — no shared state.
-	RunLoop(context.Background(), nil, TurnContext{}, LoopConfig{Model: llm.Model{ID: "x"}, StreamFn: streamFn}, func(e session.Event) {}, nil)
-	RunLoop(context.Background(), nil, TurnContext{}, LoopConfig{Model: llm.Model{ID: "y"}, StreamFn: streamFn}, func(e session.Event) {}, nil)
+	RunLoop(
+		context.Background(),
+		nil,
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "x"}, StreamFn: streamFn},
+		func(e session.Event) {},
+		nil,
+	)
+	RunLoop(
+		context.Background(),
+		nil,
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "y"}, StreamFn: streamFn},
+		func(e session.Event) {},
+		nil,
+	)
 }
 
 // INVARIANT: tool calls are executed and ToolExecStart/End emitted.
@@ -242,7 +268,8 @@ func TestRunLoopToolExecution(t *testing.T) {
 		},
 	}
 
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("use tool", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn, Tools: []Tool{tool}},
@@ -302,9 +329,16 @@ func TestPrepareToolArgumentsRecoversPanics(t *testing.T) {
 			panic("bad preparation")
 		},
 	}
-	prepared, result := prepareToolCall(context.Background(), TurnContext{}, session.AssistantMessage{}, &session.ToolCall{
-		ID: "call-panic", Name: "panic-prepare", Arguments: map[string]any{},
-	}, LoopConfig{Tools: []Tool{*tool}}, nil)
+	prepared, result := prepareToolCall(
+		context.Background(),
+		TurnContext{},
+		session.AssistantMessage{},
+		&session.ToolCall{
+			ID: "call-panic", Name: "panic-prepare", Arguments: map[string]any{},
+		},
+		LoopConfig{Tools: []Tool{*tool}},
+		nil,
+	)
 	if prepared.tool != nil || result == nil || !result.IsError {
 		t.Fatalf("prepared=%#v result=%#v, want recovered preparation error", prepared, result)
 	}
@@ -403,12 +437,14 @@ func TestRunLoopToolPanicRecovery(t *testing.T) {
 	cfg := LoopConfig{
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
-		Tools: []Tool{{
-			Name: "panic_tool",
-			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				panic("intentional test panic")
+		Tools: []Tool{
+			{
+				Name: "panic_tool",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					panic("intentional test panic")
+				},
 			},
-		}},
+		},
 		Convert: DefaultConvert,
 	}
 
@@ -457,16 +493,18 @@ func TestRunLoopAfterToolCallPanicRecovery(t *testing.T) {
 	cfg := LoopConfig{
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
-		Tools: []Tool{{
-			Name: "echo",
-			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				return session.ToolResultMessage{
-					ToolCallID: id,
-					ToolName:   "echo",
-					Content:    []session.Content{session.TextContent{Text: "ok"}},
-				}, nil
+		Tools: []Tool{
+			{
+				Name: "echo",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "echo",
+						Content:    []session.Content{session.TextContent{Text: "ok"}},
+					}, nil
+				},
 			},
-		}},
+		},
 		AfterToolCall: func(ctx ToolCallResultContext) *ToolCallPatch {
 			panic("hook bug")
 		},
@@ -548,18 +586,26 @@ func TestRunLoopToolResultMessageEvents(t *testing.T) {
 	}
 
 	var msEvents int
-	vars := RunLoop(context.Background(),
+	vars := RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{
 			Model:    llm.Model{ID: "test"},
 			StreamFn: streamFn,
-			Tools: []Tool{{
-				Name: "test-tool",
-				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-					return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ok"}}, Timestamp: time.Now()}, nil
+			Tools: []Tool{
+				{
+					Name: "test-tool",
+					Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						return session.ToolResultMessage{
+							ToolCallID: id,
+							ToolName:   "test-tool",
+							Content:    []session.Content{session.TextContent{Text: "ok"}},
+							Timestamp:  time.Now(),
+						}, nil
+					},
 				},
-			}},
+			},
 		},
 		func(e session.Event) {
 			switch e.(type) {
@@ -601,19 +647,26 @@ func TestRunLoopStopReasonLengthFailsToolCalls(t *testing.T) {
 	}
 
 	var toolEvents []session.Event
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{
 			Model:    llm.Model{ID: "test"},
 			StreamFn: streamFn,
-			Tools: []Tool{{
-				Name: "test-tool",
-				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-					executed = true
-					return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ok"}}}, nil
+			Tools: []Tool{
+				{
+					Name: "test-tool",
+					Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						executed = true
+						return session.ToolResultMessage{
+							ToolCallID: id,
+							ToolName:   "test-tool",
+							Content:    []session.Content{session.TextContent{Text: "ok"}},
+						}, nil
+					},
 				},
-			}},
+			},
 		},
 		func(e session.Event) {
 			switch e.(type) {
@@ -652,7 +705,8 @@ func TestRunLoopAbortMidStreamClassified(t *testing.T) {
 	}
 
 	var turnEnd *session.TurnEnd
-	RunLoop(context.Background(),
+	RunLoop(
+		context.Background(),
 		[]session.Message{session.NewUserText("hi", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn},

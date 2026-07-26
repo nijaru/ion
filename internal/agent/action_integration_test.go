@@ -44,7 +44,13 @@ func TestHarnessRoutesEffectThroughDurableActionBoundary(t *testing.T) {
 			actionID := approvedAction
 			mu.Unlock()
 			if actionID == "" {
-				return session.ToolResultMessage{ToolCallID: id, ToolName: "write_probe", IsError: true}, errors.New("effect ran before approval identity was visible")
+				return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "write_probe",
+						IsError:    true,
+					}, errors.New(
+						"effect ran before approval identity was visible",
+					)
 			}
 			record, err := store.GetAction(ctx, actionID)
 			if err != nil {
@@ -163,7 +169,12 @@ func TestHarnessRoutesEffectThroughDurableActionBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []session.ActionState{session.ActionPrepared, session.ActionAuthorized, session.ActionStarted, session.ActionCompleted}
+	want := []session.ActionState{
+		session.ActionPrepared,
+		session.ActionAuthorized,
+		session.ActionStarted,
+		session.ActionCompleted,
+	}
 	if len(transitions) != len(want) {
 		t.Fatalf("transitions = %#v, want %d transitions", transitions, len(want))
 	}

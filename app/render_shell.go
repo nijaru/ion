@@ -1,8 +1,9 @@
 package app
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 
 	"charm.land/lipgloss/v2"
 )
@@ -50,6 +51,7 @@ func newStyles() styles {
 			Bold(true),
 	}
 }
+
 func (m Model) View() tea.View {
 	if m.Picker.PreStartupMode {
 		var v tea.View
@@ -147,6 +149,7 @@ func (m Model) renderShell() string {
 
 	return b.String()
 }
+
 func (m Model) shellWidth() int {
 	if m.App.Width <= 1 {
 		return max(0, m.App.Width)

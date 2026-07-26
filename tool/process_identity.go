@@ -131,7 +131,8 @@ func validateProcessIdentity(identity ProcessIdentity) error {
 	if identity.Version != processIdentityVersion {
 		return fmt.Errorf("%w: unsupported version %d", ErrProcessIdentityInvalid, identity.Version)
 	}
-	if identity.Platform == "" || identity.PID <= 0 || identity.PGID <= 0 || identity.PID != identity.PGID || identity.StartToken == "" {
+	if identity.Platform == "" || identity.PID <= 0 || identity.PGID <= 0 || identity.PID != identity.PGID ||
+		identity.StartToken == "" {
 		return fmt.Errorf("%w: incomplete process-group identity", ErrProcessIdentityInvalid)
 	}
 	return nil
@@ -162,11 +163,17 @@ func (processReconciler) ReconcileProcess(ctx context.Context, encodedIdentity s
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrProcessNotFound):
-			return ProcessRecoveryResult{Status: ProcessRecoveryGone, Detail: "recorded process group is no longer present"}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryGone,
+				Detail: "recorded process group is no longer present",
+			}, nil
 		case errors.Is(err, ErrProcessIdentityUnsupported):
 			return ProcessRecoveryResult{Status: ProcessRecoveryUnavailable, Detail: err.Error()}, nil
 		default:
-			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("inspect recorded process: %v", err)}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryFailed,
+				Detail: fmt.Sprintf("inspect recorded process: %v", err),
+			}, nil
 		}
 	}
 	if observed != identity {
@@ -177,12 +184,21 @@ func (processReconciler) ReconcileProcess(ctx context.Context, encodedIdentity s
 	}
 	if err := platform.terminateGroup(ctx, identity); err != nil {
 		if errors.Is(err, ErrProcessNotFound) {
-			return ProcessRecoveryResult{Status: ProcessRecoveryGone, Detail: "recorded process group exited before cleanup"}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryGone,
+				Detail: "recorded process group exited before cleanup",
+			}, nil
 		}
 		if errors.Is(err, ErrProcessIdentityChanged) {
-			return ProcessRecoveryResult{Status: ProcessRecoveryIdentityChanged, Detail: "process identity changed before cleanup; refused to signal it"}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryIdentityChanged,
+				Detail: "process identity changed before cleanup; refused to signal it",
+			}, nil
 		}
-		return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("terminate recorded process group: %v", err)}, nil
+		return ProcessRecoveryResult{
+			Status: ProcessRecoveryFailed,
+			Detail: fmt.Sprintf("terminate recorded process group: %v", err),
+		}, nil
 	}
 	// Once signaling has succeeded, cleanup verification must not be abandoned
 	// merely because the initiating turn was canceled.
@@ -196,7 +212,10 @@ func (processReconciler) ReconcileProcess(ctx context.Context, encodedIdentity s
 		if errors.Is(err, ErrProcessNotFound) {
 			leaderGone = true
 		} else if err != nil {
-			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("verify process-group cleanup: %v", err)}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryFailed,
+				Detail: fmt.Sprintf("verify process-group cleanup: %v", err),
+			}, nil
 		} else if observed != identity {
 			return ProcessRecoveryResult{
 				Status: ProcessRecoveryIdentityChanged,
@@ -205,14 +224,23 @@ func (processReconciler) ReconcileProcess(ctx context.Context, encodedIdentity s
 		}
 		groupExists, err := platform.groupExists(identity.PGID)
 		if err != nil {
-			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: fmt.Sprintf("verify process-group cleanup: %v", err)}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryFailed,
+				Detail: fmt.Sprintf("verify process-group cleanup: %v", err),
+			}, nil
 		}
 		if leaderGone && !groupExists {
-			return ProcessRecoveryResult{Status: ProcessRecoveryTerminated, Detail: "terminated matching recorded process group"}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryTerminated,
+				Detail: "terminated matching recorded process group",
+			}, nil
 		}
 		select {
 		case <-verifyCtx.Done():
-			return ProcessRecoveryResult{Status: ProcessRecoveryFailed, Detail: "recorded process group remained alive after termination"}, nil
+			return ProcessRecoveryResult{
+				Status: ProcessRecoveryFailed,
+				Detail: "recorded process group remained alive after termination",
+			}, nil
 		case <-poll.C:
 		}
 	}

@@ -79,7 +79,8 @@ func TestRuntimeDurableMessageEndIsPersistedBeforePublication(t *testing.T) {
 		}
 		for _, entry := range entries {
 			if message, ok := entry.(*session.MessageEntry); ok {
-				if assistant, ok := message.Message.(*session.AssistantMessage); ok && session.MessageText(assistant) == "durable" {
+				if assistant, ok := message.Message.(*session.AssistantMessage); ok &&
+					session.MessageText(assistant) == "durable" {
 					if message.When().IsZero() {
 						seen <- false
 						return
@@ -117,7 +118,11 @@ func TestRuntimeRequireDurableRejectsEphemeralTurn(t *testing.T) {
 		},
 	})
 	defer h.Close()
-	if _, err := h.Prompt(context.Background(), "must be durable"); err == nil || !strings.Contains(err.Error(), "DurableStore") {
+	if _, err := h.Prompt(
+		context.Background(),
+		"must be durable",
+	); err == nil ||
+		!strings.Contains(err.Error(), "DurableStore") {
 		t.Fatalf("Prompt error = %v, want missing DurableStore", err)
 	}
 }

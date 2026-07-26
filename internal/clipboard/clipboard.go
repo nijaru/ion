@@ -112,7 +112,7 @@ if let data = pasteboard.data(forType: .png) {
 }
 `
 	tmpSwift := filepath.Join(os.TempDir(), "ion-clipboard.swift")
-	if err := os.WriteFile(tmpSwift, []byte(script), 0600); err != nil {
+	if err := os.WriteFile(tmpSwift, []byte(script), 0o600); err != nil {
 		return nil, fmt.Errorf("failed to write swift script: %w", err)
 	}
 	defer os.Remove(tmpSwift)
@@ -279,7 +279,7 @@ func extensionForMimeType(mimeType string) string {
 // saveToTempFile saves data to a temporary file.
 func saveToTempFile(data []byte, ext string) (string, error) {
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("ion-clipboard-%s.%s", randomID(), ext))
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
+	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
 		return "", err
 	}
 	return tmpFile, nil

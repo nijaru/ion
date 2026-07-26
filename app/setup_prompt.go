@@ -2,9 +2,10 @@ package app
 
 import (
 	"fmt"
-	"github.com/nijaru/ion/config"
 	"net/url"
 	"strings"
+
+	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/llm"

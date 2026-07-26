@@ -26,21 +26,27 @@ type testStore struct {
 func (s *testStore) Append(_ context.Context, _ session.Entry) (string, error) {
 	return "", nil
 }
+
 func (s *testStore) AppendLeafEntry(ctx context.Context, entry session.Entry) (string, error) {
 	return s.Append(ctx, entry)
 }
+
 func (s *testStore) AppendBatch(_ context.Context, _ []session.Entry) ([]string, error) {
 	return nil, nil
 }
+
 func (s *testStore) GetEntry(_ context.Context, _ string) (session.Entry, error) {
 	return nil, os.ErrNotExist
 }
+
 func (s *testStore) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
+
 func (s *testStore) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
 	return s.entries, nil
 }
+
 func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
@@ -53,12 +59,14 @@ func (s *testStore) Meta() session.Metadata { return s.meta }
 func (s *testStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil
 }
+
 func (s *testStore) ListSessions(_ context.Context, _ string) ([]session.SessionInfoEntry, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
 	return s.sessions, nil
 }
+
 func (s *testStore) GetSessionInfo(_ context.Context, id string) (session.SessionInfoEntry, error) {
 	for _, info := range s.sessions {
 		if info.ID() == id {
@@ -67,6 +75,7 @@ func (s *testStore) GetSessionInfo(_ context.Context, id string) (session.Sessio
 	}
 	return session.SessionInfoEntry{}, os.ErrNotExist
 }
+
 func (s *testStore) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error {
 	return nil
 }

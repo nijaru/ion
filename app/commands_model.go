@@ -167,7 +167,8 @@ func (m Model) handleModelCommand(fields []string) (Model, tea.Cmd) {
 	if runtimeCfg.Provider == "" {
 		return m, cmdError("cannot set model without an active provider; use /provider first")
 	}
-	return m.switchRuntimeCommand(transition,
+	return m.switchRuntimeCommand(
+		transition,
 		systemEntry("Model set to "+name),
 		m.currentResumeLeafID(),
 		false,
@@ -195,7 +196,8 @@ func (m Model) handleThinkingCommand(fields []string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 	}
-	return m.beginRuntimeTransitionCommit(transition,
+	return m.beginRuntimeTransitionCommit(
+		transition,
 		systemEntry("Thinking set to "+thinkingDisplayName(level)),
 	)
 }

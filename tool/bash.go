@@ -221,7 +221,6 @@ func (b *Bash) runCommand(
 	emit func(localOutputUpdate) error,
 	persistFullOutput bool,
 ) (string, error) {
-
 	runCtx := ctx
 	var cancel context.CancelFunc
 	if input.Timeout > 0 {
@@ -353,17 +352,23 @@ func parseBashInput(args string) (bashInput, error) {
 	case "list":
 		if input.Background || strings.TrimSpace(input.Command) != "" ||
 			strings.TrimSpace(input.JobID) != "" || input.TailLines != 0 || input.Timeout != 0 {
-			return bashInput{}, fmt.Errorf("action=list does not accept command, timeout, background, job_id, or tail_lines")
+			return bashInput{}, fmt.Errorf(
+				"action=list does not accept command, timeout, background, job_id, or tail_lines",
+			)
 		}
 	case "output":
 		if input.Background || strings.TrimSpace(input.Command) != "" || input.Timeout != 0 ||
 			strings.TrimSpace(input.JobID) == "" {
-			return bashInput{}, fmt.Errorf("action=output requires job_id and does not accept command, timeout, or background")
+			return bashInput{}, fmt.Errorf(
+				"action=output requires job_id and does not accept command, timeout, or background",
+			)
 		}
 	case "stop":
 		if input.Background || strings.TrimSpace(input.Command) != "" || input.Timeout != 0 ||
 			strings.TrimSpace(input.JobID) == "" || input.TailLines != 0 {
-			return bashInput{}, fmt.Errorf("action=stop requires job_id and does not accept command, timeout, background, or tail_lines")
+			return bashInput{}, fmt.Errorf(
+				"action=stop requires job_id and does not accept command, timeout, background, or tail_lines",
+			)
 		}
 	default:
 		return bashInput{}, fmt.Errorf("unsupported action %q", input.Action)

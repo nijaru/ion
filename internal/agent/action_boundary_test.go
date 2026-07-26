@@ -57,18 +57,28 @@ func TestJournalActionBoundaryBindsCanonicalActionIdentity(t *testing.T) {
 		t.Fatalf("second prepare and authorize: %v", err)
 	}
 	if second.ID == token.ID || second.Record.Fingerprint != token.Record.Fingerprint {
-		t.Fatalf("action identity = first (%s, %s), second (%s, %s); invocation identity must be separate from operation fingerprint", token.ID, token.Record.Fingerprint, second.ID, second.Record.Fingerprint)
+		t.Fatalf(
+			"action identity = first (%s, %s), second (%s, %s); invocation identity must be separate from operation fingerprint",
+			token.ID,
+			token.Record.Fingerprint,
+			second.ID,
+			second.Record.Fingerprint,
+		)
 	}
 	if string(token.Record.Metadata) != `{"revision":1,"surface":"editor"}` {
 		t.Fatalf("canonical metadata = %s", token.Record.Metadata)
 	}
 	equivalent, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
-		ToolName: " write ", InvocationID: "call-equivalent", Arguments: []byte(`{"content":"x","path":"nested/../main.go"}`),
-		SessionID: "session-1", TurnID: "turn-1",
+		ToolName:     " write ",
+		InvocationID: "call-equivalent",
+		Arguments:    []byte(`{"content":"x","path":"nested/../main.go"}`),
+		SessionID:    "session-1",
+		TurnID:       "turn-1",
 		Requirement: ApprovalRequirement{
 			Category: "WRITE", Operation: "WRITE", Paths: []string{"main.go", "nested/../main.go"},
 			Environment: []string{"B", "A", "A"}, Metadata: map[string]any{"revision": 1, "surface": "editor"},
-		}, Required: true,
+		},
+		Required: true,
 	})
 	if err != nil {
 		t.Fatalf("equivalent prepare and authorize: %v", err)
@@ -147,10 +157,16 @@ func TestJournalActionBoundaryRejectsChangedFilePreimageBeforeEffect(t *testing.
 		t.Fatal(err)
 	}
 	invoked := false
-	result, err := boundary.Execute(ctx, token, func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		invoked = true
-		return session.ToolResultMessage{}, nil
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			invoked = true
+			return session.ToolResultMessage{}, nil
+		},
+		nil,
+		nil,
+	)
 	if err == nil || !result.IsError || invoked {
 		t.Fatalf("preimage result = %#v, err = %v, invoked = %v; want rejection before effect", result, err, invoked)
 	}
@@ -190,17 +206,23 @@ func TestJournalActionBoundaryExecutesWorkspaceWriteAfterDurableStart(t *testing
 		t.Fatal(err)
 	}
 	writer := &tool.Write{FileTool: *tool.NewFileTool(workdir)}
-	result, err := boundary.Execute(ctx, token, func(execCtx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		record, recordErr := store.GetAction(execCtx, token.ID)
-		if recordErr != nil {
-			return session.ToolResultMessage{}, recordErr
-		}
-		if record.State != session.ActionStarted {
-			return session.ToolResultMessage{}, fmt.Errorf("write crossed boundary in state %s", record.State)
-		}
-		output, writeErr := writer.Execute(execCtx, string(token.Record.Arguments))
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, writeErr
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(execCtx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			record, recordErr := store.GetAction(execCtx, token.ID)
+			if recordErr != nil {
+				return session.ToolResultMessage{}, recordErr
+			}
+			if record.State != session.ActionStarted {
+				return session.ToolResultMessage{}, fmt.Errorf("write crossed boundary in state %s", record.State)
+			}
+			output, writeErr := writer.Execute(execCtx, string(token.Record.Arguments))
+			return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, writeErr
+		},
+		nil,
+		nil,
+	)
 	if err != nil || result.IsError {
 		t.Fatalf("write result = %#v, err = %v", result, err)
 	}
@@ -348,16 +370,29 @@ func TestJournalActionBoundaryRejectsUnboundProcessLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		recorder, ok := tool.ProcessIdentityRecorderFromContext(ctx)
-		if !ok {
-			return session.ToolResultMessage{}, errors.New("process recorder missing from action context")
-		}
-		if err := recorder(tool.ProcessLaunch{}); !errors.Is(err, tool.ErrInvalidProcessLaunch) {
-			return session.ToolResultMessage{}, fmt.Errorf("unbound launch error = %v, want ErrInvalidProcessLaunch", err)
-		}
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: "unbound launch rejected"}}}, errors.New("executor did not launch a bound process")
-	}, nil, nil)
+	_, err = boundary.Execute(
+		ctx,
+		token,
+		func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			recorder, ok := tool.ProcessIdentityRecorderFromContext(ctx)
+			if !ok {
+				return session.ToolResultMessage{}, errors.New("process recorder missing from action context")
+			}
+			if err := recorder(tool.ProcessLaunch{}); !errors.Is(err, tool.ErrInvalidProcessLaunch) {
+				return session.ToolResultMessage{}, fmt.Errorf(
+					"unbound launch error = %v, want ErrInvalidProcessLaunch",
+					err,
+				)
+			}
+			return session.ToolResultMessage{
+					Content: []session.Content{session.TextContent{Text: "unbound launch rejected"}},
+				}, errors.New(
+					"executor did not launch a bound process",
+				)
+		},
+		nil,
+		nil,
+	)
 	if err == nil {
 		t.Fatal("unbound process launch unexpectedly completed")
 	}
@@ -378,19 +413,33 @@ func TestJournalActionBoundaryPreservesUncertainEffectOutcome(t *testing.T) {
 		store, NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, workdir,
 	)
 	token, err := boundary.PrepareAndAuthorize(ctx, ActionRequest{
-		ToolName: "bash", InvocationID: "call-uncertain", SessionID: "session-1", TurnID: "turn-1",
-		Arguments:   []byte(`{"command":"possibly-mutating"}`),
-		Requirement: ApprovalRequirement{Category: "execute", Operation: "bash", Resource: "possibly-mutating"}, Required: true,
+		ToolName:     "bash",
+		InvocationID: "call-uncertain",
+		SessionID:    "session-1",
+		TurnID:       "turn-1",
+		Arguments:    []byte(`{"command":"possibly-mutating"}`),
+		Requirement: ApprovalRequirement{
+			Category:  "execute",
+			Operation: "bash",
+			Resource:  "possibly-mutating",
+		},
+		Required: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := boundary.Execute(ctx, token, func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		return session.ToolResultMessage{
-			Content: []session.Content{session.TextContent{Text: "executor failed after starting"}},
-			IsError: true,
-		}, errors.New("executor failed after starting")
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			return session.ToolResultMessage{
+				Content: []session.Content{session.TextContent{Text: "executor failed after starting"}},
+				IsError: true,
+			}, errors.New("executor failed after starting")
+		},
+		nil,
+		nil,
+	)
 	if err == nil || !result.IsError {
 		t.Fatalf("result = %#v, err = %v; want executor error", result, err)
 	}
@@ -420,10 +469,16 @@ func TestJournalActionBoundaryRecordsRealBashProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	bash := tool.NewBash(workdir)
-	result, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		output, err := bash.Execute(ctx, `{"command":"printf ok"}`)
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			output, err := bash.Execute(ctx, `{"command":"printf ok"}`)
+			return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
+		},
+		nil,
+		nil,
+	)
 	if err != nil || result.IsError {
 		t.Fatalf("bash result = %#v, err = %v", result, err)
 	}
@@ -458,10 +513,16 @@ func TestJournalActionBoundaryTracksBackgroundJobToTerminalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	bash := tool.NewBashWithEnvironmentAndJobs(workdir, tool.NewEnvironmentPolicy("inherit", nil), jobs)
-	result, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		output, err := bash.Execute(ctx, `{"command":"printf done; sleep 0.05","background":true}`)
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			output, err := bash.Execute(ctx, `{"command":"printf done; sleep 0.05","background":true}`)
+			return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
+		},
+		nil,
+		nil,
+	)
 	if err != nil || result.IsError {
 		t.Fatalf("background launch result = %#v, err = %v", result, err)
 	}
@@ -507,10 +568,16 @@ func TestJournalActionBoundarySurfacesBackgroundFinalizeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	bash := tool.NewBashWithEnvironmentAndJobs(workdir, tool.NewEnvironmentPolicy("inherit", nil), jobs)
-	result, err := boundary.Execute(ctx, token, func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
-		output, err := bash.Execute(ctx, `{"command":"printf done; sleep 0.05","background":true}`)
-		return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
-	}, nil, nil)
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(ctx context.Context, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			output, err := bash.Execute(ctx, `{"command":"printf done; sleep 0.05","background":true}`)
+			return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: output}}}, err
+		},
+		nil,
+		nil,
+	)
 	if err != nil || result.IsError {
 		t.Fatalf("background launch result = %#v, err = %v", result, err)
 	}
@@ -544,7 +611,14 @@ type finishFailingActionJournal struct {
 	err error
 }
 
-func (j *finishFailingActionJournal) FinishAction(context.Context, string, session.ActionState, string, string, string) (session.ActionRecord, error) {
+func (j *finishFailingActionJournal) FinishAction(
+	context.Context,
+	string,
+	session.ActionState,
+	string,
+	string,
+	string,
+) (session.ActionRecord, error) {
 	return session.ActionRecord{}, j.err
 }
 
@@ -636,9 +710,18 @@ func TestToolExecutionFinalizesStartedActionFailure(t *testing.T) {
 		},
 	}
 	result := executePreparedToolCall(
-		context.Background(), TurnContext{}, session.AssistantMessage{},
-		preparedToolCall{tool: tool, tc: &session.ToolCall{ID: "call-2", Name: "bash"}, argsRaw: []byte(`{}`), action: &ActionToken{ID: "stub-action"}},
-		LoopConfig{ActionBoundary: stub}, func(session.Event) {}, make(chan struct{}),
+		context.Background(),
+		TurnContext{},
+		session.AssistantMessage{},
+		preparedToolCall{
+			tool:    tool,
+			tc:      &session.ToolCall{ID: "call-2", Name: "bash"},
+			argsRaw: []byte(`{}`),
+			action:  &ActionToken{ID: "stub-action"},
+		},
+		LoopConfig{ActionBoundary: stub},
+		func(session.Event) {},
+		make(chan struct{}),
 	)
 	if !result.IsError || !stub.started || !stub.finishSet || stub.finished.State != session.ActionFailed {
 		t.Fatalf("result = %#v, started=%v, finish=%#v", result, stub.started, stub.finished)

@@ -329,7 +329,8 @@ func normalizeSandboxPolicy(cwd string, policy SandboxPolicy) (SandboxPolicy, er
 				if !sandboxPathExists(protected) {
 					return SandboxPolicy{}, fmt.Errorf(
 						"protected sandbox path %q does not exist beneath writable path %q; refusing unenforceable policy",
-						protected, writable,
+						protected,
+						writable,
 					)
 				}
 			}
@@ -546,7 +547,8 @@ func planBubblewrapCommandWithPolicy(cwd, name string, args []string, policy San
 	if !policy.AllowNetwork {
 		bwrapArgs = append(bwrapArgs, "--unshare-net")
 	}
-	bwrapArgs = append(bwrapArgs,
+	bwrapArgs = append(
+		bwrapArgs,
 		"--ro-bind", cwd, cwd,
 		"--ro-bind", "/bin", "/bin",
 		"--ro-bind", "/usr", "/usr",
@@ -559,7 +561,8 @@ func planBubblewrapCommandWithPolicy(cwd, name string, args []string, policy San
 		bwrapArgs = append(bwrapArgs, "--bind", "/private/tmp", "/private/tmp")
 	}
 	for _, path := range sandboxReadPaths(cwd, name, policy.ReadPaths) {
-		if path == cwd || path == "/bin" || path == "/usr" || path == "/etc" || path == "/dev" || path == "/private/tmp" {
+		if path == cwd || path == "/bin" || path == "/usr" || path == "/etc" || path == "/dev" ||
+			path == "/private/tmp" {
 			continue
 		}
 		if sandboxPathExists(path) {

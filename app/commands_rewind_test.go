@@ -201,6 +201,10 @@ func TestRewindRestoreUsesCancelableRuntimeContext(t *testing.T) {
 		t.Fatal("stale canceled restore returned a command")
 	}
 	if updated.Model.CheckpointRequest != model.Model.CheckpointRequest {
-		t.Fatalf("stale restore changed checkpoint request: got %d want %d", updated.Model.CheckpointRequest, model.Model.CheckpointRequest)
+		t.Fatalf(
+			"stale restore changed checkpoint request: got %d want %d",
+			updated.Model.CheckpointRequest,
+			model.Model.CheckpointRequest,
+		)
 	}
 }

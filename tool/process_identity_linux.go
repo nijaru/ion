@@ -71,7 +71,11 @@ func (linuxProcessPlatform) inspect(pid int) (ProcessIdentity, error) {
 		return ProcessIdentity{}, fmt.Errorf("%w: process group changed during inspection", ErrProcessIdentityInvalid)
 	}
 	if pgid != pid {
-		return ProcessIdentity{}, fmt.Errorf("%w: pid %d is not its process-group leader", ErrProcessIdentityInvalid, pid)
+		return ProcessIdentity{}, fmt.Errorf(
+			"%w: pid %d is not its process-group leader",
+			ErrProcessIdentityInvalid,
+			pid,
+		)
 	}
 	return ProcessIdentity{
 		Version:    processIdentityVersion,

@@ -56,7 +56,11 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 		t.Fatal("summary entry ID is empty")
 	}
 	if request.Model != "summary-model" || len(request.Messages) != 2 {
-		t.Fatalf("summary request = model %q with %d messages, want summary-model with 2", request.Model, len(request.Messages))
+		t.Fatalf(
+			"summary request = model %q with %d messages, want summary-model with 2",
+			request.Model,
+			len(request.Messages),
+		)
 	}
 	if !strings.Contains(request.Messages[1].Content, "focus on unfinished work") {
 		t.Fatalf("summary request omitted custom instructions: %q", request.Messages[1].Content)
@@ -74,7 +78,12 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 		t.Fatalf("branch entry 1 = %T, want BranchSummaryEntry", branch[1])
 	}
 	if summary.FromID != oldLeafID || !strings.Contains(summary.Summary, "branch work") {
-		t.Fatalf("summary = from %q text %q, want from %q and generated text", summary.FromID, summary.Summary, oldLeafID)
+		t.Fatalf(
+			"summary = from %q text %q, want from %q and generated text",
+			summary.FromID,
+			summary.Summary,
+			oldLeafID,
+		)
 	}
 
 	snapshot, err := sess.BuildContext(ctx)

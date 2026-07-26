@@ -1,4 +1,3 @@
-
 package app
 
 import (
@@ -50,7 +49,7 @@ func TestMarkdownRendering(t *testing.T) {
 			},
 		},
 		{
-			name: "code block",
+			name:  "code block",
 			input: "```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```",
 			contains: []string{
 				"func main()",
@@ -58,7 +57,7 @@ func TestMarkdownRendering(t *testing.T) {
 			},
 		},
 		{
-			name: "code block with language",
+			name:  "code block with language",
 			input: "```python\ndef hello():\n    print(\"hello\")\n```",
 			contains: []string{
 				"def hello():",
@@ -84,7 +83,7 @@ func TestMarkdownRendering(t *testing.T) {
 			},
 		},
 		{
-			name: "table",
+			name:  "table",
 			input: "| Name | Value |\n|------|-------|\n| foo  | bar   |",
 			contains: []string{
 				"Name",
@@ -238,7 +237,13 @@ func TestMarkdownCodeBlockSyntaxHighlighting(t *testing.T) {
 			stripped := ansi.Strip(result)
 			for _, want := range tt.contains {
 				if !strings.Contains(stripped, want) {
-					t.Errorf("syntax highlighting missing %q\nlanguage: %s\ncode: %s\noutput: %s", want, tt.language, tt.code, stripped)
+					t.Errorf(
+						"syntax highlighting missing %q\nlanguage: %s\ncode: %s\noutput: %s",
+						want,
+						tt.language,
+						tt.code,
+						stripped,
+					)
 				}
 			}
 		})

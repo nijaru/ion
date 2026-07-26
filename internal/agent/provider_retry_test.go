@@ -19,6 +19,7 @@ func (p *harnessRetryProvider) ID() string { return "harness-retry-test" }
 func (p *harnessRetryProvider) Generate(context.Context, *llm.Request) (*llm.Response, error) {
 	return &llm.Response{}, nil
 }
+
 func (p *harnessRetryProvider) Stream(context.Context, *llm.Request) (llm.Stream, error) {
 	if p.streamCalls.Add(1) == 1 {
 		return nil, syscall.ECONNRESET
@@ -31,6 +32,7 @@ func (p *harnessRetryProvider) CountTokens(context.Context, string, []llm.Messag
 }
 func (p *harnessRetryProvider) Cost(context.Context, string, llm.Usage) float64 { return 0 }
 func (p *harnessRetryProvider) Capabilities(string) llm.Capabilities            { return llm.Capabilities{} }
+
 func (p *harnessRetryProvider) IsTransient(err error) bool {
 	return llm.IsTransientTransportError(err)
 }

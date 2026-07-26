@@ -3,14 +3,15 @@ package app
 import (
 	"context"
 	"errors"
-	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/agent"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"

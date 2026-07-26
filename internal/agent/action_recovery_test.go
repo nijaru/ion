@@ -23,13 +23,22 @@ type cancelingProcessReconciler struct {
 	started chan struct{}
 }
 
-func (r *cancelingProcessReconciler) ReconcileProcess(ctx context.Context, _ string) (tool.ProcessRecoveryResult, error) {
+func (r *cancelingProcessReconciler) ReconcileProcess(
+	ctx context.Context,
+	_ string,
+) (tool.ProcessRecoveryResult, error) {
 	close(r.started)
 	<-ctx.Done()
-	return tool.ProcessRecoveryResult{Status: tool.ProcessRecoveryTerminated, Detail: "cleanup completed after caller cancellation"}, nil
+	return tool.ProcessRecoveryResult{
+		Status: tool.ProcessRecoveryTerminated,
+		Detail: "cleanup completed after caller cancellation",
+	}, nil
 }
 
-func (r *recordingProcessReconciler) ReconcileProcess(_ context.Context, identity string) (tool.ProcessRecoveryResult, error) {
+func (r *recordingProcessReconciler) ReconcileProcess(
+	_ context.Context,
+	identity string,
+) (tool.ProcessRecoveryResult, error) {
 	r.seen = append(r.seen, identity)
 	return r.result, nil
 }
@@ -78,7 +87,8 @@ func TestControllerProcessRecoveryPersistsCleanupWithoutResolvingAction(t *testi
 	if action.State != session.ActionIndeterminate {
 		t.Fatalf("recovered action state = %s, want indeterminate", action.State)
 	}
-	if !strings.Contains(action.Error, "restart process recovery: matching group terminated") || !strings.Contains(action.CleanupOutcome, "restart process recovery status: terminated") {
+	if !strings.Contains(action.Error, "restart process recovery: matching group terminated") ||
+		!strings.Contains(action.CleanupOutcome, "restart process recovery status: terminated") {
 		t.Fatalf("recovery evidence = %#v", action)
 	}
 	if len(reconciler.seen) != 1 || reconciler.seen[0] != "recorded-process" {
@@ -201,7 +211,14 @@ func TestControllerRecoveryPersistsAfterCallerCancellation(t *testing.T) {
 	if _, err := store.StartAction(ctx, record.ID, record.ProcessIdentity); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.FinishAction(ctx, record.ID, session.ActionIndeterminate, "", "unknown effect", "cleanup pending"); err != nil {
+	if _, err := store.FinishAction(
+		ctx,
+		record.ID,
+		session.ActionIndeterminate,
+		"",
+		"unknown effect",
+		"cleanup pending",
+	); err != nil {
 		t.Fatal(err)
 	}
 	reconciler := &cancelingProcessReconciler{started: make(chan struct{})}

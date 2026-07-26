@@ -18,7 +18,6 @@ type Message interface {
 // UserMessage is a prompt from the user (or queued input). Content is Text/Image blocks.
 // A plain-text user message is constructed with NewUserText.
 type UserMessage struct {
-
 	Content   []Content
 	Timestamp time.Time
 }
@@ -35,7 +34,7 @@ type AssistantMessage struct {
 	ResponseID    string // optional
 	Usage         Usage
 	StopReason    StopReason
-	Error         string // non-empty iff StopReason is error or aborted
+	Error         string        // non-empty iff StopReason is error or aborted
 	ThinkingLevel ThinkingLevel // per-message reasoning level
 	Timestamp     time.Time
 }
@@ -45,11 +44,11 @@ type AssistantMessage struct {
 type ToolResultMessage struct {
 	ToolCallID string
 	ToolName   string
-	Title      string // Formatted display title (e.g., "bash go test ./...")
+	Title      string    // Formatted display title (e.g., "bash go test ./...")
 	Content    []Content // Text | Image
 	Details    json.RawMessage
 	IsError    bool
-	Terminate  bool    // stop the agent after this tool batch when true
+	Terminate  bool // stop the agent after this tool batch when true
 	Timestamp  time.Time
 }
 
@@ -83,7 +82,7 @@ type CustomMessage struct {
 	Timestamp  time.Time
 }
 
-func (CustomMessage) isMessage()            {}
+func (CustomMessage) isMessage()             {}
 func (m CustomMessage) timestamp() time.Time { return m.Timestamp }
 
 // Content is a sealed union of content block kinds.
@@ -148,11 +147,11 @@ type Cost struct {
 type StopReason string
 
 const (
-	StopReasonEndTurn  StopReason = "stop"     // natural end of turn
-	StopReasonLength   StopReason = "length"  // hit max output tokens
-	StopReasonToolUse  StopReason = "toolUse" // stopped to call a tool
-	StopReasonError    StopReason = "error"   // provider/transport error
-	StopReasonAborted  StopReason = "aborted" // cancelled via signal
+	StopReasonEndTurn StopReason = "stop"    // natural end of turn
+	StopReasonLength  StopReason = "length"  // hit max output tokens
+	StopReasonToolUse StopReason = "toolUse" // stopped to call a tool
+	StopReasonError   StopReason = "error"   // provider/transport error
+	StopReasonAborted StopReason = "aborted" // cancelled via signal
 )
 
 // EntryRole returns the role of a message entry.
@@ -212,12 +211,16 @@ func TokenUsage(msg Message) (input int, output int, cost float64) {
 
 func (s UserMessage) When() time.Time { return s.Timestamp }
 
-const RoleTool = "tool"
-const RoleAgent = "agent"
+const (
+	RoleTool  = "tool"
+	RoleAgent = "agent"
+)
 
-const RoleSubagent = "subagent"
-const RoleUser = "user"
-const RoleSystem = "system"
+const (
+	RoleSubagent = "subagent"
+	RoleUser     = "user"
+	RoleSystem   = "system"
+)
 
 // MessageText extracts text content from a message.
 func MessageText(msg Message) string {

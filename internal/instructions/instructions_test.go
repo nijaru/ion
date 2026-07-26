@@ -121,7 +121,11 @@ func TestLoadInstructionLayersWalksAncestorsToCWD(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("root instructions"), 0o644); err != nil {
 		t.Fatalf("write root AGENTS: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "services", "AGENTS.md"), []byte("services instructions"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, "services", "AGENTS.md"),
+		[]byte("services instructions"),
+		0o644,
+	); err != nil {
 		t.Fatalf("write services AGENTS: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(nested, "AGENTS.md"), []byte("api instructions"), 0o644); err != nil {

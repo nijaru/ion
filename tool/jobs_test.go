@@ -14,10 +14,14 @@ func TestJobManagerCancellationBeforeStartReapsJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := manager.start(ctx, "never-started", func(ctx context.Context, _ func(int), _ func(localOutputUpdate) error) (string, error) {
-		<-ctx.Done()
-		return "", ctx.Err()
-	})
+	_, err := manager.start(
+		ctx,
+		"never-started",
+		func(ctx context.Context, _ func(int), _ func(localOutputUpdate) error) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("start error = %v, want context canceled", err)
 	}
@@ -30,12 +34,16 @@ func TestJobManagerCancellationBeforeStartReapsJob(t *testing.T) {
 func TestJobManagerCloseCancelsRunningJobs(t *testing.T) {
 	manager := NewJobManager()
 	started := make(chan struct{})
-	jobID, err := manager.start(context.Background(), "long-running", func(ctx context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
-		signal(123)
-		close(started)
-		<-ctx.Done()
-		return "", ctx.Err()
-	})
+	jobID, err := manager.start(
+		context.Background(),
+		"long-running",
+		func(ctx context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
+			signal(123)
+			close(started)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -58,18 +66,22 @@ func TestJobManagerCloseCancelsRunningJobs(t *testing.T) {
 func TestJobManagerBoundsConcurrentOutput(t *testing.T) {
 	manager := NewJobManager()
 	defer manager.Close()
-	jobID, err := manager.start(context.Background(), "large-output", func(ctx context.Context, signal func(int), emit func(localOutputUpdate) error) (string, error) {
-		signal(123)
-		for i := 0; i < MaxToolOutputSize*4; i++ {
-			if err := emit(localOutputUpdate{Text: "x"}); err != nil {
-				return "", err
+	jobID, err := manager.start(
+		context.Background(),
+		"large-output",
+		func(ctx context.Context, signal func(int), emit func(localOutputUpdate) error) (string, error) {
+			signal(123)
+			for i := 0; i < MaxToolOutputSize*4; i++ {
+				if err := emit(localOutputUpdate{Text: "x"}); err != nil {
+					return "", err
+				}
+				if i%1024 == 0 {
+					time.Sleep(time.Microsecond)
+				}
 			}
-			if i%1024 == 0 {
-				time.Sleep(time.Microsecond)
-			}
-		}
-		return "", nil
-	})
+			return "", nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -95,10 +107,14 @@ func TestJobManagerBoundsCompletedHistory(t *testing.T) {
 	manager := NewJobManager()
 	defer manager.Close()
 	for i := 0; i < maxRetainedJobs+8; i++ {
-		if _, err := manager.start(context.Background(), "short", func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
-			signal(123)
-			return "done", nil
-		}); err != nil {
+		if _, err := manager.start(
+			context.Background(),
+			"short",
+			func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
+				signal(123)
+				return "done", nil
+			},
+		); err != nil {
 			t.Fatalf("start %d failed: %v", i, err)
 		}
 	}
@@ -118,10 +134,14 @@ func TestJobManagerSurfacesLifecycleCompletionError(t *testing.T) {
 	ctx := WithJobLifecycleRecorder(context.Background(), JobLifecycleRecorder{
 		Finished: func(string, error) error { return lifecycleErr },
 	})
-	jobID, err := manager.start(ctx, "background action", func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
-		signal(123)
-		return "done", nil
-	})
+	jobID, err := manager.start(
+		ctx,
+		"background action",
+		func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
+			signal(123)
+			return "done", nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}

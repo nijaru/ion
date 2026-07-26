@@ -247,13 +247,16 @@ func (r *smokeRunner) Subscribe(context.Context, agent.EventCursor) (*agent.Even
 		Events:   r.backend.Events(),
 	}, nil
 }
+
 func (r *smokeRunner) Prompt(ctx context.Context, text string, _ ...session.ImageContent) (session.Message, error) {
 	return nil, r.backend.SubmitTurn(ctx, text)
 }
+
 func (r *smokeRunner) Steer(text string, _ ...session.ImageContent) error {
 	r.backend.Steer(text)
 	return nil
 }
+
 func (r *smokeRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.backend.FollowUp(text)
 	return nil
@@ -273,12 +276,14 @@ func (r *smokeRunner) ListSessions(ctx context.Context, workdir string) ([]sessi
 	}
 	return r.catalog.ListSessions(ctx, workdir)
 }
+
 func (r *smokeRunner) GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error) {
 	if r.catalog == nil {
 		return session.SessionInfoEntry{}, fmt.Errorf("session catalog unavailable")
 	}
 	return r.catalog.GetSessionInfo(ctx, sessionID)
 }
+
 func (r *smokeRunner) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
 	if r.catalog == nil {
 		return fmt.Errorf("session catalog unavailable")
@@ -289,6 +294,7 @@ func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error)
 func (r *smokeRunner) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
 	return agent.NavigateResult{}, nil
 }
+
 func (r *smokeRunner) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil
 }
@@ -297,6 +303,7 @@ func (r *smokeRunner) Compact(context.Context) error                    { return
 func (r *smokeRunner) ForkSession(context.Context, string) (string, error) {
 	return "", fmt.Errorf("fork unsupported in smoke runner")
 }
+
 func (r *smokeRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
 	return "", fmt.Errorf("import unsupported in smoke runner")
 }

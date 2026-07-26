@@ -24,18 +24,21 @@ func (r *setupRuntime) Provider() string {
 	}
 	return ""
 }
+
 func (r *setupRuntime) Model() string {
 	if r.cfg != nil {
 		return r.cfg.Model
 	}
 	return ""
 }
+
 func (r *setupRuntime) ContextLimit() int {
 	if r.cfg != nil {
 		return r.cfg.ContextLimit
 	}
 	return 0
 }
+
 func (r *setupRuntime) Bootstrap() Bootstrap {
 	return Bootstrap{
 		Status: r.msg,

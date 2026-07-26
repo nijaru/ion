@@ -524,16 +524,20 @@ func TestDeniedApprovalPersistsRecoverableToolResult(t *testing.T) {
 		ApprovalMode:        ApprovalConfirm,
 		ApprovalInteractive: true,
 		Model:               llm.Model{ID: "test"},
-		Tools: []Tool{{
-			Name: "write",
-			ApprovalRequirement: func(json.RawMessage) (ApprovalRequirement, bool, error) {
-				return ApprovalRequirement{Category: "write", Operation: "write", Resource: "main.go"}, true, nil
+		Tools: []Tool{
+			{
+				Name: "write",
+				ApprovalRequirement: func(json.RawMessage) (ApprovalRequirement, bool, error) {
+					return ApprovalRequirement{Category: "write", Operation: "write", Resource: "main.go"}, true, nil
+				},
+				Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					executed = true
+					return session.ToolResultMessage{
+						Content: []session.Content{session.TextContent{Text: "executed"}},
+					}, nil
+				},
 			},
-			Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				executed = true
-				return session.ToolResultMessage{Content: []session.Content{session.TextContent{Text: "executed"}}}, nil
-			},
-		}},
+		},
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
 			streamMu.Lock()
 			streamCalls++

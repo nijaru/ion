@@ -150,7 +150,13 @@ type ActionInvoker func(
 // Implementations must not execute the tool from PrepareAndAuthorize or Start.
 type ActionBoundary interface {
 	PrepareAndAuthorize(ctx context.Context, request ActionRequest) (*ActionToken, error)
-	Execute(ctx context.Context, token *ActionToken, invoke ActionInvoker, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error)
+	Execute(
+		ctx context.Context,
+		token *ActionToken,
+		invoke ActionInvoker,
+		signal <-chan struct{},
+		progress func(session.ToolPartial),
+	) (session.ToolResultMessage, error)
 	Cancel(ctx context.Context, token *ActionToken, reason string) error
 }
 
@@ -301,7 +307,12 @@ type Runtime interface {
 // recovery without making ordinary prompt consumers depend on administration.
 type ActionRecovery interface {
 	UnsettledActions(ctx context.Context) ([]session.ActionRecord, error)
-	ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error)
+	ReconcileAction(
+		ctx context.Context,
+		actionID string,
+		state session.ActionState,
+		verification, resultIdentity, reason, cleanup string,
+	) (session.ActionRecord, error)
 }
 
 // TurnRecovery is the optional runtime capability for inspecting and

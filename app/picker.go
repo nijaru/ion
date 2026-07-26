@@ -3,13 +3,14 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/session"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/session"
 
 	"github.com/nijaru/ion/llm"
 )
@@ -33,7 +34,15 @@ func providerItems(cfg *config.Config, resolver *llm.EndpointResolver) []pickerI
 		items = append(items, buildProviderItem(cfg, def, resolver))
 	}
 	slices.SortFunc(items, func(a, b pickerItem) int {
-		if rankA, rankB := providerSortRank(cfg, a.Value, resolver), providerSortRank(cfg, b.Value, resolver); rankA != rankB {
+		if rankA, rankB := providerSortRank(
+			cfg,
+			a.Value,
+			resolver,
+		), providerSortRank(
+			cfg,
+			b.Value,
+			resolver,
+		); rankA != rankB {
 			return rankA - rankB
 		}
 		if cmp := strings.Compare(a.Group, b.Group); cmp != 0 {

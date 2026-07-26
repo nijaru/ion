@@ -213,7 +213,9 @@ func actionRecoverySummary(actions []session.ActionRecord) string {
 	if len(actions) == 0 {
 		return ""
 	}
-	lines := []string{fmt.Sprintf("Action recovery: %d unsettled external action(s); verify before retry", len(actions))}
+	lines := []string{
+		fmt.Sprintf("Action recovery: %d unsettled external action(s); verify before retry", len(actions)),
+	}
 	limit := min(len(actions), 8)
 	for _, action := range actions[:limit] {
 		line := fmt.Sprintf("- %s: %s %s", action.ID, action.Tool, action.State)
@@ -235,7 +237,9 @@ func interruptedTurnSummary(turns []session.TurnRecord) string {
 	if len(turns) == 0 {
 		return ""
 	}
-	lines := []string{fmt.Sprintf("Interrupted turns: %d retained and excluded from replay; use /turns to inspect", len(turns))}
+	lines := []string{
+		fmt.Sprintf("Interrupted turns: %d retained and excluded from replay; use /turns to inspect", len(turns)),
+	}
 	limit := min(len(turns), 8)
 	for _, turn := range turns[:limit] {
 		input := strings.Join(strings.Fields(turn.Input), " ")

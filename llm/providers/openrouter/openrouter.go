@@ -87,7 +87,12 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		p.endpoint+"/chat/completions",
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: create request: %w", err)
 	}
@@ -150,7 +155,12 @@ func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, er
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		p.endpoint+"/chat/completions",
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: create request: %w", err)
 	}

@@ -29,7 +29,12 @@ func (e *Edit) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if err != nil {
 		return Requirement{}, false, err
 	}
-	return Requirement{Category: "write", Operation: "edit", Resource: input.Path, Paths: []string{input.Path}}, true, nil
+	return Requirement{
+		Category:  "write",
+		Operation: "edit",
+		Resource:  input.Path,
+		Paths:     []string{input.Path},
+	}, true, nil
 }
 
 func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
@@ -75,7 +80,14 @@ func (e *Edit) execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := replaceFileWithinRoot(ctx, "edit", parentRoot, targetName, []byte(newContent), info.Mode().Perm()); err != nil {
+	if err := replaceFileWithinRoot(
+		ctx,
+		"edit",
+		parentRoot,
+		targetName,
+		[]byte(newContent),
+		info.Mode().Perm(),
+	); err != nil {
 		return "", err
 	}
 
@@ -287,7 +299,21 @@ func normalizeForFuzzyMatch(text string) string {
 	text = replaceRunes(text, []rune{'\u2018', '\u2019', '\u201a', '\u201b'}, '\'')
 	text = replaceRunes(text, []rune{'\u201c', '\u201d', '\u201e', '\u201f'}, '"')
 	text = replaceRunes(text, []rune{'\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212'}, '-')
-	specialSpaces := []rune{'\u00a0', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000'}
+	specialSpaces := []rune{
+		'\u00a0',
+		'\u2002',
+		'\u2003',
+		'\u2004',
+		'\u2005',
+		'\u2006',
+		'\u2007',
+		'\u2008',
+		'\u2009',
+		'\u200a',
+		'\u202f',
+		'\u205f',
+		'\u3000',
+	}
 	text = replaceRunes(text, specialSpaces, ' ')
 	return text
 }

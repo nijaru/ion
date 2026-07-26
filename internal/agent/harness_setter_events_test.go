@@ -63,5 +63,4 @@ func TestHarnessSettersEmitLifecycleUpdates(t *testing.T) {
 	if len(tools.Active) != 1 || tools.Active[0] != "read" || len(tools.Previous) != 0 {
 		t.Fatalf("tools update = %#v", tools)
 	}
-
 }

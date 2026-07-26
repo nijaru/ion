@@ -1,8 +1,9 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"strings"
+
+	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
 	ionskills "github.com/nijaru/ion/internal/skills"

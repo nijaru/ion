@@ -14,12 +14,22 @@ func TestTurnReducerSubmitIsCancelableBeforeTurnStart(t *testing.T) {
 	model := readyModel(t)
 	model.turnReducer().StartSubmit()
 	if !model.InFlight.Thinking || model.Progress.Mode != StateIonizing || model.Progress.Status != "Submitting..." {
-		t.Fatalf("submit state = thinking=%v mode=%v status=%q, want cancelable ionizing state", model.InFlight.Thinking, model.Progress.Mode, model.Progress.Status)
+		t.Fatalf(
+			"submit state = thinking=%v mode=%v status=%q, want cancelable ionizing state",
+			model.InFlight.Thinking,
+			model.Progress.Mode,
+			model.Progress.Status,
+		)
 	}
 
 	model.turnReducer().RejectSubmit("")
 	if model.InFlight.Thinking || model.Progress.Mode != StateReady || model.Progress.Status != "" {
-		t.Fatalf("rejected submit state = thinking=%v mode=%v status=%q, want ready idle state", model.InFlight.Thinking, model.Progress.Mode, model.Progress.Status)
+		t.Fatalf(
+			"rejected submit state = thinking=%v mode=%v status=%q, want ready idle state",
+			model.InFlight.Thinking,
+			model.Progress.Mode,
+			model.Progress.Status,
+		)
 	}
 }
 
@@ -259,7 +269,8 @@ func TestTurnReducerStartTurnAndDispatchManageBusyLifecycle(t *testing.T) {
 	}
 	model.turnReducer().QueueTurn("follow up")
 	dispatch := model.turnReducer().FinishTurnDispatch()
-	if dispatch.Action != TurnFinishedDispatchSubmitLocal || dispatch.Text != "follow up" || !dispatch.RearmSessionEvents {
+	if dispatch.Action != TurnFinishedDispatchSubmitLocal || dispatch.Text != "follow up" ||
+		!dispatch.RearmSessionEvents {
 		t.Fatalf("dispatch = %#v, want local follow-up submit", dispatch)
 	}
 	if got := model.turnReducer().FinishTurnDispatch(); !got.AwaitNext {
@@ -286,7 +297,8 @@ func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
 
 	model.turnReducer().ClearActiveState(true)
 	model.turnReducer().RestoreRuntimePhase(agent.PhasePersisting)
-	if !model.Progress.Compacting || model.Progress.Mode != StateWorking || model.Progress.Status != "Compacting context..." {
+	if !model.Progress.Compacting || model.Progress.Mode != StateWorking ||
+		model.Progress.Status != "Compacting context..." {
 		t.Fatalf("compaction progress = %#v, want compacting runtime projection", model.Progress)
 	}
 }

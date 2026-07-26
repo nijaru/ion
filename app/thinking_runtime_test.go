@@ -50,7 +50,15 @@ func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) 
 	})
 	defer runner.Close()
 
-	model := New(stubBackend{sess: sess, provider: "openai", model: "test"}, sess, store, "/tmp/test", "main", "dev", nil)
+	model := New(
+		stubBackend{sess: sess, provider: "openai", model: "test"},
+		sess,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
 	model.Model.Runner = runner
 	model.Model.Config = &config.Config{
 		Provider:        "openai",
@@ -237,7 +245,15 @@ func TestAutoThinkingCommandPersistsProviderDefaultAndUsesItNextTurn(t *testing.
 	})
 	defer runner.Close()
 
-	model := New(stubBackend{sess: sess, provider: "openai", model: "test"}, sess, store, "/tmp/test", "main", "dev", nil)
+	model := New(
+		stubBackend{sess: sess, provider: "openai", model: "test"},
+		sess,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
 	model.Model.Runner = runner
 	model.Model.Config = &config.Config{
 		Provider:        "openai",

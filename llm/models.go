@@ -152,8 +152,10 @@ func NewModelCatalog(opts ModelCatalogOptions) *ModelCatalog {
 	return catalog
 }
 
-type providerModelFetcher func(context.Context, *config.Config) ([]ModelMetadata, error)
-type providerCatalogFetcherFunc func(context.Context, string, *config.Config) ([]ModelMetadata, error)
+type (
+	providerModelFetcher       func(context.Context, *config.Config) ([]ModelMetadata, error)
+	providerCatalogFetcherFunc func(context.Context, string, *config.Config) ([]ModelMetadata, error)
+)
 
 const (
 	modelListRequestTimeout = 10 * time.Second
@@ -536,7 +538,13 @@ func (c *ModelCatalog) fetchOpenAIModels(ctx context.Context, cfg *config.Config
 	headers["Authorization"] = "Bearer " + apiKey
 
 	var payload openAIModelsResponse
-	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(endpoint, "/")+"/models",
+		headers,
+		&payload,
+	); err != nil {
 		return nil, fmt.Errorf("fetch openai models: %w", err)
 	}
 
@@ -570,7 +578,13 @@ func (c *ModelCatalog) fetchAnthropicModels(ctx context.Context, cfg *config.Con
 	headers["anthropic-version"] = "2023-06-01"
 
 	var payload anthropicModelsResponse
-	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models?limit=1000", headers, &payload); err != nil {
+	if err := c.fetchJSON(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(endpoint, "/")+"/models?limit=1000",
+		headers,
+		&payload,
+	); err != nil {
 		return nil, fmt.Errorf("fetch anthropic models: %w", err)
 	}
 
@@ -603,7 +617,13 @@ func (c *ModelCatalog) fetchOpenRouterModels(ctx context.Context, cfg *config.Co
 	headers["Authorization"] = "Bearer " + apiKey
 
 	var payload openRouterModelsResponse
-	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(endpoint, "/")+"/models",
+		headers,
+		&payload,
+	); err != nil {
 		return nil, fmt.Errorf("fetch openrouter models: %w", err)
 	}
 
@@ -738,7 +758,13 @@ func (c *ModelCatalog) fetchOpenAICompatibleModels(
 	}
 
 	var payload openAIModelsResponse
-	if err := c.fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+	if err := c.fetchJSON(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(endpoint, "/")+"/models",
+		headers,
+		&payload,
+	); err != nil {
 		return nil, fmt.Errorf("fetch %s models: %w", provider, err)
 	}
 

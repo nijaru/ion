@@ -110,7 +110,11 @@ func ParseEscalate(data []byte) (*EscalationConfig, error) {
 			if strings.HasPrefix(line, "- ") {
 				flushChannel()
 				channel = &EscalationChannel{Metadata: map[string]string{}}
-				if err := assignChannelField(channel, strings.TrimSpace(strings.TrimPrefix(line, "- ")), i+1); err != nil {
+				if err := assignChannelField(
+					channel,
+					strings.TrimSpace(strings.TrimPrefix(line, "- ")),
+					i+1,
+				); err != nil {
 					return nil, err
 				}
 				continue

@@ -114,7 +114,8 @@ func TestLiveProviderAuthenticationFailure(t *testing.T) {
 		t.Fatal("live auth runtime accepted an invalid credential")
 	}
 	var turnErr *agent.TurnError
-	if !errors.As(promptErr, &turnErr) || turnErr.Kind != agent.KindProvider || turnErr.Recovery != agent.RecoveryAbort {
+	if !errors.As(promptErr, &turnErr) || turnErr.Kind != agent.KindProvider ||
+		turnErr.Recovery != agent.RecoveryAbort {
 		t.Fatalf("live auth runtime error = %v, want provider TurnError", promptErr)
 	}
 	if strings.Contains(promptErr.Error(), invalidToken) || strings.Contains(turnErr.Cause.Error(), invalidToken) {
@@ -245,7 +246,8 @@ func TestLiveProviderCancellation(t *testing.T) {
 			t.Fatal("canceled live provider turn returned nil error")
 		}
 		var turnErr *agent.TurnError
-		if !errors.As(promptErr, &turnErr) || turnErr.Kind != agent.KindCancellation || turnErr.Recovery != agent.RecoveryAbort {
+		if !errors.As(promptErr, &turnErr) || turnErr.Kind != agent.KindCancellation ||
+			turnErr.Recovery != agent.RecoveryAbort {
 			t.Fatalf("canceled live provider error = %v, want cancellation TurnError", promptErr)
 		}
 	case <-ctx.Done():
@@ -336,10 +338,20 @@ func assertLiveTerminalEvents(t *testing.T, events []session.Event, wantStop ses
 		}
 	}
 	if turnEnds != 1 || agentEnds != 1 || settled != 1 {
-		t.Errorf("live terminal event counts = TurnEnd:%d AgentEnd:%d Settled:%d, want one each", turnEnds, agentEnds, settled)
+		t.Errorf(
+			"live terminal event counts = TurnEnd:%d AgentEnd:%d Settled:%d, want one each",
+			turnEnds,
+			agentEnds,
+			settled,
+		)
 	}
 	if turnEndIndex < 0 || agentEndIndex <= turnEndIndex || settledIndex <= agentEndIndex {
-		t.Errorf("live terminal event order = TurnEnd:%d AgentEnd:%d Settled:%d, want TurnEnd < AgentEnd < Settled", turnEndIndex, agentEndIndex, settledIndex)
+		t.Errorf(
+			"live terminal event order = TurnEnd:%d AgentEnd:%d Settled:%d, want TurnEnd < AgentEnd < Settled",
+			turnEndIndex,
+			agentEndIndex,
+			settledIndex,
+		)
 	}
 }
 
@@ -434,8 +446,18 @@ func TestLiveAuthFailureStatus(t *testing.T) {
 		want int
 		ok   bool
 	}{
-		{name: "http-401", err: llm.NewHTTPError("test", http.StatusUnauthorized, nil), want: http.StatusUnauthorized, ok: true},
-		{name: "http-403", err: llm.NewHTTPError("test", http.StatusForbidden, nil), want: http.StatusForbidden, ok: true},
+		{
+			name: "http-401",
+			err:  llm.NewHTTPError("test", http.StatusUnauthorized, nil),
+			want: http.StatusUnauthorized,
+			ok:   true,
+		},
+		{
+			name: "http-403",
+			err:  llm.NewHTTPError("test", http.StatusForbidden, nil),
+			want: http.StatusForbidden,
+			ok:   true,
+		},
 		{name: "server", err: llm.NewHTTPError("test", http.StatusBadGateway, nil), want: 0, ok: false},
 		{name: "untyped-401-text", err: errors.New("status code: 401"), want: 0, ok: false},
 	}

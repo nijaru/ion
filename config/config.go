@@ -74,22 +74,22 @@ type Config struct {
 	MemoryTools            string            `toml:"memory_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
-	Models                 []ModelDef        `toml:"models,omitempty" json:"models,omitempty"`
-	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty" json:"scoped_model,omitempty"`
+	Models                 []ModelDef        `toml:"models,omitempty"                json:"models,omitempty"`
+	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty"          json:"scoped_model,omitempty"`
 }
 
 type ScopedModel struct {
 	Provider string `toml:"provider,omitempty" json:"provider,omitempty"`
-	Model    string `toml:"model,omitempty" json:"model,omitempty"`
-	Pattern  string `toml:"pattern,omitempty" json:"pattern,omitempty"`
+	Model    string `toml:"model,omitempty"    json:"model,omitempty"`
+	Pattern  string `toml:"pattern,omitempty"  json:"pattern,omitempty"`
 	Thinking string `toml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 type ModelDef struct {
-	Pattern       string `toml:"pattern" json:"pattern"`
-	Preset        string `toml:"preset,omitempty" json:"preset,omitempty"`
-	Temperature   *bool  `toml:"temperature,omitempty" json:"temperature,omitempty"`
-	SystemRole    string `toml:"system_role,omitempty" json:"system_role,omitempty"`
+	Pattern       string `toml:"pattern"                  json:"pattern"`
+	Preset        string `toml:"preset,omitempty"         json:"preset,omitempty"`
+	Temperature   *bool  `toml:"temperature,omitempty"    json:"temperature,omitempty"`
+	SystemRole    string `toml:"system_role,omitempty"    json:"system_role,omitempty"`
 	ReasoningKind string `toml:"reasoning_kind,omitempty" json:"reasoning_kind,omitempty"`
 }
 

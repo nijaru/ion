@@ -15,7 +15,14 @@ import (
 // handle. The temporary file, rename, directory sync, and postimage check all
 // use the same pinned parent, so a concurrent pathname swap cannot redirect
 // the operation outside the approved directory.
-func replaceFileWithinRoot(ctx context.Context, operation string, root *os.Root, target string, data []byte, mode os.FileMode) error {
+func replaceFileWithinRoot(
+	ctx context.Context,
+	operation string,
+	root *os.Root,
+	target string,
+	data []byte,
+	mode os.FileMode,
+) error {
 	if root == nil {
 		return errors.New("mutation root is required")
 	}

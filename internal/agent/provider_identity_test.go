@@ -90,7 +90,11 @@ func TestHarnessAssistantMessagesPreserveResolvedProviderMetadata(t *testing.T) 
 			continue
 		}
 		if assistant.API != "openai-completions" || assistant.Provider != "provider-identity" {
-			t.Fatalf("streamed assistant metadata = API %q provider %q, want resolved model metadata", assistant.API, assistant.Provider)
+			t.Fatalf(
+				"streamed assistant metadata = API %q provider %q, want resolved model metadata",
+				assistant.API,
+				assistant.Provider,
+			)
 		}
 		streamed = true
 		break
@@ -113,7 +117,11 @@ func TestHarnessAssistantMessagesPreserveResolvedProviderMetadata(t *testing.T) 
 			continue
 		}
 		if assistant.API != "openai-completions" || assistant.Provider != "provider-identity" {
-			t.Fatalf("persisted assistant metadata = API %q provider %q, want resolved model metadata", assistant.API, assistant.Provider)
+			t.Fatalf(
+				"persisted assistant metadata = API %q provider %q, want resolved model metadata",
+				assistant.API,
+				assistant.Provider,
+			)
 		}
 		return
 	}

@@ -125,12 +125,18 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		plan, err := tool.PlanSandboxedCommandWithPolicy(directory, cfg.Command, cfg.Args, tool.CurrentSandboxMode(), tool.SandboxPolicy{
-			ReadPaths:      readAbsolute,
-			WritePaths:     writableAbsolute,
-			ProtectedPaths: protectedAbsolute,
-			AllowNetwork:   cfg.AllowNetwork,
-		})
+		plan, err := tool.PlanSandboxedCommandWithPolicy(
+			directory,
+			cfg.Command,
+			cfg.Args,
+			tool.CurrentSandboxMode(),
+			tool.SandboxPolicy{
+				ReadPaths:      readAbsolute,
+				WritePaths:     writableAbsolute,
+				ProtectedPaths: protectedAbsolute,
+				AllowNetwork:   cfg.AllowNetwork,
+			},
+		)
 		if err != nil {
 			cancel()
 			runtime.Close()
@@ -203,7 +209,14 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 	return runtime, nil
 }
 
-func serverIdentity(name, command string, args []string, directory string, environment map[string]string, readPaths, writablePaths []string, allowNetwork bool) string {
+func serverIdentity(
+	name, command string,
+	args []string,
+	directory string,
+	environment map[string]string,
+	readPaths, writablePaths []string,
+	allowNetwork bool,
+) string {
 	payload, _ := json.Marshal(struct {
 		Name          string            `json:"name"`
 		Command       string            `json:"command"`
@@ -218,7 +231,11 @@ func serverIdentity(name, command string, args []string, directory string, envir
 	return "mcp:server:" + name + ":" + hex.EncodeToString(digest[:8])
 }
 
-func normalizeCapabilityPaths(validator *workvfs.Validator, paths []string, kind string) (relative, absolute []string, err error) {
+func normalizeCapabilityPaths(
+	validator *workvfs.Validator,
+	paths []string,
+	kind string,
+) (relative, absolute []string, err error) {
 	if len(paths) == 0 {
 		return nil, nil, nil
 	}

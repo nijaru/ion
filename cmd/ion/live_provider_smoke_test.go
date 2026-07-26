@@ -98,13 +98,21 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 	providerB := strings.TrimSpace(os.Getenv("ION_LIVE_PROVIDER_B"))
 	modelB := strings.TrimSpace(os.Getenv("ION_LIVE_MODEL_B"))
 	if providerA == "" || modelA == "" {
-		return nil, fmt.Errorf("live provider A needs ION_LIVE_PROVIDER_A and ION_LIVE_MODEL_A, or a configured provider/model")
+		return nil, fmt.Errorf(
+			"live provider A needs ION_LIVE_PROVIDER_A and ION_LIVE_MODEL_A, or a configured provider/model",
+		)
 	}
 	if providerB == "" || modelB == "" {
-		return nil, fmt.Errorf("live provider B needs ION_LIVE_PROVIDER_B and ION_LIVE_MODEL_B; two explicit provider profiles are required")
+		return nil, fmt.Errorf(
+			"live provider B needs ION_LIVE_PROVIDER_B and ION_LIVE_MODEL_B; two explicit provider profiles are required",
+		)
 	}
 	if requireDistinctAdapter && llm.ResolveID(providerA) == llm.ResolveID(providerB) {
-		return nil, fmt.Errorf("live provider A and B must use materially different provider adapters, got %q and %q", providerA, providerB)
+		return nil, fmt.Errorf(
+			"live provider A and B must use materially different provider adapters, got %q and %q",
+			providerA,
+			providerB,
+		)
 	}
 	providerA = llm.ResolveID(providerA)
 	providerB = llm.ResolveID(providerB)
@@ -180,10 +188,21 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	provider = providerWithRetryPolicy(provider, &providerConfig)
 	caps := provider.Capabilities(profile.model)
 	if !caps.Streaming || !caps.Tools {
-		t.Fatalf("provider %q model %q capabilities = %#v, need streaming and tools for this conformance profile", profile.provider, profile.model, caps)
+		t.Fatalf(
+			"provider %q model %q capabilities = %#v, need streaming and tools for this conformance profile",
+			profile.provider,
+			profile.model,
+			caps,
+		)
 	}
 	if profile.thinking != session.ThinkingAuto && !caps.SupportsReasoningControl(string(profile.thinking)) {
-		t.Fatalf("provider %q model %q does not advertise configured thinking level %q: %#v", profile.provider, profile.model, profile.thinking, caps)
+		t.Fatalf(
+			"provider %q model %q does not advertise configured thinking level %q: %#v",
+			profile.provider,
+			profile.model,
+			profile.thinking,
+			caps,
+		)
 	}
 
 	path := filepath.Join(t.TempDir(), "live.db")
@@ -307,7 +326,11 @@ func runLiveProviderTurn(t *testing.T, profile liveProviderProfile) {
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted live runtime: %v", err)
 	}
-	t.Logf("live profile passed turn/tool/metadata/durable-replay: provider=%s model=%s", profile.provider, profile.model)
+	t.Logf(
+		"live profile passed turn/tool/metadata/durable-replay: provider=%s model=%s",
+		profile.provider,
+		profile.model,
+	)
 }
 
 func runLiveProviderBasicTurn(t *testing.T, profile liveProviderProfile) {
@@ -406,7 +429,11 @@ func runLiveProviderBasicTurn(t *testing.T, profile liveProviderProfile) {
 	if !containsLiveText(snapshot.Messages, "ion-basic-ok") {
 		t.Fatalf("basic replay lost response marker: %s", liveMessageSummary(snapshot.Messages))
 	}
-	t.Logf("basic live profile passed text/settlement/persistence/replay: provider=%s model=%s", profile.provider, profile.model)
+	t.Logf(
+		"basic live profile passed text/settlement/persistence/replay: provider=%s model=%s",
+		profile.provider,
+		profile.model,
+	)
 }
 
 func assertBasicLiveEvents(t *testing.T, events []session.Event) {
@@ -530,26 +557,45 @@ func assertLiveEvents(t *testing.T, events []session.Event, profile liveProvider
 		t.Error("live event stream contained no text delta")
 	}
 	if toolStarts != 1 || toolEnds != 1 {
-		t.Errorf("live event stream ion_live_echo count: starts=%d ends=%d, want exactly one successful call", toolStarts, toolEnds)
+		t.Errorf(
+			"live event stream ion_live_echo count: starts=%d ends=%d, want exactly one successful call",
+			toolStarts,
+			toolEnds,
+		)
 	}
 	if !settled {
 		t.Error("live event stream contained no Settled event")
 	}
 	if !assistantStart || !assistantEnd || !turnEnd || !agentEnd {
-		t.Errorf("live event stream incomplete assistant lifecycle: start=%v end=%v turn_end=%v agent_end=%v", assistantStart, assistantEnd, turnEnd, agentEnd)
+		t.Errorf(
+			"live event stream incomplete assistant lifecycle: start=%v end=%v turn_end=%v agent_end=%v",
+			assistantStart,
+			assistantEnd,
+			turnEnd,
+			agentEnd,
+		)
 	}
 	if assistantDepth != 0 {
 		t.Errorf("live event stream left %d assistant messages open", assistantDepth)
 	}
 	if turnEndIndex < 0 || agentEndIndex <= turnEndIndex || settledIndex <= agentEndIndex {
-		t.Errorf("live terminal event order = turn_end:%d agent_end:%d settled:%d; want TurnEnd < AgentEnd < Settled", turnEndIndex, agentEndIndex, settledIndex)
+		t.Errorf(
+			"live terminal event order = turn_end:%d agent_end:%d settled:%d; want TurnEnd < AgentEnd < Settled",
+			turnEndIndex,
+			agentEndIndex,
+			settledIndex,
+		)
 	}
 	if (os.Getenv("ION_LIVE_REQUIRE_THINKING") == "1" || profile.thinking != session.ThinkingAuto) && !thinking {
 		t.Errorf("live event stream contained no thinking delta for profile thinking level %q", profile.thinking)
 	}
 }
 
-func assertLiveDurableTurn(t *testing.T, entries []session.Entry, profile liveProviderProfile) session.AssistantMessage {
+func assertLiveDurableTurn(
+	t *testing.T,
+	entries []session.Entry,
+	profile liveProviderProfile,
+) session.AssistantMessage {
 	t.Helper()
 	var toolResult bool
 	var assistants []session.AssistantMessage
@@ -560,7 +606,8 @@ func assertLiveDurableTurn(t *testing.T, entries []session.Entry, profile livePr
 		}
 		switch message := messageEntry.Message.(type) {
 		case *session.ToolResultMessage:
-			if message.ToolName == "ion_live_echo" && !message.IsError && strings.Contains(session.MessageText(message), "live-check") {
+			if message.ToolName == "ion_live_echo" && !message.IsError &&
+				strings.Contains(session.MessageText(message), "live-check") {
 				toolResult = true
 			}
 		case *session.AssistantMessage:
@@ -586,7 +633,8 @@ func assertLiveDurableTurn(t *testing.T, entries []session.Entry, profile livePr
 	if final.Usage.TotalTokens <= 0 {
 		t.Errorf("final assistant usage total = %d, want provider usage metadata", final.Usage.TotalTokens)
 	}
-	if final.StopReason == "" || final.StopReason == session.StopReasonError || final.StopReason == session.StopReasonAborted {
+	if final.StopReason == "" || final.StopReason == session.StopReasonError ||
+		final.StopReason == session.StopReasonAborted {
 		t.Errorf("final assistant stop reason = %q, want a successful terminal reason", final.StopReason)
 	}
 	return final

@@ -115,7 +115,12 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	next, ok := pickScopedModel(m.resolveScopedModelPatterns(context.Background(), cfg), runtimeCfg.Provider, runtimeCfg.Model, forward)
+	next, ok := pickScopedModel(
+		m.resolveScopedModelPatterns(context.Background(), cfg),
+		runtimeCfg.Provider,
+		runtimeCfg.Model,
+		forward,
+	)
 	if !ok {
 		return m.cyclePresetFallback(cfg, preset, forward)
 	}
@@ -690,6 +695,7 @@ func splitStoredSessionModel(value string) (string, string) {
 	}
 	return strings.TrimSpace(provider), strings.TrimSpace(model)
 }
+
 func (m Model) activePreset() Preset {
 	switch m.App.ActivePreset {
 	case PresetFast:

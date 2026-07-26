@@ -92,8 +92,17 @@ func TestActionJournalLifecycleIsDurableAndIdempotent(t *testing.T) {
 	if !slices.Equal(got.Paths, record.Paths) || !slices.Equal(got.Environment, record.Environment) {
 		t.Fatalf("round-trip lists changed: %#v", got)
 	}
-	if string(got.Arguments) != string(record.Arguments) || string(got.Metadata) != string(record.Metadata) || string(got.Preimages) != string(record.Preimages) {
-		t.Fatalf("round-trip payloads = arguments %s metadata %s preimages %s, want arguments %s metadata %s preimages %s", got.Arguments, got.Metadata, got.Preimages, record.Arguments, record.Metadata, record.Preimages)
+	if string(got.Arguments) != string(record.Arguments) || string(got.Metadata) != string(record.Metadata) ||
+		string(got.Preimages) != string(record.Preimages) {
+		t.Fatalf(
+			"round-trip payloads = arguments %s metadata %s preimages %s, want arguments %s metadata %s preimages %s",
+			got.Arguments,
+			got.Metadata,
+			got.Preimages,
+			record.Arguments,
+			record.Metadata,
+			record.Preimages,
+		)
 	}
 	transitions, err := store.ActionTransitions(ctx, record.ID)
 	if err != nil {
@@ -254,7 +263,15 @@ func TestActionJournalReconcilesIndeterminateOnlyWithEvidence(t *testing.T) {
 	if _, err := store.FinishAction(ctx, record.ID, ActionIndeterminate, "", "unknown", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReconcileAction(ctx, record.ID, ActionCompleted, "verified result digest", "result-2", "verified", "clean"); err != nil {
+	if _, err := store.ReconcileAction(
+		ctx,
+		record.ID,
+		ActionCompleted,
+		"verified result digest",
+		"result-2",
+		"verified",
+		"clean",
+	); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.GetAction(ctx, record.ID)
@@ -282,17 +299,30 @@ func TestActionJournalRecordsProcessRecoveryWithoutResolvingOutcome(t *testing.T
 	if _, err := store.StartAction(ctx, record.ID, "opaque-process-identity"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.FinishAction(ctx, record.ID, ActionIndeterminate, "", "effect outcome is unknown", "executor cleanup pending"); err != nil {
+	if _, err := store.FinishAction(
+		ctx,
+		record.ID,
+		ActionIndeterminate,
+		"",
+		"effect outcome is unknown",
+		"executor cleanup pending",
+	); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := store.RecordActionRecovery(ctx, record.ID, "restart process recovery: matching group terminated", "restart process recovery status: terminated")
+	recovered, err := store.RecordActionRecovery(
+		ctx,
+		record.ID,
+		"restart process recovery: matching group terminated",
+		"restart process recovery status: terminated",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if recovered.State != ActionIndeterminate || recovered.ProcessIdentity != "opaque-process-identity" {
 		t.Fatalf("recovered action = %#v", recovered)
 	}
-	if !strings.Contains(recovered.Error, "restart process recovery: matching group terminated") || !strings.Contains(recovered.CleanupOutcome, "restart process recovery status: terminated") {
+	if !strings.Contains(recovered.Error, "restart process recovery: matching group terminated") ||
+		!strings.Contains(recovered.CleanupOutcome, "restart process recovery status: terminated") {
 		t.Fatalf("recovery evidence = %#v", recovered)
 	}
 	transitions, err := store.ActionTransitions(ctx, record.ID)
@@ -300,7 +330,8 @@ func TestActionJournalRecordsProcessRecoveryWithoutResolvingOutcome(t *testing.T
 		t.Fatal(err)
 	}
 	last := transitions[len(transitions)-1]
-	if last.From != ActionIndeterminate || last.To != ActionIndeterminate || last.Reason != "action recovery evidence recorded" {
+	if last.From != ActionIndeterminate || last.To != ActionIndeterminate ||
+		last.Reason != "action recovery evidence recorded" {
 		t.Fatalf("recovery transition = %#v", last)
 	}
 	if _, err := store.RecordActionRecovery(ctx, record.ID, "", "cleanup"); err == nil {
@@ -321,10 +352,27 @@ func TestActionJournalRejectsCancellationAfterStart(t *testing.T) {
 	if _, err := store.StartAction(ctx, record.ID, "pg-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.FinishAction(ctx, record.ID, ActionCancelled, "", "user canceled", ""); !errors.Is(err, ErrActionState) {
+	if _, err := store.FinishAction(
+		ctx,
+		record.ID,
+		ActionCancelled,
+		"",
+		"user canceled",
+		"",
+	); !errors.Is(
+		err,
+		ErrActionState,
+	) {
 		t.Fatalf("cancel after start error = %v, want ErrActionState", err)
 	}
-	if _, err := store.FinishAction(ctx, record.ID, ActionIndeterminate, "", "cancellation crossed start boundary", ""); err != nil {
+	if _, err := store.FinishAction(
+		ctx,
+		record.ID,
+		ActionIndeterminate,
+		"",
+		"cancellation crossed start boundary",
+		"",
+	); err != nil {
 		t.Fatalf("indeterminate after start: %v", err)
 	}
 }

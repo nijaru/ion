@@ -147,12 +147,12 @@ const (
 
 // ModelDef represents a model capability mapping definition.
 type ModelDef struct {
-	Pattern       string        `json:"pattern"                toml:"pattern"` // glob pattern (e.g. "deepseek-*") or exact name
-	Preset        ModelPreset   `json:"preset,omitempty"       toml:"preset,omitempty"`
-	Temperature   *bool         `json:"temperature,omitempty"   toml:"temperature,omitempty"`
-	SystemRole    Role          `json:"system_role,omitempty"   toml:"system_role,omitempty"`
+	Pattern       string        `json:"pattern"                  toml:"pattern"` // glob pattern (e.g. "deepseek-*") or exact name
+	Preset        ModelPreset   `json:"preset,omitempty"         toml:"preset,omitempty"`
+	Temperature   *bool         `json:"temperature,omitempty"    toml:"temperature,omitempty"`
+	SystemRole    Role          `json:"system_role,omitempty"    toml:"system_role,omitempty"`
 	ReasoningKind ReasoningKind `json:"reasoning_kind,omitempty" toml:"reasoning_kind,omitempty"`
-	Capabilities  *Capabilities `json:"capabilities,omitempty" toml:"capabilities,omitempty"`
+	Capabilities  *Capabilities `json:"capabilities,omitempty"   toml:"capabilities,omitempty"`
 }
 
 // Registry manages thread-safe resolution of model capabilities.

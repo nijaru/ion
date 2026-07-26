@@ -19,18 +19,18 @@ func (m *UserMessage) MarshalJSON() ([]byte, error) {
 
 func (m *AssistantMessage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Role          string         `json:"role"`
-		Content       []Content      `json:"content"`
-		API           string         `json:"api,omitempty"`
-		Provider      string         `json:"provider,omitempty"`
-		Model         string         `json:"model,omitempty"`
-		ResponseModel string         `json:"response_model,omitempty"`
-		ResponseID    string         `json:"response_id,omitempty"`
-		Usage         Usage          `json:"usage"`
-		StopReason    StopReason     `json:"stop_reason"`
-		Error         string         `json:"error,omitempty"`
-		ThinkingLevel ThinkingLevel  `json:"thinking_level,omitempty"`
-		Timestamp     int64          `json:"timestamp"`
+		Role          string        `json:"role"`
+		Content       []Content     `json:"content"`
+		API           string        `json:"api,omitempty"`
+		Provider      string        `json:"provider,omitempty"`
+		Model         string        `json:"model,omitempty"`
+		ResponseModel string        `json:"response_model,omitempty"`
+		ResponseID    string        `json:"response_id,omitempty"`
+		Usage         Usage         `json:"usage"`
+		StopReason    StopReason    `json:"stop_reason"`
+		Error         string        `json:"error,omitempty"`
+		ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`
+		Timestamp     int64         `json:"timestamp"`
 	}{
 		Role: "assistant", Content: m.Content, API: m.API, Provider: m.Provider,
 		Model: m.Model, ResponseModel: m.ResponseModel, ResponseID: m.ResponseID,
@@ -111,7 +111,7 @@ func unmarshalMessage(b []byte) (Message, error) {
 		var raw struct {
 			ToolCallID string            `json:"tool_call_id"`
 			ToolName   string            `json:"tool_name"`
-			Content    []json.RawMessage  `json:"content"`
+			Content    []json.RawMessage `json:"content"`
 			Details    json.RawMessage   `json:"details"`
 			IsError    bool              `json:"is_error"`
 			Timestamp  int64             `json:"timestamp"`

@@ -67,16 +67,35 @@ func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	}
 	next, cmd, handled := model.dispatchPickerControllerMessage(staleTree)
 	if !handled || cmd != nil || len(next.Picker.Tree.entries) != 1 || next.Picker.Tree.entries[0].id != "current" {
-		t.Fatalf("stale tree result handling = (handled=%v, cmd=%v, tree=%#v), want ignored", handled, cmd != nil, next.Picker.Tree)
+		t.Fatalf(
+			"stale tree result handling = (handled=%v, cmd=%v, tree=%#v), want ignored",
+			handled,
+			cmd != nil,
+			next.Picker.Tree,
+		)
 	}
 
-	next, cmd, handled = model.dispatchPickerControllerMessage(treePickerMoveMsg{generation: 1, err: errors.New("stale")})
+	next, cmd, handled = model.dispatchPickerControllerMessage(
+		treePickerMoveMsg{generation: 1, err: errors.New("stale")},
+	)
 	if !handled || cmd != nil || next.Picker.BranchSummary == nil {
-		t.Fatalf("stale tree move handling = (handled=%v, cmd=%v, prompt=%#v), want ignored", handled, cmd != nil, next.Picker.BranchSummary)
+		t.Fatalf(
+			"stale tree move handling = (handled=%v, cmd=%v, prompt=%#v), want ignored",
+			handled,
+			cmd != nil,
+			next.Picker.BranchSummary,
+		)
 	}
 
-	next, cmd, handled = model.dispatchPickerControllerMessage(replayBranchMsg{generation: 1, entries: []session.Entry{agentMsgEntry("stale")}})
+	next, cmd, handled = model.dispatchPickerControllerMessage(
+		replayBranchMsg{generation: 1, entries: []session.Entry{agentMsgEntry("stale")}},
+	)
 	if !handled || cmd != nil || next.Progress.LastError != "" {
-		t.Fatalf("stale replay handling = (handled=%v, cmd=%v, error=%q), want ignored", handled, cmd != nil, next.Progress.LastError)
+		t.Fatalf(
+			"stale replay handling = (handled=%v, cmd=%v, error=%q), want ignored",
+			handled,
+			cmd != nil,
+			next.Progress.LastError,
+		)
 	}
 }

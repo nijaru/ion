@@ -261,7 +261,13 @@ func TestOpenRuntimeFailsClosedForPrintModeWithInterruptedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open initial store: %v", err)
 	}
-	if _, err := initial.BeginTurn(context.Background(), "interrupted-turn", "draft after restart", nil, "context-1"); err != nil {
+	if _, err := initial.BeginTurn(
+		context.Background(),
+		"interrupted-turn",
+		"draft after restart",
+		nil,
+		"context-1",
+	); err != nil {
 		t.Fatalf("begin interrupted turn: %v", err)
 	}
 	if err := initial.Close(); err != nil {

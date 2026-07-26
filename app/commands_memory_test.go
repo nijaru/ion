@@ -17,7 +17,12 @@ type stubMemoryController struct {
 	err            error
 }
 
-func (s *stubMemoryController) Search(_ context.Context, query string, includeDeleted bool, _ int) ([]MemoryRecord, error) {
+func (s *stubMemoryController) Search(
+	_ context.Context,
+	query string,
+	includeDeleted bool,
+	_ int,
+) ([]MemoryRecord, error) {
 	s.queries = append(s.queries, query)
 	s.includeDeleted = append(s.includeDeleted, includeDeleted)
 	return append([]MemoryRecord(nil), s.records...), s.err
@@ -121,7 +126,11 @@ func TestMemoryCommandReportsUnavailableAndUsageErrors(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("invalid memory usage returned no error")
 	}
-	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != "usage: /memory [search <query>|audit|forget <id>|restore <id>|all]" {
+	if err := localErrorFromMsg(
+		t,
+		cmd(),
+	); err == nil ||
+		err.Error() != "usage: /memory [search <query>|audit|forget <id>|restore <id>|all]" {
 		t.Fatalf("usage error = %v", err)
 	}
 
@@ -166,7 +175,10 @@ func TestFormatMemoryRecords(t *testing.T) {
 }
 
 func TestFormatMemoryRecordsIsBounded(t *testing.T) {
-	got := formatMemoryRecords([]MemoryRecord{{ID: "mem_1", Content: strings.Repeat("x", maxMemoryDisplayBytes)}}, false)
+	got := formatMemoryRecords(
+		[]MemoryRecord{{ID: "mem_1", Content: strings.Repeat("x", maxMemoryDisplayBytes)}},
+		false,
+	)
 	if len(got) > maxMemoryDisplayBytes+100 {
 		t.Fatalf("formatted memory length = %d, want bounded output", len(got))
 	}

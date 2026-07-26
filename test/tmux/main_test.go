@@ -195,7 +195,7 @@ func TestTUIToolCall(t *testing.T) {
 
 	tt := newTmuxTest(t)
 	testFile := filepath.Join(tt.root, fmt.Sprintf(".ion-tmux-test-readme-%d.txt", time.Now().UnixNano()))
-	if err := os.WriteFile(testFile, []byte("ION-TMUX-FILE-CONTENT-42"), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte("ION-TMUX-FILE-CONTENT-42"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(testFile)
@@ -203,7 +203,9 @@ func TestTUIToolCall(t *testing.T) {
 	tt.launchIon()
 	t.Log("Ion started")
 
-	tt.send("Read the file " + testFile + " and tell me exactly what it contains. Say only the file content, nothing else.")
+	tt.send(
+		"Read the file " + testFile + " and tell me exactly what it contains. Say only the file content, nothing else.",
+	)
 	t.Log("sent read request, waiting for tool execution...")
 
 	content := tt.waitFor("ION-TMUX-FILE-CONTENT-42", 60*time.Second)

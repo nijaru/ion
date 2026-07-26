@@ -277,7 +277,8 @@ func TestPickerReducerCloseAllClearsPickerSurfaces(t *testing.T) {
 
 	model.pickerReducer().closeAll()
 
-	if model.Picker.Overlay != nil || model.Picker.Session != nil || model.Picker.Setup != nil || model.Picker.Approval != nil {
+	if model.Picker.Overlay != nil || model.Picker.Session != nil || model.Picker.Setup != nil ||
+		model.Picker.Approval != nil {
 		t.Fatalf("picker state = %#v, want all surfaces closed", model.Picker)
 	}
 }

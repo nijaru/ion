@@ -77,7 +77,12 @@ func RunLoop(
 		for hasMoreToolCalls || len(pending) > 0 {
 			innerIter++
 			if innerIter > maxIter {
-				msg := newFailureMessage(cfg.Model, fmt.Errorf("max tool iterations (%d) exceeded", maxIter), false, cfg.Thinking)
+				msg := newFailureMessage(
+					cfg.Model,
+					fmt.Errorf("max tool iterations (%d) exceeded", maxIter),
+					false,
+					cfg.Thinking,
+				)
 				emit(session.MessageStart{Message: &msg})
 				emit(session.MessageEnd{Message: &msg})
 				emit(session.TurnEnd{Message: msg})
@@ -131,9 +136,13 @@ func RunLoop(
 						res := session.ToolResultMessage{
 							ToolCallID: tc.ID,
 							ToolName:   tc.Name,
-							Content:    []session.Content{session.TextContent{Text: "The model response was truncated by the output token limit; tool call was not executed."}},
-							IsError:    true,
-							Timestamp:  time.Now(),
+							Content: []session.Content{
+								session.TextContent{
+									Text: "The model response was truncated by the output token limit; tool call was not executed.",
+								},
+							},
+							IsError:   true,
+							Timestamp: time.Now(),
 						}
 						emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: res})
 						toolResults = append(toolResults, res)
@@ -522,9 +531,13 @@ func prepareToolCall(
 	args, prepareErr := prepareToolArguments(tool, tc.Arguments)
 	if prepareErr != nil {
 		return preparedToolCall{}, &session.ToolResultMessage{
-			ToolCallID: tc.ID, ToolName: tc.Name,
-			Content: []session.Content{session.TextContent{Text: fmt.Sprintf("invalid prepared arguments: %v", prepareErr)}},
-			IsError: true, Timestamp: time.Now(),
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			Content: []session.Content{
+				session.TextContent{Text: fmt.Sprintf("invalid prepared arguments: %v", prepareErr)},
+			},
+			IsError:   true,
+			Timestamp: time.Now(),
 		}
 	}
 
@@ -631,7 +644,10 @@ func prepareToolCall(
 	return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
 }
 
-func invokeActionDescriptor(tool *Tool, args json.RawMessage) (requirement ApprovalRequirement, required bool, err error) {
+func invokeActionDescriptor(
+	tool *Tool,
+	args json.RawMessage,
+) (requirement ApprovalRequirement, required bool, err error) {
 	if tool == nil || tool.ApprovalRequirement == nil {
 		return ApprovalRequirement{}, false, nil
 	}
@@ -1111,7 +1127,11 @@ func validateExactNumericSchema(schema map[string]any, instance any, path string
 					return normalizeErr
 				}
 				if valid {
-					if err := validateExactNumericSchema(patternSchema, value, joinValidationPath(path, name)); err != nil {
+					if err := validateExactNumericSchema(
+						patternSchema,
+						value,
+						joinValidationPath(path, name),
+					); err != nil {
 						return err
 					}
 				}
@@ -1127,7 +1147,11 @@ func validateExactNumericSchema(schema map[string]any, instance any, path string
 					return fmt.Errorf("%s is disallowed by schema", joinValidationPath(path, name))
 				}
 			} else if additionalValid {
-				if err := validateExactNumericSchema(additionalSchema, value, joinValidationPath(path, name)); err != nil {
+				if err := validateExactNumericSchema(
+					additionalSchema,
+					value,
+					joinValidationPath(path, name),
+				); err != nil {
 					return err
 				}
 			}
@@ -1229,7 +1253,8 @@ func normalizeSchemaForValidator(value any) any {
 		}
 		result := make(map[string]any, len(value))
 		for key, nested := range value {
-			if key == "minimum" || key == "maximum" || key == "exclusiveMinimum" || key == "exclusiveMaximum" || key == "multipleOf" {
+			if key == "minimum" || key == "maximum" || key == "exclusiveMinimum" || key == "exclusiveMaximum" ||
+				key == "multipleOf" {
 				continue
 			}
 			result[key] = normalizeSchemaForValidator(nested)
@@ -1379,7 +1404,11 @@ func coercePrimitiveByType(value any, typ string) (any, bool) {
 			return float64(0), true
 		}
 		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			if number, err := strconv.ParseFloat(text, 64); err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
+			if number, err := strconv.ParseFloat(
+				text,
+				64,
+			); err == nil && !math.IsNaN(number) &&
+				!math.IsInf(number, 0) {
 				return number, true
 			}
 		}
@@ -1394,7 +1423,11 @@ func coercePrimitiveByType(value any, typ string) (any, bool) {
 			return float64(0), true
 		}
 		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			if number, err := strconv.ParseFloat(text, 64); err == nil && math.Trunc(number) == number && !math.IsInf(number, 0) {
+			if number, err := strconv.ParseFloat(
+				text,
+				64,
+			); err == nil && math.Trunc(number) == number &&
+				!math.IsInf(number, 0) {
 				return number, true
 			}
 		}
@@ -1700,7 +1733,12 @@ func isAborted(signal <-chan struct{}) bool {
 }
 
 // newFailureMessage is the canonical failure constructor; callers adapt pointer/value.
-func newFailureMessage(model llm.Model, err error, aborted bool, thinking session.ThinkingLevel) session.AssistantMessage {
+func newFailureMessage(
+	model llm.Model,
+	err error,
+	aborted bool,
+	thinking session.ThinkingLevel,
+) session.AssistantMessage {
 	stopReason := session.StopReasonError
 	if aborted {
 		stopReason = session.StopReasonAborted
@@ -1740,13 +1778,20 @@ func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.Ass
 		case llm.ThinkingBlock:
 			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
 		case llm.ToolCallBlock:
-			msg.Content = append(msg.Content, &session.ToolCall{ID: b.ID, Name: b.Name, Arguments: decodeToolArguments(b.Arguments)})
+			msg.Content = append(
+				msg.Content,
+				&session.ToolCall{ID: b.ID, Name: b.Name, Arguments: decodeToolArguments(b.Arguments)},
+			)
 		}
 	}
 	return msg
 }
 
-func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model, thinking session.ThinkingLevel) session.AssistantMessage {
+func buildAssistantMessage(
+	acc llm.StreamAccumulator,
+	model llm.Model,
+	thinking session.ThinkingLevel,
+) session.AssistantMessage {
 	resp := acc.Response()
 	msg := session.AssistantMessage{
 		API:           resp.API,
@@ -1780,7 +1825,10 @@ func buildAssistantMessage(acc llm.StreamAccumulator, model llm.Model, thinking 
 		case llm.ThinkingBlock:
 			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
 		case llm.ToolCallBlock:
-			msg.Content = append(msg.Content, &session.ToolCall{ID: b.ID, Name: b.Name, Arguments: decodeToolArguments(b.Arguments)})
+			msg.Content = append(
+				msg.Content,
+				&session.ToolCall{ID: b.ID, Name: b.Name, Arguments: decodeToolArguments(b.Arguments)},
+			)
 		}
 	}
 	return msg

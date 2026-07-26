@@ -140,8 +140,10 @@ type BusyInputRouting struct {
 	Route            string
 }
 
-var BusyInputRouteSteer = "steer"
-var BusyInputRouteFollowUp = "follow_up"
+var (
+	BusyInputRouteSteer    = "steer"
+	BusyInputRouteFollowUp = "follow_up"
+)
 
 type BusyInputDecision struct {
 	Recall        bool

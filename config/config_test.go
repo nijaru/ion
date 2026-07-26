@@ -967,7 +967,12 @@ func TestNormalizeMCPServers(t *testing.T) {
 	}
 	if len(server.ReadPaths) != 1 || server.ReadPaths[0] != "./vendor" ||
 		len(server.WritablePaths) != 1 || server.WritablePaths[0] != "./src" || !server.AllowNetwork {
-		t.Fatalf("normalized capability policy = read=%#v writable=%#v network=%v", server.ReadPaths, server.WritablePaths, server.AllowNetwork)
+		t.Fatalf(
+			"normalized capability policy = read=%#v writable=%#v network=%v",
+			server.ReadPaths,
+			server.WritablePaths,
+			server.AllowNetwork,
+		)
 	}
 }
 

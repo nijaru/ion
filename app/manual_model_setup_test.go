@@ -24,7 +24,10 @@ func (s modelCatalogStub) ListModelsForConfig(ctx context.Context, cfg *config.C
 	return s.list(ctx, cfg)
 }
 
-func (s modelCatalogStub) QueryAvailableModels(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+func (s modelCatalogStub) QueryAvailableModels(
+	ctx context.Context,
+	query llm.ModelCatalogQuery,
+) (llm.ModelCatalogResult, error) {
 	if s.query == nil {
 		return llm.ModelCatalogResult{}, nil
 	}
@@ -106,10 +109,12 @@ func TestModelPickerKeepsDuplicateIDsBoundToTheirProvider(t *testing.T) {
 }
 
 func TestModelPickerLoadHonorsOverlayCancellation(t *testing.T) {
-	modelCatalog := modelCatalogStub{query: func(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
-		<-ctx.Done()
-		return llm.ModelCatalogResult{}, ctx.Err()
-	}}
+	modelCatalog := modelCatalogStub{
+		query: func(ctx context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+			<-ctx.Done()
+			return llm.ModelCatalogResult{}, ctx.Err()
+		},
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	model := readyModel(t).WithModelCatalog(modelCatalog)

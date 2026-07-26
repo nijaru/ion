@@ -78,7 +78,10 @@ func (b *journalActionBoundary) PrepareAndAuthorize(ctx context.Context, request
 	return b.prepareAndAuthorizeDirect(ctx, request)
 }
 
-func (b *journalActionBoundary) prepareAndAuthorizeDirect(ctx context.Context, request ActionRequest) (*ActionToken, error) {
+func (b *journalActionBoundary) prepareAndAuthorizeDirect(
+	ctx context.Context,
+	request ActionRequest,
+) (*ActionToken, error) {
 	if !request.Required {
 		return nil, nil
 	}
@@ -94,7 +97,11 @@ func (b *journalActionBoundary) prepareAndAuthorizeDirect(ctx context.Context, r
 		return nil, fmt.Errorf("prepare action: %w", err)
 	}
 	if isTerminalActionState(prepared.State) {
-		return nil, fmt.Errorf("action %q is already terminal as %s; explicit recovery is required", prepared.ID, prepared.State)
+		return nil, fmt.Errorf(
+			"action %q is already terminal as %s; explicit recovery is required",
+			prepared.ID,
+			prepared.State,
+		)
 	}
 	if prepared.State != session.ActionPrepared && prepared.State != session.ActionAuthorized {
 		return nil, fmt.Errorf("action %q is already in %s; explicit recovery is required", prepared.ID, prepared.State)
@@ -113,7 +120,10 @@ func (b *journalActionBoundary) prepareAndAuthorizeDirect(ctx context.Context, r
 	}
 	outcome := approvalOutcome{decision: session.ApprovalAllow}
 	if b.approvals == nil {
-		outcome = approvalOutcome{decision: session.ApprovalDeny, reason: "tool approval is unavailable in this runtime"}
+		outcome = approvalOutcome{
+			decision: session.ApprovalDeny,
+			reason:   "tool approval is unavailable in this runtime",
+		}
 	} else if request.Requirement.AlwaysConfirm {
 		outcome = b.approvals.RequestForced(ctx, requestEvent)
 	} else {
@@ -125,7 +135,10 @@ func (b *journalActionBoundary) prepareAndAuthorizeDirect(ctx context.Context, r
 			reason = "tool call denied by user"
 		}
 		if _, journalErr := b.journal.DenyAction(ctx, prepared.ID, reason); journalErr != nil {
-			return nil, errors.Join(fmt.Errorf("deny action: %s", reason), fmt.Errorf("record action denial: %w", journalErr))
+			return nil, errors.Join(
+				fmt.Errorf("deny action: %s", reason),
+				fmt.Errorf("record action denial: %w", journalErr),
+			)
 		}
 		return nil, errors.New(reason)
 	}
@@ -331,7 +344,14 @@ func (b *journalActionBoundary) finish(ctx context.Context, token *ActionToken, 
 		}
 		return waitCommandReplyError(durableCtx, reply)
 	}
-	if _, err := b.journal.FinishAction(ctx, token.ID, result.State, result.ResultIdentity, result.Error, result.CleanupOutcome); err != nil {
+	if _, err := b.journal.FinishAction(
+		ctx,
+		token.ID,
+		result.State,
+		result.ResultIdentity,
+		result.Error,
+		result.CleanupOutcome,
+	); err != nil {
 		return fmt.Errorf("finish action: %w", err)
 	}
 	return nil
@@ -380,7 +400,14 @@ func (b *journalActionBoundary) finishDirect(ctx context.Context, token *ActionT
 			result.State = session.ActionFailed
 		}
 	}
-	if _, err := b.journal.FinishAction(ctx, token.ID, result.State, result.ResultIdentity, result.Error, result.CleanupOutcome); err != nil {
+	if _, err := b.journal.FinishAction(
+		ctx,
+		token.ID,
+		result.State,
+		result.ResultIdentity,
+		result.Error,
+		result.CleanupOutcome,
+	); err != nil {
 		return fmt.Errorf("finish action: %w", err)
 	}
 	return nil
@@ -633,9 +660,14 @@ func (b *journalActionBoundary) canonicalWorkdir(requestCWD string) (string, err
 	return filepath.Clean(requestedResolved), nil
 }
 
-func (b *journalActionBoundary) canonicalPaths(cwd string, requirement ApprovalRequirement, operation string) ([]string, error) {
+func (b *journalActionBoundary) canonicalPaths(
+	cwd string,
+	requirement ApprovalRequirement,
+	operation string,
+) ([]string, error) {
 	paths := slices.Clone(requirement.Paths)
-	if len(paths) == 0 && (strings.EqualFold(operation, "write") || strings.EqualFold(operation, "edit")) && requirement.Resource != "" {
+	if len(paths) == 0 && (strings.EqualFold(operation, "write") || strings.EqualFold(operation, "edit")) &&
+		requirement.Resource != "" {
 		paths = []string{requirement.Resource}
 	}
 	canonical := make([]string, 0, len(paths))

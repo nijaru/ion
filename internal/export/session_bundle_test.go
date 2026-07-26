@@ -68,7 +68,8 @@ func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(forkBranch) != 2 || session.EntryText(forkBranch[0]) != "source prompt" || session.EntryText(forkBranch[1]) != "source answer" {
+	if len(forkBranch) != 2 || session.EntryText(forkBranch[0]) != "source prompt" ||
+		session.EntryText(forkBranch[1]) != "source answer" {
 		t.Fatalf("fork branch = %#v, want copied source conversation", forkBranch)
 	}
 	if forkBranch[0].ID() == userID || forkBranch[1].ID() == assistantID {

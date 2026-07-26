@@ -34,7 +34,11 @@ func TestParseRetryAfterSupportsSecondsAndHTTPDate(t *testing.T) {
 	if got, ok := llm.ParseRetryAfter("2", now); !ok || got != 2*time.Second {
 		t.Fatalf("seconds Retry-After = (%s, %v), want (2s, true)", got, ok)
 	}
-	if got, ok := llm.ParseRetryAfter(now.Add(3*time.Second).Format(http.TimeFormat), now); !ok || got != 3*time.Second {
+	if got, ok := llm.ParseRetryAfter(
+		now.Add(3*time.Second).Format(http.TimeFormat),
+		now,
+	); !ok ||
+		got != 3*time.Second {
 		t.Fatalf("date Retry-After = (%s, %v), want (3s, true)", got, ok)
 	}
 	if got, ok := llm.ParseRetryAfter("not-a-delay", now); ok || got != 0 {

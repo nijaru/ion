@@ -188,7 +188,9 @@ func settingsConfigUpdate(
 	case "reasoning", "reasoning_effort", "thinking_level":
 		level := config.NormalizeReasoningEffort(value)
 		if level == "" {
-			return config.Config{}, "", fmt.Errorf("usage: /settings thinking_level auto|off|minimal|low|medium|high|xhigh|max")
+			return config.Config{}, "", fmt.Errorf(
+				"usage: /settings thinking_level auto|off|minimal|low|medium|high|xhigh|max",
+			)
 		}
 		updated.ReasoningEffort = level
 		notice = "Thinking level: " + level

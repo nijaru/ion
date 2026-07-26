@@ -17,7 +17,11 @@ import (
 // NewProviderFromConfig creates an llm.Provider from a config.Config.
 // Model metadata (context limits, pricing) is resolved separately by the caller
 // to avoid a circular dependency between providers and models.
-func NewProviderFromConfig(ctx context.Context, cfg *config.Config, resolver *llm.EndpointResolver) (llm.Provider, error) {
+func NewProviderFromConfig(
+	ctx context.Context,
+	cfg *config.Config,
+	resolver *llm.EndpointResolver,
+) (llm.Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -222,7 +222,7 @@ func TestResponseGetContentBlocks(t *testing.T) {
 func TestResponseGetContentBlocksPrefersBlocks(t *testing.T) {
 	r := llm.Response{
 		Content: "flat text",
-		Blocks: []llm.ContentBlock{llm.TextBlock{Text: "block text"}},
+		Blocks:  []llm.ContentBlock{llm.TextBlock{Text: "block text"}},
 	}
 
 	blocks := r.GetContentBlocks()

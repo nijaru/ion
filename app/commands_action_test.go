@@ -24,7 +24,12 @@ func (r *actionRecoveryTestRunner) UnsettledActions(context.Context) ([]session.
 	return []session.ActionRecord{r.action}, nil
 }
 
-func (r *actionRecoveryTestRunner) ReconcileAction(ctx context.Context, id string, state session.ActionState, verification, _, _, _ string) (session.ActionRecord, error) {
+func (r *actionRecoveryTestRunner) ReconcileAction(
+	ctx context.Context,
+	id string,
+	state session.ActionState,
+	verification, _, _, _ string,
+) (session.ActionRecord, error) {
 	r.ctx = ctx
 	r.got.id = id
 	r.got.state = state
@@ -58,7 +63,11 @@ func TestActionsCommandReconcilesWithExplicitEvidence(t *testing.T) {
 
 	model, cmd = model.handleCommand("/actions reconcile action-1 completed operator verified result")
 	if cmd == nil || model.Model.RecoveryRequest != 1 {
-		t.Fatalf("accepted reconciliation = request %d, cmd %v; want request 1", model.Model.RecoveryRequest, cmd != nil)
+		t.Fatalf(
+			"accepted reconciliation = request %d, cmd %v; want request 1",
+			model.Model.RecoveryRequest,
+			cmd != nil,
+		)
 	}
 	msg := cmd()
 	if got := msg.(actionReconciledMsg); got.err != nil {
@@ -66,9 +75,14 @@ func TestActionsCommandReconcilesWithExplicitEvidence(t *testing.T) {
 	}
 	model, _ = model.update(msg)
 	if model.Model.RecoveryRequest != 0 || len(model.Model.Recovery) != 0 {
-		t.Fatalf("post-reconcile projection = request %d recovery %#v", model.Model.RecoveryRequest, model.Model.Recovery)
+		t.Fatalf(
+			"post-reconcile projection = request %d recovery %#v",
+			model.Model.RecoveryRequest,
+			model.Model.Recovery,
+		)
 	}
-	if runner.got.id != "action-1" || runner.got.state != session.ActionCompleted || runner.got.verification != "operator verified result" {
+	if runner.got.id != "action-1" || runner.got.state != session.ActionCompleted ||
+		runner.got.verification != "operator verified result" {
 		t.Fatalf("reconcile request = %#v, want exact action and evidence", runner.got)
 	}
 	if runner.ctx != expectedContext {
@@ -98,7 +112,11 @@ func TestStaleActionReconciliationCannotMutateNewRuntime(t *testing.T) {
 	}
 	if next.Model.RecoveryRequest != 1 || len(next.Model.Recovery) != 1 ||
 		next.Model.Recovery[0].State != session.ActionIndeterminate {
-		t.Fatalf("stale reconciliation mutated recovery projection: request=%d recovery=%#v", next.Model.RecoveryRequest, next.Model.Recovery)
+		t.Fatalf(
+			"stale reconciliation mutated recovery projection: request=%d recovery=%#v",
+			next.Model.RecoveryRequest,
+			next.Model.Recovery,
+		)
 	}
 
 	next, cmd = model.handleActionReconciled(actionReconciledMsg{
@@ -124,7 +142,11 @@ func TestActionsCommandRejectsUnknownActionAndRuntimeFailure(t *testing.T) {
 	model.Model.Recovery = []session.ActionRecord{runner.action}
 
 	_, cmd := model.handleCommand("/actions reconcile missing completed verified")
-	if err := localErrorFromMsg(t, cmd()); err == nil || err.Error() != `action "missing" is not an unsettled action; run /actions` {
+	if err := localErrorFromMsg(
+		t,
+		cmd(),
+	); err == nil ||
+		err.Error() != `action "missing" is not an unsettled action; run /actions` {
 		t.Fatalf("unknown action error = %v", err)
 	}
 
@@ -138,6 +160,10 @@ func TestActionsCommandRejectsUnknownActionAndRuntimeFailure(t *testing.T) {
 		t.Fatalf("runtime failure error = %v", err)
 	}
 	if model.Model.RecoveryRequest != 0 || len(model.Model.Recovery) != 1 {
-		t.Fatalf("failed reconciliation mutated projection: request %d recovery %#v", model.Model.RecoveryRequest, model.Model.Recovery)
+		t.Fatalf(
+			"failed reconciliation mutated projection: request %d recovery %#v",
+			model.Model.RecoveryRequest,
+			model.Model.Recovery,
+		)
 	}
 }

@@ -52,7 +52,12 @@ func TestHarnessCloseCancelsActiveProviderRequest(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.runDone != nil || h.runCancel != nil || h.activeTurnID != "" {
-		t.Fatalf("turn state retained after Close: done=%v cancel=%v turn=%q", h.runDone != nil, h.runCancel != nil, h.activeTurnID)
+		t.Fatalf(
+			"turn state retained after Close: done=%v cancel=%v turn=%q",
+			h.runDone != nil,
+			h.runCancel != nil,
+			h.activeTurnID,
+		)
 	}
 }
 
@@ -91,7 +96,12 @@ func TestHarnessCloseJoinsAuxiliaryOperation(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.phase != PhaseClosed || h.runDone != nil || h.runCancel != nil {
-		t.Fatalf("auxiliary state retained after Close: phase=%s done=%v cancel=%v", h.phase, h.runDone != nil, h.runCancel != nil)
+		t.Fatalf(
+			"auxiliary state retained after Close: phase=%s done=%v cancel=%v",
+			h.phase,
+			h.runDone != nil,
+			h.runCancel != nil,
+		)
 	}
 }
 

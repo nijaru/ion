@@ -470,7 +470,12 @@ func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 		}
 		next, cmd, handled := model.dispatchAppControlMessage(msg)
 		if !handled || cmd != nil || next.Progress.LastError != "" {
-			t.Fatalf("stale catalog cancellation handling = (handled=%v, cmd=%v, error=%q), want ignored", handled, cmd != nil, next.Progress.LastError)
+			t.Fatalf(
+				"stale catalog cancellation handling = (handled=%v, cmd=%v, error=%q), want ignored",
+				handled,
+				cmd != nil,
+				next.Progress.LastError,
+			)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stale catalog update ignored runtime cancellation")

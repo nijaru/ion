@@ -49,6 +49,7 @@ func (s *stubSession) BuildContext(_ context.Context) (session.ContextSnapshot, 
 func (s *stubSession) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
+
 func (s *stubSession) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
 	return s.entries, nil
 }
@@ -61,36 +62,47 @@ func (s *stubSession) AppendMessage(_ context.Context, msg session.Message) (str
 func (s *stubSession) AppendModelChange(_ context.Context, _, _ string) (string, error) {
 	return "mc-1", nil
 }
+
 func (s *stubSession) AppendThinkingLevelChange(_ context.Context, _ session.ThinkingLevel) (string, error) {
 	return "tc-1", nil
 }
+
 func (s *stubSession) AppendActiveToolsChange(_ context.Context, _ []string) (string, error) {
 	return "tools-1", nil
 }
+
 func (s *stubSession) AppendCompaction(_ context.Context, _ session.CompactionData) (string, error) {
 	return "compact-1", nil
 }
+
 func (s *stubSession) AppendBranchSummary(_ context.Context, _ session.BranchSummaryData) (string, error) {
 	return "bs-1", nil
 }
+
 func (s *stubSession) AppendLabel(_ context.Context, _, _ string) (string, error) {
 	return "label-1", nil
 }
+
 func (s *stubSession) AppendSessionInfo(_ context.Context, _ string) (string, error) {
 	return "si-1", nil
 }
+
 func (s *stubSession) AppendCustom(_ context.Context, _ *session.CustomEntry) (string, error) {
 	return "custom-1", nil
 }
+
 func (s *stubSession) AppendLeaf(_ context.Context, _ string) (string, error) {
 	return "leaf-1", nil
 }
+
 func (s *stubSession) AppendCustomMessage(_ context.Context, _ *session.CustomMessageEntry) (string, error) {
 	return "cm-1", nil
 }
+
 func (s *stubSession) GetLabel(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
+
 func (s *stubSession) Append(_ context.Context, _ session.Entry) (string, error) {
 	return "entry-1", nil
 }
@@ -119,12 +131,15 @@ func (s *stubSession) SetLeafID(id string) error { s.leafID = id; return nil }
 func (s *stubSession) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+
 func (s *stubSession) Entries(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
+
 func (s *stubSession) Usage(_ context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
+
 func (s *stubSession) Close() error {
 	s.closed = true
 	if s.events != nil {
@@ -159,15 +174,18 @@ type stubRunner struct {
 func (r *stubRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
 	return &agent.EventSubscription{}, nil
 }
+
 func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	r.promptTexts = append(r.promptTexts, text)
 	r.promptImages = append(r.promptImages, cloneImageAttachments(images))
 	return nil, r.promptErr
 }
+
 func (r *stubRunner) Steer(text string, _ ...session.ImageContent) error {
 	r.steers = append(r.steers, text)
 	return r.steerErr
 }
+
 func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.followUps = append(r.followUps, text)
 	return r.followUpErr
@@ -195,12 +213,18 @@ func (r *stubRunner) ForkSession(context.Context, string) (string, error)       
 func (r *stubRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
 	return "", nil
 }
-func (r *stubRunner) NavigateTree(_ context.Context, targetID string, opts agent.NavigateOptions) (agent.NavigateResult, error) {
+
+func (r *stubRunner) NavigateTree(
+	_ context.Context,
+	targetID string,
+	opts agent.NavigateOptions,
+) (agent.NavigateResult, error) {
 	r.navigates++
 	r.navigateID = targetID
 	r.navigateOpts = opts
 	return agent.NavigateResult{}, r.navigateErr
 }
+
 func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil
 }
@@ -229,6 +253,7 @@ func (b stubBackend) Provider() string {
 	}
 	return "stub"
 }
+
 func (b stubBackend) Model() string {
 	if b.modelSet || b.model != "" {
 		return b.model
@@ -395,6 +420,7 @@ type resumeOnlyStore struct{}
 func (s *resumeOnlyStore) Append(ctx context.Context, entry session.Entry) (string, error) {
 	return "id-" + time.Now().Format("150405"), nil
 }
+
 func (s *resumeOnlyStore) AppendBatch(ctx context.Context, entries []session.Entry) ([]string, error) {
 	ids := make([]string, len(entries))
 	for i := range entries {
@@ -402,15 +428,19 @@ func (s *resumeOnlyStore) AppendBatch(ctx context.Context, entries []session.Ent
 	}
 	return ids, nil
 }
+
 func (s *resumeOnlyStore) GetEntry(ctx context.Context, id string) (session.Entry, error) {
 	return nil, nil
 }
+
 func (s *resumeOnlyStore) Branch(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
+
 func (s *resumeOnlyStore) BranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
 	return nil, nil
 }
+
 func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
@@ -423,12 +453,15 @@ func (s *resumeOnlyStore) Meta() session.Metadata { return session.Metadata{} }
 func (s *resumeOnlyStore) GetInputs(ctx context.Context, workdir string, n int) ([]string, error) {
 	return nil, nil
 }
+
 func (s *resumeOnlyStore) ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error) {
 	return nil, nil
 }
+
 func (s *resumeOnlyStore) UpdateSession(ctx context.Context, info session.SessionInfoEntry) error {
 	return nil
 }
+
 func (s *resumeOnlyStore) AppendLeafEntry(ctx context.Context, entry session.Entry) (string, error) {
 	return s.Append(ctx, entry)
 }

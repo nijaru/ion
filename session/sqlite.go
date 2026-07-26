@@ -272,7 +272,9 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 		return rollback(fmt.Errorf("read schema version: %w", err))
 	}
 	if version > currentSchemaVersion {
-		return rollback(fmt.Errorf("%w: found %d, supported through %d", ErrUnsupportedSchema, version, currentSchemaVersion))
+		return rollback(
+			fmt.Errorf("%w: found %d, supported through %d", ErrUnsupportedSchema, version, currentSchemaVersion),
+		)
 	}
 	if err := ensureBaseSchema(ctx, tx); err != nil {
 		return rollback(err)
@@ -383,7 +385,10 @@ func ensureActionProcessIdentity(ctx context.Context, tx *sql.Tx) error {
 		return nil
 	}
 	if hasGroup {
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE actions RENAME COLUMN process_group_id TO process_identity"); err != nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			"ALTER TABLE actions RENAME COLUMN process_group_id TO process_identity",
+		); err != nil {
 			return fmt.Errorf("rename action process identity column: %w", err)
 		}
 		return nil
@@ -583,7 +588,8 @@ func (s *SQLiteStore) beginWriteLocked(ctx context.Context) (*sql.Tx, error) {
 }
 
 func setLeafTx(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		"INSERT INTO session_meta(key,value) VALUES('leaf_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		id,
 	); err != nil {
@@ -639,7 +645,8 @@ func nextSequenceTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 			next = 1
 		}
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		"INSERT INTO session_meta(key,value) VALUES('next_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		strconv.FormatInt(next+1, 10),
 	); err != nil {
@@ -651,7 +658,9 @@ func nextSequenceTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 func (s *SQLiteStore) loadMeta() error {
 	// Session identity is durable and never follows the selected leaf.
 	var storedID sql.NullString
-	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='session_id'").Scan(&storedID); err != nil && err != sql.ErrNoRows {
+	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='session_id'").
+		Scan(&storedID); err != nil &&
+		err != sql.ErrNoRows {
 		return err
 	}
 	if storedID.Valid && storedID.String != "" {
@@ -670,7 +679,9 @@ func (s *SQLiteStore) loadMeta() error {
 
 	// Load leaf pointer.
 	var leaf sql.NullString
-	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='leaf_id'").Scan(&leaf); err != nil && err != sql.ErrNoRows {
+	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='leaf_id'").
+		Scan(&leaf); err != nil &&
+		err != sql.ErrNoRows {
 		return err
 	}
 	if leaf.Valid {
@@ -678,7 +689,9 @@ func (s *SQLiteStore) loadMeta() error {
 	}
 	// Load session name.
 	var name sql.NullString
-	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='name'").Scan(&name); err != nil && err != sql.ErrNoRows {
+	if err := s.db.QueryRow("SELECT value FROM session_meta WHERE key='name'").
+		Scan(&name); err != nil &&
+		err != sql.ErrNoRows {
 		return err
 	}
 	if name.Valid {
@@ -805,6 +818,7 @@ func (s *SQLiteStore) GetInputs(ctx context.Context, workdir string, n int) ([]s
 	}
 	return inputs, rows.Err()
 }
+
 func (s *SQLiteStore) AddInput(ctx context.Context, workdir string, input string) error {
 	if input == "" {
 		return nil
@@ -836,9 +850,11 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 	if err := s.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(
+		ctx,
 		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
-		workdir)
+		workdir,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +897,9 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(
+		ctx,
+		`
 		INSERT INTO sessions (session_id, workdir, model, branch, name, summary, last_preview, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
@@ -892,7 +910,15 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 			summary = excluded.summary,
 			last_preview = excluded.last_preview,
 			updated_at = excluded.updated_at`,
-		info.ID(), info.Workdir, info.Model, info.Branch, info.Name, info.Summary, info.LastPreview, updatedAt.Unix()); err != nil {
+		info.ID(),
+		info.Workdir,
+		info.Model,
+		info.Branch,
+		info.Name,
+		info.Summary,
+		info.LastPreview,
+		updatedAt.Unix(),
+	); err != nil {
 		return classifySQLiteError("update session catalog", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -912,7 +938,8 @@ func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInf
 	}
 	var info SessionInfoEntry
 	var updatedAt int64
-	err := s.db.QueryRowContext(ctx,
+	err := s.db.QueryRowContext(
+		ctx,
 		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE session_id = ?",
 		id,
 	).Scan(
@@ -972,7 +999,8 @@ func (s *SQLiteStore) appendTx(ctx context.Context, tx *sql.Tx, turnID string, e
 	if err != nil {
 		return "", err
 	}
-	_, err = tx.ExecContext(ctx,
+	_, err = tx.ExecContext(
+		ctx,
 		"INSERT INTO entries(id,parent_id,type,timestamp,sequence,turn_id,payload) VALUES(?,?,?,?,?,?,?)",
 		id, parentID, typ, ts, sequence, nullableString(turnID), payload,
 	)
@@ -1371,7 +1399,13 @@ func decodeEntry(base EntryBase, typ string, payload []byte) (Entry, error) {
 	case "tools_change":
 		return &ToolsChangeEntry{EntryBase: base, ActiveTools: p.ActiveTools}, nil
 	case "compaction":
-		return &CompactionEntry{EntryBase: base, Summary: p.Summary, FirstKeptID: p.FirstKeptID, TokensBefore: p.TokensBefore, Details: p.Details}, nil
+		return &CompactionEntry{
+			EntryBase:    base,
+			Summary:      p.Summary,
+			FirstKeptID:  p.FirstKeptID,
+			TokensBefore: p.TokensBefore,
+			Details:      p.Details,
+		}, nil
 	case "branch_summary":
 		return &BranchSummaryEntry{EntryBase: base, FromID: p.FromID, Summary: p.Summary, Details: p.Details}, nil
 	case "label":
@@ -1394,7 +1428,13 @@ func decodeEntry(base EntryBase, typ string, payload []byte) (Entry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal custom_message content: %w", err)
 		}
-		return &CustomMessageEntry{EntryBase: base, CustomType: p.CustomMessageType, Content: content, Display: p.CustomMessageDisplay, Details: p.CustomMessageDetails}, nil
+		return &CustomMessageEntry{
+			EntryBase:  base,
+			CustomType: p.CustomMessageType,
+			Content:    content,
+			Display:    p.CustomMessageDisplay,
+			Details:    p.CustomMessageDetails,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown entry type %q", typ)
 	}

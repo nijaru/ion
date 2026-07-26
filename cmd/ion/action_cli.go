@@ -158,7 +158,14 @@ func runActionCommand(args []string, stdout io.Writer) (err error) {
 				continue
 			}
 			if action.State != session.ActionIndeterminate {
-				return actionCommandFailure(*jsonOutput, fmt.Errorf("action %q is %s; only indeterminate actions can be reconciled", action.ID, action.State))
+				return actionCommandFailure(
+					*jsonOutput,
+					fmt.Errorf(
+						"action %q is %s; only indeterminate actions can be reconciled",
+						action.ID,
+						action.State,
+					),
+				)
 			}
 			reconciled, err := recovery.ReconcileAction(ctx, action.ID, state, evidence, "", "", "")
 			if err != nil {
@@ -166,7 +173,10 @@ func runActionCommand(args []string, stdout io.Writer) (err error) {
 			}
 			return writeActionResult(stdout, reconciled, *jsonOutput)
 		}
-		return actionCommandFailure(*jsonOutput, fmt.Errorf("action %q is not an unsettled action; run 'ion actions list'", args[1]))
+		return actionCommandFailure(
+			*jsonOutput,
+			fmt.Errorf("action %q is not an unsettled action; run 'ion actions list'", args[1]),
+		)
 	default:
 		return actionCommandFailure(*jsonOutput, errors.New(actionCommandUsage()))
 	}

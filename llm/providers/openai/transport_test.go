@@ -31,7 +31,11 @@ func TestRequestTransportUsedForGenerateAndStream(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"content\":\"streamed\"}}]}\n\ndata: [DONE]\n\n",
 	}}
 	p := NewProvider(llm.ProviderConfig{APIKey: "test", APIEndpoint: "https://example.test/v1"})
-	req := &llm.Request{Model: "test", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, Transport: transport}
+	req := &llm.Request{
+		Model:     "test",
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		Transport: transport,
+	}
 
 	if _, err := p.Generate(t.Context(), req); err != nil {
 		t.Fatal(err)

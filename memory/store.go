@@ -138,7 +138,8 @@ func (s *Store) Add(ctx context.Context, scope, content, tags string) (Record, e
 		return Record{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		`INSERT INTO memories(id, scope, content, tags, created_at) VALUES(?, ?, ?, ?, ?)`,
 		id, scope, content, tags, now.UnixNano(),
 	); err != nil {
@@ -265,7 +266,13 @@ func (s *Store) transition(ctx context.Context, scope, id string, deleted bool) 
 	if deleted {
 		deletedAt = now.UnixNano()
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE memories SET deleted_at = ? WHERE id = ? AND scope = ?`, deletedAt, id, scope); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE memories SET deleted_at = ? WHERE id = ? AND scope = ?`,
+		deletedAt,
+		id,
+		scope,
+	); err != nil {
 		return Record{}, fmt.Errorf("update memory: %w", err)
 	}
 	op := "restore"
@@ -323,7 +330,15 @@ func (s *Store) queryAudit(ctx context.Context, scope string, limit int) ([]Audi
 	for rows.Next() {
 		var entry AuditEntry
 		var at int64
-		if err := rows.Scan(&entry.Sequence, &entry.MemoryID, &entry.Scope, &entry.Operation, &entry.Content, &entry.Tags, &at); err != nil {
+		if err := rows.Scan(
+			&entry.Sequence,
+			&entry.MemoryID,
+			&entry.Scope,
+			&entry.Operation,
+			&entry.Content,
+			&entry.Tags,
+			&at,
+		); err != nil {
 			return nil, fmt.Errorf("scan memory audit: %w", err)
 		}
 		entry.At = time.Unix(0, at).UTC()
@@ -371,7 +386,8 @@ func (s *Store) Close() error {
 }
 
 func insertAudit(ctx context.Context, tx *sql.Tx, id, scope, operation, content, tags string, at time.Time) error {
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		`INSERT INTO memory_audit(memory_id, scope, operation, content, tags, at) VALUES(?, ?, ?, ?, ?, ?)`,
 		id, scope, operation, content, tags, at.UnixNano(),
 	); err != nil {

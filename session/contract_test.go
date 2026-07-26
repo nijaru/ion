@@ -122,11 +122,26 @@ func TestEntryIsSealedUnion(t *testing.T) {
 // the loop events + harness events. AgentEnd is present (the single-terminal-event invariant).
 func TestEventUnionIsClosed(t *testing.T) {
 	events := []Event{
-		AgentStart{}, TurnStart{}, MessageStart{}, MessageUpdate{}, MessageEnd{},
-		ToolExecStart{}, ToolExecUpdate{}, ToolExecEnd{},
-		ApprovalRequest{}, ApprovalResolution{}, TurnEnd{}, AgentEnd{},
-		ModelUpdate{}, ThinkingUpdate{}, ToolsUpdate{}, QueueUpdate{}, Settled{}, SavePoint{},
-		Abort{}, ProviderRetry{},
+		AgentStart{},
+		TurnStart{},
+		MessageStart{},
+		MessageUpdate{},
+		MessageEnd{},
+		ToolExecStart{},
+		ToolExecUpdate{},
+		ToolExecEnd{},
+		ApprovalRequest{},
+		ApprovalResolution{},
+		TurnEnd{},
+		AgentEnd{},
+		ModelUpdate{},
+		ThinkingUpdate{},
+		ToolsUpdate{},
+		QueueUpdate{},
+		Settled{},
+		SavePoint{},
+		Abort{},
+		ProviderRetry{},
 		&Error{},
 	}
 	for _, e := range events {
@@ -141,7 +156,8 @@ func TestEventUnionIsClosed(t *testing.T) {
 // streaming split to three kinds.
 func TestDeltaIsSealedUnionOfThree(t *testing.T) {
 	deltas := []Delta{
-		TextDelta{Text: "a"}, ThinkingDelta{Text: "b"},
+		TextDelta{Text: "a"},
+		ThinkingDelta{Text: "b"},
 		ToolCallDelta{ToolCallID: "c", Name: "ls", ArgumentsChunk: `{"`},
 	}
 	if len(deltas) != 3 {
@@ -284,7 +300,11 @@ func TestBranchSummaryProjectsAtTreePositionAndReplays(t *testing.T) {
 	if _, err := sess.AppendMessage(ctx, NewUserText("B", time.Now())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sess.MoveTo(ctx, a, &BranchSummaryData{FromID: "old-leaf", Summary: "returned from branch"}); err != nil {
+	if _, err := sess.MoveTo(
+		ctx,
+		a,
+		&BranchSummaryData{FromID: "old-leaf", Summary: "returned from branch"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sess.AppendMessage(ctx, NewUserText("C", time.Now())); err != nil {

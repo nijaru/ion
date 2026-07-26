@@ -85,7 +85,8 @@ func FuzzRunLoop(f *testing.F) {
 			Convert:  DefaultConvert,
 		}
 
-		msgs := RunLoop(context.Background(),
+		msgs := RunLoop(
+			context.Background(),
 			[]session.Message{session.NewUserText("prompt", time.Now())},
 			TurnContext{}, cfg, func(e session.Event) {}, nil,
 		)

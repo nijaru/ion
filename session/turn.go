@@ -42,7 +42,12 @@ type TurnRecord struct {
 // persistence implementation or a compatibility protocol.
 type DurableStore interface {
 	Store
-	BeginTurn(ctx context.Context, turnID, input string, inputImages []ImageContent, contextID string) (TurnRecord, error)
+	BeginTurn(
+		ctx context.Context,
+		turnID, input string,
+		inputImages []ImageContent,
+		contextID string,
+	) (TurnRecord, error)
 	GetTurn(ctx context.Context, turnID string) (TurnRecord, error)
 	AppendTurnEntry(ctx context.Context, turnID string, entry Entry) (string, error)
 	TurnBranch(ctx context.Context, turnID string) ([]Entry, error)
@@ -193,7 +198,12 @@ func recoverInterruptedTurns(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func (s *SQLiteStore) BeginTurn(ctx context.Context, turnID, input string, inputImages []ImageContent, contextID string) (TurnRecord, error) {
+func (s *SQLiteStore) BeginTurn(
+	ctx context.Context,
+	turnID, input string,
+	inputImages []ImageContent,
+	contextID string,
+) (TurnRecord, error) {
 	ctx = normalizeContext(ctx)
 	if turnID == "" {
 		turnID = newID()
@@ -270,7 +280,12 @@ func (s *SQLiteStore) AppendTurnEntry(ctx context.Context, turnID string, entry 
 	}
 	if entry.ParentID() != record.LeafID {
 		_ = tx.Rollback()
-		return "", fmt.Errorf("entry %q parent %q does not match turn leaf %q", entry.ID(), entry.ParentID(), record.LeafID)
+		return "", fmt.Errorf(
+			"entry %q parent %q does not match turn leaf %q",
+			entry.ID(),
+			entry.ParentID(),
+			record.LeafID,
+		)
 	}
 	var existingTurn sql.NullString
 	lookupErr := tx.QueryRowContext(ctx, "SELECT turn_id FROM entries WHERE id = ?", entry.ID()).Scan(&existingTurn)
@@ -425,7 +440,18 @@ func scanTurnRecord(row interface{ Scan(...any) error }) (TurnRecord, error) {
 		inputImages                               []byte
 		sequence, started, ended                  int64
 	)
-	if err := row.Scan(&id, &sequence, &state, &leaf, &input, &inputImages, &contextID, &started, &ended, &reason); err != nil {
+	if err := row.Scan(
+		&id,
+		&sequence,
+		&state,
+		&leaf,
+		&input,
+		&inputImages,
+		&contextID,
+		&started,
+		&ended,
+		&reason,
+	); err != nil {
 		return TurnRecord{}, err
 	}
 	var images []ImageContent

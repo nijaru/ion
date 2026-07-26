@@ -78,7 +78,10 @@ type thinkingFailureSession struct {
 	fail bool
 }
 
-func (s *thinkingFailureSession) AppendThinkingLevelChange(ctx context.Context, level session.ThinkingLevel) (string, error) {
+func (s *thinkingFailureSession) AppendThinkingLevelChange(
+	ctx context.Context,
+	level session.ThinkingLevel,
+) (string, error) {
 	if s.fail {
 		return "", errors.New("injected thinking persistence failure")
 	}

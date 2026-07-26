@@ -521,8 +521,12 @@ func executeRuntimeRequest(request runtimeRequest) runtimeResult {
 				timestamp = time.Now()
 			}
 			entry := &session.MessageEntry{
-				EntryBase: session.EntryBase{ID: session.NewEntryID(), ParentID: request.parentID, Timestamp: timestamp},
-				Message:   request.message,
+				EntryBase: session.EntryBase{
+					ID:        session.NewEntryID(),
+					ParentID:  request.parentID,
+					Timestamp: timestamp,
+				},
+				Message: request.message,
 			}
 			id, err := request.durable.AppendTurnEntry(ctx, request.turnID, entry)
 			return runtimeResult{leafID: id, err: err}

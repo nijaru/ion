@@ -72,6 +72,7 @@ func PrepareRequestForCapabilities(req *Request, caps Capabilities) (*Request, e
 	}
 	return prepared, nil
 }
+
 func rewriteSystemMessages(req *Request, targetRole Role) {
 	for i, m := range req.Messages {
 		if m.Role != RoleSystem {

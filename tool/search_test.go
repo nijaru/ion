@@ -7,9 +7,16 @@ import (
 
 func TestSearchTool_ActivatesMatches(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(Func("grep_workspace", "Search files", map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-		return "", nil
-	}))
+	reg.Register(
+		Func(
+			"grep_workspace",
+			"Search files",
+			map[string]any{"type": "object"},
+			func(context.Context, string) (string, error) {
+				return "", nil
+			},
+		),
+	)
 	var activated []string
 	search := NewSearchTool(reg)
 	search.SetActivator(func(_ context.Context, names []string) error {

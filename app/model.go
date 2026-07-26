@@ -802,6 +802,7 @@ func (m Model) WithRunner(r agent.Runtime) Model {
 	}
 	return m
 }
+
 func (m Model) configurationStatus() string {
 	decision := m.submitPreflightWithoutBudget()
 	if decision.Allowed {
@@ -971,7 +972,10 @@ func (m Model) handleRuntimeTransitionCommitted(
 	}
 	transition := msg.transition.WithHandles(m.Handles())
 	if transition.PersistReasoning && m.Model.Runner != nil {
-		if err := m.Model.Runner.SetThinking(m.runtimeOperationContext(), thinkingLevelForRuntime(transition.Snapshot.Reasoning)); err != nil {
+		if err := m.Model.Runner.SetThinking(
+			m.runtimeOperationContext(),
+			thinkingLevelForRuntime(transition.Snapshot.Reasoning),
+		); err != nil {
 			previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
 			if transition.PreviousReasoning != nil {
 				previous = *transition.PreviousReasoning
@@ -1000,7 +1004,11 @@ func (m Model) persistedReasoningEffort(preset Preset) string {
 	return m.Model.Config.ReasoningEffort
 }
 
-func providerSetupPrompt(ctx context.Context, cfg *config.Config, resolver *llm.EndpointResolver) (SetupPromptKind, error) {
+func providerSetupPrompt(
+	ctx context.Context,
+	cfg *config.Config,
+	resolver *llm.EndpointResolver,
+) (SetupPromptKind, error) {
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
 		return 0, nil
 	}

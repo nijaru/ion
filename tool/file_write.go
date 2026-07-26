@@ -27,7 +27,12 @@ func (w *Write) ApprovalRequirement(args string) (Requirement, bool, error) {
 	if err != nil {
 		return Requirement{}, false, err
 	}
-	return Requirement{Category: "write", Operation: "write", Resource: input.Path, Paths: []string{input.Path}}, true, nil
+	return Requirement{
+		Category:  "write",
+		Operation: "write",
+		Resource:  input.Path,
+		Paths:     []string{input.Path},
+	}, true, nil
 }
 
 func (w *Write) Execute(ctx context.Context, args string) (string, error) {

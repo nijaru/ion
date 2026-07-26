@@ -23,7 +23,12 @@ func (c tuiMemoryController) open() (*ionmemory.Store, error) {
 	return ionmemory.Open(c.path)
 }
 
-func (c tuiMemoryController) Search(ctx context.Context, query string, includeDeleted bool, limit int) ([]app.MemoryRecord, error) {
+func (c tuiMemoryController) Search(
+	ctx context.Context,
+	query string,
+	includeDeleted bool,
+	limit int,
+) ([]app.MemoryRecord, error) {
 	store, err := c.open()
 	if err != nil {
 		return nil, err

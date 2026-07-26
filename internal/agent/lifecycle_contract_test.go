@@ -110,7 +110,7 @@ func TestLifecycle_MessageStartBeforeEnd(t *testing.T) {
 	}
 
 	// Find MessageStart and its corresponding MessageEnd for assistant messages.
-	var startIdx, endIdx = -1, -1
+	startIdx, endIdx := -1, -1
 	for i, e := range events {
 		if _, ok := e.(session.MessageStart); ok {
 			if me, ok := e.(session.MessageStart); ok {
@@ -173,21 +173,23 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
-		Tools: []Tool{{
-			Name: "echo",
-			Execute: func(ctx context.Context, id string, args json.RawMessage, sig <-chan struct{}, prog func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				// Optionally emit progress via prog if supported
-				if prog != nil {
-					prog("partial")
-				}
-				return session.ToolResultMessage{
-					ToolCallID: id,
-					ToolName:   "echo",
-					Content:    []session.Content{session.TextContent{Text: "ok"}},
-					Timestamp:  time.Now(),
-				}, nil
+		Tools: []Tool{
+			{
+				Name: "echo",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, sig <-chan struct{}, prog func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					// Optionally emit progress via prog if supported
+					if prog != nil {
+						prog("partial")
+					}
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "echo",
+						Content:    []session.Content{session.TextContent{Text: "ok"}},
+						Timestamp:  time.Now(),
+					}, nil
+				},
 			},
-		}},
+		},
 	})
 	defer h.Close()
 
@@ -195,7 +197,7 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var startIdx, endIdx = -1, -1
+	startIdx, endIdx := -1, -1
 	for i, e := range events {
 		if te, ok := e.(session.ToolExecStart); ok && te.ToolCallID == "tc1" {
 			startIdx = i
@@ -531,7 +533,10 @@ func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	}
 	// After 1B fix, HadPendingMutations should be true because we queued SetModel.
 	if !savePoint.HadPendingMutations {
-		t.Fatalf("expected HadPendingMutations=true after SetModel pending write, got false; events: %v", eventNames(filterEvents(nil, func(e session.Event) bool { return true })))
+		t.Fatalf(
+			"expected HadPendingMutations=true after SetModel pending write, got false; events: %v",
+			eventNames(filterEvents(nil, func(e session.Event) bool { return true })),
+		)
 	}
 }
 
@@ -562,7 +567,7 @@ func TestLifecycle_SettledOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var settledIdx, agentEndIdx = -1, -1
+	settledIdx, agentEndIdx := -1, -1
 	for i, e := range events {
 		switch e.(type) {
 		case session.Settled:
@@ -686,7 +691,12 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 			t.Fatalf("Subscribe path missing %s; got %v", need, eventNames(viaSubscribe))
 		}
 		if !has(drained, need) {
-			t.Fatalf("Channel path missing %s under backpressure; drained=%v subscribe=%v", need, eventNames(drained), eventNames(viaSubscribe))
+			t.Fatalf(
+				"Channel path missing %s under backpressure; drained=%v subscribe=%v",
+				need,
+				eventNames(drained),
+				eventNames(viaSubscribe),
+			)
 		}
 	}
 	dMu.Unlock()

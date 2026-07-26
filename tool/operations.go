@@ -21,8 +21,10 @@ type commandOperations interface {
 // LocalOperations implements FileReader and commandOperations using the OS.
 type LocalOperations struct{}
 
-var _ FileReader = LocalOperations{}
-var _ commandOperations = LocalOperations{}
+var (
+	_ FileReader        = LocalOperations{}
+	_ commandOperations = LocalOperations{}
+)
 
 func (LocalOperations) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 func (LocalOperations) CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd {

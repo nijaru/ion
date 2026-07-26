@@ -55,17 +55,17 @@ var DefaultKeybindings = map[KeybindingAction]string{
 
 // KeybindingsManager manages keybindings with user overrides.
 type KeybindingsManager struct {
-	defaults map[KeybindingAction]string
+	defaults  map[KeybindingAction]string
 	overrides map[KeybindingAction]string
-	resolved map[string]KeybindingAction // key -> action
+	resolved  map[string]KeybindingAction // key -> action
 }
 
 // NewKeybindingsManager creates a new keybindings manager.
 func NewKeybindingsManager() *KeybindingsManager {
 	km := &KeybindingsManager{
-		defaults: DefaultKeybindings,
+		defaults:  DefaultKeybindings,
 		overrides: make(map[KeybindingAction]string),
-		resolved: make(map[string]KeybindingAction),
+		resolved:  make(map[string]KeybindingAction),
 	}
 	km.resolve()
 	return km

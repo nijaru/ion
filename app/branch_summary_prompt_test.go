@@ -56,7 +56,11 @@ func TestBranchSummaryPromptCancelReturnsToTree(t *testing.T) {
 	model, _ = model.handleTreePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model, _ = model.handleBranchSummaryPromptKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if model.Picker.BranchSummary != nil || model.Picker.Tree == nil {
-		t.Fatalf("after cancel branch prompt=%v tree=%v, want prompt closed and tree open", model.Picker.BranchSummary, model.Picker.Tree)
+		t.Fatalf(
+			"after cancel branch prompt=%v tree=%v, want prompt closed and tree open",
+			model.Picker.BranchSummary,
+			model.Picker.Tree,
+		)
 	}
 }
 
@@ -67,7 +71,11 @@ func TestBranchSummaryNavigationResultClosesPromptAndTree(t *testing.T) {
 	model.Picker.BranchSummary = &branchSummaryPromptState{targetID: "target", navigating: true}
 	model, _ = model.handleTreePickerMove(treePickerMoveMsg{})
 	if model.Picker.Tree != nil || model.Picker.BranchSummary != nil {
-		t.Fatalf("after successful navigation tree=%v prompt=%v, want both closed", model.Picker.Tree, model.Picker.BranchSummary)
+		t.Fatalf(
+			"after successful navigation tree=%v prompt=%v, want both closed",
+			model.Picker.Tree,
+			model.Picker.BranchSummary,
+		)
 	}
 }
 
@@ -112,6 +120,10 @@ func TestStaleBranchNavigationCancelCannotRenderNewRuntime(t *testing.T) {
 		t.Fatal("stale branch navigation cancellation returned a command")
 	}
 	if next.Progress.Status != "new runtime" || next.Picker.BranchSummary == nil {
-		t.Fatalf("stale branch navigation cancellation mutated new runtime: status=%q prompt=%#v", next.Progress.Status, next.Picker.BranchSummary)
+		t.Fatalf(
+			"stale branch navigation cancellation mutated new runtime: status=%q prompt=%#v",
+			next.Progress.Status,
+			next.Picker.BranchSummary,
+		)
 	}
 }

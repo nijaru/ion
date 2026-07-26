@@ -155,7 +155,8 @@ func (b *Base) applyReasoningFormat(
 					"enabled": reasoningToggleEnabled(req.ReasoningEffort),
 				},
 			}
-			if req.ReasoningEffort != "" && reasoningToggleEnabled(req.ReasoningEffort) && compat.SupportsReasoningEffort {
+			if req.ReasoningEffort != "" && reasoningToggleEnabled(req.ReasoningEffort) &&
+				compat.SupportsReasoningEffort {
 				cr.ReasoningEffort = req.ReasoningEffort
 			}
 		}

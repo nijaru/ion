@@ -62,7 +62,8 @@ func TestLoadSessionProjectionPrefersActiveRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load active projection: %v", err)
 	}
-	if got.ID != runtimeProjection.ID || session.EntryText(got.Branch[0]) != "active" || got.Usage != runtimeProjection.Usage {
+	if got.ID != runtimeProjection.ID || session.EntryText(got.Branch[0]) != "active" ||
+		got.Usage != runtimeProjection.Usage {
 		t.Fatalf("projection = %#v, want runtime projection %#v", got, runtimeProjection)
 	}
 	if storage.reads != 0 {
@@ -128,9 +129,13 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	usageCtx := context.Background()
 	usageMsg, ok := loadSessionUsageCmd(usageCtx, 7, runner, storage)().(sessionUsageLoadedMsg)
 	if !ok {
-		t.Fatalf("usage message type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(usageCtx, 7, runner, storage)())
+		t.Fatalf(
+			"usage message type = %T, want sessionUsageLoadedMsg",
+			loadSessionUsageCmd(usageCtx, 7, runner, storage)(),
+		)
 	}
-	if usageMsg.err != nil || usageMsg.generation != 7 || usageMsg.input != 8 || usageMsg.output != 4 || usageMsg.cost != 0.4 {
+	if usageMsg.err != nil || usageMsg.generation != 7 || usageMsg.input != 8 || usageMsg.output != 4 ||
+		usageMsg.cost != 0.4 {
 		t.Fatalf("usage message = %#v, want runtime projection usage", usageMsg)
 	}
 	if runner.projectionCtx != usageCtx {
@@ -138,7 +143,8 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	}
 
 	costMsg, ok := model.sessionCostCmd()().(sessionCostMsg)
-	if !ok || costMsg.generation != model.Model.EventGeneration || !strings.Contains(costMsg.notice, "cost: $0.400000") {
+	if !ok || costMsg.generation != model.Model.EventGeneration ||
+		!strings.Contains(costMsg.notice, "cost: $0.400000") {
 		t.Fatalf("cost message = %#v, want runtime projection cost", model.sessionCostCmd()())
 	}
 	if storage.reads != 0 {

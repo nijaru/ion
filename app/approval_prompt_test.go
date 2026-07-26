@@ -92,7 +92,11 @@ func TestStaleApprovalResolutionCannotCancelNewRuntime(t *testing.T) {
 		t.Fatal("stale approval result returned a command")
 	}
 	if next.Picker.Approval == nil || next.Progress.Status != "new runtime" {
-		t.Fatalf("stale approval result mutated new runtime: picker=%#v status=%q", next.Picker.Approval, next.Progress.Status)
+		t.Fatalf(
+			"stale approval result mutated new runtime: picker=%#v status=%q",
+			next.Picker.Approval,
+			next.Progress.Status,
+		)
 	}
 }
 

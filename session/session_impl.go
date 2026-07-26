@@ -25,9 +25,11 @@ func (s *sessionImpl) Meta() Metadata { return s.store.Meta() }
 func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
+
 func (s *sessionImpl) BranchAt(ctx context.Context, leafID string) ([]Entry, error) {
 	return s.store.BranchAt(ctx, leafID)
 }
+
 func (s *sessionImpl) GetEntry(ctx context.Context, id string) (Entry, error) {
 	return s.store.GetEntry(ctx, id)
 }
@@ -35,6 +37,7 @@ func (s *sessionImpl) GetLeafID() string { return s.store.GetLeafID() }
 func (s *sessionImpl) MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error) {
 	return s.store.MoveTo(ctx, entryID, summary)
 }
+
 func (s *sessionImpl) Entries(ctx context.Context) ([]Entry, error) {
 	return s.store.Entries(ctx)
 }
@@ -104,7 +107,11 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 			}
 		}
 		if !found {
-			return ContextSnapshot{}, fmt.Errorf("compaction %q references missing first-kept entry %q", lastCompaction.ID(), lastCompaction.FirstKeptID)
+			return ContextSnapshot{}, fmt.Errorf(
+				"compaction %q references missing first-kept entry %q",
+				lastCompaction.ID(),
+				lastCompaction.FirstKeptID,
+			)
 		}
 	}
 
@@ -113,7 +120,8 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	// Prepend the compaction summary when one is present.
 	if lastCompaction != nil && lastCompaction.Summary != "" {
 		msgs = append(msgs, NewUserText(
-			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix, time.Now()))
+			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix, time.Now(),
+		))
 	}
 
 	// Extract messages from the kept portion of the branch.
@@ -124,7 +132,8 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 		case *BranchSummaryEntry:
 			if e.Summary != "" {
 				msgs = append(msgs, NewUserText(
-					BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp))
+					BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp,
+				))
 			}
 		case *CustomMessageEntry:
 			// Custom message entries project as CustomMessage in context.

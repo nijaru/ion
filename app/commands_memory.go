@@ -53,7 +53,13 @@ func (m *Model) beginMemoryRequest() uint64 {
 func memorySearchCmd(controller MemoryController, requestID uint64, query string, includeDeleted bool) tea.Cmd {
 	return func() tea.Msg {
 		records, err := controller.Search(context.Background(), query, includeDeleted, memoryCommandLimit)
-		return memorySearchMsg{requestID: requestID, query: query, includeDeleted: includeDeleted, records: records, err: err}
+		return memorySearchMsg{
+			requestID:      requestID,
+			query:          query,
+			includeDeleted: includeDeleted,
+			records:        records,
+			err:            err,
+		}
 	}
 }
 
@@ -148,7 +154,13 @@ func formatMemoryAudit(entries []MemoryAuditRecord) string {
 	}
 	var output strings.Builder
 	for _, entry := range entries {
-		fmt.Fprintf(&output, "%d  %-7s %s", entry.Sequence, sanitizeMemoryInline(entry.Operation), sanitizeMemoryInline(entry.MemoryID))
+		fmt.Fprintf(
+			&output,
+			"%d  %-7s %s",
+			entry.Sequence,
+			sanitizeMemoryInline(entry.Operation),
+			sanitizeMemoryInline(entry.MemoryID),
+		)
 		if !entry.At.IsZero() {
 			fmt.Fprintf(&output, "  %s", entry.At.UTC().Format("2006-01-02 15:04:05Z"))
 		}

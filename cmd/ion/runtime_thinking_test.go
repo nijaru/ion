@@ -33,9 +33,11 @@ func TestThinkingLevelForRuntime(t *testing.T) {
 func TestActiveToolNamesForMode(t *testing.T) {
 	registry := tool.NewRegistry()
 	for _, name := range []string{"bash", "edit", "read", "search_tools", "write", "find", "grep", "ls", "read_skill"} {
-		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-			return "", nil
-		}))
+		registry.Register(
+			tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+				return "", nil
+			}),
+		)
 	}
 	tests := []struct {
 		mode string
@@ -43,7 +45,10 @@ func TestActiveToolNamesForMode(t *testing.T) {
 	}{
 		{mode: "coding", want: []string{"bash", "edit", "read", "search_tools", "write"}},
 		{mode: "read", want: []string{"find", "grep", "ls", "read", "search_tools"}},
-		{mode: "all", want: []string{"bash", "edit", "find", "grep", "ls", "read", "read_skill", "search_tools", "write"}},
+		{
+			mode: "all",
+			want: []string{"bash", "edit", "find", "grep", "ls", "read", "read_skill", "search_tools", "write"},
+		},
 		{mode: "unknown", want: []string{"bash", "edit", "read", "search_tools", "write"}},
 	}
 	for _, tt := range tests {
@@ -58,11 +63,18 @@ func TestActiveToolNamesForMode(t *testing.T) {
 func TestDefaultActiveToolNamesKeepsDiscoveryMetaTool(t *testing.T) {
 	registry := tool.NewRegistry()
 	for _, name := range []string{"bash", "edit", "read", "search_tools", "write", "find", "grep"} {
-		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-			return "", nil
-		}))
+		registry.Register(
+			tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+				return "", nil
+			}),
+		)
 	}
-	if got := defaultActiveToolNames(registry); !slices.Equal(got, []string{"bash", "edit", "read", "search_tools", "write"}) {
+	if got := defaultActiveToolNames(
+		registry,
+	); !slices.Equal(
+		got,
+		[]string{"bash", "edit", "read", "search_tools", "write"},
+	) {
 		t.Fatalf("default active tools = %#v", got)
 	}
 }
@@ -70,9 +82,11 @@ func TestDefaultActiveToolNamesKeepsDiscoveryMetaTool(t *testing.T) {
 func TestActiveToolNamesIncludesConfiguredMCPTools(t *testing.T) {
 	registry := tool.NewRegistry()
 	for _, name := range []string{"bash", "edit", "read", "search_tools", "write"} {
-		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-			return "", nil
-		}))
+		registry.Register(
+			tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+				return "", nil
+			}),
+		)
 	}
 	registry.Register(tool.FuncWithMetadata(
 		"mcp_workspace_echo",
@@ -90,9 +104,11 @@ func TestActiveToolNamesIncludesConfiguredMCPTools(t *testing.T) {
 func TestActiveToolNamesRespectOptInMemorySurface(t *testing.T) {
 	registry := tool.NewRegistry()
 	for _, name := range []string{"bash", "edit", "read", "search_tools", "write"} {
-		registry.Register(tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-			return "", nil
-		}))
+		registry.Register(
+			tool.Func(name, name, map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
+				return "", nil
+			}),
+		)
 	}
 	registry.Register(tool.FuncWithMetadata(
 		tool.RecallMemoryToolName,

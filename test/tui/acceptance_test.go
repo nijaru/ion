@@ -86,7 +86,8 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	if !ok || !strings.Contains(session.EntryContent(leafEntry), "final-output") {
 		t.Fatalf("acceptance current leaf = %#v, want final assistant output", leafEntry)
 	}
-	if assistantEntry.Usage.Input != 17 || assistantEntry.Usage.Output != 9 || assistantEntry.Usage.Cost.Total != 0.0123 {
+	if assistantEntry.Usage.Input != 17 || assistantEntry.Usage.Output != 9 ||
+		assistantEntry.Usage.Cost.Total != 0.0123 {
 		t.Fatalf("acceptance current leaf usage = %#v, want input=17 output=9 cost=0.0123", assistantEntry.Usage)
 	}
 	usage, err := sess.Usage(context.Background())
@@ -142,7 +143,11 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	program.Quit()
 	model := waitAcceptanceProgram(t, result)
 	if model.Picker.Tree != nil || model.Picker.BranchSummary != nil {
-		t.Fatalf("branch overlays remained open after replay: tree=%v summary=%v", model.Picker.Tree, model.Picker.BranchSummary)
+		t.Fatalf(
+			"branch overlays remained open after replay: tree=%v summary=%v",
+			model.Picker.Tree,
+			model.Picker.BranchSummary,
+		)
 	}
 	if !model.App.PrintedTranscript {
 		t.Fatal("terminal output was not marked as printed after branch replay")
@@ -169,7 +174,8 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 		t.Fatalf("reopened final entry = %T, want assistant message", reopenedFinal)
 	}
 	reopenedAssistant, ok := reopenedMessage.Message.(*session.AssistantMessage)
-	if !ok || reopenedAssistant.Usage.Input != 17 || reopenedAssistant.Usage.Output != 9 || reopenedAssistant.Usage.Cost.Total != 0.0123 {
+	if !ok || reopenedAssistant.Usage.Input != 17 || reopenedAssistant.Usage.Output != 9 ||
+		reopenedAssistant.Usage.Cost.Total != 0.0123 {
 		t.Fatalf("reopened final usage = %#v, want input=17 output=9 cost=0.0123", reopenedAssistant.Usage)
 	}
 	sess2 := session.NewSession(store2, 128)
@@ -194,7 +200,8 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read reopened selected-branch usage: %v", err)
 	}
-	if resumedUsage.Input != 5 || resumedUsage.Output != 2 || resumedUsage.TotalTokens != 7 || resumedUsage.Cost.Total != 0.0045 {
+	if resumedUsage.Input != 5 || resumedUsage.Output != 2 || resumedUsage.TotalTokens != 7 ||
+		resumedUsage.Cost.Total != 0.0045 {
 		t.Fatalf("reopened selected-branch usage = %#v, want input=5 output=2 total=7 cost=0.0045", resumedUsage)
 	}
 	program2.Quit()
@@ -256,7 +263,12 @@ func TestDeterministicTUIAcceptanceFailureRecovery(t *testing.T) {
 	})
 
 	t.Run("provider error then success", func(t *testing.T) {
-		runAcceptanceFailureRecovery(t, acceptanceErrorThenComplete, "deterministic provider failure", "after-error-output")
+		runAcceptanceFailureRecovery(
+			t,
+			acceptanceErrorThenComplete,
+			"deterministic provider failure",
+			"after-error-output",
+		)
 	})
 }
 
@@ -361,7 +373,8 @@ func runAcceptanceFailureRecovery(t *testing.T, mode acceptanceMode, firstNotice
 		t.Fatalf("recovered leaf = %T, want assistant message", leaf)
 	}
 	assistant, ok := message.Message.(*session.AssistantMessage)
-	if !ok || !strings.Contains(session.EntryContent(leaf), secondOutput) || assistant.StopReason != session.StopReasonEndTurn {
+	if !ok || !strings.Contains(session.EntryContent(leaf), secondOutput) ||
+		assistant.StopReason != session.StopReasonEndTurn {
 		t.Fatalf("recovered leaf = %#v, want successful assistant output", leaf)
 	}
 
@@ -605,7 +618,13 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
 	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForAcceptanceOutputAfter(t, output, "Model set to model-b", modelSwitchNoticeCount, "post-resume model switch notice")
+	waitForAcceptanceOutputAfter(
+		t,
+		output,
+		"Model set to model-b",
+		modelSwitchNoticeCount,
+		"post-resume model switch notice",
+	)
 	postResumeSwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
 	if postResumeSwitch.leafID != postResumeLeafID {
 		t.Fatalf("post-resume model switch leaf = %q, want %q", postResumeSwitch.leafID, postResumeLeafID)
@@ -859,7 +878,13 @@ func waitForAcceptanceOutputAfter(
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s %q after %d occurrences\noutput:\n%s", label, needle, previousCount, output.String())
+	t.Fatalf(
+		"timed out waiting for %s %q after %d occurrences\noutput:\n%s",
+		label,
+		needle,
+		previousCount,
+		output.String(),
+	)
 	return ""
 }
 

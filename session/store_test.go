@@ -67,9 +67,18 @@ func TestStoreBranchOrder(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	e1 := &MessageEntry{EntryBase: EntryBase{ID: "e1", ParentID: "", Timestamp: time.Now()}, Message: NewUserText("a", time.Now())}
-	e2 := &MessageEntry{EntryBase: EntryBase{ID: "e2", ParentID: "e1", Timestamp: time.Now()}, Message: &AssistantMessage{StopReason: StopReasonEndTurn, Timestamp: time.Now()}}
-	e3 := &MessageEntry{EntryBase: EntryBase{ID: "e3", ParentID: "e2", Timestamp: time.Now()}, Message: NewUserText("b", time.Now())}
+	e1 := &MessageEntry{
+		EntryBase: EntryBase{ID: "e1", ParentID: "", Timestamp: time.Now()},
+		Message:   NewUserText("a", time.Now()),
+	}
+	e2 := &MessageEntry{
+		EntryBase: EntryBase{ID: "e2", ParentID: "e1", Timestamp: time.Now()},
+		Message:   &AssistantMessage{StopReason: StopReasonEndTurn, Timestamp: time.Now()},
+	}
+	e3 := &MessageEntry{
+		EntryBase: EntryBase{ID: "e3", ParentID: "e2", Timestamp: time.Now()},
+		Message:   NewUserText("b", time.Now()),
+	}
 
 	for _, e := range []Entry{e1, e2, e3} {
 		if _, err := s.Append(ctx, e); err != nil {
@@ -119,7 +128,10 @@ func TestStoreLeafPointer(t *testing.T) {
 	if s.GetLeafID() != "" {
 		t.Fatalf("expected empty leaf, got %q", s.GetLeafID())
 	}
-	e1 := &MessageEntry{EntryBase: EntryBase{ID: "e1", ParentID: "", Timestamp: time.Now()}, Message: NewUserText("x", time.Now())}
+	e1 := &MessageEntry{
+		EntryBase: EntryBase{ID: "e1", ParentID: "", Timestamp: time.Now()},
+		Message:   NewUserText("x", time.Now()),
+	}
 	s.Append(ctx, e1)
 	s.SetLeafID("e1")
 	if s.GetLeafID() != "e1" {
@@ -138,7 +150,12 @@ func TestStoreAllEntryTypes(t *testing.T) {
 		&ModelChangeEntry{EntryBase: EntryBase{ID: "mc1", Timestamp: ts}, Provider: "anthropic", ModelID: "claude"},
 		&ThinkingChangeEntry{EntryBase: EntryBase{ID: "tc1", Timestamp: ts}, Level: ThinkingHigh},
 		&ToolsChangeEntry{EntryBase: EntryBase{ID: "tl1", Timestamp: ts}, ActiveTools: []string{"bash", "edit"}},
-		&CompactionEntry{EntryBase: EntryBase{ID: "c1", Timestamp: ts}, Summary: "summarized", FirstKeptID: "m1", TokensBefore: 1000},
+		&CompactionEntry{
+			EntryBase:    EntryBase{ID: "c1", Timestamp: ts},
+			Summary:      "summarized",
+			FirstKeptID:  "m1",
+			TokensBefore: 1000,
+		},
 		&BranchSummaryEntry{EntryBase: EntryBase{ID: "bs1", Timestamp: ts}, Summary: "branched"},
 		&LabelEntry{EntryBase: EntryBase{ID: "l1", Timestamp: ts}, TargetID: "m1", Label: "important"},
 		&SessionInfoEntry{EntryBase: EntryBase{ID: "si1", Timestamp: ts}, Name: "my session"},
@@ -551,7 +568,11 @@ func TestSQLiteRejectsConflictingDualProcessIdentityColumns(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewSQLiteStore(path, "ignored"); err == nil || !strings.Contains(err.Error(), "conflicting process identity columns") {
+	if _, err := NewSQLiteStore(
+		path,
+		"ignored",
+	); err == nil ||
+		!strings.Contains(err.Error(), "conflicting process identity columns") {
 		t.Fatalf("conflicting dual-column store error = %v", err)
 	}
 }
@@ -690,7 +711,10 @@ func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" || len(record.InputImages) != 1 || string(record.InputImages[0].Data) != "prompt-image" || record.ContextID != "context-base" {
+	if record.State != TurnStarted || record.Sequence == 0 || record.LeafID != baseID || record.Input != "draft" ||
+		len(record.InputImages) != 1 ||
+		string(record.InputImages[0].Data) != "prompt-image" ||
+		record.ContextID != "context-base" {
 		t.Fatalf("unexpected begin record: %+v", record)
 	}
 	gotRecord, err := store.GetTurn(ctx, record.ID)

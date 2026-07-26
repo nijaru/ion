@@ -81,7 +81,11 @@ func TestIndexWorkspaceIndexesWorkspaceFS(t *testing.T) {
 	if err := root.WriteFile("docs/readme.md", []byte("workspace search substrate"), 0o644); err != nil {
 		t.Fatalf("WriteFile(readme): %v", err)
 	}
-	if err := root.WriteFile("src/main.go", []byte("package main\nfunc main() { println(\"index me\") }"), 0o644); err != nil {
+	if err := root.WriteFile(
+		"src/main.go",
+		[]byte("package main\nfunc main() { println(\"index me\") }"),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile(main): %v", err)
 	}
 

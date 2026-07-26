@@ -295,9 +295,9 @@ func TestValidateArgsChecksCommonSchemaConstraints(t *testing.T) {
 		t.Fatalf("valid constrained schema rejected: %v", err)
 	}
 	for name, args := range map[string]map[string]any{
-		"pattern": map[string]any{"name": "Ion", "score": 2, "items": []any{"a", "b"}},
-		"minimum": map[string]any{"name": "ion", "score": 0, "items": []any{"a", "b"}},
-		"items":   map[string]any{"name": "ion", "score": 2, "items": []any{"a"}},
+		"pattern": {"name": "Ion", "score": 2, "items": []any{"a", "b"}},
+		"minimum": {"name": "ion", "score": 0, "items": []any{"a", "b"}},
+		"items":   {"name": "ion", "score": 2, "items": []any{"a"}},
 	} {
 		if err := validateArgs(schema, args); err == nil {
 			t.Errorf("%s constraint accepted", name)

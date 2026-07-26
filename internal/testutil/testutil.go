@@ -63,27 +63,35 @@ func (s *MockSession) AppendMessage(_ context.Context, msg session.Message) (str
 func (s *MockSession) AppendModelChange(_ context.Context, _, _ string) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendThinkingChange(_ context.Context, _ session.ThinkingLevel) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendToolsChange(_ context.Context, _ []string) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendCompaction(_ context.Context, _ session.CompactionData) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendBranchSummary(_ context.Context, _ session.BranchSummaryData) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendLabel(_ context.Context, _, _ string) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendSessionInfo(_ context.Context, _ string) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) AppendCustom(_ context.Context, _ *session.CustomEntry) (string, error) {
 	return idOf(s.entries), nil
 }
+
 func (s *MockSession) Append(_ context.Context, _ session.Entry) (string, error) {
 	return idOf(s.entries), nil
 }
@@ -101,9 +109,11 @@ func (s *MockSession) SetLeafID(id string) error {
 	s.leafID = id
 	return nil
 }
+
 func (s *MockSession) MoveTo(_ context.Context, _ string, _ *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+
 func (s *MockSession) Entries(_ context.Context) ([]session.Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,9 +121,11 @@ func (s *MockSession) Entries(_ context.Context) ([]session.Entry, error) {
 	copy(out, s.entries)
 	return out, nil
 }
+
 func (s *MockSession) Usage(_ context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
+
 func (s *MockSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

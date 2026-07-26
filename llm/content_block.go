@@ -27,7 +27,7 @@ type ToolCallBlock struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string, not parsed
-	Type      string `json:"type"`       // e.g., "function"
+	Type      string `json:"type"`      // e.g., "function"
 }
 
 func (ToolCallBlock) contentBlock() {}
@@ -116,16 +116,15 @@ func (b *ContentBlocks) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-
 // StopReason indicates why the model stopped generating.
 type StopReason string
 
 const (
-	StopReasonStop    StopReason = "stop"     // natural end
-	StopReasonLength  StopReason = "length"   // hit max tokens
-	StopReasonToolUse StopReason = "toolUse"  // model wants to call tools
-	StopReasonError   StopReason = "error"    // provider error
-	StopReasonAborted StopReason = "aborted"  // user cancelled
+	StopReasonStop    StopReason = "stop"    // natural end
+	StopReasonLength  StopReason = "length"  // hit max tokens
+	StopReasonToolUse StopReason = "toolUse" // model wants to call tools
+	StopReasonError   StopReason = "error"   // provider error
+	StopReasonAborted StopReason = "aborted" // user cancelled
 )
 
 // CostBreakdown itemizes cost by token category.

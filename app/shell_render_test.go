@@ -2,10 +2,11 @@ package app
 
 import (
 	"fmt"
-	"github.com/nijaru/ion/config"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"

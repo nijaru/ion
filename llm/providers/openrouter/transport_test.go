@@ -30,7 +30,12 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if index < len(t.retryAfter) {
 		header.Set("Retry-After", t.retryAfter[index])
 	}
-	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: header, Request: req}, nil
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     header,
+		Request:    req,
+	}, nil
 }
 
 func TestRequestTransportUsedForGenerateAndStream(t *testing.T) {
@@ -39,7 +44,11 @@ func TestRequestTransportUsedForGenerateAndStream(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"content\":\"streamed\"}}]}\n\ndata: [DONE]\n\n",
 	}}
 	p := NewProvider(llm.ProviderConfig{APIKey: "test", APIEndpoint: "https://example.test/v1"})
-	req := &llm.Request{Model: "test", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, Transport: transport}
+	req := &llm.Request{
+		Model:     "test",
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		Transport: transport,
+	}
 
 	if _, err := p.Generate(t.Context(), req); err != nil {
 		t.Fatal(err)

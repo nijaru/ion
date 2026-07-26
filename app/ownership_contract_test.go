@@ -28,7 +28,11 @@ func TestRuntimeSwitchInstallsHarnessRunner(t *testing.T) {
 		t.Fatalf("runner = %p, want switched harness %p", model.Model.Runner, newRunner)
 	}
 	if len(model.Model.Recovery) != 0 || len(model.Model.InterruptedTurns) != 0 {
-		t.Fatalf("runtime replacement retained old recovery projection: actions=%#v turns=%#v", model.Model.Recovery, model.Model.InterruptedTurns)
+		t.Fatalf(
+			"runtime replacement retained old recovery projection: actions=%#v turns=%#v",
+			model.Model.Recovery,
+			model.Model.InterruptedTurns,
+		)
 	}
 }
 

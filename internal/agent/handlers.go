@@ -261,7 +261,14 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 		defer cancelDurability()
 		for _, action := range actions {
 			if action.State == session.ActionStarted {
-				action, err = journal.FinishAction(durableCtx, action.ID, session.ActionIndeterminate, "", "startup found an action after its durable start boundary", "startup recovery required")
+				action, err = journal.FinishAction(
+					durableCtx,
+					action.ID,
+					session.ActionIndeterminate,
+					"",
+					"startup found an action after its durable start boundary",
+					"startup recovery required",
+				)
 				if err != nil {
 					sendResult(cmd.Reply, err)
 					return
@@ -524,7 +531,10 @@ func (c *Controller) handleSessionCatalogList(cmd *SessionCatalogListCmd) {
 	c.startOperation(func() {
 		catalog, ok := c.store.(SessionCatalog)
 		if !ok {
-			sendResult(cmd.Reply, SessionCatalogListResult{Err: errors.New("session store does not support session catalog")})
+			sendResult(
+				cmd.Reply,
+				SessionCatalogListResult{Err: errors.New("session store does not support session catalog")},
+			)
 			return
 		}
 		sessions, err := catalog.ListSessions(cmd.Ctx, cmd.Workdir)
@@ -536,7 +546,10 @@ func (c *Controller) handleSessionCatalogLookup(cmd *SessionCatalogLookupCmd) {
 	c.startOperation(func() {
 		catalog, ok := c.store.(SessionCatalog)
 		if !ok {
-			sendResult(cmd.Reply, SessionCatalogLookupResult{Err: errors.New("session store does not support session catalog")})
+			sendResult(
+				cmd.Reply,
+				SessionCatalogLookupResult{Err: errors.New("session store does not support session catalog")},
+			)
 			return
 		}
 		info, err := catalog.GetSessionInfo(cmd.Ctx, cmd.SessionID)
@@ -559,7 +572,10 @@ func (c *Controller) handleInputHistoryGet(cmd *InputHistoryGetCmd) {
 	c.startOperation(func() {
 		history, ok := c.store.(InputHistory)
 		if !ok {
-			sendResult(cmd.Reply, InputHistoryGetResult{Err: errors.New("session store does not support input history")})
+			sendResult(
+				cmd.Reply,
+				InputHistoryGetResult{Err: errors.New("session store does not support input history")},
+			)
 			return
 		}
 		inputs, err := history.GetInputs(cmd.Ctx, cmd.Workdir, cmd.Limit)
@@ -819,7 +835,12 @@ func (c *Controller) AbortInterruptedTurn(ctx context.Context, turnID, reason st
 }
 
 // ReconcileAction records the externally observed outcome of an action.
-func (c *Controller) ReconcileAction(ctx context.Context, actionID string, state session.ActionState, verification, resultIdentity, reason, cleanup string) (session.ActionRecord, error) {
+func (c *Controller) ReconcileAction(
+	ctx context.Context,
+	actionID string,
+	state session.ActionState,
+	verification, resultIdentity, reason, cleanup string,
+) (session.ActionRecord, error) {
 	ctx = commandContext(ctx)
 	reply := make(chan ReconcileActionResult, 1)
 	if err := c.enqueue(ctx, &ReconcileActionCmd{

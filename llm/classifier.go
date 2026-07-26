@@ -25,6 +25,7 @@ type Classifier interface {
 	// labels is the set of valid output categories.
 	Classify(ctx context.Context, input string, labels []string) (*Classification, error)
 }
+
 // StandardClassifier implements Classifier by wrapping a standard LLM Provider.
 // It uses structured outputs (JSON schema) to ensure deterministic labels.
 type StandardClassifier struct {

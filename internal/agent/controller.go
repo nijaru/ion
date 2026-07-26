@@ -292,7 +292,11 @@ func cloneImageContents(images []session.ImageContent) []session.ImageContent {
 
 // runPrompt executes an accepted turn. Acceptance and phase reservation are
 // performed by the controller command loop before this worker starts.
-func (h *Controller) runPrompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
+func (h *Controller) runPrompt(
+	ctx context.Context,
+	text string,
+	images ...session.ImageContent,
+) (session.Message, error) {
 	turnStart := time.Now()
 	promptImages := cloneImageContents(images)
 	h.mu.Lock()
@@ -312,7 +316,12 @@ func (h *Controller) runPrompt(ctx context.Context, text string, images ...sessi
 				reason: "turn ended before durable commit",
 			})
 			if result.err != nil {
-				h.logf(slog.LevelError, "abort uncommitted turn failed", slog.String("turn_id", activeTurnID), slog.String("error", result.err.Error()))
+				h.logf(
+					slog.LevelError,
+					"abort uncommitted turn failed",
+					slog.String("turn_id", activeTurnID),
+					slog.String("error", result.err.Error()),
+				)
 			}
 		}
 		h.mu.Lock()
@@ -556,7 +565,12 @@ func (h *Controller) handleEvent(ctx context.Context, e session.Event) error {
 	}
 	result := h.requestRuntime(ctx, request)
 	if result.err != nil {
-		h.logf(slog.LevelError, "runtime event failed", slog.String("event", fmt.Sprintf("%T", e)), slog.String("error", result.err.Error()))
+		h.logf(
+			slog.LevelError,
+			"runtime event failed",
+			slog.String("event", fmt.Sprintf("%T", e)),
+			slog.String("error", result.err.Error()),
+		)
 		if _, ok := e.(session.MessageEnd); ok {
 			result.err = fmt.Errorf("persist message: %w", result.err)
 		}
@@ -1162,12 +1176,22 @@ func durableEntryBase(parentID string) session.EntryBase {
 	return session.EntryBase{ID: session.NewEntryID(), ParentID: parentID, Timestamp: time.Now()}
 }
 
-func appendDurableEntry(ctx context.Context, store session.DurableStore, turnID, parentID string, entry session.Entry) (string, error) {
+func appendDurableEntry(
+	ctx context.Context,
+	store session.DurableStore,
+	turnID, parentID string,
+	entry session.Entry,
+) (string, error) {
 	if entry == nil {
 		return "", errors.New("durable entry is nil")
 	}
 	if entry.ParentID() != parentID {
-		return "", fmt.Errorf("durable entry %q parent %q does not match active leaf %q", entry.ID(), entry.ParentID(), parentID)
+		return "", fmt.Errorf(
+			"durable entry %q parent %q does not match active leaf %q",
+			entry.ID(),
+			entry.ParentID(),
+			parentID,
+		)
 	}
 	return store.AppendTurnEntry(ctx, turnID, entry)
 }
@@ -1536,7 +1560,8 @@ func (h *Controller) logMessage(msg session.Message) {
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
-		h.logf(slog.LevelInfo, "response",
+		h.logf(
+			slog.LevelInfo, "response",
 			slog.String("stop_reason", string(msg.StopReason)),
 			slog.String("text", text),
 		)
@@ -1545,7 +1570,8 @@ func (h *Controller) logMessage(msg session.Message) {
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
-		h.logf(slog.LevelInfo, "tool_result",
+		h.logf(
+			slog.LevelInfo, "tool_result",
 			slog.String("tool", msg.ToolName),
 			slog.Bool("is_error", msg.IsError),
 			slog.String("text", text),

@@ -152,7 +152,10 @@ func TestHarnessSearchActivationUpdatesToolsWithinRun(t *testing.T) {
 			if err := harness.ActivateTools(ctx, []string{"deferred"}); err != nil {
 				return session.ToolResultMessage{}, err
 			}
-			return session.ToolResultMessage{ToolName: "search_tools", Content: []session.Content{session.TextContent{Text: "deferred"}}}, nil
+			return session.ToolResultMessage{
+				ToolName: "search_tools",
+				Content:  []session.Content{session.TextContent{Text: "deferred"}},
+			}, nil
 		},
 	}
 	harness = NewController(ControllerConfig{

@@ -38,7 +38,13 @@ func (m Model) handleActionsCommand(fields []string) (Model, tea.Cmd) {
 		if action.ID == actionID {
 			known = true
 			if action.State != session.ActionIndeterminate {
-				return m, cmdError(fmt.Sprintf("action %q is %s; only indeterminate actions can be reconciled", actionID, action.State))
+				return m, cmdError(
+					fmt.Sprintf(
+						"action %q is %s; only indeterminate actions can be reconciled",
+						actionID,
+						action.State,
+					),
+				)
 			}
 			break
 		}
@@ -95,6 +101,10 @@ func (m Model) handleActionReconciled(msg actionReconciledMsg) (Model, tea.Cmd) 
 		}
 	}
 	m.Model.Recovery = remaining
-	notice := fmt.Sprintf("Reconciled action %s as %s. Review the evidence before retrying.", msg.action.ID, msg.action.State)
+	notice := fmt.Sprintf(
+		"Reconciled action %s as %s. Review the evidence before retrying.",
+		msg.action.ID,
+		msg.action.State,
+	)
 	return m, m.terminalCommit().Entries(systemEntry(notice))
 }

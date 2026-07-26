@@ -36,21 +36,38 @@ func (m *Model) beginCheckpointRequest() uint64 {
 	return m.Model.CheckpointRequest
 }
 
-func checkpointListCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64) tea.Cmd {
+func checkpointListCmd(
+	ctx context.Context,
+	generation uint64,
+	controller CheckpointController,
+	requestID uint64,
+) tea.Cmd {
 	return func() tea.Msg {
 		items, err := controller.List(ctx, checkpointListLimit)
 		return checkpointListMsg{generation: generation, requestID: requestID, items: items, err: err}
 	}
 }
 
-func checkpointPlanCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64, id string) tea.Cmd {
+func checkpointPlanCmd(
+	ctx context.Context,
+	generation uint64,
+	controller CheckpointController,
+	requestID uint64,
+	id string,
+) tea.Cmd {
 	return func() tea.Msg {
 		plan, err := controller.Plan(ctx, id)
 		return checkpointPlanMsg{generation: generation, requestID: requestID, plan: plan, err: err}
 	}
 }
 
-func checkpointRestoreCmd(ctx context.Context, generation uint64, controller CheckpointController, requestID uint64, id string) tea.Cmd {
+func checkpointRestoreCmd(
+	ctx context.Context,
+	generation uint64,
+	controller CheckpointController,
+	requestID uint64,
+	id string,
+) tea.Cmd {
 	return func() tea.Msg {
 		report, err := controller.Restore(ctx, id)
 		return checkpointRestoredMsg{generation: generation, requestID: requestID, id: id, report: report, err: err}

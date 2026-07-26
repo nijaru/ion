@@ -155,6 +155,7 @@ func NewTransition(appCfg, runtimeCfg *config.Config, preset Preset, status stri
 func (t Transition) NeedsPersistence() bool {
 	return t.PersistState || t.PersistReasoning || t.PersistActivePreset
 }
+
 func (t Transition) WithHandles(h Handles) Transition {
 	t.Snapshot.SessionID = ""
 	t.Snapshot.Materialized = false
@@ -164,11 +165,13 @@ func (t Transition) WithHandles(h Handles) Transition {
 	}
 	return t
 }
+
 func (t Transition) WithActivePresetPersistence(p ...Preset) Transition {
 	t.PersistActivePreset = true
 	t.PersistReasoningSlot = t.Snapshot.Preset
 	return t
 }
+
 func (t Transition) Persist(fn func(update config.RuntimeStateUpdate) error) error {
 	if fn == nil {
 		return nil
@@ -456,6 +459,7 @@ func (t TurnReducer) ResetFinishedTurnSummary() {
 		t.progress.LastTurnSummary = TurnSummary{}
 	}
 }
+
 func (t TurnReducer) PopQueuedTurn() string {
 	if t.inFlight == nil || len(t.inFlight.QueuedTurns) == 0 {
 		return ""
@@ -475,6 +479,7 @@ func (t TurnReducer) StartSubmit() {
 		t.progress.Status = "Submitting..."
 	}
 }
+
 func (t TurnReducer) RejectSubmit(reason string) {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = false
@@ -524,6 +529,7 @@ func (t TurnReducer) FinishDrain() {
 		t.inFlight.DrainStartedAt = time.Time{}
 	}
 }
+
 func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) {
 	if t.inFlight == nil || t.inFlight.Pending == nil {
 		return nil, false
@@ -658,10 +664,12 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 				am.Content = []session.Content{session.TextContent{Text: t.inFlight.StreamBuf}}
 			}
 			if t.inFlight.ReasonBuf != "" {
-				am.Content = append([]session.Content{session.ThinkingContent{Text: t.inFlight.ReasonBuf}}, am.Content...)
+				am.Content = append(
+					[]session.Content{session.ThinkingContent{Text: t.inFlight.ReasonBuf}},
+					am.Content...,
+				)
 			}
 		}
-
 	}
 	t.inFlight.Pending = nil
 	t.inFlight.CommittedAssistant = nil

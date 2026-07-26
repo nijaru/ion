@@ -124,9 +124,16 @@ func TestRuntimeCodingToolsConfigGatesSkillRegistration(t *testing.T) {
 
 func TestActiveToolNamesForModeWithSkillsKeepsSkillDeferredWhenDisabled(t *testing.T) {
 	registry := tool.NewRegistry()
-	registry.Register(tool.Func("read_skill", "read a skill", map[string]any{"type": "object"}, func(context.Context, string) (string, error) {
-		return "", nil
-	}))
+	registry.Register(
+		tool.Func(
+			"read_skill",
+			"read a skill",
+			map[string]any{"type": "object"},
+			func(context.Context, string) (string, error) {
+				return "", nil
+			},
+		),
+	)
 
 	active := activeToolNamesForModeWithSkills(registry, "coding", false)
 	for _, name := range active {

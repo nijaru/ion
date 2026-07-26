@@ -83,7 +83,12 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(headers) != 2 || len(deadlines) != 2 || len(transports) != 2 {
-		t.Fatalf("requests = %d, deadlines = %d, transports = %d, want 2", len(headers), len(deadlines), len(transports))
+		t.Fatalf(
+			"requests = %d, deadlines = %d, transports = %d, want 2",
+			len(headers),
+			len(deadlines),
+			len(transports),
+		)
 	}
 	if transports[0] != hookTransport || transports[1] != configuredTransport {
 		t.Fatalf("transport snapshots = %#v, want hook override then configured transport", transports)
@@ -91,10 +96,12 @@ func TestHarnessProviderRequestOptionsAreRequestLocal(t *testing.T) {
 	if deadlines[0] <= 0 || deadlines[0] > 500*time.Millisecond || deadlines[1] < 500*time.Millisecond {
 		t.Fatalf("provider timeout windows = %#v, want first short and second configured", deadlines)
 	}
-	if headers[0]["X-Model"] != "model" || headers[0]["X-Auth"] != "auth" || headers[0]["X-Hook"] != "first" || headers[0]["X-Override"] != "hook" {
+	if headers[0]["X-Model"] != "model" || headers[0]["X-Auth"] != "auth" || headers[0]["X-Hook"] != "first" ||
+		headers[0]["X-Override"] != "hook" {
 		t.Fatalf("first request headers = %#v", headers[0])
 	}
-	if headers[1]["X-Model"] != "model" || headers[1]["X-Auth"] != "auth" || headers[1]["X-Hook"] != "" || headers[1]["X-Override"] != "auth" {
+	if headers[1]["X-Model"] != "model" || headers[1]["X-Auth"] != "auth" || headers[1]["X-Hook"] != "" ||
+		headers[1]["X-Override"] != "auth" {
 		t.Fatalf("second request headers inherited request-local patch: %#v", headers[1])
 	}
 }

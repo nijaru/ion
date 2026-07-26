@@ -44,7 +44,10 @@ func (r *sessionNamingTestRunner) AppendLabel(ctx context.Context, leafID, label
 	return "", r.labelErr
 }
 
-func (r *sessionNamingTestRunner) ExportSessionBundle(ctx context.Context, sessionID string) (ionexport.SessionBundle, error) {
+func (r *sessionNamingTestRunner) ExportSessionBundle(
+	ctx context.Context,
+	sessionID string,
+) (ionexport.SessionBundle, error) {
 	r.exportCtx = ctx
 	r.exportID = sessionID
 	return ionexport.SessionBundle{}, r.exportErr
@@ -106,7 +109,12 @@ func TestSessionLabelUsesRuntimeOperationContext(t *testing.T) {
 		t.Fatalf("session label result = %#v", result)
 	}
 	if runner.labelCtx != expectedContext || runner.labelLeaf != "leaf-1" || runner.labelValue != "release candidate" {
-		t.Fatalf("session label request = context %v, leaf %q, label %q", runner.labelCtx, runner.labelLeaf, runner.labelValue)
+		t.Fatalf(
+			"session label request = context %v, leaf %q, label %q",
+			runner.labelCtx,
+			runner.labelLeaf,
+			runner.labelValue,
+		)
 	}
 	if _, cmd := updated.handleLabelShow(result); cmd != nil {
 		t.Fatal("current session label returned an unexpected command")

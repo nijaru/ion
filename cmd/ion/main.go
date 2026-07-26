@@ -305,7 +305,10 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
-	if err := validateAPIKeyOverride(cfg.APIKeyOverride, firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel)); err != nil {
+	if err := validateAPIKeyOverride(
+		cfg.APIKeyOverride,
+		firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel),
+	); err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 2
 	}

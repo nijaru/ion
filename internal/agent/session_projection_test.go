@@ -66,7 +66,8 @@ func TestControllerSessionProjectionCapabilities(t *testing.T) {
 	if len(projection.Branch) != 2 || session.EntryText(projection.Branch[1]) != "answer" {
 		t.Fatalf("projection branch = %#v, want user and assistant entries", projection.Branch)
 	}
-	if projection.Usage.Input != 3 || projection.Usage.Output != 5 || projection.Usage.TotalTokens != 8 || projection.Usage.Cost.Total != 0.25 {
+	if projection.Usage.Input != 3 || projection.Usage.Output != 5 || projection.Usage.TotalTokens != 8 ||
+		projection.Usage.Cost.Total != 0.25 {
 		t.Fatalf("projection usage = %#v, want assistant usage", projection.Usage)
 	}
 	if controller.SessionID() != store.Meta().ID {

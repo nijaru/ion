@@ -12,14 +12,14 @@ import (
 
 // Watcher monitors the current git branch and notifies on changes.
 type Watcher struct {
-	cwd        string
-	gitDir     string // .git directory path
-	headPath   string // .git/HEAD path
+	cwd          string
+	gitDir       string // .git directory path
+	headPath     string // .git/HEAD path
 	cachedBranch string
-	mu         sync.Mutex
-	callbacks  []func(string)
-	done       chan struct{}
-	interval   time.Duration
+	mu           sync.Mutex
+	callbacks    []func(string)
+	done         chan struct{}
+	interval     time.Duration
 }
 
 // New creates a new git branch watcher for the given working directory.

@@ -47,7 +47,11 @@ func TestTurnsCommandDiscardsInterruptedTurnThroughRuntime(t *testing.T) {
 	msg := cmd()
 	model, _ = model.update(msg)
 	if model.Model.InterruptedTurnRequest != 0 || len(model.Model.InterruptedTurns) != 0 {
-		t.Fatalf("post-discard projection = request %d turns %#v", model.Model.InterruptedTurnRequest, model.Model.InterruptedTurns)
+		t.Fatalf(
+			"post-discard projection = request %d turns %#v",
+			model.Model.InterruptedTurnRequest,
+			model.Model.InterruptedTurns,
+		)
 	}
 	if runner.ctx != expectedContext {
 		t.Fatal("discard did not receive the runtime operation context")
@@ -66,7 +70,11 @@ func TestTurnsCommandKeepsProjectionOnRuntimeFailure(t *testing.T) {
 	model, cmd := model.handleCommand("/turns abort turn-1")
 	model, _ = model.update(cmd())
 	if model.Model.InterruptedTurnRequest != 0 || len(model.Model.InterruptedTurns) != 1 {
-		t.Fatalf("failed discard mutated projection = request %d turns %#v", model.Model.InterruptedTurnRequest, model.Model.InterruptedTurns)
+		t.Fatalf(
+			"failed discard mutated projection = request %d turns %#v",
+			model.Model.InterruptedTurnRequest,
+			model.Model.InterruptedTurns,
+		)
 	}
 }
 
@@ -84,7 +92,12 @@ func TestStaleInterruptedTurnDiscardCannotMutateNewRuntime(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("stale discard returned a command")
 	}
-	if next.Model.InterruptedTurnRequest != 1 || len(next.Model.InterruptedTurns) != 1 || next.Model.InterruptedTurns[0].State != session.TurnInterrupted {
-		t.Fatalf("stale discard mutated projection: request=%d turns=%#v", next.Model.InterruptedTurnRequest, next.Model.InterruptedTurns)
+	if next.Model.InterruptedTurnRequest != 1 || len(next.Model.InterruptedTurns) != 1 ||
+		next.Model.InterruptedTurns[0].State != session.TurnInterrupted {
+		t.Fatalf(
+			"stale discard mutated projection: request=%d turns=%#v",
+			next.Model.InterruptedTurnRequest,
+			next.Model.InterruptedTurns,
+		)
 	}
 }

@@ -50,14 +50,24 @@ func (darwinProcessPlatform) inspect(pid int) (ProcessIdentity, error) {
 		return ProcessIdentity{}, fmt.Errorf("%w: process group changed during inspection", ErrProcessIdentityInvalid)
 	}
 	if pgid != pid {
-		return ProcessIdentity{}, fmt.Errorf("%w: pid %d is not its process-group leader", ErrProcessIdentityInvalid, pid)
+		return ProcessIdentity{}, fmt.Errorf(
+			"%w: pid %d is not its process-group leader",
+			ErrProcessIdentityInvalid,
+			pid,
+		)
 	}
 	return ProcessIdentity{
-		Version:    processIdentityVersion,
-		Platform:   "darwin",
-		PID:        pid,
-		PGID:       pgid,
-		StartToken: fmt.Sprintf("%d:%d:%d:%d", boot.Sec, boot.Usec, proc.Proc.P_starttime.Sec, proc.Proc.P_starttime.Usec),
+		Version:  processIdentityVersion,
+		Platform: "darwin",
+		PID:      pid,
+		PGID:     pgid,
+		StartToken: fmt.Sprintf(
+			"%d:%d:%d:%d",
+			boot.Sec,
+			boot.Usec,
+			proc.Proc.P_starttime.Sec,
+			proc.Proc.P_starttime.Usec,
+		),
 	}, nil
 }
 

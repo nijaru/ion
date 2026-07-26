@@ -1,12 +1,13 @@
 package app
 
 import (
-	"github.com/nijaru/ion/config"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nijaru/ion/config"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/session"
@@ -70,7 +71,11 @@ func TestRenderMultilineUserEntryIndentsContinuationRows(t *testing.T) {
 func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{BashOutput: "summary"}
-	entry := testToolEntry("bash go test ./...", "ok github.com/nijaru/ion/internal/app\nok github.com/nijaru/ion/internal/config\n", false)
+	entry := testToolEntry(
+		"bash go test ./...",
+		"ok github.com/nijaru/ion/internal/app\nok github.com/nijaru/ion/internal/config\n",
+		false,
+	)
 
 	got := ansi.Strip(model.renderEntry(entry))
 	if got != "• Bash(go test ./...) · 2 lines" {
@@ -119,7 +124,11 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 	}
 	model.InFlight.ReasonBuf = strings.Repeat("reasoning ", 12)
 	model.InFlight.PendingTools = map[string]session.Entry{
-		"tool-1": testToolEntry("bash "+strings.Repeat("very-long-command ", 8), strings.Repeat("tool-output ", 12), false),
+		"tool-1": testToolEntry(
+			"bash "+strings.Repeat("very-long-command ", 8),
+			strings.Repeat("tool-output ", 12),
+			false,
+		),
 	}
 	got := ansi.Strip(model.renderPlaneB())
 	for i, line := range strings.Split(got, "\n") {
@@ -343,7 +352,10 @@ func TestRenderAgentMarkdownIndentsContinuationLines(t *testing.T) {
 func TestRenderAgentMarkdownWrapsCompletedLinesBeforeTerminalWrap(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 40
-	entry := testAgentEntry("This paragraph contains a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes and then more words.", "")
+	entry := testAgentEntry(
+		"This paragraph contains a verylongunbrokenidentifierthatshouldwrapbeforetheterminaldoes and then more words.",
+		"",
+	)
 
 	got := ansi.Strip(model.renderEntry(entry))
 	for _, line := range strings.Split(got, "\n") {
@@ -572,7 +584,9 @@ func TestRenderToolLabelShortensLongWorkspacePath(t *testing.T) {
 	model.App.Workdir = workdir
 	model.App.Width = 28
 
-	rendered := model.renderEntry(testToolEntry("read "+filepath.Join(workdir, "internal", "app", "model_test.go"), "", false))
+	rendered := model.renderEntry(
+		testToolEntry("read "+filepath.Join(workdir, "internal", "app", "model_test.go"), "", false),
+	)
 	stripped := ansi.Strip(rendered)
 	if ansi.StringWidth(stripped) > model.App.Width {
 		t.Fatalf(

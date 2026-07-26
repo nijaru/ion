@@ -43,7 +43,13 @@ func TestDecideSubmitPreflightEnforcesSessionCostLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := DecideSubmitPreflight(tt.input)
 			if got.Allowed != tt.allowed || got.ShouldSubmit != tt.submit || got.Reason != tt.reasonWant {
-				t.Fatalf("decision = %#v, want allowed=%v submit=%v reason=%q", got, tt.allowed, tt.submit, tt.reasonWant)
+				t.Fatalf(
+					"decision = %#v, want allowed=%v submit=%v reason=%q",
+					got,
+					tt.allowed,
+					tt.submit,
+					tt.reasonWant,
+				)
 			}
 		})
 	}

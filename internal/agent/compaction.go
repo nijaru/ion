@@ -374,7 +374,11 @@ func addOrReplace(fileOps *CompactionFileOps, kind, path string) {
 
 // ExtractFileOperations scans messages and previous compaction for file ops.
 // Pi: compaction.js extractFileOperations (line 35)
-func ExtractFileOperations(messages []session.Message, entries []session.Entry, prevCompactionIndex int) *CompactionFileOps {
+func ExtractFileOperations(
+	messages []session.Message,
+	entries []session.Entry,
+	prevCompactionIndex int,
+) *CompactionFileOps {
 	fileOps := &CompactionFileOps{}
 
 	// Inherit from previous compaction.
@@ -746,7 +750,11 @@ func GenerateTurnPrefixSummary(
 		}
 	}
 
-	promptText := fmt.Sprintf("<conversation>\n%s</conversation>\n\n%s", conversation.String(), TurnPrefixSummarizationPrompt)
+	promptText := fmt.Sprintf(
+		"<conversation>\n%s</conversation>\n\n%s",
+		conversation.String(),
+		TurnPrefixSummarizationPrompt,
+	)
 
 	req := &llm.Request{
 		Model: model,
@@ -817,7 +825,11 @@ type CompactionPreparation struct {
 // PrepareCompaction prepares the session for compaction, returning
 // all data needed by Compact.
 // Pi: compaction.js prepareCompaction (line 395)
-func PrepareCompaction(ctx context.Context, sess session.Session, settings CompactionSettings) (*CompactionPreparation, error) {
+func PrepareCompaction(
+	ctx context.Context,
+	sess session.Session,
+	settings CompactionSettings,
+) (*CompactionPreparation, error) {
 	snap, err := sess.BuildContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
@@ -938,7 +950,12 @@ type CompactOptions struct {
 
 // Compact performs compaction on the session.
 // Pi: compaction.js compact (line 460)
-func Compact(ctx context.Context, sess session.Session, opts CompactOptions, settings CompactionSettings) (*CompactionResult, error) {
+func Compact(
+	ctx context.Context,
+	sess session.Session,
+	opts CompactOptions,
+	settings CompactionSettings,
+) (*CompactionResult, error) {
 	prep, err := PrepareCompaction(ctx, sess, settings)
 	if err != nil {
 		return nil, err
@@ -995,7 +1012,11 @@ func Compact(ctx context.Context, sess session.Session, opts CompactOptions, set
 			return nil, prefixResult.err
 		}
 
-		summary = fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", historyResult.text, prefixResult.text)
+		summary = fmt.Sprintf(
+			"%s\n\n---\n\n**Turn Context (split turn):**\n\n%s",
+			historyResult.text,
+			prefixResult.text,
+		)
 	} else {
 		// Normal compaction: summarize history messages.
 		summary, err = GenerateSummary(ctx, prep.MessagesToSummarize,
@@ -1042,7 +1063,12 @@ func Compact(ctx context.Context, sess session.Session, opts CompactOptions, set
 
 // ShouldCompactAfterTurn checks if compaction should run after a turn.
 // Pi: agent-harness.js shouldCompact (line 500)
-func ShouldCompactAfterTurn(ctx context.Context, sess session.Session, contextWindow int, settings CompactionSettings) bool {
+func ShouldCompactAfterTurn(
+	ctx context.Context,
+	sess session.Session,
+	contextWindow int,
+	settings CompactionSettings,
+) bool {
 	if !settings.Enabled {
 		return false
 	}

@@ -374,13 +374,19 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		after := m.Model.EventCursor
 		return func() tea.Msg {
 			if runner == nil {
-				return runtimeSubscriptionMsg{generation: generation, err: errors.New("session event stream unavailable")}
+				return runtimeSubscriptionMsg{
+					generation: generation,
+					err:        errors.New("session event stream unavailable"),
+				}
 			}
 			source, ok := runner.(interface {
 				Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error)
 			})
 			if !ok {
-				return runtimeSubscriptionMsg{generation: generation, err: errors.New("runtime subscription unavailable")}
+				return runtimeSubscriptionMsg{
+					generation: generation,
+					err:        errors.New("runtime subscription unavailable"),
+				}
 			}
 			subscription, err := source.Subscribe(m.runtimeOperationContext(), after)
 			return runtimeSubscriptionMsg{generation: generation, subscription: subscription, err: err}
@@ -743,8 +749,9 @@ func (c runtimeRequestController) begin(status string) uint64 {
 	if c.model.Model.runtimeRequestCancel != nil {
 		c.model.Model.runtimeRequestCancel()
 	}
-	c.model.Model.runtimeRequestContext, c.model.Model.runtimeRequestCancel =
-		context.WithCancel(c.model.runtimeOperationContext())
+	c.model.Model.runtimeRequestContext, c.model.Model.runtimeRequestCancel = context.WithCancel(
+		c.model.runtimeOperationContext(),
+	)
 	decision := BeginRuntimeRequest(RuntimeRequestBeginInput{
 		Current: c.model.Model.RuntimeSwitchRequest,
 		Status:  status,

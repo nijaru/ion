@@ -22,7 +22,11 @@ func TestEstimateContextTokensUsageAware(t *testing.T) {
 		t.Errorf("expected 0 usage tokens without assistant, got %d", est.UsageTokens)
 	}
 	if est.Tokens != est.TrailingTokens {
-		t.Errorf("without usage, tokens should equal trailing, got tokens=%d trailing=%d", est.Tokens, est.TrailingTokens)
+		t.Errorf(
+			"without usage, tokens should equal trailing, got tokens=%d trailing=%d",
+			est.Tokens,
+			est.TrailingTokens,
+		)
 	}
 
 	// Messages with a successful assistant that has usage.
@@ -34,7 +38,10 @@ func TestEstimateContextTokensUsageAware(t *testing.T) {
 	messages = []session.Message{
 		session.NewUserText("hello", mustTime()),
 		assistantMsg,
-		session.NewUserText("follow-up with many many many characters here to add some trailing tokens let us make this at least forty characters", mustTime()),
+		session.NewUserText(
+			"follow-up with many many many characters here to add some trailing tokens let us make this at least forty characters",
+			mustTime(),
+		),
 	}
 
 	est = EstimateContextTokens(messages)
@@ -196,7 +203,10 @@ func TestCompactCommitsReplacementForReplay(t *testing.T) {
 		t.Fatalf("replayed message count = %d, want summary plus kept message", len(snapshot.Messages))
 	}
 	if !strings.Contains(session.EntryText(&session.MessageEntry{Message: snapshot.Messages[0]}), "durable summary") {
-		t.Fatalf("replayed summary = %q, want durable summary", session.EntryText(&session.MessageEntry{Message: snapshot.Messages[0]}))
+		t.Fatalf(
+			"replayed summary = %q, want durable summary",
+			session.EntryText(&session.MessageEntry{Message: snapshot.Messages[0]}),
+		)
 	}
 	if got := session.EntryText(&session.MessageEntry{Message: snapshot.Messages[1]}); got != "recent" {
 		t.Fatalf("replayed kept message = %q, want recent", got)

@@ -429,18 +429,21 @@ func (b *runtimeInfo) Provider() string {
 	}
 	return ""
 }
+
 func (b *runtimeInfo) Model() string {
 	if b.cfg != nil {
 		return b.cfg.Model
 	}
 	return ""
 }
+
 func (b *runtimeInfo) ContextLimit() int {
 	if b.cfg != nil {
 		return b.cfg.ContextLimit
 	}
 	return 0
 }
+
 func (b *runtimeInfo) Bootstrap() app.Bootstrap {
 	status := fmt.Sprintf("%s/%s", b.Provider(), b.Model())
 	if len(b.recovery) > 0 {
@@ -455,6 +458,7 @@ func (b *runtimeInfo) Bootstrap() app.Bootstrap {
 		InterruptedTurns: append([]session.TurnRecord(nil), b.interruptedTurns...),
 	}
 }
+
 func (b *runtimeInfo) ToolSurface() app.ToolSurface {
 	surface := b.surface
 	surface.Names = append([]string(nil), surface.Names...)

@@ -87,9 +87,15 @@ func TestExecuteRegisteredToolPreservesContentParts(t *testing.T) {
 
 func TestExecuteRegisteredToolStreamsUpdatesAndReturnsFinalSnapshot(t *testing.T) {
 	var updates []string
-	result := executeRegisteredTool(context.Background(), runtimeEntry(runtimeStreamingTool{}), "call-3", nil, func(partial session.ToolPartial) {
-		updates = append(updates, partial.(string))
-	})
+	result := executeRegisteredTool(
+		context.Background(),
+		runtimeEntry(runtimeStreamingTool{}),
+		"call-3",
+		nil,
+		func(partial session.ToolPartial) {
+			updates = append(updates, partial.(string))
+		},
+	)
 	if session.EntryText(&session.MessageEntry{Message: &result}) != " final" {
 		t.Fatalf("stream result = %#v, want final snapshot", result)
 	}

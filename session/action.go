@@ -94,8 +94,18 @@ type ActionJournal interface {
 	AuthorizeAction(ctx context.Context, actionID, policyMode string) (ActionRecord, error)
 	DenyAction(ctx context.Context, actionID, reason string) (ActionRecord, error)
 	StartAction(ctx context.Context, actionID, processIdentity string) (ActionRecord, error)
-	FinishAction(ctx context.Context, actionID string, state ActionState, resultIdentity, reason, cleanup string) (ActionRecord, error)
-	ReconcileAction(ctx context.Context, actionID string, state ActionState, verification, resultIdentity, reason, cleanup string) (ActionRecord, error)
+	FinishAction(
+		ctx context.Context,
+		actionID string,
+		state ActionState,
+		resultIdentity, reason, cleanup string,
+	) (ActionRecord, error)
+	ReconcileAction(
+		ctx context.Context,
+		actionID string,
+		state ActionState,
+		verification, resultIdentity, reason, cleanup string,
+	) (ActionRecord, error)
 	RecordActionRecovery(ctx context.Context, actionID, reason, cleanup string) (ActionRecord, error)
 	GetAction(ctx context.Context, actionID string) (ActionRecord, error)
 	UnsettledActions(ctx context.Context) ([]ActionRecord, error)
@@ -466,13 +476,19 @@ func (s *SQLiteStore) StartAction(ctx context.Context, actionID, processIdentity
 	})
 }
 
-func (s *SQLiteStore) FinishAction(ctx context.Context, actionID string, state ActionState, resultIdentity, reason, cleanup string) (ActionRecord, error) {
+func (s *SQLiteStore) FinishAction(
+	ctx context.Context,
+	actionID string,
+	state ActionState,
+	resultIdentity, reason, cleanup string,
+) (ActionRecord, error) {
 	if !validActionFinishState(state) {
 		return ActionRecord{}, fmt.Errorf("%w: finish state %q is not terminal", ErrActionState, state)
 	}
 	return s.transitionAction(ctx, actionID, func(record *ActionRecord, now time.Time) error {
 		if actionTerminal(record.State) {
-			if record.State != state || record.ResultIdentity != resultIdentity || record.Error != reason || record.CleanupOutcome != cleanup {
+			if record.State != state || record.ResultIdentity != resultIdentity || record.Error != reason ||
+				record.CleanupOutcome != cleanup {
 				return fmt.Errorf("%w: action %q already finished as %s", ErrActionConflict, actionID, record.State)
 			}
 			return nil
@@ -498,7 +514,12 @@ func (s *SQLiteStore) FinishAction(ctx context.Context, actionID string, state A
 // ReconcileAction is the only transition out of indeterminate. The caller
 // must provide explicit verifier evidence; recovery and ordinary execution
 // never infer that an unobserved effect did not happen.
-func (s *SQLiteStore) ReconcileAction(ctx context.Context, actionID string, state ActionState, verification, resultIdentity, reason, cleanup string) (ActionRecord, error) {
+func (s *SQLiteStore) ReconcileAction(
+	ctx context.Context,
+	actionID string,
+	state ActionState,
+	verification, resultIdentity, reason, cleanup string,
+) (ActionRecord, error) {
 	if !validActionFinishState(state) || state == ActionIndeterminate {
 		return ActionRecord{}, fmt.Errorf("%w: reconcile state %q is not terminal", ErrActionState, state)
 	}
@@ -522,7 +543,10 @@ func (s *SQLiteStore) ReconcileAction(ctx context.Context, actionID string, stat
 // leaving an action indeterminate. A process can be terminated safely while
 // its external effect remains unknown; only explicit user verification may
 // move the action to a terminal outcome.
-func (s *SQLiteStore) RecordActionRecovery(ctx context.Context, actionID, reason, cleanup string) (ActionRecord, error) {
+func (s *SQLiteStore) RecordActionRecovery(
+	ctx context.Context,
+	actionID, reason, cleanup string,
+) (ActionRecord, error) {
 	reason = strings.TrimSpace(reason)
 	cleanup = strings.TrimSpace(cleanup)
 	if reason == "" || cleanup == "" {
@@ -548,7 +572,11 @@ func appendActionEvidence(existing, next string) string {
 	return existing + "; " + next
 }
 
-func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mutate func(*ActionRecord, time.Time) error) (ActionRecord, error) {
+func (s *SQLiteStore) transitionAction(
+	ctx context.Context,
+	actionID string,
+	mutate func(*ActionRecord, time.Time) error,
+) (ActionRecord, error) {
 	ctx = normalizeContext(ctx)
 	if actionID == "" {
 		return ActionRecord{}, errors.New("action ID is required")
@@ -591,10 +619,17 @@ func (s *SQLiteStore) transitionAction(ctx context.Context, actionID string, mut
 		actionID); err != nil {
 		return ActionRecord{}, classifySQLiteError("update action state", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(
+		ctx,
+		`
 		INSERT INTO action_transitions(action_id, from_state, to_state, reason, timestamp)
 		VALUES(?, ?, ?, ?, ?)`,
-		actionID, string(before.State), string(record.State), actionTransitionReason(before, record), time.Now().UnixMilli()); err != nil {
+		actionID,
+		string(before.State),
+		string(record.State),
+		actionTransitionReason(before, record),
+		time.Now().UnixMilli(),
+	); err != nil {
 		return ActionRecord{}, classifySQLiteError("record action transition", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -710,7 +745,14 @@ func (s *SQLiteStore) ActionTransitions(ctx context.Context, actionID string) ([
 	for rows.Next() {
 		var transition ActionTransition
 		var timestamp int64
-		if err := rows.Scan(&transition.ID, &transition.ActionID, &transition.From, &transition.To, &transition.Reason, &timestamp); err != nil {
+		if err := rows.Scan(
+			&transition.ID,
+			&transition.ActionID,
+			&transition.From,
+			&transition.To,
+			&transition.Reason,
+			&timestamp,
+		); err != nil {
 			return nil, fmt.Errorf("decode action transition: %w", err)
 		}
 		transition.Timestamp = time.UnixMilli(timestamp)

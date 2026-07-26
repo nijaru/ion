@@ -190,14 +190,21 @@ func TestPlanSandboxedCommandPreservesArbitraryCommandArguments(t *testing.T) {
 		sandboxPathExists = prevPathExists
 	}()
 
-	plan, err := PlanSandboxedCommand(root, "/usr/local/bin/mcp-server", []string{"--config", "file with spaces.json"}, SandboxBubblewrap)
+	plan, err := PlanSandboxedCommand(
+		root,
+		"/usr/local/bin/mcp-server",
+		[]string{"--config", "file with spaces.json"},
+		SandboxBubblewrap,
+	)
 	if err != nil {
 		t.Fatalf("PlanSandboxedCommand error = %v", err)
 	}
 	if plan.Name != "/usr/bin/bwrap" || plan.Dir != resolvedRoot {
 		t.Fatalf("plan = %#v, want bubblewrap in workspace", plan)
 	}
-	if len(plan.Args) < 3 || plan.Args[len(plan.Args)-3] != "/usr/local/bin/mcp-server" || plan.Args[len(plan.Args)-2] != "--config" || plan.Args[len(plan.Args)-1] != "file with spaces.json" {
+	if len(plan.Args) < 3 || plan.Args[len(plan.Args)-3] != "/usr/local/bin/mcp-server" ||
+		plan.Args[len(plan.Args)-2] != "--config" ||
+		plan.Args[len(plan.Args)-1] != "file with spaces.json" {
 		t.Fatalf("plan args = %#v, want command and arguments preserved", plan.Args)
 	}
 }
@@ -228,7 +235,8 @@ func TestPlanSandboxedCommandWithPolicyIsReadOnlyAndNetworkDenied(t *testing.T) 
 		t.Fatalf("PlanSandboxedCommandWithPolicy: %v", err)
 	}
 	joined := strings.Join(plan.Args, " ")
-	if !strings.Contains(joined, "--unshare-net") || !strings.Contains(joined, "--ro-bind /tmp/workspace /tmp/workspace") {
+	if !strings.Contains(joined, "--unshare-net") ||
+		!strings.Contains(joined, "--ro-bind /tmp/workspace /tmp/workspace") {
 		t.Fatalf("read-only policy args = %#v, want network isolation and read-only workspace", plan.Args)
 	}
 	if strings.Contains(joined, "--bind /tmp/workspace /tmp/workspace") {
@@ -316,7 +324,14 @@ func TestPlanSandboxedCommandWithPolicyProtectsWritablePath(t *testing.T) {
 }
 
 func TestPlanSandboxedCommandWithPolicyRejectsUnsandboxedMode(t *testing.T) {
-	if _, err := PlanSandboxedCommandWithPolicy(t.TempDir(), "server", nil, SandboxOff, SandboxPolicy{}); err == nil || !strings.Contains(err.Error(), "cannot be enforced") {
+	if _, err := PlanSandboxedCommandWithPolicy(
+		t.TempDir(),
+		"server",
+		nil,
+		SandboxOff,
+		SandboxPolicy{},
+	); err == nil ||
+		!strings.Contains(err.Error(), "cannot be enforced") {
 		t.Fatalf("unsandboxed policy error = %v, want fail-closed enforcement error", err)
 	}
 }
@@ -333,10 +348,16 @@ func TestSeatbeltPolicyBlocksProtectedWrite(t *testing.T) {
 	if err := os.WriteFile(protected, []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PlanSandboxedCommandWithPolicy(root, "/bin/sh", []string{"-c", "printf changed > .env"}, SandboxSeatbelt, SandboxPolicy{
-		WritePaths:     []string{"."},
-		ProtectedPaths: []string{".env"},
-	})
+	plan, err := PlanSandboxedCommandWithPolicy(
+		root,
+		"/bin/sh",
+		[]string{"-c", "printf changed > .env"},
+		SandboxSeatbelt,
+		SandboxPolicy{
+			WritePaths:     []string{"."},
+			ProtectedPaths: []string{".env"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("PlanSandboxedCommandWithPolicy: %v", err)
 	}

@@ -197,15 +197,27 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.ModelUpdate:
-		if err := o.emit(envelope, "model_update", map[string]any{"model": msg.Model, "previous": msg.Previous, "source": msg.Source}); err != nil {
+		if err := o.emit(
+			envelope,
+			"model_update",
+			map[string]any{"model": msg.Model, "previous": msg.Previous, "source": msg.Source},
+		); err != nil {
 			return false, err
 		}
 	case session.ThinkingUpdate:
-		if err := o.emit(envelope, "thinking_update", map[string]any{"level": msg.Level, "previous": msg.Previous}); err != nil {
+		if err := o.emit(
+			envelope,
+			"thinking_update",
+			map[string]any{"level": msg.Level, "previous": msg.Previous},
+		); err != nil {
 			return false, err
 		}
 	case session.ToolsUpdate:
-		if err := o.emit(envelope, "tools_update", map[string]any{"active": msg.Active, "previous": msg.Previous}); err != nil {
+		if err := o.emit(
+			envelope,
+			"tools_update",
+			map[string]any{"active": msg.Active, "previous": msg.Previous},
+		); err != nil {
 			return false, err
 		}
 	case session.QueueUpdate:
@@ -221,7 +233,11 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.SavePoint:
-		if err := o.emit(envelope, "save_point", map[string]any{"pending_mutations": msg.HadPendingMutations}); err != nil {
+		if err := o.emit(
+			envelope,
+			"save_point",
+			map[string]any{"pending_mutations": msg.HadPendingMutations},
+		); err != nil {
 			return false, err
 		}
 	case session.Abort:
@@ -318,7 +334,12 @@ func runPromptTurn(ctx context.Context, runner agent.Runtime, prompt string) (pr
 	return runPromptTurnObserved(ctx, runner, prompt, observer)
 }
 
-func runPromptTurnObserved(ctx context.Context, runner agent.Runtime, prompt string, observer *printTurnObserver) (printResult, error) {
+func runPromptTurnObserved(
+	ctx context.Context,
+	runner agent.Runtime,
+	prompt string,
+	observer *printTurnObserver,
+) (printResult, error) {
 	subscription, err := runner.Subscribe(ctx, agent.EventCursor{})
 	if err != nil {
 		return printResult{}, fmt.Errorf("subscribe runtime events: %w", err)
@@ -345,7 +366,10 @@ func runPromptTurnObserved(ctx context.Context, runner agent.Runtime, prompt str
 		case envelope, ok := <-subscription.Events:
 			if !ok {
 				if _, _, abortErr := runner.Abort(); abortErr != nil {
-					return printResult{}, fmt.Errorf("event stream closed before turn finished: abort turn: %w", abortErr)
+					return printResult{}, fmt.Errorf(
+						"event stream closed before turn finished: abort turn: %w",
+						abortErr,
+					)
 				}
 				_ = observer.emitError("event_stream", fmt.Errorf("event stream closed before turn finished"))
 				return printResult{}, fmt.Errorf("event stream closed before turn finished")

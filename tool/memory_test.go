@@ -44,7 +44,8 @@ func TestMemoryToolsRequireExplicitWriteApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !required || requirement.Category != "memory" || requirement.Operation != RememberMemoryToolName || !requirement.AlwaysConfirm {
+	if !required || requirement.Category != "memory" || requirement.Operation != RememberMemoryToolName ||
+		!requirement.AlwaysConfirm {
 		t.Fatalf("approval = %+v, required=%v", requirement, required)
 	}
 

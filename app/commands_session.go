@@ -47,7 +47,7 @@ func (m Model) exportSession() (Model, tea.Cmd) {
 			return sessionExportedMsg{generation: generation, err: err}
 		}
 		filename := fmt.Sprintf("session-%s.json", sessionID)
-		if err := os.WriteFile(filename, data, 0644); err != nil {
+		if err := os.WriteFile(filename, data, 0o644); err != nil {
 			return sessionExportedMsg{generation: generation, err: err}
 		}
 		return sessionExportedMsg{generation: generation, filename: filename}
@@ -75,7 +75,7 @@ func (m Model) exportSessionHTML() (Model, tea.Cmd) {
 			return sessionExportedMsg{generation: generation, err: err}
 		}
 		filename := fmt.Sprintf("session-%s.html", sessionID[:min(8, len(sessionID))])
-		if err := os.WriteFile(filename, []byte(htmlContent), 0644); err != nil {
+		if err := os.WriteFile(filename, []byte(htmlContent), 0o644); err != nil {
 			return sessionExportedMsg{generation: generation, err: err}
 		}
 		return sessionExportedMsg{generation: generation, filename: filename}

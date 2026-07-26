@@ -25,39 +25,51 @@ func (s *closeStorageSession) Branch(context.Context) ([]session.Entry, error) {
 func (s *closeStorageSession) AppendMessage(context.Context, session.Message) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendModelChange(context.Context, string, string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendThinkingLevelChange(context.Context, session.ThinkingLevel) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendActiveToolsChange(context.Context, []string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendCompaction(context.Context, session.CompactionData) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendBranchSummary(context.Context, session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendSessionInfo(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendCustom(context.Context, *session.CustomEntry) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendLeaf(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) AppendCustomMessage(context.Context, *session.CustomMessageEntry) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) GetLabel(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *closeStorageSession) Append(context.Context, session.Entry) (string, error) {
 	return "", nil
 }
@@ -77,6 +89,7 @@ func (s *closeStorageSession) Entries(context.Context) ([]session.Entry, error) 
 func (s *closeStorageSession) Usage(context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
+
 func (s *closeStorageSession) Close() error {
 	s.closed++
 	return nil

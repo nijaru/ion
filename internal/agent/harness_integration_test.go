@@ -105,7 +105,8 @@ func TestHarnessIntegration_DurableTurnCommitAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Messages) != 2 || session.MessageText(snapshot.Messages[0]) != "persist durably" || session.MessageText(snapshot.Messages[1]) != "durable" {
+	if len(snapshot.Messages) != 2 || session.MessageText(snapshot.Messages[0]) != "persist durably" ||
+		session.MessageText(snapshot.Messages[1]) != "durable" {
 		t.Fatalf("replayed durable messages = %#v, want user and assistant", snapshot.Messages)
 	}
 	interrupted, err := reopened.InterruptedTurns(ctx)
@@ -1158,13 +1159,20 @@ func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
 		Session:  sess,
 		Model:    llm.Model{ID: "test"},
 		StreamFn: streamFn,
-		Tools: []Tool{{
-			Name: "test-tool",
-			Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-				executed = true
-				return session.ToolResultMessage{ToolCallID: id, ToolName: "test-tool", Content: []session.Content{session.TextContent{Text: "ran"}}, Timestamp: time.Now()}, nil
+		Tools: []Tool{
+			{
+				Name: "test-tool",
+				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					executed = true
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "test-tool",
+						Content:    []session.Content{session.TextContent{Text: "ran"}},
+						Timestamp:  time.Now(),
+					}, nil
+				},
 			},
-		}},
+		},
 	})
 	defer h.Close()
 
@@ -1251,14 +1259,24 @@ func TestHarnessIntegration_SequentialPrep_MixedBlockAllow(t *testing.T) {
 			{
 				Name: "block-me",
 				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
-					return session.ToolResultMessage{ToolCallID: id, ToolName: "block-me", Content: []session.Content{session.TextContent{Text: "should not run"}}, Timestamp: time.Now()}, nil
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "block-me",
+						Content:    []session.Content{session.TextContent{Text: "should not run"}},
+						Timestamp:  time.Now(),
+					}, nil
 				},
 			},
 			{
 				Name: "run-me",
 				Execute: func(ctx context.Context, id string, args json.RawMessage, signal <-chan struct{}, progress func(session.ToolPartial)) (session.ToolResultMessage, error) {
 					toolARan.Store(true)
-					return session.ToolResultMessage{ToolCallID: id, ToolName: "run-me", Content: []session.Content{session.TextContent{Text: "A ran ok"}}, Timestamp: time.Now()}, nil
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "run-me",
+						Content:    []session.Content{session.TextContent{Text: "A ran ok"}},
+						Timestamp:  time.Now(),
+					}, nil
 				},
 			},
 		},

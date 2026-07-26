@@ -15,6 +15,7 @@ func (runtimeRetryProviderStub) ID() string { return "runtime-retry-test" }
 func (runtimeRetryProviderStub) Generate(context.Context, *llm.Request) (*llm.Response, error) {
 	return &llm.Response{}, nil
 }
+
 func (runtimeRetryProviderStub) Stream(context.Context, *llm.Request) (llm.Stream, error) {
 	return nil, nil
 }

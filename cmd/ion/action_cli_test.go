@@ -65,7 +65,8 @@ func TestActionCLIListsRedactedRecoveryJSON(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode JSON %q: %v", stdout.String(), err)
 	}
-	if len(result.Actions) != 1 || result.Actions[0].ID != actionID || result.Actions[0].State != session.ActionIndeterminate {
+	if len(result.Actions) != 1 || result.Actions[0].ID != actionID ||
+		result.Actions[0].State != session.ActionIndeterminate {
 		t.Fatalf("actions = %#v, want one indeterminate action", result.Actions)
 	}
 	if strings.Contains(stdout.String(), "echo secret") || strings.Contains(stdout.String(), "arguments") {
@@ -78,8 +79,18 @@ func TestActionCLIReconcilesThroughRecoveryController(t *testing.T) {
 	actionID := seedCLIUnsettledAction(t, dir)
 	var stdout, stderr bytes.Buffer
 	handled, code := runTopLevelCommand(
-		[]string{"actions", "--json", "--session-dir", dir, "reconcile", actionID, "completed", "operator verified the external result"},
-		&stdout, &stderr,
+		[]string{
+			"actions",
+			"--json",
+			"--session-dir",
+			dir,
+			"reconcile",
+			actionID,
+			"completed",
+			"operator verified the external result",
+		},
+		&stdout,
+		&stderr,
 	)
 	if !handled || code != 0 {
 		t.Fatalf("handled/code = %v/%d, stderr=%q", handled, code, stderr.String())

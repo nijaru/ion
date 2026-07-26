@@ -96,59 +96,77 @@ func (s *printSession) SessionBranch(context.Context) ([]session.Entry, error) {
 func (s *printSession) SessionTree(context.Context) (agent.SessionTreeSnapshot, error) {
 	return agent.SessionTreeSnapshot{}, nil
 }
+
 func (s *printSession) BranchAt(context.Context, string) ([]session.Entry, error) { return nil, nil }
+
 func (s *printSession) AppendMessage(context.Context, session.Message) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendModelChange(context.Context, string, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendThinkingLevelChange(context.Context, session.ThinkingLevel) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendActiveToolsChange(context.Context, []string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendCompaction(context.Context, session.CompactionData) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendBranchSummary(context.Context, session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendLabel(context.Context, string, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendSessionInfo(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendCustom(context.Context, *session.CustomEntry) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendLeaf(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) AppendCustomMessage(context.Context, *session.CustomMessageEntry) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) GetLabel(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) Append(context.Context, session.Entry) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) SubmitTurn(ctx context.Context, turn string) error {
 	if s.submitErr != nil {
 		return s.submitErr
 	}
 	return nil
 }
+
 func (s *printSession) CancelTurn(context.Context) error {
 	s.cancelled++
 	return nil
 }
+
 func (s *printSession) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
 	return &agent.EventSubscription{Events: s.events}, nil
 }
+
 func (s *printSession) GetEntry(context.Context, string) (session.Entry, error) {
 	return nil, nil
 }
@@ -157,6 +175,7 @@ func (s *printSession) SetLeafID(string) error { return nil }
 func (s *printSession) MoveTo(context.Context, string, *session.BranchSummaryData) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
 	return agent.NavigateResult{}, nil
 }
@@ -164,6 +183,7 @@ func (s *printSession) Entries(context.Context) ([]session.Entry, error) { retur
 func (s *printSession) Usage(context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
+
 func (s *printSession) Close() error {
 	s.closed++
 	return nil
@@ -192,6 +212,7 @@ func (s *printSession) Session() session.Session                                
 func (s *printSession) ForkSession(context.Context, string) (string, error) {
 	return "", nil
 }
+
 func (s *printSession) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
 	return "", nil
 }
@@ -287,8 +308,18 @@ func TestValidatePrintTimeoutRequiresPositiveDuration(t *testing.T) {
 		{name: "default", printRequested: true, timeout: 5 * time.Minute},
 		{name: "positive", printRequested: true, timeout: time.Millisecond},
 		{name: "interactive ignores timeout", printRequested: false, timeout: 0},
-		{name: "zero", printRequested: true, timeout: 0, wantError: "--timeout must be greater than zero in print mode (got 0s)"},
-		{name: "negative", printRequested: true, timeout: -time.Second, wantError: "--timeout must be greater than zero in print mode (got -1s)"},
+		{
+			name:           "zero",
+			printRequested: true,
+			timeout:        0,
+			wantError:      "--timeout must be greater than zero in print mode (got 0s)",
+		},
+		{
+			name:           "negative",
+			printRequested: true,
+			timeout:        -time.Second,
+			wantError:      "--timeout must be greater than zero in print mode (got -1s)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -533,7 +564,7 @@ func TestPrintModeStreamsTextBeforePromptSettles(t *testing.T) {
 	})
 	base.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
 	sess := &gatedPrintSession{printSession: base, release: make(chan struct{})}
-	var out = &signalWriter{firstWrite: make(chan struct{})}
+	out := &signalWriter{firstWrite: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() {
 		done <- runPrintModeWithWriter(context.Background(), out, sess, "hello", "text")
@@ -609,7 +640,12 @@ func TestPrintModeWritesIonEvents(t *testing.T) {
 		}
 	}
 	if events[0].Sequence != 7 || events[1].Sequence != 8 || events[2].Sequence != 9 {
-		t.Fatalf("runtime sequences = %d, %d, %d; want 7, 8, 9", events[0].Sequence, events[1].Sequence, events[2].Sequence)
+		t.Fatalf(
+			"runtime sequences = %d, %d, %d; want 7, 8, 9",
+			events[0].Sequence,
+			events[1].Sequence,
+			events[2].Sequence,
+		)
 	}
 	var result printResult
 	data, err := json.Marshal(events[3].Data)
