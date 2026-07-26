@@ -735,22 +735,20 @@ func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
 	return TurnFinishedDispatch{AwaitNext: true}
 }
 
-func (t TurnReducer) ApplyTokenUsage(msg interface{}) {
-	if t.progress == nil {
+func (t TurnReducer) ApplyTokenUsage(msg session.Message) {
+	if t.progress == nil || msg == nil {
 		return
 	}
-	if m, ok := msg.(session.Message); ok {
-		in, out, cost := session.TokenUsage(m)
-		t.progress.CurrentTurnInput += in
-		t.progress.CurrentTurnOutput += out
-		t.progress.CurrentTurnCost += cost
-		t.progress.TokensSent += in
-		t.progress.TokensReceived += out
-		t.progress.TotalCost += cost
-	}
+	in, out, cost := session.TokenUsage(msg)
+	t.progress.CurrentTurnInput += in
+	t.progress.CurrentTurnOutput += out
+	t.progress.CurrentTurnCost += cost
+	t.progress.TokensSent += in
+	t.progress.TokensReceived += out
+	t.progress.TotalCost += cost
 }
 
-func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time.Time) {
+func (t TurnReducer) AppendAgentDelta(agentID string, delta session.Delta, ts time.Time) {
 	if t.inFlight == nil {
 		return
 	}
@@ -771,7 +769,7 @@ func (t TurnReducer) AppendAgentDelta(agentID string, delta interface{}, ts time
 	t.syncFallbackAssistant(ts)
 }
 
-func (t TurnReducer) AppendThinkingDelta(agentID string, delta interface{}) {
+func (t TurnReducer) AppendThinkingDelta(agentID string, delta session.Delta) {
 	if t.inFlight == nil {
 		return
 	}
@@ -860,7 +858,7 @@ func assistantReasoning(msg *session.AssistantMessage) string {
 	return b.String()
 }
 
-func (t TurnReducer) CommitAgentMessage(msg interface{}) (session.Entry, bool) {
+func (t TurnReducer) CommitAgentMessage(msg session.Message) (session.Entry, bool) {
 	if t.inFlight == nil {
 		return nil, false
 	}
@@ -918,7 +916,7 @@ func (t TurnReducer) AppendToolOutput(id string, output string, isError bool) {
 	}
 }
 
-func (t TurnReducer) CompleteToolResult(id string, msg interface{}) (session.Entry, bool) {
+func (t TurnReducer) CompleteToolResult(id string, msg session.Event) (session.Entry, bool) {
 	if t.inFlight == nil {
 		return nil, false
 	}

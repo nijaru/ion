@@ -996,7 +996,7 @@ func msgTypeName(m session.Message) string {
 	}
 }
 
-func typeName(v interface{}) string {
+func typeName(v any) string {
 	switch v.(type) {
 	case *session.QueueUpdate:
 		return "QueueUpdate"
