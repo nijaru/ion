@@ -703,17 +703,6 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	sMu.Unlock()
 }
 
-// helper: contains for event names
-
-func containsEvent(events []session.Event, name string) bool {
-	for _, e := range events {
-		if eventTypeName(e) == name {
-			return true
-		}
-	}
-	return false
-}
-
 // helper: filter events by name substring
 
 func filterEvents(events []session.Event, pred func(session.Event) bool) []session.Event {

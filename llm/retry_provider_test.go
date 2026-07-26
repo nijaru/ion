@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	retryTransientErr = errors.New("temporary upstream failure")
-	retryPermanentErr = errors.New("invalid request")
+	errRetryTransient = errors.New("temporary upstream failure")
+	errRetryPermanent = errors.New("invalid request")
 )
 
 type retryProviderStub struct {
@@ -46,7 +46,7 @@ func (p *retryProviderStub) CountTokens(context.Context, string, []Message) (int
 func (p *retryProviderStub) Cost(context.Context, string, Usage) float64 { return 0 }
 func (p *retryProviderStub) Capabilities(string) Capabilities            { return Capabilities{} }
 func (p *retryProviderStub) IsTransient(err error) bool {
-	return errors.Is(err, retryTransientErr) || IsRateLimit(err) || IsTransientTransportError(err)
+	return errors.Is(err, errRetryTransient) || IsRateLimit(err) || IsTransientTransportError(err)
 }
 func (p *retryProviderStub) IsContextOverflow(error) bool { return false }
 
@@ -67,7 +67,7 @@ func retryTestConfig() RetryConfig {
 
 func TestRetryProviderRetriesTransientStreamFailures(t *testing.T) {
 	provider := &retryProviderStub{
-		streamErrors: []error{retryTransientErr, retryTransientErr},
+		streamErrors: []error{errRetryTransient, errRetryTransient},
 	}
 	retry := NewRetryProvider(provider)
 	retry.Config = retryTestConfig()
@@ -92,7 +92,7 @@ func TestRetryProviderRetriesTransientStreamFailures(t *testing.T) {
 }
 
 func TestRetryProviderDisabledMakesOneAttempt(t *testing.T) {
-	provider := &retryProviderStub{streamErrors: []error{retryTransientErr}}
+	provider := &retryProviderStub{streamErrors: []error{errRetryTransient}}
 	retry := NewRetryProvider(provider)
 	retry.Config = retryTestConfig()
 	retry.Config.MaxAttempts = 1
@@ -133,7 +133,7 @@ func TestRetryProviderTransportRetryStopsOnCancellation(t *testing.T) {
 
 func TestRetryProviderTransportOnlyForeverBoundsProviderFailures(t *testing.T) {
 	provider := &retryProviderStub{
-		streamErrors: []error{retryTransientErr, retryTransientErr, retryTransientErr},
+		streamErrors: []error{errRetryTransient, errRetryTransient, errRetryTransient},
 	}
 	retry := NewRetryProvider(provider)
 	retry.Config = retryTestConfig()
@@ -155,7 +155,7 @@ func TestRetryProviderTransportOnlyForeverBoundsProviderFailures(t *testing.T) {
 
 func TestRetryProviderRetriesGenerateFailures(t *testing.T) {
 	provider := &retryProviderStub{
-		generateErrors: []error{retryTransientErr, retryTransientErr},
+		generateErrors: []error{errRetryTransient, errRetryTransient},
 	}
 	retry := NewRetryProvider(provider)
 	retry.Config = retryTestConfig()
@@ -169,12 +169,12 @@ func TestRetryProviderRetriesGenerateFailures(t *testing.T) {
 }
 
 func TestRetryProviderDoesNotRetryPermanentFailure(t *testing.T) {
-	provider := &retryProviderStub{streamErrors: []error{retryPermanentErr}}
+	provider := &retryProviderStub{streamErrors: []error{errRetryPermanent}}
 	retry := NewRetryProvider(provider)
 	retry.Config = retryTestConfig()
 
 	_, err := retry.Stream(t.Context(), &Request{})
-	if !errors.Is(err, retryPermanentErr) {
+	if !errors.Is(err, errRetryPermanent) {
 		t.Fatalf("Stream() error = %v, want permanent error", err)
 	}
 	if got := provider.streamCalls.Load(); got != 1 {

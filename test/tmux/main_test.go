@@ -135,24 +135,6 @@ func (tt *tmuxTest) waitFor(substr string, timeout time.Duration) string {
 	}
 }
 
-// waitForGone waits until substr disappears from the captured pane.
-func (tt *tmuxTest) waitForGone(substr string, timeout time.Duration) {
-	tt.t.Helper()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case <-deadline:
-			tt.t.Fatalf("timeout waiting for %q to disappear after %v", substr, timeout)
-		default:
-			content := tt.capture()
-			if !strings.Contains(content, substr) {
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-}
-
 // launchIon starts Ion with --no-session and waits for the composer prompt.
 func (tt *tmuxTest) launchIon() {
 	tt.t.Helper()

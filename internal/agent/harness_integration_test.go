@@ -507,13 +507,11 @@ func TestHarnessIntegration_ConcurrentSubscribers(t *testing.T) {
 
 	// Register 5 concurrent subscribers.
 	var wg sync.WaitGroup
-	subs := make([]*EventSubscription, 0, 5)
 	for range 5 {
 		sub, err := h.Subscribe(context.Background(), EventCursor{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		subs = append(subs, sub)
 		wg.Add(1)
 		go func(sub *EventSubscription) {
 			defer wg.Done()
@@ -680,7 +678,7 @@ func TestHarnessIntegration_Steering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = <-msgCh
+	<-msgCh
 
 	if !seenSteer {
 		t.Error("steered message was not visible in provider request")

@@ -1638,34 +1638,6 @@ func schemaPropertyValues(value any) (map[string]any, error) {
 	return properties, nil
 }
 
-func normalizeProperties(value any) (map[string]map[string]any, bool, error) {
-	if value == nil {
-		return nil, false, nil
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, false, err
-		}
-		if err := json.Unmarshal(encoded, &object); err != nil {
-			return nil, false, err
-		}
-	}
-	result := make(map[string]map[string]any, len(object))
-	for name, property := range object {
-		schema, ok, err := normalizeSchemaMap(property)
-		if err != nil {
-			return nil, false, fmt.Errorf("property %q: %w", name, err)
-		}
-		if !ok {
-			return nil, false, fmt.Errorf("property %q is not a schema object", name)
-		}
-		result[name] = schema
-	}
-	return result, true, nil
-}
-
 func normalizeSchemaMapValue(value any) (map[string]any, bool, error) {
 	if _, boolean := value.(bool); boolean {
 		return nil, false, nil

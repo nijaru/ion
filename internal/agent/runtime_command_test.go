@@ -9,19 +9,6 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-func TestControllerCommandBoundaryAcceptsNilContext(t *testing.T) {
-	store := newTestStore(t)
-	h := NewController(ControllerConfig{
-		Session: session.NewSession(store, 64),
-		Store:   store,
-	})
-	defer h.Close()
-
-	if err := h.SetThinking(nil, session.ThinkingHigh); err != nil {
-		t.Fatalf("SetThinking with nil context: %v", err)
-	}
-}
-
 func TestControllerRoutesSessionTransportThroughCommands(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

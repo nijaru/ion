@@ -30,11 +30,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap ripgrep tmux
 
-      - name: Install Go formatters
+      - name: Install Go quality tools
         run: |
           tool_dir="${RUNNER_TEMP}/ion-go-tools"
           GOBIN="$tool_dir" go install github.com/segmentio/golines@v0.15.0
           GOBIN="$tool_dir" go install mvdan.cc/gofumpt@v0.10.0
+          GOBIN="$tool_dir" go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           echo "$tool_dir" >> "$GITHUB_PATH"
 
       - name: Go format
@@ -48,6 +50,12 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Staticcheck
+        run: staticcheck ./...
+
+      - name: Vulnerability scan
+        run: govulncheck ./...
 
       - name: Build
         run: go build ./...

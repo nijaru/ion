@@ -35,18 +35,6 @@ func testAgentEntry(content string, reasoning string) session.Entry {
 	}
 }
 
-// testAgentEntryWithTS variant that sets timestamp (for timestamp-display test).
-func testAgentEntryWithTS(content, reasoning string, ts time.Time) session.Entry {
-	e := testAgentEntry(content, reasoning)
-	if me, ok := e.(*session.MessageEntry); ok {
-		if am, ok := me.Message.(*session.AssistantMessage); ok {
-			am.Timestamp = ts
-		}
-		me.EntryBase = session.EntryBase{Timestamp: ts}
-	}
-	return e
-}
-
 func testUserEntryWithTS(content string, ts time.Time) session.Entry {
 	e := &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: ts},

@@ -864,21 +864,6 @@ func normalizeToolEnv(value string) string {
 	}
 }
 
-func expandUserPath(path string) string {
-	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return home
-		}
-		return path
-	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
-		}
-	}
-	return path
-}
-
 func normalizeStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil

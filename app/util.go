@@ -21,8 +21,6 @@ func systemEntry(content string) session.Entry {
 	return entry
 }
 
-func now() int64 { return time.Now().Unix() }
-
 // clearVisibleScreenCmd clears the visible inline frame after terminal width
 // shrink, then asks Bubble Tea's renderer to discard its old frame. The raw
 // clear handles rows already reflowed by the terminal; ClearScreen keeps the

@@ -151,12 +151,11 @@ func TestCheckpointListFiltersWorkspaceAndSortsNewestFirst(t *testing.T) {
 
 	// Make ordering deterministic without depending on the clock granularity.
 	secondManifest := filepath.Join(store.path, second.ID, checkpointManifestName)
-	data, err := os.ReadFile(secondManifest)
-	if err != nil {
+	if _, err := os.ReadFile(secondManifest); err != nil {
 		t.Fatalf("read second manifest: %v", err)
 	}
 	second.CreatedAt = first.CreatedAt.Add(time.Minute)
-	data, err = json.MarshalIndent(second, "", "  ")
+	data, err := json.MarshalIndent(second, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal second manifest: %v", err)
 	}

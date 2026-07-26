@@ -643,20 +643,6 @@ func isCancellationFailure(reason string) bool {
 		strings.Contains(reason, "response aborted")
 }
 
-func turnOutcomeForMessages(messages []session.Message) TurnOutcome {
-	for i := len(messages) - 1; i >= 0; i-- {
-		assistant, ok := messages[i].(*session.AssistantMessage)
-		if !ok {
-			continue
-		}
-		if assistant.StopReason == session.StopReasonAborted {
-			return TurnAborted
-		}
-		return TurnFailed
-	}
-	return TurnFailed
-}
-
 // buildLoopConfig constructs the per-turn LoopConfig.
 //
 // Reference: Pi agent-harness.js createLoopConfig (line 350).
@@ -1194,24 +1180,6 @@ func appendDurableEntry(
 		)
 	}
 	return store.AppendTurnEntry(ctx, turnID, entry)
-}
-
-func reparentDurableEntry(entry session.Entry, parentID string) (session.Entry, error) {
-	if entry == nil {
-		return nil, errors.New("durable entry is nil")
-	}
-	if entry.ParentID() == parentID {
-		return entry, nil
-	}
-	if entry.ParentID() != "" {
-		return nil, fmt.Errorf("entry %q already has parent %q", entry.ID(), entry.ParentID())
-	}
-	if custom, ok := entry.(*session.CustomEntry); ok {
-		copy := *custom
-		copy.EntryBase.ParentID = parentID
-		return &copy, nil
-	}
-	return nil, fmt.Errorf("cannot attach %T to active durable turn without an explicit parent", entry)
 }
 
 // SetModel changes the model. If a run is active, buffered until next turn boundary.

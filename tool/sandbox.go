@@ -527,14 +527,6 @@ func sandboxCommandPaths(name string) []string {
 	return slices.Compact(result)
 }
 
-func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
-	return planBubblewrapCommand(cwd, "/bin/bash", []string{"-c", command})
-}
-
-func planBubblewrapCommand(cwd, name string, args []string) (sandboxPlan, error) {
-	return planSandboxedCommandWithPolicy(cwd, name, args, SandboxBubblewrap, defaultSandboxPolicy(cwd))
-}
-
 func planBubblewrapCommandWithPolicy(cwd, name string, args []string, policy SandboxPolicy) (sandboxPlan, error) {
 	if sandboxGOOS != "linux" {
 		return sandboxPlan{}, fmt.Errorf("bubblewrap sandbox unsupported on %s", sandboxGOOS)

@@ -1034,11 +1034,3 @@ func (c *Controller) IsIdle() bool {
 	phase := c.currentPhase()
 	return phase == PhaseReady || phase == PhaseSettled
 }
-
-// formatPhaseError wraps an error with phase context.
-func formatPhaseError(phase Phase, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("phase %s: %w", phase, err)
-}

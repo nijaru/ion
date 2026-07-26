@@ -114,10 +114,6 @@ func TestHarnessEmitsEvents(t *testing.T) {
 			if _, ok := e.(session.Settled); ok {
 				goto afterSettled
 			}
-			if _, ok := e.(session.AgentEnd); ok {
-				// Keep draining for Settled after AgentEnd.
-				continue
-			}
 		case <-done:
 			// Prompt finished; allow one more drain cycle for buffered events.
 			timeout = time.After(100 * time.Millisecond)

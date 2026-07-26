@@ -98,15 +98,6 @@ func legalTransition(from, to Phase) bool {
 	return false
 }
 
-// mustTransition panics if a transition is illegal. Used only where the
-// controller has already validated the transition via legalTransition.
-func mustTransition(from, to Phase) Phase {
-	if !legalTransition(from, to) {
-		panic(fmt.Sprintf("illegal phase transition %s -> %s", from, to))
-	}
-	return to
-}
-
 // ErrorKind classifies the failure source for recovery decisions.
 type ErrorKind uint8
 
