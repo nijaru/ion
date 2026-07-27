@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -509,9 +508,11 @@ func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	})
 	defer h.Close()
 
-	// Force pending writes: SetModel before Prompt leaves a pendingWrite that
-	// TurnEnd should report via HadPendingMutations (fixed in 1B).
-	h.SetModel(llm.Model{ID: "new-model", Provider: "test"})
+	// Idle model changes are durable before the setter acknowledges, so the
+	// following prompt does not need to flush a deferred model write.
+	if err := h.SetModel(llm.Model{ID: "new-model", Provider: "test"}); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
 
 	savePoints := make(chan session.SavePoint, 1)
 	watchEvents(t, h, func(e session.Event) {
@@ -531,12 +532,8 @@ func TestLifecycle_SavePointHadPendingMutations(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no SavePoint emitted")
 	}
-	// After 1B fix, HadPendingMutations should be true because we queued SetModel.
-	if !savePoint.HadPendingMutations {
-		t.Fatalf(
-			"expected HadPendingMutations=true after SetModel pending write, got false; events: %v",
-			eventNames(filterEvents(nil, func(e session.Event) bool { return true })),
-		)
+	if savePoint.HadPendingMutations {
+		t.Fatalf("expected no pending setter write after durable SetModel, got true")
 	}
 }
 
@@ -702,18 +699,3 @@ func TestEmit_Backpressure_NoDropWhenDraining(t *testing.T) {
 	dMu.Unlock()
 	sMu.Unlock()
 }
-
-// helper: filter events by name substring
-
-func filterEvents(events []session.Event, pred func(session.Event) bool) []session.Event {
-	var out []session.Event
-	for _, e := range events {
-		if pred(e) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// Ensure test file doesn't accidentally import unused strings (used in earlier version)
-var _ = strings.Contains

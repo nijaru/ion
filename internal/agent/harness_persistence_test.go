@@ -16,6 +16,7 @@ type failingPersistenceSession struct {
 	messageCalls atomic.Int32
 	failMessage  int32
 	failModel    atomic.Bool
+	failTools    atomic.Bool
 }
 
 func (s *failingPersistenceSession) AppendMessage(ctx context.Context, msg session.Message) (string, error) {
@@ -31,6 +32,13 @@ func (s *failingPersistenceSession) AppendModelChange(ctx context.Context, provi
 		return "", errors.New("injected model persistence failure")
 	}
 	return s.Session.AppendModelChange(ctx, provider, modelID)
+}
+
+func (s *failingPersistenceSession) AppendActiveToolsChange(ctx context.Context, active []string) (string, error) {
+	if s.failTools.Load() {
+		return "", errors.New("injected tools persistence failure")
+	}
+	return s.Session.AppendActiveToolsChange(ctx, active)
 }
 
 func TestHarnessPersistenceFailureIsTerminalAndNotAcknowledged(t *testing.T) {
@@ -90,7 +98,7 @@ func TestHarnessPersistenceFailureIsTerminalAndNotAcknowledged(t *testing.T) {
 	}
 }
 
-func TestHarnessFailedPendingWriteIsRetainedForRetry(t *testing.T) {
+func TestHarnessIdleSetterFailureIsReturnedBeforePrompt(t *testing.T) {
 	store := newTestStore(t)
 	base := session.NewSession(store, 64)
 	failing := &failingPersistenceSession{Session: base}
@@ -104,22 +112,21 @@ func TestHarnessFailedPendingWriteIsRetainedForRetry(t *testing.T) {
 		},
 	})
 
-	h.SetModel(llm.Model{ID: "next"})
-	_, err := h.Prompt(context.Background(), "write model change")
-	if err == nil || !strings.Contains(err.Error(), "flush pending write") {
-		t.Fatalf("Prompt error = %v, want pending write failure", err)
+	err := h.SetModel(llm.Model{ID: "next"})
+	if err == nil || !strings.Contains(err.Error(), "persist model change") {
+		t.Fatalf("SetModel error = %v, want setter persistence failure", err)
 	}
 
 	failing.failModel.Store(false)
-	if err := h.flushPending(context.Background()); err != nil {
-		t.Fatalf("retry pending write: %v", err)
+	if _, err := h.Prompt(context.Background(), "write after setter failure"); err != nil {
+		t.Fatalf("Prompt after setter failure: %v", err)
 	}
 	snap, err := failing.BuildContext(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.ActiveModel != "next" {
-		t.Fatalf("active model = %q, want retried model change", snap.ActiveModel)
+	if snap.ActiveModel != "initial" {
+		t.Fatalf("active model = %q, want unchanged initial model", snap.ActiveModel)
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)

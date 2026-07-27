@@ -1194,9 +1194,37 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 		h.mu.Unlock()
 		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, h.phase)
 	}
+	idle := h.phase == PhaseReady
+	sess := h.session
 	oldModel := h.model
+	changed := model.Provider != oldModel.Provider || model.ID != oldModel.ID
+	if idle && changed {
+		h.mu.Unlock()
+		if sess == nil {
+			return errors.New("harness has no session")
+		}
+		finish, err := h.beginExclusive(PhasePersisting)
+		if err != nil {
+			return err
+		}
+		if _, err := sess.AppendModelChange(context.Background(), model.Provider, model.ID); err != nil {
+			finish()
+			return fmt.Errorf("persist model change: %w", err)
+		}
+		h.mu.Lock()
+		oldModel = h.model
+		h.model = model
+		h.emitLocked(session.ModelUpdate{
+			Model:    model.ID,
+			Previous: oldModel.ID,
+			Source:   session.UpdateSourceSet,
+		})
+		h.mu.Unlock()
+		finish()
+		return nil
+	}
 	h.model = model
-	if model.Provider != oldModel.Provider || model.ID != oldModel.ID {
+	if changed {
 		h.pending = append(h.pending, pendingWrite{
 			apply: func(ctx context.Context, s session.Session) error {
 				_, err := s.AppendModelChange(ctx, model.Provider, model.ID)
@@ -1339,6 +1367,33 @@ func (h *Controller) setToolsDirect(tools []Tool, active []string) error {
 		}
 	}
 	previous := append([]string(nil), h.active...)
+	idle := h.phase == PhaseReady
+	sess := h.session
+	if idle {
+		h.mu.Unlock()
+		if sess == nil {
+			return errors.New("harness has no session")
+		}
+		finish, err := h.beginExclusive(PhasePersisting)
+		if err != nil {
+			return err
+		}
+		if _, err := sess.AppendActiveToolsChange(context.Background(), active); err != nil {
+			finish()
+			return fmt.Errorf("persist active tools: %w", err)
+		}
+		h.mu.Lock()
+		previous = append([]string(nil), h.active...)
+		h.tools = toolMap
+		h.active = append([]string(nil), active...)
+		h.emitLocked(session.ToolsUpdate{
+			Active:   append([]string(nil), active...),
+			Previous: previous,
+		})
+		h.mu.Unlock()
+		finish()
+		return nil
+	}
 	h.tools = toolMap
 	h.active = append([]string(nil), active...)
 	persistActive := append([]string(nil), active...)

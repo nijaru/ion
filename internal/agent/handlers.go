@@ -150,7 +150,9 @@ func (c *Controller) handleAbort(cmd *AbortCmd) {
 // --- Model and tool commands ---
 
 func (c *Controller) handleSetModel(cmd *SetModelCmd) {
-	sendResult(cmd.Reply, c.setModelDirect(cmd.Model))
+	c.startOperation(func() {
+		sendResult(cmd.Reply, c.setModelDirect(cmd.Model))
+	})
 }
 
 func (c *Controller) handleSetThinking(cmd *SetThinkingCmd) {
@@ -160,7 +162,9 @@ func (c *Controller) handleSetThinking(cmd *SetThinkingCmd) {
 }
 
 func (c *Controller) handleSetTools(cmd *SetToolsCmd) {
-	sendResult(cmd.Reply, c.setToolsDirect(cmd.Tools, cmd.Active))
+	c.startOperation(func() {
+		sendResult(cmd.Reply, c.setToolsDirect(cmd.Tools, cmd.Active))
+	})
 }
 
 func (c *Controller) handleActivateTools(cmd *ActivateToolsCmd) {
