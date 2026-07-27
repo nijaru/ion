@@ -1,8 +1,15 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 func TestHarnessInputQueuesAreBounded(t *testing.T) {
@@ -32,5 +39,121 @@ func TestHarnessInputQueuesAreBounded(t *testing.T) {
 	}
 	if err := h.NextTurn("second"); !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("second next-turn error = %v, want ErrQueueFull", err)
+	}
+}
+
+type queuedTurnStream struct {
+	ctx       context.Context
+	gate      <-chan struct{}
+	started   chan<- struct{}
+	completed chan<- struct{}
+	once      sync.Once
+	sent      bool
+}
+
+func (s *queuedTurnStream) Next() (*llm.Chunk, bool) {
+	if s.sent {
+		return nil, false
+	}
+	if s.started != nil {
+		s.once.Do(func() { close(s.started) })
+	}
+	if s.gate != nil {
+		select {
+		case <-s.gate:
+		case <-s.ctx.Done():
+			return nil, false
+		}
+	}
+	s.sent = true
+	if s.completed != nil {
+		close(s.completed)
+	}
+	return &llm.Chunk{Content: "ok", StopReason: "stop"}, true
+}
+
+func (s *queuedTurnStream) Err() error   { return nil }
+func (s *queuedTurnStream) Close() error { return nil }
+
+func TestControllerNextTurnStartsQueuedPromptsAfterSettlement(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondCompleted := make(chan struct{})
+	thirdCompleted := make(chan struct{})
+	var calls atomic.Int32
+
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			switch calls.Add(1) {
+			case 1:
+				return &queuedTurnStream{ctx: ctx, gate: releaseFirst, started: firstStarted}, nil
+			case 2:
+				return &queuedTurnStream{ctx: ctx, completed: secondCompleted}, nil
+			default:
+				return &queuedTurnStream{ctx: ctx, completed: thirdCompleted}, nil
+			}
+		},
+	})
+	defer h.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := h.Prompt(context.Background(), "first")
+		firstDone <- err
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first turn did not start")
+	}
+
+	if err := h.NextTurn("second"); err != nil {
+		t.Fatalf("queue second: %v", err)
+	}
+	if err := h.NextTurn("third"); err != nil {
+		t.Fatalf("queue third: %v", err)
+	}
+	close(releaseFirst)
+
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first turn: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first turn did not settle")
+	}
+	select {
+	case <-secondCompleted:
+	case <-time.After(time.Second):
+		t.Fatal("queued second turn did not complete")
+	}
+	select {
+	case <-thirdCompleted:
+	case <-time.After(time.Second):
+		t.Fatal("queued third turn did not complete")
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("provider calls = %d, want exactly three turns", got)
+	}
+}
+
+func TestAbortClearsRuntimeOwnedNextTurns(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t), QueueCapacity: 2})
+	defer h.Close()
+	h.phase = PhaseStreaming
+
+	if err := h.NextTurn("discard me"); err != nil {
+		t.Fatalf("queue next turn: %v", err)
+	}
+	if _, _, err := h.Abort(); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if len(h.nextTurn) != 0 {
+		t.Fatalf("next-turn queue = %#v, want empty after abort", h.nextTurn)
 	}
 }

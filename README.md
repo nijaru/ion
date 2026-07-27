@@ -163,7 +163,7 @@ Common TUI commands:
 | Ctrl+T | Toggle thinking blocks visibility |
 | Ctrl+O | Toggle tool output |
 | Shift+Tab | Cycle thinking level |
-| Alt+Up | Recall queued turns |
+| Alt+Up | Recall queued turns (deferred while runtime owns the queue) |
 | Alt+Enter | Queue follow-up |
 | Ctrl+C | Clear editor (double-tap to quit) |
 | Ctrl+D | Exit (double-tap when empty) |

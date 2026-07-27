@@ -205,12 +205,6 @@ type gitBranchChangedMsg struct {
 	branch string
 }
 
-type queuedTurnMsg struct {
-	generation         uint64
-	text               string
-	rearmSessionEvents bool
-}
-
 type busyInputResultMsg struct {
 	generation uint64
 	action     string

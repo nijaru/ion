@@ -35,20 +35,19 @@ type TurnSummary struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending                 *session.Entry
-	PendingTools            map[string]session.Entry
-	CommittedAssistant      *session.Entry // assistant entry that survived tool clearing
-	ReasonBuf               string
-	StreamBuf               string
-	StreamChunks            []string
-	QueuedSteering          []string
-	QueuedTurns             []string
-	QueuedTurnsRuntimeOwned bool
-	Thinking                bool
-	Canceling               bool
-	AgentCommitted          bool
-	DrainUntilTurnStarted   bool
-	DrainStartedAt          time.Time
+	Pending               *session.Entry
+	PendingTools          map[string]session.Entry
+	CommittedAssistant    *session.Entry // assistant entry that survived tool clearing
+	ReasonBuf             string
+	StreamBuf             string
+	StreamChunks          []string
+	QueuedSteering        []string
+	QueuedTurns           []string
+	Thinking              bool
+	Canceling             bool
+	AgentCommitted        bool
+	DrainUntilTurnStarted bool
+	DrainStartedAt        time.Time
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -450,7 +449,6 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	if full {
 		t.inFlight.QueuedTurns = nil
 		t.inFlight.QueuedSteering = nil
-		t.inFlight.QueuedTurnsRuntimeOwned = false
 	}
 }
 
@@ -458,15 +456,6 @@ func (t TurnReducer) ResetFinishedTurnSummary() {
 	if t.progress != nil {
 		t.progress.LastTurnSummary = TurnSummary{}
 	}
-}
-
-func (t TurnReducer) PopQueuedTurn() string {
-	if t.inFlight == nil || len(t.inFlight.QueuedTurns) == 0 {
-		return ""
-	}
-	text := t.inFlight.QueuedTurns[0]
-	t.inFlight.QueuedTurns = t.inFlight.QueuedTurns[1:]
-	return text
 }
 
 func (t TurnReducer) StartSubmit() {
@@ -491,18 +480,6 @@ func (t TurnReducer) RejectSubmit(reason string) {
 	}
 }
 
-func (t TurnReducer) QueueTurn(text string) {
-	if t.inFlight != nil {
-		t.inFlight.QueuedTurns = append(t.inFlight.QueuedTurns, text)
-	}
-}
-
-func (t TurnReducer) ClearQueuedTurns() {
-	if t.inFlight != nil {
-		t.inFlight.QueuedTurns = nil
-	}
-}
-
 func (t TurnReducer) DrainingUntilTurnStarted() bool {
 	return t.inFlight != nil && t.inFlight.DrainUntilTurnStarted
 }
@@ -515,7 +492,6 @@ type CancelDecision struct {
 func (t TurnReducer) CancelTurn(reason string, now time.Time) CancelDecision {
 	if t.inFlight != nil {
 		t.inFlight.Canceling = true
-		t.inFlight.QueuedTurns = nil
 	}
 	if t.progress != nil {
 		t.progress.Mode = StateCancelled
@@ -706,33 +682,6 @@ func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) {
 		t.progress.Mode = StateIonizing
 	}
 	return nil, true
-}
-
-// TurnFinishedDispatch holds events to emit after a turn finishes.
-type TurnFinishedDispatch struct {
-	ReloadGitDiff      bool
-	AwaitNext          bool
-	Action             string
-	Text               string
-	RearmSessionEvents bool
-}
-
-var TurnFinishedDispatchSubmitLocal = "submit_local"
-
-func (t TurnReducer) FinishTurnDispatch() TurnFinishedDispatch {
-	if t.inFlight == nil {
-		return TurnFinishedDispatch{AwaitNext: true}
-	}
-	if !t.inFlight.QueuedTurnsRuntimeOwned {
-		if text := t.PopQueuedTurn(); text != "" {
-			return TurnFinishedDispatch{
-				Action:             TurnFinishedDispatchSubmitLocal,
-				Text:               text,
-				RearmSessionEvents: true,
-			}
-		}
-	}
-	return TurnFinishedDispatch{AwaitNext: true}
 }
 
 func (t TurnReducer) ApplyTokenUsage(msg session.Message) {

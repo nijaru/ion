@@ -260,24 +260,6 @@ func TestTurnReducerTypedDeltaFallbackDoesNotStringifyStructs(t *testing.T) {
 	}
 }
 
-func TestTurnReducerStartTurnAndDispatchManageBusyLifecycle(t *testing.T) {
-	model := readyModel(t)
-	now := time.Now()
-	model.turnReducer().StartTurn(now, now)
-	if !model.InFlight.Thinking || model.Progress.Mode != StateStreaming {
-		t.Fatalf("turn state = inFlight=%#v progress=%#v, want active streaming", model.InFlight, model.Progress)
-	}
-	model.turnReducer().QueueTurn("follow up")
-	dispatch := model.turnReducer().FinishTurnDispatch()
-	if dispatch.Action != TurnFinishedDispatchSubmitLocal || dispatch.Text != "follow up" ||
-		!dispatch.RearmSessionEvents {
-		t.Fatalf("dispatch = %#v, want local follow-up submit", dispatch)
-	}
-	if got := model.turnReducer().FinishTurnDispatch(); !got.AwaitNext {
-		t.Fatalf("empty dispatch = %#v, want await", got)
-	}
-}
-
 func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true

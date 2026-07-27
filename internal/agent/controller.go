@@ -137,6 +137,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		phase:             PhaseReady,
 		commands:          make(chan Command, controllerCommandCapacity),
 		commandStop:       make(chan struct{}),
+		nextTurnWake:      make(chan struct{}, 1),
 		completions:       make(chan turnCompletion, 1),
 		runtimeRequests:   make(chan runtimeRequest, runtimeOperationCapacity),
 		runtimeResults:    make(chan runtimeCompletion, 1),
@@ -325,9 +326,10 @@ func (h *Controller) runPrompt(
 	}
 	h.mu.Unlock()
 
-	// Drain nextTurn queue and prepend to prompts.
-	prompts := h.drainNextTurn() // holds its own lock
-	prompts = append(prompts, newUserMessage(text, promptImages, time.Now()))
+	// The controller starts queued next-turn inputs as independent prompts after
+	// the preceding turn settles. The turn engine receives only this prompt;
+	// queued input never becomes an implicit context prefix.
+	prompts := []session.Message{newUserMessage(text, promptImages, time.Now())}
 
 	// Emit before_agent_start hook — inject extra messages.
 	patches, err := h.emitHook(HookBeforeAgentStart, beforeAgentStartPayload{
@@ -975,16 +977,6 @@ func (h *Controller) drainQueued(queue *[]session.Message, mode string) []sessio
 	return msgs
 }
 
-// drainNextTurn drains the nextTurn queue — always in "all" mode.
-// Holds h.mu to avoid racing with NextTurn(). Emits QueueUpdate after draining.
-func (h *Controller) drainNextTurn() []session.Message {
-	h.mu.Lock()
-	msgs := h.drainQueued(&h.nextTurn, "all")
-	h.mu.Unlock()
-	h.emitQueueUpdate()
-	return msgs
-}
-
 // appendQueued appends one user-controlled message to a bounded runtime queue.
 // The caller must hold h.mu. Keeping the bound at the owner makes queue
 // capacity a lifecycle invariant instead of a UI convention.
@@ -1052,14 +1044,15 @@ func (h *Controller) followUpDirect(text string, images ...session.ImageContent)
 	return nil
 }
 
-// NextTurn queues a message to be prepended to the next prompt.
+// NextTurn queues a message for an independent turn after the current turn
+// settles. The bounded queue is drained one prompt at a time by the controller.
 func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() && h.activeTurnID != "" {
 		phase := h.phase
 		h.mu.Unlock()
 		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
@@ -1077,7 +1070,69 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 	h.mu.Unlock()
 	// emit outside lock — emit() acquires h.mu internally for listener snapshot
 	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	h.wakeNextTurnStart()
 	return nil
+}
+
+func (h *Controller) wakeNextTurnStart() {
+	select {
+	case h.nextTurnWake <- struct{}{}:
+	default:
+	}
+}
+
+// startNextTurnIfReady transfers one queued next-turn prompt into the normal
+// turn lifecycle. It runs only on the controller goroutine, so a queued input
+// cannot bypass phase reservation or start concurrently with another turn.
+func (h *Controller) startNextTurnIfReady() {
+	h.mu.Lock()
+	if h.closed || h.phase != PhaseReady || len(h.nextTurn) == 0 {
+		h.mu.Unlock()
+		return
+	}
+	queued := h.nextTurn[0]
+	h.nextTurn = h.nextTurn[1:]
+	h.mu.Unlock()
+
+	user, ok := queued.(*session.UserMessage)
+	if !ok {
+		h.mu.Lock()
+		h.nextTurn = append([]session.Message{queued}, h.nextTurn...)
+		h.mu.Unlock()
+		h.emitQueueUpdate()
+		return
+	}
+
+	runDone, err := h.beginTurn(context.Background())
+	if err != nil {
+		h.mu.Lock()
+		h.nextTurn = append([]session.Message{queued}, h.nextTurn...)
+		h.mu.Unlock()
+		h.emitQueueUpdate()
+		return
+	}
+	h.emitQueueUpdate()
+	h.startPromptWorker(&PromptCmd{
+		Ctx:    context.Background(),
+		Text:   session.MessageText(user),
+		Images: userMessageImages(user),
+	}, runDone)
+}
+
+func userMessageImages(user *session.UserMessage) []session.ImageContent {
+	if user == nil {
+		return nil
+	}
+	var images []session.ImageContent
+	for _, content := range user.Content {
+		if image, ok := content.(session.ImageContent); ok {
+			images = append(images, session.ImageContent{
+				Data:     append([]byte(nil), image.Data...),
+				MimeType: image.MimeType,
+			})
+		}
+	}
+	return images
 }
 
 // emitQueueUpdate emits a QueueUpdate event for tests and internal callers
@@ -1411,8 +1466,10 @@ func (h *Controller) cancelActiveRun() ([]session.Message, []session.Message, er
 	clearedFollowUp := append([]session.Message(nil), h.followUp...)
 	h.steer = nil
 	h.followUp = nil
+	h.nextTurn = nil
 	cancel := h.runCancel
 	h.mu.Unlock()
+	h.emitQueueUpdate()
 
 	if cancel != nil {
 		h.cancelCurrentRun()

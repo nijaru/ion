@@ -376,10 +376,6 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		next, cmd := m.handleStreamClosed()
 		return next, cmd, true
 
-	case queuedTurnMsg:
-		next, cmd := m.handleQueuedTurn(msg)
-		return next, cmd, true
-
 	case busyInputResultMsg:
 		next, cmd := m.handleBusyInputResult(msg)
 		return next, cmd, true

@@ -86,11 +86,12 @@ type Controller struct {
 	maxParallelTools int
 
 	// --- Lifecycle (owned by command goroutine, guarded by mu) ---
-	phase       Phase
-	closed      bool
-	mu          sync.Mutex // guards phase, closed, runCancel, runDone
-	commands    chan Command
-	commandStop chan struct{}
+	phase        Phase
+	closed       bool
+	mu           sync.Mutex // guards phase, closed, runCancel, runDone
+	commands     chan Command
+	commandStop  chan struct{}
+	nextTurnWake chan struct{}
 
 	// --- Active turn coordination ---
 	runCancel        chan struct{} // closed to abort current run
@@ -180,6 +181,8 @@ func (c *Controller) run() {
 			}
 		case completion := <-c.completions:
 			c.handleTurnCompletion(completion)
+		case <-c.nextTurnWake:
+			c.startNextTurnIfReady()
 		case request := <-c.runtimeRequests:
 			c.handleRuntimeRequest(request)
 		case completion := <-c.runtimeResults:
@@ -522,6 +525,7 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 			c.runDone = nil
 		}
 		c.mu.Unlock()
+		c.wakeNextTurnStart()
 	}, nil
 }
 

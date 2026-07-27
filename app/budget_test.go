@@ -115,8 +115,8 @@ func TestMessageEndCrossingBudgetCancelsActiveTurn(t *testing.T) {
 	if next.Progress.BudgetStopReason != "turn cost limit reached ($0.1000/$0.1000)" {
 		t.Fatalf("budget reason = %q", next.Progress.BudgetStopReason)
 	}
-	if len(next.InFlight.QueuedTurns) != 0 {
-		t.Fatalf("queued turns = %#v, want cleared", next.InFlight.QueuedTurns)
+	if len(next.InFlight.QueuedTurns) != 1 {
+		t.Fatalf("queued turns = %#v, want runtime projection preserved until abort", next.InFlight.QueuedTurns)
 	}
 }
 

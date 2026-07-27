@@ -27,7 +27,10 @@ func (c *Controller) handlePrompt(cmd *PromptCmd) {
 		sendResult(cmd.Reply, PromptResult{Err: turnError(KindInternal, c.currentPhase(), RecoveryNone, err)})
 		return
 	}
+	c.startPromptWorker(cmd, runDone)
+}
 
+func (c *Controller) startPromptWorker(cmd *PromptCmd, runDone chan struct{}) {
 	go func() {
 		defer c.turnWorkers.Done()
 		c.mu.Lock()
@@ -110,6 +113,7 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 
 	sendResult(completion.reply, result)
 	close(completion.ack)
+	c.startNextTurnIfReady()
 }
 
 func (c *Controller) handleSteer(cmd *SteerCmd) {

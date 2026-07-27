@@ -429,8 +429,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	if model.Progress.Mode != StateCancelled {
 		t.Fatalf("progress mode = %v, want StateCancelled", model.Progress.Mode)
 	}
-	if len(model.InFlight.QueuedTurns) != 0 {
-		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
+	if len(model.InFlight.QueuedTurns) != 1 {
+		t.Fatalf("queued turns = %#v, want runtime projection preserved until abort", model.InFlight.QueuedTurns)
 	}
 	runCommandTree(t, cmd)
 	if runner.aborts != 1 {

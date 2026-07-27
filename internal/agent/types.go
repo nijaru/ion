@@ -276,7 +276,7 @@ type Runtime interface {
 	// queues rather than silently losing user input.
 	NextTurn(text string, images ...session.ImageContent) error
 
-	// Abort cancels the current turn and clears steering/follow-up queues.
+	// Abort cancels the current turn and clears all pending input queues.
 	// It returns after the cancellation request is accepted; the runtime remains
 	// busy until terminal lifecycle persistence and settlement complete. Returns
 	// the cleared messages.

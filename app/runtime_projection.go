@@ -30,5 +30,4 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	steer, followUp, nextTurn := snapshot.Queues.Texts()
 	m.InFlight.QueuedSteering = steer
 	m.InFlight.QueuedTurns = append(followUp, nextTurn...)
-	m.InFlight.QueuedTurnsRuntimeOwned = true
 }

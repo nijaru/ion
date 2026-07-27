@@ -154,34 +154,6 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 	return m, tea.Batch(draftCmd, cmdError(msg.err.Error()))
 }
 
-func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
-		return m, nil
-	}
-	next, cmd := m.submitText(msg.text)
-	if !msg.rearmSessionEvents {
-		return next, cmd
-	}
-	if next.InFlight.Thinking {
-		if cmd == nil {
-			return next, next.awaitSessionEvent()
-		}
-		return next, rearmSubmitResultCmd(cmd)
-	}
-	return next, sequenceCmds(cmd, next.awaitSessionEvent())
-}
-
-func rearmSubmitResultCmd(submitCmd tea.Cmd) tea.Cmd {
-	return func() tea.Msg {
-		msg := submitCmd()
-		if result, ok := msg.(turnSubmitResultMsg); ok {
-			result.rearm = true
-			return result
-		}
-		return msg
-	}
-}
-
 func (m Model) submitBusyInput(text string, images []session.ImageContent) (Model, tea.Cmd) {
 	mode := ""
 	if m.Model.Config != nil {
@@ -205,10 +177,8 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 		m.resetComposerDraft()
 		return m, busyInputCmd(runner, m.Model.EventGeneration, "follow-up", text, images)
 	default:
-		if len(images) > 0 {
-			return m, cmdError("image attachments require an active agent turn")
-		}
-		return m.queueBusyInputLocal(text)
+		m.resetComposerDraft()
+		return m, busyInputCmd(runner, m.Model.EventGeneration, "next-turn", text, images)
 	}
 }
 
@@ -217,7 +187,8 @@ func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
 		m.resetComposerDraft()
 		return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "follow-up", text, nil)
 	}
-	return m.queueBusyInputLocal(text)
+	m.resetComposerDraft()
+	return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "next-turn", text, nil)
 }
 
 func busyInputCmd(runner agent.Runtime, generation uint64, action, text string, images []session.ImageContent) tea.Cmd {
@@ -239,6 +210,8 @@ func busyInputCmd(runner agent.Runtime, generation uint64, action, text string, 
 			err = runner.Steer(text, images...)
 		case "follow-up":
 			err = runner.FollowUp(text, images...)
+		case "next-turn":
+			err = runner.NextTurn(text, images...)
 		default:
 			err = fmt.Errorf("unsupported busy input action %q", action)
 		}
@@ -283,25 +256,11 @@ func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	return m.queueBusyInput(text)
 }
 
-func (m Model) queueBusyInputLocal(text string) (Model, tea.Cmd) {
-	m.turnReducer().QueueTurn(text)
-	m.resetComposerDraft()
-	entry, _ := session.EntrySystem("Queued follow-up", time.Time{})
-	return m, m.terminalCommit().Entries(entry)
-}
-
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	decision := DecideQueuedInputRecall(QueuedInputRecallInput{
-		CurrentDraft: m.Input.Composer.Value(),
-		Steering:     m.InFlight.QueuedSteering,
-		FollowUp:     m.InFlight.QueuedTurns,
-		RuntimeOwned: m.InFlight.QueuedTurnsRuntimeOwned,
-	})
-	if !decision.Recall {
+	if len(m.InFlight.QueuedSteering) == 0 && len(m.InFlight.QueuedTurns) == 0 {
 		return m, nil
 	}
-	m.turnReducer().ClearQueuedTurns()
-	return m, m.setComposerDraft(decision.ComposerText)
+	return m, cmdError("queued input is owned by the runtime and cannot be recalled")
 }
 
 func cloneImageAttachments(images []session.ImageContent) []session.ImageContent {
@@ -528,6 +487,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 // handleQueueUpdate shows queued messages in the terminal when steer/followUp change.
 func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
+	steer, followUp, nextTurn := (agent.QueueSnapshot{
+		Steer:    msg.Steer,
+		FollowUp: msg.FollowUp,
+		NextTurn: msg.NextTurn,
+	}).Texts()
+	m.InFlight.QueuedSteering = steer
+	m.InFlight.QueuedTurns = append(followUp, nextTurn...)
+
 	var parts []string
 	if len(msg.Steer) > 0 {
 		parts = append(parts, fmt.Sprintf("🧭 %d steered", len(msg.Steer)))
@@ -630,23 +597,7 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	}
 	m.turnReducer().RecordFinishedTurnSummary(time.Now())
 
-	dispatch := m.turnReducer().FinishTurnDispatch()
-	if dispatch.Action == TurnFinishedDispatchSubmitLocal {
-		cmds = append(cmds, func() tea.Msg {
-			return queuedTurnMsg{
-				generation:         m.Model.EventGeneration,
-				text:               dispatch.Text,
-				rearmSessionEvents: dispatch.RearmSessionEvents,
-			}
-		})
-		return m, tea.Sequence(cmds...)
-	}
-	if dispatch.ReloadGitDiff {
-		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
-	}
-	if dispatch.AwaitNext {
-		cmds = append(cmds, m.awaitSessionEvent())
-	}
+	cmds = append(cmds, m.awaitSessionEvent())
 	return m, tea.Sequence(cmds...)
 }
 

@@ -158,6 +158,8 @@ type stubRunner struct {
 	followUps    []string
 	steerErr     error
 	followUpErr  error
+	nextTurns    []string
+	nextTurnErr  error
 	compacts     int
 	compactErr   error
 	promptTexts  []string
@@ -190,7 +192,12 @@ func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.followUps = append(r.followUps, text)
 	return r.followUpErr
 }
-func (r *stubRunner) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
+
+func (r *stubRunner) NextTurn(text string, _ ...session.ImageContent) error {
+	r.nextTurns = append(r.nextTurns, text)
+	return r.nextTurnErr
+}
+
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {
 	r.aborts++
 	return nil, nil, r.abortErr

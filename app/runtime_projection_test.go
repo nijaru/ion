@@ -101,6 +101,30 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	}
 }
 
+func TestQueueUpdateReplacesProjectedRuntimeQueues(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedSteering = []string{"stale steer"}
+	model.InFlight.QueuedTurns = []string{"stale turn"}
+
+	next, cmd := model.handleQueueUpdate(session.QueueUpdate{
+		Steer: []session.Message{
+			session.NewUserText("redirect", time.Now()),
+		},
+		NextTurn: []session.Message{
+			session.NewUserText("continue later", time.Now()),
+		},
+	})
+	if cmd == nil {
+		t.Fatal("queue update should re-arm the runtime event stream")
+	}
+	if got, want := next.InFlight.QueuedSteering, []string{"redirect"}; !equalStrings(got, want) {
+		t.Fatalf("steering projection = %#v, want %#v", got, want)
+	}
+	if got, want := next.InFlight.QueuedTurns, []string{"continue later"}; !equalStrings(got, want) {
+		t.Fatalf("turn projection = %#v, want %#v", got, want)
+	}
+}
+
 func TestSessionEventCursorAdvancesAfterAcceptedSequence(t *testing.T) {
 	model := readyModel(t)
 	stream := agent.EventStreamID{1}
@@ -235,22 +259,6 @@ func TestStaleTurnCommandsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	}
 	if got := staleCancel.Input.Composer.Value(); got != "new draft" {
 		t.Fatalf("stale cancel result changed composer to %q", got)
-	}
-
-	runner := &stubRunner{}
-	model.Model.Runner = runner
-	staleQueued, cmd := model.handleQueuedTurn(queuedTurnMsg{
-		generation: 1,
-		text:       "old queued turn",
-	})
-	if cmd != nil {
-		t.Fatal("stale queued turn returned a command")
-	}
-	if len(runner.promptTexts) != 0 {
-		t.Fatalf("stale queued turn submitted prompts %#v", runner.promptTexts)
-	}
-	if got := staleQueued.Input.Composer.Value(); got != "new draft" {
-		t.Fatalf("stale queued turn changed composer to %q", got)
 	}
 }
 

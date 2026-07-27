@@ -108,3 +108,51 @@ func TestBusyInputFollowUpSuccessUsesRuntimeCommand(t *testing.T) {
 		t.Fatalf("follow-ups = %#v, want one submitted follow-up", runner.followUps)
 	}
 }
+
+func TestBusyInputQueueUsesBoundedRuntimeNextTurn(t *testing.T) {
+	runner := &stubRunner{}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.Model.Config.BusyInput = "queue"
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("run after this turn")
+
+	updated, cmd := model.submitBusyInput("run after this turn", nil)
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("queue mode should return an asynchronous command")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q while queue request is pending, want empty", got)
+	}
+
+	next, resultCmd := model.Update(cmd())
+	model = testModel(t, next)
+	if resultCmd != nil {
+		t.Fatal("successful next-turn queue should not emit an error command")
+	}
+	if len(runner.nextTurns) != 1 || runner.nextTurns[0] != "run after this turn" {
+		t.Fatalf("next turns = %#v, want one runtime-owned next turn", runner.nextTurns)
+	}
+}
+
+func TestBusyInputQueueFailureRestoresDraft(t *testing.T) {
+	runner := &stubRunner{nextTurnErr: errors.New("queue full")}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.Model.Config.BusyInput = "queue"
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.submitBusyInput("retry after capacity", nil)
+	model = testModel(t, updated)
+	next, resultCmd := model.Update(cmd())
+	model = testModel(t, next)
+	if got := model.Input.Composer.Value(); got != "retry after capacity" {
+		t.Fatalf("composer after failed next turn = %q, want restored draft", got)
+	}
+	messages := runCommandTree(t, resultCmd)
+	if len(messages) != 1 ||
+		!strings.Contains(localErrorFromMsg(t, messages[0]).Error(), "next-turn input: queue full") {
+		t.Fatalf("queue error messages = %#v, want visible queue failure", messages)
+	}
+}

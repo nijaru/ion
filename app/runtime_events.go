@@ -145,29 +145,6 @@ var (
 	BusyInputRouteFollowUp = "follow_up"
 )
 
-type BusyInputDecision struct {
-	Recall        bool
-	ComposerText  string
-	ClearRuntime  bool
-	Action        string
-	NoticeContent string
-	FollowUp      []string
-}
-
-var BusyInputResultAccepted = "accepted"
-
-type QueuedInputRecallInput struct {
-	Text         string
-	CurrentDraft string
-	Steering     []string
-	FollowUp     []string
-	RuntimeOwned bool
-}
-
-func DecideQueuedInputRecall(input QueuedInputRecallInput) BusyInputDecision {
-	return BusyInputDecision{Action: BusyInputResultAccepted, NoticeContent: "Input recalled"}
-}
-
 // --- Event drain ---
 
 type EventDrainInput struct {

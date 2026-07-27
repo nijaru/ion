@@ -229,7 +229,7 @@ func TestStaleCompactionResultCannotReleaseNewRuntimeQueue(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2
 	model.Progress.Compacting = true
-	model.turnReducer().QueueTurn("queued for current runtime")
+	model.InFlight.QueuedTurns = []string{"queued for current runtime"}
 
 	next, cmd, handled := model.dispatchAppControlMessage(sessionCompactedMsg{
 		generation: 1,
