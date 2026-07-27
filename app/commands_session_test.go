@@ -70,9 +70,8 @@ func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
 	if runner.ctx != expectedContext || runner.name != "daily driver" {
 		t.Fatalf("session name request = context %v, name %q", runner.ctx, runner.name)
 	}
-	if _, cmd := updated.handleSessionNamed(result); cmd != nil {
-		t.Fatal("current session name returned an unexpected command")
-	}
+	_, cmd = updated.handleSessionNamed(result)
+	requireTerminalCommitContains(t, cmd, "Session named: daily driver")
 }
 
 func TestStaleSessionNameCannotRenderNewRuntime(t *testing.T) {
@@ -116,9 +115,14 @@ func TestSessionLabelUsesRuntimeOperationContext(t *testing.T) {
 			runner.labelValue,
 		)
 	}
-	if _, cmd := updated.handleLabelShow(result); cmd != nil {
-		t.Fatal("current session label returned an unexpected command")
-	}
+	_, cmd = updated.handleLabelShow(result)
+	requireTerminalCommitContains(t, cmd, "🏷 label: release candidate")
+
+	_, cmd = updated.handleLabelShow(labelShowMsg{
+		generation: model.Model.EventGeneration,
+		err:        errors.New("label lookup failed"),
+	})
+	requireTerminalCommitContains(t, cmd, "⚠ label: label lookup failed")
 }
 
 func TestStaleSessionLabelCannotRenderNewRuntime(t *testing.T) {
@@ -161,9 +165,15 @@ func TestSessionExportUsesRuntimeOperationContext(t *testing.T) {
 	if _, err := os.Stat(result.filename); err != nil {
 		t.Fatalf("export file %q: %v", result.filename, err)
 	}
-	if _, cmd := updated.handleSessionExported(result); cmd != nil {
-		t.Fatal("current session export returned an unexpected command")
-	}
+	_, cmd = updated.handleSessionExported(result)
+	requireTerminalCommitContains(t, cmd, "Exported session to "+result.filename)
+}
+
+func TestSuccessfulClipboardResultReturnsTerminalCommand(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleSessionCopied(sessionCopiedMsg{generation: model.Model.EventGeneration})
+	requireTerminalCommitContains(t, cmd, "Copied last response to clipboard")
 }
 
 func TestStaleSessionExportCannotRenderNewRuntime(t *testing.T) {

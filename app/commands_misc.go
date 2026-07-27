@@ -24,8 +24,7 @@ func (m Model) logoutProvider() (Model, tea.Cmd) {
 	if err := config.SaveAPIKey(provider, ""); err != nil {
 		return m, cmdError(fmt.Sprintf("failed to clear API key: %v", err))
 	}
-	m.terminalCommit().Entries(systemEntry("Logged out from " + provider))
-	return m, nil
+	return m, m.terminalCommit().Entries(systemEntry("Logged out from " + provider))
 }
 
 func (m Model) openExternalEditor() (Model, tea.Cmd) {

@@ -99,3 +99,23 @@ func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 		)
 	}
 }
+
+func TestTreeNavigationFailuresReturnTerminalCommands(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+
+	_, cmd := model.openTreePicker()
+	requireTerminalCommitContains(t, cmd, "session tree is not available")
+
+	_, cmd = model.handleTreePickerMove(treePickerMoveMsg{
+		generation: 1,
+		cancelled:  true,
+	})
+	requireTerminalCommitContains(t, cmd, "branch navigation cancelled")
+
+	_, cmd = model.handleTreePickerMove(treePickerMoveMsg{
+		generation: 1,
+		err:        errors.New("navigation failed"),
+	})
+	requireTerminalCommitContains(t, cmd, "tree navigation failed: navigation failed")
+}

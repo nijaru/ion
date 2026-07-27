@@ -73,3 +73,18 @@ func TestTerminalCommitDefersEveryScrollbackCommit(t *testing.T) {
 		})
 	}
 }
+
+func requireTerminalCommitContains(t *testing.T, cmd tea.Cmd, want string) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("terminal commit command is nil")
+	}
+	msg := cmd()
+	commit, ok := msg.(terminalCommitLinesMsg)
+	if !ok {
+		t.Fatalf("terminal commit returned %T, want terminalCommitLinesMsg", msg)
+	}
+	if output := strings.Join(commit.lines, "\n"); !strings.Contains(output, want) {
+		t.Fatalf("terminal commit output = %q, want substring %q", output, want)
+	}
+}

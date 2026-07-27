@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nijaru/ion/config"
 )
 
 func TestSlashCommandDispatchIsExhaustive(t *testing.T) {
@@ -41,4 +43,12 @@ func TestSlashCommandDispatchIsExhaustive(t *testing.T) {
 			t.Errorf("slash command %q has no dispatch case", command.Name)
 		}
 	}
+}
+
+func TestLogoutProviderReturnsTerminalCommand(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{Provider: "openrouter"}
+
+	_, cmd := model.logoutProvider()
+	requireTerminalCommitContains(t, cmd, "Logged out from openrouter")
 }

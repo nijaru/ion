@@ -95,8 +95,7 @@ func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
-	return m, nil
+	return m, m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
 }
 
 func (m Model) importSession(filename string) (Model, tea.Cmd) {
@@ -188,8 +187,7 @@ func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
-	return m, nil
+	return m, m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
 }
 
 type sessionCopiedMsg struct {
@@ -246,8 +244,7 @@ func (m Model) handleSessionCopied(msg sessionCopiedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
-	return m, nil
+	return m, m.terminalCommit().Entries(systemEntry("Copied last response to clipboard"))
 }
 
 func (m Model) cloneSession() (Model, tea.Cmd) {
@@ -656,13 +653,10 @@ func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err != nil {
-		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ label: %v", msg.err)))
-		return m, nil
+		return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ label: %v", msg.err)))
 	}
 	if msg.label == "" {
-		m.terminalCommit().Entries(systemEntry("ℹ no label set on current branch"))
-	} else {
-		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("🏷 label: %s", msg.label)))
+		return m, m.terminalCommit().Entries(systemEntry("ℹ no label set on current branch"))
 	}
-	return m, nil
+	return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("🏷 label: %s", msg.label)))
 }

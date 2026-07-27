@@ -46,8 +46,7 @@ type treePickerMoveMsg struct {
 func (m Model) openTreePicker() (Model, tea.Cmd) {
 	reader, ok := m.Model.Runner.(agent.SessionReader)
 	if !ok {
-		m.showTreeUnavailable()
-		return m, nil
+		return m.showTreeUnavailable()
 	}
 
 	m.Picker.Tree = &treePickerState{loading: true}
@@ -117,9 +116,9 @@ func (m Model) closeTreePicker() Model {
 	return m
 }
 
-func (m Model) showTreeUnavailable() {
+func (m Model) showTreeUnavailable() (Model, tea.Cmd) {
 	msg := "session tree is not available (no active runtime or unsupported capability)"
-	m.terminalCommit().Entries(systemEntry("⚠ " + msg))
+	return m, m.terminalCommit().Entries(systemEntry("⚠ " + msg))
 }
 
 // handleTreePickerLoaded processes the loaded session tree.
@@ -293,14 +292,14 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	}
 	if msg.cancelled || errors.Is(msg.err, context.Canceled) {
 		m.Picker.BranchSummary = nil
-		m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
-		return m, nil
+		return m, m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
 	}
 	if msg.err != nil {
-		m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err)))
 		m.Picker.BranchSummary = nil
 		m = m.closeTreePicker()
-		return m, nil
+		return m, m.terminalCommit().Entries(
+			systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err)),
+		)
 	}
 	// Close tree picker and replay entries from the new branch position.
 	m = m.closeTreePicker()

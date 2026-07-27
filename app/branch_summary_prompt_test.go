@@ -64,6 +64,13 @@ func TestBranchSummaryPromptCancelReturnsToTree(t *testing.T) {
 	}
 }
 
+func TestBranchSummaryWithoutRunnerReturnsTerminalCommand(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.openBranchSummaryPrompt("target")
+	requireTerminalCommitContains(t, cmd, "tree navigation is unavailable")
+}
+
 func TestBranchSummaryNavigationResultClosesPromptAndTree(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Runner = &stubRunner{}

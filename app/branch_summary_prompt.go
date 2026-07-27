@@ -19,8 +19,9 @@ const (
 
 func (m Model) openBranchSummaryPrompt(targetID string) (Model, tea.Cmd) {
 	if m.Model.Runner == nil {
-		m.terminalCommit().Entries(systemEntry("⚠ tree navigation is unavailable without an agent runner"))
-		return m, nil
+		return m, m.terminalCommit().Entries(
+			systemEntry("⚠ tree navigation is unavailable without an agent runner"),
+		)
 	}
 	m.Picker.BranchSummary = &branchSummaryPromptState{targetID: targetID}
 	return m, nil
