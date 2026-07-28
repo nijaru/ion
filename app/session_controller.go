@@ -440,7 +440,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if msg.Error != nil {
 			return m.handleSessionError(msg.Error, true)
 		}
-		return m.handleTurnFinished()
+		return m.handleTurnFinished(msg)
 
 	case session.QueueUpdate:
 		return m.handleQueueUpdate(msg)
@@ -537,6 +537,7 @@ func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
 	m.InFlight.AgentCommitted = false
 	m.InFlight.Thinking = false
 	m.InFlight.Canceling = false
+	m.Progress.Compacting = false
 	m.Progress.Mode = StateReady
 	m.Progress.Status = ""
 	if msg.NextTurnCount > 0 {
@@ -605,16 +606,22 @@ func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
 	return m, m.awaitSessionEvent()
 }
 
-func (m Model) handleTurnFinished() (Model, tea.Cmd) {
-	// TurnEnd closes one model/tool iteration, not the whole agent run. The
-	// runtime remains busy until Settled, so keep Thinking set across tool
-	// loops and queued follow-up boundaries.
+func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
+	// TurnEnd closes one model/tool iteration, not the whole agent run. Keep
+	// Thinking set across tool loops and queued follow-up boundaries. A final
+	// response with no tool results can be projected idle eagerly; Settled
+	// remains the runtime's authoritative terminal boundary and repairs any
+	// projection race before the next command is accepted.
+	terminalResponse := len(msg.ToolResults) == 0 &&
+		len(m.InFlight.QueuedSteering) == 0 && len(m.InFlight.QueuedTurns) == 0
 	var cmds []tea.Cmd
+	var terminalFailure bool
 
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
 	if printAssistant {
 		cmds = append(cmds, m.terminalCommit().Entries(assistant))
 		if errText := assistantErrorText(assistant); errText != "" {
+			terminalFailure = true
 			notice, _ := session.EntrySystem("Error: "+errText, time.Now())
 			cmds = append(cmds, m.terminalCommit().Entries(notice))
 		}
@@ -623,6 +630,11 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 		cmds = append(cmds, m.terminalCommit().Entries(entry))
 	}
 	m.turnReducer().RecordFinishedTurnSummary(time.Now())
+	if terminalResponse || terminalFailure {
+		m.turnReducer().StopThinking()
+		m.Progress.Mode = StateReady
+		m.Progress.Status = ""
+	}
 
 	cmds = append(cmds, m.awaitSessionEvent())
 	return m, tea.Sequence(cmds...)

@@ -563,38 +563,54 @@ func (t TurnReducer) RestoreRuntimePhase(phase agent.Phase) {
 	case agent.PhaseReady, agent.PhaseSettled:
 		t.inFlight.Thinking = false
 		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateReady
 		t.progress.Status = ""
 	case agent.PhaseStarting:
 		t.inFlight.Thinking = true
 		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateIonizing
 		t.progress.Status = "Submitting..."
 	case agent.PhaseStreaming:
 		t.inFlight.Thinking = true
 		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateStreaming
 		t.progress.Status = "Streaming..."
 	case agent.PhaseAwaitingApproval:
 		t.inFlight.Thinking = true
 		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateWorking
 		t.progress.Status = "Awaiting approval..."
 	case agent.PhaseExecutingTool:
 		t.inFlight.Thinking = true
 		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateWorking
 		t.progress.Status = "Running tools..."
 	case agent.PhasePersisting:
-		t.progress.Compacting = true
+		// Persisting is the runtime's generic terminal barrier, not proof that
+		// a context compaction is running. Preserve Compacting only when the
+		// explicit /compact command already owns that local operation.
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
 		t.progress.Mode = StateWorking
-		t.progress.Status = "Compacting context..."
+		if t.progress.Compacting {
+			t.progress.Status = "Compacting context..."
+		} else {
+			t.progress.Status = "Persisting..."
+		}
 	case agent.PhaseRecovering:
-		t.inFlight.Thinking = false
+		t.inFlight.Thinking = true
+		t.inFlight.Canceling = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateWorking
 		t.progress.Status = "Recovering..."
 	case agent.PhaseClosed:
 		t.inFlight.Thinking = false
+		t.progress.Compacting = false
 		t.progress.Mode = StateError
 		t.progress.Status = "Runtime closed"
 	}

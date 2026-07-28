@@ -279,8 +279,23 @@ func TestTurnReducerRestoresActiveRuntimePhase(t *testing.T) {
 
 	model.turnReducer().ClearActiveState(true)
 	model.turnReducer().RestoreRuntimePhase(agent.PhasePersisting)
-	if !model.Progress.Compacting || model.Progress.Mode != StateWorking ||
-		model.Progress.Status != "Compacting context..." {
-		t.Fatalf("compaction progress = %#v, want compacting runtime projection", model.Progress)
+	if !model.InFlight.Thinking || model.Progress.Compacting ||
+		model.Progress.Mode != StateWorking || model.Progress.Status != "Persisting..." {
+		t.Fatalf(
+			"persisting progress = %#v in-flight=%#v, want active persistence projection",
+			model.Progress,
+			model.InFlight,
+		)
+	}
+
+	model.Progress.Compacting = true
+	model.turnReducer().RestoreRuntimePhase(agent.PhasePersisting)
+	if !model.Progress.Compacting || model.Progress.Status != "Compacting context..." {
+		t.Fatalf("explicit compaction progress = %#v, want compacting projection", model.Progress)
+	}
+
+	model.turnReducer().RestoreRuntimePhase(agent.PhaseReady)
+	if model.Progress.Compacting || model.InFlight.Thinking || model.Progress.Mode != StateReady {
+		t.Fatalf("ready progress = %#v in-flight=%#v, want idle projection", model.Progress, model.InFlight)
 	}
 }

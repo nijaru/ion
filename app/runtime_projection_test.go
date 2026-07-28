@@ -101,6 +101,28 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	}
 }
 
+func TestPersistingResyncDoesNotStickCompactingAfterSettled(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+
+	model.applyAgentRuntimeSnapshot(agent.RuntimeSnapshot{Phase: agent.PhasePersisting})
+	if !model.InFlight.Thinking || model.Progress.Compacting || !model.localCommandBusy() {
+		t.Fatalf(
+			"persisting snapshot = in-flight=%#v progress=%#v, want busy non-compacting projection",
+			model.InFlight,
+			model.Progress,
+		)
+	}
+	if model.Progress.Status != "Persisting..." {
+		t.Fatalf("persisting status = %q, want Persisting...", model.Progress.Status)
+	}
+
+	settled, _ := model.handleSettled(session.Settled{})
+	if settled.Progress.Compacting || settled.localCommandBusy() {
+		t.Fatalf("settled projection = in-flight=%#v progress=%#v, want idle", settled.InFlight, settled.Progress)
+	}
+}
+
 func TestQueueUpdateReplacesProjectedRuntimeQueues(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.QueuedSteering = []string{"stale steer"}
@@ -293,7 +315,9 @@ func TestIntermediateTurnEndKeepsRuntimeBusyAcrossToolLoop(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.InFlight.AgentCommitted = true
 
-	afterEnd, _ := model.handleTurnFinished()
+	afterEnd, _ := model.handleTurnFinished(session.TurnEnd{
+		ToolResults: []session.ToolResultMessage{{ToolCallID: "tool-loop"}},
+	})
 	if !afterEnd.InFlight.Thinking || !afterEnd.localCommandBusy() {
 		t.Fatalf("intermediate TurnEnd marked runtime idle: in-flight=%#v", afterEnd.InFlight)
 	}
