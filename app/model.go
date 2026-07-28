@@ -68,6 +68,7 @@ type approvalResolveMsg struct {
 
 type branchNavigationCancelMsg struct {
 	generation uint64
+	requestID  uint64
 	err        error
 }
 
@@ -398,7 +399,11 @@ type ModelState struct {
 	// runtime context; request completion clears this child separately.
 	runtimeRequestContext context.Context
 	runtimeRequestCancel  context.CancelFunc
+	// treeNavigationCancel is the per-request cancellation boundary for branch
+	// navigation. It must not use Runtime.Abort, which is global to the runtime.
+	treeNavigationCancel  context.CancelFunc
 	RuntimeSwitchRequest  uint64
+	TreeNavigationRequest uint64
 	SettingsRequest       uint64
 	MemoryRequest         uint64
 	CheckpointRequest     uint64

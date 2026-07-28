@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -89,6 +90,24 @@ func TestBranchSummaryWithoutRunnerReturnsTerminalCommand(t *testing.T) {
 	requireTerminalCommitContains(t, cmd, "tree navigation is unavailable")
 }
 
+func TestTreeNavigationCompletionCancelsRequestContext(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	model.Model.treeNavigationCancel = cancel
+
+	next, _ := model.handleTreePickerMove(treePickerMoveMsg{generation: 1, requestID: 1})
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("navigation completion did not cancel its child context")
+	}
+	if next.Model.treeNavigationCancel != nil {
+		t.Fatal("completed navigation retained its cancellation function")
+	}
+}
+
 func TestBranchSummaryNavigationResultClosesPromptAndTree(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Runner = &stubRunner{}
@@ -104,30 +123,73 @@ func TestBranchSummaryNavigationResultClosesPromptAndTree(t *testing.T) {
 	}
 }
 
-func TestBranchSummaryNavigationCancelSurfacesAbortError(t *testing.T) {
+func TestBranchSummaryNavigationCancelUsesRequestContext(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Runner = &stubRunner{abortErr: errors.New("runtime is closed")}
+	model.Model.Runner = &stubRunner{}
+	model.Model.TreeNavigationRequest = 1
 	model.Picker.Tree = &treePickerState{}
 	model.Picker.BranchSummary = &branchSummaryPromptState{
 		targetID:   "target",
 		navigating: true,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	model.Model.treeNavigationCancel = cancel
 
 	model, cmd := model.handleBranchSummaryPromptKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
-		t.Fatal("cancel did not return an abort command")
+		t.Fatal("cancel did not return a request cancellation command")
 	}
 	if model.Picker.BranchSummary == nil || !model.Picker.BranchSummary.navigating {
-		t.Fatal("failed cancellation should keep navigation state until its result arrives")
+		t.Fatal("navigation should remain pending until its cancellation result arrives")
 	}
 
-	msg := cmd()
-	cancel, ok := msg.(branchNavigationCancelMsg)
-	if !ok || cancel.err == nil {
-		t.Fatalf("cancel message = %#v, want branch navigation cancellation", msg)
+	msg, ok := cmd().(branchNavigationCancelMsg)
+	if !ok || msg.err != nil || msg.requestID != 1 {
+		t.Fatalf("cancel message = %#v, want successful request cancellation", msg)
 	}
-	if !strings.Contains(cancel.err.Error(), "cancel branch navigation: runtime is closed") {
-		t.Fatalf("cancel error = %v, want contextual runtime error", cancel.err)
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("navigation request context was not canceled")
+	}
+
+	next, _ := model.handleBranchNavigationCancel(msg)
+	if next.Picker.BranchSummary == nil || next.Picker.BranchSummary.navigating {
+		t.Fatalf("after cancellation result prompt = %#v, want retryable prompt", next.Picker.BranchSummary)
+	}
+}
+
+func TestStaleNavigationCancelCannotCancelNewRequest(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runner = &stubRunner{}
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 1
+	model.Picker.BranchSummary = &branchSummaryPromptState{targetID: "target", navigating: true}
+	ctxA, cancelA := context.WithCancel(context.Background())
+	model.Model.treeNavigationCancel = cancelA
+
+	_, cancelCmd := model.handleBranchSummaryPromptKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cancelCmd == nil {
+		t.Fatal("stale navigation did not create cancellation command")
+	}
+	ctxB, cancelB := context.WithCancel(context.Background())
+	model.Model.TreeNavigationRequest = 2
+	model.Model.treeNavigationCancel = cancelB
+	cancelMsg := cancelCmd().(branchNavigationCancelMsg)
+	select {
+	case <-ctxA.Done():
+	default:
+		t.Fatal("old navigation context was not canceled")
+	}
+	select {
+	case <-ctxB.Done():
+		t.Fatal("stale cancellation canceled the newer navigation context")
+	default:
+	}
+
+	next, cmd := model.handleBranchNavigationCancel(cancelMsg)
+	if cmd != nil || next.Model.TreeNavigationRequest != 2 || next.Picker.BranchSummary == nil {
+		t.Fatalf("stale cancellation result mutated newer request: model=%#v cmd=%v", next.Model, cmd != nil)
 	}
 }
 

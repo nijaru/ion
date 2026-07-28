@@ -100,6 +100,27 @@ func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	}
 }
 
+func TestStaleSameGenerationBranchReplayCannotOverwriteCurrentNavigation(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Progress.LastError = "keep current projection"
+
+	next, cmd, handled := model.dispatchPickerControllerMessage(replayBranchMsg{
+		generation: 1,
+		requestID:  1,
+		entries:    []session.Entry{agentMsgEntry("stale")},
+	})
+	if !handled || cmd != nil || next.Progress.LastError != "keep current projection" {
+		t.Fatalf(
+			"stale same-generation replay = (handled=%v, cmd=%v, error=%q), want ignored",
+			handled,
+			cmd != nil,
+			next.Progress.LastError,
+		)
+	}
+}
+
 func TestTreeNavigationFailuresReturnTerminalCommands(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1

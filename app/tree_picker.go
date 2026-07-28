@@ -39,6 +39,7 @@ type treePickerLoadedMsg struct {
 // treePickerMoveMsg confirms that a NavigateTree operation completed.
 type treePickerMoveMsg struct {
 	generation uint64
+	requestID  uint64
 	err        error
 	cancelled  bool
 }
@@ -287,9 +288,11 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 // handleTreePickerMove processes a tree navigation result.
 func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
+	m.clearTreeNavigationCancel()
 	if msg.cancelled || errors.Is(msg.err, context.Canceled) {
 		m.Picker.BranchSummary = nil
 		return m, m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
@@ -303,11 +306,11 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	}
 	// Close tree picker and replay entries from the new branch position.
 	m = m.closeTreePicker()
-	return m, m.replayCurrentBranch()
+	return m, m.replayCurrentBranch(msg.requestID)
 }
 
 // replayCurrentBranch loads entries from the current session branch and replays them.
-func (m Model) replayCurrentBranch() tea.Cmd {
+func (m Model) replayCurrentBranch(requestID uint64) tea.Cmd {
 	reader, ok := m.Model.Runner.(agent.SessionReader)
 	if !ok {
 		return nil
@@ -316,18 +319,25 @@ func (m Model) replayCurrentBranch() tea.Cmd {
 	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
 		entries, err := reader.SessionBranch(ctx)
-		return replayBranchMsg{generation: generation, entries: entries, err: err}
+		return replayBranchMsg{
+			generation: generation,
+			requestID:  requestID,
+			entries:    entries,
+			err:        err,
+		}
 	}
 }
 
 type replayBranchMsg struct {
 	generation uint64
+	requestID  uint64
 	entries    []session.Entry
 	err        error
 }
 
 func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {

@@ -574,6 +574,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	// after-switch lifecycle boundary; Switch/Resume deliberately do not run
 	// teardown on construction failure.
 	m.rotateRuntimeContext()
+	m.clearTreeNavigationCancel()
 	m.runtimeRequest().clear()
 	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner

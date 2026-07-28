@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -16,6 +15,13 @@ const (
 	branchSummaryGenerate
 	branchSummaryCustom
 )
+
+func (m *Model) clearTreeNavigationCancel() {
+	if m.Model.treeNavigationCancel != nil {
+		m.Model.treeNavigationCancel()
+		m.Model.treeNavigationCancel = nil
+	}
+}
 
 func (m Model) openBranchSummaryPrompt(targetID string) (Model, tea.Cmd) {
 	if m.Model.Runner == nil {
@@ -35,19 +41,19 @@ func (m Model) handleBranchSummaryPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd
 	if prompt.navigating {
 		switch msg.String() {
 		case "esc", "ctrl+c", "ctrl+d":
-			if m.Model.Runner == nil {
-				return m, nil
-			}
-			runner := m.Model.Runner
 			generation := m.Model.EventGeneration
+			requestID := m.Model.TreeNavigationRequest
+			cancel := m.Model.treeNavigationCancel
 			return m, func() tea.Msg {
-				if _, _, err := runner.Abort(); err != nil {
+				if cancel == nil {
 					return branchNavigationCancelMsg{
 						generation: generation,
-						err:        fmt.Errorf("cancel branch navigation: %w", err),
+						requestID:  requestID,
+						err:        errors.New("branch navigation cancellation is unavailable"),
 					}
 				}
-				return branchNavigationCancelMsg{generation: generation}
+				cancel()
+				return branchNavigationCancelMsg{generation: generation, requestID: requestID}
 			}
 		}
 		return m, nil
@@ -84,11 +90,16 @@ func (m Model) handleBranchSummaryPromptKey(msg tea.KeyPressMsg) (Model, tea.Cmd
 }
 
 func (m Model) handleBranchNavigationCancel(msg branchNavigationCancelMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
+	m.clearTreeNavigationCancel()
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
+	}
+	if m.Picker.BranchSummary != nil {
+		m.Picker.BranchSummary.navigating = false
 	}
 	return m, nil
 }
@@ -143,20 +154,27 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 		prompt.err = m.localCommandBusyMessage("navigating the session tree")
 		return m, nil
 	}
-	prompt.navigating = true
-	prompt.err = ""
-	targetID := prompt.targetID
-	runner := m.Model.Runner
-	generation := m.Model.EventGeneration
-	ctx := m.runtimeOperationContext()
-	navigator, ok := runner.(agent.SessionNavigator)
+	navigator, ok := m.Model.Runner.(agent.SessionNavigator)
 	if !ok {
-		prompt.navigating = false
 		prompt.err = "tree navigation is unavailable"
 		return m, nil
 	}
+	prompt.navigating = true
+	prompt.err = ""
+	targetID := prompt.targetID
+	generation := m.Model.EventGeneration
+	m.clearTreeNavigationCancel()
+	m.Model.TreeNavigationRequest++
+	requestID := m.Model.TreeNavigationRequest
+	ctx, cancel := context.WithCancel(m.runtimeOperationContext())
+	m.Model.treeNavigationCancel = cancel
 	return m, func() tea.Msg {
 		_, err := navigator.NavigateTree(ctx, targetID, opts)
-		return treePickerMoveMsg{generation: generation, err: err, cancelled: errors.Is(err, context.Canceled)}
+		return treePickerMoveMsg{
+			generation: generation,
+			requestID:  requestID,
+			err:        err,
+			cancelled:  errors.Is(err, context.Canceled),
+		}
 	}
 }
