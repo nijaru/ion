@@ -124,6 +124,38 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeRuntimeSnapshotClearsStaleSelections(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runtime = Snapshot{
+		SessionID:    "old-session",
+		Provider:     "old-provider",
+		Model:        "old-model",
+		Reasoning:    "high",
+		Materialized: true,
+	}
+	model.Progress.ReasoningEffort = "high"
+
+	model.applyAgentRuntimeSnapshot(agent.RuntimeSnapshot{
+		SessionID: "current-session",
+		Phase:     agent.PhaseReady,
+		Model:     llm.Model{ID: "current-model"},
+	})
+
+	if model.Model.Runtime.SessionID != "current-session" ||
+		model.Model.Runtime.Provider != "" || model.Model.Runtime.Model != "current-model" {
+		t.Fatalf("runtime selection = %#v, want provider cleared and current model", model.Model.Runtime)
+	}
+	if want := normalizeThinkingValue(""); model.Model.Runtime.Reasoning != want ||
+		model.Progress.ReasoningEffort != want {
+		t.Fatalf(
+			"reasoning projection = runtime=%q progress=%q, want %q",
+			model.Model.Runtime.Reasoning,
+			model.Progress.ReasoningEffort,
+			want,
+		)
+	}
+}
+
 func TestPersistingResyncDoesNotStickCompactingAfterSettled(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true

@@ -7,21 +7,16 @@ import "github.com/nijaru/ion/internal/agent"
 // recovery boundary, so retaining local queue or phase state would create a
 // second, potentially divergent runtime.
 func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
-	if snapshot.SessionID != "" {
-		m.Model.Runtime.SessionID = snapshot.SessionID
-	}
+	// RuntimeSnapshot is authoritative, including empty values. Conditional
+	// assignment would retain state from the previous snapshot when a runtime
+	// clears its provider, model, or thinking selection.
+	m.Model.Runtime.SessionID = snapshot.SessionID
 	m.Model.LeafID = snapshot.LeafID
 	m.Model.Runtime.Materialized = true
-	if snapshot.Model.Provider != "" {
-		m.Model.Runtime.Provider = snapshot.Model.Provider
-	}
-	if snapshot.Model.ID != "" {
-		m.Model.Runtime.Model = snapshot.Model.ID
-	}
-	if snapshot.Thinking != "" {
-		m.Model.Runtime.Reasoning = normalizeThinkingValue(string(snapshot.Thinking))
-		m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
-	}
+	m.Model.Runtime.Provider = snapshot.Model.Provider
+	m.Model.Runtime.Model = snapshot.Model.ID
+	m.Model.Runtime.Reasoning = normalizeThinkingValue(string(snapshot.Thinking))
+	m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
 	m.Model.ActiveTools = append(m.Model.ActiveTools[:0], snapshot.ActiveTools...)
 	if snapshot.ActiveTurnToken == 0 {
 		if m.Model.turnCancellation == nil || m.Model.turnCancellation.isStarted() {
