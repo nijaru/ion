@@ -88,11 +88,14 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 	}
 
 	m.turnReducer().StartSubmit()
+	m.Model.TurnSubmitRequest++
+	requestID := m.Model.TurnSubmitRequest
 	m.resetComposerDraft()
 	return m, submitTurnCmd(
 		m.Model.Runner,
 		m.runtimeOperationContext(),
 		m.Model.EventGeneration,
+		requestID,
 		text,
 		draft,
 		images,
@@ -102,7 +105,7 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 func submitTurnCmd(
 	runner agent.Runtime,
 	ctx context.Context,
-	generation uint64,
+	generation, requestID uint64,
 	text, draft string,
 	images []session.ImageContent,
 ) tea.Cmd {
@@ -112,6 +115,7 @@ func submitTurnCmd(
 			_, err := runner.Prompt(ctx, text, images...)
 			return turnSubmitResultMsg{
 				generation: generation,
+				requestID:  requestID,
 				text:       text,
 				draft:      draft,
 				images:     images,
@@ -120,6 +124,7 @@ func submitTurnCmd(
 		}
 		return turnSubmitResultMsg{
 			generation: generation,
+			requestID:  requestID,
 			text:       text,
 			draft:      draft,
 			images:     images,
@@ -129,7 +134,7 @@ func submitTurnCmd(
 }
 
 func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.TurnSubmitRequest {
 		return m, nil
 	}
 	m.refreshRuntimeSessionSnapshot()
@@ -144,6 +149,12 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 			return m, batchCmds(leafCmd, historyCmd, m.awaitSessionEvent())
 		}
 		return m, sequenceCmds(leafCmd, historyCmd)
+	}
+	if !m.InFlight.Thinking {
+		// A settled runtime result may arrive after the lifecycle event. Its
+		// error is already represented by the terminal event and must not
+		// restore a draft into a newer or queued turn.
+		return m, nil
 	}
 	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
@@ -576,6 +587,11 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 }
 
 func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
+	if !m.InFlight.Thinking {
+		// Runtime-owned queued turns do not originate from submitComposer, so
+		// advance the app request fence when their lifecycle starts.
+		m.Model.TurnSubmitRequest++
+	}
 	m.turnReducer().StartTurn(msg.When(), time.Now())
 	return m, m.awaitSessionEvent()
 }

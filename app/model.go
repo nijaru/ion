@@ -215,6 +215,7 @@ type busyInputResultMsg struct {
 
 type turnSubmitResultMsg struct {
 	generation uint64
+	requestID  uint64
 	text       string
 	draft      string
 	images     []session.ImageContent
@@ -364,20 +365,23 @@ type ConfigLoader func() (*config.Config, error)
 
 // ModelState holds setup metadata, the active harness, and its auxiliary adapter.
 type ModelState struct {
-	Info                   RuntimeInfo
-	Storage                RuntimeStorage
-	SessionCatalog         agent.SessionCatalog
-	InputHistory           agent.InputHistory
-	Jobs                   JobController
-	Memory                 MemoryController
-	Checkpoints            CheckpointController
-	Switcher               Switcher
-	ConfigLoader           ConfigLoader
-	Catalog                ModelCatalog
-	EndpointResolver       *llm.EndpointResolver
-	Config                 *config.Config
-	Runtime                Snapshot
-	EventGeneration        uint64
+	Info             RuntimeInfo
+	Storage          RuntimeStorage
+	SessionCatalog   agent.SessionCatalog
+	InputHistory     agent.InputHistory
+	Jobs             JobController
+	Memory           MemoryController
+	Checkpoints      CheckpointController
+	Switcher         Switcher
+	ConfigLoader     ConfigLoader
+	Catalog          ModelCatalog
+	EndpointResolver *llm.EndpointResolver
+	Config           *config.Config
+	Runtime          Snapshot
+	EventGeneration  uint64
+	// TurnSubmitRequest fences asynchronous Prompt results within one runtime
+	// generation. EventGeneration alone only fences runtime replacement.
+	TurnSubmitRequest      uint64
 	EventCursor            agent.EventCursor
 	EventSubscription      *agent.EventSubscription
 	EventSubscriptionState *eventSubscriptionState

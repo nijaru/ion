@@ -262,6 +262,95 @@ func TestStaleTurnCommandsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	}
 }
 
+func TestStaleTurnSubmitResultCannotMutateNewTurn(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TurnSubmitRequest = 2
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("new draft")
+
+	next, cmd := model.handleTurnSubmitResult(turnSubmitResultMsg{
+		generation: 1,
+		requestID:  1,
+		draft:      "old draft",
+		err:        errors.New("old turn failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale submit result returned a command")
+	}
+	if !next.InFlight.Thinking {
+		t.Fatal("stale submit result cleared the newer turn")
+	}
+	if got := next.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("stale submit result changed composer to %q", got)
+	}
+}
+
+func TestSettledTurnResultCannotRestoreDraftBeforeQueuedTurn(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TurnSubmitRequest = 1
+	model.InFlight.Thinking = true
+
+	settled, _ := model.handleSettled(session.Settled{NextTurnCount: 1})
+	settled.Input.Composer.SetValue("")
+	stale, cmd := settled.handleTurnSubmitResult(turnSubmitResultMsg{
+		generation: 1,
+		requestID:  1,
+		draft:      "old draft",
+		err:        errors.New("old turn failed"),
+	})
+	if cmd != nil {
+		t.Fatal("settled stale result returned a command")
+	}
+	if got := stale.Input.Composer.Value(); got != "" {
+		t.Fatalf("settled stale result restored draft %q", got)
+	}
+
+	started, _ := stale.handleTurnStarted(session.TurnStart{})
+	if got, want := started.Model.TurnSubmitRequest, uint64(2); got != want {
+		t.Fatalf("queued turn request fence = %d, want %d", got, want)
+	}
+	started.Input.Composer.SetValue("new draft")
+	newer, cmd := started.handleTurnSubmitResult(turnSubmitResultMsg{
+		generation: 1,
+		requestID:  1,
+		draft:      "old draft",
+		err:        errors.New("old turn failed"),
+	})
+	if cmd != nil {
+		t.Fatal("queued-turn stale result returned a command")
+	}
+	if !newer.InFlight.Thinking || newer.Input.Composer.Value() != "new draft" {
+		t.Fatalf(
+			"queued-turn stale result mutated current turn: thinking=%v draft=%q",
+			newer.InFlight.Thinking,
+			newer.Input.Composer.Value(),
+		)
+	}
+}
+
+func TestSubmitTurnCommandCarriesRequestIdentity(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runner = &stubRunner{}
+	model.Input.Composer.SetValue("hello")
+
+	next, cmd := model.submitComposer()
+	if cmd == nil {
+		t.Fatal("submit command = nil")
+	}
+	if next.Model.TurnSubmitRequest != 1 {
+		t.Fatalf("turn submit request = %d, want 1", next.Model.TurnSubmitRequest)
+	}
+	result, ok := cmd().(turnSubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit result = %T, want turnSubmitResultMsg", result)
+	}
+	if result.requestID != next.Model.TurnSubmitRequest {
+		t.Fatalf("result request ID = %d, want %d", result.requestID, next.Model.TurnSubmitRequest)
+	}
+}
+
 func TestStaleSessionCostCannotRenderNewRuntime(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2
