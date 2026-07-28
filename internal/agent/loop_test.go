@@ -207,6 +207,29 @@ func TestRunLoopPreCancelledSignalSkipsProvider(t *testing.T) {
 	}
 }
 
+func TestRunLoopPreCancelledContextSkipsProvider(t *testing.T) {
+	called := false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	RunLoop(
+		ctx,
+		[]session.Message{session.NewUserText("cancel", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				called = true
+				return nil, nil
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if called {
+		t.Fatal("provider called for pre-cancelled context")
+	}
+}
+
 // INVARIANT: RunLoop is stateless — no fields, no persistence.
 // This is a compile-time invariant enforced by rg guard, but we verify
 // the function signature takes all inputs as args.

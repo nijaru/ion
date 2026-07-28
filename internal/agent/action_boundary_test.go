@@ -627,13 +627,15 @@ func containsActionError(err error, text string) bool {
 }
 
 type actionBoundaryStub struct {
-	startErr  error
-	started   bool
-	finished  ActionResult
-	finishSet bool
+	startErr     error
+	started      bool
+	prepareCalls int
+	finished     ActionResult
+	finishSet    bool
 }
 
 func (s *actionBoundaryStub) PrepareAndAuthorize(context.Context, ActionRequest) (*ActionToken, error) {
+	s.prepareCalls++
 	return &ActionToken{ID: "stub-action", Record: session.ActionRecord{ID: "stub-action"}}, nil
 }
 
@@ -672,6 +674,87 @@ func (s *actionBoundaryStub) Execute(
 
 func (s *actionBoundaryStub) Cancel(ctx context.Context, token *ActionToken, reason string) error {
 	return s.Finish(ctx, token, ActionResult{State: session.ActionCancelled, Error: reason})
+}
+
+func TestPrepareToolCallSkipsAuthorizationAfterCancellation(t *testing.T) {
+	stub := &actionBoundaryStub{}
+	signal := make(chan struct{})
+	close(signal)
+	_, result := prepareToolCall(
+		context.Background(),
+		TurnContext{},
+		session.AssistantMessage{},
+		&session.ToolCall{ID: "call-cancelled", Name: "write"},
+		LoopConfig{
+			Tools:          []Tool{{Name: "write", RequiresAction: true}},
+			ActionBoundary: stub,
+		},
+		signal,
+	)
+	if stub.prepareCalls != 0 {
+		t.Fatalf("authorization calls = %d, want 0 after cancellation", stub.prepareCalls)
+	}
+	if result == nil || !result.IsError || len(result.Content) != 1 {
+		t.Fatalf("result = %#v, want cancellation error", result)
+	}
+}
+
+func TestPrepareToolCallCancelsAuthorizationContext(t *testing.T) {
+	boundary := &blockingPrepareBoundary{started: make(chan struct{})}
+	signal := make(chan struct{})
+	resultCh := make(chan *session.ToolResultMessage, 1)
+	go func() {
+		_, result := prepareToolCall(
+			context.Background(),
+			TurnContext{},
+			session.AssistantMessage{},
+			&session.ToolCall{ID: "call-cancel-auth", Name: "write"},
+			LoopConfig{
+				Tools:          []Tool{{Name: "write", RequiresAction: true}},
+				ActionBoundary: boundary,
+			},
+			signal,
+		)
+		resultCh <- result
+	}()
+	select {
+	case <-boundary.started:
+	case <-time.After(time.Second):
+		t.Fatal("authorization did not start")
+	}
+	close(signal)
+	select {
+	case result := <-resultCh:
+		if result == nil || !result.IsError {
+			t.Fatalf("result = %#v, want cancellation error", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authorization did not observe cancellation")
+	}
+}
+
+type blockingPrepareBoundary struct {
+	started chan struct{}
+}
+
+func (b *blockingPrepareBoundary) PrepareAndAuthorize(ctx context.Context, _ ActionRequest) (*ActionToken, error) {
+	close(b.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingPrepareBoundary) Execute(
+	context.Context,
+	*ActionToken,
+	ActionInvoker,
+	<-chan struct{},
+	func(session.ToolPartial),
+) (session.ToolResultMessage, error) {
+	return session.ToolResultMessage{}, errors.New("execute should not be called")
+}
+
+func (b *blockingPrepareBoundary) Cancel(context.Context, *ActionToken, string) error {
+	return errors.New("cancel should not be called")
 }
 
 func TestToolExecutionCannotCrossFailedStartBoundary(t *testing.T) {

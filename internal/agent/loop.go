@@ -227,7 +227,7 @@ func streamAssistantResponse(
 	emit func(session.Event),
 	signal <-chan struct{},
 ) (*session.AssistantMessage, bool) {
-	if isAborted(signal) {
+	if isCanceled(ctx, signal) {
 		msg := newFailureMessage(cfg.Model, context.Canceled, true, cfg.Thinking)
 		msg.Error = "response aborted"
 		emit(session.MessageStart{Message: &msg})
@@ -237,14 +237,7 @@ func streamAssistantResponse(
 
 	// Derive a cancellable context from the signal channel so the
 	// provider stream is cancelled when the run is aborted.
-	streamCtx, cancelStream := context.WithCancel(ctx)
-	go func() {
-		select {
-		case <-signal:
-			cancelStream()
-		case <-streamCtx.Done():
-		}
-	}()
+	streamCtx, cancelStream := contextWithSignal(ctx, signal)
 	defer cancelStream()
 
 	msgs := snapshot.Messages
@@ -342,7 +335,7 @@ func streamAssistantResponse(
 		}
 	}
 
-	if isAborted(signal) {
+	if isCanceled(ctx, signal) {
 		// Cancellation may surface as ok=false with a nil stream error;
 		// treat it as an aborted turn, not a completed one. Pi agent-loop.js abort branch.
 		final := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
@@ -423,7 +416,7 @@ func executeToolCallsSequential(
 			result = executePreparedToolCall(ctx, snapshot, assistantMsg, prepared, cfg, emit, signal)
 		}
 		results = append(results, result)
-		if isAborted(signal) {
+		if isCanceled(ctx, signal) {
 			break
 		}
 	}
@@ -498,6 +491,16 @@ func prepareToolArguments(tool *Tool, arguments map[string]any) (args map[string
 	return args, nil
 }
 
+func abortedToolResult(tc *session.ToolCall) *session.ToolResultMessage {
+	return &session.ToolResultMessage{
+		ToolCallID: tc.ID,
+		ToolName:   tc.Name,
+		Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
+		IsError:    true,
+		Timestamp:  time.Now(),
+	}
+}
+
 // prepareToolCall runs the sequential portion of tool preparation: find the
 // tool, normalize args, validate schema, and run the before_tool_call hook.
 // Returns the prepared call on success, or a non-nil result on failure.
@@ -524,6 +527,9 @@ func prepareToolCall(
 			Content: []session.Content{session.TextContent{Text: "tool not found: " + tc.Name}},
 			IsError: true, Timestamp: time.Now(),
 		}
+	}
+	if isCanceled(ctx, signal) {
+		return preparedToolCall{}, abortedToolResult(tc)
 	}
 
 	// Pi: prepareToolCallArguments normalizes args before validation.
@@ -576,12 +582,8 @@ func prepareToolCall(
 				IsError: true, Timestamp: time.Now(),
 			}
 		}
-		if isAborted(signal) {
-			return preparedToolCall{}, &session.ToolResultMessage{
-				ToolCallID: tc.ID, ToolName: tc.Name,
-				Content: []session.Content{session.TextContent{Text: "Operation aborted"}},
-				IsError: true, Timestamp: time.Now(),
-			}
+		if isCanceled(ctx, signal) {
+			return preparedToolCall{}, abortedToolResult(tc)
 		}
 		if decision != nil && decision.Block {
 			return preparedToolCall{}, &session.ToolResultMessage{
@@ -590,6 +592,9 @@ func prepareToolCall(
 				IsError: true, Timestamp: time.Now(),
 			}
 		}
+	}
+	if isCanceled(ctx, signal) {
+		return preparedToolCall{}, abortedToolResult(tc)
 	}
 	if tool.RequiresAction || tool.ApprovalRequirement != nil {
 		requirement, declared, descriptorErr := invokeActionDescriptor(tool, argsRaw)
@@ -607,6 +612,9 @@ func prepareToolCall(
 		if !required {
 			return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
 		}
+		if isCanceled(ctx, signal) {
+			return preparedToolCall{}, abortedToolResult(tc)
+		}
 		if cfg.ActionBoundary == nil {
 			return preparedToolCall{}, &session.ToolResultMessage{
 				ToolCallID: tc.ID, ToolName: tc.Name,
@@ -614,7 +622,8 @@ func prepareToolCall(
 				IsError: true, Timestamp: time.Now(),
 			}
 		}
-		action, actionErr := cfg.ActionBoundary.PrepareAndAuthorize(ctx, ActionRequest{
+		actionCtx, cancelAction := contextWithSignal(ctx, signal)
+		action, actionErr := cfg.ActionBoundary.PrepareAndAuthorize(actionCtx, ActionRequest{
 			ToolName:     tc.Name,
 			InvocationID: tc.ID,
 			SessionID:    cfg.SessionID,
@@ -624,6 +633,7 @@ func prepareToolCall(
 			Required:     required,
 			CWD:          "",
 		})
+		cancelAction()
 		if actionErr != nil {
 			return preparedToolCall{}, &session.ToolResultMessage{
 				ToolCallID: tc.ID, ToolName: tc.Name,
@@ -633,12 +643,8 @@ func prepareToolCall(
 		}
 		return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw, action: action}, nil
 	}
-	if isAborted(signal) {
-		return preparedToolCall{}, &session.ToolResultMessage{
-			ToolCallID: tc.ID, ToolName: tc.Name,
-			Content: []session.Content{session.TextContent{Text: "Operation aborted"}},
-			IsError: true, Timestamp: time.Now(),
-		}
+	if isCanceled(ctx, signal) {
+		return preparedToolCall{}, abortedToolResult(tc)
 	}
 
 	return preparedToolCall{tool: tool, tc: tc, argsRaw: argsRaw}, nil
@@ -695,7 +701,7 @@ func executeToolCallsParallel(
 			prepared = append(prepared, p)
 		}
 		processed = i + 1
-		if isAborted(signal) {
+		if isCanceled(ctx, signal) {
 			break
 		}
 	}
@@ -761,13 +767,8 @@ func executePreparedToolCall(
 	tc := p.tc
 	tool := p.tool
 	argsRaw := p.argsRaw
-	if isAborted(signal) {
-		result := session.ToolResultMessage{
-			ToolCallID: tc.ID,
-			ToolName:   tc.Name,
-			Content:    []session.Content{session.TextContent{Text: "Operation aborted"}},
-			IsError:    true, Timestamp: time.Now(),
-		}
+	if isCanceled(ctx, signal) {
+		result := *abortedToolResult(tc)
 		if p.action != nil && cfg.ActionBoundary != nil {
 			_ = cfg.ActionBoundary.Cancel(ctx, p.action, "operation aborted")
 		}
@@ -1702,6 +1703,31 @@ func isAborted(signal <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+func isCanceled(ctx context.Context, signal <-chan struct{}) bool {
+	return isAborted(signal) || (ctx != nil && ctx.Err() != nil)
+}
+
+// contextWithSignal combines the parent context with the run-local abort
+// signal so authorization and provider calls observe the same cancellation
+// boundary. The caller owns the returned cancel function.
+func contextWithSignal(parent context.Context, signal <-chan struct{}) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if signal == nil {
+		return parent, func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		select {
+		case <-signal:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // newFailureMessage is the canonical failure constructor; callers adapt pointer/value.
