@@ -286,6 +286,47 @@ func TestStaleTurnSubmitResultCannotMutateNewTurn(t *testing.T) {
 	}
 }
 
+func TestIntermediateTurnEndKeepsRuntimeBusyAcrossToolLoop(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TurnSubmitRequest = 1
+	model.InFlight.Thinking = true
+	model.InFlight.AgentCommitted = true
+
+	afterEnd, _ := model.handleTurnFinished()
+	if !afterEnd.InFlight.Thinking || !afterEnd.localCommandBusy() {
+		t.Fatalf("intermediate TurnEnd marked runtime idle: in-flight=%#v", afterEnd.InFlight)
+	}
+
+	afterNextStart, _ := afterEnd.handleTurnStarted(session.TurnStart{})
+	if got, want := afterNextStart.Model.TurnSubmitRequest, uint64(1); got != want {
+		t.Fatalf("tool-loop TurnStart advanced submit fence to %d, want %d", got, want)
+	}
+}
+
+func TestSuccessfulTurnResultAppliesAfterQueuedTurnStarts(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TurnSubmitRequest = 2
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("new draft")
+
+	next, _ := model.handleTurnSubmitResult(turnSubmitResultMsg{
+		generation: 1,
+		requestID:  1,
+		text:       "completed old turn",
+	})
+	if len(next.Input.History) != 1 || next.Input.History[0] != "completed old turn" {
+		t.Fatalf("history = %#v, want completed old turn", next.Input.History)
+	}
+	if !next.InFlight.Thinking {
+		t.Fatal("successful old result cleared the queued turn")
+	}
+	if got := next.Input.Composer.Value(); got != "new draft" {
+		t.Fatalf("successful old result changed composer to %q", got)
+	}
+}
+
 func TestSettledTurnResultCannotRestoreDraftBeforeQueuedTurn(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1

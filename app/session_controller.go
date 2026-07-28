@@ -134,7 +134,16 @@ func submitTurnCmd(
 }
 
 func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.TurnSubmitRequest {
+	// Successful Prompt results may arrive after the runtime has already
+	// started a queued turn. They still own their accepted history/catalog
+	// side effects, but a result from a future request is impossible to apply.
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID == 0 || msg.requestID > m.Model.TurnSubmitRequest {
+		return m, nil
+	}
+	// Errors can restore a draft only for the currently accepted turn. An old
+	// error must not clear or overwrite the newer turn's composer state.
+	if msg.err != nil && msg.requestID != m.Model.TurnSubmitRequest {
 		return m, nil
 	}
 	m.refreshRuntimeSessionSnapshot()
@@ -597,7 +606,9 @@ func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
 }
 
 func (m Model) handleTurnFinished() (Model, tea.Cmd) {
-	m.turnReducer().StopThinking()
+	// TurnEnd closes one model/tool iteration, not the whole agent run. The
+	// runtime remains busy until Settled, so keep Thinking set across tool
+	// loops and queued follow-up boundaries.
 	var cmds []tea.Cmd
 
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
