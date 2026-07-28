@@ -205,6 +205,35 @@ func TestAwaitSessionEventDeduplicatesActiveReader(t *testing.T) {
 	}
 }
 
+func TestStreamClosedSettlesBusyTurnAndSurfacesError(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.EventSubscription = &agent.EventSubscription{Events: make(chan agent.EventEnvelope)}
+	model.InFlight.Thinking = true
+	model.Progress.Mode = StateStreaming
+	model.Progress.Status = "Streaming..."
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(streamClosedMsg{
+		generation: 1,
+		err:        agent.ErrRuntimeClosed,
+	})
+	if !handled {
+		t.Fatal("stream close was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("stream close did not emit a terminal notice")
+	}
+	if next.Model.EventSubscription != nil {
+		t.Fatal("closed runtime subscription was retained")
+	}
+	if next.InFlight.Thinking || next.localCommandBusy() {
+		t.Fatalf("closed runtime left busy projection: in-flight=%#v progress=%#v", next.InFlight, next.Progress)
+	}
+	if next.Progress.Mode != StateError || next.Progress.Status != "Runtime closed" {
+		t.Fatalf("closed runtime progress = %#v, want terminal error", next.Progress)
+	}
+}
+
 func TestStaleEventReaderCannotAdvanceRuntimeCursor(t *testing.T) {
 	model := readyModel(t)
 	stream := agent.EventStreamID{1}

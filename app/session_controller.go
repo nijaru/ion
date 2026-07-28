@@ -563,10 +563,25 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 	return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
 }
 
-// handleStreamClosed displays a stream-closed system entry.
-func (m Model) handleStreamClosed() (Model, tea.Cmd) {
+// handleStreamClosed settles the projection when its runtime can no longer
+// deliver lifecycle events. Lagged subscriptions take a separate resync path;
+// every other close is terminal for this runtime generation.
+func (m Model) handleStreamClosed(err error) (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
-	return m, m.terminalCommit().Entries(entryIf)
+	m.turnReducer().ClearActiveState(true)
+	m.turnReducer().RestoreRuntimePhase(agent.PhaseClosed)
+
+	message := "runtime event stream closed"
+	if errors.Is(err, agent.ErrRuntimeClosed) {
+		message = "runtime closed before the event stream settled"
+	} else if err != nil {
+		message = fmt.Sprintf("runtime event stream closed: %v", err)
+	}
+	notice, _ := session.EntrySystem("Error: "+message, time.Now())
+	return m, tea.Sequence(
+		m.terminalCommit().Entries(entryIf),
+		m.terminalCommit().Entries(notice),
+	)
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {

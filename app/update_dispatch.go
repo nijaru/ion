@@ -373,7 +373,11 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 			m.Model.EventSubscription = nil
 			return m, m.awaitSessionEvent(), true
 		}
-		next, cmd := m.handleStreamClosed()
+		if m.Model.EventSubscription != nil {
+			m.Model.EventSubscription.Close()
+			m.Model.EventSubscription = nil
+		}
+		next, cmd := m.handleStreamClosed(msg.err)
 		return next, cmd, true
 
 	case busyInputResultMsg:
