@@ -26,10 +26,11 @@ type Command interface {
 // PromptCmd submits a user message and runs a full agent turn. The reply
 // receives the final assistant message or a typed error.
 type PromptCmd struct {
-	Ctx    context.Context
-	Text   string
-	Images []session.ImageContent
-	Reply  chan<- PromptResult
+	Ctx       context.Context
+	TurnToken uint64
+	Text      string
+	Images    []session.ImageContent
+	Reply     chan<- PromptResult
 }
 
 func (PromptCmd) command() {}
@@ -81,7 +82,11 @@ func (NextTurnCmd) command() {}
 // AbortCmd cancels the current turn and clears queues. Returns the cleared
 // steer and follow-up messages.
 type AbortCmd struct {
-	Reply chan<- AbortResult
+	// ExpectedTurnToken is zero for the unscoped host/runtime operation. A
+	// non-zero token makes cancellation conditional on the observed turn still
+	// being active when the command reaches the controller.
+	ExpectedTurnToken uint64
+	Reply             chan<- AbortResult
 }
 
 func (AbortCmd) command() {}

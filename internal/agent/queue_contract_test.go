@@ -142,6 +142,24 @@ func TestControllerNextTurnStartsQueuedPromptsAfterSettlement(t *testing.T) {
 	}
 }
 
+func TestAbortPendingPromptTokenClearsQueuedNextTurns(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t), QueueCapacity: 2})
+	defer h.Close()
+
+	token := h.reserveTurnToken()
+	if err := h.nextTurnDirect("discard me"); err != nil {
+		t.Fatalf("queue next turn: %v", err)
+	}
+	if _, _, err := h.AbortTurn(token); err != nil {
+		t.Fatalf("abort pending prompt: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.nextTurn) != 0 {
+		t.Fatalf("next-turn queue = %#v, want empty after pending abort", h.nextTurn)
+	}
+}
+
 func TestAbortClearsRuntimeOwnedNextTurns(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t), QueueCapacity: 2})
 	defer h.Close()

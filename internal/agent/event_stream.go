@@ -74,12 +74,15 @@ func queueMessageTexts(messages []session.Message) []string {
 // approvals are included because an approval event can be missed during
 // subscription recovery while the tool remains blocked on the broker.
 type RuntimeSnapshot struct {
-	Cursor           EventCursor
-	Resynced         bool
-	SessionID        string
-	LeafID           string
-	Branch           []session.Entry
-	Phase            Phase
+	Cursor    EventCursor
+	Resynced  bool
+	SessionID string
+	LeafID    string
+	Branch    []session.Entry
+	Phase     Phase
+	// ActiveTurnToken identifies the active turn for turn-scoped frontend
+	// cancellation. It is zero when the runtime has no active turn.
+	ActiveTurnToken  uint64
 	Model            llm.Model
 	Thinking         session.ThinkingLevel
 	ActiveTools      []string
@@ -162,6 +165,7 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 			SessionID:        h.session.ID(),
 			LeafID:           h.session.GetLeafID(),
 			Phase:            phase,
+			ActiveTurnToken:  h.activeTurnToken,
 			Model:            h.model,
 			Thinking:         h.thinking,
 			ActiveTools:      append([]string(nil), h.active...),

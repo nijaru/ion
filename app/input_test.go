@@ -406,6 +406,8 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Runner = runner
 	model.InFlight.Thinking = true
+	model.Model.turnCancellation, _ = newTurnCancellationState(context.Background())
+	model.Model.turnCancellation.setToken(1)
 	model.InFlight.QueuedTurns = []string{"follow up"}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -570,6 +572,8 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	model := New(stubBackend{}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.Model.Runner = runner
 	model.InFlight.Thinking = true
+	model.Model.turnCancellation, _ = newTurnCancellationState(context.Background())
+	model.Model.turnCancellation.setToken(1)
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -593,6 +597,30 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	runCommandTree(t, cmd)
 	if runner.aborts != 1 {
 		t.Fatalf("cancel count after command execution = %d, want 1", runner.aborts)
+	}
+}
+
+func TestDelayedTurnCancelCannotAbortLaterTurn(t *testing.T) {
+	runner := &stubRunner{turnToken: 1}
+	state, _ := newTurnCancellationState(context.Background())
+	state.setToken(1)
+	cmd := cancelTurnCmd(runner, 1, 1, state)
+
+	// The command was accepted for turn token 1, but turn 2 owns the runtime
+	// before Bubble Tea gets to execute the delayed command.
+	runner.turnToken = 2
+	msg, ok := cmd().(turnCancelResultMsg)
+	if !ok {
+		t.Fatalf("cancel result = %T, want turnCancelResultMsg", cmd())
+	}
+	if runner.aborts != 0 {
+		t.Fatalf("stale cancellation aborted later turn: %d aborts", runner.aborts)
+	}
+	if len(runner.abortTokens) != 1 || runner.abortTokens[0] != 1 {
+		t.Fatalf("cancellation tokens = %#v, want [1]", runner.abortTokens)
+	}
+	if msg.err == nil {
+		t.Fatal("stale cancellation unexpectedly succeeded")
 	}
 }
 

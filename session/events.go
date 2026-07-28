@@ -28,6 +28,10 @@ type AgentStart struct {
 // TurnStart opens a turn (one assistant response + its tool execution).
 type TurnStart struct {
 	Timestamp time.Time
+	// TurnToken is runtime-owned cancellation identity. Stateless loop
+	// emitters leave it zero; the controller enriches lifecycle events before
+	// publication so frontends can fence delayed cancellation commands.
+	TurnToken uint64
 }
 
 // MessageStart opens a message (user prompt, assistant response, or tool result).

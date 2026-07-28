@@ -200,6 +200,11 @@ func (s *printSession) Prompt(_ context.Context, _ string, _ ...session.ImageCon
 func (s *printSession) Steer(_ string, _ ...session.ImageContent) error    { return nil }
 func (s *printSession) FollowUp(_ string, _ ...session.ImageContent) error { return nil }
 func (s *printSession) NextTurn(_ string, _ ...session.ImageContent) error { return nil }
+func (s *printSession) ActiveTurnToken() uint64                            { return 1 }
+func (s *printSession) AbortTurn(uint64) ([]session.Message, []session.Message, error) {
+	return s.Abort()
+}
+
 func (s *printSession) Abort() ([]session.Message, []session.Message, error) {
 	s.cancelled++
 	return nil, nil, nil

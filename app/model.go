@@ -227,6 +227,7 @@ type turnSubmitResultMsg struct {
 
 type turnCancelResultMsg struct {
 	generation uint64
+	requestID  uint64
 	err        error
 }
 
@@ -385,7 +386,11 @@ type ModelState struct {
 	EventGeneration  uint64
 	// TurnSubmitRequest fences asynchronous Prompt results within one runtime
 	// generation. EventGeneration alone only fences runtime replacement.
-	TurnSubmitRequest      uint64
+	TurnSubmitRequest uint64
+	// turnCancellation is the per-turn cancellation authority for asynchronous
+	// prompt work. Its token is populated from the matching TurnStart event;
+	// delayed commands retain this pointer when the projection advances.
+	turnCancellation       *turnCancellationState
 	EventCursor            agent.EventCursor
 	EventSubscription      *agent.EventSubscription
 	EventSubscriptionState *eventSubscriptionState

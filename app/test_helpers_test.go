@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -154,6 +155,8 @@ func (s *stubSession) Close() error {
 type stubRunner struct {
 	aborts       int
 	abortErr     error
+	turnToken    uint64
+	abortTokens  []uint64
 	steers       []string
 	followUps    []string
 	steerErr     error
@@ -196,6 +199,21 @@ func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
 func (r *stubRunner) NextTurn(text string, _ ...session.ImageContent) error {
 	r.nextTurns = append(r.nextTurns, text)
 	return r.nextTurnErr
+}
+
+func (r *stubRunner) ActiveTurnToken() uint64 {
+	if r.turnToken == 0 {
+		return 1
+	}
+	return r.turnToken
+}
+
+func (r *stubRunner) AbortTurn(token uint64) ([]session.Message, []session.Message, error) {
+	r.abortTokens = append(r.abortTokens, token)
+	if token != r.ActiveTurnToken() {
+		return nil, nil, errors.New("stale turn token")
+	}
+	return r.Abort()
 }
 
 func (r *stubRunner) Abort() ([]session.Message, []session.Message, error) {

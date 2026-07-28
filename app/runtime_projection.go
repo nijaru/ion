@@ -23,6 +23,19 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 		m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
 	}
 	m.Model.ActiveTools = append(m.Model.ActiveTools[:0], snapshot.ActiveTools...)
+	if snapshot.ActiveTurnToken == 0 {
+		if m.Model.turnCancellation == nil || m.Model.turnCancellation.isStarted() {
+			m.clearTurnCancellation()
+		}
+	} else {
+		if m.Model.turnCancellation == nil ||
+			m.Model.turnCancellation.turnToken() != snapshot.ActiveTurnToken {
+			state, _ := newTurnCancellationState(m.runtimeOperationContext())
+			m.replaceTurnCancellation(state)
+		}
+		m.Model.turnCancellation.setToken(snapshot.ActiveTurnToken)
+		m.Model.turnCancellation.markStarted()
+	}
 
 	// Approval state is runtime-owned and may have changed while the previous
 	// subscription was lagged. Replace the prompt wholesale so a missed
@@ -32,6 +45,7 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	turn := m.turnReducer()
 	turn.ClearActiveState(true)
 	turn.RestoreRuntimePhase(snapshot.Phase)
+	m.preserveCancellationProjection()
 	steer, followUp, nextTurn := snapshot.Queues.Texts()
 	m.InFlight.QueuedSteering = steer
 	m.InFlight.QueuedTurns = append(followUp, nextTurn...)

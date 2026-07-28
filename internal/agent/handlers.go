@@ -22,10 +22,26 @@ import (
 // --- Turn commands ---
 
 func (c *Controller) handlePrompt(cmd *PromptCmd) {
-	runDone, err := c.beginTurn(cmd.Ctx)
-	if err != nil {
-		sendResult(cmd.Reply, PromptResult{Err: turnError(KindInternal, c.currentPhase(), RecoveryNone, err)})
+	if err := cmd.Ctx.Err(); err != nil {
+		if cmd.TurnToken != 0 {
+			_, _, _ = c.cancelActiveRun(cmd.TurnToken)
+			c.releaseTurnToken(cmd.TurnToken)
+		}
+		sendResult(cmd.Reply, PromptResult{Err: turnError(KindCancellation, c.currentPhase(), RecoveryNone, err)})
 		return
+	}
+	runDone, err := c.beginTurn(cmd.Ctx, cmd.TurnToken)
+	if err != nil {
+		c.releaseTurnToken(cmd.TurnToken)
+		kind := KindInternal
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			kind = KindCancellation
+		}
+		sendResult(cmd.Reply, PromptResult{Err: turnError(kind, c.currentPhase(), RecoveryNone, err)})
+		return
+	}
+	if sink := TurnAcceptanceSinkFromContext(cmd.Ctx); sink != nil {
+		sink()
 	}
 	c.startPromptWorker(cmd, runDone)
 }
@@ -97,6 +113,7 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		}
 		c.activeTurnID = ""
 		c.activeTurnLeaf = ""
+		c.activeTurnToken = 0
 		c.turnCommitted = false
 		c.turnAborted = false
 		c.runCancel = nil
@@ -139,7 +156,7 @@ func (c *Controller) handleNextTurn(cmd *NextTurnCmd) {
 }
 
 func (c *Controller) handleAbort(cmd *AbortCmd) {
-	steer, followUp, err := c.cancelActiveRun()
+	steer, followUp, err := c.cancelActiveRun(cmd.ExpectedTurnToken)
 	if err != nil {
 		sendResult(cmd.Reply, AbortResult{Err: turnError(KindCancellation, c.currentPhase(), RecoveryNone, err)})
 		return

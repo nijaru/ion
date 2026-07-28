@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,6 +14,80 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
+
+type turnCancellationState struct {
+	cancel          context.CancelFunc
+	token           atomic.Uint64
+	accepted        atomic.Bool
+	started         atomic.Bool
+	cancelRequested atomic.Bool
+	preCancelled    atomic.Bool
+}
+
+func newTurnCancellationState(parent context.Context) (*turnCancellationState, context.Context) {
+	ctx, cancel := context.WithCancel(parent)
+	return &turnCancellationState{cancel: cancel}, ctx
+}
+
+func (s *turnCancellationState) setToken(token uint64) {
+	if s != nil && token != 0 {
+		s.token.Store(token)
+	}
+}
+
+func (s *turnCancellationState) markAccepted() {
+	if s != nil {
+		s.accepted.Store(true)
+	}
+}
+
+func (s *turnCancellationState) isAccepted() bool {
+	return s != nil && s.accepted.Load()
+}
+
+func (s *turnCancellationState) markStarted() {
+	if s != nil {
+		s.started.Store(true)
+		s.accepted.Store(true)
+	}
+}
+
+func (s *turnCancellationState) isStarted() bool {
+	return s != nil && s.started.Load()
+}
+
+func (s *turnCancellationState) markCancelRequested() {
+	if s != nil {
+		s.cancelRequested.Store(true)
+	}
+}
+
+func (s *turnCancellationState) wasCancelRequested() bool {
+	return s != nil && s.cancelRequested.Load()
+}
+
+func (s *turnCancellationState) markPreCancelled() {
+	if s != nil {
+		s.preCancelled.Store(true)
+	}
+}
+
+func (s *turnCancellationState) wasPreCancelled() bool {
+	return s != nil && s.preCancelled.Load()
+}
+
+func (s *turnCancellationState) turnToken() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.token.Load()
+}
+
+func (s *turnCancellationState) stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
+}
 
 type localErrorMsg struct {
 	err error
@@ -90,10 +165,13 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 	m.turnReducer().StartSubmit()
 	m.Model.TurnSubmitRequest++
 	requestID := m.Model.TurnSubmitRequest
+	turnState, turnContext := newTurnCancellationState(m.runtimeOperationContext())
+	m.replaceTurnCancellation(turnState)
 	m.resetComposerDraft()
 	return m, submitTurnCmd(
 		m.Model.Runner,
-		m.runtimeOperationContext(),
+		turnContext,
+		turnState,
 		m.Model.EventGeneration,
 		requestID,
 		text,
@@ -105,6 +183,7 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 func submitTurnCmd(
 	runner agent.Runtime,
 	ctx context.Context,
+	state *turnCancellationState,
 	generation, requestID uint64,
 	text, draft string,
 	images []session.ImageContent,
@@ -112,7 +191,9 @@ func submitTurnCmd(
 	images = cloneImageAttachments(images)
 	return func() tea.Msg {
 		if runner != nil {
-			_, err := runner.Prompt(ctx, text, images...)
+			promptContext := agent.WithTurnTokenSink(ctx, state.setToken)
+			promptContext = agent.WithTurnAcceptanceSink(promptContext, state.markAccepted)
+			_, err := runner.Prompt(promptContext, text, images...)
 			return turnSubmitResultMsg{
 				generation: generation,
 				requestID:  requestID,
@@ -133,6 +214,14 @@ func submitTurnCmd(
 	}
 }
 
+func isTurnCancellationError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	var turnErr *agent.TurnError
+	return errors.As(err, &turnErr) && turnErr.Kind == agent.KindCancellation
+}
+
 func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) {
 	// Successful Prompt results may arrive after the runtime has already
 	// started a queued turn. They still own their accepted history/catalog
@@ -144,6 +233,14 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 	// Errors can restore a draft only for the currently accepted turn. An old
 	// error must not clear or overwrite the newer turn's composer state.
 	if msg.err != nil && msg.requestID != m.Model.TurnSubmitRequest {
+		return m, nil
+	}
+	if msg.err != nil && isTurnCancellationError(msg.err) && m.InFlight.Canceling {
+		state := m.Model.turnCancellation
+		if state != nil && state.wasPreCancelled() && !state.isAccepted() {
+			m.clearTurnCancellation()
+			m.turnReducer().RejectSubmit("")
+		}
 		return m, nil
 	}
 	m.refreshRuntimeSessionSnapshot()
@@ -165,6 +262,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		// restore a draft into a newer or queued turn.
 		return m, nil
 	}
+	m.clearTurnCancellation()
 	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
@@ -297,29 +395,106 @@ func cloneImageAttachments(images []session.ImageContent) []session.ImageContent
 	return cloned
 }
 
+func (m *Model) replaceTurnCancellation(state *turnCancellationState) {
+	if m == nil {
+		return
+	}
+	if m.Model.turnCancellation != nil && m.Model.turnCancellation != state {
+		m.Model.turnCancellation.stop()
+	}
+	m.Model.turnCancellation = state
+}
+
+func (m *Model) clearTurnCancellation() {
+	if m == nil {
+		return
+	}
+	if m.Model.turnCancellation != nil {
+		m.Model.turnCancellation.stop()
+		m.Model.turnCancellation = nil
+	}
+}
+
+func (m *Model) preserveCancellationProjection() {
+	if m == nil || m.Model.turnCancellation == nil ||
+		!m.Model.turnCancellation.wasCancelRequested() {
+		return
+	}
+	m.InFlight.Canceling = true
+	if m.InFlight.Thinking {
+		m.Progress.Mode = StateCancelled
+	}
+}
+
 func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	decision := m.turnReducer().CancelTurn(reason, time.Now())
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
+	state := m.Model.turnCancellation
+	if state == nil {
+		state, _ = newTurnCancellationState(m.runtimeOperationContext())
+		m.replaceTurnCancellation(state)
+	}
+	state.markCancelRequested()
+	// A prompt that has not reached controller acceptance has no runtime turn
+	// to abort; cancel its context now. Accepted turns defer context
+	// cancellation until the targeted AbortTurn command has cleared queues.
+	if !state.isAccepted() {
+		state.markPreCancelled()
+		state.stop()
+	}
 	return m, batchCmds(
 		m.terminalCommit().Entries(entry),
-		cancelTurnCmd(m.Model.Runner, m.Model.EventGeneration),
+		cancelTurnCmd(
+			m.Model.Runner,
+			m.Model.EventGeneration,
+			m.Model.TurnSubmitRequest,
+			state,
+		),
 	)
 }
 
-func cancelTurnCmd(runner agent.Runtime, generation uint64) tea.Cmd {
+func cancelTurnCmd(
+	runner agent.Runtime,
+	generation, requestID uint64,
+	state *turnCancellationState,
+) tea.Cmd {
+	var canceler agent.TurnCanceler
+	if runner != nil {
+		canceler = runner
+	}
 	return func() tea.Msg {
+		result := turnCancelResultMsg{generation: generation, requestID: requestID}
 		if runner == nil {
-			return turnCancelResultMsg{generation: generation, err: errors.New("session unavailable")}
+			result.err = errors.New("session unavailable")
+			return result
 		}
-		if _, _, err := runner.Abort(); err != nil {
-			return turnCancelResultMsg{generation: generation, err: err}
+		turnToken := state.turnToken()
+		if turnToken == 0 {
+			// The prompt may still be waiting for controller acceptance. The
+			// canceled prompt context is the only valid effect until TurnStart
+			// publishes its identity; never sample a later runtime turn here.
+			return result
 		}
-		return turnCancelResultMsg{generation: generation}
+		if canceler == nil {
+			state.stop()
+			result.err = errors.New("runtime does not support turn-scoped cancellation")
+			return result
+		}
+		if _, _, err := canceler.AbortTurn(turnToken); err != nil {
+			safeStale := errors.Is(err, agent.ErrNoActiveTurn) || errors.Is(err, agent.ErrTurnChanged)
+			if !(safeStale && state.wasPreCancelled()) {
+				result.err = err
+				return result
+			}
+		}
+		state.stop()
+		return result
 	}
 }
 
 func (m Model) handleTurnCancelResult(msg turnCancelResultMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		(msg.requestID != 0 && msg.requestID != m.Model.TurnSubmitRequest) {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -532,6 +707,7 @@ func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
 
 // handleSettled marks the harness as idle — enables submit button and clears in-flight state.
 func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
+	m.clearTurnCancellation()
 	m.InFlight.AgentCommitted = false
 	m.InFlight.Thinking = false
 	m.InFlight.Canceling = false
@@ -566,6 +742,7 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 // deliver lifecycle events. Lagged subscriptions take a separate resync path;
 // every other close is terminal for this runtime generation.
 func (m Model) handleStreamClosed(err error) (Model, tea.Cmd) {
+	m.clearTurnCancellation()
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	m.turnReducer().ClearActiveState(true)
 	m.Picker.Approval = nil
@@ -617,7 +794,18 @@ func (m Model) handleTurnStarted(msg session.TurnStart) (Model, tea.Cmd) {
 		// advance the app request fence when their lifecycle starts.
 		m.Model.TurnSubmitRequest++
 	}
+	if m.Model.turnCancellation == nil ||
+		(msg.TurnToken != 0 && m.Model.turnCancellation.turnToken() != 0 &&
+			m.Model.turnCancellation.turnToken() != msg.TurnToken) {
+		state, _ := newTurnCancellationState(m.runtimeOperationContext())
+		m.replaceTurnCancellation(state)
+	}
+	if msg.TurnToken != 0 {
+		m.Model.turnCancellation.setToken(msg.TurnToken)
+		m.Model.turnCancellation.markStarted()
+	}
 	m.turnReducer().StartTurn(msg.When(), time.Now())
+	m.preserveCancellationProjection()
 	return m, m.awaitSessionEvent()
 }
 

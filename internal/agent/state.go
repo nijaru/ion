@@ -194,6 +194,7 @@ var (
 	ErrPhaseConflict  = errors.New("command conflicts with current phase")
 	ErrTurnActive     = errors.New("a turn is already active")
 	ErrNoActiveTurn   = errors.New("no active turn")
+	ErrTurnChanged    = errors.New("active turn changed before cancellation was accepted")
 	ErrActionBoundary = errors.New("external action boundary is unavailable")
 )
 

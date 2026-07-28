@@ -125,10 +125,14 @@ type Controller struct {
 	staged []pendingWrite
 
 	// --- Active turn identity ---
-	activeTurnID   string
-	activeTurnLeaf string
-	turnCommitted  bool
-	turnAborted    bool
+	activeTurnID       string
+	activeTurnLeaf     string
+	nextTurnToken      uint64
+	activeTurnToken    uint64
+	reservedTurnTokens map[uint64]struct{}
+	canceledTurnTokens map[uint64]struct{}
+	turnCommitted      bool
+	turnAborted        bool
 
 	// --- Thinking state coordination ---
 	thinkingPending     bool
@@ -151,6 +155,7 @@ type Controller struct {
 // Compile-time interface assertions.
 var (
 	_ Runtime                 = (*Controller)(nil)
+	_ TurnCanceler            = (*Controller)(nil)
 	_ SessionProjectionReader = (*Controller)(nil)
 	_ SessionReader           = (*Controller)(nil)
 	_ SessionCatalog          = (*Controller)(nil)
@@ -292,6 +297,7 @@ func (c *Controller) rejectQueued() {
 func (c *Controller) rejectCommand(cmd Command) {
 	switch cmd := cmd.(type) {
 	case *PromptCmd:
+		c.releaseTurnToken(cmd.TurnToken)
 		sendResult(cmd.Reply, PromptResult{Err: turnError(KindInternal, PhaseClosed, RecoveryNone, ErrRuntimeClosed)})
 	case *SteerCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
@@ -453,7 +459,7 @@ func (c *Controller) transitionPhase(from, to Phase) error {
 // context is canceled by Abort and Close as well as by the caller.
 // The controller retains the reservation until it processes the worker's
 // typed completion. Must be called from the command goroutine.
-func (c *Controller) beginTurn(parent context.Context) (chan struct{}, error) {
+func (c *Controller) beginTurn(parent context.Context, requestedToken ...uint64) (chan struct{}, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -462,10 +468,36 @@ func (c *Controller) beginTurn(parent context.Context) (chan struct{}, error) {
 		c.mu.Unlock()
 		return nil, ErrRuntimeClosed
 	}
+	token := uint64(0)
+	if len(requestedToken) > 0 {
+		token = requestedToken[0]
+	}
+	if token != 0 {
+		if _, canceled := c.canceledTurnTokens[token]; canceled {
+			delete(c.canceledTurnTokens, token)
+			delete(c.reservedTurnTokens, token)
+			c.mu.Unlock()
+			return nil, context.Canceled
+		}
+	}
 	if c.phase.activeTurn() {
 		phase := c.phase
 		c.mu.Unlock()
 		return nil, fmt.Errorf("%w: phase=%s", ErrTurnActive, phase)
+	}
+	if err := parent.Err(); err != nil {
+		if token != 0 {
+			delete(c.reservedTurnTokens, token)
+			c.canceledTurnTokens[token] = struct{}{}
+			c.steer = nil
+			c.followUp = nil
+			c.nextTurn = nil
+		}
+		c.mu.Unlock()
+		if token != 0 {
+			c.emitQueueUpdate()
+		}
+		return nil, err
 	}
 	if c.phase == PhaseSettled {
 		if err := c.transitionPhase(PhaseSettled, PhaseReady); err != nil {
@@ -481,6 +513,13 @@ func (c *Controller) beginTurn(parent context.Context) (chan struct{}, error) {
 		c.mu.Unlock()
 		return nil, err
 	}
+	if token != 0 {
+		delete(c.reservedTurnTokens, token)
+	} else {
+		c.nextTurnToken++
+		token = c.nextTurnToken
+	}
+	c.activeTurnToken = token
 	c.runCancel = make(chan struct{})
 	c.runCancelOnce = new(sync.Once)
 	turnContext, cancelContext := context.WithCancel(parent)
@@ -521,6 +560,7 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 			}
 			c.runCancel = nil
 			c.runCancelOnce = nil
+			c.activeTurnToken = 0
 			close(done)
 			c.runDone = nil
 		}
@@ -579,9 +619,16 @@ func (c *Controller) Subscribe(ctx context.Context, after EventCursor) (*EventSu
 // Prompt submits a user message and runs a full agent turn.
 func (c *Controller) Prompt(ctx context.Context, text string, images ...session.ImageContent) (session.Message, error) {
 	ctx = commandContext(ctx)
+	token := c.reserveTurnToken()
+	if sink := TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(token)
+	}
 	reply := make(chan PromptResult, 1)
-	cmd := &PromptCmd{Ctx: ctx, Text: text, Images: cloneImageContents(images), Reply: reply}
+	cmd := &PromptCmd{
+		Ctx: ctx, TurnToken: token, Text: text, Images: cloneImageContents(images), Reply: reply,
+	}
 	if err := c.enqueue(ctx, cmd); err != nil {
+		c.releaseTurnToken(token)
 		return nil, err
 	}
 	result, err := waitCommandReply(ctx, reply)
@@ -624,10 +671,64 @@ func (c *Controller) NextTurn(text string, images ...session.ImageContent) error
 	return <-reply
 }
 
-// Abort cancels the current turn and clears queues.
+func (c *Controller) reserveTurnToken() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nextTurnToken++
+	token := c.nextTurnToken
+	if c.reservedTurnTokens == nil {
+		c.reservedTurnTokens = make(map[uint64]struct{})
+	}
+	if c.canceledTurnTokens == nil {
+		c.canceledTurnTokens = make(map[uint64]struct{})
+	}
+	c.reservedTurnTokens[token] = struct{}{}
+	return token
+}
+
+func (c *Controller) releaseTurnToken(token uint64) {
+	if token == 0 {
+		return
+	}
+	c.mu.Lock()
+	delete(c.reservedTurnTokens, token)
+	delete(c.canceledTurnTokens, token)
+	wake := !c.closed && len(c.reservedTurnTokens) == 0 && len(c.nextTurn) > 0
+	c.mu.Unlock()
+	if wake {
+		c.wakeNextTurnStart()
+	}
+}
+
+// ActiveTurnToken returns the opaque identity of the currently accepted turn.
+// It is zero while no turn is active. The token is read under the same lock
+// used by AbortTurn, so a caller can bind an asynchronous cancel command to a
+// specific runtime turn without exposing controller state.
+func (c *Controller) ActiveTurnToken() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.activeTurnToken
+}
+
+// Abort cancels the current turn and clears queues. Host shutdown and other
+// synchronous runtime owners intentionally retain this unscoped operation.
 func (c *Controller) Abort() ([]session.Message, []session.Message, error) {
+	return c.abortTurn(0)
+}
+
+// AbortTurn cancels and clears queues only when turnToken still identifies the
+// active turn. A stale token is rejected atomically with the cancellation
+// decision, so a delayed frontend command cannot abort a later turn.
+func (c *Controller) AbortTurn(turnToken uint64) ([]session.Message, []session.Message, error) {
+	if turnToken == 0 {
+		return nil, nil, ErrNoActiveTurn
+	}
+	return c.abortTurn(turnToken)
+}
+
+func (c *Controller) abortTurn(expectedToken uint64) ([]session.Message, []session.Message, error) {
 	reply := make(chan AbortResult, 1)
-	cmd := &AbortCmd{Reply: reply}
+	cmd := &AbortCmd{ExpectedTurnToken: expectedToken, Reply: reply}
 	if err := c.enqueue(context.Background(), cmd); err != nil {
 		return nil, nil, err
 	}

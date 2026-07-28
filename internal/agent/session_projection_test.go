@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,6 +157,79 @@ func (s *blockingProjectionStream) Next() (*llm.Chunk, bool) {
 
 func (s *blockingProjectionStream) Err() error   { return nil }
 func (s *blockingProjectionStream) Close() error { return nil }
+
+func TestControllerAbortTurnRejectsStaleTurnToken(t *testing.T) {
+	var streamCalls atomic.Int32
+	startedFirst := make(chan struct{})
+	startedSecond := make(chan struct{})
+	controller := NewController(ControllerConfig{
+		Session: newTestSession(t),
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			started := startedFirst
+			if streamCalls.Add(1) > 1 {
+				started = startedSecond
+			}
+			return &blockingProjectionStream{ctx: ctx, started: started}, nil
+		},
+	})
+	defer controller.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := controller.Prompt(t.Context(), "first")
+		firstDone <- err
+	}()
+	select {
+	case <-startedFirst:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for first provider stream")
+	}
+	firstToken := controller.ActiveTurnToken()
+	if firstToken == 0 {
+		t.Fatal("first turn never acquired a cancellation token")
+	}
+	if _, _, err := controller.AbortTurn(firstToken); err != nil {
+		t.Fatalf("abort first turn: %v", err)
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for aborted first prompt")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := controller.Prompt(t.Context(), "second")
+		secondDone <- err
+	}()
+	select {
+	case <-startedSecond:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for second provider stream")
+	}
+	secondToken := controller.ActiveTurnToken()
+	if secondToken == 0 || secondToken == firstToken {
+		t.Fatalf("second turn token = %d, first = %d", secondToken, firstToken)
+	}
+
+	if _, _, err := controller.AbortTurn(firstToken); !errors.Is(err, ErrTurnChanged) {
+		t.Fatalf("stale abort error = %v, want ErrTurnChanged", err)
+	}
+	select {
+	case <-secondDone:
+		t.Fatal("stale abort unexpectedly stopped the second turn")
+	default:
+	}
+	if _, _, err := controller.AbortTurn(secondToken); err != nil {
+		t.Fatalf("abort current turn: %v", err)
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for aborted second prompt")
+	}
+}
 
 func TestControllerSessionProjectionIncludesActiveDurableTurn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "projection.db")

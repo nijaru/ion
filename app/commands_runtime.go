@@ -575,6 +575,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	// teardown on construction failure.
 	m.rotateRuntimeContext()
 	m.clearTreeNavigationCancel()
+	m.clearTurnCancellation()
 	m.runtimeRequest().clear()
 	m.Model.Info = msg.runtime.Handles.Info
 	m.Model.Runner = msg.runtime.Handles.Runner

@@ -246,6 +246,76 @@ const (
 // TurnError now lives in state.go with the phase machine.
 // It carries Phase, Kind, RecoveryAction, and Cause.
 
+// TurnCanceler is the runtime-owned capability for cancellation requests that
+// must remain scoped to the turn observed by the caller. ActiveTurnToken is
+// opaque and changes for every accepted turn; AbortTurn rejects a stale token
+// before clearing queues or signaling the active run.
+type TurnCanceler interface {
+	ActiveTurnToken() uint64
+	AbortTurn(turnToken uint64) ([]session.Message, []session.Message, error)
+}
+
+// TurnTokenSink receives the runtime-issued identity reserved for one Prompt
+// call. The Controller invokes it once before enqueueing that prompt so a
+// frontend can bind cancellation before acceptance; the token remains scoped
+// to that prompt even if the command is delayed or rejected.
+type TurnTokenSink func(uint64)
+
+// TurnAcceptanceSink marks the point where a reserved prompt has acquired a
+// live runtime turn. It lets a frontend distinguish a rejected pending prompt
+// from an accepted turn whose terminal events are still in flight.
+type TurnAcceptanceSink func()
+
+type (
+	turnTokenSinkKey      struct{}
+	turnAcceptanceSinkKey struct{}
+)
+
+// WithTurnTokenSink attaches a cancellation identity sink to a Prompt context.
+// The Controller calls it once when reserving the Prompt command. Runtime
+// adapters should invoke the sink at their equivalent reservation boundary.
+func WithTurnTokenSink(ctx context.Context, sink TurnTokenSink) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, turnTokenSinkKey{}, sink)
+}
+
+// TurnTokenSinkFromContext returns the optional acceptance sink carried by a
+// prompt context. Runtime adapters that implement Runtime outside Controller
+// should invoke it when their prompt becomes accepted.
+func TurnTokenSinkFromContext(ctx context.Context) TurnTokenSink {
+	if ctx == nil {
+		return nil
+	}
+	sink, _ := ctx.Value(turnTokenSinkKey{}).(TurnTokenSink)
+	return sink
+}
+
+// WithTurnAcceptanceSink attaches an acceptance callback to a Prompt context.
+// The Controller invokes it exactly once after beginTurn succeeds.
+func WithTurnAcceptanceSink(ctx context.Context, sink TurnAcceptanceSink) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, turnAcceptanceSinkKey{}, sink)
+}
+
+// TurnAcceptanceSinkFromContext returns the optional prompt-acceptance sink.
+func TurnAcceptanceSinkFromContext(ctx context.Context) TurnAcceptanceSink {
+	if ctx == nil {
+		return nil
+	}
+	sink, _ := ctx.Value(turnAcceptanceSinkKey{}).(TurnAcceptanceSink)
+	return sink
+}
+
 // Runtime is the narrow turn and event surface consumed by the TUI and CLI.
 //
 // Session administration is deliberately not part of this interface. Those
@@ -254,6 +324,8 @@ const (
 // the turn boundary explicit and prevents the UI from depending on the
 // controller's entire implementation.
 type Runtime interface {
+	TurnCanceler
+
 	// Subscribe opens an independent bounded event stream and returns an
 	// authoritative renderable snapshot. A non-zero cursor is used for
 	// resubscription; if the stream has advanced, the snapshot is marked

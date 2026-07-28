@@ -118,40 +118,42 @@ func NewController(cfg ControllerConfig) *Controller {
 	}
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	h := &Controller{
-		session:           cfg.Session,
-		store:             cfg.Store,
-		durable:           cfg.Durable,
-		requireDurable:    cfg.RequireDurable,
-		tools:             toolMap,
-		active:            active,
-		model:             cfg.Model,
-		thinking:          cfg.Thinking,
-		sysprompt:         cfg.SysPrompt,
-		log:               cfg.Logger,
-		metrics:           cfg.Metrics,
-		promptTemplates:   cfg.PromptTemplates,
-		stream:            cfg.StreamFn,
-		auth:              cfg.Auth,
-		transport:         cfg.Transport,
-		timeout:           cfg.Timeout,
-		phase:             PhaseReady,
-		commands:          make(chan Command, controllerCommandCapacity),
-		commandStop:       make(chan struct{}),
-		nextTurnWake:      make(chan struct{}, 1),
-		completions:       make(chan turnCompletion, 1),
-		runtimeRequests:   make(chan runtimeRequest, runtimeOperationCapacity),
-		runtimeResults:    make(chan runtimeCompletion, 1),
-		runtimeContext:    runtimeContext,
-		runtimeCancel:     runtimeCancel,
-		eventHub:          newEventHub(),
-		done:              make(chan struct{}),
-		compaction:        cfg.Compaction,
-		contextWindow:     cfg.ContextWindow,
-		steeringMode:      cfg.SteeringMode,
-		followUpMode:      cfg.FollowUpMode,
-		queueCapacity:     cfg.QueueCapacity,
-		maxParallelTools:  cfg.MaxParallelTools,
-		processReconciler: cfg.ProcessReconciler,
+		session:            cfg.Session,
+		store:              cfg.Store,
+		durable:            cfg.Durable,
+		requireDurable:     cfg.RequireDurable,
+		tools:              toolMap,
+		active:             active,
+		model:              cfg.Model,
+		thinking:           cfg.Thinking,
+		sysprompt:          cfg.SysPrompt,
+		log:                cfg.Logger,
+		metrics:            cfg.Metrics,
+		promptTemplates:    cfg.PromptTemplates,
+		stream:             cfg.StreamFn,
+		auth:               cfg.Auth,
+		transport:          cfg.Transport,
+		timeout:            cfg.Timeout,
+		phase:              PhaseReady,
+		commands:           make(chan Command, controllerCommandCapacity),
+		commandStop:        make(chan struct{}),
+		nextTurnWake:       make(chan struct{}, 1),
+		completions:        make(chan turnCompletion, 1),
+		runtimeRequests:    make(chan runtimeRequest, runtimeOperationCapacity),
+		runtimeResults:     make(chan runtimeCompletion, 1),
+		runtimeContext:     runtimeContext,
+		runtimeCancel:      runtimeCancel,
+		eventHub:           newEventHub(),
+		done:               make(chan struct{}),
+		compaction:         cfg.Compaction,
+		contextWindow:      cfg.ContextWindow,
+		steeringMode:       cfg.SteeringMode,
+		followUpMode:       cfg.FollowUpMode,
+		queueCapacity:      cfg.QueueCapacity,
+		maxParallelTools:   cfg.MaxParallelTools,
+		reservedTurnTokens: make(map[uint64]struct{}),
+		canceledTurnTokens: make(map[uint64]struct{}),
+		processReconciler:  cfg.ProcessReconciler,
 	}
 	if h.steeringMode == "" {
 		h.steeringMode = "one-at-a-time"
@@ -371,6 +373,10 @@ func (h *Controller) runPrompt(
 	// PrepareNextTurn can stop the run when a buffered write fails.
 	cfg := h.buildLoopConfig(ctx, tools, recordPersistErr)
 	emitWrap := func(e session.Event) {
+		if turnStart, ok := e.(session.TurnStart); ok {
+			turnStart.TurnToken = h.ActiveTurnToken()
+			e = turnStart
+		}
 		if ae, ok := e.(session.AgentEnd); ok {
 			lastAgentEnd = ae
 			return // harness emits the single terminal AgentEnd below
@@ -1086,7 +1092,7 @@ func (h *Controller) wakeNextTurnStart() {
 // cannot bypass phase reservation or start concurrently with another turn.
 func (h *Controller) startNextTurnIfReady() {
 	h.mu.Lock()
-	if h.closed || h.phase != PhaseReady || len(h.nextTurn) == 0 {
+	if h.closed || h.phase != PhaseReady || len(h.nextTurn) == 0 || len(h.reservedTurnTokens) > 0 {
 		h.mu.Unlock()
 		return
 	}
@@ -1506,11 +1512,46 @@ func (h *Controller) activateToolsDirect(ctx context.Context, names []string) er
 
 // cancelActiveRun clears pending queues and signals the current run without
 // waiting for its provider or tools to return. The caller chooses the wait policy.
-func (h *Controller) cancelActiveRun() ([]session.Message, []session.Message, error) {
+func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message, []session.Message, error) {
+	expected := uint64(0)
+	if len(expectedToken) > 0 {
+		expected = expectedToken[0]
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return nil, nil, errors.New("harness is closed")
+	}
+	if expected != 0 && expected != h.activeTurnToken {
+		if _, reserved := h.reservedTurnTokens[expected]; reserved {
+			// The prompt command is accepted by the controller but has not
+			// acquired a turn yet. Revoke only that reservation while another
+			// active turn owns the runtime queues.
+			delete(h.reservedTurnTokens, expected)
+			h.canceledTurnTokens[expected] = struct{}{}
+			if h.activeTurnToken != 0 {
+				h.mu.Unlock()
+				return nil, nil, nil
+			}
+			clearedSteer := append([]session.Message(nil), h.steer...)
+			clearedFollowUp := append([]session.Message(nil), h.followUp...)
+			h.steer = nil
+			h.followUp = nil
+			h.nextTurn = nil
+			h.mu.Unlock()
+			h.emitQueueUpdate()
+			return clearedSteer, clearedFollowUp, nil
+		}
+		if _, canceled := h.canceledTurnTokens[expected]; canceled {
+			h.mu.Unlock()
+			return nil, nil, nil
+		}
+		current := h.activeTurnToken
+		h.mu.Unlock()
+		if current == 0 {
+			return nil, nil, ErrNoActiveTurn
+		}
+		return nil, nil, fmt.Errorf("%w: expected=%d current=%d", ErrTurnChanged, expected, current)
 	}
 	if h.phase == PhasePersisting {
 		phase := h.phase

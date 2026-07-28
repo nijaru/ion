@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -233,9 +234,10 @@ func (b *smokeBackend) Close() error {
 func (b *smokeBackend) Events() <-chan agent.EventEnvelope { return b.events }
 
 type smokeRunner struct {
-	backend *smokeBackend
-	sess    session.Session
-	catalog agent.SessionCatalog
+	backend   *smokeBackend
+	sess      session.Session
+	catalog   agent.SessionCatalog
+	turnToken atomic.Uint64
 }
 
 func (r *smokeRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
@@ -249,6 +251,16 @@ func (r *smokeRunner) Subscribe(context.Context, agent.EventCursor) (*agent.Even
 }
 
 func (r *smokeRunner) Prompt(ctx context.Context, text string, _ ...session.ImageContent) (session.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	token := r.turnToken.Add(1)
+	if sink := agent.TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(token)
+	}
+	if sink := agent.TurnAcceptanceSinkFromContext(ctx); sink != nil {
+		sink()
+	}
 	return nil, r.backend.SubmitTurn(ctx, text)
 }
 
@@ -262,6 +274,14 @@ func (r *smokeRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	return nil
 }
 func (r *smokeRunner) NextTurn(string, ...session.ImageContent) error { return nil }
+func (r *smokeRunner) ActiveTurnToken() uint64                        { return r.turnToken.Load() }
+func (r *smokeRunner) AbortTurn(token uint64) ([]session.Message, []session.Message, error) {
+	if token == 0 || token != r.turnToken.Load() {
+		return nil, nil, agent.ErrTurnChanged
+	}
+	return r.Abort()
+}
+
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }

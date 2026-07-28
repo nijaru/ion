@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -94,6 +95,8 @@ func TestMessageEndCrossingBudgetCancelsActiveTurn(t *testing.T) {
 	runner := &stubRunner{}
 	m.Model.Runner = runner
 	m.Model.Config = &config.Config{MaxTurnCost: 0.10}
+	m.Model.turnCancellation, _ = newTurnCancellationState(context.Background())
+	m.Model.turnCancellation.setToken(1)
 	m.turnReducer().StartTurn(time.Now(), time.Now())
 	m.InFlight.QueuedTurns = []string{"must not run"}
 
