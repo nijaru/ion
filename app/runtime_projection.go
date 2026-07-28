@@ -24,6 +24,11 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	}
 	m.Model.ActiveTools = append(m.Model.ActiveTools[:0], snapshot.ActiveTools...)
 
+	// Approval state is runtime-owned and may have changed while the previous
+	// subscription was lagged. Replace the prompt wholesale so a missed
+	// resolution cannot leave stale input interception in the TUI.
+	m.replaceApprovalRequests(snapshot.PendingApprovals)
+
 	turn := m.turnReducer()
 	turn.ClearActiveState(true)
 	turn.RestoreRuntimePhase(snapshot.Phase)

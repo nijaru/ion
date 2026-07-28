@@ -56,6 +56,11 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedSteering = []string{"stale steer"}
 	model.InFlight.QueuedTurns = []string{"stale follow-up"}
+	model.Picker.Approval = &approvalPromptState{
+		request:     session.ApprovalRequest{ID: "approval-1"},
+		resolving:   true,
+		resolvingID: "approval-1",
+	}
 
 	snapshot := agent.RuntimeSnapshot{
 		SessionID: "session-resumed",
@@ -66,6 +71,12 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 		},
 		Thinking:    session.ThinkingHigh,
 		ActiveTools: []string{"read", "edit"},
+		PendingApprovals: []session.ApprovalRequest{{
+			ID:       "approval-1",
+			ToolName: "write",
+			Resource: "config.toml",
+			Paths:    []string{"config.toml"},
+		}},
 		Queues: agent.QueueSnapshot{
 			Steer: []session.Message{
 				&session.UserMessage{Content: []session.Content{session.TextContent{Text: "steer me"}}},
@@ -99,6 +110,17 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	}
 	if !equalStrings(model.Model.ActiveTools, []string{"read", "edit"}) {
 		t.Fatalf("active tools = %#v", model.Model.ActiveTools)
+	}
+	if model.Picker.Approval == nil || model.Picker.Approval.request.ID != "approval-1" ||
+		model.Picker.Approval.request.Resource != "config.toml" || !model.Picker.Approval.resolving {
+		t.Fatalf("approval projection = %#v, want approval-1 still resolving", model.Picker.Approval)
+	}
+
+	resolved := snapshot
+	resolved.PendingApprovals = nil
+	model.applyAgentRuntimeSnapshot(resolved)
+	if model.Picker.Approval != nil {
+		t.Fatalf("resolved approval remained after snapshot: %#v", model.Picker.Approval)
 	}
 }
 
@@ -145,6 +167,37 @@ func TestQueueUpdateReplacesProjectedRuntimeQueues(t *testing.T) {
 	}
 	if got, want := next.InFlight.QueuedTurns, []string{"continue later"}; !equalStrings(got, want) {
 		t.Fatalf("turn projection = %#v, want %#v", got, want)
+	}
+}
+
+func TestInitialSubscriptionRehydratesPendingApproval(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	sub := &agent.EventSubscription{
+		Snapshot: agent.RuntimeSnapshot{
+			Phase: agent.PhaseAwaitingApproval,
+			PendingApprovals: []session.ApprovalRequest{{
+				ID:       "approval-1",
+				ToolName: "write",
+				Resource: "config.toml",
+			}},
+		},
+		Events: make(chan agent.EventEnvelope),
+	}
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(runtimeSubscriptionMsg{
+		generation:   1,
+		subscription: sub,
+	})
+	if !handled {
+		t.Fatal("initial subscription was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("initial subscription did not start event consumption")
+	}
+	if next.Picker.Approval == nil || next.Picker.Approval.request.ID != "approval-1" ||
+		next.Progress.Mode != StateWorking || next.Progress.Status != "Awaiting approval..." {
+		t.Fatalf("initial approval projection = %#v progress=%#v", next.Picker.Approval, next.Progress)
 	}
 }
 
@@ -206,6 +259,32 @@ func TestAwaitSessionEventDeduplicatesActiveReader(t *testing.T) {
 	}
 }
 
+func TestClosedSubscriptionResultSettlesBusyTurnAndClearsApproval(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.InFlight.Thinking = true
+	model.Progress.Mode = StateStreaming
+	model.Progress.Status = "Streaming..."
+	model.Picker.Approval = &approvalPromptState{
+		request: session.ApprovalRequest{ID: "approval-1"},
+	}
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(runtimeSubscriptionMsg{
+		generation: 1,
+		err:        agent.ErrRuntimeClosed,
+	})
+	if !handled {
+		t.Fatal("closed subscription result was not handled")
+	}
+	if cmd == nil || next.Progress.Mode != StateError || next.Picker.Approval != nil {
+		t.Fatalf(
+			"closed subscription projection = %#v/%#v, want terminal error without approval",
+			next.Progress,
+			next.Picker.Approval,
+		)
+	}
+}
+
 func TestStreamClosedSettlesBusyTurnAndSurfacesError(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1
@@ -213,6 +292,9 @@ func TestStreamClosedSettlesBusyTurnAndSurfacesError(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.Progress.Mode = StateStreaming
 	model.Progress.Status = "Streaming..."
+	model.Picker.Approval = &approvalPromptState{
+		request: session.ApprovalRequest{ID: "stale-approval"},
+	}
 
 	next, cmd, handled := model.dispatchTurnControllerMessage(streamClosedMsg{
 		generation: 1,
@@ -229,6 +311,9 @@ func TestStreamClosedSettlesBusyTurnAndSurfacesError(t *testing.T) {
 	}
 	if next.InFlight.Thinking || next.localCommandBusy() {
 		t.Fatalf("closed runtime left busy projection: in-flight=%#v progress=%#v", next.InFlight, next.Progress)
+	}
+	if next.Picker.Approval != nil {
+		t.Fatalf("closed runtime retained approval prompt: %#v", next.Picker.Approval)
 	}
 	if next.Progress.Mode != StateError || next.Progress.Status != "Runtime closed" {
 		t.Fatalf("closed runtime progress = %#v, want terminal error", next.Progress)

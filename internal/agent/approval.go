@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ type approvalOutcome struct {
 type pendingApproval struct {
 	request session.ApprovalRequest
 	result  chan approvalOutcome
+	order   uint64
 }
 
 // ApprovalBroker owns the pending-decision protocol for one Controller. It is
@@ -118,15 +120,19 @@ func (b *ApprovalBroker) request(ctx context.Context, req session.ApprovalReques
 		}
 	}
 	b.nextID++
+	req = cloneApprovalRequest(req)
 	req.ID = fmt.Sprintf("approval-%d", b.nextID)
 	if req.Timestamp.IsZero() {
 		req.Timestamp = time.Now()
 	}
-	pending := pendingApproval{request: req, result: make(chan approvalOutcome, 1)}
+	pending := pendingApproval{request: req, result: make(chan approvalOutcome, 1), order: b.nextID}
 	b.pending[req.ID] = pending
+	// Publish while holding the broker lock. Snapshot capture takes the same
+	// lock, so a request cannot appear in a resync without its event already
+	// having an ordered place in the runtime stream. Keep the event detached
+	// from the broker-owned request slices as well.
+	b.emitEvent(cloneApprovalRequest(req))
 	b.mu.Unlock()
-
-	b.emitEvent(req)
 	select {
 	case outcome := <-pending.result:
 		return outcome
@@ -143,6 +149,34 @@ func (b *ApprovalBroker) request(ctx context.Context, req session.ApprovalReques
 		})
 		return <-pending.result
 	}
+}
+
+// snapshot returns every currently pending request in deterministic ID order.
+// The broker remains the authority; callers receive detached request values so
+// resync cannot expose mutable broker-owned slices.
+func (b *ApprovalBroker) snapshot() []session.ApprovalRequest {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	type orderedRequest struct {
+		request session.ApprovalRequest
+		order   uint64
+	}
+	ordered := make([]orderedRequest, 0, len(b.pending))
+	for _, pending := range b.pending {
+		ordered = append(ordered, orderedRequest{
+			request: cloneApprovalRequest(pending.request),
+			order:   pending.order,
+		})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
+	requests := make([]session.ApprovalRequest, 0, len(ordered))
+	for _, pending := range ordered {
+		requests = append(requests, pending.request)
+	}
+	return requests
 }
 
 // Resolve supplies one host decision. Duplicate or unknown IDs are errors;
@@ -209,16 +243,22 @@ func (b *ApprovalBroker) finish(id string, outcome approvalOutcome) bool {
 	if outcome.decision == session.ApprovalAlways {
 		b.always[approvalKey(pending.request)] = struct{}{}
 	}
-	pending.result <- outcome
-	b.mu.Unlock()
-
+	// Publish before waking the tool worker so the lifecycle stream records the
+	// resolution before any resumed tool/execution events.
 	b.emitEvent(session.ApprovalResolution{
 		ID:        id,
 		Decision:  outcome.decision,
 		Reason:    outcome.reason,
 		Timestamp: time.Now(),
 	})
+	pending.result <- outcome
+	b.mu.Unlock()
 	return true
+}
+
+func cloneApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest {
+	req.Paths = append([]string(nil), req.Paths...)
+	return req
 }
 
 func (b *ApprovalBroker) emitEvent(event session.Event) {

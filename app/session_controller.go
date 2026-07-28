@@ -487,13 +487,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleToolExecEnd(msg)
 
 	case session.ApprovalRequest:
-		m.Picker.Approval = &approvalPromptState{request: msg}
+		m.addApprovalRequest(msg)
 		return m, m.awaitSessionEvent()
 
 	case session.ApprovalResolution:
-		if m.Picker.Approval != nil && m.Picker.Approval.request.ID == msg.ID {
-			m.Picker.Approval = nil
-		}
+		m.resolveApprovalRequest(msg.ID)
 		return m, m.awaitSessionEvent()
 
 	case *session.Error:
@@ -570,6 +568,7 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 func (m Model) handleStreamClosed(err error) (Model, tea.Cmd) {
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	m.turnReducer().ClearActiveState(true)
+	m.Picker.Approval = nil
 	m.turnReducer().RestoreRuntimePhase(agent.PhaseClosed)
 
 	message := "runtime event stream closed"

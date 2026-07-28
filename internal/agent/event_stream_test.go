@@ -62,6 +62,78 @@ func TestEventStreamDetachesSlowSubscriberAtBound(t *testing.T) {
 	}
 }
 
+func TestEventStreamResubscriptionRestoresPendingApproval(t *testing.T) {
+	h := NewController(ControllerConfig{
+		Session:             newTestSession(t),
+		ApprovalMode:        ApprovalConfirm,
+		ApprovalInteractive: true,
+	})
+	defer h.Close()
+
+	first, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := first.Snapshot.Cursor
+	requestDone := make(chan approvalOutcome, 1)
+	go func() {
+		requestDone <- h.approvals.Request(context.Background(), session.ApprovalRequest{
+			ToolName:  "write",
+			Operation: "write",
+			Resource:  "config.toml",
+			Paths:     []string{"config.toml"},
+		})
+	}()
+
+	event := receiveEvent(t, first)
+	request, ok := event.Event.(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("event = %T, want ApprovalRequest", event.Event)
+	}
+	first.Close()
+
+	second, err := h.Subscribe(context.Background(), initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Snapshot.Resynced {
+		t.Fatal("resubscription did not mark snapshot as resynced")
+	}
+	if second.Snapshot.Phase != PhaseAwaitingApproval {
+		t.Fatalf("resynced phase = %s, want awaiting approval", second.Snapshot.Phase)
+	}
+	if len(second.Snapshot.PendingApprovals) != 1 {
+		t.Fatalf("pending approvals = %#v, want one request", second.Snapshot.PendingApprovals)
+	}
+	pending := second.Snapshot.PendingApprovals[0]
+	if pending.ID != request.ID || pending.Resource != request.Resource ||
+		len(pending.Paths) != 1 || pending.Paths[0] != "config.toml" {
+		t.Fatalf("pending approval = %#v, want %#v", pending, request)
+	}
+	second.Close()
+
+	if err := h.ResolveApproval(request.ID, session.ApprovalDeny); err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	select {
+	case outcome := <-requestDone:
+		if outcome.decision != session.ApprovalDeny {
+			t.Fatalf("approval outcome = %q, want deny", outcome.decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for approval request")
+	}
+
+	third, err := h.Subscribe(context.Background(), second.Snapshot.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if len(third.Snapshot.PendingApprovals) != 0 {
+		t.Fatalf("resolved pending approvals = %#v, want none", third.Snapshot.PendingApprovals)
+	}
+}
+
 func TestEventStreamResubscriptionReturnsFreshSnapshot(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()

@@ -62,6 +62,7 @@ type deferredEnterMsg struct{}
 
 type approvalResolveMsg struct {
 	generation uint64
+	requestID  string
 	err        error
 }
 
@@ -341,8 +342,10 @@ type branchSummaryPromptState struct {
 }
 
 type approvalPromptState struct {
-	request   session.ApprovalRequest
-	resolving bool
+	request     session.ApprovalRequest
+	queued      []session.ApprovalRequest
+	resolving   bool
+	resolvingID string
 }
 
 // AppState holds general application and workspace metadata.

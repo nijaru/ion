@@ -118,6 +118,41 @@ func TestApprovalBrokerResolvesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestApprovalBrokerDetachesRequestPaths(t *testing.T) {
+	events := make(chan session.Event, 1)
+	broker := NewApprovalBroker(ApprovalConfirm, true, func(event session.Event) {
+		events <- event
+	})
+	result := make(chan approvalOutcome, 1)
+	paths := []string{"config.toml"}
+	go func() {
+		result <- broker.Request(context.Background(), session.ApprovalRequest{
+			ToolName: "write",
+			Paths:    paths,
+		})
+	}()
+
+	event := <-events
+	request, ok := event.(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("event = %T, want ApprovalRequest", event)
+	}
+	paths[0] = "caller-mutated.toml"
+	request.Paths[0] = "event-mutated.toml"
+	snapshot := broker.snapshot()
+	if len(snapshot) != 1 || len(snapshot[0].Paths) != 1 || snapshot[0].Paths[0] != "config.toml" {
+		t.Fatalf("snapshot = %#v, want detached original path", snapshot)
+	}
+	if err := broker.Resolve(request.ID, session.ApprovalDeny); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("approval request did not resolve")
+	}
+}
+
 func TestApprovalBrokerCancellationDenies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

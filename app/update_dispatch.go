@@ -317,6 +317,10 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 			if errors.Is(msg.err, agent.ErrSnapshotChanged) {
 				return m, m.awaitSessionEvent(), true
 			}
+			if errors.Is(msg.err, agent.ErrRuntimeClosed) {
+				next, cmd := m.handleStreamClosed(msg.err)
+				return next, cmd, true
+			}
 			next, cmd := m.handleSessionError(msg.err, false)
 			return next, cmd, true
 		}
@@ -329,9 +333,12 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		}
 		m.Model.EventSubscription = msg.subscription
 		m.Model.EventCursor = msg.subscription.Snapshot.Cursor
+		// The initial subscription can be established after the runtime has
+		// already entered an approval wait. Reconcile every authoritative
+		// snapshot; only a cursor-based recovery needs transcript replay.
+		m.applyAgentRuntimeSnapshot(msg.subscription.Snapshot)
 		var snapshotCmd tea.Cmd
 		if msg.subscription.Snapshot.Resynced {
-			m.applyAgentRuntimeSnapshot(msg.subscription.Snapshot)
 			snapshotCmd = m.terminalCommit().SwitchReplay(
 				nil,
 				msg.subscription.Snapshot.Branch,

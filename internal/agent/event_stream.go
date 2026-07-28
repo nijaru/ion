@@ -70,18 +70,21 @@ func queueMessageTexts(messages []session.Message) []string {
 
 // RuntimeSnapshot is the authoritative renderable runtime projection returned
 // when a subscription is opened or resynchronized. Branch is read at the
-// captured leaf; active fields are ephemeral controller state.
+// captured leaf; active fields are ephemeral controller state. Pending
+// approvals are included because an approval event can be missed during
+// subscription recovery while the tool remains blocked on the broker.
 type RuntimeSnapshot struct {
-	Cursor      EventCursor
-	Resynced    bool
-	SessionID   string
-	LeafID      string
-	Branch      []session.Entry
-	Phase       Phase
-	Model       llm.Model
-	Thinking    session.ThinkingLevel
-	ActiveTools []string
-	Queues      QueueSnapshot
+	Cursor           EventCursor
+	Resynced         bool
+	SessionID        string
+	LeafID           string
+	Branch           []session.Entry
+	Phase            Phase
+	Model            llm.Model
+	Thinking         session.ThinkingLevel
+	ActiveTools      []string
+	Queues           QueueSnapshot
+	PendingApprovals []session.ApprovalRequest
 }
 
 type eventSubscriptionState struct {
@@ -144,13 +147,25 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 			h.mu.Unlock()
 			return nil, ErrRuntimeClosed
 		}
+		pendingApprovals := []session.ApprovalRequest(nil)
+		if h.approvals != nil {
+			pendingApprovals = h.approvals.snapshot()
+		}
+		phase := h.phase
+		if len(pendingApprovals) > 0 {
+			// ApprovalBroker owns the pending decision while the turn worker is
+			// blocked; expose the renderable phase even though the controller's
+			// command-owned phase remains Streaming until the worker resumes.
+			phase = PhaseAwaitingApproval
+		}
 		snapshot := RuntimeSnapshot{
-			SessionID:   h.session.ID(),
-			LeafID:      h.session.GetLeafID(),
-			Phase:       h.phase,
-			Model:       h.model,
-			Thinking:    h.thinking,
-			ActiveTools: append([]string(nil), h.active...),
+			SessionID:        h.session.ID(),
+			LeafID:           h.session.GetLeafID(),
+			Phase:            phase,
+			Model:            h.model,
+			Thinking:         h.thinking,
+			ActiveTools:      append([]string(nil), h.active...),
+			PendingApprovals: pendingApprovals,
 			Queues: QueueSnapshot{
 				Steer:    append([]session.Message(nil), h.steer...),
 				FollowUp: append([]session.Message(nil), h.followUp...),

@@ -75,6 +75,39 @@ func TestApprovalPromptRendersAndResolvesAlways(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptQueuesPendingRequestsAcrossResolutions(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.handleSessionEvent(session.ApprovalRequest{
+		ID:       "approval-a",
+		ToolName: "write",
+		Resource: "a.txt",
+	})
+	model = testModel(t, updated)
+	updated, _ = model.handleSessionEvent(session.ApprovalRequest{
+		ID:       "approval-b",
+		ToolName: "write",
+		Resource: "b.txt",
+	})
+	model = testModel(t, updated)
+	if model.Picker.Approval == nil || model.Picker.Approval.request.ID != "approval-a" ||
+		len(model.Picker.Approval.queued) != 1 || model.Picker.Approval.queued[0].ID != "approval-b" {
+		t.Fatalf("approval queue = %#v, want a then b", model.Picker.Approval)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ApprovalResolution{ID: "approval-a"})
+	model = testModel(t, updated)
+	if model.Picker.Approval == nil || model.Picker.Approval.request.ID != "approval-b" ||
+		len(model.Picker.Approval.queued) != 0 || model.Picker.Approval.resolving {
+		t.Fatalf("after first resolution = %#v, want b ready", model.Picker.Approval)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ApprovalResolution{ID: "approval-b"})
+	if updated.Picker.Approval != nil {
+		t.Fatalf("approval queue remained after final resolution: %#v", updated.Picker.Approval)
+	}
+}
+
 func TestStaleApprovalResolutionCannotCancelNewRuntime(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2
