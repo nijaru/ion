@@ -623,6 +623,22 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.Settled:
 		return m.handleSettled(msg)
 
+	case session.RuntimeReady:
+		// A user turn may be accepted between the operation result and this
+		// lifecycle event. That turn owns cancellation, buffers, and queues; do
+		// not let an older exclusive-operation completion clear them.
+		if m.Model.turnCancellation != nil || m.InFlight.AwaitingSettlement || m.Progress.Compacting ||
+			len(m.InFlight.QueuedSteering) > 0 || len(m.InFlight.QueuedTurns) > 0 {
+			return m, m.awaitSessionEvent()
+		}
+		m.InFlight.Thinking = false
+		m.InFlight.Canceling = false
+		m.InFlight.AgentCommitted = false
+		m.Progress.Compacting = false
+		m.Progress.Mode = StateReady
+		m.Progress.Status = ""
+		return m, m.awaitSessionEvent()
+
 	case session.Abort:
 		return m.handleAbort(msg)
 

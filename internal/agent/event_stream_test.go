@@ -6,8 +6,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
+
+type blockingModelChangeSession struct {
+	session.Session
+	started chan struct{}
+	release chan struct{}
+}
+
+type blockingBranchSession struct {
+	session.Session
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingModelChangeSession) AppendModelChange(
+	ctx context.Context,
+	provider, modelID string,
+) (string, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+		return s.Session.AppendModelChange(ctx, provider, modelID)
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
 
 func TestEventStreamBroadcastsIndependentOrderedSubscriptions(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t)})
@@ -131,6 +157,174 @@ func TestEventStreamResubscriptionRestoresPendingApproval(t *testing.T) {
 	defer third.Close()
 	if len(third.Snapshot.PendingApprovals) != 0 {
 		t.Fatalf("resolved pending approvals = %#v, want none", third.Snapshot.PendingApprovals)
+	}
+}
+
+func TestEventStreamExclusiveSnapshotSettlesAfterPersistence(t *testing.T) {
+	base := newTestSession(t)
+	blocking := &blockingModelChangeSession{
+		Session: base,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{
+		Session: blocking,
+		Model:   llm.Model{Provider: "old-provider", ID: "old-model"},
+	})
+	defer h.Close()
+
+	initial, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initial.Close()
+
+	setModelDone := make(chan error, 1)
+	go func() {
+		setModelDone <- h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("model persistence did not start")
+	}
+
+	recovery, err := h.Subscribe(context.Background(), initial.Snapshot.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovery.Close()
+	if recovery.Snapshot.Phase != PhasePersisting {
+		t.Fatalf("in-flight recovery phase = %s, want persisting", recovery.Snapshot.Phase)
+	}
+
+	close(blocking.release)
+	select {
+	case err := <-setModelDone:
+		if err != nil {
+			t.Fatalf("SetModel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SetModel did not finish")
+	}
+
+	var ready EventEnvelope
+	for {
+		select {
+		case envelope := <-recovery.Events:
+			if _, ok := envelope.Event.(session.RuntimeReady); ok {
+				ready = envelope
+				goto readyEvent
+			}
+		case <-time.After(time.Second):
+			t.Fatal("recovery subscription did not receive RuntimeReady")
+		}
+	}
+
+readyEvent:
+	fresh, err := h.Subscribe(context.Background(), EventCursor{
+		Stream: ready.Stream,
+		Next:   ready.Sequence + 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if fresh.Snapshot.Phase != PhaseReady {
+		t.Fatalf("fresh snapshot phase = %s, want ready", fresh.Snapshot.Phase)
+	}
+	if fresh.Snapshot.Model.ID != "new-model" {
+		t.Fatalf("fresh snapshot model = %q, want new-model", fresh.Snapshot.Model.ID)
+	}
+}
+
+func TestCloseCancelsIdleModelPersistence(t *testing.T) {
+	blocking := &blockingModelChangeSession{
+		Session: newTestSession(t),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{
+		Session: blocking,
+		Model:   llm.Model{Provider: "old-provider", ID: "old-model"},
+	})
+
+	setModelDone := make(chan error, 1)
+	go func() {
+		setModelDone <- h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("model persistence did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- h.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel idle model persistence")
+	}
+	select {
+	case err := <-setModelDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SetModel error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SetModel did not settle after Close")
+	}
+}
+
+func (s *blockingBranchSession) BranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+		return s.Session.BranchAt(ctx, leafID)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestCloseCancelsBlockedSubscription(t *testing.T) {
+	blocking := &blockingBranchSession{
+		Session: newTestSession(t),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{Session: blocking})
+
+	subscribeDone := make(chan error, 1)
+	go func() {
+		_, err := h.Subscribe(context.Background(), EventCursor{})
+		subscribeDone <- err
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("subscription branch read did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- h.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel blocked subscription")
+	}
+	select {
+	case err := <-subscribeDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Subscribe error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Subscribe did not settle after Close")
 	}
 }
 

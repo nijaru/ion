@@ -395,8 +395,8 @@ func (c *Controller) handleCompact(cmd *CompactCmd) {
 		return
 	}
 	c.startOperation(func() {
-		defer finish()
 		result := c.requestRuntime(cmd.Ctx, runtimeRequest{kind: runtimeCompact, force: true})
+		finish()
 		sendResult(cmd.Reply, result.err)
 	})
 }
@@ -931,7 +931,14 @@ func (c *Controller) Compact(ctx context.Context) error {
 	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &CompactCmd{Ctx: ctx, Reply: reply}
-	return c.enqueueSync(ctx, cmd, reply)
+	// Compaction owns the runtime busy barrier until its operation worker
+	// acknowledges completion. Once accepted, wait for that authoritative
+	// result rather than allowing caller cancellation to release the app gate
+	// early.
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return err
+	}
+	return <-reply
 }
 
 // NavigateTree moves the active session leaf.

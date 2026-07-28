@@ -219,6 +219,10 @@ type Settled struct {
 	NextTurnCount int
 }
 
+// RuntimeReady is emitted after a non-turn exclusive operation returns the
+// runtime to ready. It is distinct from Settled because no agent turn ended.
+type RuntimeReady struct{}
+
 // SavePoint is emitted after turn_end flush, signaling all writes are durable.
 type SavePoint struct {
 	HadPendingMutations bool
@@ -235,6 +239,7 @@ func (ThinkingUpdate) isEvent() {}
 func (ToolsUpdate) isEvent()    {}
 func (QueueUpdate) isEvent()    {}
 func (Settled) isEvent()        {}
+func (RuntimeReady) isEvent()   {}
 func (SavePoint) isEvent()      {}
 func (Abort) isEvent()          {}
 

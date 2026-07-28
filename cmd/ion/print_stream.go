@@ -232,6 +232,10 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 		if err := o.emit(envelope, "settled", map[string]any{"next_turn_count": msg.NextTurnCount}); err != nil {
 			return false, err
 		}
+	case session.RuntimeReady:
+		if err := o.emit(envelope, "runtime_ready", nil); err != nil {
+			return false, err
+		}
 	case session.SavePoint:
 		if err := o.emit(
 			envelope,

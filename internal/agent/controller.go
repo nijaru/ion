@@ -1073,9 +1073,10 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 	copy(followUp, h.followUp)
 	nextTurn := make([]session.Message, len(h.nextTurn))
 	copy(nextTurn, h.nextTurn)
+	// Publish while holding h.mu so an exclusive operation cannot publish
+	// RuntimeReady between queue acceptance and this authoritative projection.
+	h.emitLocked(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	h.mu.Unlock()
-	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	h.wakeNextTurnStart()
 	return nil
 }
@@ -1213,7 +1214,9 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 		if err != nil {
 			return err
 		}
-		if _, err := sess.AppendModelChange(context.Background(), model.Provider, model.ID); err != nil {
+		persistCtx, releasePersistCtx := h.runtimeBoundContext(context.Background())
+		defer releasePersistCtx()
+		if _, err := sess.AppendModelChange(persistCtx, model.Provider, model.ID); err != nil {
 			finish()
 			return fmt.Errorf("persist model change: %w", err)
 		}
@@ -1252,12 +1255,42 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 	return nil
 }
 
+func (h *Controller) setThinkingAtIdle(
+	ctx context.Context,
+	sess session.Session,
+	level session.ThinkingLevel,
+) error {
+	if sess == nil {
+		return errors.New("harness has no session")
+	}
+	finish, err := h.beginExclusive(PhasePersisting)
+	if err != nil {
+		return err
+	}
+	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
+	defer releasePersistCtx()
+	if _, err := sess.AppendThinkingLevelChange(persistCtx, level); err != nil {
+		finish()
+		return fmt.Errorf("persist thinking level: %w", err)
+	}
+	h.mu.Lock()
+	previous := h.thinking
+	h.thinking = level
+	h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
+	h.mu.Unlock()
+	finish()
+	return nil
+}
+
 // SetThinking changes the thinking level. Idle changes are durable before the
 // live value changes so the next Prompt cannot restore the previous tree value.
 // Active changes are buffered for the next turn boundary.
 func (h *Controller) setThinkingDirect(ctx context.Context, level session.ThinkingLevel) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	h.mu.Lock()
 	if h.closed {
@@ -1273,27 +1306,24 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 	sess := h.session
 	h.mu.Unlock()
 	if idle {
-		if sess == nil {
-			return errors.New("harness has no session")
-		}
-		finish, err := h.beginExclusive(PhaseReady)
-		if err != nil {
-			return err
-		}
-		if _, err := sess.AppendThinkingLevelChange(ctx, level); err != nil {
-			finish()
-			return fmt.Errorf("persist thinking level: %w", err)
-		}
-		h.mu.Lock()
-		previous := h.thinking
-		h.thinking = level
-		h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
-		h.mu.Unlock()
-		finish()
-		return nil
+		return h.setThinkingAtIdle(ctx, sess, level)
 	}
 
 	h.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		h.mu.Unlock()
+		return err
+	}
+	if h.phase == PhaseReady {
+		sess = h.session
+		h.mu.Unlock()
+		return h.setThinkingAtIdle(ctx, sess, level)
+	}
+	if h.phase != PhaseReady && !h.phase.acceptsTurnInput() {
+		phase := h.phase
+		h.mu.Unlock()
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
+	}
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
@@ -1384,7 +1414,9 @@ func (h *Controller) setToolsDirect(tools []Tool, active []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := sess.AppendActiveToolsChange(context.Background(), active); err != nil {
+		persistCtx, releasePersistCtx := h.runtimeBoundContext(context.Background())
+		defer releasePersistCtx()
+		if _, err := sess.AppendActiveToolsChange(persistCtx, active); err != nil {
 			finish()
 			return fmt.Errorf("persist active tools: %w", err)
 		}
@@ -1428,10 +1460,17 @@ func (h *Controller) activateToolsDirect(ctx context.Context, names []string) er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		h.mu.Unlock()
+		return err
 	}
 	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
 		phase := h.phase
@@ -1491,11 +1530,13 @@ func (h *Controller) activateToolsDirect(ctx context.Context, names []string) er
 	if sess == nil {
 		return errors.New("harness has no session")
 	}
-	finish, err := h.beginExclusive(PhaseReady)
+	finish, err := h.beginExclusive(PhasePersisting)
 	if err != nil {
 		return err
 	}
-	if _, err := sess.AppendActiveToolsChange(ctx, updated); err != nil {
+	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
+	defer releasePersistCtx()
+	if _, err := sess.AppendActiveToolsChange(persistCtx, updated); err != nil {
 		finish()
 		return fmt.Errorf("persist active tools: %w", err)
 	}

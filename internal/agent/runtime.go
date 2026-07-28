@@ -419,6 +419,25 @@ func commandContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// runtimeBoundContext combines a caller context with the controller lifetime.
+// Host-owned persistence must observe Close even when its public API has no
+// caller context or the caller passed context.Background().
+func (c *Controller) runtimeBoundContext(parent context.Context) (context.Context, func()) {
+	parent = commandContext(parent)
+	c.mu.Lock()
+	runtimeContext := c.runtimeContext
+	c.mu.Unlock()
+	if runtimeContext == nil {
+		return parent, func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(runtimeContext, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
 func waitCommandReply[T any](ctx context.Context, reply <-chan T) (T, error) {
 	ctx = commandContext(ctx)
 	select {
@@ -555,6 +574,7 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 	return func() {
 		c.mu.Lock()
 		if c.runDone == done {
+			ready := c.phase == phase && phase == PhasePersisting
 			if c.phase == phase {
 				c.phase = PhaseReady
 			}
@@ -563,6 +583,15 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 			c.activeTurnToken = 0
 			close(done)
 			c.runDone = nil
+			// Exclusive persistence operations share the runtime's busy phase
+			// with turn finalization. Publish the return to ready after the
+			// operation completes so a subscriber that captured the busy snapshot
+			// cannot remain stuck there without a lifecycle event. This is not a
+			// turn settlement: no AgentEnd occurred, so use the operation-specific
+			// RuntimeReady event instead of Settled.
+			if ready && !c.closed {
+				c.emitLocked(session.RuntimeReady{})
+			}
 		}
 		c.mu.Unlock()
 		c.wakeNextTurnStart()
@@ -754,7 +783,14 @@ func (c *Controller) SetThinking(ctx context.Context, level session.ThinkingLeve
 	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &SetThinkingCmd{Ctx: ctx, Level: level, Reply: reply}
-	return c.enqueueSync(ctx, cmd, reply)
+	// Once accepted, setter mutation has one authoritative outcome. Wait for
+	// the command result instead of returning early on caller cancellation;
+	// the handler checks the context before mutation and persistence is bound to
+	// the same runtime lifetime.
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return err
+	}
+	return <-reply
 }
 
 // SetTools updates the complete tool registry and active set.
@@ -772,7 +808,10 @@ func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
 	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	cmd := &ActivateToolsCmd{Ctx: ctx, Names: names, Reply: reply}
-	return c.enqueueSync(ctx, cmd, reply)
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return err
+	}
+	return <-reply
 }
 
 // Close initiates shutdown. This is a direct operation (not through the

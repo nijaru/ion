@@ -417,6 +417,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		session.ApprovalResolution,
 		session.QueueUpdate,
 		session.Settled,
+		session.RuntimeReady,
 		session.Abort,
 		session.SavePoint,
 		session.ProviderRetry,

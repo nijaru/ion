@@ -132,7 +132,12 @@ func (c *Controller) requestRuntime(ctx context.Context, request runtimeRequest)
 
 func runtimeMustComplete(kind runtimeOperation) bool {
 	switch kind {
-	case runtimePublish, runtimePersistMessage, runtimeFlushPending, runtimeFinalizeTurn, runtimeAbortTurn:
+	case runtimePublish,
+		runtimePersistMessage,
+		runtimeFlushPending,
+		runtimeFinalizeTurn,
+		runtimeAbortTurn,
+		runtimeCompact:
 		return true
 	default:
 		return false

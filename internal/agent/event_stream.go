@@ -137,9 +137,8 @@ type eventHub struct {
 // typed command queue and calls subscribeDirect from the command goroutine.
 
 func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*EventSubscription, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx, releaseContext := h.runtimeBoundContext(ctx)
+	defer releaseContext()
 	if h.eventHub == nil {
 		return nil, ErrRuntimeClosed
 	}

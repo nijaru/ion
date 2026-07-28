@@ -156,6 +156,71 @@ func TestAuthoritativeRuntimeSnapshotClearsStaleSelections(t *testing.T) {
 	}
 }
 
+func TestRuntimeReadyClearsExclusivePersistenceProjection(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Progress.Mode = StateWorking
+	model.Progress.Status = "Persisting..."
+
+	next, cmd := model.handleSessionEvent(session.RuntimeReady{})
+	if cmd == nil {
+		t.Fatal("RuntimeReady did not re-arm the event stream")
+	}
+	if next.InFlight.Thinking || next.Progress.Compacting ||
+		next.Progress.Mode != StateReady || next.Progress.Status != "" {
+		t.Fatalf("RuntimeReady projection = in-flight=%#v progress=%#v, want ready", next.InFlight, next.Progress)
+	}
+}
+
+func TestRuntimeReadyPreservesQueuedTurnHandoff(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{"queued"}
+	model.InFlight.Thinking = true
+	model.Progress.Mode = StateWorking
+
+	next, cmd := model.handleSessionEvent(session.RuntimeReady{})
+	if cmd == nil {
+		t.Fatal("RuntimeReady did not re-arm the event stream")
+	}
+	if !next.InFlight.Thinking || len(next.InFlight.QueuedTurns) != 1 || next.InFlight.QueuedTurns[0] != "queued" {
+		t.Fatalf("RuntimeReady cleared queued handoff: %#v", next.InFlight)
+	}
+}
+
+func TestRuntimeReadyDoesNotClearActiveCompaction(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Compacting = true
+	model.Progress.Mode = StateWorking
+	model.Progress.Status = "Compacting context..."
+
+	next, cmd := model.handleSessionEvent(session.RuntimeReady{})
+	if cmd == nil {
+		t.Fatal("RuntimeReady did not re-arm the event stream")
+	}
+	if !next.Progress.Compacting || next.Progress.Mode != StateWorking ||
+		next.Progress.Status != "Compacting context..." {
+		t.Fatalf("RuntimeReady cleared active compaction: %#v", next.Progress)
+	}
+}
+
+func TestRuntimeReadyDoesNotClearAcceptedTurnProjection(t *testing.T) {
+	model := readyModel(t)
+	state, _ := newTurnCancellationState(context.Background())
+	state.setToken(9)
+	state.markStarted()
+	model.Model.turnCancellation = state
+	model.InFlight.Thinking = true
+	model.InFlight.QueuedTurns = []string{"queued"}
+
+	next, cmd := model.handleSessionEvent(session.RuntimeReady{})
+	if cmd == nil {
+		t.Fatal("RuntimeReady did not re-arm the event stream")
+	}
+	if !next.InFlight.Thinking || len(next.InFlight.QueuedTurns) != 1 || next.InFlight.QueuedTurns[0] != "queued" {
+		t.Fatalf("RuntimeReady cleared accepted turn projection: %#v", next.InFlight)
+	}
+}
+
 func TestPersistingResyncDoesNotStickCompactingAfterSettled(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
