@@ -537,6 +537,7 @@ func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
 	m.InFlight.AgentCommitted = false
 	m.InFlight.Thinking = false
 	m.InFlight.Canceling = false
+	m.InFlight.AwaitingSettlement = false
 	m.Progress.Compacting = false
 	m.Progress.Mode = StateReady
 	m.Progress.Status = ""
@@ -647,6 +648,7 @@ func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
 	m.turnReducer().RecordFinishedTurnSummary(time.Now())
 	if terminalResponse || terminalFailure {
 		m.turnReducer().StopThinking()
+		m.turnReducer().MarkAwaitingSettlement()
 		m.Progress.Mode = StateReady
 		m.Progress.Status = ""
 	}

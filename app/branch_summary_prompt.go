@@ -139,6 +139,10 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 	if prompt == nil || m.Model.Runner == nil {
 		return m, nil
 	}
+	if m.localCommandBusy() {
+		prompt.err = m.localCommandBusyMessage("navigating the session tree")
+		return m, nil
+	}
 	prompt.navigating = true
 	prompt.err = ""
 	targetID := prompt.targetID

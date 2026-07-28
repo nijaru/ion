@@ -95,7 +95,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.clearPendingAction()
 			return m, m.updateComposer(msg)
 		}
-		if m.InFlight.Thinking {
+		if m.InFlight.Thinking || m.InFlight.AwaitingSettlement {
 			m.clearPendingAction()
 			return m, nil
 		}
@@ -112,7 +112,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "esc":
 		// Double Escape opens tree/fork when idle.
-		if !m.InFlight.Thinking && m.Input.Pending == pendingActionNone {
+		if !m.InFlight.Thinking && !m.InFlight.AwaitingSettlement &&
+			m.Input.Pending == pendingActionNone {
 			now := time.Now()
 			if !m.Picker.LastEscAt.IsZero() && now.Sub(m.Picker.LastEscAt) < 500*time.Millisecond {
 				m.Picker.LastEscAt = time.Time{}
@@ -164,8 +165,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "alt+enter":
 		m.clearPendingAction()
-		if m.InFlight.Thinking {
-			// Queue follow-up message when agent is streaming
+		if m.InFlight.Thinking || m.InFlight.AwaitingSettlement {
+			// Queue follow-up message when agent is streaming or settling.
 			return m.queueFollowUp()
 		}
 		// When idle, insert newline

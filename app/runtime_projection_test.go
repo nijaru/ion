@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,6 +355,33 @@ func TestIntermediateTurnEndKeepsRuntimeBusyAcrossToolLoop(t *testing.T) {
 	afterNextStart, _ := afterEnd.handleTurnStarted(session.TurnStart{})
 	if got, want := afterNextStart.Model.TurnSubmitRequest, uint64(1); got != want {
 		t.Fatalf("tool-loop TurnStart advanced submit fence to %d, want %d", got, want)
+	}
+}
+
+func TestTerminalTurnEndBlocksRuntimeReplacementUntilSettled(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.InFlight.AgentCommitted = true
+
+	afterEnd, _ := model.handleTurnFinished(session.TurnEnd{})
+	if afterEnd.InFlight.Thinking {
+		t.Fatal("terminal TurnEnd should still allow the eager output projection")
+	}
+	if !afterEnd.InFlight.AwaitingSettlement || !afterEnd.localCommandBusy() {
+		t.Fatalf("terminal TurnEnd lost the settlement barrier: in-flight=%#v", afterEnd.InFlight)
+	}
+
+	_, cmd := afterEnd.handleCommand("/model model-b")
+	if cmd == nil {
+		t.Fatal("model replacement was accepted before Settled")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+		t.Fatalf("error = %v, want settlement barrier", err)
+	}
+
+	settled, _ := afterEnd.handleSettled(session.Settled{})
+	if settled.InFlight.AwaitingSettlement || settled.localCommandBusy() {
+		t.Fatalf("Settled retained the settlement barrier: in-flight=%#v", settled.InFlight)
 	}
 }
 

@@ -48,6 +48,24 @@ func TestBranchSummaryPromptPassesCustomInstructionsToRunner(t *testing.T) {
 	}
 }
 
+func TestBranchSummaryNavigationWaitsForSettlement(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Runner = &stubRunner{}
+	model.InFlight.AwaitingSettlement = true
+	model.Picker.BranchSummary = &branchSummaryPromptState{targetID: "target"}
+
+	next, cmd := model.handleBranchSummaryPromptKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("branch navigation started before settlement")
+	}
+	if next.Picker.BranchSummary == nil || next.Picker.BranchSummary.navigating {
+		t.Fatalf("branch prompt = %#v, want navigation blocked", next.Picker.BranchSummary)
+	}
+	if !strings.Contains(next.Picker.BranchSummary.err, "Finish or cancel the current turn") {
+		t.Fatalf("branch prompt error = %q, want settlement barrier", next.Picker.BranchSummary.err)
+	}
+}
+
 func TestBranchSummaryPromptCancelReturnsToTree(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Runner = &stubRunner{}

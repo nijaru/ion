@@ -602,9 +602,14 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	waitForAcceptanceOutput(t, output, "model-b-output", "model-b runtime output")
 	waitForAcceptanceIdle(t, switchResult.runner)
 
-	program.Send(tea.KeyPressMsg{Text: "/resume " + leafID})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForAcceptanceOutput(t, output, "--- resumed ---", "session resume replay boundary")
+	sendAcceptanceCommandAfterSettlement(
+		t,
+		program,
+		output,
+		"/resume "+leafID,
+		"--- resumed ---",
+		"session resume replay boundary",
+	)
 	resumeResult := waitAcceptanceRuntimeSwitch(t, switches, "model-a")
 	if resumeResult.leafID != leafID {
 		t.Fatalf("resume leaf = %q, want selected leaf %q", resumeResult.leafID, leafID)
@@ -860,6 +865,36 @@ func waitForAcceptanceTreeCursor(t *testing.T, output *acceptanceBuffer, entry s
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for tree cursor on %q\noutput:\n%s", title, output.String())
+}
+
+func sendAcceptanceCommandAfterSettlement(
+	t *testing.T,
+	program *tea.Program,
+	output *acceptanceBuffer,
+	command, success, label string,
+) {
+	t.Helper()
+	guard := "Error: Finish or cancel the current turn before " + strings.Fields(command)[0]
+	successCount := strings.Count(output.String(), success)
+	guardCount := strings.Count(output.String(), guard)
+	for attempt := 0; attempt < 3; attempt++ {
+		program.Send(tea.KeyPressMsg{Text: command})
+		program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			content := output.String()
+			if strings.Count(content, success) > successCount {
+				return
+			}
+			if strings.Count(content, guard) > guardCount {
+				guardCount = strings.Count(content, guard)
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, success, output.String())
 }
 
 func waitForAcceptanceOutputAfter(

@@ -147,6 +147,7 @@ func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Confi
 
 func (m Model) localCommandBusy() bool {
 	return m.InFlight.Thinking ||
+		m.InFlight.AwaitingSettlement ||
 		m.Progress.Compacting ||
 		m.Model.RuntimeSwitchRequest != 0 ||
 		m.Picker.SetupSaveRequest != 0 ||

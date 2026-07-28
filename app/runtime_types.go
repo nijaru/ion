@@ -35,15 +35,17 @@ type TurnSummary struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending               *session.Entry
-	PendingTools          map[string]session.Entry
-	CommittedAssistant    *session.Entry // assistant entry that survived tool clearing
-	ReasonBuf             string
-	StreamBuf             string
-	StreamChunks          []string
-	QueuedSteering        []string
-	QueuedTurns           []string
-	Thinking              bool
+	Pending            *session.Entry
+	PendingTools       map[string]session.Entry
+	CommittedAssistant *session.Entry // assistant entry that survived tool clearing
+	ReasonBuf          string
+	StreamBuf          string
+	StreamChunks       []string
+	QueuedSteering     []string
+	QueuedTurns        []string
+	Thinking           bool
+	// AwaitingSettlement keeps runtime replacement blocked after terminal output until Settled.
+	AwaitingSettlement    bool
 	Canceling             bool
 	AgentCommitted        bool
 	DrainUntilTurnStarted bool
@@ -432,6 +434,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 		return
 	}
 	t.inFlight.Thinking = false
+	t.inFlight.AwaitingSettlement = false
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
 	t.inFlight.CommittedAssistant = nil
@@ -461,6 +464,7 @@ func (t TurnReducer) ResetFinishedTurnSummary() {
 func (t TurnReducer) StartSubmit() {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = true
+		t.inFlight.AwaitingSettlement = false
 		t.inFlight.Canceling = false
 	}
 	if t.progress != nil {
@@ -472,6 +476,7 @@ func (t TurnReducer) StartSubmit() {
 func (t TurnReducer) RejectSubmit(reason string) {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = false
+		t.inFlight.AwaitingSettlement = false
 		t.inFlight.Canceling = false
 	}
 	if t.progress != nil {
@@ -537,6 +542,7 @@ func providerRetryStatus(msg session.ProviderRetry) string {
 func (t TurnReducer) StartTurn(now time.Time, ts time.Time) {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = true
+		t.inFlight.AwaitingSettlement = false
 		t.inFlight.Canceling = false
 	}
 	if t.progress != nil {
@@ -559,6 +565,8 @@ func (t TurnReducer) RestoreRuntimePhase(phase agent.Phase) {
 	if t.inFlight == nil || t.progress == nil {
 		return
 	}
+	// An authoritative snapshot supersedes the local eager-output barrier.
+	t.inFlight.AwaitingSettlement = false
 	switch phase {
 	case agent.PhaseReady, agent.PhaseSettled:
 		t.inFlight.Thinking = false
@@ -619,6 +627,12 @@ func (t TurnReducer) RestoreRuntimePhase(phase agent.Phase) {
 func (t TurnReducer) StopThinking() {
 	if t.inFlight != nil {
 		t.inFlight.Thinking = false
+	}
+}
+
+func (t TurnReducer) MarkAwaitingSettlement() {
+	if t.inFlight != nil {
+		t.inFlight.AwaitingSettlement = true
 	}
 }
 
