@@ -412,25 +412,36 @@ func (m Model) forkSessionFromPicker(parentID string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	m.pickerReducer().closeSession()
 	return m, func() tea.Msg {
 		sessionID, err := forker.ForkSession(ctx, parentID)
 		if err != nil {
-			return sessionForkedMsg{generation: generation, err: err}
+			return sessionForkedMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   err,
+			}
 		}
-		return sessionForkedMsg{generation: generation, sessionID: sessionID}
+		return sessionForkedMsg{
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			sessionID:             sessionID,
+		}
 	}
 }
 
 type sessionForkedMsg struct {
-	generation uint64
-	sessionID  string
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	sessionID             string
+	err                   error
 }
 
 func (m Model) handleSessionForked(msg sessionForkedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {

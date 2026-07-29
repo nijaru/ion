@@ -912,6 +912,25 @@ func TestStaleSessionForkCannotResumeNewRuntime(t *testing.T) {
 	}
 }
 
+func TestStaleSameRuntimeSessionForkCannotResumeNavigatedBranch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionForked(sessionForkedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		sessionID:             "old-branch-fork",
+	})
+	if cmd != nil {
+		t.Fatal("stale same-runtime session fork returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale same-runtime session fork resumed after navigation")
+	}
+}
+
 func TestSessionForkUsesRuntimeOperationContext(t *testing.T) {
 	model := readyModel(t)
 	runner := &recordingForkRunner{
@@ -920,6 +939,7 @@ func TestSessionForkUsesRuntimeOperationContext(t *testing.T) {
 	}
 	model.Model.Runner = runner
 	generation := model.Model.EventGeneration
+	treeNavigationRequest := model.Model.TreeNavigationRequest
 
 	next, cmd := model.forkSessionFromPicker("parent")
 	if cmd == nil {
@@ -934,8 +954,14 @@ func TestSessionForkUsesRuntimeOperationContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("fork command returned %T, want sessionForkedMsg", result)
 	}
-	if msg.generation != generation || msg.sessionID != "forked" {
-		t.Fatalf("fork result = %#v, want generation %d and forked session", msg, generation)
+	if msg.generation != generation ||
+		msg.treeNavigationRequest != treeNavigationRequest || msg.sessionID != "forked" {
+		t.Fatalf(
+			"fork result = %#v, want generation %d, navigation request %d, and forked session",
+			msg,
+			generation,
+			treeNavigationRequest,
+		)
 	}
 	if runner.forkContext != model.Model.runtimeContext {
 		t.Fatal("session fork did not receive the runtime operation context")
