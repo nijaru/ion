@@ -348,6 +348,52 @@ func TestSubscriptionRecoveryDefersUntilTreeNavigationSettles(t *testing.T) {
 	}
 }
 
+func TestSubscriptionRecoveryDefersCurrentNavigationSnapshot(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "selected-leaf"
+	model.Model.EventSubscriptionState.generation = 1
+	model.Picker.BranchSummary = &branchSummaryPromptState{navigating: true}
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(runtimeSubscriptionMsg{
+		generation:            1,
+		treeNavigationRequest: 2,
+		subscription: &agent.EventSubscription{
+			Snapshot: agent.RuntimeSnapshot{LeafID: "stale-leaf", Phase: agent.PhaseRecovering},
+			Events:   make(chan agent.EventEnvelope),
+		},
+	})
+	if !handled {
+		t.Fatal("current navigation subscription result was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("subscription recovery started while navigation was active")
+	}
+	if next.Model.LeafID != "selected-leaf" || next.Progress.Mode != StateReady {
+		t.Fatalf("navigation snapshot changed projection: leaf=%q progress=%#v", next.Model.LeafID, next.Progress)
+	}
+	if state := next.Model.EventSubscriptionState; state == nil || !state.retryAfterNavigation {
+		t.Fatalf("subscription state = %#v, want retry after navigation", state)
+	}
+
+	next, cmd = next.handleTreePickerMove(treePickerMoveMsg{
+		generation: 1,
+		requestID:  2,
+		leafID:     "selected-leaf",
+	})
+	if cmd == nil {
+		t.Fatal("navigation completion did not rearm deferred subscription recovery")
+	}
+	if next.Model.TreeNavigationRequest != 3 || next.Model.LeafID != "selected-leaf" {
+		t.Fatalf(
+			"navigation projection = leaf %q/epoch %d, want selected-leaf/3",
+			next.Model.LeafID,
+			next.Model.TreeNavigationRequest,
+		)
+	}
+}
+
 func TestInitialSubscriptionRehydratesPendingApproval(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1

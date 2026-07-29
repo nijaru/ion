@@ -305,6 +305,16 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 			}
 			return m, nil, true
 		}
+		if m.Picker.BranchSummary != nil && m.Picker.BranchSummary.navigating {
+			if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
+				state.pending = false
+				state.retryAfterNavigation = true
+			}
+			if msg.subscription != nil {
+				msg.subscription.Close()
+			}
+			return m, nil, true
+		}
 		if msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 			if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
 				state.pending = false
