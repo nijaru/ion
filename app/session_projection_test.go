@@ -142,9 +142,10 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 		t.Fatalf("usage projection context = %v, want supplied context", runner.projectionCtx)
 	}
 
+	model.Model.TreeNavigationRequest = 3
 	costMsg, ok := model.sessionCostCmd()().(sessionCostMsg)
 	if !ok || costMsg.generation != model.Model.EventGeneration ||
-		!strings.Contains(costMsg.notice, "cost: $0.400000") {
+		costMsg.treeNavigationRequest != 3 || !strings.Contains(costMsg.notice, "cost: $0.400000") {
 		t.Fatalf("cost message = %#v, want runtime projection cost", model.sessionCostCmd()())
 	}
 	if storage.reads != 0 {

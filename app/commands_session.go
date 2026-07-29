@@ -347,7 +347,8 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 }
 
 func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -393,6 +394,7 @@ func (m Model) sessionCostCmd() tea.Cmd {
 	storage := m.Model.Storage
 	progress := m.Progress
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
 		inputTokens := progress.TokensSent
@@ -402,8 +404,9 @@ func (m Model) sessionCostCmd() tea.Cmd {
 			projection, err := loadSessionProjection(ctx, runner, storage)
 			if err != nil {
 				return sessionCostMsg{
-					generation: generation,
-					err:        fmt.Errorf("failed to load active session usage: %w", err),
+					generation:            generation,
+					treeNavigationRequest: treeNavigationRequest,
+					err:                   fmt.Errorf("failed to load active session usage: %w", err),
 				}
 			}
 			inputTokens = projection.Usage.Input
@@ -414,30 +417,42 @@ func (m Model) sessionCostCmd() tea.Cmd {
 			if m.Model.Config != nil &&
 				(m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
 				return sessionCostMsg{
-					generation: generation,
-					notice:     m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+					generation:            generation,
+					treeNavigationRequest: treeNavigationRequest,
+					notice:                m.costBudgetNotice(inputTokens, outputTokens, totalCost),
 				}
 			}
-			return sessionCostMsg{generation: generation, notice: "No API cost tracked for this session"}
+			return sessionCostMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				notice:                "No API cost tracked for this session",
+			}
 		}
 		return sessionCostMsg{
-			generation: generation,
-			notice:     m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			notice:                m.costBudgetNotice(inputTokens, outputTokens, totalCost),
 		}
 	}
 }
 
 func (m Model) sessionInfoCmd() tea.Cmd {
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
 		notice, err := m.sessionInfoNotice(ctx)
 		if err != nil {
-			return localEntriesMsg{generation: generation, err: err}
+			return localEntriesMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   err,
+			}
 		}
 		return localEntriesMsg{
-			generation: generation,
-			entries:    []session.Entry{systemEntry(notice)},
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			entries:               []session.Entry{systemEntry(notice)},
 		}
 	}
 }

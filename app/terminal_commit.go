@@ -103,7 +103,8 @@ func (c terminalCommitController) SwitchReplay(
 }
 
 func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {

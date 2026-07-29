@@ -828,6 +828,34 @@ func TestStaleSessionUsageCannotOverwriteNavigatedBranch(t *testing.T) {
 	}
 }
 
+func TestStaleBranchSessionCommandsCannotRenderAfterNavigation(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd, handled := model.dispatchAppControlMessage(sessionCostMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		notice:                "old branch cost",
+	})
+	if !handled {
+		t.Fatal("stale session cost was not handled")
+	}
+	if cmd != nil || next.App.PrintedTranscript {
+		t.Fatalf("stale session cost = (cmd=%v, printed=%v), want ignored", cmd != nil, next.App.PrintedTranscript)
+	}
+
+	next, cmd = next.handleLocalEntries(localEntriesMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		entries:               []session.Entry{systemEntry("old branch session")},
+	})
+	if cmd != nil || next.App.PrintedTranscript {
+		t.Fatalf("stale session info = (cmd=%v, printed=%v), want ignored", cmd != nil, next.App.PrintedTranscript)
+	}
+}
+
 func TestStaleSessionInfoCannotRenderNewRuntime(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2

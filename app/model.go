@@ -177,9 +177,10 @@ type sessionCompactedMsg struct {
 }
 
 type sessionCostMsg struct {
-	generation uint64
-	notice     string
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	notice                string
+	err                   error
 }
 
 type sessionUsageLoadedMsg struct {
@@ -192,9 +193,10 @@ type sessionUsageLoadedMsg struct {
 }
 
 type localEntriesMsg struct {
-	generation uint64
-	entries    []session.Entry
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	entries               []session.Entry
+	err                   error
 }
 
 type terminalCommitLinesMsg struct {
