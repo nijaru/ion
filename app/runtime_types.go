@@ -706,7 +706,21 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 	return entry, completed, true
 }
 
-func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {}
+func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {
+	if t.progress == nil {
+		return
+	}
+	elapsed := time.Duration(0)
+	if !t.progress.TurnStartedAt.IsZero() && now.After(t.progress.TurnStartedAt) {
+		elapsed = now.Sub(t.progress.TurnStartedAt)
+	}
+	t.progress.LastTurnSummary = TurnSummary{
+		Elapsed: elapsed,
+		Input:   t.progress.CurrentTurnInput,
+		Output:  t.progress.CurrentTurnOutput,
+		Cost:    t.progress.CurrentTurnCost,
+	}
+}
 
 func (t TurnReducer) FinishTurnMode(completed bool) (session.Entry, bool) {
 	if t.inFlight == nil {

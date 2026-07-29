@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
@@ -65,4 +66,73 @@ func TestLocalErrorClearsPreviousTerminalErrorWhenIdle(t *testing.T) {
 	if next.Progress.Mode != StateReady || next.Progress.LastError != "" || next.Progress.Status != "" {
 		t.Fatalf("local error projection = %#v, want idle without stale error state", next.Progress)
 	}
+}
+
+func TestTurnReducerRecordsFinishedSummary(t *testing.T) {
+	model := readyModel(t)
+	started := time.Unix(100, 0)
+	model.Progress.TurnStartedAt = started
+	model.Progress.CurrentTurnInput = 120
+	model.Progress.CurrentTurnOutput = 45
+	model.Progress.CurrentTurnCost = 0.0123
+
+	model.turnReducer().RecordFinishedTurnSummary(started.Add(1500 * time.Millisecond))
+	want := TurnSummary{
+		Elapsed: 1500 * time.Millisecond,
+		Input:   120,
+		Output:  45,
+		Cost:    0.0123,
+	}
+	if model.Progress.LastTurnSummary != want {
+		t.Fatalf("last turn summary = %#v, want %#v", model.Progress.LastTurnSummary, want)
+	}
+}
+
+func TestTerminalTurnProjectsCompletionAndFailureUntilSettled(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		model := readyModel(t)
+		model.InFlight.Thinking = true
+		model.InFlight.AgentCommitted = true
+		model.InFlight.Pending = messageEntry(&session.AssistantMessage{})
+		model.Progress.TurnStartedAt = time.Now().Add(-time.Second)
+		model.Progress.CurrentTurnInput = 10
+		model.Progress.CurrentTurnOutput = 20
+
+		next, cmd := model.handleTurnFinished(session.TurnEnd{})
+		if cmd == nil || next.Progress.Mode != StateComplete {
+			t.Fatalf("completion projection = %#v, want complete with an event reader", next.Progress)
+		}
+		if next.Progress.LastTurnSummary.Input != 10 || next.Progress.LastTurnSummary.Output != 20 {
+			t.Fatalf("completion summary = %#v, want current turn usage", next.Progress.LastTurnSummary)
+		}
+		settled, _ := next.handleSettled(session.Settled{})
+		if settled.Progress.Mode != StateReady {
+			t.Fatalf("settled completion mode = %v, want ready", settled.Progress.Mode)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		model := readyModel(t)
+		model.InFlight.Thinking = true
+		model.InFlight.AgentCommitted = true
+		model.InFlight.Pending = messageEntry(&session.AssistantMessage{
+			StopReason: session.StopReasonError,
+			Error:      "provider unavailable",
+		})
+
+		next, cmd := model.handleTurnFinished(session.TurnEnd{})
+		if cmd == nil || next.Progress.Mode != StateError ||
+			next.Progress.LastError != "provider unavailable" {
+			t.Fatalf("failure projection = %#v, want provider error", next.Progress)
+		}
+		settled, _ := next.handleSettled(session.Settled{})
+		if settled.Progress.Mode != StateReady {
+			t.Fatalf("settled failure mode = %v, want ready", settled.Progress.Mode)
+		}
+	})
+}
+
+func messageEntry(message session.Message) *session.Entry {
+	var entry session.Entry = &session.MessageEntry{Message: message}
+	return &entry
 }

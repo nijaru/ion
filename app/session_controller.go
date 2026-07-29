@@ -855,12 +855,14 @@ func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
 		len(m.InFlight.QueuedSteering) == 0 && len(m.InFlight.QueuedTurns) == 0
 	var cmds []tea.Cmd
 	var terminalFailure bool
+	failureReason := ""
 
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
 	if printAssistant {
 		cmds = append(cmds, m.terminalCommit().Entries(assistant))
 		if errText := assistantErrorText(assistant); errText != "" {
 			terminalFailure = true
+			failureReason = errText
 			notice, _ := session.EntrySystem("Error: "+errText, time.Now())
 			cmds = append(cmds, m.terminalCommit().Entries(notice))
 		}
@@ -868,11 +870,23 @@ func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
 	if entry, ok := m.turnReducer().FinishTurnMode(assistantCompleted); ok {
 		cmds = append(cmds, m.terminalCommit().Entries(entry))
 	}
-	m.turnReducer().RecordFinishedTurnSummary(time.Now())
+	if !assistantCompleted {
+		terminalFailure = true
+		if failureReason == "" {
+			failureReason = "turn finished without assistant response"
+		}
+	}
 	if terminalResponse || terminalFailure {
+		if terminalFailure {
+			if m.Progress.Mode != StateError {
+				m.turnReducer().FailTurn(failureReason)
+			}
+		} else {
+			m.Progress.Mode = StateComplete
+		}
+		m.turnReducer().RecordFinishedTurnSummary(time.Now())
 		m.turnReducer().StopThinking()
 		m.turnReducer().MarkAwaitingSettlement()
-		m.Progress.Mode = StateReady
 		m.Progress.Status = ""
 	}
 
