@@ -98,9 +98,9 @@ func (m Model) handleBranchNavigationCancel(msg branchNavigationCancelMsg) (Mode
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
 	}
-	if m.Picker.BranchSummary != nil {
-		m.Picker.BranchSummary.navigating = false
-	}
+	// The cancellation command only canceled the navigation context. The
+	// navigation worker still owns the terminal result and must settle before
+	// the prompt becomes retryable or event recovery resumes.
 	return m, nil
 }
 

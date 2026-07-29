@@ -44,10 +44,11 @@ type runtimeSubscriptionMsg struct {
 // subscription result reaches the Bubble Tea update loop; duplicate readers
 // race on one event stream and make cursor recovery discard events.
 type eventSubscriptionState struct {
-	generation uint64
-	pending    bool
-	reader     uint64
-	readerBusy bool
+	generation           uint64
+	pending              bool
+	reader               uint64
+	readerBusy           bool
+	retryAfterNavigation bool
 }
 
 type streamClosedMsg struct {

@@ -517,6 +517,15 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 	return m.submitComposer()
 }
 
+func (m Model) retrySessionEventAfterNavigation() tea.Cmd {
+	state := m.Model.EventSubscriptionState
+	if state == nil || !state.retryAfterNavigation {
+		return nil
+	}
+	state.retryAfterNavigation = false
+	return m.awaitSessionEvent()
+}
+
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
 	treeNavigationRequest := m.Model.TreeNavigationRequest
@@ -1086,6 +1095,25 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 			leafID:                id,
 			info:                  info,
 		}
+	}
+}
+
+func (m Model) persistSessionCatalogInfoCmd(
+	generation uint64,
+	info *session.SessionInfoEntry,
+) tea.Cmd {
+	if info == nil || m.Model.SessionCatalog == nil {
+		return nil
+	}
+	catalog := m.Model.SessionCatalog
+	candidate := *info
+	ctx := m.runtimeOperationContext()
+	return func() tea.Msg {
+		var err error
+		if updateErr := catalog.UpdateSession(ctx, candidate); updateErr != nil {
+			err = fmt.Errorf("persist session info: %w", updateErr)
+		}
+		return runtimeCatalogUpdateMsg{generation: generation, err: err}
 	}
 }
 

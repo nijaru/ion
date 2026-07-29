@@ -613,6 +613,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 		state.generation = m.Model.EventGeneration
 		state.pending = false
 		state.readerBusy = false
+		state.retryAfterNavigation = false
 	}
 	m.pickerReducer().closeAll()
 	m.clearProgressError()

@@ -312,13 +312,17 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	m.clearTreeNavigationCancel()
 	if msg.cancelled || errors.Is(msg.err, context.Canceled) {
 		m.Picker.BranchSummary = nil
-		return m, m.terminalCommit().Entries(systemEntry("branch navigation cancelled"))
+		return m, sequenceCmds(
+			m.terminalCommit().Entries(systemEntry("branch navigation cancelled")),
+			m.retrySessionEventAfterNavigation(),
+		)
 	}
 	if msg.err != nil {
 		m.Picker.BranchSummary = nil
 		m = m.closeTreePicker()
-		return m, m.terminalCommit().Entries(
-			systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err)),
+		return m, sequenceCmds(
+			m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err))),
+			m.retrySessionEventAfterNavigation(),
 		)
 	}
 	// Close tree picker and replay entries from the new branch position. The
@@ -331,7 +335,10 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 		m.Model.LeafID = msg.leafID
 	}
 	m.Model.TreeNavigationRequest++
-	return m, m.replayCurrentBranch(m.Model.TreeNavigationRequest)
+	return m, sequenceCmds(
+		m.replayCurrentBranch(m.Model.TreeNavigationRequest),
+		m.retrySessionEventAfterNavigation(),
+	)
 }
 
 // replayCurrentBranch loads entries from the current session branch and replays them.

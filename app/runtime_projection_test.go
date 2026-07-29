@@ -31,6 +31,23 @@ type cancelAwareSessionCatalog struct {
 	listContext context.Context
 }
 
+type recordingSessionCatalog struct {
+	updates []session.SessionInfoEntry
+}
+
+func (c *recordingSessionCatalog) ListSessions(context.Context, string) ([]session.SessionInfoEntry, error) {
+	return nil, nil
+}
+
+func (c *recordingSessionCatalog) GetSessionInfo(context.Context, string) (session.SessionInfoEntry, error) {
+	return session.SessionInfoEntry{}, nil
+}
+
+func (c *recordingSessionCatalog) UpdateSession(_ context.Context, info session.SessionInfoEntry) error {
+	c.updates = append(c.updates, info)
+	return nil
+}
+
 func (c *cancelAwareSessionCatalog) ListSessions(ctx context.Context, _ string) ([]session.SessionInfoEntry, error) {
 	c.listContext = ctx
 	if c.listStarted == nil {
@@ -289,6 +306,45 @@ func TestStaleSubscriptionSnapshotCannotOverwriteNavigationProjection(t *testing
 	}
 	if next.Model.LeafID != "selected-leaf" {
 		t.Fatalf("stale subscription changed selected leaf to %q", next.Model.LeafID)
+	}
+}
+
+func TestSubscriptionRecoveryDefersUntilTreeNavigationSettles(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.EventSubscriptionState.generation = 1
+	model.Picker.BranchSummary = &branchSummaryPromptState{navigating: true}
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(runtimeSubscriptionMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		subscription: &agent.EventSubscription{
+			Snapshot: agent.RuntimeSnapshot{LeafID: "stale-leaf", Phase: agent.PhaseRecovering},
+			Events:   make(chan agent.EventEnvelope),
+		},
+	})
+	if !handled {
+		t.Fatal("stale subscription result was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("subscription recovery started while navigation was active")
+	}
+
+	next, cmd = next.handleTreePickerMove(treePickerMoveMsg{
+		generation: 1,
+		requestID:  2,
+		leafID:     "selected-leaf",
+	})
+	if cmd == nil {
+		t.Fatal("navigation completion did not rearm subscription recovery")
+	}
+	if next.Model.TreeNavigationRequest != 3 || next.Model.LeafID != "selected-leaf" {
+		t.Fatalf(
+			"navigation projection = leaf %q/epoch %d, want selected-leaf/3",
+			next.Model.LeafID,
+			next.Model.TreeNavigationRequest,
+		)
 	}
 }
 
@@ -888,11 +944,44 @@ func TestStaleSameRuntimeLeafSnapshotCannotOverwriteCurrentProjection(t *testing
 	if !handled {
 		t.Fatal("stale leaf snapshot was not handled")
 	}
-	if cmd != nil {
-		t.Fatal("stale leaf snapshot returned a catalog command")
+	if cmd == nil {
+		t.Fatal("stale leaf snapshot did not request a fresh projection")
 	}
 	if next.Model.LeafID != "selected-leaf" {
 		t.Fatalf("stale leaf snapshot changed selected leaf to %q", next.Model.LeafID)
+	}
+}
+
+func TestStaleLeafSnapshotStillPersistsItsCatalogMetadata(t *testing.T) {
+	model := readyModel(t)
+	catalog := &recordingSessionCatalog{}
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "selected-leaf"
+	model.Model.SessionCatalog = catalog
+
+	info := session.SessionInfoEntry{EntryBase: session.EntryBase{ID: "stale-leaf"}}
+	next, cmd, handled := model.dispatchAppControlMessage(runtimeLeafSnapshotMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		leafID:                "stale-leaf",
+		info:                  &info,
+	})
+	if !handled {
+		t.Fatal("stale leaf snapshot was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("stale leaf snapshot dropped its catalog update")
+	}
+	result, ok := cmd().(runtimeCatalogUpdateMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("catalog update result = %#v, want successful update", result)
+	}
+	if len(catalog.updates) != 1 || catalog.updates[0].ID() != "stale-leaf" {
+		t.Fatalf("catalog updates = %#v, want stale-leaf metadata", catalog.updates)
+	}
+	if next.Model.LeafID != "selected-leaf" {
+		t.Fatalf("stale catalog projection changed selected leaf to %q", next.Model.LeafID)
 	}
 }
 

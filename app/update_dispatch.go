@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/spinner"
@@ -131,29 +130,24 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case runtimeLeafSnapshotMsg:
-		if msg.generation != m.Model.EventGeneration ||
-			msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
+		if msg.generation != m.Model.EventGeneration {
 			return m, nil, true
+		}
+		if msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
+			if msg.info != nil && m.Model.SessionCatalog != nil {
+				return m, m.persistSessionCatalogInfoCmd(msg.generation, msg.info), true
+			}
+			if m.Picker.BranchSummary != nil && m.Picker.BranchSummary.navigating {
+				return m, nil, true
+			}
+			return m, m.awaitSessionEvent(), true
 		}
 		if msg.err != nil {
 			next, cmd := m.handleLocalError(msg.err)
 			return next, cmd, true
 		}
 		m.Model.LeafID = strings.TrimSpace(msg.leafID)
-		if msg.info == nil || m.Model.SessionCatalog == nil {
-			return m, nil, true
-		}
-		catalog := m.Model.SessionCatalog
-		info := *msg.info
-		ctx := m.runtimeOperationContext()
-		generation := msg.generation
-		return m, func() tea.Msg {
-			var err error
-			if updateErr := catalog.UpdateSession(ctx, info); updateErr != nil {
-				err = fmt.Errorf("persist session info: %w", updateErr)
-			}
-			return runtimeCatalogUpdateMsg{generation: generation, err: err}
-		}, true
+		return m, m.persistSessionCatalogInfoCmd(msg.generation, msg.info), true
 
 	case approvalResolveMsg:
 		next, cmd := m.handleApprovalResolve(msg)
@@ -314,9 +308,15 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		if msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 			if state := m.Model.EventSubscriptionState; state != nil && state.generation == msg.generation {
 				state.pending = false
+				if m.Picker.BranchSummary != nil && m.Picker.BranchSummary.navigating {
+					state.retryAfterNavigation = true
+				}
 			}
 			if msg.subscription != nil {
 				msg.subscription.Close()
+			}
+			if m.Picker.BranchSummary != nil && m.Picker.BranchSummary.navigating {
+				return m, nil, true
 			}
 			return m, m.awaitSessionEvent(), true
 		}

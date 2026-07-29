@@ -154,8 +154,19 @@ func TestBranchSummaryNavigationCancelUsesRequestContext(t *testing.T) {
 	}
 
 	next, _ := model.handleBranchNavigationCancel(msg)
-	if next.Picker.BranchSummary == nil || next.Picker.BranchSummary.navigating {
-		t.Fatalf("after cancellation result prompt = %#v, want retryable prompt", next.Picker.BranchSummary)
+	if next.Picker.BranchSummary == nil || !next.Picker.BranchSummary.navigating {
+		t.Fatalf(
+			"after cancellation request result prompt = %#v, want navigation still pending",
+			next.Picker.BranchSummary,
+		)
+	}
+	next, _ = next.handleTreePickerMove(treePickerMoveMsg{
+		generation: next.Model.EventGeneration,
+		requestID:  next.Model.TreeNavigationRequest,
+		cancelled:  true,
+	})
+	if next.Picker.BranchSummary != nil {
+		t.Fatalf("after cancellation settlement prompt = %#v, want closed", next.Picker.BranchSummary)
 	}
 }
 
