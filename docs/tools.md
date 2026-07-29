@@ -56,7 +56,17 @@ configured overrides.
 Skill tools are runtime-configured rather than silently enabled. Set
 `skill_tools = "read"` to register and expose `read_skill`; `tool_mode =
 "all"` also includes it in the complete tool surface. With the default skill
-mode, `/skills` and `ion skill list` remain host-side discovery only.
+mode, `/skills` and `ion skill list` remain host-side discovery only. Global
+skills are read from `~/.ion/skills`; project skills in `.ion/skills` are
+loaded only for a trusted project.
+
+Project-local instructions (`AGENTS.md`/`CLAUDE.md`), prompt templates in
+`.ion/prompts`, and skills in `.ion/skills` are untrusted until explicitly
+trusted. Pass `--trust` once from the project directory to persist trust for
+that directory and its descendants. Without trust, including in print mode,
+Ion skips those project-local resources while still loading global resources.
+Trusted project content supplies context only; it cannot grant trust, change
+runtime policy, or bypass the selected confirmation or sandbox mode.
 
 Background commands are managed by runtime-owned jobs. They are useful for dev
 servers, watchers, and long builds without blocking the agent turn:
@@ -85,9 +95,10 @@ compiler errors instead of returning only the command's head.
 
 External actions use the durable runtime action boundary. The default
 policy is trusted local execution; set `trust_mode = "confirm"` explicitly or
-pass `--trust-mode confirm` to require interactive confirmation. Confirmation
-and sandboxing are separate controls. Requirement-bearing tools are durably
-prepared and bound
+pass `--trust-mode confirm` to require interactive confirmation. Project trust
+(`--trust`) controls resource loading and is separate from execution policy.
+Confirmation and sandboxing are separate controls. Requirement-bearing tools
+are durably prepared and bound
 to their normalized operation fingerprint before the TUI offers allow, allow
 for the rest of the runtime, or deny. Denying produces a recoverable error
 result without running the tool. Print mode and shutdown fail closed because
@@ -218,10 +229,11 @@ recovery.
 
 The same boundary applies to Ion's skill primitives. Ion uses a validated
 skill registry plus `read_skill`; it owns prompt exposure and whether skill
-tools are model-visible at all. Project-trust gating for project-local
-instructions, prompts, and extensions is not yet implemented; do not treat
-repository content as a security authority. Ion's current `/skills` command is
-read-only discovery, not activation.
+tools are model-visible at all. Project-local instructions, prompts, and
+skills are loaded only after the host resolves persisted project trust; future
+local extensions have no dynamic loader. Without trust, repository content is
+not a security authority. Ion's current `/skills` command is read-only
+discovery, not activation.
 
 `/rewind` is a separate explicit checkpoint capability; writes and edits do not
 create checkpoints as a hidden side effect. Use `/rewind` to list recent

@@ -52,6 +52,23 @@ func TestLoadPromptTemplatesIncludesProjectDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadPromptTemplatesSkipsUntrustedProjectDirectory(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := filepath.Join(project, ".ion", "prompts")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "project.md"), []byte("project"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := loadPromptTemplates("")
+	if _, ok := got["project"]; ok {
+		t.Fatalf("untrusted templates = %#v, want project template omitted", got)
+	}
+}
+
 func TestLoadPromptTemplatesFromDirsMissingDirectoriesAreNonFatal(t *testing.T) {
 	got := loadPromptTemplatesFromDirs([]string{filepath.Join(t.TempDir(), "missing")})
 	if got != nil {

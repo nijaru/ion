@@ -2,12 +2,115 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/config"
+	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/tool"
 )
+
+func TestSkillDirsForRuntimeGatesProjectSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+
+	untrusted, err := skillDirsForRuntime("")
+	if err != nil {
+		t.Fatalf("untrusted skill dirs: %v", err)
+	}
+	if len(untrusted) != 1 || untrusted[0] != filepath.Join(home, ".ion", "skills") {
+		t.Fatalf("untrusted skill dirs = %#v", untrusted)
+	}
+
+	trusted, err := skillDirsForRuntime(project)
+	if err != nil {
+		t.Fatalf("trusted skill dirs: %v", err)
+	}
+	want := []string{filepath.Join(home, ".ion", "skills"), filepath.Join(project, ".ion", "skills")}
+	if len(trusted) != len(want) || trusted[0] != want[0] || trusted[1] != want[1] {
+		t.Fatalf("trusted skill dirs = %#v, want %#v", trusted, want)
+	}
+}
+
+func TestRuntimeSkillResourcesHonorProjectTrustAndIgnoreMalformedSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+
+	writeRuntimeSkill := func(path, name string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: test skill\n---\nInstructions.\n"
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalSkill := filepath.Join(home, ".ion", "skills", "global-skill", "SKILL.md")
+	projectSkill := filepath.Join(project, ".ion", "skills", "project-skill", "SKILL.md")
+	malformedSkill := filepath.Join(project, ".ion", "skills", "malformed", "SKILL.md")
+	writeRuntimeSkill(globalSkill, "global-skill")
+	writeRuntimeSkill(projectSkill, "project-skill")
+	duplicateGlobal := filepath.Join(home, ".ion", "skills", "duplicate", "SKILL.md")
+	duplicateProject := filepath.Join(project, ".ion", "skills", "duplicate", "SKILL.md")
+	writeRuntimeSkill(duplicateGlobal, "duplicate")
+	writeRuntimeSkill(duplicateProject, "duplicate")
+	if err := os.WriteFile(
+		duplicateProject,
+		[]byte("---\nname: duplicate\ndescription: project version\n---\nProject instructions.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(malformedSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(malformedSkill, []byte("not frontmatter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	untrustedDirs, err := skillDirsForRuntime("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedPrompt, err := ionskills.FormatSkillsForPrompt(untrustedDirs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(untrustedPrompt, "global-skill") || strings.Contains(untrustedPrompt, "project-skill") {
+		t.Fatalf("untrusted skills prompt = %q", untrustedPrompt)
+	}
+
+	trustedDirs, err := skillDirsForRuntime(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedPrompt, err := ionskills.FormatSkillsForPrompt(trustedDirs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(trustedPrompt, "global-skill") || !strings.Contains(trustedPrompt, "project-skill") {
+		t.Fatalf("trusted skills prompt = %q", trustedPrompt)
+	}
+	if !strings.Contains(trustedPrompt, "project version") ||
+		!strings.Contains(trustedPrompt, filepath.Join(project, ".ion", "skills", "duplicate", "SKILL.md")) {
+		t.Fatalf("trusted duplicate skill did not use project source: %q", trustedPrompt)
+	}
+	detail, err := ionskills.Read(trustedDirs, "duplicate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Instructions != "Project instructions." {
+		t.Fatalf("duplicate skill instructions = %q, want project source", detail.Instructions)
+	}
+	if strings.Contains(trustedPrompt, "malformed") {
+		t.Fatalf("malformed skill was loaded: %q", trustedPrompt)
+	}
+}
 
 func TestRuntimeCodingToolsConfigAppliesCredentialEnvironmentPolicy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -20,6 +123,7 @@ func TestRuntimeCodingToolsConfigAppliesCredentialEnvironmentPolicy(t *testing.T
 			ToolEnv:  "inherit_without_provider_keys",
 		},
 		t.TempDir(),
+		"",
 		nil,
 	)
 	if err != nil {
@@ -51,7 +155,7 @@ func TestRuntimeCodingToolsConfigInheritsEnvironmentByDefault(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("ION_RUNTIME_VISIBLE", "not-allowlisted")
 
-	codingConfig, err := runtimeCodingToolsConfig(&config.Config{}, t.TempDir(), nil)
+	codingConfig, err := runtimeCodingToolsConfig(&config.Config{}, t.TempDir(), "", nil)
 	if err != nil {
 		t.Fatalf("runtimeCodingToolsConfig error = %v", err)
 	}
@@ -91,7 +195,7 @@ func TestRuntimeCodingToolsConfigGatesSkillRegistration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			codingConfig, err := runtimeCodingToolsConfig(&tt.cfg, workdir, nil)
+			codingConfig, err := runtimeCodingToolsConfig(&tt.cfg, workdir, "", nil)
 			if err != nil {
 				t.Fatalf("runtimeCodingToolsConfig error = %v", err)
 			}

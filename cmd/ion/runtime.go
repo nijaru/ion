@@ -49,16 +49,16 @@ func closeRuntimeResourcesAfterError(openErr error, closeResources func() error)
 	return openErr
 }
 
-// loadPromptTemplates reads global and project-local .md prompt templates.
-// Global templates are loaded first and retain precedence on name collisions.
-func loadPromptTemplates(cwd string) map[string]string {
+// loadPromptTemplates reads trusted global and optional project-local .md prompt
+// templates. Global templates retain precedence on name collisions.
+func loadPromptTemplates(projectTrustRoot string) map[string]string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
 	dirs := []string{filepath.Join(home, ".ion", "prompts")}
-	if cwd != "" {
-		dirs = append(dirs, filepath.Join(cwd, ".ion", "prompts"))
+	if projectTrustRoot != "" {
+		dirs = append(dirs, filepath.Join(projectTrustRoot, ".ion", "prompts"))
 	}
 	return loadPromptTemplatesFromDirs(dirs)
 }
@@ -232,9 +232,23 @@ func activeToolNamesForModeWithSkills(
 	return active
 }
 
+func skillDirsForRuntime(projectTrustRoot string) ([]string, error) {
+	dir, err := config.DefaultSkillsDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve skills dir: %w", err)
+	}
+	dirs := []string{dir}
+	if projectTrustRoot != "" {
+		// Project skills take precedence over global skills with the same name.
+		dirs = append(dirs, filepath.Join(projectTrustRoot, ".ion", "skills"))
+	}
+	return dirs, nil
+}
+
 func runtimeCodingToolsConfig(
 	cfg *config.Config,
 	cwd string,
+	projectTrustRoot string,
 	jobs *tool.JobManager,
 ) (tool.CodingToolsConfig, error) {
 	if cfg == nil {
@@ -243,11 +257,11 @@ func runtimeCodingToolsConfig(
 
 	var skillDirs []string
 	if cfg.SkillToolMode() == "read" || cfg.ActiveToolMode() == "all" {
-		dir, err := config.DefaultSkillsDir()
+		var err error
+		skillDirs, err = skillDirsForRuntime(projectTrustRoot)
 		if err != nil {
-			return tool.CodingToolsConfig{}, fmt.Errorf("resolve skills dir: %w", err)
+			return tool.CodingToolsConfig{}, err
 		}
-		skillDirs = []string{dir}
 	}
 
 	return tool.CodingToolsConfig{
@@ -302,6 +316,7 @@ func openRuntime(
 	persistResumedSessionModel bool,
 	systemPromptOverride string,
 	appendSystemPromptOverride string,
+	projectTrustRoot string,
 	approvalInteractive ...bool,
 ) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
 	interactive := true
@@ -390,7 +405,7 @@ func openRuntime(
 	// here so the shell and optional skill surface cannot silently diverge from
 	// the normalized config used to build the provider.
 	toolRegistry := tool.NewRegistry()
-	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, jobs)
+	codingToolsConfig, err := runtimeCodingToolsConfig(&runtimeCfg, cwd, projectTrustRoot, jobs)
 	if err != nil {
 		return setupFailure(err)
 	}
@@ -470,8 +485,8 @@ func openRuntime(
 		if registered.Name != "read" {
 			continue
 		}
-		if skillsDir, err := config.DefaultSkillsDir(); err == nil {
-			if text, err := ionskills.FormatSkillsForPrompt(skillsDir); err == nil {
+		if skillDirs, err := skillDirsForRuntime(projectTrustRoot); err == nil {
+			if text, err := ionskills.FormatSkillsForPrompt(skillDirs...); err == nil {
 				skillsText = text
 			}
 		}
@@ -479,7 +494,7 @@ func openRuntime(
 	}
 
 	// Load global and project-local prompt templates; global names win collisions.
-	promptTemplates := loadPromptTemplates(cwd)
+	promptTemplates := loadPromptTemplates(projectTrustRoot)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -491,6 +506,7 @@ func openRuntime(
 		appendSystemPromptOverride,
 		skillsText,
 		cwd,
+		projectTrustRoot,
 	)
 	if err != nil {
 		return nil, nil, nil, cleanupOpenError(fmt.Errorf("build system prompt: %w", err))

@@ -29,7 +29,7 @@ func TestBuildSystemPromptUsesDefaultContextAndRuntimeMetadata(t *testing.T) {
 		t.Fatalf("write AGENTS: %v", err)
 	}
 
-	prompt, err := BuildSystemPrompt("", "", "<available_skills>\nskill\n</available_skills>", root)
+	prompt, err := BuildSystemPrompt("", "", "<available_skills>\nskill\n</available_skills>", root, root)
 	if err != nil {
 		t.Fatalf("BuildSystemPrompt: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestBuildSystemPromptOverrideKeepsAppendAndProjectContext(t *testing.T) {
 		t.Fatalf("write AGENTS: %v", err)
 	}
 
-	prompt, err := BuildSystemPrompt("custom policy", "extra policy", "", root)
+	prompt, err := BuildSystemPrompt("custom policy", "extra policy", "", root, root)
 	if err != nil {
 		t.Fatalf("BuildSystemPrompt: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBuildSystemPromptReadsPromptFiles(t *testing.T) {
 		t.Fatalf("write append: %v", err)
 	}
 
-	prompt, err := BuildSystemPrompt(overridePath, appendPath, "", root)
+	prompt, err := BuildSystemPrompt(overridePath, appendPath, "", root, root)
 	if err != nil {
 		t.Fatalf("BuildSystemPrompt: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestLoadInstructionLayersWalksAncestorsToCWD(t *testing.T) {
 		t.Fatalf("write api AGENTS: %v", err)
 	}
 
-	layers, err := LoadInstructionLayers(nested)
+	layers, err := LoadInstructionLayers(nested, root)
 	if err != nil {
 		t.Fatalf("LoadInstructionLayers: %v", err)
 	}
@@ -150,6 +150,31 @@ func TestLoadInstructionLayersWalksAncestorsToCWD(t *testing.T) {
 	}
 }
 
+func TestLoadInstructionLayersStopsAtTrustedProjectRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "project")
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "AGENTS.md"), []byte("outside trust root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("inside trust root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	layers, err := LoadInstructionLayers(nested, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layers) != 1 || layers[0].Content != "inside trust root" {
+		t.Fatalf("layers = %#v, want only trusted project content", layers)
+	}
+}
+
 func TestLoadInstructionLayersPrefersAgentsOverClaude(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -164,7 +189,7 @@ func TestLoadInstructionLayersPrefersAgentsOverClaude(t *testing.T) {
 		t.Fatalf("write CLAUDE: %v", err)
 	}
 
-	layers, err := LoadInstructionLayers(root)
+	layers, err := LoadInstructionLayers(root, root)
 	if err != nil {
 		t.Fatalf("LoadInstructionLayers: %v", err)
 	}
@@ -187,7 +212,7 @@ func TestLoadInstructionLayersSupportsCaseVariantsAndFallback(t *testing.T) {
 		t.Fatalf("write CLAUDE.MD: %v", err)
 	}
 
-	layers, err := LoadInstructionLayers(root)
+	layers, err := LoadInstructionLayers(root, root)
 	if err != nil {
 		t.Fatalf("LoadInstructionLayers: %v", err)
 	}
@@ -210,7 +235,7 @@ func TestBuildInstructionsIncludesProjectSection(t *testing.T) {
 		t.Fatalf("write AGENTS: %v", err)
 	}
 
-	out, err := BuildInstructions("base rules", root)
+	out, err := BuildInstructions("base rules", root, root)
 	if err != nil {
 		t.Fatalf("BuildInstructions: %v", err)
 	}
@@ -225,6 +250,22 @@ func TestBuildInstructionsIncludesProjectSection(t *testing.T) {
 	}
 	if !strings.Contains(out, "project rules") {
 		t.Fatalf("instructions missing project content: %q", out)
+	}
+}
+
+func TestBuildInstructionsSkipsUntrustedProjectLayers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("untrusted project rules"), 0o644); err != nil {
+		t.Fatalf("write AGENTS: %v", err)
+	}
+
+	out, err := BuildInstructions("base rules", root, "")
+	if err != nil {
+		t.Fatalf("BuildInstructions: %v", err)
+	}
+	if strings.Contains(out, "untrusted project rules") || strings.Contains(out, "<project_context>") {
+		t.Fatalf("untrusted project instructions were loaded: %q", out)
 	}
 }
 
@@ -243,7 +284,7 @@ func TestLoadInstructionLayersWithoutRepoWalksAncestors(t *testing.T) {
 		t.Fatalf("write nested AGENTS: %v", err)
 	}
 
-	layers, err := LoadInstructionLayers(nested)
+	layers, err := LoadInstructionLayers(nested, root)
 	if err != nil {
 		t.Fatalf("LoadInstructionLayers: %v", err)
 	}
@@ -275,7 +316,7 @@ func TestLoadInstructionLayersIncludesGlobalIonInstructionsFirst(t *testing.T) {
 		t.Fatalf("write project AGENTS: %v", err)
 	}
 
-	layers, err := LoadInstructionLayers(root)
+	layers, err := LoadInstructionLayers(root, root)
 	if err != nil {
 		t.Fatalf("LoadInstructionLayers: %v", err)
 	}

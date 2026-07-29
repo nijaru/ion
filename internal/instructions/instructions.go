@@ -42,9 +42,11 @@ func BasePrompt() string { return defaultBasePrompt }
 
 // BuildSystemPrompt assembles the complete prompt sent to the provider. A
 // non-empty override replaces Ion's built-in policy, while an append and the
-// resource sections are retained in both cases. Project instruction files
-// remain in scope for custom prompts, matching Pi's buildSystemPrompt behavior.
-func BuildSystemPrompt(systemPromptOverride, appendSystemPrompt, skillsText, cwd string) (string, error) {
+// resource sections are retained in both cases. Project instruction files are
+// included only below the host-resolved trusted project root.
+func BuildSystemPrompt(
+	systemPromptOverride, appendSystemPrompt, skillsText, cwd, projectTrustRoot string,
+) (string, error) {
 	override, err := resolvePromptInput(systemPromptOverride)
 	if err != nil {
 		return "", err
@@ -66,7 +68,7 @@ func BuildSystemPrompt(systemPromptOverride, appendSystemPrompt, skillsText, cwd
 	if err != nil {
 		return "", err
 	}
-	prompt, err := BuildInstructions(base, resolvedCWD)
+	prompt, err := BuildInstructions(base, resolvedCWD, projectTrustRoot)
 	if err != nil {
 		return "", err
 	}
@@ -119,13 +121,13 @@ var instructionFileNames = []string{
 	"CLAUDE.MD",
 }
 
-func BuildInstructions(base, cwd string) (string, error) {
+func BuildInstructions(base, cwd, projectTrustRoot string) (string, error) {
 	base = strings.TrimSpace(base)
 	if cwd == "" {
 		return base, nil
 	}
 
-	layers, err := LoadInstructionLayers(cwd)
+	layers, err := LoadInstructionLayers(cwd, projectTrustRoot)
 	if err != nil {
 		return "", err
 	}
@@ -150,25 +152,50 @@ func BuildInstructions(base, cwd string) (string, error) {
 	return b.String(), nil
 }
 
-func LoadInstructionLayers(cwd string) ([]InstructionLayer, error) {
+func LoadInstructionLayers(cwd, projectTrustRoot string) ([]InstructionLayer, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return nil, err
 	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = filepath.Clean(resolved)
+	}
 
-	dirs := dirsFromRoot(filepath.VolumeName(abs)+string(filepath.Separator), abs)
-	layers := make([]InstructionLayer, 0, len(dirs)+1)
-	seen := make(map[string]struct{}, len(dirs)+1)
+	layers := make([]InstructionLayer, 0, 2)
+	seen := make(map[string]struct{}, 2)
 
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		globalDir := filepath.Join(home, ".ion")
 		appendInstructionLayers(&layers, seen, instructionLayerForDir(globalDir))
 	}
 
-	for _, dir := range dirs {
+	projectRoot := strings.TrimSpace(projectTrustRoot)
+	if projectRoot == "" {
+		return layers, nil
+	}
+	projectRoot, err = filepath.Abs(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	projectRoot = filepath.Clean(projectRoot)
+	if resolved, err := filepath.EvalSymlinks(projectRoot); err == nil {
+		projectRoot = filepath.Clean(resolved)
+	}
+	if !pathContains(projectRoot, abs) {
+		return layers, nil
+	}
+	for _, dir := range dirsFromRoot(projectRoot, abs) {
 		appendInstructionLayers(&layers, seen, instructionLayerForDir(dir))
 	}
 	return layers, nil
+}
+
+func pathContains(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func dirsFromRoot(root, cwd string) []string {

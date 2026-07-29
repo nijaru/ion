@@ -936,6 +936,99 @@ func TestNormalizeTrustMode(t *testing.T) {
 	}
 }
 
+func TestProjectTrustPersistsAndCoversDescendants(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	project := t.TempDir()
+	child := filepath.Join(project, "nested")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+
+	trusted, err := IsProjectTrusted(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("new project is trusted before an explicit decision")
+	}
+	if err := TrustProject(project); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{project, child} {
+		trusted, err := IsProjectTrusted(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !trusted {
+			t.Fatalf("project path %q is not trusted", path)
+		}
+		root, err := TrustedProjectRoot(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantRoot, err := normalizeProjectPath(project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if root != wantRoot {
+			t.Fatalf("trusted root for %q = %q, want %q", path, root, wantRoot)
+		}
+	}
+	trusted, err = IsProjectTrusted(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted {
+		t.Fatal("trust decision leaked to a sibling project")
+	}
+
+	wantProject, err := normalizeProjectPath(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.TrustedProjects) != 1 || state.TrustedProjects[0] != wantProject {
+		t.Fatalf("trusted projects = %#v, want %q", state.TrustedProjects, wantProject)
+	}
+}
+
+func TestProjectTrustSurvivesRuntimeStateWrites(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	project := t.TempDir()
+	if err := TrustProject(project); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveRuntimeState(RuntimeStateUpdate{
+		Config:        &Config{Provider: "ollama", Model: "llama3"},
+		PersistConfig: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	trusted, err := IsProjectTrusted(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trusted {
+		t.Fatal("runtime state write removed project trust")
+	}
+
+	if err := SaveState(&Config{Provider: "openai", Model: "gpt-4.1"}); err != nil {
+		t.Fatal(err)
+	}
+	trusted, err = IsProjectTrusted(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trusted {
+		t.Fatal("config state write removed project trust")
+	}
+}
+
 func TestNormalizeMCPServers(t *testing.T) {
 	cfg := &Config{MCPServers: []MCPServerConfig{{
 		Name:           "  files  ",

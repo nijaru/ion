@@ -21,26 +21,61 @@ type Detail struct {
 	Instructions string
 }
 
+type resolvedSkill struct {
+	skill *agentskills.Skill
+	path  string
+}
+
+func discoverSkills(paths ...string) ([]resolvedSkill, error) {
+	byName := make(map[string]resolvedSkill)
+	for _, root := range paths {
+		if _, err := os.Stat(root); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() || info.Name() != "SKILL.md" {
+				return nil
+			}
+			skill, err := agentskills.Load(path)
+			if err == nil && skill != nil {
+				byName[skill.Name] = resolvedSkill{skill: skill, path: path}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	resolved := make([]resolvedSkill, 0, len(byName))
+	for _, item := range byName {
+		resolved = append(resolved, item)
+	}
+	slices.SortFunc(resolved, func(a, b resolvedSkill) int {
+		return strings.Compare(a.skill.Name, b.skill.Name)
+	})
+	return resolved, nil
+}
+
+func summaryForSkill(skill *agentskills.Skill) Summary {
+	return Summary{
+		Name:         skill.Name,
+		Description:  strings.TrimSpace(skill.Description),
+		AllowedTools: append([]string(nil), []string(skill.AllowedTools)...),
+	}
+}
+
 func List(paths ...string) ([]Summary, error) {
-	reg := agentskills.NewRegistry(paths...)
-	if err := reg.Discover(); err != nil {
+	resolved, err := discoverSkills(paths...)
+	if err != nil {
 		return nil, err
 	}
-	loaded := reg.List()
-	out := make([]Summary, 0, len(loaded))
-	for _, skill := range loaded {
-		if skill == nil {
-			continue
-		}
-		out = append(out, Summary{
-			Name:         skill.Name,
-			Description:  strings.TrimSpace(skill.Description),
-			AllowedTools: append([]string(nil), []string(skill.AllowedTools)...),
-		})
+	out := make([]Summary, 0, len(resolved))
+	for _, item := range resolved {
+		out = append(out, summaryForSkill(item.skill))
 	}
-	slices.SortFunc(out, func(a, b Summary) int {
-		return strings.Compare(a.Name, b.Name)
-	})
 	return out, nil
 }
 
@@ -49,30 +84,31 @@ func Read(paths []string, name string) (Detail, error) {
 	if name == "" {
 		return Detail{}, fmt.Errorf("skill name is required")
 	}
-	reg := agentskills.NewRegistry(paths...)
-	if err := reg.Discover(); err != nil {
+	resolved, err := discoverSkills(paths...)
+	if err != nil {
 		return Detail{}, err
 	}
-	skill, ok := reg.Get(name)
-	if !ok {
-		for _, candidate := range reg.List() {
-			if candidate != nil && strings.EqualFold(candidate.Name, name) {
-				skill = candidate
-				ok = true
+	var selected *agentskills.Skill
+	for _, item := range resolved {
+		if item.skill != nil && item.skill.Name == name {
+			selected = item.skill
+			break
+		}
+	}
+	if selected == nil {
+		for _, item := range resolved {
+			if item.skill != nil && strings.EqualFold(item.skill.Name, name) {
+				selected = item.skill
 				break
 			}
 		}
 	}
-	if !ok || skill == nil {
+	if selected == nil {
 		return Detail{}, fmt.Errorf("skill %q not found", name)
 	}
 	return Detail{
-		Summary: Summary{
-			Name:         skill.Name,
-			Description:  strings.TrimSpace(skill.Description),
-			AllowedTools: append([]string(nil), []string(skill.AllowedTools)...),
-		},
-		Instructions: strings.TrimSpace(skill.Instructions),
+		Summary:      summaryForSkill(selected),
+		Instructions: strings.TrimSpace(selected.Instructions),
 	}, nil
 }
 
@@ -159,11 +195,11 @@ func FormatNotice(paths []string, query string, items []Summary) string {
 }
 
 func FormatSkillsForPrompt(paths ...string) (string, error) {
-	summaries, err := List(paths...)
+	resolved, err := discoverSkills(paths...)
 	if err != nil {
 		return "", err
 	}
-	if len(summaries) == 0 {
+	if len(resolved) == 0 {
 		return "", nil
 	}
 
@@ -175,45 +211,15 @@ func FormatSkillsForPrompt(paths ...string) (string, error) {
 	)
 	b.WriteString("<available_skills>\n")
 
-	for _, s := range summaries {
-		// Find location for this skill
-		location := ""
-		for _, baseDir := range paths {
-			// 1. Check if the directory itself is the skill
-			selfSkill := filepath.Join(baseDir, "SKILL.md")
-			if info, err := os.Stat(selfSkill); err == nil && !info.IsDir() {
-				if strings.EqualFold(filepath.Base(baseDir), s.Name) {
-					abs, _ := filepath.Abs(selfSkill)
-					location = abs
-					break
-				}
-			}
-			// 2. Check subdirectories
-			subSkill := filepath.Join(baseDir, s.Name, "SKILL.md")
-			if info, err := os.Stat(subSkill); err == nil && !info.IsDir() {
-				abs, _ := filepath.Abs(subSkill)
-				location = abs
-				break
-			}
-			// 3. Check direct .md files (e.g. dir/name.md)
-			mdSkill := filepath.Join(baseDir, s.Name+".md")
-			if info, err := os.Stat(mdSkill); err == nil && !info.IsDir() {
-				abs, _ := filepath.Abs(mdSkill)
-				location = abs
-				break
-			}
+	for _, item := range resolved {
+		summary := summaryForSkill(item.skill)
+		location, err := filepath.Abs(item.path)
+		if err != nil {
+			location = item.path
 		}
-
-		if location == "" {
-			if len(paths) > 0 {
-				abs, _ := filepath.Abs(filepath.Join(paths[0], s.Name, "SKILL.md"))
-				location = abs
-			}
-		}
-
 		b.WriteString("  <skill>\n")
-		b.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeXml(s.Name)))
-		b.WriteString(fmt.Sprintf("    <description>%s</description>\n", escapeXml(s.Description)))
+		b.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeXml(summary.Name)))
+		b.WriteString(fmt.Sprintf("    <description>%s</description>\n", escapeXml(summary.Description)))
 		b.WriteString(fmt.Sprintf("    <location>%s</location>\n", escapeXml(location)))
 		b.WriteString("  </skill>\n")
 	}

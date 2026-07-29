@@ -109,7 +109,27 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	}
 
 	ctx := context.Background()
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "failed to resolve working directory: %v\n", err)
+		return 1
+	}
+	projectTrustRoot, err := config.TrustedProjectRoot(cwd)
+	if err != nil {
+		fmt.Fprintf(stderr, "failed to resolve project trust: %v\n", err)
+		return 1
+	}
+	if cli.trustProjectRequested() {
+		if err := config.TrustProject(cwd); err != nil {
+			fmt.Fprintf(stderr, "failed to trust project: %v\n", err)
+			return 1
+		}
+		projectTrustRoot, err = config.TrustedProjectRoot(cwd)
+		if err != nil {
+			fmt.Fprintf(stderr, "failed to resolve project trust: %v\n", err)
+			return 1
+		}
+	}
 	branch := currentBranch()
 
 	listModelsSearch, err := resolveListModelsSearch(cli.listModelsRequested(), flagSet.Args())
@@ -337,6 +357,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		persistResumedSessionModel,
 		cli.systemPromptOverride(),
 		cli.appendSystemPromptOverride(),
+		projectTrustRoot,
 		!printRequested,
 	)
 	if err != nil {
@@ -426,6 +447,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			true,
 			cli.systemPromptOverride(),
 			cli.appendSystemPromptOverride(),
+			projectTrustRoot,
 			true,
 		)
 		if err != nil {

@@ -121,6 +121,30 @@ func writeSkill(t *testing.T, path, content string) {
 	}
 }
 
+func TestFormatSkillsForPromptUsesDiscoveredSkillPath(t *testing.T) {
+	root := t.TempDir()
+	skillPath := filepath.Join(root, "different-directory", "SKILL.md")
+	writeSkill(t, skillPath, `---
+name: declared-name
+description: Skill directory does not match its name.
+---
+Instructions here.
+`)
+
+	prompt, err := FormatSkillsForPrompt(root)
+	if err != nil {
+		t.Fatalf("FormatSkillsForPrompt returned error: %v", err)
+	}
+	absPath, err := filepath.Abs(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "<name>declared-name</name>") ||
+		!strings.Contains(prompt, "<location>"+absPath+"</location>") {
+		t.Fatalf("prompt = %q, want discovered source path", prompt)
+	}
+}
+
 func TestFormatSkillsForPrompt(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "test-skill")

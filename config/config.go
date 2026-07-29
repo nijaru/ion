@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -94,14 +95,15 @@ type ModelDef struct {
 }
 
 type State struct {
-	Provider               *string `toml:"provider,omitempty"`
-	Model                  *string `toml:"model,omitempty"`
-	ReasoningEffort        *string `toml:"reasoning_effort,omitempty"`
-	FastModel              *string `toml:"fast_model,omitempty"`
-	FastReasoningEffort    *string `toml:"fast_reasoning_effort,omitempty"`
-	SummaryModel           *string `toml:"summary_model,omitempty"`
-	SummaryReasoningEffort *string `toml:"summary_reasoning_effort,omitempty"`
-	ActivePreset           *string `toml:"active_preset,omitempty"`
+	Provider               *string  `toml:"provider,omitempty"`
+	Model                  *string  `toml:"model,omitempty"`
+	ReasoningEffort        *string  `toml:"reasoning_effort,omitempty"`
+	FastModel              *string  `toml:"fast_model,omitempty"`
+	FastReasoningEffort    *string  `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           *string  `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort *string  `toml:"summary_reasoning_effort,omitempty"`
+	ActivePreset           *string  `toml:"active_preset,omitempty"`
+	TrustedProjects        []string `toml:"trusted_projects,omitempty"`
 }
 
 type RuntimeStateUpdate struct {
@@ -128,6 +130,102 @@ func DefaultStatePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".ion", "state.toml"), nil
+}
+
+// TrustProject records an explicit trust decision for cwd and its descendants.
+// The state file is host-owned; project content never writes this decision.
+func TrustProject(cwd string) error {
+	project, err := normalizeProjectPath(cwd)
+	if err != nil {
+		return err
+	}
+	return updateState(func(state *State) {
+		for _, trusted := range state.TrustedProjects {
+			if trusted == project {
+				return
+			}
+		}
+		state.TrustedProjects = append(state.TrustedProjects, project)
+		sort.Strings(state.TrustedProjects)
+	})
+}
+
+// IsProjectTrusted reports whether cwd is inside an explicitly trusted project.
+func IsProjectTrusted(cwd string) (bool, error) {
+	root, err := TrustedProjectRoot(cwd)
+	return root != "", err
+}
+
+// TrustedProjectRoot returns the most-specific trusted directory containing
+// cwd. An empty result means that cwd has not been explicitly trusted.
+func TrustedProjectRoot(cwd string) (string, error) {
+	project, err := normalizeProjectPath(cwd)
+	if err != nil {
+		return "", err
+	}
+	state, err := LoadState()
+	if err != nil {
+		return "", err
+	}
+	var root string
+	for _, trusted := range normalizeTrustedProjects(state.TrustedProjects) {
+		if pathContains(trusted, project) && len(trusted) > len(root) {
+			root = trusted
+		}
+	}
+	return root, nil
+}
+
+func normalizeProjectPath(cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	absolute, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolve project path: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = filepath.Clean(resolved)
+	}
+	return absolute, nil
+}
+
+func pathContains(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func normalizeTrustedProjects(projects []string) []string {
+	if len(projects) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(projects))
+	normalized := make([]string, 0, len(projects))
+	for _, project := range projects {
+		if strings.TrimSpace(project) == "" {
+			continue
+		}
+		project, err := normalizeProjectPath(project)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[project]; ok {
+			continue
+		}
+		seen[project] = struct{}{}
+		normalized = append(normalized, project)
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func Load() (*Config, error) {
@@ -292,14 +390,17 @@ func LoadState() (*State, error) {
 	} else if err := toml.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("failed to parse state: %w", err)
 	}
+	state.TrustedProjects = normalizeTrustedProjects(state.TrustedProjects)
 	return state, nil
 }
 
 func SaveState(cfg *Config) error {
 	return updateState(func(state *State) {
 		activePreset := state.ActivePreset
+		trustedProjects := append([]string(nil), state.TrustedProjects...)
 		*state = *stateFromConfig(cfg)
 		state.ActivePreset = activePreset
+		state.TrustedProjects = trustedProjects
 	})
 }
 
@@ -330,8 +431,10 @@ func SaveRuntimeState(update RuntimeStateUpdate) error {
 	return updateState(func(state *State) {
 		if update.PersistConfig {
 			activePreset := state.ActivePreset
+			trustedProjects := append([]string(nil), state.TrustedProjects...)
 			*state = *stateFromConfig(update.Config)
 			state.ActivePreset = activePreset
+			state.TrustedProjects = trustedProjects
 		}
 		if update.PersistReasoning {
 			normalized := normalizeOptionalReasoningEffort(update.ReasoningEffort)

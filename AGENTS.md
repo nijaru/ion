@@ -205,21 +205,24 @@ changes, update it by explicit decision before changing structural code.
 
 The current safety implementation is a baseline, not automatically the final
 policy. As of 2026-07-29, the P1 security reference is current Pi: project
-trust gates project-local settings, instructions, skills, prompts, themes,
-packages, and extensions; ordinary local tools run with the launching user's
-permissions; and there is no mandatory per-action approval or in-process
-sandbox. Codex remains a secondary reference for reviewable action identity,
-recovery, and cancellation. Do not add or preserve stronger policy machinery
-by momentum when it has no current Ion owner and user-facing purpose.
+trust gates project-local settings and resource loading; ordinary local tools
+run with the launching user's permissions; and there is no mandatory
+per-action approval or in-process sandbox. Ion applies that host-owned trust
+boundary to project settings, instructions, skills, prompts, themes, packages,
+and extensions (including instruction files because they affect model policy).
+Ion implements the current resource boundary with persisted
+`--trust` decisions for the working directory and descendants; untrusted
+non-interactive runs skip project-local instructions, prompts, and skills.
+Codex remains a secondary reference for reviewable action identity, recovery,
+and cancellation. Do not add or preserve stronger policy machinery by
+momentum when it has no current Ion owner and user-facing purpose.
 
-The next safety convergence is an evidence-led audit of the existing action
-planner, journal, approval, environment, MCP, and OS-sandbox paths. Keep the
-planner and journal only where an external-effect contract requires durable
-prepared/started/outcome evidence or indeterminate recovery; delete unused or
-speculative paths rather than carrying them for P2. Explicit confirmation or
-sandbox modes must fail clearly when selected but unavailable. Ordinary trusted
-execution must not pretend to be sandboxed. An effect must not bypass any
-policy or recovery boundary that its actual contract requires.
+Keep the action planner and journal only where an external-effect contract
+requires durable prepared/started/outcome evidence or indeterminate recovery;
+delete unused or speculative paths rather than carrying them for P2. Explicit
+confirmation or sandbox modes must fail clearly when selected but unavailable.
+Ordinary trusted execution must not pretend to be sandboxed. An effect must
+not bypass any policy or recovery boundary that its actual contract requires.
 
 The same ownership rule applies to every cross-cutting guarantee: session
 durability belongs to `session/`, live lifecycle ordering to the runtime
@@ -235,10 +238,10 @@ reference-backed product charter is captured in
 ai/research/agent-reference-matrix.md; the ideal architecture is frozen in
 ai/DESIGN.md and tracked by completed task tk-uyfo. The implementation audit
 tk-03v2 and session durability task tk-mkmt are complete; the active bounded
-implementation task tk-k6gf (core daily-driver proof) is complete. The active
-bounded convergence task is tk-1qp1 (Go quality and formatter gates). The next
-P1 follow-up is ion-j2wv, blocked behind tk-1qp1, to align project trust and
-security posture with Pi and delete unused policy debt. The live-provider task
+implementation task tk-k6gf (core daily-driver proof) is complete. The Go
+quality convergence task tk-1qp1 and Pi security posture task ion-j2wv are
+complete. The active P1 task is tk-l6cq, which closes the explicit project
+resource-trust boundary and its behavioral gates. The live-provider task
 tk-h5yr is deferred, as are P2 queued-input and cache/compaction follow-ups;
 do not select deferred work merely because a reference feature is visible.
 Keep tasks atomic, demoable, and acceptance-tested. Log findings while fresh,
