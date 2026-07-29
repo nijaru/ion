@@ -802,6 +802,32 @@ func TestStaleSessionCostCannotRenderNewRuntime(t *testing.T) {
 	}
 }
 
+func TestStaleSessionUsageCannotOverwriteNavigatedBranch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Progress.TokensSent = 3
+	model.Progress.TokensReceived = 4
+	model.Progress.TotalCost = 0.5
+
+	next, cmd, handled := model.dispatchAppControlMessage(sessionUsageLoadedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		input:                 90,
+		output:                80,
+		cost:                  12.5,
+	})
+	if !handled {
+		t.Fatal("stale session usage was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale session usage returned a command")
+	}
+	if next.Progress.TokensSent != 3 || next.Progress.TokensReceived != 4 || next.Progress.TotalCost != 0.5 {
+		t.Fatalf("stale session usage changed progress: %#v", next.Progress)
+	}
+}
+
 func TestStaleSessionInfoCannotRenderNewRuntime(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2

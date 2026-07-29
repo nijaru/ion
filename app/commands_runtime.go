@@ -650,6 +650,7 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 			loadSessionUsageCmd(
 				m.runtimeOperationContext(),
 				m.Model.EventGeneration,
+				m.Model.TreeNavigationRequest,
 				msg.runtime.Handles.Runner,
 				msg.runtime.Handles.Storage,
 			),

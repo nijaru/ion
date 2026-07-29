@@ -183,11 +183,12 @@ type sessionCostMsg struct {
 }
 
 type sessionUsageLoadedMsg struct {
-	generation uint64
-	input      int
-	output     int
-	cost       float64
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	input                 int
+	output                int
+	cost                  float64
+	err                   error
 }
 
 type localEntriesMsg struct {

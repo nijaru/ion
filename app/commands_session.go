@@ -359,6 +359,7 @@ func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
 func loadSessionUsageCmd(
 	ctx context.Context,
 	generation uint64,
+	treeNavigationRequest uint64,
 	runner agent.Runtime,
 	storage RuntimeStorage,
 ) tea.Cmd {
@@ -368,17 +369,19 @@ func loadSessionUsageCmd(
 	return func() tea.Msg {
 		projection, err := loadSessionProjection(ctx, runner, storage)
 		return sessionUsageLoadedMsg{
-			generation: generation,
-			input:      projection.Usage.Input,
-			output:     projection.Usage.Output,
-			cost:       projection.Usage.Cost.Total,
-			err:        err,
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			input:                 projection.Usage.Input,
+			output:                projection.Usage.Output,
+			cost:                  projection.Usage.Cost.Total,
+			err:                   err,
 		}
 	}
 }
 
 func (m Model) handleSessionUsageLoaded(msg sessionUsageLoadedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration || msg.err != nil {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest || msg.err != nil {
 		return m, nil
 	}
 	m.progressReducer().applySessionUsage(msg.input, msg.output, msg.cost)

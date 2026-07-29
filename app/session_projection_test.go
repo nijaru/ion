@@ -127,15 +127,15 @@ func TestActiveSessionCommandsUseRuntimeProjection(t *testing.T) {
 	}
 
 	usageCtx := context.Background()
-	usageMsg, ok := loadSessionUsageCmd(usageCtx, 7, runner, storage)().(sessionUsageLoadedMsg)
+	usageMsg, ok := loadSessionUsageCmd(usageCtx, 7, 3, runner, storage)().(sessionUsageLoadedMsg)
 	if !ok {
 		t.Fatalf(
 			"usage message type = %T, want sessionUsageLoadedMsg",
-			loadSessionUsageCmd(usageCtx, 7, runner, storage)(),
+			loadSessionUsageCmd(usageCtx, 7, 3, runner, storage)(),
 		)
 	}
-	if usageMsg.err != nil || usageMsg.generation != 7 || usageMsg.input != 8 || usageMsg.output != 4 ||
-		usageMsg.cost != 0.4 {
+	if usageMsg.err != nil || usageMsg.generation != 7 || usageMsg.treeNavigationRequest != 3 ||
+		usageMsg.input != 8 || usageMsg.output != 4 || usageMsg.cost != 0.4 {
 		t.Fatalf("usage message = %#v, want runtime projection usage", usageMsg)
 	}
 	if runner.projectionCtx != usageCtx {
@@ -157,9 +157,9 @@ func TestLoadSessionUsageStopsOnCanceledRuntimeContext(t *testing.T) {
 	cancel()
 	runner := &projectionTestRunner{stubRunner: &stubRunner{}}
 
-	result, ok := loadSessionUsageCmd(ctx, 4, runner, nil)().(sessionUsageLoadedMsg)
+	result, ok := loadSessionUsageCmd(ctx, 4, 0, runner, nil)().(sessionUsageLoadedMsg)
 	if !ok {
-		t.Fatalf("usage result type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(ctx, 4, runner, nil)())
+		t.Fatalf("usage result type = %T, want sessionUsageLoadedMsg", loadSessionUsageCmd(ctx, 4, 0, runner, nil)())
 	}
 	if result.generation != 4 || result.err == nil {
 		t.Fatalf("canceled usage result = %#v, want generation and cancellation error", result)
