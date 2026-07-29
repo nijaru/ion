@@ -32,6 +32,7 @@ type treePickerEntry struct {
 // treePickerLoadedMsg carries the loaded session tree.
 type treePickerLoadedMsg struct {
 	generation uint64
+	requestID  uint64
 	tree       SessionTree
 	err        error
 }
@@ -52,6 +53,8 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 	}
 
 	m.Picker.Tree = &treePickerState{loading: true}
+	m.Model.TreeLoadRequest++
+	requestID := m.Model.TreeLoadRequest
 	generation := m.Model.EventGeneration
 	ctx := m.runtimeOperationContext()
 
@@ -61,7 +64,12 @@ func (m Model) openTreePicker() (Model, tea.Cmd) {
 		if err == nil {
 			tree, err = loadSessionTree(snapshot)
 		}
-		return treePickerLoadedMsg{generation: generation, tree: tree, err: err}
+		return treePickerLoadedMsg{
+			generation: generation,
+			requestID:  requestID,
+			tree:       tree,
+			err:        err,
+		}
 	}
 }
 
@@ -125,7 +133,8 @@ func (m Model) showTreeUnavailable() (Model, tea.Cmd) {
 
 // handleTreePickerLoaded processes the loaded session tree.
 func (m Model) handleTreePickerLoaded(msg treePickerLoadedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID != m.Model.TreeLoadRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -271,6 +280,8 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Refresh tree through the active runtime projection.
 		if reader, ok := m.Model.Runner.(agent.SessionReader); ok {
 			m.Picker.Tree.loading = true
+			m.Model.TreeLoadRequest++
+			requestID := m.Model.TreeLoadRequest
 			generation := m.Model.EventGeneration
 			ctx := m.runtimeOperationContext()
 			return m, func() tea.Msg {
@@ -279,7 +290,12 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				if err == nil {
 					tree, err = loadSessionTree(snapshot)
 				}
-				return treePickerLoadedMsg{generation: generation, tree: tree, err: err}
+				return treePickerLoadedMsg{
+					generation: generation,
+					requestID:  requestID,
+					tree:       tree,
+					err:        err,
+				}
 			}
 		}
 	}

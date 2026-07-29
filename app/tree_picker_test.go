@@ -56,6 +56,7 @@ func TestLoadSessionTreeProjectsPersistedLineageAndChildren(t *testing.T) {
 func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2
+	model.Model.TreeLoadRequest = 1
 	model.Picker.Tree = &treePickerState{
 		entries: []treePickerEntry{{id: "current", isLeaf: true}},
 	}
@@ -63,6 +64,7 @@ func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 
 	staleTree := treePickerLoadedMsg{
 		generation: 1,
+		requestID:  1,
 		tree:       SessionTree{Current: agentMsgEntry("stale")},
 	}
 	next, cmd, handled := model.dispatchPickerControllerMessage(staleTree)
@@ -96,6 +98,30 @@ func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 			handled,
 			cmd != nil,
 			next.Progress.LastError,
+		)
+	}
+}
+
+func TestStaleSameGenerationTreePickerResultCannotOverwriteCurrentSnapshot(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeLoadRequest = 2
+	model.Picker.Tree = &treePickerState{
+		entries: []treePickerEntry{{id: "new-leaf", isLeaf: true}},
+	}
+
+	next, cmd, handled := model.dispatchPickerControllerMessage(treePickerLoadedMsg{
+		generation: 1,
+		requestID:  1,
+		tree:       SessionTree{Current: agentMsgEntry("stale")},
+	})
+	if !handled || cmd != nil || len(next.Picker.Tree.entries) != 1 ||
+		next.Picker.Tree.entries[0].id != "new-leaf" {
+		t.Fatalf(
+			"stale same-generation tree load = (handled=%v, cmd=%v, tree=%#v), want ignored",
+			handled,
+			cmd != nil,
+			next.Picker.Tree,
 		)
 	}
 }

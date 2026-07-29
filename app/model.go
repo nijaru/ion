@@ -409,9 +409,12 @@ type ModelState struct {
 	treeNavigationCancel  context.CancelFunc
 	RuntimeSwitchRequest  uint64
 	TreeNavigationRequest uint64
-	SettingsRequest       uint64
-	MemoryRequest         uint64
-	CheckpointRequest     uint64
+	// TreeLoadRequest fences same-runtime session-tree reads so an older open
+	// or refresh result cannot overwrite a newer picker snapshot.
+	TreeLoadRequest   uint64
+	SettingsRequest   uint64
+	MemoryRequest     uint64
+	CheckpointRequest uint64
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
