@@ -170,9 +170,13 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
+		networkIntent := tool.SandboxPolicyNetworkIntent(cfg.AllowNetwork)
+		if mode == tool.SandboxOff {
+			networkIntent = tool.SandboxNetworkIntent(mode)
+		}
 		client.WithIdentity(serverIdentity(name, cfg.Command, cfg.Args, command.Dir, cfg.Env, readAbsolute, writableAbsolute, cfg.AllowNetwork)).
 			WithEnvironment(environmentKeys(cfg.Env)).
-			WithNetworkIntent(tool.SandboxPolicyNetworkIntent(cfg.AllowNetwork))
+			WithNetworkIntent(networkIntent)
 		client.WithFilePolicy(&FilePolicy{
 			Validator:       validator,
 			ProtectedPaths:  protectedPaths,

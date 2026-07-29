@@ -166,6 +166,7 @@ func TestMCPParentWatchKillsGroupWhenIonPipeCloses(t *testing.T) {
 }
 
 func TestOpenDiscoversAndClosesStdioRuntime(t *testing.T) {
+	t.Setenv("ION_SANDBOX", "off")
 	runtime, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
 		Name:    "test",
 		Command: os.Args[0],
@@ -183,6 +184,8 @@ func TestOpenDiscoversAndClosesStdioRuntime(t *testing.T) {
 		ApprovalRequirement(string) (Requirement, bool, error)
 	}).ApprovalRequirement(`{"msg":"hello"}`); err != nil || !ok || !strings.HasPrefix(requirement.MCPIdentity, "mcp:server:test:") {
 		t.Fatalf("external tool approval = %#v, %v, %v; want required server identity", requirement, err, ok)
+	} else if requirement.NetworkIntent != "unrestricted" {
+		t.Fatalf("trusted MCP network intent = %q, want unrestricted", requirement.NetworkIntent)
 	}
 	text, err := tools[0].Execute(t.Context(), `{"msg":"hello"}`)
 	if err != nil || text != "echo: hello" {
