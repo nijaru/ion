@@ -945,6 +945,35 @@ func TestSessionForkUsesRuntimeOperationContext(t *testing.T) {
 	}
 }
 
+func TestCopyRejectsProjectionFromChangedLeafBeforeClipboardWrite(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "leaf-a"
+	model.Model.Runner = &projectionTestRunner{
+		stubRunner: &stubRunner{},
+		projection: agent.SessionProjection{
+			LeafID: "leaf-b",
+			Branch: []session.Entry{agentMsgEntry("branch b response")},
+		},
+	}
+
+	_, cmd := model.copyLastResponse()
+	if cmd == nil {
+		t.Fatal("copy command is nil")
+	}
+	msg, ok := cmd().(sessionCopiedMsg)
+	if !ok {
+		t.Fatalf("copy result = %T, want sessionCopiedMsg", cmd())
+	}
+	if msg.err == nil || !strings.Contains(msg.err.Error(), "active session leaf changed") {
+		t.Fatalf("copy result = %#v, want changed-leaf error", msg)
+	}
+	if msg.generation != 1 || msg.treeNavigationRequest != 2 {
+		t.Fatalf("copy fence = generation %d/navigation %d, want 1/2", msg.generation, msg.treeNavigationRequest)
+	}
+}
+
 func TestStaleClipboardResultCannotRenderNewRuntime(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2

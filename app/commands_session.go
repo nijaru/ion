@@ -191,8 +191,9 @@ func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 }
 
 type sessionCopiedMsg struct {
-	generation uint64
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	err                   error
 }
 
 func (m Model) copyLastResponse() (Model, tea.Cmd) {
@@ -202,13 +203,27 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 	runner := m.Model.Runner
 	storage := m.Model.Storage
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
+	leafID := m.currentResumeLeafID()
 	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
 		projection, err := loadSessionProjection(ctx, runner, storage)
 		if err != nil {
 			return sessionCopiedMsg{
-				generation: generation,
-				err:        fmt.Errorf("failed to get active session: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("failed to get active session: %w", err),
+			}
+		}
+		if projection.LeafID != leafID {
+			return sessionCopiedMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err: fmt.Errorf(
+					"active session leaf changed from %q to %q",
+					leafID,
+					projection.LeafID,
+				),
 			}
 		}
 		var lastResponse string
@@ -220,25 +235,28 @@ func (m Model) copyLastResponse() (Model, tea.Cmd) {
 		}
 		if lastResponse == "" {
 			return sessionCopiedMsg{
-				generation: generation,
-				err:        fmt.Errorf("no assistant response to copy"),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("no assistant response to copy"),
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return sessionCopiedMsg{generation: generation, err: err}
+			return sessionCopiedMsg{generation: generation, treeNavigationRequest: treeNavigationRequest, err: err}
 		}
 		if err := ionclipboard.WriteClipboardTextContext(ctx, lastResponse); err != nil {
 			return sessionCopiedMsg{
-				generation: generation,
-				err:        fmt.Errorf("failed to copy: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("failed to copy: %w", err),
 			}
 		}
-		return sessionCopiedMsg{generation: generation}
+		return sessionCopiedMsg{generation: generation, treeNavigationRequest: treeNavigationRequest}
 	}
 }
 
 func (m Model) handleSessionCopied(msg sessionCopiedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {
