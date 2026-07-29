@@ -170,8 +170,6 @@ func DecideEventDrain(input EventDrainInput) EventDrainDecision {
 type ErrorSettlementInput struct {
 	AwaitTerminal bool
 	Err           error
-	Thinking      bool
-	Compacting    bool
 }
 
 type ErrorSettlementDecision struct {
@@ -181,7 +179,15 @@ type ErrorSettlementDecision struct {
 }
 
 func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
-	return ErrorSettlementDecision{DisplayError: input.Err.Error()}
+	message := "unknown runtime error"
+	if input.Err != nil {
+		message = input.Err.Error()
+	}
+	return ErrorSettlementDecision{
+		AwaitNext:    input.AwaitTerminal,
+		DisplayError: message,
+		EntryContent: "Error: " + message,
+	}
 }
 
 // --- Session tree ---

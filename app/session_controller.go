@@ -806,7 +806,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 
-	m.turnReducer().FailTurn(decision.DisplayError, time.Now())
+	m.turnReducer().FailTurn(decision.DisplayError)
 
 	if decision.AwaitNext {
 		cmds = append(cmds, m.awaitSessionEvent())

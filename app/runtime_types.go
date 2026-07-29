@@ -522,8 +522,29 @@ func (t TurnReducer) StreamClosed(now time.Time) (session.Entry, bool) {
 	t.inFlight.StreamChunks = nil
 	return entry, true
 }
-func (t TurnReducer) FailTurn(msg string, now time.Time) {}
-func (t TurnReducer) ClearLocalErrorIfIdle()             {}
+
+func (t TurnReducer) FailTurn(msg string) {
+	if t.progress == nil {
+		return
+	}
+	t.progress.Mode = StateError
+	t.progress.LastError = msg
+	t.progress.Status = ""
+	t.progress.StatusUpdatedAt = time.Time{}
+}
+
+func (t TurnReducer) ClearLocalErrorIfIdle() {
+	if t.progress == nil || t.progress.Mode != StateError || t.progress.Compacting {
+		return
+	}
+	if t.inFlight != nil && t.inFlight.Thinking {
+		return
+	}
+	t.progress.Mode = StateReady
+	t.progress.LastError = ""
+	t.progress.Status = ""
+	t.progress.StatusUpdatedAt = time.Time{}
+}
 
 func providerRetryStatus(msg session.ProviderRetry) string {
 	reason := "transient provider failure"
