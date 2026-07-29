@@ -93,11 +93,14 @@ type localErrorMsg struct {
 	err error
 }
 
+// runtimeLeafSnapshotMsg carries the navigation identity observed by a
+// background projection read. A newer tree navigation invalidates the read.
 type runtimeLeafSnapshotMsg struct {
-	generation uint64
-	leafID     string
-	info       *session.SessionInfoEntry
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	leafID                string
+	info                  *session.SessionInfoEntry
+	err                   error
 }
 
 type runtimeCatalogUpdateMsg struct {
@@ -1019,6 +1022,9 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		return nil
 	}
 	generation := m.Model.EventGeneration
+	// The read can finish after a same-runtime tree navigation. Keep its
+	// request identity so the dispatcher can discard a stale leaf projection.
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	workdir := m.App.Workdir
 	branch := m.App.Branch
@@ -1046,12 +1052,16 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		}
 		if err != nil {
 			return runtimeLeafSnapshotMsg{
-				generation: generation,
-				err:        fmt.Errorf("load session projection for catalog: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("load session projection for catalog: %w", err),
 			}
 		}
 		if id == "" {
-			return runtimeLeafSnapshotMsg{generation: generation}
+			return runtimeLeafSnapshotMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+			}
 		}
 		var info *session.SessionInfoEntry
 		if catalog != nil {
@@ -1062,7 +1072,12 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 				info = &candidate
 			}
 		}
-		return runtimeLeafSnapshotMsg{generation: generation, leafID: id, info: info}
+		return runtimeLeafSnapshotMsg{
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			leafID:                id,
+			info:                  info,
+		}
 	}
 }
 

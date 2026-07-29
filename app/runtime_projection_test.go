@@ -831,6 +831,46 @@ func TestStaleSessionImportAndCloneCannotResumeNewRuntime(t *testing.T) {
 	}
 }
 
+func TestSessionInfoProjectionCarriesNavigationFence(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 4
+	model.Model.TreeNavigationRequest = 7
+	model.Model.Runner = &projectionTestRunner{
+		stubRunner: &stubRunner{},
+		projection: agent.SessionProjection{LeafID: "leaf-7"},
+	}
+
+	msg, ok := model.persistCurrentSessionInfoCmd()().(runtimeLeafSnapshotMsg)
+	if !ok {
+		t.Fatalf("projection message = %T, want runtimeLeafSnapshotMsg", model.persistCurrentSessionInfoCmd()())
+	}
+	if msg.generation != 4 || msg.treeNavigationRequest != 7 || msg.leafID != "leaf-7" {
+		t.Fatalf("projection message = %#v, want generation 4/navigation 7/leaf-7", msg)
+	}
+}
+
+func TestStaleSameRuntimeLeafSnapshotCannotOverwriteCurrentProjection(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "selected-leaf"
+
+	next, cmd, handled := model.dispatchAppControlMessage(runtimeLeafSnapshotMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		leafID:                "stale-leaf",
+	})
+	if !handled {
+		t.Fatal("stale leaf snapshot was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale leaf snapshot returned a catalog command")
+	}
+	if next.Model.LeafID != "selected-leaf" {
+		t.Fatalf("stale leaf snapshot changed selected leaf to %q", next.Model.LeafID)
+	}
+}
+
 func TestStaleCatalogProjectionWriteIsCanceledOnRuntimeSwitch(t *testing.T) {
 	model := readyModel(t)
 	catalog := &cancelAwareSessionCatalog{started: make(chan struct{})}

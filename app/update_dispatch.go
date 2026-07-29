@@ -131,7 +131,8 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case runtimeLeafSnapshotMsg:
-		if msg.generation != m.Model.EventGeneration {
+		if msg.generation != m.Model.EventGeneration ||
+			msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 			return m, nil, true
 		}
 		if msg.err != nil {
