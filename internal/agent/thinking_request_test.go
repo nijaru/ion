@@ -52,7 +52,7 @@ func TestHarnessThinkingChangeIsDurableBeforeNextPrompt(t *testing.T) {
 	})
 	defer h.Close()
 
-	if err := h.SetThinking(context.Background(), session.ThinkingLow); err != nil {
+	if _, err := h.SetThinking(context.Background(), session.ThinkingLow); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.GetThinkingLevel(); got != session.ThinkingLow {
@@ -103,7 +103,7 @@ func TestHarnessThinkingChangeFailureLeavesLiveStateUnchanged(t *testing.T) {
 	})
 	defer h.Close()
 
-	if err := h.SetThinking(context.Background(), session.ThinkingLow); err == nil {
+	if _, err := h.SetThinking(context.Background(), session.ThinkingLow); err == nil {
 		t.Fatal("thinking persistence unexpectedly succeeded")
 	}
 	if got := h.GetThinkingLevel(); got != session.ThinkingHigh {
@@ -137,7 +137,7 @@ func TestHarnessActiveThinkingFailureRollsBackAndRetries(t *testing.T) {
 		StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 			requests = append(requests, req.ReasoningEffort)
 			if len(requests) == 1 {
-				if err := harness.SetThinking(ctx, session.ThinkingLow); err != nil {
+				if _, err := harness.SetThinking(ctx, session.ThinkingLow); err != nil {
 					return nil, err
 				}
 				close(started)

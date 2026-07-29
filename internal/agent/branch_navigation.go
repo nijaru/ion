@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -17,63 +16,41 @@ Summary of that exploration:
 `
 
 // NavigateTree moves the session leaf and optionally summarizes the abandoned
-// branch. The harness owns the phase and model call; Session owns validation,
-// leaf persistence, and the branch_summary entry.
+// branch. The handler reserves PhaseRecovering before starting this worker;
+// Session owns validation, leaf persistence, and the branch_summary entry.
 func (h *Controller) navigateTreeDirect(
 	ctx context.Context,
 	targetID string,
 	opts NavigateOptions,
 ) (result NavigateResult, err error) {
 	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return result, errors.New("harness is closed")
-	}
-	if h.phase != PhaseReady {
-		phase := h.phase
-		h.mu.Unlock()
-		return result, fmt.Errorf("harness is busy (phase=%s)", phase)
-	}
-	h.phase = PhaseRecovering
-	h.runDone = make(chan struct{})
-	h.runCancel = make(chan struct{})
-	h.runCancelOnce = new(sync.Once)
-	done := h.runDone
-	runCancel := h.runCancel
 	model := h.model
 	thinking := h.thinking
 	stream := h.stream
 	auth := h.auth
 	reserveTokens := h.compaction.ReserveTokens
+	runCancel := h.runCancel
 	h.mu.Unlock()
-
-	defer func() {
-		h.mu.Lock()
-		if h.phase != PhaseClosed {
-			h.phase = PhaseReady
-		}
-		h.runCancel = nil
-		h.runCancelOnce = nil
-		if h.runDone == done {
-			close(done)
-			h.runDone = nil
-		}
-		h.mu.Unlock()
-	}()
 
 	if h.session == nil {
 		return result, errors.New("harness has no session")
 	}
+	if runCancel == nil {
+		return result, errors.New("branch navigation is not reserved")
+	}
+	navigationCtx, releaseNavigationCtx := h.runtimeRunBoundContext(ctx, runCancel)
+	defer releaseNavigationCtx()
+
 	oldLeafID := h.session.GetLeafID()
 	if oldLeafID == targetID {
 		result.LeafID = oldLeafID
 		return result, nil
 	}
-	if _, err := h.session.GetEntry(ctx, targetID); err != nil {
+	if _, err := h.session.GetEntry(navigationCtx, targetID); err != nil {
 		return result, fmt.Errorf("navigate tree: target entry %q not found: %w", targetID, err)
 	}
 
-	entries, err := h.collectBranchEntries(ctx, oldLeafID, targetID)
+	entries, err := h.collectBranchEntries(navigationCtx, oldLeafID, targetID)
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: collect branch: %w", err)
 	}
@@ -81,7 +58,7 @@ func (h *Controller) navigateTreeDirect(
 	var summary *session.BranchSummaryData
 	if opts.Summarize {
 		summary, err = h.summarizeBranch(
-			ctx,
+			navigationCtx,
 			runCancel,
 			entries,
 			model,
@@ -92,20 +69,20 @@ func (h *Controller) navigateTreeDirect(
 			opts.CustomInstructions,
 		)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || navigationCanceled(ctx, runCancel) {
+			if errors.Is(err, context.Canceled) || navigationCanceled(navigationCtx, runCancel) {
 				return result, context.Canceled
 			}
 			return result, fmt.Errorf("navigate tree: summarize branch: %w", err)
 		}
 	}
-	if navigationCanceled(ctx, runCancel) {
+	if navigationCanceled(navigationCtx, runCancel) {
 		return result, context.Canceled
 	}
 
 	if summary != nil {
 		summary.FromID = oldLeafID
 	}
-	result.SummaryEntryID, err = h.session.MoveTo(ctx, targetID, summary)
+	result.SummaryEntryID, err = h.session.MoveTo(navigationCtx, targetID, summary)
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: move session: %w", err)
 	}

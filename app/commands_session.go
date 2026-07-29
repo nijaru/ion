@@ -177,28 +177,48 @@ func (m Model) nameSession(name string) (Model, tea.Cmd) {
 		return m, cmdError("active runtime does not support session naming")
 	}
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
+	leafID := m.currentResumeLeafID()
 	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
-		_, err := namer.AppendSessionInfo(ctx, name)
+		entryID, err := namer.AppendSessionInfo(ctx, leafID, name)
 		if err != nil {
-			return sessionNamedMsg{generation: generation, err: err}
+			return sessionNamedMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				expectedLeafID:        leafID,
+				err:                   err,
+			}
 		}
-		return sessionNamedMsg{generation: generation, name: name}
+		return sessionNamedMsg{
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			expectedLeafID:        leafID,
+			leafID:                entryID,
+			name:                  name,
+		}
 	}
 }
 
 type sessionNamedMsg struct {
-	generation uint64
-	name       string
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	expectedLeafID        string
+	leafID                string
+	name                  string
+	err                   error
 }
 
 func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		!m.sessionMetadataResultMatches(msg.expectedLeafID, msg.treeNavigationRequest) {
 		return m, nil
 	}
 	if msg.err != nil {
 		return m.handleLocalError(msg.err)
+	}
+	if msg.leafID != "" {
+		m.Model.LeafID = msg.leafID
 	}
 	return m, m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
 }
@@ -649,6 +669,13 @@ func (m Model) handleCompactCommand() (Model, tea.Cmd) {
 	}
 }
 
+func (m Model) sessionMetadataResultMatches(expectedLeafID string, treeNavigationRequest uint64) bool {
+	if expectedLeafID != "" {
+		return expectedLeafID == m.currentResumeLeafID()
+	}
+	return treeNavigationRequest == m.Model.TreeNavigationRequest
+}
+
 func (m Model) handleImportCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) < 2 {
 		return m, cmdError("usage: /import <filename>")
@@ -674,35 +701,56 @@ func (m Model) handleLabelCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError("current session leaf is unavailable")
 	}
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 
 	if len(fields) < 2 {
 		// Show current label.
 		return m, func() tea.Msg {
-			label, err := labels.GetLabel(ctx, leafID)
-			return labelShowMsg{generation: generation, label: label, err: err}
+			label, err := labels.GetBranchLabel(ctx, leafID)
+			return labelShowMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				expectedLeafID:        leafID,
+				label:                 label,
+				err:                   err,
+			}
 		}
 	}
 	// Set label.
 	text := strings.Join(fields[1:], " ")
 	return m, func() tea.Msg {
-		_, err := labels.AppendLabel(ctx, leafID, text)
-		return labelShowMsg{generation: generation, label: text, err: err}
+		entryID, err := labels.AppendLabel(ctx, leafID, leafID, text)
+		return labelShowMsg{
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			expectedLeafID:        leafID,
+			leafID:                entryID,
+			label:                 text,
+			err:                   err,
+		}
 	}
 }
 
 type labelShowMsg struct {
-	generation uint64
-	label      string
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	expectedLeafID        string
+	leafID                string
+	label                 string
+	err                   error
 }
 
 func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		!m.sessionMetadataResultMatches(msg.expectedLeafID, msg.treeNavigationRequest) {
 		return m, nil
 	}
 	if msg.err != nil {
 		return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ label: %v", msg.err)))
+	}
+	if msg.leafID != "" {
+		m.Model.LeafID = msg.leafID
 	}
 	if msg.label == "" {
 		return m, m.terminalCommit().Entries(systemEntry("ℹ no label set on current branch"))

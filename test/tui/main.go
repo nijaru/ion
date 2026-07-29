@@ -285,11 +285,13 @@ func (r *smokeRunner) AbortTurn(token uint64) ([]session.Message, []session.Mess
 func (r *smokeRunner) Abort() ([]session.Message, []session.Message, error) {
 	return nil, nil, r.backend.CancelTurn(context.Background())
 }
-func (r *smokeRunner) SetModel(llm.Model) error                                 { return nil }
-func (r *smokeRunner) SetThinking(context.Context, session.ThinkingLevel) error { return nil }
-func (r *smokeRunner) SetTools([]agent.Tool, []string) error                    { return nil }
-func (r *smokeRunner) ActivateTools(context.Context, []string) error            { return nil }
-func (r *smokeRunner) Session() session.Session                                 { return r.sess }
+func (r *smokeRunner) SetModel(llm.Model) error { return nil }
+func (r *smokeRunner) SetThinking(context.Context, session.ThinkingLevel) (string, error) {
+	return "", nil
+}
+func (r *smokeRunner) SetTools([]agent.Tool, []string) error         { return nil }
+func (r *smokeRunner) ActivateTools(context.Context, []string) error { return nil }
+func (r *smokeRunner) Session() session.Session                      { return r.sess }
 func (r *smokeRunner) ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error) {
 	if r.catalog == nil {
 		return nil, fmt.Errorf("session catalog unavailable")
@@ -310,16 +312,23 @@ func (r *smokeRunner) UpdateSession(ctx context.Context, info session.SessionInf
 	}
 	return r.catalog.UpdateSession(ctx, info)
 }
-func (r *smokeRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
+
+func (r *smokeRunner) AppendSessionInfo(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 func (r *smokeRunner) NavigateTree(context.Context, string, agent.NavigateOptions) (agent.NavigateResult, error) {
 	return agent.NavigateResult{}, nil
 }
 
-func (r *smokeRunner) AppendLabel(context.Context, string, string) (string, error) {
+func (r *smokeRunner) AppendLabel(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
 func (r *smokeRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
-func (r *smokeRunner) Compact(context.Context) error                    { return nil }
+func (r *smokeRunner) GetBranchLabel(context.Context, string) (string, error) {
+	return "", nil
+}
+func (r *smokeRunner) Compact(context.Context) error { return nil }
 func (r *smokeRunner) ForkSession(context.Context, string) (string, error) {
 	return "", fmt.Errorf("fork unsupported in smoke runner")
 }

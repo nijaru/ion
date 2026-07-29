@@ -993,11 +993,13 @@ func (m Model) handleRuntimeTransitionCommitted(
 		return m.handleLocalError(msg.err)
 	}
 	transition := msg.transition.WithHandles(m.Handles())
+	var thinkingLeafID string
 	if transition.PersistReasoning && m.Model.Runner != nil {
-		if err := m.Model.Runner.SetThinking(
+		leafID, err := m.Model.Runner.SetThinking(
 			m.runtimeOperationContext(),
 			thinkingLevelForRuntime(transition.Snapshot.Reasoning),
-		); err != nil {
+		)
+		if err != nil {
 			previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
 			if transition.PreviousReasoning != nil {
 				previous = *transition.PreviousReasoning
@@ -1010,8 +1012,12 @@ func (m Model) handleRuntimeTransitionCommitted(
 			rollbackErr := saveRuntimeState(rollback)
 			return m.handleLocalError(errors.Join(err, rollbackErr))
 		}
+		thinkingLeafID = leafID
 	}
 	m.applyRuntimeSnapshot(transition.Snapshot)
+	if thinkingLeafID != "" {
+		m.Model.LeafID = thinkingLeafID
+	}
 	m.clearProgressError()
 	return m, m.terminalCommit().Entries(msg.notice)
 }

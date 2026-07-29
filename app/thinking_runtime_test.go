@@ -81,6 +81,9 @@ func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) 
 	}
 	next, _ := updated.Update(committed)
 	model = testModel(t, next)
+	if model.Model.LeafID != sess.GetLeafID() {
+		t.Fatalf("thinking change leaf = %q, want durable leaf %q", model.Model.LeafID, sess.GetLeafID())
+	}
 
 	if got := model.Progress.ReasoningEffort; got != "high" {
 		t.Fatalf("visible reasoning effort = %q, want high", got)

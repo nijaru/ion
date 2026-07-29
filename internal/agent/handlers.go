@@ -174,7 +174,8 @@ func (c *Controller) handleSetModel(cmd *SetModelCmd) {
 
 func (c *Controller) handleSetThinking(cmd *SetThinkingCmd) {
 	c.startOperation(func() {
-		sendResult(cmd.Reply, c.setThinkingDirect(cmd.Ctx, cmd.Level))
+		leafID, err := c.setThinkingDirect(cmd.Ctx, cmd.Level)
+		sendResult(cmd.Reply, ThinkingResult{LeafID: leafID, Err: err})
 	})
 }
 
@@ -402,22 +403,40 @@ func (c *Controller) handleCompact(cmd *CompactCmd) {
 }
 
 func (c *Controller) handleNavigate(cmd *NavigateCmd) {
+	finish, err := c.beginExclusive(PhaseRecovering)
+	if err != nil {
+		sendResult(cmd.Reply, NavigateCmdResult{Err: err})
+		return
+	}
 	c.startOperation(func() {
 		result, err := c.navigateTreeDirect(cmd.Ctx, cmd.Target, cmd.Opts)
+		finish()
 		sendResult(cmd.Reply, NavigateCmdResult{Result: result, Err: err})
 	})
 }
 
 func (c *Controller) handleAppendSessionInfo(cmd *AppendSessionInfoCmd) {
+	finish, err := c.beginExclusive(PhasePersisting)
+	if err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+		return
+	}
 	c.startOperation(func() {
-		name, err := c.appendSessionInfoDirect(cmd.Ctx, cmd.Name)
+		name, err := c.appendSessionInfoDirect(cmd.Ctx, cmd.ExpectedLeafID, cmd.Name)
+		finish()
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
 	})
 }
 
 func (c *Controller) handleAppendLabel(cmd *AppendLabelCmd) {
+	finish, err := c.beginExclusive(PhasePersisting)
+	if err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+		return
+	}
 	c.startOperation(func() {
-		name, err := c.appendLabelDirect(cmd.Ctx, cmd.Target, cmd.Label)
+		name, err := c.appendLabelDirect(cmd.Ctx, cmd.ExpectedLeafID, cmd.Target, cmd.Label)
+		finish()
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
 	})
 }
@@ -426,6 +445,19 @@ func (c *Controller) handleGetLabel(cmd *GetLabelCmd) {
 	c.startOperation(func() {
 		name, err := c.getLabelDirect(cmd.Ctx, cmd.Target)
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
+	})
+}
+
+func (c *Controller) handleGetBranchLabel(cmd *GetBranchLabelCmd) {
+	finish, err := c.beginExclusive(PhasePersisting)
+	if err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+		return
+	}
+	c.startOperation(func() {
+		label, err := c.getBranchLabelDirect(cmd.Ctx, cmd.LeafID)
+		finish()
+		sendResult(cmd.Reply, SessionInfoResult{Name: label, Err: err})
 	})
 }
 
@@ -956,11 +988,16 @@ func (c *Controller) NavigateTree(ctx context.Context, targetID string, opts Nav
 	return result.Result, result.Err
 }
 
-// AppendSessionInfo updates display metadata.
-func (c *Controller) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+// AppendSessionInfo updates display metadata for the expected active leaf.
+func (c *Controller) AppendSessionInfo(ctx context.Context, expectedLeafID, name string) (string, error) {
 	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
-	cmd := &AppendSessionInfoCmd{Ctx: ctx, Name: name, Reply: reply}
+	cmd := &AppendSessionInfoCmd{
+		Ctx:            ctx,
+		ExpectedLeafID: expectedLeafID,
+		Name:           name,
+		Reply:          reply,
+	}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
@@ -971,11 +1008,20 @@ func (c *Controller) AppendSessionInfo(ctx context.Context, name string) (string
 	return result.Name, result.Err
 }
 
-// AppendLabel writes a branch label.
-func (c *Controller) AppendLabel(ctx context.Context, targetID, label string) (string, error) {
+// AppendLabel writes a branch label for the expected active leaf.
+func (c *Controller) AppendLabel(
+	ctx context.Context,
+	expectedLeafID, targetID, label string,
+) (string, error) {
 	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
-	cmd := &AppendLabelCmd{Ctx: ctx, Target: targetID, Label: label, Reply: reply}
+	cmd := &AppendLabelCmd{
+		Ctx:            ctx,
+		ExpectedLeafID: expectedLeafID,
+		Target:         targetID,
+		Label:          label,
+		Reply:          reply,
+	}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
@@ -991,6 +1037,21 @@ func (c *Controller) GetLabel(ctx context.Context, targetID string) (string, err
 	ctx = commandContext(ctx)
 	reply := make(chan SessionInfoResult, 1)
 	cmd := &GetLabelCmd{Ctx: ctx, Target: targetID, Reply: reply}
+	if err := c.enqueue(ctx, cmd); err != nil {
+		return "", err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return "", err
+	}
+	return result.Name, result.Err
+}
+
+// GetBranchLabel reads the latest label on the explicit branch leaf.
+func (c *Controller) GetBranchLabel(ctx context.Context, leafID string) (string, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionInfoResult, 1)
+	cmd := &GetBranchLabelCmd{Ctx: ctx, LeafID: leafID, Reply: reply}
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}

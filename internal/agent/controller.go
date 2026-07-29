@@ -1259,19 +1259,20 @@ func (h *Controller) setThinkingAtIdle(
 	ctx context.Context,
 	sess session.Session,
 	level session.ThinkingLevel,
-) error {
+) (string, error) {
 	if sess == nil {
-		return errors.New("harness has no session")
+		return "", errors.New("harness has no session")
 	}
 	finish, err := h.beginExclusive(PhasePersisting)
 	if err != nil {
-		return err
+		return "", err
 	}
 	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
 	defer releasePersistCtx()
-	if _, err := sess.AppendThinkingLevelChange(persistCtx, level); err != nil {
+	entryID, err := sess.AppendThinkingLevelChange(persistCtx, level)
+	if err != nil {
 		finish()
-		return fmt.Errorf("persist thinking level: %w", err)
+		return "", fmt.Errorf("persist thinking level: %w", err)
 	}
 	h.mu.Lock()
 	previous := h.thinking
@@ -1279,28 +1280,28 @@ func (h *Controller) setThinkingAtIdle(
 	h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
 	h.mu.Unlock()
 	finish()
-	return nil
+	return entryID, nil
 }
 
 // SetThinking changes the thinking level. Idle changes are durable before the
 // live value changes so the next Prompt cannot restore the previous tree value.
 // Active changes are buffered for the next turn boundary.
-func (h *Controller) setThinkingDirect(ctx context.Context, level session.ThinkingLevel) error {
+func (h *Controller) setThinkingDirect(ctx context.Context, level session.ThinkingLevel) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return errors.New("harness is closed")
+		return "", errors.New("harness is closed")
 	}
 	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
 		phase := h.phase
 		h.mu.Unlock()
-		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
+		return "", fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 	idle := h.phase == PhaseReady
 	sess := h.session
@@ -1312,7 +1313,7 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 	h.mu.Lock()
 	if err := ctx.Err(); err != nil {
 		h.mu.Unlock()
-		return err
+		return "", err
 	}
 	if h.phase == PhaseReady {
 		sess = h.session
@@ -1322,11 +1323,11 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 	if h.phase != PhaseReady && !h.phase.acceptsTurnInput() {
 		phase := h.phase
 		h.mu.Unlock()
-		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
+		return "", fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 	if h.closed {
 		h.mu.Unlock()
-		return errors.New("harness is closed")
+		return "", errors.New("harness is closed")
 	}
 	previous := h.thinking
 	h.thinking = level
@@ -1377,7 +1378,7 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 	}
 	h.emitLocked(session.ThinkingUpdate{Level: level, Previous: previous})
 	h.mu.Unlock()
-	return nil
+	return "", nil
 }
 
 // SetTools changes the active tools.
@@ -1728,24 +1729,36 @@ func (h *Controller) logf(level slog.Level, msg string, attrs ...slog.Attr) {
 	_ = h.log.Handler().Handle(context.Background(), a)
 }
 
-// AppendSessionInfo persists the session display name.
-func (h *Controller) appendSessionInfoDirect(ctx context.Context, name string) (string, error) {
-	finish, err := h.beginExclusive(PhaseReady)
-	if err != nil {
-		return "", err
+// AppendSessionInfo persists the session display name when the active leaf
+// still matches the caller's captured leaf. The caller must hold the
+// controller's PhasePersisting exclusive boundary.
+func (h *Controller) appendSessionInfoDirect(ctx context.Context, expectedLeafID, name string) (string, error) {
+	if actualLeafID := h.session.GetLeafID(); actualLeafID != expectedLeafID {
+		return "", fmt.Errorf(
+			"active session leaf changed from %q to %q",
+			expectedLeafID,
+			actualLeafID,
+		)
 	}
-	defer finish()
-	return h.session.AppendSessionInfo(ctx, name)
+	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
+	defer releasePersistCtx()
+	return h.session.AppendSessionInfo(persistCtx, name)
 }
 
-// AppendLabel attaches a label to a target entry.
-func (h *Controller) appendLabelDirect(ctx context.Context, targetID, label string) (string, error) {
-	finish, err := h.beginExclusive(PhaseReady)
-	if err != nil {
-		return "", err
+// AppendLabel attaches a label to a target entry when the active leaf still
+// matches the caller's captured leaf. The caller must hold the controller's
+// PhasePersisting exclusive boundary.
+func (h *Controller) appendLabelDirect(ctx context.Context, expectedLeafID, targetID, label string) (string, error) {
+	if actualLeafID := h.session.GetLeafID(); actualLeafID != expectedLeafID {
+		return "", fmt.Errorf(
+			"active session leaf changed from %q to %q",
+			expectedLeafID,
+			actualLeafID,
+		)
 	}
-	defer finish()
-	return h.session.AppendLabel(ctx, targetID, label)
+	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
+	defer releasePersistCtx()
+	return h.session.AppendLabel(persistCtx, targetID, label)
 }
 
 // GetLabel returns the most recent label for a target entry.
@@ -1756,4 +1769,21 @@ func (h *Controller) getLabelDirect(ctx context.Context, targetID string) (strin
 	}
 	defer finish()
 	return h.session.GetLabel(ctx, targetID)
+}
+
+// GetBranchLabel returns the latest label persisted on an explicit branch.
+// The caller must provide the leaf captured when the read was accepted.
+func (h *Controller) getBranchLabelDirect(ctx context.Context, leafID string) (string, error) {
+	persistCtx, releasePersistCtx := h.runtimeBoundContext(ctx)
+	defer releasePersistCtx()
+	branch, err := h.session.BranchAt(persistCtx, leafID)
+	if err != nil {
+		return "", err
+	}
+	for i := len(branch) - 1; i >= 0; i-- {
+		if label, ok := branch[i].(*session.LabelEntry); ok {
+			return label.Label, nil
+		}
+	}
+	return "", nil
 }

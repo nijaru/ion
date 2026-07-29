@@ -112,10 +112,15 @@ func (SetModelCmd) command() {}
 type SetThinkingCmd struct {
 	Ctx   context.Context
 	Level session.ThinkingLevel
-	Reply chan<- error
+	Reply chan<- ThinkingResult
 }
 
 func (SetThinkingCmd) command() {}
+
+type ThinkingResult struct {
+	LeafID string
+	Err    error
+}
 
 // SetToolsCmd updates the complete tool registry and active set.
 type SetToolsCmd struct {
@@ -303,9 +308,10 @@ type NavigateCmdResult struct {
 
 // AppendSessionInfoCmd updates display metadata for the active session.
 type AppendSessionInfoCmd struct {
-	Ctx   context.Context
-	Name  string
-	Reply chan<- SessionInfoResult
+	Ctx            context.Context
+	ExpectedLeafID string
+	Name           string
+	Reply          chan<- SessionInfoResult
 }
 
 func (AppendSessionInfoCmd) command() {}
@@ -317,10 +323,11 @@ type SessionInfoResult struct {
 
 // AppendLabelCmd writes a branch label.
 type AppendLabelCmd struct {
-	Ctx    context.Context
-	Target string
-	Label  string
-	Reply  chan<- SessionInfoResult
+	Ctx            context.Context
+	ExpectedLeafID string
+	Target         string
+	Label          string
+	Reply          chan<- SessionInfoResult
 }
 
 func (AppendLabelCmd) command() {}
@@ -333,6 +340,15 @@ type GetLabelCmd struct {
 }
 
 func (GetLabelCmd) command() {}
+
+// GetBranchLabelCmd reads the latest label on an explicit branch leaf.
+type GetBranchLabelCmd struct {
+	Ctx    context.Context
+	LeafID string
+	Reply  chan<- SessionInfoResult
+}
+
+func (GetBranchLabelCmd) command() {}
 
 // ForkSessionCmd creates a new session rooted at a source.
 type ForkSessionCmd struct {

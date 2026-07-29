@@ -224,17 +224,19 @@ func (r *stubRunner) WaitForIdle()               {}
 func (r *stubRunner) Close() error               { return nil }
 func (r *stubRunner) Session() session.Session   { return nil }
 func (r *stubRunner) SetModel(_ llm.Model) error { return nil }
-func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel) error {
+func (r *stubRunner) SetThinking(_ context.Context, level session.ThinkingLevel) (string, error) {
 	if r.thinkingErr != nil {
-		return r.thinkingErr
+		return "", r.thinkingErr
 	}
 	r.thinking = append(r.thinking, level)
-	return nil
+	return "", nil
 }
-func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error                 { return nil }
-func (r *stubRunner) ActivateTools(context.Context, []string) error             { return nil }
-func (r *stubRunner) AppendSessionInfo(context.Context, string) (string, error) { return "", nil }
-func (r *stubRunner) ForkSession(context.Context, string) (string, error)       { return "", nil }
+func (r *stubRunner) SetTools(_ []agent.Tool, _ []string) error     { return nil }
+func (r *stubRunner) ActivateTools(context.Context, []string) error { return nil }
+func (r *stubRunner) AppendSessionInfo(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (r *stubRunner) ForkSession(context.Context, string) (string, error) { return "", nil }
 func (r *stubRunner) ImportSessionBundle(context.Context, ionexport.SessionBundle) (string, error) {
 	return "", nil
 }
@@ -250,10 +252,11 @@ func (r *stubRunner) NavigateTree(
 	return agent.NavigateResult{}, r.navigateErr
 }
 
-func (r *stubRunner) AppendLabel(context.Context, string, string) (string, error) {
+func (r *stubRunner) AppendLabel(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
-func (r *stubRunner) GetLabel(context.Context, string) (string, error) { return "", nil }
+func (r *stubRunner) GetLabel(context.Context, string) (string, error)       { return "", nil }
+func (r *stubRunner) GetBranchLabel(context.Context, string) (string, error) { return "", nil }
 func (r *stubRunner) Compact(_ context.Context) error {
 	r.compacts++
 	return r.compactErr

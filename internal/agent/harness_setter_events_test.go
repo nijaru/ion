@@ -23,7 +23,7 @@ func TestHarnessSettersEmitLifecycleUpdates(t *testing.T) {
 	defer unsubscribe()
 
 	h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})
-	if err := h.SetThinking(context.Background(), session.ThinkingHigh); err != nil {
+	if _, err := h.SetThinking(context.Background(), session.ThinkingHigh); err != nil {
 		t.Fatal(err)
 	}
 	h.SetTools([]Tool{{Name: "read"}}, []string{"read"})

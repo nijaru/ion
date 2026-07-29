@@ -13,22 +13,27 @@ import (
 
 type sessionNamingTestRunner struct {
 	stubRunner
-	ctx        context.Context
-	name       string
-	err        error
-	labelCtx   context.Context
-	labelLeaf  string
-	labelValue string
-	labelErr   error
-	exportCtx  context.Context
-	exportID   string
-	exportErr  error
+	ctx               context.Context
+	nameExpectedLeaf  string
+	nameEntryID       string
+	name              string
+	err               error
+	labelCtx          context.Context
+	labelExpectedLeaf string
+	labelLeaf         string
+	labelEntryID      string
+	labelValue        string
+	labelErr          error
+	exportCtx         context.Context
+	exportID          string
+	exportErr         error
 }
 
-func (r *sessionNamingTestRunner) AppendSessionInfo(ctx context.Context, name string) (string, error) {
+func (r *sessionNamingTestRunner) AppendSessionInfo(ctx context.Context, expectedLeafID, name string) (string, error) {
 	r.ctx = ctx
+	r.nameExpectedLeaf = expectedLeafID
 	r.name = name
-	return "", r.err
+	return r.nameEntryID, r.err
 }
 
 func (r *sessionNamingTestRunner) GetLabel(ctx context.Context, leafID string) (string, error) {
@@ -37,11 +42,21 @@ func (r *sessionNamingTestRunner) GetLabel(ctx context.Context, leafID string) (
 	return r.labelValue, r.labelErr
 }
 
-func (r *sessionNamingTestRunner) AppendLabel(ctx context.Context, leafID, label string) (string, error) {
+func (r *sessionNamingTestRunner) GetBranchLabel(ctx context.Context, leafID string) (string, error) {
 	r.labelCtx = ctx
 	r.labelLeaf = leafID
+	return r.labelValue, r.labelErr
+}
+
+func (r *sessionNamingTestRunner) AppendLabel(
+	ctx context.Context,
+	expectedLeafID, leafID, label string,
+) (string, error) {
+	r.labelCtx = ctx
+	r.labelExpectedLeaf = expectedLeafID
+	r.labelLeaf = leafID
 	r.labelValue = label
-	return "", r.labelErr
+	return r.labelEntryID, r.labelErr
 }
 
 func (r *sessionNamingTestRunner) ExportSessionBundle(
@@ -55,8 +70,9 @@ func (r *sessionNamingTestRunner) ExportSessionBundle(
 
 func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
 	model := readyModel(t)
+	model.Model.LeafID = "leaf-1"
 	expectedContext := model.Model.runtimeContext
-	runner := &sessionNamingTestRunner{}
+	runner := &sessionNamingTestRunner{nameEntryID: "name-entry"}
 	model.Model.Runner = runner
 
 	updated, cmd := model.nameSession("daily driver")
@@ -67,11 +83,21 @@ func TestSessionNameUsesRuntimeOperationContext(t *testing.T) {
 	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
 		t.Fatalf("session name result = %#v", result)
 	}
-	if runner.ctx != expectedContext || runner.name != "daily driver" {
-		t.Fatalf("session name request = context %v, name %q", runner.ctx, runner.name)
+	if runner.ctx != expectedContext ||
+		runner.nameExpectedLeaf != "leaf-1" ||
+		runner.name != "daily driver" {
+		t.Fatalf(
+			"session name request = context %v, expected leaf %q, name %q",
+			runner.ctx,
+			runner.nameExpectedLeaf,
+			runner.name,
+		)
 	}
-	_, cmd = updated.handleSessionNamed(result)
+	next, cmd := updated.handleSessionNamed(result)
 	requireTerminalCommitContains(t, cmd, "Session named: daily driver")
+	if next.Model.LeafID != "name-entry" {
+		t.Fatalf("session name leaf = %q, want name-entry", next.Model.LeafID)
+	}
 }
 
 func TestStaleSessionNameCannotRenderNewRuntime(t *testing.T) {
@@ -96,7 +122,7 @@ func TestSessionLabelUsesRuntimeOperationContext(t *testing.T) {
 	model := readyModel(t)
 	model.Model.LeafID = "leaf-1"
 	expectedContext := model.Model.runtimeContext
-	runner := &sessionNamingTestRunner{}
+	runner := &sessionNamingTestRunner{labelEntryID: "label-entry"}
 	model.Model.Runner = runner
 
 	updated, cmd := model.handleLabelCommand([]string{"/label", "release candidate"})
@@ -107,16 +133,23 @@ func TestSessionLabelUsesRuntimeOperationContext(t *testing.T) {
 	if !ok || result.generation != model.Model.EventGeneration || result.err != nil {
 		t.Fatalf("session label result = %#v", result)
 	}
-	if runner.labelCtx != expectedContext || runner.labelLeaf != "leaf-1" || runner.labelValue != "release candidate" {
+	if runner.labelCtx != expectedContext ||
+		runner.labelExpectedLeaf != "leaf-1" ||
+		runner.labelLeaf != "leaf-1" ||
+		runner.labelValue != "release candidate" {
 		t.Fatalf(
-			"session label request = context %v, leaf %q, label %q",
+			"session label request = context %v, expected leaf %q, leaf %q, label %q",
 			runner.labelCtx,
+			runner.labelExpectedLeaf,
 			runner.labelLeaf,
 			runner.labelValue,
 		)
 	}
-	_, cmd = updated.handleLabelShow(result)
+	next, cmd := updated.handleLabelShow(result)
 	requireTerminalCommitContains(t, cmd, "🏷 label: release candidate")
+	if next.Model.LeafID != "label-entry" {
+		t.Fatalf("session label leaf = %q, want label-entry", next.Model.LeafID)
+	}
 
 	_, cmd = updated.handleLabelShow(labelShowMsg{
 		generation: model.Model.EventGeneration,
@@ -140,6 +173,109 @@ func TestStaleSessionLabelCannotRenderNewRuntime(t *testing.T) {
 	}
 	if next.App.PrintedTranscript {
 		t.Fatal("stale session label rendered into the new runtime")
+	}
+}
+
+func TestStaleSessionMetadataCannotRenderNavigatedBranch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionNamed(sessionNamedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		name:                  "old branch",
+		err:                   errors.New("old name failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale same-runtime session name returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale same-runtime session name rendered into the navigated branch")
+	}
+
+	next, cmd = model.handleLabelShow(labelShowMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		label:                 "old branch",
+		err:                   errors.New("old label failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale same-runtime label returned a command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale same-runtime label rendered into the navigated branch")
+	}
+}
+
+func TestDelayedSessionMetadataCannotRegressCurrentLeaf(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.LeafID = "current-leaf"
+	model.App.PrintedTranscript = false
+
+	next, cmd := model.handleSessionNamed(sessionNamedMsg{
+		generation:     1,
+		expectedLeafID: "old-leaf",
+		leafID:         "old-name-entry",
+		name:           "old name",
+	})
+	if cmd != nil {
+		t.Fatal("delayed session name returned a command")
+	}
+	if next.Model.LeafID != "current-leaf" || next.App.PrintedTranscript {
+		t.Fatalf(
+			"delayed session name changed projection: leaf=%q printed=%v",
+			next.Model.LeafID,
+			next.App.PrintedTranscript,
+		)
+	}
+
+	next, cmd = model.handleLabelShow(labelShowMsg{
+		generation:     1,
+		expectedLeafID: "old-leaf",
+		leafID:         "old-label-entry",
+		label:          "old label",
+	})
+	if cmd != nil {
+		t.Fatal("delayed label returned a command")
+	}
+	if next.Model.LeafID != "current-leaf" || next.App.PrintedTranscript {
+		t.Fatalf("delayed label changed projection: leaf=%q printed=%v", next.Model.LeafID, next.App.PrintedTranscript)
+	}
+}
+
+func TestMetadataCompletionSurvivesRejectedNavigationEpoch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "current-leaf"
+
+	next, cmd := model.handleSessionNamed(sessionNamedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		expectedLeafID:        "current-leaf",
+		leafID:                "named-leaf",
+		name:                  "current name",
+	})
+	requireTerminalCommitContains(t, cmd, "Session named: current name")
+	if next.Model.LeafID != "named-leaf" {
+		t.Fatalf("session name leaf = %q, want named-leaf", next.Model.LeafID)
+	}
+
+	next.Model.LeafID = "current-leaf"
+	next.App.PrintedTranscript = false
+	next, cmd = next.handleLabelShow(labelShowMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		expectedLeafID:        "current-leaf",
+		leafID:                "labeled-leaf",
+		label:                 "current label",
+	})
+	requireTerminalCommitContains(t, cmd, "🏷 label: current label")
+	if next.Model.LeafID != "labeled-leaf" {
+		t.Fatalf("session label leaf = %q, want labeled-leaf", next.Model.LeafID)
 	}
 }
 

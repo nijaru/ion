@@ -359,7 +359,8 @@ type Runtime interface {
 
 	// SetThinking changes the thinking level. Idle changes are durable before
 	// the live value changes; active changes are applied at the next boundary.
-	SetThinking(ctx context.Context, level session.ThinkingLevel) error
+	// It returns the new durable leaf when an idle append succeeds.
+	SetThinking(ctx context.Context, level session.ThinkingLevel) (string, error)
 
 	// SetTools updates the complete tool registry and active tool set. Active
 	// names must exist in the replacement registry.
@@ -461,9 +462,9 @@ type InputHistory interface {
 	AddInput(ctx context.Context, workdir, input string) error
 }
 
-// SessionNamer updates the display metadata for the active session.
+// SessionNamer updates the display metadata for the expected active session leaf.
 type SessionNamer interface {
-	AppendSessionInfo(ctx context.Context, name string) (string, error)
+	AppendSessionInfo(ctx context.Context, expectedLeafID, name string) (string, error)
 }
 
 // SessionForker creates a new session rooted at a source session.
@@ -479,8 +480,9 @@ type SessionNavigator interface {
 
 // SessionLabels reads and writes branch labels.
 type SessionLabels interface {
-	AppendLabel(ctx context.Context, targetID, label string) (string, error)
+	AppendLabel(ctx context.Context, expectedLeafID, targetID, label string) (string, error)
 	GetLabel(ctx context.Context, targetID string) (string, error)
+	GetBranchLabel(ctx context.Context, leafID string) (string, error)
 }
 
 // Compactor requests a context compaction at a safe runtime boundary.

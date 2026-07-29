@@ -253,6 +253,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleAppendLabel(cmd)
 	case *GetLabelCmd:
 		c.handleGetLabel(cmd)
+	case *GetBranchLabelCmd:
+		c.handleGetBranchLabel(cmd)
 	case *ForkSessionCmd:
 		c.handleForkSession(cmd)
 	case *ExportSessionBundleCmd:
@@ -310,7 +312,7 @@ func (c *Controller) rejectCommand(cmd Command) {
 	case *SetModelCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *SetThinkingCmd:
-		sendResult(cmd.Reply, ErrRuntimeClosed)
+		sendResult(cmd.Reply, ThinkingResult{Err: ErrRuntimeClosed})
 	case *SetToolsCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *ActivateToolsCmd:
@@ -326,6 +328,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 	case *AppendLabelCmd:
 		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
 	case *GetLabelCmd:
+		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
+	case *GetBranchLabelCmd:
 		sendResult(cmd.Reply, SessionInfoResult{Err: ErrRuntimeClosed})
 	case *ForkSessionCmd:
 		sendResult(cmd.Reply, ForkResult{Err: ErrRuntimeClosed})
@@ -435,6 +439,31 @@ func (c *Controller) runtimeBoundContext(parent context.Context) (context.Contex
 	return ctx, func() {
 		stop()
 		cancel()
+	}
+}
+
+// runtimeRunBoundContext combines a caller context, runtime lifetime, and an
+// operation cancel signal. The joined worker observes Close and Abort even
+// when the caller passed context.Background().
+func (c *Controller) runtimeRunBoundContext(
+	parent context.Context,
+	runCancel <-chan struct{},
+) (context.Context, func()) {
+	ctx, releaseRuntime := c.runtimeBoundContext(parent)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-runCancel:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, func() {
+		cancel()
+		releaseRuntime()
+		<-done
 	}
 }
 
@@ -779,18 +808,19 @@ func (c *Controller) SetModel(model llm.Model) error {
 }
 
 // SetThinking changes the thinking level.
-func (c *Controller) SetThinking(ctx context.Context, level session.ThinkingLevel) error {
+func (c *Controller) SetThinking(ctx context.Context, level session.ThinkingLevel) (string, error) {
 	ctx = commandContext(ctx)
-	reply := make(chan error, 1)
+	reply := make(chan ThinkingResult, 1)
 	cmd := &SetThinkingCmd{Ctx: ctx, Level: level, Reply: reply}
 	// Once accepted, setter mutation has one authoritative outcome. Wait for
 	// the command result instead of returning early on caller cancellation;
 	// the handler checks the context before mutation and persistence is bound to
 	// the same runtime lifetime.
 	if err := c.enqueue(ctx, cmd); err != nil {
-		return err
+		return "", err
 	}
-	return <-reply
+	result := <-reply
+	return result.LeafID, result.Err
 }
 
 // SetTools updates the complete tool registry and active set.
