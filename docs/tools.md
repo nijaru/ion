@@ -39,17 +39,18 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current registered and active tool names. Shell execution defaults to `auto`,
-selecting the available macOS seatbelt or Linux bubblewrap backend and failing
-closed when no backend is available. Use `ION_SANDBOX=off` only as an explicit
-unsandboxed technical boundary.
+current registered and active tool names. Shell execution defaults to trusted
+local execution with the launching user's permissions and environment. Set
+`ION_SANDBOX=seatbelt` or `ION_SANDBOX=bubblewrap` to select an enforceable OS
+boundary explicitly; `auto` selects an available backend and fails clearly
+when none exists. `ION_SANDBOX=off` is the explicit spelling for the same
+unrestricted boundary.
 
 Shell environment inheritance is controlled by `tool_env` in
-`~/.ion/config.toml`. The default `allowlist` passes only a small explicit
-non-secret runtime environment to native Bash; provider credentials and
-arbitrary host variables are excluded. `inherit_without_provider_keys` and
-`inherit` are explicit escape hatches, not safe defaults. MCP stdio servers
-start from the same allowlist and then receive only their explicitly
+`~/.ion/config.toml`. The default is `inherit`, matching trusted local
+execution. Select `allowlist` or `inherit_without_provider_keys` when the
+operator wants to reduce credential or host-variable exposure. MCP stdio
+servers still start from a minimal allowlist and receive only their explicitly
 configured overrides.
 
 Skill tools are runtime-configured rather than silently enabled. Set
@@ -82,10 +83,11 @@ Long native `bash` output uses tail semantics: Ion keeps the last 2000 lines or
 file referenced in the tool result. This preserves final test summaries and
 compiler errors instead of returning only the command's head.
 
-External actions use the durable runtime action boundary. The default policy is
-interactive confirmation; set `trust_mode = "confirm"` explicitly or pass
-`--trust-mode confirm`. `trusted` is an explicit unsandboxed policy choice, not
-an implicit default. Requirement-bearing tools are durably prepared and bound
+External actions use the durable runtime action boundary. The default
+policy is trusted local execution; set `trust_mode = "confirm"` explicitly or
+pass `--trust-mode confirm` to require interactive confirmation. Confirmation
+and sandboxing are separate controls. Requirement-bearing tools are durably
+prepared and bound
 to their normalized operation fingerprint before the TUI offers allow, allow
 for the rest of the runtime, or deny. Denying produces a recoverable error
 result without running the tool. Print mode and shutdown fail closed because
@@ -123,8 +125,9 @@ directory = "."
 EXAMPLE_TOKEN = "literal-value-for-the-server"
 ```
 
-MCP server sandboxes are read-only and network-denied by default. Grant only
-the capabilities that the server requires:
+When an explicit sandbox mode is selected, MCP server sandboxes are read-only
+and network-denied by default. Grant only the capabilities that the server
+requires:
 
 ```toml
 [[mcp_servers]]
@@ -139,9 +142,10 @@ MCP servers can read their configured directory and the minimal runtime paths
 needed by the selected sandbox. `read_paths` grants additional existing paths
 relative to the server directory. `writable_paths` are existing paths relative
 to that directory; `protected_paths` remain read-only even when a writable root
-covers them. `allow_network` is an explicit per-server capability. If the selected
-OS sandbox cannot enforce the requested policy—or `ION_SANDBOX=off` is set—Ion
-rejects the MCP runtime instead of silently widening its access.
+covers them. `allow_network` is an explicit per-server capability. In trusted
+`ION_SANDBOX=off` mode, the OS boundary is intentionally unrestricted; an
+explicit sandbox mode still rejects the MCP runtime when its backend cannot
+be enforced.
 
 Configured servers connect and discover tools atomically during runtime
 startup. External tools are exposed under `mcp_<server>_<tool>` names, are
@@ -212,10 +216,12 @@ Those wrappers own product-level names, line-numbered reads, ripgrep search,
 checkpoints, compact TUI display, and edit error messages tuned for coding-agent
 recovery.
 
-The same boundary applies to Ion's skill primitives. Ion uses a validated skill
-registry plus `read_skill`; it owns install UX, trust policy, prompt exposure,
-and whether skill tools are model-visible at all. Ion's current `/skills`
-command is read-only discovery, not activation.
+The same boundary applies to Ion's skill primitives. Ion uses a validated
+skill registry plus `read_skill`; it owns prompt exposure and whether skill
+tools are model-visible at all. Project-trust gating for project-local
+instructions, prompts, and extensions is not yet implemented; do not treat
+repository content as a security authority. Ion's current `/skills` command is
+read-only discovery, not activation.
 
 `/rewind` is a separate explicit checkpoint capability; writes and edits do not
 create checkpoints as a hidden side effect. Use `/rewind` to list recent

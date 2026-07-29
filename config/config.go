@@ -659,7 +659,7 @@ func (c *Config) ActiveToolMode() string {
 
 func (c *Config) ToolEnvMode() string {
 	if c == nil {
-		return "allowlist"
+		return "inherit"
 	}
 	return normalizeToolEnv(c.ToolEnv)
 }
@@ -787,10 +787,13 @@ func NormalizeBusyInput(value string) string {
 	}
 }
 
-// NormalizeTrustMode returns the host's tool trust policy. Unknown and empty
-// values fail closed to the interactive confirm mode; trusted is explicit.
+// NormalizeTrustMode returns the host's tool trust policy. Empty values use
+// the Pi-style trusted local default; unknown non-empty values fail closed to
+// interactive confirmation.
 func NormalizeTrustMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return "trusted"
 	case "confirm", "approval", "approvals", "ask":
 		return "confirm"
 	case "trusted", "trust", "local":
@@ -804,7 +807,7 @@ func normalizeTrustMode(value string) string { return NormalizeTrustMode(value) 
 
 func (c *Config) ToolTrustMode() string {
 	if c == nil {
-		return "confirm"
+		return "trusted"
 	}
 	return NormalizeTrustMode(c.TrustMode)
 }
@@ -853,10 +856,10 @@ func normalizeToolMode(value string) string {
 
 func normalizeToolEnv(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "inherit":
+		return "inherit"
 	case "allowlist", "safe", "default":
 		return "allowlist"
-	case "inherit":
-		return "inherit"
 	case "inherit_without_provider_keys":
 		return "inherit_without_provider_keys"
 	default:

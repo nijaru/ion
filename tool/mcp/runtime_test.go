@@ -275,13 +275,18 @@ func TestOpenFailsClosedWhenSandboxConfigurationIsInvalid(t *testing.T) {
 	}
 }
 
-func TestOpenFailsClosedWhenPerServerPolicyCannotBeEnforced(t *testing.T) {
+func TestOpenAllowsTrustedMCPWithoutSandbox(t *testing.T) {
 	t.Setenv("ION_SANDBOX", "off")
-	if _, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
-		Name:    "unsandboxed",
+	runtime, err := Open(t.Context(), t.TempDir(), []ServerConfig{{
+		Name:    "trusted",
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestMCPHelperProcess"},
-	}}); err == nil || !strings.Contains(err.Error(), "cannot be enforced") {
-		t.Fatalf("Open with unsandboxed MCP policy error = %v, want fail-closed policy error", err)
+		Env:     map[string]string{"ION_MCP_HELPER": "1"},
+	}})
+	if err != nil {
+		t.Fatalf("Open with trusted MCP = %v, want direct execution", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close trusted MCP: %v", err)
 	}
 }

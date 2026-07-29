@@ -27,10 +27,10 @@ func TestPlanSandboxedBashOffUsesPlainBash(t *testing.T) {
 	}
 }
 
-func TestResolveSandboxModeDefaultsToAuto(t *testing.T) {
+func TestResolveSandboxModeDefaultsToTrustedExecution(t *testing.T) {
 	t.Setenv("ION_SANDBOX", "")
-	if got := resolveSandboxMode(); got != SandboxAuto {
-		t.Fatalf("default sandbox mode = %s, want %s", got, SandboxAuto)
+	if got := resolveSandboxMode(); got != SandboxOff {
+		t.Fatalf("default sandbox mode = %s, want %s", got, SandboxOff)
 	}
 }
 

@@ -105,7 +105,7 @@ func resolveSandboxMode() SandboxMode {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("ION_SANDBOX")))
 	switch raw {
 	case "":
-		return SandboxAuto
+		return SandboxOff
 	case string(SandboxAuto):
 		return SandboxAuto
 	case string(SandboxOff):

@@ -26,7 +26,7 @@ var (
 func NewBash(cwd string) *Bash {
 	return NewBashWithEnvironment(
 		cwd,
-		NewEnvironmentPolicy(executorEnvironmentAllowlist, nil),
+		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
 	)
 }
 

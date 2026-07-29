@@ -125,18 +125,24 @@ func Open(ctx context.Context, workdir string, configs []ServerConfig) (*Runtime
 			runtime.Close()
 			return nil, fmt.Errorf("mcp server %q: %w", name, err)
 		}
-		plan, err := tool.PlanSandboxedCommandWithPolicy(
-			directory,
-			cfg.Command,
-			cfg.Args,
-			tool.CurrentSandboxMode(),
-			tool.SandboxPolicy{
-				ReadPaths:      readAbsolute,
-				WritePaths:     writableAbsolute,
-				ProtectedPaths: protectedAbsolute,
-				AllowNetwork:   cfg.AllowNetwork,
-			},
-		)
+		mode := tool.CurrentSandboxMode()
+		var plan tool.SandboxCommandPlan
+		if mode == tool.SandboxOff {
+			plan, err = tool.PlanSandboxedCommand(directory, cfg.Command, cfg.Args, mode)
+		} else {
+			plan, err = tool.PlanSandboxedCommandWithPolicy(
+				directory,
+				cfg.Command,
+				cfg.Args,
+				mode,
+				tool.SandboxPolicy{
+					ReadPaths:      readAbsolute,
+					WritePaths:     writableAbsolute,
+					ProtectedPaths: protectedAbsolute,
+					AllowNetwork:   cfg.AllowNetwork,
+				},
+			)
+		}
 		if err != nil {
 			cancel()
 			runtime.Close()

@@ -46,7 +46,7 @@ func TestRuntimeCodingToolsConfigAppliesCredentialEnvironmentPolicy(t *testing.T
 	}
 }
 
-func TestRuntimeCodingToolsConfigUsesSafeEnvironmentByDefault(t *testing.T) {
+func TestRuntimeCodingToolsConfigInheritsEnvironmentByDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("ION_RUNTIME_VISIBLE", "not-allowlisted")
@@ -70,8 +70,8 @@ func TestRuntimeCodingToolsConfigUsesSafeEnvironmentByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bash execute error = %v", err)
 	}
-	if got, want := strings.TrimSpace(output), ":"; got != want {
-		t.Fatalf("default bash environment = %q, want both variables absent", got)
+	if got, want := strings.TrimSpace(output), "secret:not-allowlisted"; got != want {
+		t.Fatalf("default bash environment = %q, want inherited host environment", got)
 	}
 }
 
