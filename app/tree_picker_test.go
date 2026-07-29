@@ -162,6 +162,9 @@ func TestSuccessfulTreeNavigationUpdatesSelectedLeafBeforeReplay(t *testing.T) {
 	if got, want := next.Model.LeafID, "selected-leaf"; got != want {
 		t.Fatalf("selected leaf = %q, want navigation leaf %q", got, want)
 	}
+	if got, want := next.Model.TreeNavigationRequest, uint64(2); got != want {
+		t.Fatalf("navigation epoch = %d, want %d after completion", got, want)
+	}
 }
 
 func TestSuccessfulBranchReplayUpdatesSelectedLeaf(t *testing.T) {

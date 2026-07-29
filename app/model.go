@@ -32,9 +32,10 @@ type sessionEventMsg struct {
 }
 
 type runtimeSubscriptionMsg struct {
-	generation   uint64
-	subscription *agent.EventSubscription
-	err          error
+	generation            uint64
+	treeNavigationRequest uint64
+	subscription          *agent.EventSubscription
+	err                   error
 }
 
 // eventSubscriptionState prevents more than one asynchronous subscription
@@ -406,8 +407,10 @@ type ModelState struct {
 	runtimeRequestCancel  context.CancelFunc
 	// treeNavigationCancel is the per-request cancellation boundary for branch
 	// navigation. It must not use Runtime.Abort, which is global to the runtime.
-	treeNavigationCancel  context.CancelFunc
-	RuntimeSwitchRequest  uint64
+	treeNavigationCancel context.CancelFunc
+	RuntimeSwitchRequest uint64
+	// TreeNavigationRequest fences branch navigation, replay, and runtime
+	// snapshots across both the accepted operation and its completion.
 	TreeNavigationRequest uint64
 	// TreeLoadRequest fences same-runtime session-tree reads so an older open
 	// or refresh result cannot overwrite a newer picker snapshot.

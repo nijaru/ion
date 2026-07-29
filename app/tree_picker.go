@@ -323,12 +323,15 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	}
 	// Close tree picker and replay entries from the new branch position. The
 	// navigation result is authoritative immediately; branch replay then
-	// refreshes the transcript projection and confirms the same leaf.
+	// refreshes the transcript projection and confirms the same leaf. Advance
+	// the epoch after the mutation so snapshots captured during navigation are
+	// also rejected.
 	m = m.closeTreePicker()
 	if msg.leafID != "" {
 		m.Model.LeafID = msg.leafID
 	}
-	return m, m.replayCurrentBranch(msg.requestID)
+	m.Model.TreeNavigationRequest++
+	return m, m.replayCurrentBranch(m.Model.TreeNavigationRequest)
 }
 
 // replayCurrentBranch loads entries from the current session branch and replays them.

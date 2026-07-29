@@ -519,6 +519,7 @@ func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
 
 func (m Model) awaitSessionEvent() tea.Cmd {
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	if m.Model.EventSubscription == nil {
 		if state := m.Model.EventSubscriptionState; state != nil {
 			if state.pending && state.generation == generation {
@@ -532,8 +533,9 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 		return func() tea.Msg {
 			if runner == nil {
 				return runtimeSubscriptionMsg{
-					generation: generation,
-					err:        errors.New("session event stream unavailable"),
+					generation:            generation,
+					treeNavigationRequest: treeNavigationRequest,
+					err:                   errors.New("session event stream unavailable"),
 				}
 			}
 			source, ok := runner.(interface {
@@ -541,12 +543,18 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 			})
 			if !ok {
 				return runtimeSubscriptionMsg{
-					generation: generation,
-					err:        errors.New("runtime subscription unavailable"),
+					generation:            generation,
+					treeNavigationRequest: treeNavigationRequest,
+					err:                   errors.New("runtime subscription unavailable"),
 				}
 			}
 			subscription, err := source.Subscribe(m.runtimeOperationContext(), after)
-			return runtimeSubscriptionMsg{generation: generation, subscription: subscription, err: err}
+			return runtimeSubscriptionMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				subscription:          subscription,
+				err:                   err,
+			}
 		}
 	}
 	subscription := m.Model.EventSubscription

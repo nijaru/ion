@@ -267,6 +267,31 @@ func TestQueueUpdateReplacesProjectedRuntimeQueues(t *testing.T) {
 	}
 }
 
+func TestStaleSubscriptionSnapshotCannotOverwriteNavigationProjection(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.Model.LeafID = "selected-leaf"
+
+	next, cmd, handled := model.dispatchTurnControllerMessage(runtimeSubscriptionMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		subscription: &agent.EventSubscription{
+			Snapshot: agent.RuntimeSnapshot{LeafID: "stale-leaf", Phase: agent.PhaseReady},
+			Events:   make(chan agent.EventEnvelope),
+		},
+	})
+	if !handled {
+		t.Fatal("stale subscription result was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("stale subscription did not request a replacement snapshot")
+	}
+	if next.Model.LeafID != "selected-leaf" {
+		t.Fatalf("stale subscription changed selected leaf to %q", next.Model.LeafID)
+	}
+}
+
 func TestInitialSubscriptionRehydratesPendingApproval(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1
