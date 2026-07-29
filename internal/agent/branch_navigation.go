@@ -66,6 +66,7 @@ func (h *Controller) navigateTreeDirect(
 	}
 	oldLeafID := h.session.GetLeafID()
 	if oldLeafID == targetID {
+		result.LeafID = oldLeafID
 		return result, nil
 	}
 	if _, err := h.session.GetEntry(ctx, targetID); err != nil {
@@ -108,6 +109,7 @@ func (h *Controller) navigateTreeDirect(
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: move session: %w", err)
 	}
+	result.LeafID = h.session.GetLeafID()
 	return result, nil
 }
 

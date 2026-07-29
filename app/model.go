@@ -434,8 +434,9 @@ type ModelState struct {
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
 	// registry-level startup description.
 	ActiveTools []string
-	// LeafID is the current runtime-selected tree leaf from the authoritative
-	// event snapshot. It is a render/query hint, never a mutation authority.
+	// LeafID is the current runtime-selected tree leaf from an authoritative
+	// event snapshot or successful branch replay. It is a render/query hint,
+	// never a mutation authority.
 	LeafID string
 }
 

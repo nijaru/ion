@@ -121,6 +121,46 @@ func TestStaleSameGenerationBranchReplayCannotOverwriteCurrentNavigation(t *test
 	}
 }
 
+func TestSuccessfulTreeNavigationUpdatesSelectedLeafBeforeReplay(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 1
+	model.Model.LeafID = "abandoned-leaf"
+	model.Picker.BranchSummary = &branchSummaryPromptState{targetID: "selected-leaf"}
+
+	next, _ := model.handleTreePickerMove(treePickerMoveMsg{
+		generation: 1,
+		requestID:  1,
+		leafID:     "selected-leaf",
+	})
+	if got, want := next.Model.LeafID, "selected-leaf"; got != want {
+		t.Fatalf("selected leaf = %q, want navigation leaf %q", got, want)
+	}
+}
+
+func TestSuccessfulBranchReplayUpdatesSelectedLeaf(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 1
+	model.Model.LeafID = "abandoned-leaf"
+	entries := []session.Entry{agentMsgEntry("root"), agentMsgEntry("selected")}
+
+	next, cmd, handled := model.dispatchPickerControllerMessage(replayBranchMsg{
+		generation: 1,
+		requestID:  1,
+		entries:    entries,
+	})
+	if !handled {
+		t.Fatal("branch replay was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("branch replay did not schedule terminal output")
+	}
+	if got, want := next.Model.LeafID, entries[len(entries)-1].ID(); got != want {
+		t.Fatalf("selected leaf = %q, want replay leaf %q", got, want)
+	}
+}
+
 func TestTreeNavigationFailuresReturnTerminalCommands(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 1

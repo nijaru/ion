@@ -495,7 +495,9 @@ type NavigateOptions struct {
 	CustomInstructions string
 }
 
-// NavigateResult reports the durable entry created by branch summarization.
+// NavigateResult reports the durable leaf selected by navigation and, when
+// requested, the entry created by branch summarization.
 type NavigateResult struct {
+	LeafID         string
 	SummaryEntryID string
 }

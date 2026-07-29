@@ -40,6 +40,7 @@ type treePickerLoadedMsg struct {
 type treePickerMoveMsg struct {
 	generation uint64
 	requestID  uint64
+	leafID     string
 	err        error
 	cancelled  bool
 }
@@ -304,8 +305,13 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 			systemEntry(fmt.Sprintf("⚠ tree navigation failed: %v", msg.err)),
 		)
 	}
-	// Close tree picker and replay entries from the new branch position.
+	// Close tree picker and replay entries from the new branch position. The
+	// navigation result is authoritative immediately; branch replay then
+	// refreshes the transcript projection and confirms the same leaf.
 	m = m.closeTreePicker()
+	if msg.leafID != "" {
+		m.Model.LeafID = msg.leafID
+	}
 	return m, m.replayCurrentBranch(msg.requestID)
 }
 
@@ -342,6 +348,13 @@ func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
 	}
 	if msg.err != nil {
 		return m.handleLocalError(fmt.Errorf("load selected branch: %w", msg.err))
+	}
+	// Tree navigation does not emit a runtime lifecycle event. The successful
+	// branch read is therefore the authoritative post-navigation projection;
+	// keep the cached leaf aligned before later label/export/resume commands
+	// consult it.
+	if len(msg.entries) > 0 {
+		m.Model.LeafID = msg.entries[len(msg.entries)-1].ID()
 	}
 	var lines []string
 	lines = append(lines, "--- moved to branch ---")

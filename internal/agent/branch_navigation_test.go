@@ -55,6 +55,9 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	if result.SummaryEntryID == "" {
 		t.Fatal("summary entry ID is empty")
 	}
+	if result.LeafID != sess.GetLeafID() || result.LeafID != result.SummaryEntryID {
+		t.Fatalf("navigation leaf = %q, want summary leaf %q", result.LeafID, result.SummaryEntryID)
+	}
 	if request.Model != "summary-model" || len(request.Messages) != 2 {
 		t.Fatalf(
 			"summary request = model %q with %d messages, want summary-model with 2",
