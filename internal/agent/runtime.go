@@ -100,6 +100,7 @@ type Controller struct {
 	runContextCancel context.CancelFunc
 	runDone          chan struct{} // closed when run finishes
 	turnWorkers      sync.WaitGroup
+	dispatchWorkers  sync.WaitGroup
 	operationWorkers sync.WaitGroup
 	completions      chan turnCompletion
 	runtimeRequests  chan runtimeRequest
@@ -179,11 +180,14 @@ func (c *Controller) run() {
 	for {
 		select {
 		case cmd := <-c.commands:
-			if c.isClosed() {
+			if !c.beginDispatch() {
 				c.rejectCommand(cmd)
-			} else {
-				c.dispatch(cmd)
+				continue
 			}
+			func() {
+				defer c.dispatchWorkers.Done()
+				c.dispatch(cmd)
+			}()
 		case completion := <-c.completions:
 			c.handleTurnCompletion(completion)
 		case <-c.nextTurnWake:
@@ -628,6 +632,16 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 	}, nil
 }
 
+func (c *Controller) beginDispatch() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.dispatchWorkers.Add(1)
+	return true
+}
+
 // startOperation runs controller-owned external work while retaining a join
 // handle for shutdown. The caller is on the command goroutine, so registering
 // the worker under mu prevents Close from racing a late Add with Wait.
@@ -895,6 +909,11 @@ func (c *Controller) Close() error {
 
 	// Cancel any active run.
 	c.cancelCurrentRun()
+
+	// Wait for a command already selected by the loop to finish dispatching
+	// before joining workers. This closes the gap where a handler could register
+	// an operation after operationWorkers.Wait had observed a zero count.
+	c.dispatchWorkers.Wait()
 
 	// Keep the command loop alive while the prompt worker publishes its typed
 	// completion. The completion handler owns phase, turn identity, and the

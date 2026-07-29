@@ -4,9 +4,35 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/session"
 )
+
+func TestCloseJoinsDispatchBeforeWorkers(t *testing.T) {
+	store := newTestStore(t)
+	h := NewController(ControllerConfig{Session: session.NewSession(store, 64), Store: store})
+	if !h.beginDispatch() {
+		t.Fatal("dispatch reservation was rejected")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- h.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("close returned before dispatch completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	h.dispatchWorkers.Done()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close did not join dispatch")
+	}
+}
 
 func TestRejectQueuedBranchLabelCommand(t *testing.T) {
 	reply := make(chan SessionInfoResult, 1)
