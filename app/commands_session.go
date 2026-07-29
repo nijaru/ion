@@ -108,41 +108,54 @@ func (m Model) importSession(filename string) (Model, tea.Cmd) {
 		return m, cmdError("active runtime does not support import")
 	}
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(filename)
 		if err != nil {
-			return sessionImportedMsg{generation: generation, err: err}
+			return sessionImportedMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   err,
+			}
 		}
 		var bundle ionexport.SessionBundle
 		if err := json.Unmarshal(data, &bundle); err != nil {
 			return sessionImportedMsg{
-				generation: generation,
-				err:        fmt.Errorf("decode Ion session bundle: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("decode Ion session bundle: %w", err),
 			}
 		}
 		bundle.RootSessionID = ""
 		imported, err := importer.ImportSessionBundle(ctx, bundle)
 		if err != nil {
-			return sessionImportedMsg{generation: generation, err: err}
+			return sessionImportedMsg{
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   err,
+			}
 		}
 		return sessionImportedMsg{
-			generation: generation,
-			sessionID:  imported,
-			filename:   filename,
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			sessionID:             imported,
+			filename:              filename,
 		}
 	}
 }
 
 type sessionImportedMsg struct {
-	generation uint64
-	sessionID  string
-	filename   string
-	err        error
+	generation            uint64
+	treeNavigationRequest uint64
+	sessionID             string
+	filename              string
+	err                   error
 }
 
 func (m Model) handleSessionImported(msg sessionImportedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -283,13 +296,15 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 		return m, cmdError("active runtime does not support import")
 	}
 	generation := m.Model.EventGeneration
+	treeNavigationRequest := m.Model.TreeNavigationRequest
 	ctx := m.runtimeOperationContext()
 	return m, func() tea.Msg {
 		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
 		if err != nil {
 			return sessionClonedMsg{
-				generation: generation,
-				err:        fmt.Errorf("export session: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("export session: %w", err),
 			}
 		}
 		// Clear the root session ID so import creates a new session
@@ -297,28 +312,36 @@ func (m Model) cloneSession() (Model, tea.Cmd) {
 		imported, err := importer.ImportSessionBundle(ctx, bundle)
 		if err != nil {
 			return sessionClonedMsg{
-				generation: generation,
-				err:        fmt.Errorf("import session: %w", err),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("import session: %w", err),
 			}
 		}
 		if len(imported) == 0 {
 			return sessionClonedMsg{
-				generation: generation,
-				err:        fmt.Errorf("no sessions imported"),
+				generation:            generation,
+				treeNavigationRequest: treeNavigationRequest,
+				err:                   fmt.Errorf("no sessions imported"),
 			}
 		}
-		return sessionClonedMsg{generation: generation, newSessionID: imported}
+		return sessionClonedMsg{
+			generation:            generation,
+			treeNavigationRequest: treeNavigationRequest,
+			newSessionID:          imported,
+		}
 	}
 }
 
 type sessionClonedMsg struct {
-	generation   uint64
-	newSessionID string
-	err          error
+	generation            uint64
+	treeNavigationRequest uint64
+	newSessionID          string
+	err                   error
 }
 
 func (m Model) handleSessionCloned(msg sessionClonedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.treeNavigationRequest != m.Model.TreeNavigationRequest {
 		return m, nil
 	}
 	if msg.err != nil {

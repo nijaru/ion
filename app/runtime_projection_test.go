@@ -1007,9 +1007,10 @@ func TestStaleSessionImportAndCloneCannotResumeNewRuntime(t *testing.T) {
 	model.App.PrintedTranscript = false
 
 	imported, cmd := model.handleSessionImported(sessionImportedMsg{
-		generation: 1,
-		sessionID:  "old-import",
-		filename:   "old.json",
+		generation:            1,
+		treeNavigationRequest: model.Model.TreeNavigationRequest,
+		sessionID:             "old-import",
+		filename:              "old.json",
 	})
 	if cmd != nil {
 		t.Fatal("stale import returned a resume command")
@@ -1019,8 +1020,9 @@ func TestStaleSessionImportAndCloneCannotResumeNewRuntime(t *testing.T) {
 	}
 
 	cloned, cmd := model.handleSessionCloned(sessionClonedMsg{
-		generation:   1,
-		newSessionID: "old-clone",
+		generation:            1,
+		treeNavigationRequest: model.Model.TreeNavigationRequest,
+		newSessionID:          "old-clone",
 	})
 	if cmd != nil {
 		t.Fatal("stale clone returned a resume command")
@@ -1030,14 +1032,47 @@ func TestStaleSessionImportAndCloneCannotResumeNewRuntime(t *testing.T) {
 	}
 
 	failedImport, cmd := model.handleSessionImported(sessionImportedMsg{
-		generation: 1,
-		err:        errors.New("old import failed"),
+		generation:            1,
+		treeNavigationRequest: model.Model.TreeNavigationRequest,
+		err:                   errors.New("old import failed"),
 	})
 	if cmd != nil {
 		t.Fatal("stale import error returned a command")
 	}
 	if failedImport.App.PrintedTranscript {
 		t.Fatal("stale import error rendered into the new runtime")
+	}
+}
+
+func TestStaleSessionImportAndCloneCannotResumeNavigatedBranch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 2
+	model.App.PrintedTranscript = false
+
+	imported, cmd := model.handleSessionImported(sessionImportedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		sessionID:             "imported-after-navigation",
+		filename:              "session.json",
+	})
+	if cmd != nil {
+		t.Fatal("stale same-runtime import returned a resume command")
+	}
+	if imported.App.PrintedTranscript {
+		t.Fatal("stale same-runtime import rendered into the navigated branch")
+	}
+
+	cloned, cmd := model.handleSessionCloned(sessionClonedMsg{
+		generation:            1,
+		treeNavigationRequest: 1,
+		newSessionID:          "clone-after-navigation",
+	})
+	if cmd != nil {
+		t.Fatal("stale same-runtime clone returned a resume command")
+	}
+	if cloned.App.PrintedTranscript {
+		t.Fatal("stale same-runtime clone rendered into the navigated branch")
 	}
 }
 
