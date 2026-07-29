@@ -603,7 +603,8 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 	return func() {
 		c.mu.Lock()
 		if c.runDone == done {
-			ready := c.phase == phase && phase == PhasePersisting
+			ready := c.phase == phase &&
+				(phase == PhasePersisting || phase == PhaseRecovering)
 			if c.phase == phase {
 				c.phase = PhaseReady
 			}
@@ -612,11 +613,11 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 			c.activeTurnToken = 0
 			close(done)
 			c.runDone = nil
-			// Exclusive persistence operations share the runtime's busy phase
-			// with turn finalization. Publish the return to ready after the
-			// operation completes so a subscriber that captured the busy snapshot
-			// cannot remain stuck there without a lifecycle event. This is not a
-			// turn settlement: no AgentEnd occurred, so use the operation-specific
+			// Exclusive operations share the runtime's busy phase with turn
+			// finalization. Publish the return to ready after the operation
+			// completes so a subscriber that captured the busy snapshot cannot
+			// remain stuck there without a lifecycle event. This is not a turn
+			// settlement: no AgentEnd occurred, so use the operation-specific
 			// RuntimeReady event instead of Settled.
 			if ready && !c.closed {
 				c.emitLocked(session.RuntimeReady{})
@@ -638,6 +639,25 @@ func (c *Controller) startOperation(fn func()) {
 		defer c.operationWorkers.Done()
 		fn()
 	}()
+}
+
+// startReservedOperation registers a worker while holding the lifecycle lock.
+// A phase reservation and its worker must become visible atomically to Close;
+// otherwise shutdown can pass Wait before the reserved worker is registered.
+func (c *Controller) startReservedOperation(finish func(), fn func()) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		finish()
+		return ErrRuntimeClosed
+	}
+	c.operationWorkers.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.operationWorkers.Done()
+		fn()
+	}()
+	return nil
 }
 
 // cancelCurrentRun signals the active operation exactly once. Cancellation is

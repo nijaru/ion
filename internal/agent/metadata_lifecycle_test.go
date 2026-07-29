@@ -59,6 +59,55 @@ func (s *blockingMetadataSession) AppendLabel(
 	return s.Session.AppendLabel(ctx, targetID, label)
 }
 
+func TestNavigationPublishesReadyBeforeReply(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	base := session.NewSession(store, 64)
+	oldLeafID, err := base.AppendMessage(ctx, session.NewUserText("old branch", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.AppendMessage(ctx, session.NewUserText("current branch", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	sess := &blockingNavigationSession{
+		Session: base,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{Session: sess, Store: store})
+	defer h.Close()
+
+	navigationResult := make(chan error, 1)
+	go func() {
+		_, err := h.NavigateTree(ctx, oldLeafID, NavigateOptions{})
+		navigationResult <- err
+	}()
+	<-sess.started
+
+	sub, err := h.Subscribe(ctx, EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if sub.Snapshot.Phase != PhaseRecovering {
+		t.Fatalf("navigation snapshot phase = %s, want recovering", sub.Snapshot.Phase)
+	}
+
+	close(sess.release)
+	if err := <-navigationResult; err != nil {
+		t.Fatalf("navigation: %v", err)
+	}
+	select {
+	case event := <-sub.Events:
+		if _, ok := event.Event.(session.RuntimeReady); !ok {
+			t.Fatalf("navigation completion event = %T, want RuntimeReady", event.Event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not publish RuntimeReady")
+	}
+}
+
 func TestNavigationHonorsRuntimeClose(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

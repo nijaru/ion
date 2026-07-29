@@ -395,11 +395,13 @@ func (c *Controller) handleCompact(cmd *CompactCmd) {
 		sendResult(cmd.Reply, err)
 		return
 	}
-	c.startOperation(func() {
+	if err := c.startReservedOperation(finish, func() {
 		result := c.requestRuntime(cmd.Ctx, runtimeRequest{kind: runtimeCompact, force: true})
 		finish()
 		sendResult(cmd.Reply, result.err)
-	})
+	}); err != nil {
+		sendResult(cmd.Reply, err)
+	}
 }
 
 func (c *Controller) handleNavigate(cmd *NavigateCmd) {
@@ -408,11 +410,13 @@ func (c *Controller) handleNavigate(cmd *NavigateCmd) {
 		sendResult(cmd.Reply, NavigateCmdResult{Err: err})
 		return
 	}
-	c.startOperation(func() {
+	if err := c.startReservedOperation(finish, func() {
 		result, err := c.navigateTreeDirect(cmd.Ctx, cmd.Target, cmd.Opts)
 		finish()
 		sendResult(cmd.Reply, NavigateCmdResult{Result: result, Err: err})
-	})
+	}); err != nil {
+		sendResult(cmd.Reply, NavigateCmdResult{Err: err})
+	}
 }
 
 func (c *Controller) handleAppendSessionInfo(cmd *AppendSessionInfoCmd) {
@@ -421,11 +425,13 @@ func (c *Controller) handleAppendSessionInfo(cmd *AppendSessionInfoCmd) {
 		sendResult(cmd.Reply, SessionInfoResult{Err: err})
 		return
 	}
-	c.startOperation(func() {
+	if err := c.startReservedOperation(finish, func() {
 		name, err := c.appendSessionInfoDirect(cmd.Ctx, cmd.ExpectedLeafID, cmd.Name)
 		finish()
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
-	})
+	}); err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+	}
 }
 
 func (c *Controller) handleAppendLabel(cmd *AppendLabelCmd) {
@@ -434,11 +440,13 @@ func (c *Controller) handleAppendLabel(cmd *AppendLabelCmd) {
 		sendResult(cmd.Reply, SessionInfoResult{Err: err})
 		return
 	}
-	c.startOperation(func() {
+	if err := c.startReservedOperation(finish, func() {
 		name, err := c.appendLabelDirect(cmd.Ctx, cmd.ExpectedLeafID, cmd.Target, cmd.Label)
 		finish()
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
-	})
+	}); err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+	}
 }
 
 func (c *Controller) handleGetLabel(cmd *GetLabelCmd) {
@@ -454,11 +462,13 @@ func (c *Controller) handleGetBranchLabel(cmd *GetBranchLabelCmd) {
 		sendResult(cmd.Reply, SessionInfoResult{Err: err})
 		return
 	}
-	c.startOperation(func() {
+	if err := c.startReservedOperation(finish, func() {
 		label, err := c.getBranchLabelDirect(cmd.Ctx, cmd.LeafID)
 		finish()
 		sendResult(cmd.Reply, SessionInfoResult{Name: label, Err: err})
-	})
+	}); err != nil {
+		sendResult(cmd.Reply, SessionInfoResult{Err: err})
+	}
 }
 
 func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
@@ -981,10 +991,7 @@ func (c *Controller) NavigateTree(ctx context.Context, targetID string, opts Nav
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return NavigateResult{}, err
 	}
-	result, err := waitCommandReply(ctx, reply)
-	if err != nil {
-		return NavigateResult{}, err
-	}
+	result := <-reply
 	return result.Result, result.Err
 }
 
@@ -1001,10 +1008,7 @@ func (c *Controller) AppendSessionInfo(ctx context.Context, expectedLeafID, name
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result, err := waitCommandReply(ctx, reply)
-	if err != nil {
-		return "", err
-	}
+	result := <-reply
 	return result.Name, result.Err
 }
 
@@ -1025,10 +1029,7 @@ func (c *Controller) AppendLabel(
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result, err := waitCommandReply(ctx, reply)
-	if err != nil {
-		return "", err
-	}
+	result := <-reply
 	return result.Name, result.Err
 }
 
@@ -1055,10 +1056,7 @@ func (c *Controller) GetBranchLabel(ctx context.Context, leafID string) (string,
 	if err := c.enqueue(ctx, cmd); err != nil {
 		return "", err
 	}
-	result, err := waitCommandReply(ctx, reply)
-	if err != nil {
-		return "", err
-	}
+	result := <-reply
 	return result.Name, result.Err
 }
 
