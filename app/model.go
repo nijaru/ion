@@ -94,6 +94,7 @@ const (
 const pendingActionTimeout = 1500 * time.Millisecond
 
 type runtimeSwitchedMsg struct {
+	generation    uint64
 	switchID      uint64
 	runtime       Accepted
 	previous      Handles
@@ -113,6 +114,7 @@ type reloadConfigLoadedMsg struct {
 }
 
 type TransitionCommittedMsg struct {
+	generation uint64
 	switchID   uint64
 	transition Transition
 	notice     session.Entry
@@ -121,15 +123,17 @@ type TransitionCommittedMsg struct {
 }
 
 type runtimeSwitchErrorMsg struct {
-	switchID uint64
-	err      error
-	retry    *setupPromptState
+	generation uint64
+	switchID   uint64
+	err        error
+	retry      *setupPromptState
 }
 
 type resumeSessionSelectedMsg struct {
-	switchID  uint64
-	sessionID string
-	cfg       *config.Config
+	generation uint64
+	switchID   uint64
+	sessionID  string
+	cfg        *config.Config
 }
 
 type allModelsLoadedMsg struct {
@@ -963,12 +967,19 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 		}
 		return m, m.terminalCommit().Entries(notice)
 	}
+	generation := m.Model.EventGeneration
 	switchID := m.runtimeRequest().begin("Saving runtime settings...")
 	return m, func() tea.Msg {
 		if err := t.Persist(saveRuntimeState); err != nil {
-			return TransitionCommittedMsg{switchID: switchID, err: err, retry: retry}
+			return TransitionCommittedMsg{
+				generation: generation,
+				switchID:   switchID,
+				err:        err,
+				retry:      retry,
+			}
 		}
 		return TransitionCommittedMsg{
+			generation: generation,
 			switchID:   switchID,
 			transition: t,
 			notice:     notice,
@@ -979,6 +990,9 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 func (m Model) handleRuntimeTransitionCommitted(
 	msg TransitionCommittedMsg,
 ) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
+		return m, nil
+	}
 	if !m.runtimeRequest().finish(msg.switchID) {
 		return m, nil
 	}

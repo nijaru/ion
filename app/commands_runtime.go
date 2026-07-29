@@ -20,18 +20,24 @@ func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 		return m, cmdError("session catalog not available")
 	}
 
+	generation := m.Model.EventGeneration
 	switchID := m.runtimeRequest().begin("Loading session...")
 	catalog := m.Model.SessionCatalog
 	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
 		cfg, err := m.storedSessionConfig(ctx, catalog, sessionID)
 		if err != nil {
-			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
+			return runtimeSwitchErrorMsg{
+				generation: generation,
+				switchID:   switchID,
+				err:        err,
+			}
 		}
 		return resumeSessionSelectedMsg{
-			switchID:  switchID,
-			sessionID: sessionID,
-			cfg:       cfg,
+			generation: generation,
+			switchID:   switchID,
+			sessionID:  sessionID,
+			cfg:        cfg,
 		}
 	}
 }
@@ -61,7 +67,7 @@ func (m Model) storedSessionConfig(
 }
 
 func (m Model) handleResumeSessionSelected(msg resumeSessionSelectedMsg) (Model, tea.Cmd) {
-	if !m.runtimeRequest().matches(msg.switchID) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
 		return m, nil
 	}
 	notice := systemEntry("Resumed session " + msg.sessionID)
@@ -420,6 +426,7 @@ func (m Model) switchRuntimeCommandWithOptions(
 
 	switcher := m.Model.Switcher
 	current := m.Handles()
+	generation := m.Model.EventGeneration
 	requestID := m.runtimeRequest().begin("Switching runtime...")
 	ctx := m.runtimeRequestOperationContext()
 
@@ -434,20 +441,23 @@ func (m Model) switchRuntimeCommandWithOptions(
 		})
 		if err != nil {
 			return runtimeSwitchErrorMsg{
-				switchID: requestID,
-				err:      err,
-				retry:    options.retrySetup,
+				generation: generation,
+				switchID:   requestID,
+				err:        err,
+				retry:      options.retrySetup,
 			}
 		}
 		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
-				switchID: requestID,
-				err:      errors.Join(fmt.Errorf("switch: read selected leaf: %w", err), closeErr),
+				generation: generation,
+				switchID:   requestID,
+				err:        errors.Join(fmt.Errorf("switch: read selected leaf: %w", err), closeErr),
 			}
 		}
 		return runtimeSwitchedMsg{
+			generation:  generation,
 			switchID:    requestID,
 			runtime:     result.Runtime,
 			previous:    result.Previous,
@@ -471,6 +481,7 @@ func (m Model) resumeRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	current := m.Handles()
+	generation := m.Model.EventGeneration
 	switchID := m.runtimeRequest().begin("Switching runtime...")
 	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
@@ -482,30 +493,33 @@ func (m Model) resumeRuntimeCommand(
 			SaveState:  saveRuntimeState,
 		})
 		if err != nil {
-			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
+			return runtimeSwitchErrorMsg{generation: generation, switchID: switchID, err: err}
 		}
 		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
-				switchID: switchID,
-				err:      errors.Join(fmt.Errorf("resume: read selected leaf: %w", err), closeErr),
+				generation: generation,
+				switchID:   switchID,
+				err:        errors.Join(fmt.Errorf("resume: read selected leaf: %w", err), closeErr),
 			}
 		}
 		storage := result.Runtime.Handles.Storage
 		if storage == nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
-				switchID: switchID,
-				err:      errors.Join(errors.New("resumed runtime has no storage"), closeErr),
+				generation: generation,
+				switchID:   switchID,
+				err:        errors.Join(errors.New("resumed runtime has no storage"), closeErr),
 			}
 		}
 		entries, err := storage.Entries(ctx)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
-				switchID: switchID,
-				err:      errors.Join(fmt.Errorf("load resumed session: %w", err), closeErr),
+				generation: generation,
+				switchID:   switchID,
+				err:        errors.Join(fmt.Errorf("load resumed session: %w", err), closeErr),
 			}
 		}
 		resumeBranch := currentBranchName(m.App.Branch, storage)
@@ -515,6 +529,7 @@ func (m Model) resumeRuntimeCommand(
 		}
 		printLines = append(printLines, "", "--- resumed ---", "")
 		return runtimeSwitchedMsg{
+			generation:    generation,
 			switchID:      switchID,
 			runtime:       result.Runtime,
 			previous:      result.Previous,
@@ -550,7 +565,7 @@ func selectedRuntimeLeafID(ctx context.Context, runner agent.Runtime) (string, e
 }
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
-	if !m.runtimeRequest().matches(msg.switchID) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
 		if err := closeRuntimeHandles(msg.runtime.Handles); err != nil {
 			return m.handleLocalError(fmt.Errorf("close stale runtime: %w", err))
 		}
@@ -660,7 +675,7 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 }
 
 func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.Cmd) {
-	if !m.runtimeRequest().matches(msg.switchID) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
 		return m, nil
 	}
 	m.runtimeRequest().clear()

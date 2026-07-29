@@ -68,6 +68,50 @@ func (c *cancelAwareSessionCatalog) UpdateSession(ctx context.Context, _ session
 	return ctx.Err()
 }
 
+func TestStaleRuntimeSwitchCannotReplaceNewGeneration(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Model.RuntimeSwitchRequest = 1
+	oldRunner := &stubRunner{}
+	model.Model.Runner = oldRunner
+	newRunner := &stubRunner{}
+
+	next, cmd := model.handleRuntimeSwitched(runtimeSwitchedMsg{
+		generation: 1,
+		switchID:   1,
+		runtime:    Accepted{Handles: Handles{Runner: newRunner}},
+	})
+	if cmd != nil {
+		t.Fatal("stale runtime switch returned a command")
+	}
+	if next.Model.Runner != oldRunner {
+		t.Fatal("stale runtime switch replaced the current-generation runner")
+	}
+	if next.Model.RuntimeSwitchRequest != 1 {
+		t.Fatalf("stale runtime switch cleared active request: %d", next.Model.RuntimeSwitchRequest)
+	}
+}
+
+func TestStaleRuntimeSwitchErrorCannotClearNewGeneration(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Model.RuntimeSwitchRequest = 1
+	model.Progress.LocalStatus = "Switching runtime..."
+
+	next, cmd := model.handleRuntimeSwitchError(runtimeSwitchErrorMsg{
+		generation: 1,
+		switchID:   1,
+		err:        errors.New("stale switch failed"),
+	})
+	if cmd != nil {
+		t.Fatal("stale runtime switch error returned a command")
+	}
+	if next.Model.RuntimeSwitchRequest != 1 || next.Progress.LocalStatus != "Switching runtime..." {
+		t.Fatalf("stale runtime switch error changed active state: request=%d status=%q",
+			next.Model.RuntimeSwitchRequest, next.Progress.LocalStatus)
+	}
+}
+
 func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
