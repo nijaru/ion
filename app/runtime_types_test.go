@@ -8,6 +8,7 @@ import (
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/session"
 )
 
 type trackingRuntimeRunner struct {
@@ -18,6 +19,20 @@ type trackingRuntimeRunner struct {
 func (r *trackingRuntimeRunner) Close() error {
 	r.closed++
 	return nil
+}
+
+type sessionStateRuntimeRunner struct {
+	trackingRuntimeRunner
+	id string
+}
+
+func (r *sessionStateRuntimeRunner) SessionID() string { return r.id }
+func (r *sessionStateRuntimeRunner) SessionBranch(context.Context) ([]session.Entry, error) {
+	return nil, nil
+}
+
+func (r *sessionStateRuntimeRunner) SessionTree(context.Context) (agent.SessionTreeSnapshot, error) {
+	return agent.SessionTreeSnapshot{}, nil
 }
 
 func runtimeSwitchInput(current Handles) SwitchInput {
@@ -159,6 +174,29 @@ func TestSwitchSkipsPersistenceWhenValidationCancels(t *testing.T) {
 	}
 	if newRunner.closed != 1 {
 		t.Fatalf("canceled replacement runner closed = %d, want 1", newRunner.closed)
+	}
+}
+
+func TestSwitchCarriesAcceptedSessionState(t *testing.T) {
+	newRunner := &sessionStateRuntimeRunner{
+		trackingRuntimeRunner: trackingRuntimeRunner{},
+		id:                    "switched-session",
+	}
+	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+		handles := completeRuntimeHandles(newRunner)
+		return handles.Info, handles.Runner, handles.Storage, nil
+	}
+
+	result, err := Switch(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Switch() error = %v", err)
+	}
+	if got := result.Runtime.Transition.Snapshot.SessionID; got != "switched-session" {
+		t.Fatalf("switched session ID = %q, want switched-session", got)
+	}
+	if !result.Runtime.Transition.Snapshot.Materialized {
+		t.Fatal("switched runtime snapshot is not materialized")
 	}
 }
 

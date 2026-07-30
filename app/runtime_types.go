@@ -310,10 +310,11 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		return SwitchResult{}, errors.Join(fmt.Errorf("switch: %w", err), CloseHandles(newHandles))
 	}
 
+	transition := input.Transition.WithHandles(newHandles)
 	result := SwitchResult{
 		Runtime: Accepted{
 			Handles:    newHandles,
-			Transition: input.Transition,
+			Transition: transition,
 		},
 		Previous: input.Current,
 	}
@@ -332,7 +333,7 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 			CloseHandles(newHandles),
 		)
 	}
-	if err := input.Transition.Persist(input.SaveState); err != nil {
+	if err := transition.Persist(input.SaveState); err != nil {
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("switch: persist runtime state: %w", err),
 			CloseHandles(newHandles),
