@@ -26,15 +26,27 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 		return m.showMemory("", true)
 	case strings.EqualFold(fields[1], "audit") && len(fields) == 2:
 		requestID := (&m).beginMemoryRequest()
-		return m, memoryAuditCmd(m.Model.Memory, requestID)
+		return m, memoryAuditCmd(m.runtimeOperationContext(), m.Model.Memory, requestID)
 	case strings.EqualFold(fields[1], "search") && len(fields) >= 3:
 		return m.showMemory(strings.TrimSpace(strings.Join(fields[2:], " ")), false)
 	case strings.EqualFold(fields[1], "forget") && len(fields) == 3:
 		requestID := (&m).beginMemoryRequest()
-		return m, memoryActionCmd(m.Model.Memory, requestID, "forgot", strings.TrimSpace(fields[2]))
+		return m, memoryActionCmd(
+			m.runtimeOperationContext(),
+			m.Model.Memory,
+			requestID,
+			"forgot",
+			strings.TrimSpace(fields[2]),
+		)
 	case strings.EqualFold(fields[1], "restore") && len(fields) == 3:
 		requestID := (&m).beginMemoryRequest()
-		return m, memoryActionCmd(m.Model.Memory, requestID, "restored", strings.TrimSpace(fields[2]))
+		return m, memoryActionCmd(
+			m.runtimeOperationContext(),
+			m.Model.Memory,
+			requestID,
+			"restored",
+			strings.TrimSpace(fields[2]),
+		)
 	default:
 		return m, cmdError("usage: /memory [search <query>|audit|forget <id>|restore <id>|all]")
 	}
@@ -42,7 +54,7 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 
 func (m Model) showMemory(query string, includeDeleted bool) (Model, tea.Cmd) {
 	requestID := (&m).beginMemoryRequest()
-	return m, memorySearchCmd(m.Model.Memory, requestID, query, includeDeleted)
+	return m, memorySearchCmd(m.runtimeOperationContext(), m.Model.Memory, requestID, query, includeDeleted)
 }
 
 func (m *Model) beginMemoryRequest() uint64 {
@@ -50,9 +62,18 @@ func (m *Model) beginMemoryRequest() uint64 {
 	return m.Model.MemoryRequest
 }
 
-func memorySearchCmd(controller MemoryController, requestID uint64, query string, includeDeleted bool) tea.Cmd {
+func memorySearchCmd(
+	ctx context.Context,
+	controller MemoryController,
+	requestID uint64,
+	query string,
+	includeDeleted bool,
+) tea.Cmd {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func() tea.Msg {
-		records, err := controller.Search(context.Background(), query, includeDeleted, memoryCommandLimit)
+		records, err := controller.Search(ctx, query, includeDeleted, memoryCommandLimit)
 		return memorySearchMsg{
 			requestID:      requestID,
 			query:          query,
@@ -63,21 +84,32 @@ func memorySearchCmd(controller MemoryController, requestID uint64, query string
 	}
 }
 
-func memoryAuditCmd(controller MemoryController, requestID uint64) tea.Cmd {
+func memoryAuditCmd(ctx context.Context, controller MemoryController, requestID uint64) tea.Cmd {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func() tea.Msg {
-		entries, err := controller.Audit(context.Background(), memoryCommandLimit)
+		entries, err := controller.Audit(ctx, memoryCommandLimit)
 		return memoryAuditMsg{requestID: requestID, entries: entries, err: err}
 	}
 }
 
-func memoryActionCmd(controller MemoryController, requestID uint64, action, id string) tea.Cmd {
+func memoryActionCmd(
+	ctx context.Context,
+	controller MemoryController,
+	requestID uint64,
+	action, id string,
+) tea.Cmd {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func() tea.Msg {
 		var err error
 		switch action {
 		case "forgot":
-			err = controller.Delete(context.Background(), id)
+			err = controller.Delete(ctx, id)
 		case "restored":
-			err = controller.Restore(context.Background(), id)
+			err = controller.Restore(ctx, id)
 		default:
 			err = fmt.Errorf("unknown memory action %q", action)
 		}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 type stubMemoryController struct {
@@ -15,14 +17,20 @@ type stubMemoryController struct {
 	deleted        []string
 	restored       []string
 	err            error
+	searchStarted  chan struct{}
 }
 
 func (s *stubMemoryController) Search(
-	_ context.Context,
+	ctx context.Context,
 	query string,
 	includeDeleted bool,
 	_ int,
 ) ([]MemoryRecord, error) {
+	if s.searchStarted != nil {
+		close(s.searchStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	s.queries = append(s.queries, query)
 	s.includeDeleted = append(s.includeDeleted, includeDeleted)
 	return append([]MemoryRecord(nil), s.records...), s.err
@@ -107,6 +115,34 @@ func TestMemoryCommandUsesExplicitOperations(t *testing.T) {
 	}
 	if result, ok := cmd().(memoryAuditMsg); !ok {
 		t.Fatalf("audit result = %T, want memoryAuditMsg", result)
+	}
+}
+
+func TestMemoryCommandUsesRuntimeContext(t *testing.T) {
+	controller := &stubMemoryController{searchStarted: make(chan struct{})}
+	model := readyModel(t).WithMemory(controller)
+	_, cmd := model.handleCommand("/memory search note")
+	if cmd == nil {
+		t.Fatal("memory search returned no command")
+	}
+
+	resultCh := make(chan tea.Msg, 1)
+	go func() { resultCh <- cmd() }()
+	select {
+	case <-controller.searchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("memory search did not start")
+	}
+	model.Close()
+
+	select {
+	case result := <-resultCh:
+		msg, ok := result.(memorySearchMsg)
+		if !ok || !errors.Is(msg.err, context.Canceled) {
+			t.Fatalf("canceled memory search = %#v, want context canceled", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("memory search did not observe runtime cancellation")
 	}
 }
 
