@@ -21,7 +21,11 @@ func TestCanceledFrontendTimersStopWithoutMessages(t *testing.T) {
 	if msg := model.pollGitBranch()(); msg != nil {
 		t.Fatalf("canceled branch poll message = %#v, want nil", msg)
 	}
-	if cmd := loadGitDiffStats(model.runtimeOperationContext(), t.TempDir()); cmd() != nil {
+	if cmd := loadGitDiffStats(
+		model.runtimeOperationContext(),
+		model.Model.EventGeneration,
+		t.TempDir(),
+	); cmd() != nil {
 		t.Fatal("canceled git diff command returned a message")
 	}
 }

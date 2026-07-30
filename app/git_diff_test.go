@@ -36,10 +36,32 @@ func TestGitDiffStatsMessageIgnoresStaleWorkspace(t *testing.T) {
 	model.App.Workdir = "/repo/current"
 	model.App.GitDiff = "+1"
 
-	updated, _ := model.Update(gitDiffStatsMsg{workdir: "/repo/old", stats: "+2/-1"})
+	updated, _ := model.Update(gitDiffStatsMsg{
+		generation: model.Model.EventGeneration,
+		workdir:    "/repo/old",
+		stats:      "+2/-1",
+	})
 	model = testModel(t, updated)
 
 	if model.App.GitDiff != "+1" {
 		t.Fatalf("git diff stats = %q, want unchanged", model.App.GitDiff)
+	}
+}
+
+func TestGitDiffStatsMessageIgnoresStaleRuntime(t *testing.T) {
+	model := readyModel(t)
+	model.App.Workdir = "/repo/current"
+	model.App.GitDiff = "+1"
+	model.Model.EventGeneration = 2
+
+	updated, _ := model.Update(gitDiffStatsMsg{
+		generation: 1,
+		workdir:    model.App.Workdir,
+		stats:      "+2/-1",
+	})
+	model = testModel(t, updated)
+
+	if model.App.GitDiff != "+1" {
+		t.Fatalf("stale git diff stats = %q, want unchanged", model.App.GitDiff)
 	}
 }

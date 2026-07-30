@@ -564,6 +564,13 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 		}
 	}
 	command := tea.Sequence(cmds...)
+	if diffCmd := loadGitDiffStats(
+		m.runtimeOperationContext(),
+		m.Model.EventGeneration,
+		m.App.Workdir,
+	); diffCmd != nil {
+		command = batchCmds(command, diffCmd)
+	}
 	if m.GitWatcher != nil {
 		command = batchCmds(command, m.pollGitBranch())
 	}

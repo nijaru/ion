@@ -214,8 +214,9 @@ type terminalCommitLinesMsg struct {
 }
 
 type gitDiffStatsMsg struct {
-	workdir string
-	stats   string
+	generation uint64
+	workdir    string
+	stats      string
 }
 
 type gitBranchChangedMsg struct {
@@ -741,7 +742,11 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,
 		m.Input.Spinner.Tick,
-		loadGitDiffStats(m.runtimeOperationContext(), m.App.Workdir),
+		loadGitDiffStats(
+			m.runtimeOperationContext(),
+			m.Model.EventGeneration,
+			m.App.Workdir,
+		),
 		m.startupPickerCmd(),
 	}
 	if m.Model.Runner != nil {
