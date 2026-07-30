@@ -40,6 +40,12 @@ type runtimeRequest struct {
 	force     bool
 	reply     chan<- runtimeResult
 
+	// returnOnCallerCancellation lets an explicit shutdown stop waiting for a
+	// durable operation without canceling that operation. Its worker remains
+	// runtime-bound so accepted pending writes retain their publication
+	// contract and can still be joined by a later Close.
+	returnOnCallerCancellation bool
+
 	// The command loop captures these fields before starting external work. They
 	// are immutable operation inputs, not a second copy of controller state.
 	turnID         string
@@ -112,7 +118,7 @@ func (c *Controller) requestRuntime(ctx context.Context, request runtimeRequest)
 		return runtimeResult{err: ErrQueueFull}
 	}
 
-	if runtimeMustComplete(request.kind) {
+	if runtimeMustComplete(request.kind) && !request.returnOnCallerCancellation {
 		select {
 		case result := <-reply:
 			return result

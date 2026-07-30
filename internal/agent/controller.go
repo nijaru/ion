@@ -145,6 +145,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		runtimeCancel:      runtimeCancel,
 		eventHub:           newEventHub(),
 		done:               make(chan struct{}),
+		closeDone:          make(chan struct{}),
 		compaction:         cfg.Compaction,
 		contextWindow:      cfg.ContextWindow,
 		steeringMode:       cfg.SteeringMode,
@@ -1160,6 +1161,20 @@ func (h *Controller) emitQueueUpdate() {
 
 func (h *Controller) flushPending(ctx context.Context) error {
 	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeFlushPending})
+	if result.err != nil {
+		h.logf(slog.LevelError, "flush pending write failed", slog.String("error", result.err.Error()))
+	}
+	return result.err
+}
+
+// flushPendingForShutdown lets Shutdown stop waiting at its deadline without
+// canceling an accepted durable flush. The runtime operation remains joined
+// and runtime-bound; a later Close can still cancel and wait for it.
+func (h *Controller) flushPendingForShutdown(ctx context.Context) error {
+	result := h.requestRuntime(ctx, runtimeRequest{
+		kind:                       runtimeFlushPending,
+		returnOnCallerCancellation: true,
+	})
 	if result.err != nil {
 		h.logf(slog.LevelError, "flush pending write failed", slog.String("error", result.err.Error()))
 	}

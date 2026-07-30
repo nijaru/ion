@@ -111,8 +111,10 @@ type Controller struct {
 	runtimeCancel    context.CancelFunc
 
 	// --- Event delivery ---
-	eventHub *eventHub
-	done     chan struct{}
+	eventHub  *eventHub
+	done      chan struct{}
+	closeDone chan struct{}
+	closeErr  error
 
 	// --- Hooks (Pi on/emitHook pattern) ---
 	hooks      map[string][]hookRegistration
@@ -902,7 +904,15 @@ func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
 func (c *Controller) Close() error {
 	c.mu.Lock()
 	if c.closed {
+		closeDone := c.closeDone
 		c.mu.Unlock()
+		if closeDone != nil {
+			<-closeDone
+			c.mu.Lock()
+			err := c.closeErr
+			c.mu.Unlock()
+			return err
+		}
 		return nil
 	}
 	c.closed = true
@@ -958,5 +968,11 @@ func (c *Controller) Close() error {
 		c.eventHub.close()
 	}
 
+	c.mu.Lock()
+	c.closeErr = approvalErr
+	if c.closeDone != nil {
+		close(c.closeDone)
+	}
+	c.mu.Unlock()
 	return approvalErr
 }

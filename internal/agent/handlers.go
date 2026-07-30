@@ -814,9 +814,27 @@ func (c *Controller) CloseResources() error {
 	return c.resourcesErr
 }
 
+// closeWithContext starts the terminal controller close and bounds how long
+// the caller waits. Close itself remains joinable: a later Close waits for the
+// same terminal cleanup instead of returning before the first close finishes.
+func (c *Controller) closeWithContext(ctx context.Context) error {
+	ctx = commandContext(ctx)
+	done := make(chan error, 1)
+	go func() { done <- c.Close() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Shutdown stops the controller with a context-bounded wait for active work.
 // Host-created resources remain the composition root's responsibility through
-// CloseResources after the controller boundary has closed.
+// CloseResources after the controller boundary has closed. If the shutdown
+// deadline expires during pending durability, Shutdown returns while the
+// runtime-owned flush remains joined; the caller must Close after any needed
+// dependency release.
 func (c *Controller) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -839,12 +857,19 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	if err := c.flushPending(context.Background()); err != nil {
+	if err := c.flushPendingForShutdown(ctx); err != nil {
+		if errors.Is(err, ctx.Err()) {
+			c.logf(slog.LevelWarn, "shutdown timed out waiting for pending writes")
+			return err
+		}
 		c.logf(slog.LevelError, "shutdown pending write failed", slog.String("error", err.Error()))
-		return errors.Join(err, c.Close())
+		if closeErr := c.closeWithContext(ctx); closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+		return err
 	}
 	c.logf(slog.LevelInfo, "shutdown complete")
-	return c.Close()
+	return c.closeWithContext(ctx)
 }
 
 // RecoverProcessActions reconciles durable process evidence through the
