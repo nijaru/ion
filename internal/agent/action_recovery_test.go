@@ -257,3 +257,70 @@ func TestControllerRecoveryPersistsAfterCallerCancellation(t *testing.T) {
 	action, _ := store.GetAction(context.Background(), record.ID)
 	t.Fatalf("canceled recovery did not persist evidence: %#v", action)
 }
+
+func TestControllerCloseCancelsProcessRecovery(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	record := session.ActionRecord{
+		ID:              "close-recovery-action",
+		InvocationID:    "close-recovery-call",
+		SessionID:       "close-recovery-session",
+		TurnID:          "close-recovery-turn",
+		Tool:            "bash",
+		Operation:       "run",
+		Arguments:       []byte(`{"command":"sleep 30"}`),
+		Fingerprint:     "close-recovery-fingerprint",
+		ProcessIdentity: "opaque-process",
+	}
+	if _, err := store.PrepareAction(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthorizeAction(ctx, record.ID, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartAction(ctx, record.ID, record.ProcessIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FinishAction(
+		ctx,
+		record.ID,
+		session.ActionIndeterminate,
+		"",
+		"unknown effect",
+		"cleanup pending",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciler := &cancelingProcessReconciler{started: make(chan struct{})}
+	controller := NewController(ControllerConfig{
+		Session:           session.NewSession(store, 64),
+		Store:             store,
+		ActionJournal:     store,
+		ProcessReconciler: reconciler,
+	})
+
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- controller.RecoverProcessActions(ctx) }()
+	select {
+	case <-reconciler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("process recovery did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- controller.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("controller close = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("controller close did not cancel process recovery")
+	}
+	select {
+	case <-recoveryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("process recovery did not return after controller close")
+	}
+}

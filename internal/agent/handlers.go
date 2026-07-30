@@ -273,17 +273,25 @@ func (c *Controller) handleReconcileAction(cmd *ReconcileActionCmd) {
 
 func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) {
 	c.startOperation(func() {
+		// Recovery must remain durable after caller cancellation so a completed
+		// reconciliation is not lost, but both the reconciler and its durable
+		// writes must stop when the runtime closes. Keep those lifetimes separate.
+		operationCtx, releaseOperation := c.runtimeBoundContext(cmd.Ctx)
+		defer releaseOperation()
+		durableRuntimeCtx, releaseDurableRuntime := c.runtimeBoundContext(context.Background())
+		defer releaseDurableRuntime()
+
 		journal, err := c.actionJournal()
 		if err != nil {
 			sendResult(cmd.Reply, err)
 			return
 		}
-		actions, err := journal.UnsettledActions(cmd.Ctx)
+		actions, err := journal.UnsettledActions(operationCtx)
 		if err != nil {
 			sendResult(cmd.Reply, err)
 			return
 		}
-		durableCtx, cancelDurability := context.WithTimeout(context.Background(), 5*time.Second)
+		durableCtx, cancelDurability := context.WithTimeout(durableRuntimeCtx, 5*time.Second)
 		defer cancelDurability()
 		for _, action := range actions {
 			if action.State == session.ActionStarted {
@@ -311,7 +319,7 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 				if c.processReconciler == nil {
 					result.Detail = "runtime has no process reconciler; manual verification is required"
 				} else {
-					result, err = c.processReconciler.ReconcileProcess(cmd.Ctx, action.ProcessIdentity)
+					result, err = c.processReconciler.ReconcileProcess(operationCtx, action.ProcessIdentity)
 					if err != nil {
 						result = tool.ProcessRecoveryResult{
 							Status: tool.ProcessRecoveryFailed,
