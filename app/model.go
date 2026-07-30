@@ -94,16 +94,17 @@ const (
 const pendingActionTimeout = 1500 * time.Millisecond
 
 type runtimeSwitchedMsg struct {
-	generation    uint64
-	switchID      uint64
-	runtime       Accepted
-	previous      Handles
-	leafID        string
-	keybindings   *KeybindingsManager
-	printLines    []string
-	replayEntries []session.Entry
-	notice        string
-	showStatus    bool
+	generation     uint64
+	switchID       uint64
+	runtime        Accepted
+	previous       Handles
+	leafID         string
+	worktreeBranch string
+	keybindings    *KeybindingsManager
+	printLines     []string
+	replayEntries  []session.Entry
+	notice         string
+	showStatus     bool
 }
 
 type reloadConfigLoadedMsg struct {

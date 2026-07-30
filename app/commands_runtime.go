@@ -431,6 +431,7 @@ func (m Model) switchRuntimeCommandWithOptions(
 
 	return m, func() tea.Msg {
 		var leafID string
+		var worktreeBranch string
 		result, err := Switch(ctx, SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
@@ -438,11 +439,12 @@ func (m Model) switchRuntimeCommandWithOptions(
 			TargetSessionID: sessionID,
 			PreserveSession: preserveSession,
 			ValidateReplacement: func(validateCtx context.Context, handles Handles) error {
-				var validateErr error
-				leafID, validateErr = selectedRuntimeLeafID(validateCtx, handles.Runner)
+				projection, validateErr := selectedRuntimeProjection(validateCtx, handles.Runner)
 				if validateErr != nil {
-					return fmt.Errorf("read selected leaf: %w", validateErr)
+					return fmt.Errorf("read selected projection: %w", validateErr)
 				}
+				leafID = strings.TrimSpace(projection.LeafID)
+				worktreeBranch = strings.TrimSpace(projection.WorktreeBranch)
 				return nil
 			},
 			SaveState: saveRuntimeState,
@@ -456,14 +458,15 @@ func (m Model) switchRuntimeCommandWithOptions(
 			}
 		}
 		return runtimeSwitchedMsg{
-			generation:  generation,
-			switchID:    requestID,
-			runtime:     result.Runtime,
-			previous:    result.Previous,
-			leafID:      leafID,
-			keybindings: options.keybindings,
-			notice:      session.EntryText(notice),
-			showStatus:  preserveSession,
+			generation:     generation,
+			switchID:       requestID,
+			runtime:        result.Runtime,
+			previous:       result.Previous,
+			leafID:         leafID,
+			worktreeBranch: worktreeBranch,
+			keybindings:    options.keybindings,
+			notice:         session.EntryText(notice),
+			showStatus:     preserveSession,
 		}
 	}
 }
@@ -511,39 +514,37 @@ func (m Model) resumeRuntimeCommand(
 		}
 		printLines = append(printLines, "", "--- resumed ---", "")
 		return runtimeSwitchedMsg{
-			generation:    generation,
-			switchID:      switchID,
-			runtime:       result.Runtime,
-			previous:      result.Previous,
-			leafID:        leafID,
-			printLines:    printLines,
-			replayEntries: projection.Branch,
-			notice:        session.EntryText(notice),
-			showStatus:    false,
+			generation:     generation,
+			switchID:       switchID,
+			runtime:        result.Runtime,
+			previous:       result.Previous,
+			leafID:         leafID,
+			worktreeBranch: projection.WorktreeBranch,
+			printLines:     printLines,
+			replayEntries:  projection.Branch,
+			notice:         session.EntryText(notice),
+			showStatus:     false,
 		}
 	}
 }
 
-// selectedRuntimeLeafID captures the accepted runtime's authoritative leaf
-// before the TUI installs it. The asynchronous event subscription will
-// refresh this projection, but runtime replacement must not expose a window
-// where a fast follow-up command can observe an empty leaf.
-func selectedRuntimeLeafID(ctx context.Context, runner agent.Runtime) (string, error) {
+// selectedRuntimeProjection captures the accepted runtime's authoritative
+// projection before the TUI installs it. The asynchronous event subscription
+// will refresh this projection, but runtime replacement must not expose a
+// window where a fast follow-up command can observe an empty leaf or stale
+// worktree metadata.
+func selectedRuntimeProjection(ctx context.Context, runner agent.Runtime) (agent.SessionProjection, error) {
 	if reader, ok := runner.(agent.SessionProjectionReader); ok {
-		projection, err := reader.SessionProjection(ctx)
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(projection.LeafID), nil
+		return reader.SessionProjection(ctx)
 	}
 	if reader, ok := runner.(agent.SessionReader); ok {
 		tree, err := reader.SessionTree(ctx)
 		if err != nil {
-			return "", err
+			return agent.SessionProjection{}, err
 		}
-		return strings.TrimSpace(tree.LeafID), nil
+		return agent.SessionProjection{LeafID: strings.TrimSpace(tree.LeafID)}, nil
 	}
-	return "", nil
+	return agent.SessionProjection{}, nil
 }
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
@@ -614,10 +615,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	}
 	m.pickerReducer().closeAll()
 	m.clearProgressError()
-	if msg.runtime.Handles.Storage != nil {
-		meta := msg.runtime.Handles.Storage.Meta()
-		m.App.Branch = meta.Branch
-	}
+	m.App.Branch = msg.worktreeBranch
 	m.turnReducer().ClearActiveState(true)
 	m.progressReducer().clearLocalBusyStatus()
 	m.progressReducer().markRuntimeReady()

@@ -89,6 +89,7 @@ func (r *resumeProjectionRunner) Close() error {
 type resumeProjectionStorage struct {
 	entries      []session.Entry
 	entriesCalls int
+	metaCalls    int
 	branch       string
 }
 
@@ -100,6 +101,7 @@ func (s *resumeProjectionStorage) Entries(context.Context) ([]session.Entry, err
 func (s *resumeProjectionStorage) ID() string { return "resumed" }
 
 func (s *resumeProjectionStorage) Meta() session.Metadata {
+	s.metaCalls++
 	return session.Metadata{ID: s.ID(), Branch: s.branch}
 }
 
@@ -197,6 +199,28 @@ func TestResumeProjectionFailureClosesReplacement(t *testing.T) {
 	}
 	if storage.entriesCalls != 0 {
 		t.Fatalf("storage Entries calls = %d, want 0", storage.entriesCalls)
+	}
+}
+
+func TestRuntimeSwitchUsesAcceptedWorktreeBranch(t *testing.T) {
+	model := readyModel(t)
+	model.Model.RuntimeSwitchRequest = 1
+	oldRunner := &stubRunner{}
+	newRunner := &stubRunner{}
+	storage := &resumeProjectionStorage{branch: "stale-storage-branch"}
+
+	model.Model.Runner = oldRunner
+	model, _ = model.handleRuntimeSwitched(runtimeSwitchedMsg{
+		switchID:       1,
+		runtime:        Accepted{Handles: Handles{Runner: newRunner, Storage: storage}},
+		previous:       Handles{Runner: oldRunner},
+		worktreeBranch: "accepted-runtime-branch",
+	})
+	if model.App.Branch != "accepted-runtime-branch" {
+		t.Fatalf("installed worktree branch = %q, want accepted-runtime-branch", model.App.Branch)
+	}
+	if storage.metaCalls != 0 {
+		t.Fatalf("storage Meta calls = %d, want 0 after runtime acceptance", storage.metaCalls)
 	}
 }
 
