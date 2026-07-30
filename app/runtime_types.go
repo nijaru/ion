@@ -249,12 +249,10 @@ type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
 	Config          *config.Config
-	ProviderKey     string
 	Switcher        Switcher
 	Transition      Transition
 	Current         Handles
 	TargetSessionID string
-	PreserveSession bool
 	// ValidateReplacement runs the app-owned acceptance checks before the
 	// transition becomes durable. It must not mutate the replacement.
 	ValidateReplacement func(context.Context, Handles) error

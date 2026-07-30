@@ -437,7 +437,6 @@ func (m Model) switchRuntimeCommandWithOptions(
 			Transition:      transition,
 			Current:         current,
 			TargetSessionID: sessionID,
-			PreserveSession: preserveSession,
 			ValidateReplacement: func(validateCtx context.Context, handles Handles) error {
 				projection, validateErr := selectedRuntimeProjection(validateCtx, handles.Runner)
 				if validateErr != nil {
