@@ -19,6 +19,11 @@ func TestModelCloseCancelsOwnedFrontendWork(t *testing.T) {
 	model.Model.runtimeRequestContext, model.Model.runtimeRequestCancel = context.WithCancel(model.Model.runtimeContext)
 	treeContext, treeCancel := context.WithCancel(context.Background())
 	model.Model.treeNavigationCancel = treeCancel
+	pickerContext, pickerCancel := context.WithCancel(context.Background())
+	model.Picker.Overlay = &pickerOverlayState{
+		loadContext: pickerContext,
+		loadCancel:  pickerCancel,
+	}
 	turnState, turnContext := newTurnCancellationState(context.Background())
 	model.Model.turnCancellation = turnState
 
@@ -33,6 +38,12 @@ func TestModelCloseCancelsOwnedFrontendWork(t *testing.T) {
 	}
 	if err := treeContext.Err(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("tree navigation context error = %v, want context canceled", err)
+	}
+	if err := pickerContext.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("picker context error = %v, want context canceled", err)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatal("picker overlay remained installed after model close")
 	}
 	select {
 	case <-turnContext.Done():

@@ -722,6 +722,11 @@ func (m *Model) Close() {
 	if m.Model.treeNavigationCancel != nil {
 		m.Model.treeNavigationCancel()
 	}
+	m.pickerReducer().closeAll()
+	if m.Model.EventSubscription != nil {
+		m.Model.EventSubscription.Close()
+		m.Model.EventSubscription = nil
+	}
 	m.clearTurnCancellation()
 }
 
