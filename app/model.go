@@ -970,7 +970,16 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 	}
 	generation := m.Model.EventGeneration
 	switchID := m.runtimeRequest().begin("Saving runtime settings...")
+	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return TransitionCommittedMsg{
+				generation: generation,
+				switchID:   switchID,
+				err:        fmt.Errorf("runtime transition canceled: %w", err),
+				retry:      retry,
+			}
+		}
 		if err := t.Persist(saveRuntimeState); err != nil {
 			return TransitionCommittedMsg{
 				generation: generation,

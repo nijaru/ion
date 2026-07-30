@@ -120,6 +120,39 @@ func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) 
 	}
 }
 
+func TestCanceledRuntimeTransitionSkipsPersistence(t *testing.T) {
+	model := readyModel(t)
+	transition := NewTransition(
+		&config.Config{Provider: "openai", Model: "test"},
+		&config.Config{Provider: "openai", Model: "test", ReasoningEffort: "high"},
+		PresetPrimary,
+		"",
+	).WithReasoningPersistence()
+	saved := false
+	previousSave := saveRuntimeState
+	saveRuntimeState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+	defer func() { saveRuntimeState = previousSave }()
+
+	updated, cmd := model.beginRuntimeTransitionCommit(transition, systemEntry("thinking"))
+	if cmd == nil || updated.Model.runtimeRequestCancel == nil {
+		t.Fatal("runtime transition did not create a cancelable persistence request")
+	}
+	updated.Model.runtimeRequestCancel()
+	msg, ok := cmd().(TransitionCommittedMsg)
+	if !ok {
+		t.Fatalf("runtime transition message = %T, want TransitionCommittedMsg", cmd())
+	}
+	if !errors.Is(msg.err, context.Canceled) {
+		t.Fatalf("runtime transition error = %v, want context cancellation", msg.err)
+	}
+	if saved {
+		t.Fatal("canceled runtime transition persisted state")
+	}
+}
+
 func TestThinkingPersistenceFailureLeavesLiveRuntimeUnchanged(t *testing.T) {
 	model := readyModel(t)
 	runner := &stubRunner{}
