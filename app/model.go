@@ -57,10 +57,13 @@ type streamClosedMsg struct {
 }
 
 type clearPendingMsg struct {
-	action pendingAction
+	action    pendingAction
+	requestID uint64
 }
 
-type deferredEnterMsg struct{}
+type deferredEnterMsg struct {
+	generation uint64
+}
 
 type approvalResolveMsg struct {
 	generation uint64
@@ -485,6 +488,7 @@ type InputState struct {
 	HistoryIdx            int
 	HistoryDraft          string
 	Pending               pendingAction
+	PendingActionRequest  uint64
 	PrintHoldUntil        time.Time
 	PrintHoldDelay        time.Duration
 	DelayNextEnter        bool

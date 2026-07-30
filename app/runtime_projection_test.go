@@ -112,6 +112,26 @@ func TestStaleRuntimeSwitchErrorCannotClearNewGeneration(t *testing.T) {
 	}
 }
 
+func TestRuntimeReplacementResetsOldPrintHold(t *testing.T) {
+	model := readyModel(t)
+	model.Input.PrintHoldUntil = time.Now().Add(time.Minute)
+	model.Input.PrintHoldDelay = time.Second
+	model.Input.DelayNextEnter = true
+	model.Input.DeferredEnter = true
+	generation := model.Model.EventGeneration
+
+	if err := model.applyRuntimeSwitched(runtimeSwitchedMsg{runtime: Accepted{}}); err != nil {
+		t.Fatalf("apply runtime switch: %v", err)
+	}
+	if model.Model.EventGeneration != generation+1 {
+		t.Fatalf("generation = %d, want %d", model.Model.EventGeneration, generation+1)
+	}
+	if !model.Input.PrintHoldUntil.IsZero() || model.Input.PrintHoldDelay != 0 ||
+		model.Input.DelayNextEnter || model.Input.DeferredEnter {
+		t.Fatalf("old print hold survived runtime replacement: %#v", model.Input)
+	}
+}
+
 func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true

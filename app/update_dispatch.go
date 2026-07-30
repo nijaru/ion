@@ -52,12 +52,15 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case clearPendingMsg:
-		if msg.action == m.Input.Pending {
+		if msg.action == m.Input.Pending && msg.requestID == m.Input.PendingActionRequest {
 			m.clearPendingAction()
 		}
 		return m, nil, true
 
 	case deferredEnterMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
 		next, cmd := m.handleDeferredEnter()
 		return next, cmd, true
 

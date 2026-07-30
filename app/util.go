@@ -87,7 +87,7 @@ func (m *Model) clearPendingAction() {
 }
 
 func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
-	m.inputReducer().armPendingAction(action)
+	requestID := m.inputReducer().armPendingAction(action)
 	switch action {
 	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
 	default:
@@ -95,7 +95,7 @@ func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
 		return nil
 	}
 	return tea.Tick(pendingActionTimeout, func(time.Time) tea.Msg {
-		return clearPendingMsg{action: action}
+		return clearPendingMsg{action: action, requestID: requestID}
 	})
 }
 

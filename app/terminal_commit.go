@@ -177,7 +177,8 @@ func (m Model) scheduleDeferredEnter() tea.Cmd {
 	if delay < 10*time.Millisecond {
 		delay = 10 * time.Millisecond
 	}
+	generation := m.Model.EventGeneration
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return deferredEnterMsg{}
+		return deferredEnterMsg{generation: generation}
 	})
 }

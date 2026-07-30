@@ -340,7 +340,7 @@ func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
 	model.Input.DeferredEnter = true
 	model.Input.PrintHoldUntil = time.Now().Add(-time.Millisecond)
 
-	updated, cmd := model.Update(deferredEnterMsg{})
+	updated, cmd := model.Update(deferredEnterMsg{generation: model.Model.EventGeneration})
 	model = testModel(t, updated)
 
 	if model.Input.DeferredEnter {
@@ -351,6 +351,24 @@ func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected deferred slash command print command")
+	}
+}
+
+func TestStaleDeferredEnterCannotSubmitAfterRuntimeGenerationChanges(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/session")
+	model.Input.DeferredEnter = true
+	model.Input.PrintHoldUntil = time.Now().Add(-time.Millisecond)
+	oldGeneration := model.Model.EventGeneration
+	model.Model.EventGeneration++
+
+	updated, cmd := model.Update(deferredEnterMsg{generation: oldGeneration})
+	model = testModel(t, updated)
+	if cmd != nil {
+		t.Fatal("stale deferred Enter returned a submit command")
+	}
+	if !model.Input.DeferredEnter {
+		t.Fatal("stale deferred Enter changed current-generation input state")
 	}
 }
 
@@ -632,8 +650,12 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected timeout cmd after first ctrl+c")
 	}
+	requestID := model.Input.PendingActionRequest
 
-	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
+	updated, _ = model.Update(clearPendingMsg{
+		action:    pendingActionQuitCtrlC,
+		requestID: requestID,
+	})
 	model = testModel(t, updated)
 	if model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should clear after timeout")
@@ -643,6 +665,30 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 		"Press Ctrl+C again to quit",
 	) {
 		t.Fatalf("status line should clear timeout hint, got %q", line)
+	}
+}
+
+func TestPendingActionTimeoutCannotClearRearmedAction(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	oldRequest := model.Input.PendingActionRequest
+	model.clearPendingAction()
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = testModel(t, updated)
+	if model.Input.PendingActionRequest == oldRequest {
+		t.Fatal("re-armed pending action reused the old request")
+	}
+
+	updated, _ = model.Update(clearPendingMsg{
+		action:    pendingActionQuitCtrlC,
+		requestID: oldRequest,
+	})
+	model = testModel(t, updated)
+	if model.Input.Pending != pendingActionQuitCtrlC {
+		t.Fatalf("stale timeout cleared re-armed action: %v", model.Input.Pending)
 	}
 }
 

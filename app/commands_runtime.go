@@ -613,6 +613,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 		state.retryAfterNavigation = false
 	}
 	m.pickerReducer().closeAll()
+	m.inputReducer().resetPrintHold()
 	m.clearProgressError()
 	m.App.Branch = msg.worktreeBranch
 	m.turnReducer().ClearActiveState(true)

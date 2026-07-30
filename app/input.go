@@ -141,8 +141,10 @@ func (r inputReducer) clearPendingAction() {
 	r.input.Pending = pendingActionNone
 }
 
-func (r inputReducer) armPendingAction(action pendingAction) {
+func (r inputReducer) armPendingAction(action pendingAction) uint64 {
+	r.input.PendingActionRequest++
 	r.input.Pending = action
+	return r.input.PendingActionRequest
 }
 
 func (r inputReducer) holdEnter(delay time.Duration) {
@@ -165,6 +167,13 @@ func (r inputReducer) markDeferredEnter() {
 func (r inputReducer) finishDeferredEnter() {
 	r.input.DeferredEnter = false
 	r.input.PrintHoldDelay = 0
+}
+
+func (r inputReducer) resetPrintHold() {
+	r.input.PrintHoldUntil = time.Time{}
+	r.input.PrintHoldDelay = 0
+	r.input.DelayNextEnter = false
+	r.input.DeferredEnter = false
 }
 
 const maxInputHistoryEntries = 200
