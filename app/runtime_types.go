@@ -326,6 +326,12 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 			)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("switch: replacement canceled: %w", err),
+			CloseHandles(newHandles),
+		)
+	}
 	if err := input.Transition.Persist(input.SaveState); err != nil {
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("switch: persist runtime state: %w", err),
@@ -364,6 +370,12 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 				CloseHandles(newHandles),
 			)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("resume: replacement canceled: %w", err),
+			CloseHandles(newHandles),
+		)
 	}
 	if err := transition.Persist(input.SaveState); err != nil {
 		return SwitchResult{}, errors.Join(

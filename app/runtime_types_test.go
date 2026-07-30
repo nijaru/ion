@@ -131,6 +131,37 @@ func TestSwitchRejectsReplacementValidationWithoutPersisting(t *testing.T) {
 	}
 }
 
+func TestSwitchSkipsPersistenceWhenValidationCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	newRunner := &trackingRuntimeRunner{}
+	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+		handles := completeRuntimeHandles(newRunner)
+		return handles.Info, handles.Runner, handles.Storage, nil
+	}
+	input.ValidateReplacement = func(context.Context, Handles) error {
+		cancel()
+		return nil
+	}
+	saved := false
+	input.SaveState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+
+	_, err := Switch(ctx, input)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Switch error = %v, want context cancellation", err)
+	}
+	if saved {
+		t.Fatal("canceled replacement persisted runtime state")
+	}
+	if newRunner.closed != 1 {
+		t.Fatalf("canceled replacement runner closed = %d, want 1", newRunner.closed)
+	}
+}
+
 func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
@@ -268,6 +299,43 @@ func TestResumeRejectsReplacementValidationWithoutPersisting(t *testing.T) {
 	}
 	if oldRunner.closed != 0 {
 		t.Fatalf("current runner closed = %d, want 0", oldRunner.closed)
+	}
+}
+
+func TestResumeSkipsPersistenceWhenValidationCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oldRunner := &trackingRuntimeRunner{}
+	newRunner := &trackingRuntimeRunner{}
+	cfg := &config.Config{Provider: "openai", Model: "gpt-4.1"}
+	input := ResumeInput{
+		Transition: NewTransition(cfg, cfg, PresetPrimary, "").WithStatePersistence(),
+		Current:    completeRuntimeHandles(oldRunner),
+		SessionID:  "resume",
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+			handles := completeRuntimeHandles(newRunner)
+			return handles.Info, handles.Runner, handles.Storage, nil
+		},
+		ValidateReplacement: func(context.Context, Handles) error {
+			cancel()
+			return nil
+		},
+	}
+	saved := false
+	input.SaveState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+
+	_, err := Resume(ctx, input)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Resume error = %v, want context cancellation", err)
+	}
+	if saved {
+		t.Fatal("canceled resumed replacement persisted runtime state")
+	}
+	if newRunner.closed != 1 {
+		t.Fatalf("canceled resumed replacement runner closed = %d, want 1", newRunner.closed)
 	}
 }
 
