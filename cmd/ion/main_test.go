@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -104,6 +105,22 @@ type closeOnlyResource struct {
 func (r *closeOnlyResource) Close() error {
 	r.closed++
 	return r.err
+}
+
+func TestCloseStartupStoreReportsCloseFailure(t *testing.T) {
+	store := &closeOnlyResource{err: context.Canceled}
+	var stderr bytes.Buffer
+	closeStartupStore(&stderr, store)
+	if store.closed != 1 {
+		t.Fatalf("store close count = %d, want 1", store.closed)
+	}
+	if got := stderr.String(); got != "failed to close storage: context canceled\n" {
+		t.Fatalf("stderr = %q, want close failure", got)
+	}
+}
+
+func TestCloseStartupStoreAcceptsNilStore(t *testing.T) {
+	closeStartupStore(nil, nil)
 }
 
 func TestCloseSessionPickerResourcesClosesStore(t *testing.T) {

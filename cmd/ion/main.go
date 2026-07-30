@@ -301,12 +301,14 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			cli.continueRequested(),
 		)
 		if err != nil {
+			closeStartupStore(stderr, store)
 			fmt.Fprintf(stderr, "%v\n", err)
 			return 1
 		}
 	}
 	if cli.exportSessionPath() != "" {
 		if sessionID == "" {
+			closeStartupStore(stderr, store)
 			fmt.Fprintln(
 				stderr,
 				"--export-session requires --session <id>, --resume <id>, or --continue",
@@ -329,7 +331,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	if forkRequested {
 		forkedID, err := ionexport.ForkSession(ctx, store, sessionID)
 		if err != nil {
-			store.Close()
+			closeStartupStore(stderr, store)
 			fmt.Fprintf(stderr, "failed to fork session %s: %v\n", sessionID, err)
 			return 1
 		}
@@ -337,6 +339,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
+			closeStartupStore(stderr, store)
 			fmt.Fprintf(stderr, "%v\n", err)
 			return 1
 		}
@@ -346,6 +349,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		cfg.APIKeyOverride,
 		firstNonEmpty(cfg.Model, cfg.FastModel, cfg.SummaryModel),
 	); err != nil {
+		closeStartupStore(stderr, store)
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 2
 	}
@@ -357,6 +361,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		explicitRuntimeOverride,
 	)
 	if err != nil {
+		closeStartupStore(stderr, store)
 		fmt.Fprintf(stderr, "failed to resolve runtime config: %v\n", err)
 		return 1
 	}
@@ -550,6 +555,15 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		printResumeHint(stdout, sessionID)
 	}
 	return 0
+}
+
+func closeStartupStore(stderr io.Writer, store interface{ Close() error }) {
+	if store == nil {
+		return
+	}
+	if err := store.Close(); err != nil {
+		fmt.Fprintf(stderr, "failed to close storage: %v\n", err)
+	}
 }
 
 func closeAppModel(model tea.Model) {
