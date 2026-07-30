@@ -248,7 +248,6 @@ type Switcher func(context.Context, *config.Config, string) (RuntimeInfo, agent.
 
 // SwitchInput holds the parameters for a model switch.
 type SwitchInput struct {
-	Context         context.Context
 	Config          *config.Config
 	ProviderKey     string
 	Switcher        Switcher
@@ -277,7 +276,6 @@ type ResumeInput struct {
 	// transition becomes durable. It must not mutate the replacement.
 	ValidateReplacement func(context.Context, Handles) error
 	SaveState           func(update config.RuntimeStateUpdate) error
-	Context             context.Context
 	SessionID           string
 }
 
