@@ -26,7 +26,12 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 		return m.showMemory("", true)
 	case strings.EqualFold(fields[1], "audit") && len(fields) == 2:
 		requestID := (&m).beginMemoryRequest()
-		return m, memoryAuditCmd(m.runtimeOperationContext(), m.Model.Memory, requestID)
+		return m, memoryAuditCmd(
+			m.runtimeOperationContext(),
+			m.Model.Memory,
+			m.Model.EventGeneration,
+			requestID,
+		)
 	case strings.EqualFold(fields[1], "search") && len(fields) >= 3:
 		return m.showMemory(strings.TrimSpace(strings.Join(fields[2:], " ")), false)
 	case strings.EqualFold(fields[1], "forget") && len(fields) == 3:
@@ -34,6 +39,7 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 		return m, memoryActionCmd(
 			m.runtimeOperationContext(),
 			m.Model.Memory,
+			m.Model.EventGeneration,
 			requestID,
 			"forgot",
 			strings.TrimSpace(fields[2]),
@@ -43,6 +49,7 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 		return m, memoryActionCmd(
 			m.runtimeOperationContext(),
 			m.Model.Memory,
+			m.Model.EventGeneration,
 			requestID,
 			"restored",
 			strings.TrimSpace(fields[2]),
@@ -54,7 +61,14 @@ func (m Model) handleMemoryCommand(fields []string) (Model, tea.Cmd) {
 
 func (m Model) showMemory(query string, includeDeleted bool) (Model, tea.Cmd) {
 	requestID := (&m).beginMemoryRequest()
-	return m, memorySearchCmd(m.runtimeOperationContext(), m.Model.Memory, requestID, query, includeDeleted)
+	return m, memorySearchCmd(
+		m.runtimeOperationContext(),
+		m.Model.Memory,
+		m.Model.EventGeneration,
+		requestID,
+		query,
+		includeDeleted,
+	)
 }
 
 func (m *Model) beginMemoryRequest() uint64 {
@@ -65,7 +79,7 @@ func (m *Model) beginMemoryRequest() uint64 {
 func memorySearchCmd(
 	ctx context.Context,
 	controller MemoryController,
-	requestID uint64,
+	generation, requestID uint64,
 	query string,
 	includeDeleted bool,
 ) tea.Cmd {
@@ -75,6 +89,7 @@ func memorySearchCmd(
 	return func() tea.Msg {
 		records, err := controller.Search(ctx, query, includeDeleted, memoryCommandLimit)
 		return memorySearchMsg{
+			generation:     generation,
 			requestID:      requestID,
 			query:          query,
 			includeDeleted: includeDeleted,
@@ -84,20 +99,29 @@ func memorySearchCmd(
 	}
 }
 
-func memoryAuditCmd(ctx context.Context, controller MemoryController, requestID uint64) tea.Cmd {
+func memoryAuditCmd(
+	ctx context.Context,
+	controller MemoryController,
+	generation, requestID uint64,
+) tea.Cmd {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		entries, err := controller.Audit(ctx, memoryCommandLimit)
-		return memoryAuditMsg{requestID: requestID, entries: entries, err: err}
+		return memoryAuditMsg{
+			generation: generation,
+			requestID:  requestID,
+			entries:    entries,
+			err:        err,
+		}
 	}
 }
 
 func memoryActionCmd(
 	ctx context.Context,
 	controller MemoryController,
-	requestID uint64,
+	generation, requestID uint64,
 	action, id string,
 ) tea.Cmd {
 	if ctx == nil {
@@ -113,12 +137,18 @@ func memoryActionCmd(
 		default:
 			err = fmt.Errorf("unknown memory action %q", action)
 		}
-		return memoryActionMsg{requestID: requestID, action: action, id: id, err: err}
+		return memoryActionMsg{
+			generation: generation,
+			requestID:  requestID,
+			action:     action,
+			id:         id,
+			err:        err,
+		}
 	}
 }
 
 func (m Model) handleMemorySearch(msg memorySearchMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.MemoryRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.MemoryRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -128,7 +158,7 @@ func (m Model) handleMemorySearch(msg memorySearchMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleMemoryAudit(msg memoryAuditMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.MemoryRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.MemoryRequest {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -138,7 +168,7 @@ func (m Model) handleMemoryAudit(msg memoryAuditMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleMemoryAction(msg memoryActionMsg) (Model, tea.Cmd) {
-	if msg.requestID != m.Model.MemoryRequest {
+	if msg.generation != m.Model.EventGeneration || msg.requestID != m.Model.MemoryRequest {
 		return m, nil
 	}
 	if msg.err != nil {

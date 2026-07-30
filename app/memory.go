@@ -32,6 +32,7 @@ type MemoryAuditRecord struct {
 }
 
 type memorySearchMsg struct {
+	generation     uint64
 	requestID      uint64
 	query          string
 	includeDeleted bool
@@ -40,14 +41,16 @@ type memorySearchMsg struct {
 }
 
 type memoryAuditMsg struct {
-	requestID uint64
-	entries   []MemoryAuditRecord
-	err       error
+	generation uint64
+	requestID  uint64
+	entries    []MemoryAuditRecord
+	err        error
 }
 
 type memoryActionMsg struct {
-	requestID uint64
-	action    string
-	id        string
-	err       error
+	generation uint64
+	requestID  uint64
+	action     string
+	id         string
+	err        error
 }

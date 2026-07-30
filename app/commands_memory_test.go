@@ -118,6 +118,29 @@ func TestMemoryCommandUsesExplicitOperations(t *testing.T) {
 	}
 }
 
+func TestStaleMemoryResultCannotReportAfterRuntimeReplacement(t *testing.T) {
+	controller := &stubMemoryController{records: []MemoryRecord{{ID: "mem_1"}}}
+	model := readyModel(t).WithMemory(controller)
+	_, cmd := model.handleCommand("/memory search note")
+	if cmd == nil {
+		t.Fatal("memory search returned no command")
+	}
+	result := cmd()
+	msg, ok := result.(memorySearchMsg)
+	if !ok {
+		t.Fatalf("memory result = %T, want memorySearchMsg", result)
+	}
+	model.Model.EventGeneration++
+
+	updated, resultCmd := model.update(msg)
+	if resultCmd != nil {
+		t.Fatal("stale memory result returned a terminal command")
+	}
+	if updated.Progress.LastError != "" {
+		t.Fatalf("stale memory result reported error: %q", updated.Progress.LastError)
+	}
+}
+
 func TestMemoryCommandUsesRuntimeContext(t *testing.T) {
 	controller := &stubMemoryController{searchStarted: make(chan struct{})}
 	model := readyModel(t).WithMemory(controller)
