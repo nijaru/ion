@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nijaru/ion/app"
@@ -93,6 +94,37 @@ func (s *closeStorageSession) Usage(context.Context) (session.Usage, error) {
 func (s *closeStorageSession) Close() error {
 	s.closed++
 	return nil
+}
+
+type closeOnlyResource struct {
+	closed int
+	err    error
+}
+
+func (r *closeOnlyResource) Close() error {
+	r.closed++
+	return r.err
+}
+
+func TestCloseSessionPickerResourcesClosesStore(t *testing.T) {
+	store := &closeOnlyResource{}
+	if err := closeSessionPickerResources(nil, store); err != nil {
+		t.Fatalf("closeSessionPickerResources() error = %v", err)
+	}
+	if store.closed != 1 {
+		t.Fatalf("store close count = %d, want 1", store.closed)
+	}
+}
+
+func TestCloseSessionPickerResourcesPropagatesStoreCloseError(t *testing.T) {
+	wantErr := context.Canceled
+	store := &closeOnlyResource{err: wantErr}
+	if err := closeSessionPickerResources(nil, store); !errors.Is(err, wantErr) {
+		t.Fatalf("closeSessionPickerResources() error = %v, want %v", err, wantErr)
+	}
+	if store.closed != 1 {
+		t.Fatalf("store close count = %d, want 1", store.closed)
+	}
 }
 
 type providerRuntimeInfo struct {

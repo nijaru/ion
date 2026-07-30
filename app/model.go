@@ -704,6 +704,27 @@ func (m Model) attachClipboardImage(img *ionclipboard.ImageData) (Model, tea.Cmd
 	return m, m.insertComposerText(img.FilePath)
 }
 
+// Close stops app-owned background work and cancels frontend operations. It
+// does not close the runtime or storage handles; the host owns those resources.
+func (m *Model) Close() {
+	if m == nil {
+		return
+	}
+	if m.GitWatcher != nil {
+		m.GitWatcher.Stop()
+	}
+	if m.Model.runtimeCancel != nil {
+		m.Model.runtimeCancel()
+	}
+	if m.Model.runtimeRequestCancel != nil {
+		m.Model.runtimeRequestCancel()
+	}
+	if m.Model.treeNavigationCancel != nil {
+		m.Model.treeNavigationCancel()
+	}
+	m.clearTurnCancellation()
+}
+
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,

@@ -13,6 +13,37 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestModelCloseCancelsOwnedFrontendWork(t *testing.T) {
+	model := Model{}
+	model.Model.runtimeContext, model.Model.runtimeCancel = context.WithCancel(context.Background())
+	model.Model.runtimeRequestContext, model.Model.runtimeRequestCancel = context.WithCancel(model.Model.runtimeContext)
+	treeContext, treeCancel := context.WithCancel(context.Background())
+	model.Model.treeNavigationCancel = treeCancel
+	turnState, turnContext := newTurnCancellationState(context.Background())
+	model.Model.turnCancellation = turnState
+
+	model.Close()
+	model.Close()
+
+	if err := model.Model.runtimeContext.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runtime context error = %v, want context canceled", err)
+	}
+	if err := model.Model.runtimeRequestContext.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runtime request context error = %v, want context canceled", err)
+	}
+	if err := treeContext.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("tree navigation context error = %v, want context canceled", err)
+	}
+	select {
+	case <-turnContext.Done():
+	default:
+		t.Fatal("turn context remained active after model close")
+	}
+	if model.Model.turnCancellation != nil {
+		t.Fatal("turn cancellation state remained installed after model close")
+	}
+}
+
 func TestFormatPrintLinesAppendsSingleTrailingBlankLine(t *testing.T) {
 	got := formatPrintLines("• answer", "", "")
 	if !strings.HasSuffix(got, "\n") {

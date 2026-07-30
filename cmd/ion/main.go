@@ -256,20 +256,37 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		p := tea.NewProgram(&pickerModel)
 		finalPickerModel, pickerErr := p.Run()
 		if pickerErr != nil {
+			closeErr := closeSessionPickerResources(finalPickerModel, store)
+			if closeErr != nil {
+				fmt.Fprintf(stderr, "failed to close session picker: %v\n", closeErr)
+			}
 			fmt.Fprintf(stderr, "session picker error: %v\n", pickerErr)
 			return 1
 		}
 
 		appPickerModel, ok := finalPickerModel.(*app.Model)
 		if !ok || appPickerModel == nil {
+			closeErr := closeSessionPickerResources(finalPickerModel, store)
+			if closeErr != nil {
+				fmt.Fprintf(stderr, "failed to close session picker: %v\n", closeErr)
+				return 1
+			}
 			return 0
 		}
 
 		selectedSessionID := appPickerModel.SelectedSessionID()
 		if selectedSessionID == "" {
+			closeErr := closeSessionPickerResources(appPickerModel, store)
+			if closeErr != nil {
+				fmt.Fprintf(stderr, "failed to close session picker: %v\n", closeErr)
+				return 1
+			}
 			return 0
 		}
 
+		// The picker owns only frontend work. Keep the shared store open for the
+		// selected session, but stop the picker before constructing the runtime.
+		appPickerModel.Close()
 		sessionID = selectedSessionID
 		openResumePicker = false
 	} else {
@@ -514,6 +531,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	timing.Print()
 	p := tea.NewProgram(&model)
 	finalModel, runErr := p.Run()
+	closeAppModel(finalModel)
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
 	closeErr := jobs.Close()
 	closeErr = errors.Join(closeErr, closeRuntimeHandles(agentToClose, store))
@@ -532,6 +550,20 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		printResumeHint(stdout, sessionID)
 	}
 	return 0
+}
+
+func closeAppModel(model tea.Model) {
+	if appModel, ok := model.(*app.Model); ok && appModel != nil {
+		appModel.Close()
+	}
+}
+
+func closeSessionPickerResources(model tea.Model, store interface{ Close() error }) error {
+	closeAppModel(model)
+	if store == nil {
+		return nil
+	}
+	return store.Close()
 }
 
 func terminalSize(w io.Writer) (int, int) {
