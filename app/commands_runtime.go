@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -431,13 +430,22 @@ func (m Model) switchRuntimeCommandWithOptions(
 	ctx := m.runtimeRequestOperationContext()
 
 	return m, func() tea.Msg {
+		var leafID string
 		result, err := Switch(ctx, SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
 			Current:         current,
 			TargetSessionID: sessionID,
 			PreserveSession: preserveSession,
-			SaveState:       saveRuntimeState,
+			ValidateReplacement: func(validateCtx context.Context, handles Handles) error {
+				var validateErr error
+				leafID, validateErr = selectedRuntimeLeafID(validateCtx, handles.Runner)
+				if validateErr != nil {
+					return fmt.Errorf("read selected leaf: %w", validateErr)
+				}
+				return nil
+			},
+			SaveState: saveRuntimeState,
 		})
 		if err != nil {
 			return runtimeSwitchErrorMsg{
@@ -445,15 +453,6 @@ func (m Model) switchRuntimeCommandWithOptions(
 				switchID:   requestID,
 				err:        err,
 				retry:      options.retrySetup,
-			}
-		}
-		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
-		if err != nil {
-			closeErr := closeRuntimeHandles(result.Runtime.Handles)
-			return runtimeSwitchErrorMsg{
-				generation: generation,
-				switchID:   requestID,
-				err:        errors.Join(fmt.Errorf("switch: read selected leaf: %w", err), closeErr),
 			}
 		}
 		return runtimeSwitchedMsg{
@@ -485,24 +484,21 @@ func (m Model) resumeRuntimeCommand(
 	switchID := m.runtimeRequest().begin("Switching runtime...")
 	ctx := m.runtimeRequestOperationContext()
 	return m, func() tea.Msg {
+		var projection agent.SessionProjection
 		result, err := Resume(ctx, ResumeInput{
 			Switcher:   switcher,
 			Transition: transition,
 			Current:    current,
 			SessionID:  sessionID,
-			SaveState:  saveRuntimeState,
+			ValidateReplacement: func(validateCtx context.Context, handles Handles) error {
+				var projectionErr error
+				projection, projectionErr = loadSessionProjection(validateCtx, handles.Runner, nil)
+				return projectionErr
+			},
+			SaveState: saveRuntimeState,
 		})
 		if err != nil {
 			return runtimeSwitchErrorMsg{generation: generation, switchID: switchID, err: err}
-		}
-		projection, err := loadSessionProjection(ctx, result.Runtime.Handles.Runner, nil)
-		if err != nil {
-			closeErr := closeRuntimeHandles(result.Runtime.Handles)
-			return runtimeSwitchErrorMsg{
-				generation: generation,
-				switchID:   switchID,
-				err:        errors.Join(fmt.Errorf("resume: read active session projection: %w", err), closeErr),
-			}
 		}
 		leafID := strings.TrimSpace(projection.LeafID)
 		resumeBranch := strings.TrimSpace(projection.WorktreeBranch)

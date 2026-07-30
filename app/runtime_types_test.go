@@ -94,6 +94,43 @@ func TestSwitchReturnsPersistenceFailureAndClosesReplacement(t *testing.T) {
 	}
 }
 
+func TestSwitchRejectsReplacementValidationWithoutPersisting(t *testing.T) {
+	oldRunner := &trackingRuntimeRunner{}
+	newRunner := &trackingRuntimeRunner{}
+	input := runtimeSwitchInput(completeRuntimeHandles(oldRunner))
+	input.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+		handles := completeRuntimeHandles(newRunner)
+		return handles.Info, handles.Runner, handles.Storage, nil
+	}
+	validated := false
+	input.ValidateReplacement = func(context.Context, Handles) error {
+		validated = true
+		return errors.New("selected leaf unavailable")
+	}
+	saved := false
+	input.SaveState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+
+	_, err := Switch(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "validate replacement") {
+		t.Fatalf("Switch error = %v, want replacement validation error", err)
+	}
+	if !validated {
+		t.Fatal("replacement validator was not called")
+	}
+	if saved {
+		t.Fatal("rejected replacement persisted runtime state")
+	}
+	if newRunner.closed != 1 {
+		t.Fatalf("rejected replacement runner closed = %d, want 1", newRunner.closed)
+	}
+	if oldRunner.closed != 0 {
+		t.Fatalf("current runner closed = %d, want 0", oldRunner.closed)
+	}
+}
+
 func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	newRunner := &trackingRuntimeRunner{}
 	input := runtimeSwitchInput(completeRuntimeHandles(&trackingRuntimeRunner{}))
@@ -192,6 +229,45 @@ func TestResumePersistsTransitionSelectionFlags(t *testing.T) {
 	}
 	if !got.PersistReasoning || got.ReasoningPreset != "primary" || got.ReasoningEffort != "medium" {
 		t.Fatalf("resumed reasoning update = %#v, want primary/medium persistence", got)
+	}
+}
+
+func TestResumeRejectsReplacementValidationWithoutPersisting(t *testing.T) {
+	oldRunner := &trackingRuntimeRunner{}
+	newRunner := &trackingRuntimeRunner{}
+	newStorage := newStubSession("resume")
+	cfg := &config.Config{Provider: "openai", Model: "gpt-4.1"}
+	input := ResumeInput{
+		Transition: NewTransition(cfg, cfg, PresetPrimary, "").WithStatePersistence(),
+		Current:    completeRuntimeHandles(oldRunner),
+		SessionID:  "resume",
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+			handles := completeRuntimeHandles(newRunner)
+			handles.Storage = newStorage
+			return handles.Info, handles.Runner, handles.Storage, nil
+		},
+	}
+	input.ValidateReplacement = func(context.Context, Handles) error {
+		return errors.New("active projection unavailable")
+	}
+	saved := false
+	input.SaveState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+
+	_, err := Resume(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "validate replacement") {
+		t.Fatalf("Resume error = %v, want replacement validation error", err)
+	}
+	if saved {
+		t.Fatal("rejected resumed replacement persisted runtime state")
+	}
+	if newRunner.closed != 1 {
+		t.Fatalf("rejected resumed replacement runner closed = %d, want 1", newRunner.closed)
+	}
+	if oldRunner.closed != 0 {
+		t.Fatalf("current runner closed = %d, want 0", oldRunner.closed)
 	}
 }
 

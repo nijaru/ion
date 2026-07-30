@@ -157,6 +157,13 @@ func TestResumeReplaysRuntimeOwnedBranchProjection(t *testing.T) {
 
 func TestResumeProjectionFailureClosesReplacement(t *testing.T) {
 	projectionErr := errors.New("projection unavailable")
+	previousSave := saveRuntimeState
+	saved := false
+	saveRuntimeState = func(config.RuntimeStateUpdate) error {
+		saved = true
+		return nil
+	}
+	defer func() { saveRuntimeState = previousSave }()
 	runner := &resumeProjectionRunner{
 		stubRunner:    &stubRunner{},
 		projectionErr: projectionErr,
@@ -184,6 +191,9 @@ func TestResumeProjectionFailureClosesReplacement(t *testing.T) {
 	}
 	if runner.closed != 1 {
 		t.Fatalf("replacement runner close count = %d, want 1", runner.closed)
+	}
+	if saved {
+		t.Fatal("projection-rejected replacement persisted runtime state")
 	}
 	if storage.entriesCalls != 0 {
 		t.Fatalf("storage Entries calls = %d, want 0", storage.entriesCalls)

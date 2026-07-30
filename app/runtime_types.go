@@ -256,7 +256,10 @@ type SwitchInput struct {
 	Current         Handles
 	TargetSessionID string
 	PreserveSession bool
-	SaveState       func(update config.RuntimeStateUpdate) error
+	// ValidateReplacement runs the app-owned acceptance checks before the
+	// transition becomes durable. It must not mutate the replacement.
+	ValidateReplacement func(context.Context, Handles) error
+	SaveState           func(update config.RuntimeStateUpdate) error
 }
 
 // SwitchResult holds the result of a model switch.
@@ -270,9 +273,12 @@ type ResumeInput struct {
 	Switcher   Switcher
 	Transition Transition
 	Current    Handles
-	SaveState  func(update config.RuntimeStateUpdate) error
-	Context    context.Context
-	SessionID  string
+	// ValidateReplacement runs the app-owned acceptance checks before the
+	// transition becomes durable. It must not mutate the replacement.
+	ValidateReplacement func(context.Context, Handles) error
+	SaveState           func(update config.RuntimeStateUpdate) error
+	Context             context.Context
+	SessionID           string
 }
 
 // Switch constructs the replacement runtime but does not close input.Current.
@@ -312,6 +318,14 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		Previous: input.Current,
 	}
 
+	if input.ValidateReplacement != nil {
+		if err := input.ValidateReplacement(ctx, newHandles); err != nil {
+			return SwitchResult{}, errors.Join(
+				fmt.Errorf("switch: validate replacement: %w", err),
+				CloseHandles(newHandles),
+			)
+		}
+	}
 	if err := input.Transition.Persist(input.SaveState); err != nil {
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("switch: persist runtime state: %w", err),
@@ -343,6 +357,14 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 		return SwitchResult{}, errors.Join(fmt.Errorf("resume: %w", err), CloseHandles(newHandles))
 	}
 	transition := input.Transition.WithHandles(newHandles)
+	if input.ValidateReplacement != nil {
+		if err := input.ValidateReplacement(ctx, newHandles); err != nil {
+			return SwitchResult{}, errors.Join(
+				fmt.Errorf("resume: validate replacement: %w", err),
+				CloseHandles(newHandles),
+			)
+		}
+	}
 	if err := transition.Persist(input.SaveState); err != nil {
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("resume: persist runtime state: %w", err),
