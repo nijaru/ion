@@ -734,7 +734,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,
 		m.Input.Spinner.Tick,
-		loadGitDiffStats(m.App.Workdir),
+		loadGitDiffStats(m.runtimeOperationContext(), m.App.Workdir),
 		m.startupPickerCmd(),
 	}
 	if m.Model.Runner != nil {
@@ -753,9 +753,16 @@ func (m Model) Init() tea.Cmd {
 
 // pollGitBranch returns a command that polls for git branch changes.
 func (m Model) pollGitBranch() tea.Cmd {
+	ctx := m.runtimeOperationContext()
 	return func() tea.Msg {
-		time.Sleep(2 * time.Second)
-		if m.GitWatcher == nil {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+		if ctx.Err() != nil || m.GitWatcher == nil {
 			return nil
 		}
 		branch := m.GitWatcher.Branch()

@@ -13,6 +13,19 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestCanceledFrontendTimersStopWithoutMessages(t *testing.T) {
+	model := Model{}
+	model.Model.runtimeContext, model.Model.runtimeCancel = context.WithCancel(context.Background())
+	model.Model.runtimeCancel()
+
+	if msg := model.pollGitBranch()(); msg != nil {
+		t.Fatalf("canceled branch poll message = %#v, want nil", msg)
+	}
+	if cmd := loadGitDiffStats(model.runtimeOperationContext(), t.TempDir()); cmd() != nil {
+		t.Fatal("canceled git diff command returned a message")
+	}
+}
+
 func TestModelCloseCancelsOwnedFrontendWork(t *testing.T) {
 	model := Model{}
 	model.Model.runtimeContext, model.Model.runtimeCancel = context.WithCancel(context.Background())

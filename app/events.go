@@ -624,15 +624,21 @@ var (
 	gitDiffDeletionsPattern  = regexp.MustCompile(`(\d+) deletion`)
 )
 
-func loadGitDiffStats(workdir string) tea.Cmd {
+func loadGitDiffStats(ctx context.Context, workdir string) tea.Cmd {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
 		return gitDiffStatsMsg{
 			workdir: workdir,
-			stats:   currentGitDiffStats(workdir),
+			stats:   currentGitDiffStats(ctx, workdir),
 		}
 	}
 }
@@ -644,8 +650,11 @@ func (m Model) handleGitDiffStats(msg gitDiffStatsMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func currentGitDiffStats(workdir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), gitDiffStatsTimeout)
+func currentGitDiffStats(parent context.Context, workdir string) string {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, gitDiffStatsTimeout)
 	defer cancel()
 
 	out, err := exec.CommandContext(ctx, "git", "-C", workdir, "diff", "--shortstat", "HEAD", "--").
