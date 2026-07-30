@@ -515,7 +515,7 @@ func (c *Controller) sessionProjectionDirect(ctx context.Context) (SessionProjec
 		if err != nil {
 			return SessionProjection{}, fmt.Errorf("read active turn branch: %w", err)
 		}
-		return newSessionProjection(sess.ID(), sess.GetLeafID(), entries), nil
+		return newSessionProjection(sess.ID(), sess.GetLeafID(), sess.Meta().Branch, entries), nil
 	}
 
 	for attempt := 0; attempt < 3; attempt++ {
@@ -525,7 +525,7 @@ func (c *Controller) sessionProjectionDirect(ctx context.Context) (SessionProjec
 			return SessionProjection{}, err
 		}
 		if sess.GetLeafID() == leafID {
-			return newSessionProjection(sess.ID(), leafID, entries), nil
+			return newSessionProjection(sess.ID(), leafID, sess.Meta().Branch, entries), nil
 		}
 		if err := ctx.Err(); err != nil {
 			return SessionProjection{}, err
@@ -534,16 +534,17 @@ func (c *Controller) sessionProjectionDirect(ctx context.Context) (SessionProjec
 	return SessionProjection{}, ErrSessionTreeChanged
 }
 
-func newSessionProjection(id, leafID string, entries []session.Entry) SessionProjection {
+func newSessionProjection(id, leafID, worktreeBranch string, entries []session.Entry) SessionProjection {
 	branch := append([]session.Entry(nil), entries...)
 	if len(branch) > 0 {
 		leafID = branch[len(branch)-1].ID()
 	}
 	return SessionProjection{
-		ID:     id,
-		LeafID: leafID,
-		Branch: branch,
-		Usage:  session.UsageFromEntries(branch),
+		ID:             id,
+		LeafID:         leafID,
+		Branch:         branch,
+		Usage:          session.UsageFromEntries(branch),
+		WorktreeBranch: strings.TrimSpace(worktreeBranch),
 	}
 }
 

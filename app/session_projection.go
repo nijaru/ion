@@ -40,9 +40,10 @@ func loadSessionProjection(
 		return agent.SessionProjection{}, fmt.Errorf("load bootstrap session usage: %w", err)
 	}
 	projection := agent.SessionProjection{
-		ID:     storage.ID(),
-		Branch: append([]session.Entry(nil), entries...),
-		Usage:  usage,
+		ID:             storage.ID(),
+		Branch:         append([]session.Entry(nil), entries...),
+		Usage:          usage,
+		WorktreeBranch: storage.Meta().Branch,
 	}
 	if len(projection.Branch) > 0 {
 		projection.LeafID = projection.Branch[len(projection.Branch)-1].ID()

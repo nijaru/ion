@@ -431,11 +431,14 @@ type SessionReader interface {
 // for semantic reads. Branch contains the selected branch and includes staged
 // entries while a durable turn is active; Usage is computed from that same
 // branch, so the two fields cannot describe different turn boundaries.
+// WorktreeBranch is the workspace branch captured with the same runtime-owned
+// read, so frontends do not need to inspect the active session storage.
 type SessionProjection struct {
-	ID     string
-	LeafID string
-	Branch []session.Entry
-	Usage  session.Usage
+	ID             string
+	LeafID         string
+	Branch         []session.Entry
+	Usage          session.Usage
+	WorktreeBranch string
 }
 
 // SessionTreeSnapshot is the immutable data needed to render the active

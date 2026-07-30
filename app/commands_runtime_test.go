@@ -70,6 +70,126 @@ func TestStoredSessionConfigUsesDirectCatalogLookupForForeignWorkdir(t *testing.
 	}
 }
 
+type resumeProjectionRunner struct {
+	*stubRunner
+	projection    agent.SessionProjection
+	projectionErr error
+	closed        int
+}
+
+func (r *resumeProjectionRunner) SessionProjection(context.Context) (agent.SessionProjection, error) {
+	return r.projection, r.projectionErr
+}
+
+func (r *resumeProjectionRunner) Close() error {
+	r.closed++
+	return nil
+}
+
+type resumeProjectionStorage struct {
+	entries      []session.Entry
+	entriesCalls int
+	branch       string
+}
+
+func (s *resumeProjectionStorage) Entries(context.Context) ([]session.Entry, error) {
+	s.entriesCalls++
+	return append([]session.Entry(nil), s.entries...), nil
+}
+
+func (s *resumeProjectionStorage) ID() string { return "resumed" }
+
+func (s *resumeProjectionStorage) Meta() session.Metadata {
+	return session.Metadata{ID: s.ID(), Branch: s.branch}
+}
+
+func (s *resumeProjectionStorage) Usage(context.Context) (session.Usage, error) {
+	return session.Usage{}, nil
+}
+
+func TestResumeReplaysRuntimeOwnedBranchProjection(t *testing.T) {
+	active := []session.Entry{sysEntry("active branch")}
+	abandoned := []session.Entry{sysEntry("abandoned branch")}
+	runner := &resumeProjectionRunner{
+		stubRunner: &stubRunner{},
+		projection: agent.SessionProjection{
+			ID:             "resumed",
+			LeafID:         active[0].ID(),
+			Branch:         active,
+			WorktreeBranch: "feature/resumed",
+		},
+	}
+	storage := &resumeProjectionStorage{entries: abandoned, branch: "stale-storage-branch"}
+	model := readyModel(t)
+	model.Model.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+		return stubBackend{}, runner, storage, nil
+	}
+
+	updated, cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "test-model"},
+		sysEntry("resume"),
+		"resumed",
+	)
+	if cmd == nil {
+		t.Fatal("resume command is nil")
+	}
+	msg, ok := cmd().(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("resume result = %T, want runtimeSwitchedMsg", cmd())
+	}
+	if storage.entriesCalls != 0 {
+		t.Fatalf("storage Entries calls = %d, want 0", storage.entriesCalls)
+	}
+	if len(msg.replayEntries) != len(active) || session.EntryText(msg.replayEntries[0]) != "active branch" {
+		t.Fatalf("replay entries = %#v, want active branch only", msg.replayEntries)
+	}
+	if msg.leafID != active[0].ID() {
+		t.Fatalf("replay leaf = %q, want %q", msg.leafID, active[0].ID())
+	}
+	if !strings.Contains(strings.Join(msg.printLines, "\n"), "feature/resumed") {
+		t.Fatalf("resume header = %q, want runtime-owned worktree branch", strings.Join(msg.printLines, "\n"))
+	}
+	if runner.closed != 0 {
+		t.Fatalf("replacement runner close count = %d, want 0 before installation", runner.closed)
+	}
+	_ = updated
+}
+
+func TestResumeProjectionFailureClosesReplacement(t *testing.T) {
+	projectionErr := errors.New("projection unavailable")
+	runner := &resumeProjectionRunner{
+		stubRunner:    &stubRunner{},
+		projectionErr: projectionErr,
+	}
+	storage := &resumeProjectionStorage{}
+	model := readyModel(t)
+	model.Model.Switcher = func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+		return stubBackend{}, runner, storage, nil
+	}
+
+	_, cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "test-model"},
+		sysEntry("resume"),
+		"resumed",
+	)
+	if cmd == nil {
+		t.Fatal("resume command is nil")
+	}
+	msg, ok := cmd().(runtimeSwitchErrorMsg)
+	if !ok {
+		t.Fatalf("resume result = %T, want runtimeSwitchErrorMsg", cmd())
+	}
+	if !errors.Is(msg.err, projectionErr) {
+		t.Fatalf("resume error = %v, want projection error", msg.err)
+	}
+	if runner.closed != 1 {
+		t.Fatalf("replacement runner close count = %d, want 1", runner.closed)
+	}
+	if storage.entriesCalls != 0 {
+		t.Fatalf("storage Entries calls = %d, want 0", storage.entriesCalls)
+	}
+}
+
 func TestRuntimeSwitchUsesCancelableRequestContext(t *testing.T) {
 	started := make(chan struct{})
 	seen := make(chan context.Context, 1)

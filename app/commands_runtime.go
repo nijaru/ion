@@ -495,34 +495,20 @@ func (m Model) resumeRuntimeCommand(
 		if err != nil {
 			return runtimeSwitchErrorMsg{generation: generation, switchID: switchID, err: err}
 		}
-		leafID, err := selectedRuntimeLeafID(ctx, result.Runtime.Handles.Runner)
+		projection, err := loadSessionProjection(ctx, result.Runtime.Handles.Runner, nil)
 		if err != nil {
 			closeErr := closeRuntimeHandles(result.Runtime.Handles)
 			return runtimeSwitchErrorMsg{
 				generation: generation,
 				switchID:   switchID,
-				err:        errors.Join(fmt.Errorf("resume: read selected leaf: %w", err), closeErr),
+				err:        errors.Join(fmt.Errorf("resume: read active session projection: %w", err), closeErr),
 			}
 		}
-		storage := result.Runtime.Handles.Storage
-		if storage == nil {
-			closeErr := closeRuntimeHandles(result.Runtime.Handles)
-			return runtimeSwitchErrorMsg{
-				generation: generation,
-				switchID:   switchID,
-				err:        errors.Join(errors.New("resumed runtime has no storage"), closeErr),
-			}
+		leafID := strings.TrimSpace(projection.LeafID)
+		resumeBranch := strings.TrimSpace(projection.WorktreeBranch)
+		if resumeBranch == "" {
+			resumeBranch = m.App.Branch
 		}
-		entries, err := storage.Entries(ctx)
-		if err != nil {
-			closeErr := closeRuntimeHandles(result.Runtime.Handles)
-			return runtimeSwitchErrorMsg{
-				generation: generation,
-				switchID:   switchID,
-				err:        errors.Join(fmt.Errorf("load resumed session: %w", err), closeErr),
-			}
-		}
-		resumeBranch := currentBranchName(m.App.Branch, storage)
 		printLines := []string{m.runtimeHeaderLine(result.Runtime.Handles.Info)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
 			printLines = append(printLines, header)
@@ -535,7 +521,7 @@ func (m Model) resumeRuntimeCommand(
 			previous:      result.Previous,
 			leafID:        leafID,
 			printLines:    printLines,
-			replayEntries: entries,
+			replayEntries: projection.Branch,
 			notice:        session.EntryText(notice),
 			showStatus:    false,
 		}
@@ -691,16 +677,6 @@ func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.C
 
 func closeRuntimeHandles(handles Handles) error {
 	return CloseHandles(handles)
-}
-
-func currentBranchName(defaultBranch string, sess RuntimeStorage) string {
-	if sess == nil {
-		return defaultBranch
-	}
-	if branch := strings.TrimSpace(sess.Meta().Branch); branch != "" {
-		return branch
-	}
-	return defaultBranch
 }
 
 func splitStoredSessionModel(value string) (string, string) {
