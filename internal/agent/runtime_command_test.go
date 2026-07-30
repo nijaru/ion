@@ -41,10 +41,51 @@ type blockingLabelSession struct {
 	release chan struct{}
 }
 
-func (s *blockingLabelSession) GetLabel(context.Context, string) (string, error) {
+func (s *blockingLabelSession) GetLabel(ctx context.Context, _ string) (string, error) {
 	close(s.started)
-	<-s.release
-	return "label", nil
+	select {
+	case <-s.release:
+		return "label", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func TestControllerGetLabelHonorsRuntimeClose(t *testing.T) {
+	store := newTestStore(t)
+	base := session.NewSession(store, 64)
+	sess := &blockingLabelSession{
+		Session: base,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{Session: sess, Store: store})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := h.GetLabel(context.Background(), "missing")
+		result <- err
+	}()
+	<-sess.started
+
+	closed := make(chan error, 1)
+	go func() { closed <- h.Close() }()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GetLabel error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetLabel did not observe runtime close")
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join GetLabel")
+	}
 }
 
 func TestControllerCommandWaitHonorsCancellation(t *testing.T) {

@@ -173,8 +173,8 @@ func (c *Controller) handleSetModel(cmd *SetModelCmd) {
 }
 
 func (c *Controller) handleSetThinking(cmd *SetThinkingCmd) {
-	c.startOperation(func() {
-		leafID, err := c.setThinkingDirect(cmd.Ctx, cmd.Level)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		leafID, err := c.setThinkingDirect(ctx, cmd.Level)
 		sendResult(cmd.Reply, ThinkingResult{LeafID: leafID, Err: err})
 	})
 }
@@ -186,8 +186,8 @@ func (c *Controller) handleSetTools(cmd *SetToolsCmd) {
 }
 
 func (c *Controller) handleActivateTools(cmd *ActivateToolsCmd) {
-	c.startOperation(func() {
-		sendResult(cmd.Reply, c.activateToolsDirect(cmd.Ctx, cmd.Names))
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		sendResult(cmd.Reply, c.activateToolsDirect(ctx, cmd.Names))
 	})
 }
 
@@ -197,71 +197,71 @@ func (c *Controller) handleActivateTools(cmd *ActivateToolsCmd) {
 // operation workers. This keeps journal and approval I/O off the command loop
 // while preserving one runtime-owned entry point for every transition.
 func (c *Controller) handlePrepareAction(cmd *PrepareActionCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		coordinator, err := c.actionCoordinator()
 		if err != nil {
 			sendResult(cmd.Reply, ActionPrepareResult{Err: err})
 			return
 		}
-		token, err := coordinator.prepareAndAuthorizeDirect(cmd.Ctx, cmd.Request)
+		token, err := coordinator.prepareAndAuthorizeDirect(ctx, cmd.Request)
 		sendResult(cmd.Reply, ActionPrepareResult{Token: token, Err: err})
 	})
 }
 
 func (c *Controller) handleStartAction(cmd *StartActionCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		coordinator, err := c.actionCoordinator()
 		if err != nil {
 			sendResult(cmd.Reply, ActionStartResult{Err: err})
 			return
 		}
 		token := cmd.Token
-		err = coordinator.startDirect(cmd.Ctx, &token, cmd.ProcessIdentity)
+		err = coordinator.startDirect(ctx, &token, cmd.ProcessIdentity)
 		sendResult(cmd.Reply, ActionStartResult{Token: &token, Err: err})
 	})
 }
 
 func (c *Controller) handleFinishAction(cmd *FinishActionCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		coordinator, err := c.actionCoordinator()
 		if err == nil {
 			token := cmd.Token
-			err = coordinator.finishDirect(cmd.Ctx, &token, cmd.Result)
+			err = coordinator.finishDirect(ctx, &token, cmd.Result)
 		}
 		sendResult(cmd.Reply, err)
 	})
 }
 
 func (c *Controller) handleCancelAction(cmd *CancelActionCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		coordinator, err := c.actionCoordinator()
 		if err == nil {
 			token := cmd.Token
-			err = coordinator.cancelDirect(cmd.Ctx, &token, cmd.Reason)
+			err = coordinator.cancelDirect(ctx, &token, cmd.Reason)
 		}
 		sendResult(cmd.Reply, err)
 	})
 }
 
 func (c *Controller) handleUnsettledActions(cmd *UnsettledActionsCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		journal, err := c.actionJournal()
 		if err != nil {
 			sendResult(cmd.Reply, UnsettledActionsResult{Err: err})
 			return
 		}
-		actions, err := journal.UnsettledActions(cmd.Ctx)
+		actions, err := journal.UnsettledActions(ctx)
 		sendResult(cmd.Reply, UnsettledActionsResult{Actions: actions, Err: err})
 	})
 }
 
 func (c *Controller) handleReconcileAction(cmd *ReconcileActionCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		journal, err := c.actionJournal()
 		if err == nil {
 			var action session.ActionRecord
 			action, err = journal.ReconcileAction(
-				cmd.Ctx, cmd.ActionID, cmd.State, cmd.Verification,
+				ctx, cmd.ActionID, cmd.State, cmd.Verification,
 				cmd.ResultIdentity, cmd.Reason, cmd.Cleanup,
 			)
 			sendResult(cmd.Reply, ReconcileActionResult{Action: action, Err: err})
@@ -347,18 +347,18 @@ func (c *Controller) handleRecoverProcessActions(cmd *RecoverProcessActionsCmd) 
 }
 
 func (c *Controller) handleInterruptedTurns(cmd *InterruptedTurnsCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		if c.durable == nil {
 			sendResult(cmd.Reply, InterruptedTurnsResult{Err: errors.New("runtime does not support durable turns")})
 			return
 		}
-		turns, err := c.durable.InterruptedTurns(cmd.Ctx)
+		turns, err := c.durable.InterruptedTurns(ctx)
 		sendResult(cmd.Reply, InterruptedTurnsResult{Turns: turns, Err: err})
 	})
 }
 
 func (c *Controller) handleAbortInterruptedTurn(cmd *AbortInterruptedTurnCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		if c.durable == nil {
 			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: errors.New("runtime does not support durable turns")})
 			return
@@ -368,7 +368,7 @@ func (c *Controller) handleAbortInterruptedTurn(cmd *AbortInterruptedTurnCmd) {
 			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: errors.New("turn ID is required")})
 			return
 		}
-		record, err := c.durable.GetTurn(cmd.Ctx, turnID)
+		record, err := c.durable.GetTurn(ctx, turnID)
 		if err != nil {
 			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: err})
 			return
@@ -379,11 +379,11 @@ func (c *Controller) handleAbortInterruptedTurn(cmd *AbortInterruptedTurnCmd) {
 			})
 			return
 		}
-		if err := c.durable.AbortTurn(cmd.Ctx, turnID, strings.TrimSpace(cmd.Reason)); err != nil {
+		if err := c.durable.AbortTurn(ctx, turnID, strings.TrimSpace(cmd.Reason)); err != nil {
 			sendResult(cmd.Reply, AbortInterruptedTurnResult{Err: err})
 			return
 		}
-		record, err = c.durable.GetTurn(cmd.Ctx, turnID)
+		record, err = c.durable.GetTurn(ctx, turnID)
 		sendResult(cmd.Reply, AbortInterruptedTurnResult{Turn: record, Err: err})
 	})
 }
@@ -391,8 +391,8 @@ func (c *Controller) handleAbortInterruptedTurn(cmd *AbortInterruptedTurnCmd) {
 // --- Session administration commands ---
 
 func (c *Controller) handleSubscribe(cmd *SubscribeCmd) {
-	c.startOperation(func() {
-		sub, err := c.subscribeDirect(cmd.Ctx, cmd.After)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		sub, err := c.subscribeDirect(ctx, cmd.After)
 		sendResult(cmd.Reply, SubscribeResult{Sub: sub, Err: err})
 	})
 }
@@ -458,8 +458,8 @@ func (c *Controller) handleAppendLabel(cmd *AppendLabelCmd) {
 }
 
 func (c *Controller) handleGetLabel(cmd *GetLabelCmd) {
-	c.startOperation(func() {
-		name, err := c.getLabelDirect(cmd.Ctx, cmd.Target)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		name, err := c.getLabelDirect(ctx, cmd.Target)
 		sendResult(cmd.Reply, SessionInfoResult{Name: name, Err: err})
 	})
 }
@@ -480,29 +480,29 @@ func (c *Controller) handleGetBranchLabel(cmd *GetBranchLabelCmd) {
 }
 
 func (c *Controller) handleForkSession(cmd *ForkSessionCmd) {
-	c.startOperation(func() {
-		id, err := c.forkSessionDirect(cmd.Ctx, cmd.SourceID)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		id, err := c.forkSessionDirect(ctx, cmd.SourceID)
 		sendResult(cmd.Reply, ForkResult{ID: id, Err: err})
 	})
 }
 
 func (c *Controller) handleExportSessionBundle(cmd *ExportSessionBundleCmd) {
-	c.startOperation(func() {
-		bundle, err := c.exportSessionBundleDirect(cmd.Ctx, cmd.SessionID)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		bundle, err := c.exportSessionBundleDirect(ctx, cmd.SessionID)
 		sendResult(cmd.Reply, ExportSessionResult{Bundle: bundle, Err: err})
 	})
 }
 
 func (c *Controller) handleImportSessionBundle(cmd *ImportSessionBundleCmd) {
-	c.startOperation(func() {
-		id, err := c.importSessionBundleDirect(cmd.Ctx, cmd.Bundle)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		id, err := c.importSessionBundleDirect(ctx, cmd.Bundle)
 		sendResult(cmd.Reply, ImportSessionResult{ID: id, Err: err})
 	})
 }
 
 func (c *Controller) handleSessionProjection(cmd *SessionProjectionCmd) {
-	c.startOperation(func() {
-		projection, err := c.sessionProjectionDirect(cmd.Ctx)
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		projection, err := c.sessionProjectionDirect(ctx)
 		sendResult(cmd.Reply, SessionProjectionResult{Projection: projection, Err: err})
 	})
 }
@@ -557,23 +557,22 @@ func newSessionProjection(id, leafID, worktreeBranch string, entries []session.E
 }
 
 func (c *Controller) handleSessionBranch(cmd *SessionBranchCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		if c.session == nil {
 			sendResult(cmd.Reply, SessionBranchResult{Err: errors.New("session is unavailable")})
 			return
 		}
-		entries, err := c.session.Branch(cmd.Ctx)
+		entries, err := c.session.Branch(ctx)
 		sendResult(cmd.Reply, SessionBranchResult{Entries: entries, Err: err})
 	})
 }
 
 func (c *Controller) handleSessionTree(cmd *SessionTreeCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		if c.store == nil {
 			sendResult(cmd.Reply, SessionTreeResult{Err: errors.New("session store is unavailable")})
 			return
 		}
-		ctx := commandContext(cmd.Ctx)
 		// GetLeafID and Entries are separate Store reads. A navigation can
 		// commit between them, so only publish a pair after confirming that
 		// the selected leaf remained stable. Never hand the picker a mixed
@@ -604,7 +603,7 @@ func (c *Controller) handleSessionTree(cmd *SessionTreeCmd) {
 }
 
 func (c *Controller) handleSessionCatalogList(cmd *SessionCatalogListCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		catalog, ok := c.store.(SessionCatalog)
 		if !ok {
 			sendResult(
@@ -613,13 +612,13 @@ func (c *Controller) handleSessionCatalogList(cmd *SessionCatalogListCmd) {
 			)
 			return
 		}
-		sessions, err := catalog.ListSessions(cmd.Ctx, cmd.Workdir)
+		sessions, err := catalog.ListSessions(ctx, cmd.Workdir)
 		sendResult(cmd.Reply, SessionCatalogListResult{Sessions: sessions, Err: err})
 	})
 }
 
 func (c *Controller) handleSessionCatalogLookup(cmd *SessionCatalogLookupCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		catalog, ok := c.store.(SessionCatalog)
 		if !ok {
 			sendResult(
@@ -628,24 +627,24 @@ func (c *Controller) handleSessionCatalogLookup(cmd *SessionCatalogLookupCmd) {
 			)
 			return
 		}
-		info, err := catalog.GetSessionInfo(cmd.Ctx, cmd.SessionID)
+		info, err := catalog.GetSessionInfo(ctx, cmd.SessionID)
 		sendResult(cmd.Reply, SessionCatalogLookupResult{Info: info, Err: err})
 	})
 }
 
 func (c *Controller) handleSessionCatalogUpdate(cmd *SessionCatalogUpdateCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		catalog, ok := c.store.(SessionCatalog)
 		if !ok {
 			sendResult(cmd.Reply, errors.New("session store does not support session catalog"))
 			return
 		}
-		sendResult(cmd.Reply, catalog.UpdateSession(cmd.Ctx, cmd.Info))
+		sendResult(cmd.Reply, catalog.UpdateSession(ctx, cmd.Info))
 	})
 }
 
 func (c *Controller) handleInputHistoryGet(cmd *InputHistoryGetCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		history, ok := c.store.(InputHistory)
 		if !ok {
 			sendResult(
@@ -654,19 +653,19 @@ func (c *Controller) handleInputHistoryGet(cmd *InputHistoryGetCmd) {
 			)
 			return
 		}
-		inputs, err := history.GetInputs(cmd.Ctx, cmd.Workdir, cmd.Limit)
+		inputs, err := history.GetInputs(ctx, cmd.Workdir, cmd.Limit)
 		sendResult(cmd.Reply, InputHistoryGetResult{Inputs: inputs, Err: err})
 	})
 }
 
 func (c *Controller) handleInputHistoryAdd(cmd *InputHistoryAddCmd) {
-	c.startOperation(func() {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		history, ok := c.store.(InputHistory)
 		if !ok {
 			sendResult(cmd.Reply, errors.New("session store does not support input history"))
 			return
 		}
-		sendResult(cmd.Reply, history.AddInput(cmd.Ctx, cmd.Workdir, cmd.Input))
+		sendResult(cmd.Reply, history.AddInput(ctx, cmd.Workdir, cmd.Input))
 	})
 }
 

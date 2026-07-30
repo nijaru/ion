@@ -655,6 +655,19 @@ func (c *Controller) startOperation(fn func()) {
 	}()
 }
 
+// startContextOperation runs caller-owned work with both the caller's
+// cancellation and the controller lifetime. Every operation selected by the
+// command loop must observe Close even when its public API was given
+// context.Background; direct functions may add a narrower lifetime when their
+// operation has additional cancellation rules.
+func (c *Controller) startContextOperation(parent context.Context, fn func(context.Context)) {
+	operationCtx, release := c.runtimeBoundContext(parent)
+	c.startOperation(func() {
+		defer release()
+		fn(operationCtx)
+	})
+}
+
 // startReservedOperation registers a worker while holding the lifecycle lock.
 // A phase reservation and its worker must become visible atomically to Close;
 // otherwise shutdown can pass Wait before the reserved worker is registered.
