@@ -219,7 +219,8 @@ type gitDiffStatsMsg struct {
 }
 
 type gitBranchChangedMsg struct {
-	branch string
+	generation uint64
+	branch     string
 }
 
 type busyInputResultMsg struct {
@@ -760,6 +761,7 @@ func (m Model) Init() tea.Cmd {
 // pollGitBranch returns a command that polls for git branch changes.
 func (m Model) pollGitBranch() tea.Cmd {
 	ctx := m.runtimeOperationContext()
+	generation := m.Model.EventGeneration
 	return func() tea.Msg {
 		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
@@ -772,7 +774,7 @@ func (m Model) pollGitBranch() tea.Cmd {
 			return nil
 		}
 		branch := m.GitWatcher.Branch()
-		return gitBranchChangedMsg{branch: branch}
+		return gitBranchChangedMsg{generation: generation, branch: branch}
 	}
 }
 

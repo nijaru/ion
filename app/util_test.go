@@ -26,6 +26,26 @@ func TestCanceledFrontendTimersStopWithoutMessages(t *testing.T) {
 	}
 }
 
+func TestStaleGitBranchCannotOverwriteReplacementMetadata(t *testing.T) {
+	model := Model{}
+	model.App.Branch = "accepted-branch"
+	model.Model.EventGeneration = 2
+
+	next, cmd, handled := model.dispatchAppControlMessage(gitBranchChangedMsg{
+		generation: 1,
+		branch:     "stale-branch",
+	})
+	if !handled {
+		t.Fatal("stale branch message was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale branch message scheduled a replacement poll")
+	}
+	if next.App.Branch != "accepted-branch" {
+		t.Fatalf("stale branch changed accepted metadata to %q", next.App.Branch)
+	}
+}
+
 func TestModelCloseCancelsOwnedFrontendWork(t *testing.T) {
 	model := Model{}
 	model.Model.runtimeContext, model.Model.runtimeCancel = context.WithCancel(context.Background())

@@ -563,7 +563,11 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 			cmds = append(cmds, errCmd)
 		}
 	}
-	return m, tea.Sequence(cmds...)
+	command := tea.Sequence(cmds...)
+	if m.GitWatcher != nil {
+		command = batchCmds(command, m.pollGitBranch())
+	}
+	return m, command
 }
 
 func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {

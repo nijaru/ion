@@ -95,6 +95,9 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case gitBranchChangedMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
 		if msg.branch != m.App.Branch {
 			m.App.Branch = msg.branch
 		}
