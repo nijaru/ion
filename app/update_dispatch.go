@@ -186,6 +186,9 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case terminalCommitLinesMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil, true
+		}
 		return m, terminalCommitFlushCmd(msg.lines...), true
 
 	case tea.ResumeMsg:

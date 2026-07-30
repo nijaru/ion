@@ -44,6 +44,25 @@ func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
 	}
 }
 
+func TestStaleTerminalCommitCannotFlushAfterRuntimeReplacement(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration++
+
+	next, cmd, handled := model.dispatchAppControlMessage(terminalCommitLinesMsg{
+		generation: model.Model.EventGeneration - 1,
+		lines:      []string{"stale output"},
+	})
+	if !handled {
+		t.Fatal("stale terminal commit was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("stale terminal commit returned a flush command")
+	}
+	if next.App.PrintedTranscript {
+		t.Fatal("stale terminal commit changed transcript state")
+	}
+}
+
 func TestTerminalCommitDefersEveryScrollbackCommit(t *testing.T) {
 	model := readyModel(t)
 	commits := []struct {

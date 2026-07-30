@@ -206,7 +206,8 @@ type localEntriesMsg struct {
 }
 
 type terminalCommitLinesMsg struct {
-	lines []string
+	generation uint64
+	lines      []string
 }
 
 type gitDiffStatsMsg struct {

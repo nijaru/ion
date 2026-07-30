@@ -388,8 +388,9 @@ func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
 		lines = append(lines, "")
 		lines = append(lines, m.RenderEntries(msg.entries...)...)
 	}
-	m.terminalCommit().MarkPrinted()
-	return m, deferredTerminalCommitCmd(lines...)
+	commit := m.terminalCommit()
+	commit.MarkPrinted()
+	return m, commit.deferredLinesCmd(lines...)
 }
 
 // renderTreePicker renders the interactive tree selector.

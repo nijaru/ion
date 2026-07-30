@@ -36,7 +36,7 @@ func (c terminalCommitController) Entries(entries ...session.Entry) tea.Cmd {
 	c.MarkPrinted()
 	lines = append(lines, c.model.RenderEntries(entries...)...)
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return deferredTerminalCommitCmd(lines...)
+	return c.deferredLinesCmd(lines...)
 }
 
 func (c terminalCommitController) Help(content string) tea.Cmd {
@@ -50,7 +50,7 @@ func (c terminalCommitController) Help(content string) tea.Cmd {
 		lines = append(lines, c.model.renderHelpLine(i, line))
 	}
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return deferredTerminalCommitCmd(lines...)
+	return c.deferredLinesCmd(lines...)
 }
 
 func (c terminalCommitController) Lines(lines ...string) tea.Cmd {
@@ -59,7 +59,7 @@ func (c terminalCommitController) Lines(lines ...string) tea.Cmd {
 	}
 	c.MarkPrinted()
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return deferredTerminalCommitCmd(lines...)
+	return c.deferredLinesCmd(lines...)
 }
 
 func (c terminalCommitController) DeferredLines(lines ...string) tea.Cmd {
@@ -99,7 +99,7 @@ func (c terminalCommitController) SwitchReplay(
 		return nil
 	}
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return deferredTerminalCommitCmd(lines...)
+	return c.deferredLinesCmd(lines...)
 }
 
 func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
@@ -121,10 +121,11 @@ func terminalCommitFlushCmd(lines ...string) tea.Cmd {
 	return tea.Printf("%s", body)
 }
 
-func deferredTerminalCommitCmd(lines ...string) tea.Cmd {
+func (c terminalCommitController) deferredLinesCmd(lines ...string) tea.Cmd {
 	copied := append([]string(nil), lines...)
+	generation := c.model.Model.EventGeneration
 	return tea.Tick(printFrameSettleDelay, func(time.Time) tea.Msg {
-		return terminalCommitLinesMsg{lines: copied}
+		return terminalCommitLinesMsg{generation: generation, lines: copied}
 	})
 }
 
