@@ -309,6 +309,7 @@ func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
 	m.inputReducer().clearCompletion()
 	return m, loadFileReferenceCompletion(
 		requestID,
+		m.Model.EventGeneration,
 		m.App.Workdir,
 		text,
 		start,

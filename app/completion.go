@@ -38,7 +38,15 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 		return nil, nil
 	}
 	requestID := m.inputReducer().beginFileCompletionRequest()
-	return nil, loadFileReferenceCompletion(requestID, m.App.Workdir, text, start, token, false)
+	return nil, loadFileReferenceCompletion(
+		requestID,
+		m.Model.EventGeneration,
+		m.App.Workdir,
+		text,
+		start,
+		token,
+		false,
+	)
 }
 
 func slashComposerCompletionItems(text string) []completionItem {
@@ -139,6 +147,7 @@ func fileReferenceCompletionItems(
 
 func loadFileReferenceCompletion(
 	requestID uint64,
+	generation uint64,
 	workdir, text string,
 	start int,
 	token string,
@@ -146,10 +155,11 @@ func loadFileReferenceCompletion(
 ) tea.Cmd {
 	return func() tea.Msg {
 		return fileReferenceCompletionMsg{
-			requestID: requestID,
-			text:      text,
-			start:     start,
-			token:     token,
+			generation: generation,
+			requestID:  requestID,
+			text:       text,
+			start:      start,
+			token:      token,
 			matches: matchingWorkspaceFileReferences(
 				workdir,
 				strings.TrimPrefix(token, "@"),
@@ -162,7 +172,8 @@ func loadFileReferenceCompletion(
 func (m Model) handleFileReferenceCompletion(
 	msg fileReferenceCompletionMsg,
 ) (Model, tea.Cmd) {
-	if msg.requestID == 0 ||
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID == 0 ||
 		msg.requestID != m.Input.FileCompletionRequest ||
 		m.Input.Composer.Value() != msg.text {
 		return m, nil

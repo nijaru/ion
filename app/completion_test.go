@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestStaleFileCompletionCannotApplyAfterRuntimeReplacement(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("@src")
+	requestID := model.inputReducer().beginFileCompletionRequest()
+	model.Model.EventGeneration++
+
+	next, cmd := model.handleFileReferenceCompletion(fileReferenceCompletionMsg{
+		generation: model.Model.EventGeneration - 1,
+		requestID:  requestID,
+		text:       "@src",
+		token:      "@src",
+		matches:    []fileReferenceMatch{{reference: "@src/main.go"}},
+	})
+	if cmd != nil {
+		t.Fatal("stale file completion returned a command")
+	}
+	if next.Input.Completion != nil {
+		t.Fatal("stale file completion changed the replacement runtime")
+	}
+}
+
 func TestCustomComposerCompletionItems(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

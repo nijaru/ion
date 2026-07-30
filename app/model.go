@@ -75,12 +75,13 @@ type branchNavigationCancelMsg struct {
 }
 
 type fileReferenceCompletionMsg struct {
-	requestID uint64
-	text      string
-	start     int
-	token     string
-	matches   []fileReferenceMatch
-	apply     bool
+	generation uint64
+	requestID  uint64
+	text       string
+	start      int
+	token      string
+	matches    []fileReferenceMatch
+	apply      bool
 }
 
 type pendingAction int
