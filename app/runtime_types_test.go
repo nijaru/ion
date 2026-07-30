@@ -30,7 +30,7 @@ func runtimeSwitchInput(current Handles) SwitchInput {
 			cfg,
 			PresetPrimary,
 			"",
-		),
+		).WithStatePersistence(),
 	}
 }
 
@@ -116,6 +116,82 @@ func TestSwitchAcceptsCompleteRuntimeAfterPersistence(t *testing.T) {
 	}
 	if result.Runtime.Handles.Runner != newRunner {
 		t.Fatal("successful switch did not return replacement runner")
+	}
+}
+
+func TestSwitchPersistsTransitionSelectionFlags(t *testing.T) {
+	cfg := &config.Config{
+		Provider:        "openai",
+		Model:           "gpt-4.1",
+		ReasoningEffort: "high",
+	}
+	input := SwitchInput{
+		Config: cfg,
+		Transition: NewTransition(cfg, cfg, PresetFast, "").
+			WithStatePersistence().
+			WithReasoningPersistence().
+			WithActivePresetPersistence(),
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+			runner := &trackingRuntimeRunner{}
+			handles := completeRuntimeHandles(runner)
+			return handles.Info, handles.Runner, handles.Storage, nil
+		},
+	}
+	var got config.RuntimeStateUpdate
+	input.SaveState = func(update config.RuntimeStateUpdate) error {
+		got = update
+		return nil
+	}
+
+	if _, err := Switch(context.Background(), input); err != nil {
+		t.Fatalf("Switch() error = %v", err)
+	}
+	if got.Config == nil || got.Config.Model != cfg.Model || !got.PersistConfig {
+		t.Fatalf("persisted config update = %#v, want configured persistence", got)
+	}
+	if !got.PersistActivePreset || got.ActivePreset != "fast" {
+		t.Fatalf("active preset update = %#v, want fast persistence", got)
+	}
+	if !got.PersistReasoning || got.ReasoningPreset != "fast" || got.ReasoningEffort != "high" {
+		t.Fatalf("reasoning update = %#v, want fast/high persistence", got)
+	}
+}
+
+func TestResumePersistsTransitionSelectionFlags(t *testing.T) {
+	cfg := &config.Config{
+		Provider:        "openai",
+		Model:           "gpt-4.1",
+		ReasoningEffort: "medium",
+	}
+	input := ResumeInput{
+		Transition: NewTransition(cfg, cfg, PresetPrimary, "").
+			WithStatePersistence().
+			WithReasoningPersistence().
+			WithActivePresetPersistence(),
+		SessionID: "resume",
+		Switcher: func(context.Context, *config.Config, string) (RuntimeInfo, agent.Runtime, RuntimeStorage, error) {
+			runner := &trackingRuntimeRunner{}
+			handles := completeRuntimeHandles(runner)
+			return handles.Info, handles.Runner, handles.Storage, nil
+		},
+	}
+	var got config.RuntimeStateUpdate
+	input.SaveState = func(update config.RuntimeStateUpdate) error {
+		got = update
+		return nil
+	}
+
+	if _, err := Resume(context.Background(), input); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if got.Config == nil || got.Config.Model != cfg.Model || !got.PersistConfig {
+		t.Fatalf("resumed config update = %#v, want configured persistence", got)
+	}
+	if !got.PersistActivePreset || got.ActivePreset != "primary" {
+		t.Fatalf("resumed active preset update = %#v, want primary persistence", got)
+	}
+	if !got.PersistReasoning || got.ReasoningPreset != "primary" || got.ReasoningEffort != "medium" {
+		t.Fatalf("resumed reasoning update = %#v, want primary/medium persistence", got)
 	}
 }
 

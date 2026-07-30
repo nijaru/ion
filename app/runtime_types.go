@@ -312,15 +312,11 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 		Previous: input.Current,
 	}
 
-	if input.SaveState != nil {
-		if err := input.SaveState(config.RuntimeStateUpdate{
-			Config: cfg,
-		}); err != nil {
-			return SwitchResult{}, errors.Join(
-				fmt.Errorf("switch: persist runtime state: %w", err),
-				CloseHandles(newHandles),
-			)
-		}
+	if err := input.Transition.Persist(input.SaveState); err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("switch: persist runtime state: %w", err),
+			CloseHandles(newHandles),
+		)
 	}
 
 	return result, nil
@@ -347,13 +343,11 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 		return SwitchResult{}, errors.Join(fmt.Errorf("resume: %w", err), CloseHandles(newHandles))
 	}
 	transition := input.Transition.WithHandles(newHandles)
-	if input.SaveState != nil {
-		if err := input.SaveState(config.RuntimeStateUpdate{Config: &cfg}); err != nil {
-			return SwitchResult{}, errors.Join(
-				fmt.Errorf("resume: persist runtime state: %w", err),
-				CloseHandles(newHandles),
-			)
-		}
+	if err := transition.Persist(input.SaveState); err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("resume: persist runtime state: %w", err),
+			CloseHandles(newHandles),
+		)
 	}
 	return SwitchResult{
 		Runtime:  NewAccepted(transition, newHandles),
