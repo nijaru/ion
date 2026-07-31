@@ -191,6 +191,14 @@ type providerSetupResolvedMsg struct {
 	err        error
 }
 
+type providerItemsLoadedMsg struct {
+	generation uint64
+	requestID  uint64
+	cfg        config.Config
+	items      []pickerItem
+	err        error
+}
+
 type setupPromptSavedMsg struct {
 	requestID uint64
 	cfg       config.Config
@@ -1085,7 +1093,17 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 				retry:      retry,
 			}
 		}
-		if err := t.Persist(saveRuntimeState); err != nil {
+		transition := t
+		if transition.PersistReasoning && transition.PreviousReasoning == nil {
+			if state, err := config.LoadState(); err == nil {
+				if transition.PersistReasoningSlot == PresetFast {
+					transition.PreviousReasoning = state.FastReasoningEffort
+				} else {
+					transition.PreviousReasoning = state.ReasoningEffort
+				}
+			}
+		}
+		if err := transition.Persist(saveRuntimeState); err != nil {
 			return TransitionCommittedMsg{
 				generation: generation,
 				switchID:   switchID,
@@ -1096,7 +1114,7 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 		return TransitionCommittedMsg{
 			generation: generation,
 			switchID:   switchID,
-			transition: t,
+			transition: transition,
 			notice:     notice,
 		}
 	}
@@ -1220,13 +1238,6 @@ func (m Model) thinkingSelectionTransition(
 	}
 	transition := newRuntimeTransition(updated, runtimeCfg, preset, "").
 		WithReasoningPersistence()
-	if state, err := config.LoadState(); err == nil {
-		if preset == PresetFast {
-			transition.PreviousReasoning = state.FastReasoningEffort
-		} else {
-			transition.PreviousReasoning = state.ReasoningEffort
-		}
-	}
 	return transition, runtimeCfg, nil
 }
 

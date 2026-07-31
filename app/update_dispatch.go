@@ -251,6 +251,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 		next, cmd := m.handleProviderSetupResolved(msg)
 		return next, cmd, true
 
+	case providerItemsLoadedMsg:
+		next, cmd := m.handleProviderItemsLoaded(msg)
+		return next, cmd, true
+
 	case setupPromptSavedMsg:
 		next, cmd := m.handleSetupPromptSaved(msg)
 		return next, cmd, true

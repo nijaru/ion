@@ -703,16 +703,61 @@ func (m Model) openProviderSetupPicker() (Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	items := providerItems(cfg, m.Model.EndpointResolver)
+	requestID := m.runtimeRequest().begin("Loading providers...")
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeRequestOperationContext()
+	cfgCopy := *cfg
+	resolver := m.Model.EndpointResolver
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return providerItemsLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				cfg:        cfgCopy,
+				err:        err,
+			}
+		}
+		items := providerItems(&cfgCopy, resolver)
+		if err := ctx.Err(); err != nil {
+			return providerItemsLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				cfg:        cfgCopy,
+				err:        err,
+			}
+		}
+		return providerItemsLoadedMsg{
+			generation: generation,
+			requestID:  requestID,
+			cfg:        cfgCopy,
+			items:      items,
+		}
+	}
+}
+
+func (m Model) handleProviderItemsLoaded(msg providerItemsLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		return m.handleLocalError(fmt.Errorf("load providers: %w", msg.err))
+	}
+	cfg := msg.cfg
 	m.clearProgressError()
 	m.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
 		title:    "Provider setup",
-		items:    items,
-		filtered: append([]pickerItem(nil), items...),
-		index:    pickerIndex(items, cfg.Provider),
+		items:    msg.items,
+		filtered: append([]pickerItem(nil), msg.items...),
+		index:    pickerIndex(msg.items, cfg.Provider),
 		purpose:  pickerPurposeProviderSetup,
 		preset:   m.activePreset(),
-		cfg:      cfg,
+		cfg:      &cfg,
 	})
 	return m, nil
 }
@@ -882,32 +927,20 @@ func (m Model) handleProviderCommand(name string) (Model, tea.Cmd) {
 		return m, cmdError(err.Error())
 	}
 	preset := m.activePreset()
-
-	// OpenAI-compatible readiness probes perform HTTP I/O. Keep endpoint
-	// discovery outside Bubble Tea Update and bind it to the runtime request so
-	// replacement and close cancel the probe before it can open stale UI.
-	if llm.IsOpenAICompatible(updated.Provider) {
-		requestID := m.runtimeRequest().begin("Checking provider endpoint...")
-		generation := m.Model.EventGeneration
-		loadContext := m.runtimeRequestOperationContext()
-		if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProviderSetup {
-			m.pickerReducer().closeOverlay()
-		}
-		return m, checkProviderSetup(
-			generation,
-			requestID,
-			updated,
-			preset,
-			loadContext,
-			m.Model.EndpointResolver,
-		)
+	requestID := m.runtimeRequest().begin("Checking provider setup...")
+	generation := m.Model.EventGeneration
+	loadContext := m.runtimeRequestOperationContext()
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProviderSetup {
+		m.pickerReducer().closeOverlay()
 	}
-
-	setup, err := providerSetupPrompt(m.runtimeOperationContext(), updated, m.Model.EndpointResolver)
-	if err != nil {
-		return m, cmdError(err.Error())
-	}
-	return m.openProviderSelection(updated, preset, setup)
+	return m, checkProviderSetup(
+		generation,
+		requestID,
+		updated,
+		preset,
+		loadContext,
+		m.Model.EndpointResolver,
+	)
 }
 
 func (m Model) handleProviderSetupResolved(msg providerSetupResolvedMsg) (Model, tea.Cmd) {

@@ -206,6 +206,62 @@ func TestProviderSetupSaveLeadsToManualModelPrompt(t *testing.T) {
 	}
 }
 
+func TestProviderSetupPickerDefersCredentialReads(t *testing.T) {
+	model := readyModel(t)
+	updated, cmd := model.openProviderSetupPicker()
+	if cmd == nil {
+		t.Fatal("provider picker returned no deferred command")
+	}
+	if updated.Picker.Overlay != nil {
+		t.Fatal("provider picker opened before provider metadata loaded")
+	}
+	if updated.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("provider picker did not own a runtime request")
+	}
+	message := cmd()
+	loaded, ok := message.(providerItemsLoadedMsg)
+	if !ok {
+		t.Fatalf("provider picker result = %T, want providerItemsLoadedMsg", message)
+	}
+	next, completionCmd := updated.Update(loaded)
+	if completionCmd != nil {
+		t.Fatal("provider picker completion returned an unexpected command")
+	}
+	final := testModel(t, next)
+	if final.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("provider picker completion left runtime request active")
+	}
+	if final.Picker.Overlay == nil || final.Picker.Overlay.purpose != pickerPurposeProviderSetup {
+		t.Fatalf("overlay = %#v, want provider setup picker", final.Picker.Overlay)
+	}
+}
+
+func TestStaleProviderItemsCompletionCannotOpenReplacementPicker(t *testing.T) {
+	model := readyModel(t)
+	updated, cmd := model.openProviderSetupPicker()
+	if cmd == nil {
+		t.Fatal("provider picker returned no deferred command")
+	}
+	requestID := updated.Model.RuntimeSwitchRequest
+	generation := updated.Model.EventGeneration
+	updated.rotateRuntimeContext()
+	updated.runtimeRequest().clear()
+	updated.Model.EventGeneration++
+
+	next, completionCmd := updated.Update(providerItemsLoadedMsg{
+		generation: generation,
+		requestID:  requestID,
+		items:      []pickerItem{{Label: "Ollama", Value: "ollama"}},
+	})
+	if completionCmd != nil {
+		t.Fatal("stale provider picker completion returned a command")
+	}
+	final := testModel(t, next)
+	if final.Picker.Overlay != nil {
+		t.Fatal("stale provider picker completion opened replacement UI")
+	}
+}
+
 func TestProviderSetupDoesNotProbeCatalogSynchronously(t *testing.T) {
 	modelCatalog := modelCatalogStub{list: func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
 		t.Fatal("provider setup synchronously probed model catalog")
@@ -216,8 +272,14 @@ func TestProviderSetupDoesNotProbeCatalogSynchronously(t *testing.T) {
 	model := readyModel(t).WithModelCatalog(modelCatalog).WithConfig(&config.Config{Provider: "openai"})
 	updated, cmd := model.handleProviderCommand("openai")
 	if cmd == nil {
-		t.Fatal("provider setup did not start asynchronous model loading")
+		t.Fatal("provider setup did not start asynchronous setup resolution")
 	}
+	setupMsg, ok := cmd().(providerSetupResolvedMsg)
+	if !ok {
+		t.Fatalf("provider setup result = %T, want providerSetupResolvedMsg", cmd())
+	}
+	next, _ := updated.Update(setupMsg)
+	updated = testModel(t, next)
 	if updated.Picker.Overlay == nil || updated.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("overlay = %#v, want model picker", updated.Picker.Overlay)
 	}
@@ -368,8 +430,14 @@ func TestProviderPickerUsesNativeSetupForOllama(t *testing.T) {
 
 	updated, cmd := model.commitPickerSelection()
 	if cmd == nil {
-		t.Fatal("Ollama provider selection did not start model loading")
+		t.Fatal("Ollama provider selection did not start asynchronous setup resolution")
 	}
+	setupMsg, ok := cmd().(providerSetupResolvedMsg)
+	if !ok {
+		t.Fatalf("provider setup result = %T, want providerSetupResolvedMsg", cmd())
+	}
+	next, _ := updated.Update(setupMsg)
+	updated = testModel(t, next)
 	if updated.Picker.Setup != nil {
 		t.Fatalf("setup = %#v, want no API-key prompt", updated.Picker.Setup)
 	}
