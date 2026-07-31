@@ -13,6 +13,9 @@ import (
 )
 
 func (m Model) logoutProvider() (Model, tea.Cmd) {
+	if m.Model.RuntimeSwitchRequest != 0 {
+		return m, cmdError(m.localCommandBusyMessage("logging out"))
+	}
 	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
@@ -21,10 +24,30 @@ func (m Model) logoutProvider() (Model, tea.Cmd) {
 	if provider == "" {
 		return m, cmdError("no active provider")
 	}
-	if err := config.SaveAPIKey(provider, ""); err != nil {
-		return m, cmdError(fmt.Sprintf("failed to clear API key: %v", err))
+	requestID := m.runtimeRequest().begin("Logging out...")
+	generation := m.Model.EventGeneration
+	return m, func() tea.Msg {
+		err := saveProviderKey(provider, "")
+		return logoutProviderSavedMsg{
+			generation: generation,
+			requestID:  requestID,
+			provider:   provider,
+			err:        err,
+		}
 	}
-	return m, m.terminalCommit().Entries(systemEntry("Logged out from " + provider))
+}
+
+func (m Model) handleLogoutProviderSaved(msg logoutProviderSavedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(fmt.Errorf("failed to clear API key: %w", msg.err))
+	}
+	return m, m.terminalCommit().Entries(systemEntry("Logged out from " + msg.provider))
 }
 
 func (m Model) openExternalEditor() (Model, tea.Cmd) {

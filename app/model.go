@@ -198,6 +198,13 @@ type setupPromptSavedMsg struct {
 	err       error
 }
 
+type logoutProviderSavedMsg struct {
+	generation uint64
+	requestID  uint64
+	provider   string
+	err        error
+}
+
 type settingsCommandMsg struct {
 	requestID     uint64
 	transition    Transition
