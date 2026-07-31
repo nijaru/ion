@@ -7,7 +7,6 @@ import (
 	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
-	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -23,15 +22,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if name == "" {
 			return m, cmdError("usage: //skill_name")
 		}
-		dir, err := config.DefaultSkillsDir()
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
-		}
-		detail, err := ionskills.Read([]string{dir}, name)
-		if err != nil {
-			return m, cmdError(err.Error())
-		}
-		return m, m.terminalCommit().Help(ionskills.FormatDetail(detail))
+		return m.handleSkillDetailCommand(name)
 	}
 
 	commandInfo, ok := resolveSlashCommand(command)

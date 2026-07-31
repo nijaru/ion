@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -155,22 +157,136 @@ func (m Model) handleChangelogCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) != 1 {
 		return m, cmdError("usage: /changelog")
 	}
-	content, err := os.ReadFile("CHANGELOG.md")
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to read CHANGELOG.md: %v", err))
+	requestID := m.runtimeRequest().begin("Loading changelog...")
+	generation := m.Model.EventGeneration
+	ctx := m.Model.runtimeRequestContext
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return changelogLoadedMsg{generation: generation, requestID: requestID, err: err}
+		}
+		content, err := os.ReadFile("CHANGELOG.md")
+		if err != nil {
+			return changelogLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				err:        fmt.Errorf("failed to read CHANGELOG.md: %w", err),
+			}
+		}
+		return changelogLoadedMsg{
+			generation: generation,
+			requestID:  requestID,
+			content:    string(content),
+		}
 	}
-	return m, m.terminalCommit().Entries(systemEntry(string(content)))
+}
+
+func (m Model) handleChangelogLoaded(msg changelogLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if errors.Is(msg.err, context.Canceled) {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	return m, m.terminalCommit().Entries(systemEntry(msg.content))
 }
 
 func (m Model) handleSkillsCommand(input, command string) (Model, tea.Cmd) {
-	dir, err := config.DefaultSkillsDir()
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
-	}
 	query := strings.TrimSpace(strings.TrimPrefix(input, command))
-	out, err := ionskills.Notice([]string{dir}, query)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
+	requestID := m.runtimeRequest().begin("Loading skills...")
+	generation := m.Model.EventGeneration
+	ctx := m.Model.runtimeRequestContext
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return skillsNoticeLoadedMsg{generation: generation, requestID: requestID, err: err}
+		}
+		dir, err := config.DefaultSkillsDir()
+		if err == nil {
+			var out string
+			out, err = ionskills.Notice([]string{dir}, query)
+			if err == nil {
+				return skillsNoticeLoadedMsg{
+					generation: generation,
+					requestID:  requestID,
+					content:    out,
+				}
+			}
+		}
+		if err != nil {
+			return skillsNoticeLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				err:        fmt.Errorf("failed to load skills: %w", err),
+			}
+		}
+		return skillsNoticeLoadedMsg{generation: generation, requestID: requestID}
 	}
-	return m, m.terminalCommit().Entries(systemEntry(out))
+}
+
+func (m Model) handleSkillsNoticeLoaded(msg skillsNoticeLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if errors.Is(msg.err, context.Canceled) {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	return m, m.terminalCommit().Entries(systemEntry(msg.content))
+}
+
+func (m Model) handleSkillDetailCommand(name string) (Model, tea.Cmd) {
+	requestID := m.runtimeRequest().begin("Loading skill...")
+	generation := m.Model.EventGeneration
+	ctx := m.Model.runtimeRequestContext
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return skillDetailLoadedMsg{generation: generation, requestID: requestID, err: err}
+		}
+		dir, err := config.DefaultSkillsDir()
+		if err == nil {
+			var detail ionskills.Detail
+			detail, err = ionskills.Read([]string{dir}, name)
+			if err == nil {
+				return skillDetailLoadedMsg{
+					generation: generation,
+					requestID:  requestID,
+					content:    ionskills.FormatDetail(detail),
+				}
+			}
+		}
+		if err != nil {
+			return skillDetailLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				err:        err,
+			}
+		}
+		return skillDetailLoadedMsg{generation: generation, requestID: requestID}
+	}
+}
+
+func (m Model) handleSkillDetailLoaded(msg skillDetailLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if errors.Is(msg.err, context.Canceled) {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	return m, m.terminalCommit().Help(msg.content)
 }

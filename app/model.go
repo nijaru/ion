@@ -205,6 +205,27 @@ type logoutProviderSavedMsg struct {
 	err        error
 }
 
+type changelogLoadedMsg struct {
+	generation uint64
+	requestID  uint64
+	content    string
+	err        error
+}
+
+type skillsNoticeLoadedMsg struct {
+	generation uint64
+	requestID  uint64
+	content    string
+	err        error
+}
+
+type skillDetailLoadedMsg struct {
+	generation uint64
+	requestID  uint64
+	content    string
+	err        error
+}
+
 type settingsCommandMsg struct {
 	requestID     uint64
 	transition    Transition

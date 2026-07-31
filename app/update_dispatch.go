@@ -255,6 +255,18 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 		next, cmd := m.handleLogoutProviderSaved(msg)
 		return next, cmd, true
 
+	case changelogLoadedMsg:
+		next, cmd := m.handleChangelogLoaded(msg)
+		return next, cmd, true
+
+	case skillsNoticeLoadedMsg:
+		next, cmd := m.handleSkillsNoticeLoaded(msg)
+		return next, cmd, true
+
+	case skillDetailLoadedMsg:
+		next, cmd := m.handleSkillDetailLoaded(msg)
+		return next, cmd, true
+
 	case settingsCommandMsg:
 		next, cmd := m.handleSettingsCommandResult(msg)
 		return next, cmd, true
