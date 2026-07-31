@@ -93,8 +93,47 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-	resolved := m.resolveScopedModelPatterns(context.Background(), cfg)
-	if len(resolved) == 0 {
+	if !hasScopedModelPatterns(cfg) {
+		return m.renderScopedModels(cfg.ScopedModels)
+	}
+
+	// Pattern expansion may fetch provider catalog data. Keep that work out of
+	// Bubble Tea's Update path and bind it to the same request/runtime lifetime
+	// as other asynchronous model operations.
+	requestID := m.runtimeRequest().begin("Loading scoped models...")
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeRequestOperationContext()
+	cfgCopy := *cfg
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return scopedModelsListedMsg{generation: generation, requestID: requestID, err: err}
+		}
+		models := m.resolveScopedModelPatterns(ctx, &cfgCopy)
+		if err := ctx.Err(); err != nil {
+			return scopedModelsListedMsg{generation: generation, requestID: requestID, err: err}
+		}
+		return scopedModelsListedMsg{generation: generation, requestID: requestID, models: models}
+	}
+}
+
+func (m Model) handleScopedModelsListed(msg scopedModelsListedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		return m.handleLocalError(fmt.Errorf("load scoped models: %w", msg.err))
+	}
+	return m.renderScopedModels(msg.models)
+}
+
+func (m Model) renderScopedModels(models []config.ScopedModel) (Model, tea.Cmd) {
+	if len(models) == 0 {
 		return m, m.terminalCommit().Entries(systemEntry("No scoped models configured"))
 	}
 
@@ -102,7 +141,7 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 	b.WriteString("\n")
 	b.WriteString(m.cardTopBorder("Scoped Models"))
 	b.WriteString("\n")
-	for i, sm := range resolved {
+	for i, sm := range models {
 		line := fmt.Sprintf("  %d. %s", i+1, sm.Model)
 		if sm.Provider != "" {
 			line += fmt.Sprintf(" (provider: %s)", sm.Provider)

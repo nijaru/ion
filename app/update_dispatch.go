@@ -231,6 +231,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 		next, cmd := m.handleScopedModelsLoaded(msg)
 		return next, cmd, true
 
+	case scopedModelsListedMsg:
+		next, cmd := m.handleScopedModelsListed(msg)
+		return next, cmd, true
+
 	case allModelsLoadedMsg:
 		next, cmd := m.handleAllModelsLoaded(msg)
 		return next, cmd, true

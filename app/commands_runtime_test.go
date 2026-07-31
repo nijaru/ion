@@ -92,6 +92,148 @@ func TestScopedPatternCatalogRunsOutsideUpdateAndCancels(t *testing.T) {
 	}
 }
 
+func TestScopedModelsCommandCatalogRunsOutsideUpdateAndCancels(t *testing.T) {
+	catalogStarted := make(chan struct{})
+	catalogCanceled := make(chan struct{})
+	catalog := modelCatalogStub{
+		list: func(ctx context.Context, _ *config.Config) ([]llm.ModelMetadata, error) {
+			close(catalogStarted)
+			<-ctx.Done()
+			close(catalogCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	model := readyModelWithSwitcher(t, &[]string{}).WithModelCatalog(catalog).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+
+	type commandResult struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	resultCh := make(chan commandResult, 1)
+	go func() {
+		updated, cmd := model.handleCommand("/scoped-models")
+		resultCh <- commandResult{model: updated, cmd: cmd}
+	}()
+
+	var result commandResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("/scoped-models blocked while expanding scoped models")
+	}
+	select {
+	case <-catalogStarted:
+		t.Fatal("catalog fetch started inside /scoped-models command handling")
+	default:
+	}
+	if result.cmd == nil {
+		t.Fatal("/scoped-models returned no scoped-model command")
+	}
+	updated := testModel(t, result.model)
+	if updated.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("scoped-model listing did not own a runtime request")
+	}
+
+	messageCh := make(chan tea.Msg, 1)
+	go func() { messageCh <- result.cmd() }()
+	select {
+	case <-catalogStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scoped-model command did not start catalog fetch")
+	}
+	updated.Close()
+
+	var message tea.Msg
+	select {
+	case message = <-messageCh:
+	case <-time.After(time.Second):
+		t.Fatal("scoped-model command did not observe runtime cancellation")
+	}
+	select {
+	case <-catalogCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("catalog fetch did not observe runtime cancellation")
+	}
+	loaded, ok := message.(scopedModelsListedMsg)
+	if !ok || !errors.Is(loaded.err, context.Canceled) {
+		t.Fatalf("scoped-model listing result = %#v, want canceled scopedModelsListedMsg", message)
+	}
+	settled, _ := updated.Update(loaded)
+	if next := testModel(t, settled); next.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("canceled scoped-model listing left runtime request active")
+	}
+}
+
+func TestScopedModelsCommandResultDisplaysResolvedModels(t *testing.T) {
+	catalog := modelCatalogStub{
+		list: func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
+			return []llm.ModelMetadata{
+				{Provider: "openai", ID: "gpt-4.1"},
+				{Provider: "openai", ID: "gpt-4.1-mini"},
+			}, nil
+		},
+	}
+	model := readyModelWithSwitcher(t, &[]string{}).WithModelCatalog(catalog).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+	updatedValue, cmd := model.handleCommand("/scoped-models")
+	if cmd == nil {
+		t.Fatal("/scoped-models returned no scoped-model command")
+	}
+	message := cmd()
+	loaded, ok := message.(scopedModelsListedMsg)
+	if !ok {
+		t.Fatalf("scoped-model listing result = %T, want scopedModelsListedMsg", message)
+	}
+	updated := testModel(t, updatedValue)
+	next, renderCmd := updated.Update(loaded)
+	if renderCmd == nil {
+		t.Fatal("scoped-model listing returned no render command")
+	}
+	if next := testModel(t, next); next.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("completed scoped-model listing left runtime request active")
+	}
+}
+
+func TestStaleScopedModelsListingCannotClearNewerRequest(t *testing.T) {
+	model := readyModelWithSwitcher(t, &[]string{}).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+	updatedValue, _ := model.handleCommand("/scoped-models")
+	updated := testModel(t, updatedValue)
+	staleRequest := updated.Model.RuntimeSwitchRequest
+	currentRequest := updated.runtimeRequest().begin("newer request")
+
+	next, cmd := updated.handleScopedModelsListed(scopedModelsListedMsg{
+		generation: updated.Model.EventGeneration,
+		requestID:  staleRequest,
+		models: []config.ScopedModel{
+			{Provider: "openai", Model: "gpt-4.1-mini"},
+		},
+	})
+	if cmd != nil {
+		t.Fatal("stale scoped-model listing returned a command")
+	}
+	if next.Model.RuntimeSwitchRequest != currentRequest {
+		t.Fatalf("active runtime request = %d, want newer request %d", next.Model.RuntimeSwitchRequest, currentRequest)
+	}
+	next.Close()
+}
+
 func TestScopedPatternCatalogResultStartsRuntimeSwitch(t *testing.T) {
 	var observed []string
 	catalog := modelCatalogStub{

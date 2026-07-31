@@ -152,6 +152,13 @@ type scopedModelsLoadedMsg struct {
 	err        error
 }
 
+type scopedModelsListedMsg struct {
+	generation uint64
+	requestID  uint64
+	models     []config.ScopedModel
+	err        error
+}
+
 type allModelsLoadedMsg struct {
 	requestID uint64
 	items     []pickerItem // All models from all providers, with Provider field set
