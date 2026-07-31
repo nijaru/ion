@@ -536,20 +536,22 @@ type PickerState struct {
 
 // InputState holds state for the composer, history, and double-tap tracking.
 type InputState struct {
-	Composer              textarea.Model
-	Images                []session.ImageContent
-	Completion            *completionState
-	FileCompletionRequest uint64
-	Spinner               spinner.Model
-	History               []string
-	HistoryIdx            int
-	HistoryDraft          string
-	Pending               pendingAction
-	PendingActionRequest  uint64
-	PrintHoldUntil        time.Time
-	PrintHoldDelay        time.Duration
-	DelayNextEnter        bool
-	DeferredEnter         bool
+	Composer               textarea.Model
+	Images                 []session.ImageContent
+	Completion             *completionState
+	FileCompletionRequest  uint64
+	SkillCompletionRequest uint64
+	skillCompletionCancel  context.CancelFunc
+	Spinner                spinner.Model
+	History                []string
+	HistoryIdx             int
+	HistoryDraft           string
+	Pending                pendingAction
+	PendingActionRequest   uint64
+	PrintHoldUntil         time.Time
+	PrintHoldDelay         time.Duration
+	DelayNextEnter         bool
+	DeferredEnter          bool
 }
 
 // pasteMarker stores original content for a collapsed large paste.
@@ -699,6 +701,7 @@ func (m *Model) rotateRuntimeContext() {
 	if m.Model.runtimeCancel != nil {
 		m.Model.runtimeCancel()
 	}
+	m.inputReducer().invalidateSkillCompletionRequest()
 	m.Model.runtimeContext, m.Model.runtimeCancel = context.WithCancel(context.Background())
 }
 
@@ -785,6 +788,7 @@ func (m *Model) Close() {
 	if m.Model.treeNavigationCancel != nil {
 		m.Model.treeNavigationCancel()
 	}
+	m.inputReducer().invalidateSkillCompletionRequest()
 	m.pickerReducer().closeAll()
 	if m.Model.EventSubscription != nil {
 		m.Model.EventSubscription.Close()

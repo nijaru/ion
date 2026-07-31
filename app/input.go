@@ -97,6 +97,38 @@ func (r inputReducer) invalidateFileCompletionRequest() {
 	r.input.FileCompletionRequest++
 }
 
+func (r inputReducer) beginSkillCompletionRequest(parent context.Context) (uint64, context.Context) {
+	if r.input.skillCompletionCancel != nil {
+		r.input.skillCompletionCancel()
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.input.skillCompletionCancel = cancel
+	r.input.SkillCompletionRequest++
+	return r.input.SkillCompletionRequest, ctx
+}
+
+func (r inputReducer) invalidateSkillCompletionRequest() {
+	if r.input.skillCompletionCancel != nil {
+		r.input.skillCompletionCancel()
+		r.input.skillCompletionCancel = nil
+	}
+	r.input.SkillCompletionRequest++
+}
+
+func (r inputReducer) finishSkillCompletionRequest(requestID uint64) bool {
+	if requestID == 0 || requestID != r.input.SkillCompletionRequest {
+		return false
+	}
+	if r.input.skillCompletionCancel != nil {
+		r.input.skillCompletionCancel()
+		r.input.skillCompletionCancel = nil
+	}
+	return true
+}
+
 func (r inputReducer) clearPasteMarkers() {
 	if r.pasteMarkers == nil {
 		return
@@ -203,6 +235,7 @@ func (m *Model) resetHistoryCursor() {
 func (m *Model) resetComposerDraft() {
 	m.inputReducer().resetComposerDraft()
 	m.inputReducer().invalidateFileCompletionRequest()
+	m.inputReducer().invalidateSkillCompletionRequest()
 	m.relayoutComposer()
 }
 

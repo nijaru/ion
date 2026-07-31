@@ -111,6 +111,10 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		next, cmd := m.handleFileReferenceCompletion(msg)
 		return next, cmd, true
 
+	case skillCompletionMsg:
+		next, cmd := m.handleSkillCompletion(msg)
+		return next, cmd, true
+
 	case localErrorMsg:
 		next, cmd := m.handleLocalError(msg.err)
 		return next, cmd, true

@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	ionskills "github.com/nijaru/ion/internal/skills"
 )
 
 func TestResourceCommandsDeferFilesystemWork(t *testing.T) {
@@ -13,7 +16,11 @@ func TestResourceCommandsDeferFilesystemWork(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
 		t.Fatalf("mkdir skill dir: %v", err)
 	}
-	if err := os.WriteFile(skillPath, []byte("---\nname: review\ndescription: Review code.\n---\nReview instructions."), 0o644); err != nil {
+	if err := os.WriteFile(
+		skillPath,
+		[]byte("---\nname: review\ndescription: Review code.\n---\nReview instructions."),
+		0o644,
+	); err != nil {
 		t.Fatalf("write skill: %v", err)
 	}
 
@@ -41,6 +48,68 @@ func TestResourceCommandsDeferFilesystemWork(t *testing.T) {
 				t.Fatalf("%s message = %T, want skillDetailLoadedMsg", command, msg)
 			}
 		}
+	}
+}
+
+func TestSkillCompletionDefersDiscoveryAndDropsReplacementResult(t *testing.T) {
+	previous := loadSkillSummaries
+	t.Cleanup(func() { loadSkillSummaries = previous })
+	started := make(chan struct{})
+	loadSkillSummaries = func(...string) ([]ionskills.Summary, error) {
+		close(started)
+		return []ionskills.Summary{{Name: "review", Description: "Review code."}}, nil
+	}
+
+	model := readyModel(t)
+	model.Input.Composer.SetValue("//r")
+	updatedValue, cmd := model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("skill completion returned no command")
+	}
+	select {
+	case <-started:
+		t.Fatal("skill discovery started during Bubble Tea Update")
+	default:
+	}
+
+	messages := runCommandTree(t, cmd)
+	select {
+	case <-started:
+	default:
+		t.Fatal("skill completion command did not discover skills")
+	}
+	var loaded skillCompletionMsg
+	var ok bool
+	for _, message := range messages {
+		if loadedMessage, loadedOK := message.(skillCompletionMsg); loadedOK {
+			loaded, ok = loadedMessage, true
+			break
+		}
+	}
+	if !ok {
+		t.Fatalf("skill completion messages = %#v, want skillCompletionMsg", messages)
+	}
+
+	updated := testModel(t, updatedValue)
+	updated.resetComposerDraft()
+	next, completionCmd := updated.Update(loaded)
+	if completionCmd != nil {
+		t.Fatal("stale skill completion after reset returned a command")
+	}
+	if testModel(t, next).Input.Completion != nil {
+		t.Fatal("stale skill completion after reset changed the composer")
+	}
+
+	updated = testModel(t, updatedValue)
+	updated.rotateRuntimeContext()
+	updated.runtimeRequest().clear()
+	updated.Model.EventGeneration++
+	next, completionCmd = updated.Update(loaded)
+	if completionCmd != nil {
+		t.Fatal("stale skill completion returned a command")
+	}
+	if testModel(t, next).Input.Completion != nil {
+		t.Fatal("stale skill completion changed the replacement runtime")
 	}
 }
 

@@ -50,11 +50,18 @@ func TestCustomComposerCompletionItems(t *testing.T) {
 	// Set composer draft
 	model.Input.Composer.SetValue("//re")
 
-	// Get completions
-	items, cmd := model.composerCompletionItems()
-	if cmd != nil {
-		t.Fatal("expected no command for inline completion items")
+	// Get completions. Skill discovery is asynchronous so it cannot block
+	// Bubble Tea Update while walking the skill tree.
+	_, cmd := model.composerCompletionItems()
+	if cmd == nil {
+		t.Fatal("expected asynchronous skill completion command")
 	}
+	message, ok := cmd().(skillCompletionMsg)
+	if !ok {
+		t.Fatalf("completion message = %T, want skillCompletionMsg", cmd())
+	}
+	model, _ = model.handleSkillCompletion(message)
+	items := model.Input.Completion.items
 
 	if len(items) != 2 {
 		t.Fatalf("expected 2 completions, got %d", len(items))
@@ -67,7 +74,13 @@ func TestCustomComposerCompletionItems(t *testing.T) {
 
 	// Unique query
 	model.Input.Composer.SetValue("//ref")
-	items, _ = model.composerCompletionItems()
+	_, cmd = model.composerCompletionItems()
+	if cmd == nil {
+		t.Fatal("expected asynchronous unique skill completion command")
+	}
+	message = cmd().(skillCompletionMsg)
+	model, _ = model.handleSkillCompletion(message)
+	items = model.Input.Completion.items
 	if len(items) != 1 || items[0].Label != "//refactor" {
 		t.Fatalf("expected unique refactor completion, got: %v", items)
 	}
@@ -99,12 +112,19 @@ func TestCompleteCustomCommandRouting(t *testing.T) {
 	if !ok {
 		t.Fatal("expected completion to handle custom command")
 	}
+	if cmd == nil {
+		t.Fatal("expected asynchronous custom command completion")
+	}
+	message, ok := cmd().(skillCompletionMsg)
+	if !ok {
+		t.Fatalf("completion message = %T, want skillCompletionMsg", cmd())
+	}
+	model, cmd = model.handleSkillCompletion(message)
 	if model.Input.Composer.Value() != "//refactor " {
 		t.Fatalf("expected completed composer value to be '//refactor ', got %q", model.Input.Composer.Value())
 	}
-	// The unique match completion should return nil command as there are no subsequent completions
 	if cmd != nil {
-		t.Fatalf("expected nil command for complete unique match, got %T", cmd)
+		t.Fatalf("expected no follow-up command after unique completion, got %T", cmd)
 	}
 
 	// Test case 2: Ambiguous matches open command picker
@@ -113,6 +133,14 @@ func TestCompleteCustomCommandRouting(t *testing.T) {
 	if !ok {
 		t.Fatal("expected completion to handle custom command")
 	}
+	if cmd == nil {
+		t.Fatal("expected asynchronous custom command completion")
+	}
+	message, ok = cmd().(skillCompletionMsg)
+	if !ok {
+		t.Fatalf("completion message = %T, want skillCompletionMsg", cmd())
+	}
+	model, cmd = model.handleSkillCompletion(message)
 	if cmd != nil {
 		t.Fatal("expected picker opening to return no cmd")
 	}

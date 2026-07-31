@@ -13,7 +13,6 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/config"
 	ionskills "github.com/nijaru/ion/internal/skills"
 )
 
@@ -517,60 +516,49 @@ func (m Model) completeCustomCommand() (Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
-	matches := m.matchingCustomCommands(text)
+	requestID, ctx := m.inputReducer().beginSkillCompletionRequest(m.runtimeOperationContext())
+	m.inputReducer().clearCompletion()
+	return m, loadSkillCompletion(
+		ctx,
+		m.Model.EventGeneration,
+		requestID,
+		text,
+		true,
+	), true
+}
+
+func (m Model) applyCustomCommandCompletion(
+	text string,
+	summaries []ionskills.Summary,
+) (Model, tea.Cmd) {
+	matches := matchingCustomCommandsFromSummaries(text, summaries)
 	switch len(matches) {
 	case 0:
-		return m, nil, true
+		return m, nil
 	case 1:
-		return m, m.setComposerDraft(matches[0] + " "), true
+		return m, m.setComposerDraft(matches[0] + " ")
 	}
 
 	prefix := commonPrefix(matches)
 	if prefix != "" && prefix != text {
-		return m, m.setComposerDraft(prefix), true
+		return m, m.setComposerDraft(prefix)
 	}
 
-	return m.openCustomCommandPicker(text), nil, true
+	return m.openCustomCommandPicker(text, summaries), nil
 }
 
-func (m Model) matchingCustomCommands(query string) []string {
+func matchingCustomCommandsFromSummaries(query string, summaries []ionskills.Summary) []string {
 	query = strings.TrimPrefix(strings.TrimSpace(query), "//")
-	dir, err := config.DefaultSkillsDir()
-	if err != nil {
-		return nil
-	}
-	skillSummaries, err := ionskills.List(dir)
-	if err != nil {
-		return nil
-	}
-
-	var pickerItems []pickerItem
-	for _, skill := range skillSummaries {
-		search := pickerSearchIndex(
-			"//"+skill.Name,
-			skill.Name,
-			skill.Description,
-			"Skills",
-			nil,
-		)
-		pickerItems = append(pickerItems, pickerItem{
-			Label:  "//" + skill.Name,
-			Value:  "//" + skill.Name,
-			Detail: skill.Description,
-			Group:  "Skills",
-			Search: search,
-		})
-	}
-
+	items := skillPickerItems(summaries)
 	if query == "" {
-		out := make([]string, 0, len(pickerItems))
-		for _, item := range pickerItems {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
 			out = append(out, item.Value)
 		}
 		return out
 	}
 
-	ranked := rankedPickerItems(pickerItems, query)
+	ranked := rankedPickerItems(items, query)
 	out := make([]string, 0, len(ranked))
 	for _, item := range ranked {
 		out = append(out, item.Value)
@@ -578,33 +566,8 @@ func (m Model) matchingCustomCommands(query string) []string {
 	return out
 }
 
-func (m Model) openCustomCommandPicker(prefix string) Model {
-	dir, err := config.DefaultSkillsDir()
-	if err != nil {
-		return m
-	}
-	skillSummaries, err := ionskills.List(dir)
-	if err != nil {
-		return m
-	}
-	var items []pickerItem
-	for _, skill := range skillSummaries {
-		search := pickerSearchIndex(
-			"//"+skill.Name,
-			skill.Name,
-			skill.Description,
-			"Skills",
-			nil,
-		)
-		items = append(items, pickerItem{
-			Label:  "//" + skill.Name,
-			Value:  "//" + skill.Name,
-			Detail: skill.Description,
-			Group:  "Skills",
-			Search: search,
-		})
-	}
-
+func (m Model) openCustomCommandPicker(prefix string, summaries []ionskills.Summary) Model {
+	items := skillPickerItems(summaries)
 	query := strings.TrimPrefix(strings.TrimSpace(prefix), "//")
 	m.pickerReducer().openOverlay(pickerOverlayState{
 		title:    "Pick a skill",

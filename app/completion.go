@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/nijaru/ion/config"
 
@@ -9,7 +11,10 @@ import (
 	ionskills "github.com/nijaru/ion/internal/skills"
 )
 
-const maxComposerCompletions = 5
+const (
+	maxComposerCompletions       = 5
+	skillCompletionDebounceDelay = 50 * time.Millisecond
+)
 
 func (m *Model) refreshComposerCompletions() tea.Cmd {
 	items, cmd := m.composerCompletionItems()
@@ -19,14 +24,23 @@ func (m *Model) refreshComposerCompletions() tea.Cmd {
 
 func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 	text := m.Input.Composer.Value()
+	m.inputReducer().invalidateSkillCompletionRequest()
 	if strings.TrimSpace(text) == "" {
 		m.inputReducer().invalidateFileCompletionRequest()
 		return nil, nil
 	}
 	if strings.HasPrefix(text, "//") {
-		m.inputReducer().invalidateFileCompletionRequest()
-		items := m.customComposerCompletionItems(text)
-		return limitCompletionItems(items), nil
+		if strings.ContainsAny(text, " \t\r\n") {
+			return nil, nil
+		}
+		requestID, ctx := m.inputReducer().beginSkillCompletionRequest(m.runtimeOperationContext())
+		return nil, loadSkillCompletion(
+			ctx,
+			m.Model.EventGeneration,
+			requestID,
+			text,
+			false,
+		)
 	}
 	if items := slashComposerCompletionItems(text); len(items) > 0 {
 		m.inputReducer().invalidateFileCompletionRequest()
@@ -230,7 +244,100 @@ func limitCompletionItems(items []completionItem) []completionItem {
 	return items[:maxComposerCompletions]
 }
 
-func (m Model) customComposerCompletionItems(text string) []completionItem {
+type skillCompletionMsg struct {
+	generation uint64
+	requestID  uint64
+	text       string
+	summaries  []ionskills.Summary
+	apply      bool
+	err        error
+}
+
+var loadSkillSummaries = ionskills.List
+
+func loadSkillCompletion(
+	ctx context.Context,
+	generation, requestID uint64,
+	text string,
+	apply bool,
+) tea.Cmd {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		timer := time.NewTimer(skillCompletionDebounceDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return skillCompletionMsg{
+				generation: generation,
+				requestID:  requestID,
+				text:       text,
+				apply:      apply,
+				err:        ctx.Err(),
+			}
+		case <-timer.C:
+		}
+		if err := ctx.Err(); err != nil {
+			return skillCompletionMsg{
+				generation: generation,
+				requestID:  requestID,
+				text:       text,
+				apply:      apply,
+				err:        err,
+			}
+		}
+		dir, err := config.DefaultSkillsDir()
+		if err == nil {
+			var summaries []ionskills.Summary
+			summaries, err = loadSkillSummaries(dir)
+			if err == nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					err = ctxErr
+				} else {
+					return skillCompletionMsg{
+						generation: generation,
+						requestID:  requestID,
+						text:       text,
+						summaries:  summaries,
+						apply:      apply,
+					}
+				}
+			}
+		}
+		return skillCompletionMsg{
+			generation: generation,
+			requestID:  requestID,
+			text:       text,
+			apply:      apply,
+			err:        err,
+		}
+	}
+}
+
+func (m Model) handleSkillCompletion(msg skillCompletionMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration ||
+		msg.requestID == 0 ||
+		msg.requestID != m.Input.SkillCompletionRequest ||
+		m.Input.Composer.Value() != msg.text {
+		return m, nil
+	}
+	if !m.inputReducer().finishSkillCompletionRequest(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m, nil
+	}
+	if msg.apply {
+		return m.applyCustomCommandCompletion(msg.text, msg.summaries)
+	}
+	m.inputReducer().setCompletionItems(
+		limitCompletionItems(customComposerCompletionItems(msg.text, msg.summaries)),
+	)
+	return m, nil
+}
+
+func customComposerCompletionItems(text string, summaries []ionskills.Summary) []completionItem {
 	if !strings.HasPrefix(text, "//") || strings.ContainsAny(text, "\r\n") {
 		return nil
 	}
@@ -238,38 +345,29 @@ func (m Model) customComposerCompletionItems(text string) []completionItem {
 		return nil
 	}
 
-	dir, err := config.DefaultSkillsDir()
-	if err != nil {
-		return nil
-	}
-
-	skillSummaries, err := ionskills.List(dir)
-	if err != nil {
-		return nil
-	}
-
-	var pickerItems []pickerItem
-	for _, skill := range skillSummaries {
-		search := pickerSearchIndex(
-			"//"+skill.Name,
-			skill.Name,
-			skill.Description,
-			"Skills",
-			nil,
-		)
-		pickerItems = append(pickerItems, pickerItem{
-			Label:  "//" + skill.Name,
-			Value:  "//" + skill.Name,
-			Detail: skill.Description,
-			Group:  "Skills",
-			Search: search,
-		})
-	}
-
-	query := strings.TrimPrefix(strings.TrimSpace(text), "//")
-	items := rankedPickerItems(pickerItems, query)
+	items := rankedPickerItems(skillPickerItems(summaries), strings.TrimPrefix(strings.TrimSpace(text), "//"))
 	if len(items) == 1 && strings.EqualFold(items[0].Value, strings.TrimSpace(text)) {
 		return nil
 	}
 	return completionItemsFromPicker(items)
+}
+
+func skillPickerItems(summaries []ionskills.Summary) []pickerItem {
+	items := make([]pickerItem, 0, len(summaries))
+	for _, skill := range summaries {
+		items = append(items, pickerItem{
+			Label:  "//" + skill.Name,
+			Value:  "//" + skill.Name,
+			Detail: skill.Description,
+			Group:  "Skills",
+			Search: pickerSearchIndex(
+				"//"+skill.Name,
+				skill.Name,
+				skill.Description,
+				"Skills",
+				nil,
+			),
+		})
+	}
+	return items
 }
