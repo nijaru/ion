@@ -140,6 +140,43 @@ func TestScopedPatternCatalogResultStartsRuntimeSwitch(t *testing.T) {
 	}
 }
 
+func TestStaleScopedPatternResultCannotStartRuntimeSwitch(t *testing.T) {
+	var observed []string
+	model := readyModelWithSwitcher(t, &observed).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+	updatedValue, _ := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	updated := testModel(t, updatedValue)
+	staleRequest := updated.Model.RuntimeSwitchRequest
+	currentRequest := updated.runtimeRequest().begin("newer request")
+
+	next, cmd := updated.handleScopedModelsLoaded(scopedModelsLoadedMsg{
+		generation: updated.Model.EventGeneration,
+		requestID:  staleRequest,
+		cfg:        config.Config{Provider: "openai", Model: "gpt-4.1"},
+		runtimeCfg: config.Config{Provider: "openai", Model: "gpt-4.1"},
+		models: []config.ScopedModel{
+			{Provider: "openai", Model: "gpt-4.1-mini"},
+		},
+		preset:  PresetPrimary,
+		forward: true,
+	})
+	if cmd != nil {
+		t.Fatal("stale scoped-model result started a command")
+	}
+	if next.Model.RuntimeSwitchRequest != currentRequest {
+		t.Fatalf("active runtime request = %d, want newer request %d", next.Model.RuntimeSwitchRequest, currentRequest)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("stale scoped-model result switched models = %#v", observed)
+	}
+	next.Close()
+}
+
 func TestCurrentResumeLeafIDDoesNotUseStableSessionIdentity(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Runtime = Snapshot{
