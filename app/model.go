@@ -141,6 +141,17 @@ type resumeSessionSelectedMsg struct {
 	cfg        *config.Config
 }
 
+type scopedModelsLoadedMsg struct {
+	generation uint64
+	requestID  uint64
+	cfg        config.Config
+	runtimeCfg config.Config
+	preset     Preset
+	forward    bool
+	models     []config.ScopedModel
+	err        error
+}
+
 type allModelsLoadedMsg struct {
 	requestID uint64
 	items     []pickerItem // All models from all providers, with Provider field set

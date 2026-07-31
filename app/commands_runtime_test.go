@@ -5,11 +5,140 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
+
+func TestScopedPatternCatalogRunsOutsideUpdateAndCancels(t *testing.T) {
+	catalogStarted := make(chan struct{})
+	catalogCanceled := make(chan struct{})
+	catalog := modelCatalogStub{
+		list: func(ctx context.Context, _ *config.Config) ([]llm.ModelMetadata, error) {
+			close(catalogStarted)
+			<-ctx.Done()
+			close(catalogCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	model := readyModelWithSwitcher(t, &[]string{}).WithModelCatalog(catalog).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+
+	type updateResult struct {
+		model tea.Model
+		cmd   tea.Cmd
+	}
+	updatedCh := make(chan updateResult, 1)
+	go func() {
+		updated, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+		updatedCh <- updateResult{model: updated, cmd: cmd}
+	}()
+
+	var result updateResult
+	select {
+	case result = <-updatedCh:
+	case <-time.After(time.Second):
+		t.Fatal("Ctrl+L blocked Update while expanding scoped models")
+	}
+	select {
+	case <-catalogStarted:
+		t.Fatal("catalog fetch started inside Update")
+	default:
+	}
+	if result.cmd == nil {
+		t.Fatal("Ctrl+L returned no scoped-model command")
+	}
+	updated := testModel(t, result.model)
+	if updated.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("scoped-model load did not own a runtime request")
+	}
+
+	messageCh := make(chan tea.Msg, 1)
+	go func() { messageCh <- result.cmd() }()
+	select {
+	case <-catalogStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scoped-model command did not start catalog fetch")
+	}
+	updated.Close()
+
+	var message tea.Msg
+	select {
+	case message = <-messageCh:
+	case <-time.After(time.Second):
+		t.Fatal("scoped-model command did not observe runtime cancellation")
+	}
+	select {
+	case <-catalogCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("catalog fetch did not observe runtime cancellation")
+	}
+	loaded, ok := message.(scopedModelsLoadedMsg)
+	if !ok || !errors.Is(loaded.err, context.Canceled) {
+		t.Fatalf("scoped-model result = %#v, want canceled scopedModelsLoadedMsg", message)
+	}
+	settled, _ := updated.Update(loaded)
+	if next := testModel(t, settled); next.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("canceled scoped-model load left runtime request active")
+	}
+}
+
+func TestScopedPatternCatalogResultStartsRuntimeSwitch(t *testing.T) {
+	var observed []string
+	catalog := modelCatalogStub{
+		list: func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
+			return []llm.ModelMetadata{
+				{Provider: "openai", ID: "gpt-4.1"},
+				{Provider: "openai", ID: "gpt-4.1-mini"},
+			}, nil
+		},
+	}
+	model := readyModelWithSwitcher(t, &observed).WithModelCatalog(catalog).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+
+	updatedValue, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl+L returned no scoped-model command")
+	}
+	message := cmd()
+	loaded, ok := message.(scopedModelsLoadedMsg)
+	if !ok {
+		t.Fatalf("scoped-model result = %T, want scopedModelsLoadedMsg", message)
+	}
+	updated := testModel(t, updatedValue)
+	next, switchCmd := updated.Update(loaded)
+	updated = testModel(t, next)
+	if switchCmd == nil {
+		t.Fatal("scoped-model completion returned no runtime switch")
+	}
+	switchMessage := switchCmd()
+	switched, ok := switchMessage.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("runtime switch result = %T, want runtimeSwitchedMsg", switchMessage)
+	}
+	updatedValue, _ = updated.Update(switched)
+	updated = testModel(t, updatedValue)
+	if got, want := updated.Model.Info.Model(), "gpt-4.1-mini"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if len(observed) != 1 || observed[0] != "gpt-4.1-mini" {
+		t.Fatalf("switched models = %#v, want [gpt-4.1-mini]", observed)
+	}
+}
 
 func TestCurrentResumeLeafIDDoesNotUseStableSessionIdentity(t *testing.T) {
 	model := readyModel(t)

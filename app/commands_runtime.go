@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,12 +121,81 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	next, ok := pickScopedModel(
-		m.resolveScopedModelPatterns(context.Background(), cfg),
-		runtimeCfg.Provider,
-		runtimeCfg.Model,
-		forward,
+	if !hasScopedModelPatterns(cfg) {
+		return m.cycleScopedModelResolved(
+			cfg,
+			runtimeCfg,
+			preset,
+			m.resolveScopedModelPatterns(m.runtimeOperationContext(), cfg),
+			forward,
+		)
+	}
+
+	// Pattern expansion may fetch provider catalog data. Keep that work out of
+	// Bubble Tea's Update path and bind it to the same request/runtime lifetime
+	// as the eventual replacement.
+	requestID := m.runtimeRequest().begin("Loading scoped models...")
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeRequestOperationContext()
+	cfgCopy := *cfg
+	runtimeCfgCopy := *runtimeCfg
+	return m, func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return scopedModelsLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				err:        err,
+			}
+		}
+		models := m.resolveScopedModelPatterns(ctx, &cfgCopy)
+		if err := ctx.Err(); err != nil {
+			return scopedModelsLoadedMsg{
+				generation: generation,
+				requestID:  requestID,
+				err:        err,
+			}
+		}
+		return scopedModelsLoadedMsg{
+			generation: generation,
+			requestID:  requestID,
+			cfg:        cfgCopy,
+			runtimeCfg: runtimeCfgCopy,
+			preset:     preset,
+			forward:    forward,
+			models:     models,
+		}
+	}
+}
+
+func (m Model) handleScopedModelsLoaded(msg scopedModelsLoadedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		return m.handleLocalError(fmt.Errorf("load scoped models: %w", msg.err))
+	}
+	return m.cycleScopedModelResolved(
+		&msg.cfg,
+		&msg.runtimeCfg,
+		msg.preset,
+		msg.models,
+		msg.forward,
 	)
+}
+
+func (m Model) cycleScopedModelResolved(
+	cfg, runtimeCfg *config.Config,
+	preset Preset,
+	models []config.ScopedModel,
+	forward bool,
+) (Model, tea.Cmd) {
+	next, ok := pickScopedModel(models, runtimeCfg.Provider, runtimeCfg.Model, forward)
 	if !ok {
 		return m.cyclePresetFallback(cfg, preset, forward)
 	}
@@ -283,6 +353,19 @@ func filterScopedModelsByAuth(models []config.ScopedModel) []config.ScopedModel 
 		}
 	}
 	return filtered
+}
+
+// hasScopedModelPatterns reports whether cycling needs provider catalog data.
+func hasScopedModelPatterns(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, sm := range cfg.ScopedModels {
+		if sm.Pattern != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveScopedModelPatterns expands glob patterns in scoped models against available models.
