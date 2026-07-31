@@ -205,6 +205,40 @@ func TestScopedModelsCommandResultDisplaysResolvedModels(t *testing.T) {
 	}
 }
 
+func TestScopedModelsCatalogFailureSurfaces(t *testing.T) {
+	catalog := modelCatalogStub{
+		list: func(context.Context, *config.Config) ([]llm.ModelMetadata, error) {
+			return nil, errors.New("catalog offline")
+		},
+	}
+	model := readyModel(t).WithModelCatalog(catalog).WithConfig(&config.Config{
+		Provider: "openai",
+		ScopedModels: []config.ScopedModel{
+			{Pattern: "openai/*"},
+		},
+	})
+	updatedValue, cmd := model.handleCommand("/scoped-models")
+	if cmd == nil {
+		t.Fatal("/scoped-models returned no scoped-model command")
+	}
+	message := cmd()
+	loaded, ok := message.(scopedModelsListedMsg)
+	if !ok {
+		t.Fatalf("scoped-model listing result = %T, want scopedModelsListedMsg", message)
+	}
+	if loaded.err == nil || !strings.Contains(loaded.err.Error(), "catalog offline") {
+		t.Fatalf("scoped-model listing error = %v, want catalog failure", loaded.err)
+	}
+	updated := testModel(t, updatedValue)
+	next, renderCmd := updated.Update(loaded)
+	if renderCmd == nil {
+		t.Fatal("catalog failure returned no visible error command")
+	}
+	if final := testModel(t, next); final.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("catalog failure left runtime request active")
+	}
+}
+
 func TestStaleScopedModelsListingCannotClearNewerRequest(t *testing.T) {
 	model := readyModelWithSwitcher(t, &[]string{}).WithConfig(&config.Config{
 		Provider: "openai",

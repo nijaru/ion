@@ -108,8 +108,11 @@ func (m Model) showScopedModels() (Model, tea.Cmd) {
 		if err := ctx.Err(); err != nil {
 			return scopedModelsListedMsg{generation: generation, requestID: requestID, err: err}
 		}
-		models := m.resolveScopedModelPatterns(ctx, &cfgCopy)
-		if err := ctx.Err(); err != nil {
+		models, err := m.resolveScopedModelPatterns(ctx, &cfgCopy)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+		if err != nil {
 			return scopedModelsListedMsg{generation: generation, requestID: requestID, err: err}
 		}
 		return scopedModelsListedMsg{generation: generation, requestID: requestID, models: models}

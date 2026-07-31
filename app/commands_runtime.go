@@ -122,13 +122,11 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	if !hasScopedModelPatterns(cfg) {
-		return m.cycleScopedModelResolved(
-			cfg,
-			runtimeCfg,
-			preset,
-			m.resolveScopedModelPatterns(m.runtimeOperationContext(), cfg),
-			forward,
-		)
+		models, err := m.resolveScopedModelPatterns(m.runtimeOperationContext(), cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("load scoped models: %v", err))
+		}
+		return m.cycleScopedModelResolved(cfg, runtimeCfg, preset, models, forward)
 	}
 
 	// Pattern expansion may fetch provider catalog data. Keep that work out of
@@ -147,8 +145,11 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 				err:        err,
 			}
 		}
-		models := m.resolveScopedModelPatterns(ctx, &cfgCopy)
-		if err := ctx.Err(); err != nil {
+		models, err := m.resolveScopedModelPatterns(ctx, &cfgCopy)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+		if err != nil {
 			return scopedModelsLoadedMsg{
 				generation: generation,
 				requestID:  requestID,
@@ -370,9 +371,12 @@ func hasScopedModelPatterns(cfg *config.Config) bool {
 
 // resolveScopedModelPatterns expands glob patterns in scoped models against available models.
 // Patterns without glob characters are passed through as-is.
-func (m Model) resolveScopedModelPatterns(ctx context.Context, cfg *config.Config) []config.ScopedModel {
+func (m Model) resolveScopedModelPatterns(
+	ctx context.Context,
+	cfg *config.Config,
+) ([]config.ScopedModel, error) {
 	if cfg == nil || len(cfg.ScopedModels) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var result []config.ScopedModel
@@ -384,7 +388,10 @@ func (m Model) resolveScopedModelPatterns(ctx context.Context, cfg *config.Confi
 		}
 
 		// Glob pattern — resolve against available models
-		matched := m.matchModelsByPattern(ctx, cfg, sm.Pattern)
+		matched, err := m.matchModelsByPattern(ctx, cfg, sm.Pattern)
+		if err != nil {
+			return nil, err
+		}
 		for _, m := range matched {
 			result = append(result, config.ScopedModel{
 				Provider: m.Provider,
@@ -393,18 +400,22 @@ func (m Model) resolveScopedModelPatterns(ctx context.Context, cfg *config.Confi
 			})
 		}
 	}
-	return result
+	return result, nil
 }
 
 // matchModelsByPattern returns models matching a glob pattern.
 // Matches against "provider/model" or just "model".
-func (m Model) matchModelsByPattern(ctx context.Context, cfg *config.Config, pattern string) []llm.ModelMetadata {
+func (m Model) matchModelsByPattern(
+	ctx context.Context,
+	cfg *config.Config,
+	pattern string,
+) ([]llm.ModelMetadata, error) {
 	if m.Model.Catalog == nil {
-		return nil
+		return nil, nil
 	}
 	models, err := m.Model.Catalog.ListModelsForConfig(ctx, cfg)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	pattern = strings.ToLower(pattern)
@@ -416,7 +427,7 @@ func (m Model) matchModelsByPattern(ctx context.Context, cfg *config.Config, pat
 			matched = append(matched, m)
 		}
 	}
-	return matched
+	return matched, nil
 }
 
 // matchGlob does simple glob matching (* and ?).
