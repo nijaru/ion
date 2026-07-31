@@ -988,6 +988,25 @@ func TestCtrlLBlockedDuringBusyTurn(t *testing.T) {
 	}
 }
 
+func applyScopedModelCycle(t *testing.T, model Model, cmd tea.Cmd) (Model, runtimeSwitchedMsg) {
+	t.Helper()
+	loaded, ok := cmd().(scopedModelsLoadedMsg)
+	if !ok {
+		t.Fatalf("scoped-model result = %T, want scopedModelsLoadedMsg", cmd())
+	}
+	next, switchCmd := model.Update(loaded)
+	model = testModel(t, next)
+	if switchCmd == nil {
+		t.Fatal("scoped-model completion returned no runtime switch")
+	}
+	switchMessage := switchCmd()
+	switched, ok := switchMessage.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("runtime switch result = %T, want runtimeSwitchedMsg", switchMessage)
+	}
+	return model, switched
+}
+
 func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	var observed []string
 	model := readyModelWithSwitcher(t, &observed).WithConfig(&config.Config{
@@ -1006,11 +1025,7 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected ctrl+l to switch to next scoped model")
 	}
-	msg := cmd()
-	switched, ok := msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
+	model, switched := applyScopedModelCycle(t, model, cmd)
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
 	if got, want := model.Model.Info.Model(), "claude-sonnet-4-5"; got != want {
@@ -1023,11 +1038,7 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	// Forward: claude-sonnet-4-5 → gpt-4.1-mini
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
-	msg = cmd()
-	switched, ok = msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
+	model, switched = applyScopedModelCycle(t, model, cmd)
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
 	if got := model.Model.Info.Model(); got != "gpt-4.1-mini" {
@@ -1037,11 +1048,7 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 	// Forward: gpt-4.1-mini → gpt-4.1 (wraps)
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	model = testModel(t, updated)
-	msg = cmd()
-	switched, ok = msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
+	model, switched = applyScopedModelCycle(t, model, cmd)
 	next, _ = model.Update(switched)
 	model = testModel(t, next)
 	if got := model.Model.Info.Model(); got != "gpt-4.1" {
@@ -1067,11 +1074,7 @@ func TestCtrlLCyclesScopedModelsBackward(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected shift+ctrl+l to switch scoped model")
 	}
-	msg := cmd()
-	switched, ok := msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
+	model, switched := applyScopedModelCycle(t, model, cmd)
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
 	if got := model.Model.Info.Model(); got != "gpt-4.1-mini" {

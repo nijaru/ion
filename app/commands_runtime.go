@@ -121,17 +121,12 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
-	if !hasScopedModelPatterns(cfg) {
-		models, err := m.resolveScopedModelPatterns(m.runtimeOperationContext(), cfg)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("load scoped models: %v", err))
-		}
-		return m.cycleScopedModelResolved(cfg, runtimeCfg, preset, models, forward)
+	if len(cfg.ScopedModels) == 0 {
+		return m.cyclePresetFallback(cfg, preset, forward)
 	}
-
-	// Pattern expansion may fetch provider catalog data. Keep that work out of
-	// Bubble Tea's Update path and bind it to the same request/runtime lifetime
-	// as the eventual replacement.
+	// Exact entries still need credential-file inspection before they can be
+	// cycled, while patterns may also fetch provider catalog data. Keep both
+	// paths out of Bubble Tea's Update and bind them to one runtime request.
 	requestID := m.runtimeRequest().begin("Loading scoped models...")
 	generation := m.Model.EventGeneration
 	ctx := m.runtimeRequestOperationContext()
@@ -148,6 +143,12 @@ func (m Model) cycleScopedModelCommand(forward bool) (Model, tea.Cmd) {
 		models, err := m.resolveScopedModelPatterns(ctx, &cfgCopy)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr
+		}
+		if err == nil {
+			models = filterScopedModelsByAuth(models)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = ctxErr
+			}
 		}
 		if err != nil {
 			return scopedModelsLoadedMsg{
@@ -442,8 +443,6 @@ func pickScopedModel(
 	currentModel string,
 	forward bool,
 ) (config.ScopedModel, bool) {
-	// Filter by authentication availability.
-	models = filterScopedModelsByAuth(models)
 	if len(models) <= 1 {
 		return config.ScopedModel{}, false
 	}

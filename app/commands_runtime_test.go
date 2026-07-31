@@ -14,6 +14,30 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestExactScopedModelCredentialInspectionRunsOutsideUpdate(t *testing.T) {
+	model := readyModel(t).WithConfig(&config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+		ScopedModels: []config.ScopedModel{
+			{Provider: "openai", Model: "gpt-4.1"},
+			{Provider: "openai", Model: "gpt-4.1-mini"},
+		},
+	})
+
+	updatedValue, cmd := model.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl+L returned no deferred scoped-model command")
+	}
+	updated := testModel(t, updatedValue)
+	if updated.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("deferred scoped-model inspection did not own a runtime request")
+	}
+	message := cmd()
+	if _, ok := message.(scopedModelsLoadedMsg); !ok {
+		t.Fatalf("exact scoped-model result = %T, want scopedModelsLoadedMsg", message)
+	}
+}
+
 func TestScopedPatternCatalogRunsOutsideUpdateAndCancels(t *testing.T) {
 	catalogStarted := make(chan struct{})
 	catalogCanceled := make(chan struct{})
