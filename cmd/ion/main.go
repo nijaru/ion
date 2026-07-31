@@ -877,7 +877,7 @@ func runSkillList(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve skills dir: %w", err)
 	}
-	out, err := ionskills.Notice([]string{dir}, strings.Join(args, " "))
+	out, err := ionskills.NoticeContext(context.Background(), []string{dir}, strings.Join(args, " "))
 	if err != nil {
 		return fmt.Errorf("load skills: %w", err)
 	}

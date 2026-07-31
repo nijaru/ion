@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,11 +52,35 @@ func TestResourceCommandsDeferFilesystemWork(t *testing.T) {
 	}
 }
 
+func TestUnchangedComposerMessagesDoNotRescanSkills(t *testing.T) {
+	previous := loadSkillSummaries
+	t.Cleanup(func() { loadSkillSummaries = previous })
+	calls := 0
+	loadSkillSummaries = func(context.Context, ...string) ([]ionskills.Summary, error) {
+		calls++
+		return []ionskills.Summary{{Name: "review", Description: "Review code."}}, nil
+	}
+
+	model := readyModel(t)
+	model.Input.Composer.SetValue("//r")
+	updatedValue, firstCmd := model.Update(struct{}{})
+	if firstCmd == nil {
+		t.Fatal("first unchanged composer update returned no completion command")
+	}
+	_ = runCommandTree(t, firstCmd)
+	updated := testModel(t, updatedValue)
+	_, secondCmd := updated.Update(struct{}{})
+	_ = runCommandTree(t, secondCmd)
+	if calls != 1 {
+		t.Fatalf("skill discovery calls = %d, want one for unchanged composer text", calls)
+	}
+}
+
 func TestSkillCompletionDefersDiscoveryAndDropsReplacementResult(t *testing.T) {
 	previous := loadSkillSummaries
 	t.Cleanup(func() { loadSkillSummaries = previous })
 	started := make(chan struct{})
-	loadSkillSummaries = func(...string) ([]ionskills.Summary, error) {
+	loadSkillSummaries = func(context.Context, ...string) ([]ionskills.Summary, error) {
 		close(started)
 		return []ionskills.Summary{{Name: "review", Description: "Review code."}}, nil
 	}

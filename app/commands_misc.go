@@ -208,7 +208,7 @@ func (m Model) handleSkillsCommand(input, command string) (Model, tea.Cmd) {
 		dir, err := config.DefaultSkillsDir()
 		if err == nil {
 			var out string
-			out, err = ionskills.Notice([]string{dir}, query)
+			out, err = ionskills.NoticeContext(ctx, []string{dir}, query)
 			if err == nil {
 				return skillsNoticeLoadedMsg{
 					generation: generation,
@@ -255,7 +255,7 @@ func (m Model) handleSkillDetailCommand(name string) (Model, tea.Cmd) {
 		dir, err := config.DefaultSkillsDir()
 		if err == nil {
 			var detail ionskills.Detail
-			detail, err = ionskills.Read([]string{dir}, name)
+			detail, err = ionskills.ReadContext(ctx, []string{dir}, name)
 			if err == nil {
 				return skillDetailLoadedMsg{
 					generation: generation,

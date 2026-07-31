@@ -39,7 +39,7 @@ func (t *ReadSkill) Spec() llm.Spec {
 	}
 }
 
-func (t *ReadSkill) Execute(_ context.Context, args string) (string, error) {
+func (t *ReadSkill) Execute(ctx context.Context, args string) (string, error) {
 	var input struct {
 		Name string `json:"name"`
 	}
@@ -50,7 +50,7 @@ func (t *ReadSkill) Execute(_ context.Context, args string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	detail, err := ionskills.Read(t.paths, name)
+	detail, err := ionskills.ReadContext(ctx, t.paths, name)
 	if err != nil {
 		return "", err
 	}

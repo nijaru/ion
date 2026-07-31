@@ -212,8 +212,8 @@ func TestProviderSetupPickerDefersCredentialReads(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("provider picker returned no deferred command")
 	}
-	if updated.Picker.Overlay != nil {
-		t.Fatal("provider picker opened before provider metadata loaded")
+	if updated.Picker.Overlay == nil || !updated.Picker.Overlay.loading {
+		t.Fatal("provider picker did not preserve a loading overlay before metadata")
 	}
 	if updated.Model.RuntimeSwitchRequest == 0 {
 		t.Fatal("provider picker did not own a runtime request")
@@ -236,6 +236,30 @@ func TestProviderSetupPickerDefersCredentialReads(t *testing.T) {
 	}
 }
 
+func TestWithProviderPickerPreservesStartupLoad(t *testing.T) {
+	model := readyModel(t).WithProviderPicker()
+	if model.Picker.Overlay == nil || !model.Picker.Overlay.loading {
+		t.Fatal("WithProviderPicker did not preserve a loading overlay")
+	}
+	cmd := model.startupPickerCmd()
+	if cmd == nil {
+		t.Fatal("startup provider picker returned no load command")
+	}
+	message := cmd()
+	loaded, ok := message.(providerItemsLoadedMsg)
+	if !ok {
+		t.Fatalf("startup provider picker result = %T, want providerItemsLoadedMsg", message)
+	}
+	next, completionCmd := model.Update(loaded)
+	if completionCmd != nil {
+		t.Fatal("startup provider picker completion returned an unexpected command")
+	}
+	final := testModel(t, next)
+	if final.Picker.Overlay == nil || final.Picker.Overlay.purpose != pickerPurposeProviderSetup {
+		t.Fatalf("overlay = %#v, want provider setup picker", final.Picker.Overlay)
+	}
+}
+
 func TestStaleProviderItemsCompletionCannotOpenReplacementPicker(t *testing.T) {
 	model := readyModel(t)
 	updated, cmd := model.openProviderSetupPicker()
@@ -247,6 +271,7 @@ func TestStaleProviderItemsCompletionCannotOpenReplacementPicker(t *testing.T) {
 	updated.rotateRuntimeContext()
 	updated.runtimeRequest().clear()
 	updated.Model.EventGeneration++
+	updated.pickerReducer().closeOverlay()
 
 	next, completionCmd := updated.Update(providerItemsLoadedMsg{
 		generation: generation,

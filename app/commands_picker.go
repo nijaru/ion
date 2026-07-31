@@ -386,6 +386,19 @@ func (m Model) startupPickerCmd() tea.Cmd {
 			m.Model.Catalog,
 		)
 	}
+	if overlay != nil &&
+		overlay.purpose == pickerPurposeProviderSetup &&
+		overlay.loading &&
+		overlay.request != 0 &&
+		overlay.cfg != nil {
+		return loadProviderPickerItems(
+			m.runtimeRequestOperationContext(),
+			m.Model.EventGeneration,
+			overlay.request,
+			*overlay.cfg,
+			m.Model.EndpointResolver,
+		)
+	}
 
 	if sessionPicker := m.Picker.Session; sessionPicker != nil &&
 		sessionPicker.loading &&
@@ -707,29 +720,55 @@ func (m Model) openProviderSetupPicker() (Model, tea.Cmd) {
 	generation := m.Model.EventGeneration
 	ctx := m.runtimeRequestOperationContext()
 	cfgCopy := *cfg
-	resolver := m.Model.EndpointResolver
-	return m, func() tea.Msg {
+	m.clearProgressError()
+	m.pickerReducer().openOverlayInvalidatingModelLoads(pickerOverlayState{
+		title:    "Provider setup",
+		items:    nil,
+		filtered: nil,
+		index:    0,
+		purpose:  pickerPurposeProviderSetup,
+		preset:   m.activePreset(),
+		cfg:      &cfgCopy,
+		loading:  true,
+		request:  requestID,
+	})
+	return m, loadProviderPickerItems(
+		ctx,
+		generation,
+		requestID,
+		cfgCopy,
+		m.Model.EndpointResolver,
+	)
+}
+
+func loadProviderPickerItems(
+	ctx context.Context,
+	generation, requestID uint64,
+	cfg config.Config,
+	resolver *llm.EndpointResolver,
+) tea.Cmd {
+	return func() tea.Msg {
 		if err := ctx.Err(); err != nil {
 			return providerItemsLoadedMsg{
 				generation: generation,
 				requestID:  requestID,
-				cfg:        cfgCopy,
+				cfg:        cfg,
 				err:        err,
 			}
 		}
-		items := providerItems(&cfgCopy, resolver)
+		items := providerItems(&cfg, resolver)
 		if err := ctx.Err(); err != nil {
 			return providerItemsLoadedMsg{
 				generation: generation,
 				requestID:  requestID,
-				cfg:        cfgCopy,
+				cfg:        cfg,
 				err:        err,
 			}
 		}
 		return providerItemsLoadedMsg{
 			generation: generation,
 			requestID:  requestID,
-			cfg:        cfgCopy,
+			cfg:        cfg,
 			items:      items,
 		}
 	}

@@ -236,6 +236,7 @@ func (m *Model) resetComposerDraft() {
 	m.inputReducer().resetComposerDraft()
 	m.inputReducer().invalidateFileCompletionRequest()
 	m.inputReducer().invalidateSkillCompletionRequest()
+	m.Input.completionText = ""
 	m.relayoutComposer()
 }
 

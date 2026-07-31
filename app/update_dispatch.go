@@ -223,6 +223,10 @@ func (m Model) dispatchRuntimeControllerMessage(msg tea.Msg) (Model, tea.Cmd, bo
 		next, cmd := m.handleRuntimeTransitionCommitted(msg)
 		return next, cmd, true
 
+	case thinkingRuntimeAppliedMsg:
+		next, cmd := m.handleThinkingRuntimeApplied(msg)
+		return next, cmd, true
+
 	case runtimeSwitchErrorMsg:
 		next, cmd := m.handleRuntimeSwitchError(msg)
 		return next, cmd, true

@@ -1,12 +1,23 @@
 package skills
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestListContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ListContext(ctx, t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListContext error = %v, want context cancellation", err)
+	}
+}
 
 func TestNoticeListsInstalledSkills(t *testing.T) {
 	root := t.TempDir()

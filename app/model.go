@@ -127,6 +127,16 @@ type TransitionCommittedMsg struct {
 	retry      *setupPromptState
 }
 
+type thinkingRuntimeAppliedMsg struct {
+	generation uint64
+	switchID   uint64
+	transition Transition
+	leafID     string
+	notice     session.Entry
+	err        error
+	retry      *setupPromptState
+}
+
 type runtimeSwitchErrorMsg struct {
 	generation uint64
 	switchID   uint64
@@ -547,6 +557,7 @@ type InputState struct {
 	Composer               textarea.Model
 	Images                 []session.ImageContent
 	Completion             *completionState
+	completionText         string
 	FileCompletionRequest  uint64
 	SkillCompletionRequest uint64
 	skillCompletionCancel  context.CancelFunc
@@ -710,6 +721,7 @@ func (m *Model) rotateRuntimeContext() {
 		m.Model.runtimeCancel()
 	}
 	m.inputReducer().invalidateSkillCompletionRequest()
+	m.Input.completionText = ""
 	m.Model.runtimeContext, m.Model.runtimeCancel = context.WithCancel(context.Background())
 }
 
@@ -1126,47 +1138,88 @@ func (m Model) handleRuntimeTransitionCommitted(
 	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
 		return m, nil
 	}
+	if msg.err != nil {
+		if !m.runtimeRequest().finish(msg.switchID) {
+			return m, nil
+		}
+		return m.handleTransitionError(msg.err, msg.retry)
+	}
+
+	transition := msg.transition.WithHandles(m.Handles())
+	if transition.PersistReasoning && m.Model.Runner != nil {
+		runner := m.Model.Runner
+		ctx := m.runtimeOperationContext()
+		generation := m.Model.EventGeneration
+		return m, func() tea.Msg {
+			leafID, err := runner.SetThinking(
+				ctx,
+				thinkingLevelForRuntime(transition.Snapshot.Reasoning),
+			)
+			if err != nil {
+				previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
+				if transition.PreviousReasoning != nil {
+					previous = *transition.PreviousReasoning
+				}
+				rollback := config.RuntimeStateUpdate{
+					ReasoningPreset:  transition.PersistReasoningSlot.String(),
+					ReasoningEffort:  previous,
+					PersistReasoning: true,
+				}
+				err = errors.Join(err, saveRuntimeState(rollback))
+			}
+			return thinkingRuntimeAppliedMsg{
+				generation: generation,
+				switchID:   msg.switchID,
+				transition: transition,
+				leafID:     leafID,
+				notice:     msg.notice,
+				err:        err,
+			}
+		}
+	}
+	if !m.runtimeRequest().finish(msg.switchID) {
+		return m, nil
+	}
+	return m.applyCommittedTransition(transition, "", msg.notice)
+}
+
+func (m Model) handleThinkingRuntimeApplied(
+	msg thinkingRuntimeAppliedMsg,
+) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
+		return m, nil
+	}
 	if !m.runtimeRequest().finish(msg.switchID) {
 		return m, nil
 	}
 	if msg.err != nil {
-		if msg.retry != nil {
-			retry := *msg.retry
-			retry.err = msg.err.Error()
-			retry.saving = false
-			retry.request = 0
-			m.pickerReducer().openSetup(retry)
-		}
-		return m.handleLocalError(msg.err)
+		return m.handleTransitionError(msg.err, msg.retry)
 	}
-	transition := msg.transition.WithHandles(m.Handles())
-	var thinkingLeafID string
-	if transition.PersistReasoning && m.Model.Runner != nil {
-		leafID, err := m.Model.Runner.SetThinking(
-			m.runtimeOperationContext(),
-			thinkingLevelForRuntime(transition.Snapshot.Reasoning),
-		)
-		if err != nil {
-			previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
-			if transition.PreviousReasoning != nil {
-				previous = *transition.PreviousReasoning
-			}
-			rollback := config.RuntimeStateUpdate{
-				ReasoningPreset:  transition.PersistReasoningSlot.String(),
-				ReasoningEffort:  previous,
-				PersistReasoning: true,
-			}
-			rollbackErr := saveRuntimeState(rollback)
-			return m.handleLocalError(errors.Join(err, rollbackErr))
-		}
-		thinkingLeafID = leafID
+	return m.applyCommittedTransition(msg.transition, msg.leafID, msg.notice)
+}
+
+func (m Model) handleTransitionError(err error, retry *setupPromptState) (Model, tea.Cmd) {
+	if retry != nil {
+		copy := *retry
+		copy.err = err.Error()
+		copy.saving = false
+		copy.request = 0
+		m.pickerReducer().openSetup(copy)
 	}
+	return m.handleLocalError(err)
+}
+
+func (m Model) applyCommittedTransition(
+	transition Transition,
+	thinkingLeafID string,
+	notice session.Entry,
+) (Model, tea.Cmd) {
 	m.applyRuntimeSnapshot(transition.Snapshot)
 	if thinkingLeafID != "" {
 		m.Model.LeafID = thinkingLeafID
 	}
 	m.clearProgressError()
-	return m, m.terminalCommit().Entries(msg.notice)
+	return m, m.terminalCommit().Entries(notice)
 }
 
 func (m Model) persistedReasoningEffort(preset Preset) string {

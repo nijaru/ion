@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
@@ -28,6 +29,102 @@ func (s *thinkingTestStream) Next() (*llm.Chunk, bool) {
 
 func (s *thinkingTestStream) Err() error   { return nil }
 func (s *thinkingTestStream) Close() error { return nil }
+
+type blockingThinkingRunner struct {
+	stubRunner
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingThinkingRunner) SetThinking(ctx context.Context, _ session.ThinkingLevel) (string, error) {
+	close(r.started)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-r.release:
+		return "thinking-leaf", nil
+	}
+}
+
+func applyThinkingTransition(t *testing.T, model Model, committed TransitionCommittedMsg) Model {
+	t.Helper()
+	next, cmd := model.Update(committed)
+	if cmd == nil {
+		return testModel(t, next)
+	}
+	applied, ok := cmd().(thinkingRuntimeAppliedMsg)
+	if !ok {
+		t.Fatalf("thinking application message = %T, want thinkingRuntimeAppliedMsg", cmd())
+	}
+	final, _ := next.Update(applied)
+	return testModel(t, final)
+}
+
+func TestThinkingRuntimeApplicationRunsOutsideUpdate(t *testing.T) {
+	runner := &blockingThinkingRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.Model.Config = &config.Config{Provider: "openai", Model: "test", ReasoningEffort: "low"}
+	model.Progress.ReasoningEffort = "low"
+	transition := NewTransition(
+		model.Model.Config,
+		&config.Config{Provider: "openai", Model: "test", ReasoningEffort: "high"},
+		PresetPrimary,
+		"",
+	).WithReasoningPersistence()
+	switchID := model.runtimeRequest().begin("Saving runtime settings...")
+	committed := TransitionCommittedMsg{
+		generation: model.Model.EventGeneration,
+		switchID:   switchID,
+		transition: transition,
+		notice:     systemEntry("thinking"),
+	}
+
+	type updateResult struct {
+		model tea.Model
+		cmd   tea.Cmd
+	}
+	updatedCh := make(chan updateResult, 1)
+	go func() {
+		updated, cmd := model.Update(committed)
+		updatedCh <- updateResult{model: updated, cmd: cmd}
+	}()
+	var updated updateResult
+	select {
+	case updated = <-updatedCh:
+	case <-time.After(time.Second):
+		t.Fatal("thinking runtime application blocked Bubble Tea Update")
+	}
+	if updated.cmd == nil {
+		t.Fatal("thinking runtime application returned no command")
+	}
+
+	messageCh := make(chan tea.Msg, 1)
+	go func() { messageCh <- updated.cmd() }()
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("thinking runtime command did not start")
+	}
+	close(runner.release)
+	message := <-messageCh
+	applied, ok := message.(thinkingRuntimeAppliedMsg)
+	if !ok {
+		t.Fatalf("thinking runtime result = %T, want thinkingRuntimeAppliedMsg", message)
+	}
+	updatedModel := testModel(t, updated.model)
+	next, terminalCmd := updatedModel.Update(applied)
+	if terminalCmd == nil {
+		t.Fatal("thinking runtime completion returned no terminal command")
+	}
+	final := testModel(t, next)
+	if final.Model.LeafID != "thinking-leaf" {
+		t.Fatalf("thinking leaf = %q, want thinking-leaf", final.Model.LeafID)
+	}
+}
 
 func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -79,8 +176,7 @@ func TestThinkingCommandUpdatesLiveRunnerAndPersistsProviderState(t *testing.T) 
 	if committed.err != nil {
 		t.Fatalf("thinking persistence failed: %v", committed.err)
 	}
-	next, _ := updated.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, updated, committed)
 	if model.Model.LeafID != sess.GetLeafID() {
 		t.Fatalf("thinking change leaf = %q, want durable leaf %q", model.Model.LeafID, sess.GetLeafID())
 	}
@@ -220,8 +316,7 @@ func TestFastThinkingCommandPersistsFastPresetState(t *testing.T) {
 	if committed.err != nil {
 		t.Fatalf("thinking persistence failed: %v", committed.err)
 	}
-	next, _ := updated.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, updated, committed)
 
 	state, err := config.LoadState()
 	if err != nil {
@@ -246,8 +341,7 @@ func TestFastThinkingCommandPersistsFastPresetState(t *testing.T) {
 	if committed.err != nil {
 		t.Fatalf("auto thinking persistence failed: %v", committed.err)
 	}
-	next, _ = updated.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, updated, committed)
 	state, err = config.LoadState()
 	if err != nil {
 		t.Fatal(err)
@@ -310,8 +404,7 @@ func TestAutoThinkingCommandPersistsProviderDefaultAndUsesItNextTurn(t *testing.
 	if committed.err != nil {
 		t.Fatalf("thinking persistence failed: %v", committed.err)
 	}
-	next, _ := updated.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, updated, committed)
 
 	state, err := config.LoadState()
 	if err != nil {
@@ -367,8 +460,7 @@ func TestThinkingSessionPersistenceFailureRollsBackRuntimeState(t *testing.T) {
 	if committed.err != nil {
 		t.Fatalf("runtime-state persistence failed: %v", committed.err)
 	}
-	next, _ := updated.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, updated, committed)
 
 	if len(runner.thinking) != 0 {
 		t.Fatalf("live thinking updates = %#v, want none", runner.thinking)
@@ -417,8 +509,7 @@ func TestShiftTabThinkingPickerCommitsSelectedLevel(t *testing.T) {
 	if committed.err != nil {
 		t.Fatalf("thinking picker persistence failed: %v", committed.err)
 	}
-	next, _ := model.Update(committed)
-	model = testModel(t, next)
+	model = applyThinkingTransition(t, model, committed)
 	if len(runner.thinking) != 1 || runner.thinking[0] != session.ThinkingHigh {
 		t.Fatalf("live thinking updates = %#v, want high", runner.thinking)
 	}

@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,9 +27,15 @@ type resolvedSkill struct {
 	path  string
 }
 
-func discoverSkills(paths ...string) ([]resolvedSkill, error) {
+func discoverSkills(ctx context.Context, paths ...string) ([]resolvedSkill, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	byName := make(map[string]resolvedSkill)
 	for _, root := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, err := os.Stat(root); err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -36,6 +43,9 @@ func discoverSkills(paths ...string) ([]resolvedSkill, error) {
 			return nil, err
 		}
 		if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil || info == nil || info.IsDir() || info.Name() != "SKILL.md" {
 				return nil
 			}
@@ -68,7 +78,11 @@ func summaryForSkill(skill *agentskills.Skill) Summary {
 }
 
 func List(paths ...string) ([]Summary, error) {
-	resolved, err := discoverSkills(paths...)
+	return ListContext(context.Background(), paths...)
+}
+
+func ListContext(ctx context.Context, paths ...string) ([]Summary, error) {
+	resolved, err := discoverSkills(ctx, paths...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,11 +94,15 @@ func List(paths ...string) ([]Summary, error) {
 }
 
 func Read(paths []string, name string) (Detail, error) {
+	return ReadContext(context.Background(), paths, name)
+}
+
+func ReadContext(ctx context.Context, paths []string, name string) (Detail, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Detail{}, fmt.Errorf("skill name is required")
 	}
-	resolved, err := discoverSkills(paths...)
+	resolved, err := discoverSkills(ctx, paths...)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -148,7 +166,11 @@ func Search(items []Summary, query string) []Summary {
 }
 
 func Notice(paths []string, query string) (string, error) {
-	items, err := List(paths...)
+	return NoticeContext(context.Background(), paths, query)
+}
+
+func NoticeContext(ctx context.Context, paths []string, query string) (string, error) {
+	items, err := ListContext(ctx, paths...)
 	if err != nil {
 		return "", err
 	}
@@ -195,7 +217,7 @@ func FormatNotice(paths []string, query string, items []Summary) string {
 }
 
 func FormatSkillsForPrompt(paths ...string) (string, error) {
-	resolved, err := discoverSkills(paths...)
+	resolved, err := discoverSkills(context.Background(), paths...)
 	if err != nil {
 		return "", err
 	}

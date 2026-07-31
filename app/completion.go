@@ -17,6 +17,11 @@ const (
 )
 
 func (m *Model) refreshComposerCompletions() tea.Cmd {
+	text := m.Input.Composer.Value()
+	if m.Input.completionText == text {
+		return nil
+	}
+	m.Input.completionText = text
 	items, cmd := m.composerCompletionItems()
 	m.inputReducer().setCompletionItems(items)
 	return cmd
@@ -253,7 +258,7 @@ type skillCompletionMsg struct {
 	err        error
 }
 
-var loadSkillSummaries = ionskills.List
+var loadSkillSummaries = ionskills.ListContext
 
 func loadSkillCompletion(
 	ctx context.Context,
@@ -290,7 +295,7 @@ func loadSkillCompletion(
 		dir, err := config.DefaultSkillsDir()
 		if err == nil {
 			var summaries []ionskills.Summary
-			summaries, err = loadSkillSummaries(dir)
+			summaries, err = loadSkillSummaries(ctx, dir)
 			if err == nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					err = ctxErr
