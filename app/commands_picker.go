@@ -595,6 +595,11 @@ func thinkingDisplayName(value string) string {
 func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
+		if m.Picker.Overlay != nil &&
+			m.Picker.Overlay.purpose == pickerPurposeProviderSetup &&
+			m.Picker.Overlay.loading {
+			m.runtimeRequest().clear()
+		}
 		m.pickerReducer().closeOverlay()
 		return m, nil
 	case "backspace":
@@ -775,7 +780,12 @@ func loadProviderPickerItems(
 }
 
 func (m Model) handleProviderItemsLoaded(msg providerItemsLoadedMsg) (Model, tea.Cmd) {
-	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+	if msg.generation != m.Model.EventGeneration ||
+		m.Picker.Overlay == nil ||
+		m.Picker.Overlay.purpose != pickerPurposeProviderSetup ||
+		!m.Picker.Overlay.loading ||
+		m.Picker.Overlay.request != msg.requestID ||
+		!m.runtimeRequest().matches(msg.requestID) {
 		return m, nil
 	}
 	if !m.runtimeRequest().finish(msg.requestID) {
@@ -807,6 +817,9 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 	items := pickerDisplayItems(m.Picker.Overlay)
 	if len(items) == 0 {
+		if m.Picker.Overlay.purpose == pickerPurposeProviderSetup && m.Picker.Overlay.loading {
+			m.runtimeRequest().clear()
+		}
 		m.pickerReducer().closeOverlay()
 		return m, nil
 	}

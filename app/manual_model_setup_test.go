@@ -236,6 +236,32 @@ func TestProviderSetupPickerDefersCredentialReads(t *testing.T) {
 	}
 }
 
+func TestCancelProviderPickerStopsPendingLoad(t *testing.T) {
+	model := readyModel(t)
+	updated, cmd := model.openProviderSetupPicker()
+	if cmd == nil {
+		t.Fatal("provider picker returned no deferred command")
+	}
+	updated, closeCmd := updated.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if closeCmd != nil {
+		t.Fatal("provider picker cancel returned an unexpected command")
+	}
+	if updated.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("provider picker cancel left runtime request active")
+	}
+	if updated.Picker.Overlay != nil {
+		t.Fatal("provider picker cancel left overlay open")
+	}
+	message := cmd()
+	next, completionCmd := updated.Update(message)
+	if completionCmd != nil {
+		t.Fatal("canceled provider picker completion returned a command")
+	}
+	if testModel(t, next).Picker.Overlay != nil {
+		t.Fatal("canceled provider picker completion reopened the overlay")
+	}
+}
+
 func TestWithProviderPickerPreservesStartupLoad(t *testing.T) {
 	model := readyModel(t).WithProviderPicker()
 	if model.Picker.Overlay == nil || !model.Picker.Overlay.loading {

@@ -477,6 +477,36 @@ func TestThinkingSessionPersistenceFailureRollsBackRuntimeState(t *testing.T) {
 	}
 }
 
+func TestThinkingFailureRestoresAbsentReasoningOverride(t *testing.T) {
+	model := readyModel(t)
+	runner := &stubRunner{thinkingErr: errors.New("session unavailable")}
+	model.Model.Runner = runner
+	model.Model.Config = &config.Config{
+		Provider:        "openai",
+		Model:           "test",
+		ReasoningEffort: "low",
+	}
+	model.Progress.ReasoningEffort = "low"
+
+	updated, cmd := model.handleThinkingCommand([]string{"/thinking", "high"})
+	if cmd == nil {
+		t.Fatal("thinking command returned no persistence command")
+	}
+	committed, ok := cmd().(TransitionCommittedMsg)
+	if !ok || committed.err != nil {
+		t.Fatalf("thinking persistence result = %#v", committed)
+	}
+	_ = applyThinkingTransition(t, updated, committed)
+
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ReasoningEffort != nil {
+		t.Fatalf("reasoning override = %q, want absent", *state.ReasoningEffort)
+	}
+}
+
 func TestShiftTabThinkingPickerCommitsSelectedLevel(t *testing.T) {
 	model := readyModel(t)
 	runner := &stubRunner{}

@@ -217,7 +217,11 @@ func FormatNotice(paths []string, query string, items []Summary) string {
 }
 
 func FormatSkillsForPrompt(paths ...string) (string, error) {
-	resolved, err := discoverSkills(context.Background(), paths...)
+	return FormatSkillsForPromptContext(context.Background(), paths...)
+}
+
+func FormatSkillsForPromptContext(ctx context.Context, paths ...string) (string, error) {
+	resolved, err := discoverSkills(ctx, paths...)
 	if err != nil {
 		return "", err
 	}

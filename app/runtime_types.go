@@ -125,12 +125,13 @@ func NewSnapshot(appCfg, runtimeCfg *config.Config, preset Preset, status string
 
 // Transition represents a pending config/state change.
 type Transition struct {
-	Snapshot             Snapshot
-	PersistState         bool
-	PersistReasoning     bool
-	PersistActivePreset  bool
-	PersistReasoningSlot Preset
-	PreviousReasoning    *string
+	Snapshot               Snapshot
+	PersistState           bool
+	PersistReasoning       bool
+	PersistActivePreset    bool
+	PersistReasoningSlot   Preset
+	PreviousReasoning      *string
+	PreviousReasoningKnown bool
 }
 
 func NewTransition(appCfg, runtimeCfg *config.Config, preset Preset, status string) Transition {

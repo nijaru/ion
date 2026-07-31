@@ -1106,8 +1106,9 @@ func (m Model) beginRuntimeTransitionCommitWithRetry(
 			}
 		}
 		transition := t
-		if transition.PersistReasoning && transition.PreviousReasoning == nil {
+		if transition.PersistReasoning && !transition.PreviousReasoningKnown {
 			if state, err := config.LoadState(); err == nil {
+				transition.PreviousReasoningKnown = true
 				if transition.PersistReasoningSlot == PresetFast {
 					transition.PreviousReasoning = state.FastReasoningEffort
 				} else {
@@ -1157,7 +1158,12 @@ func (m Model) handleRuntimeTransitionCommitted(
 			)
 			if err != nil {
 				previous := m.persistedReasoningEffort(transition.PersistReasoningSlot)
-				if transition.PreviousReasoning != nil {
+				if transition.PreviousReasoningKnown {
+					previous = ""
+					if transition.PreviousReasoning != nil {
+						previous = *transition.PreviousReasoning
+					}
+				} else if transition.PreviousReasoning != nil {
 					previous = *transition.PreviousReasoning
 				}
 				rollback := config.RuntimeStateUpdate{

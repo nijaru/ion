@@ -486,7 +486,7 @@ func openRuntime(
 			continue
 		}
 		if skillDirs, err := skillDirsForRuntime(projectTrustRoot); err == nil {
-			if text, err := ionskills.FormatSkillsForPrompt(skillDirs...); err == nil {
+			if text, err := ionskills.FormatSkillsForPromptContext(ctx, skillDirs...); err == nil {
 				skillsText = text
 			}
 		}
