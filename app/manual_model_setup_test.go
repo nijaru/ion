@@ -3,10 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
@@ -217,6 +220,137 @@ func TestProviderSetupDoesNotProbeCatalogSynchronously(t *testing.T) {
 	}
 	if updated.Picker.Overlay == nil || updated.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("overlay = %#v, want model picker", updated.Picker.Overlay)
+	}
+}
+
+func TestOpenAICompatibleProviderProbeRunsOutsideCommandHandlingAndCancels(t *testing.T) {
+	probeStarted := make(chan struct{})
+	probeCanceled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(probeStarted)
+		<-r.Context().Done()
+		close(probeCanceled)
+	}))
+	defer server.Close()
+
+	resolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{HTTPClient: server.Client()})
+	model := readyModel(t).WithEndpointResolver(resolver).WithConfig(&config.Config{
+		Provider: "openai-compatible",
+		Endpoint: server.URL + "/v1",
+	})
+
+	resultCh := make(chan struct {
+		model Model
+		cmd   tea.Cmd
+	}, 1)
+	go func() {
+		updated, cmd := model.handleCommand("/provider openai-compatible")
+		resultCh <- struct {
+			model Model
+			cmd   tea.Cmd
+		}{updated, cmd}
+	}()
+
+	var result struct {
+		model Model
+		cmd   tea.Cmd
+	}
+	select {
+	case result = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("provider command blocked while probing OpenAI-compatible endpoint")
+	}
+	select {
+	case <-probeStarted:
+		t.Fatal("endpoint probe started inside provider command handling")
+	default:
+	}
+	if result.cmd == nil {
+		t.Fatal("provider command returned no asynchronous setup command")
+	}
+	if result.model.Model.RuntimeSwitchRequest == 0 {
+		t.Fatal("provider setup did not own a runtime request")
+	}
+
+	messageCh := make(chan tea.Msg, 1)
+	go func() { messageCh <- result.cmd() }()
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provider setup command did not start endpoint probe")
+	}
+	result.model.Close()
+	select {
+	case <-probeCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("endpoint probe did not observe provider setup cancellation")
+	}
+
+	var message tea.Msg
+	select {
+	case message = <-messageCh:
+	case <-time.After(time.Second):
+		t.Fatal("provider setup command did not settle after cancellation")
+	}
+	resolved, ok := message.(providerSetupResolvedMsg)
+	if !ok || !errors.Is(resolved.err, context.Canceled) {
+		t.Fatalf("provider setup result = %#v, want canceled providerSetupResolvedMsg", message)
+	}
+	settled, _ := result.model.Update(resolved)
+	if next := testModel(t, settled); next.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("canceled provider setup left runtime request active")
+	}
+}
+
+func TestProviderSetupCompletionOpensModelPicker(t *testing.T) {
+	model := readyModel(t).WithConfig(&config.Config{
+		Provider: "openai-compatible",
+		Endpoint: "http://127.0.0.1:8080/v1",
+	})
+	requestID := model.runtimeRequest().begin("Checking provider endpoint...")
+	generation := model.Model.EventGeneration
+
+	updated, cmd := model.Update(providerSetupResolvedMsg{
+		generation: generation,
+		requestID:  requestID,
+		cfg: config.Config{
+			Provider: "openai-compatible",
+			Endpoint: "http://127.0.0.1:8080/v1",
+		},
+		preset: PresetPrimary,
+	})
+	if cmd == nil {
+		t.Fatal("provider setup completion returned no asynchronous model load")
+	}
+	final := testModel(t, updated)
+	if final.Model.RuntimeSwitchRequest != 0 {
+		t.Fatal("provider setup completion left runtime request active")
+	}
+	if final.Picker.Overlay == nil || final.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("overlay = %#v, want model picker", final.Picker.Overlay)
+	}
+}
+
+func TestStaleProviderSetupCompletionCannotOpenPicker(t *testing.T) {
+	model := readyModel(t).WithConfig(&config.Config{Provider: "openai-compatible"})
+	requestID := model.runtimeRequest().begin("Checking provider endpoint...")
+	generation := model.Model.EventGeneration
+	model.rotateRuntimeContext()
+	model.runtimeRequest().clear()
+	model.Model.EventGeneration++
+
+	updated, cmd := model.Update(providerSetupResolvedMsg{
+		generation: generation,
+		requestID:  requestID,
+		cfg:        config.Config{Provider: "openai-compatible"},
+		preset:     PresetPrimary,
+	})
+	if cmd != nil {
+		t.Fatal("stale provider setup completion returned a command")
+	}
+	final := testModel(t, updated)
+	if final.Picker.Setup != nil || final.Picker.Overlay != nil {
+		t.Fatal("stale provider setup completion opened UI in the replacement runtime")
 	}
 }
 

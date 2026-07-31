@@ -182,6 +182,15 @@ type modelPickerSetupResolvedMsg struct {
 	err       error
 }
 
+type providerSetupResolvedMsg struct {
+	generation uint64
+	requestID  uint64
+	cfg        config.Config
+	preset     Preset
+	setup      SetupPromptKind
+	err        error
+}
+
 type setupPromptSavedMsg struct {
 	requestID uint64
 	cfg       config.Config

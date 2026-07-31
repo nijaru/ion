@@ -428,6 +428,36 @@ func checkModelPickerSetup(
 	}
 }
 
+func checkProviderSetup(
+	generation, requestID uint64,
+	cfg *config.Config,
+	preset Preset,
+	loadContext context.Context,
+	resolver *llm.EndpointResolver,
+) tea.Cmd {
+	cfgCopy := config.Config{}
+	if cfg != nil {
+		cfgCopy = *cfg
+	}
+	if loadContext == nil {
+		loadContext = context.Background()
+	}
+	return func() tea.Msg {
+		setup, err := providerSetupPrompt(loadContext, &cfgCopy, resolver)
+		if err == nil && loadContext.Err() != nil {
+			err = loadContext.Err()
+		}
+		return providerSetupResolvedMsg{
+			generation: generation,
+			requestID:  requestID,
+			cfg:        cfgCopy,
+			preset:     preset,
+			setup:      setup,
+			err:        err,
+		}
+	}
+}
+
 func (m Model) handleModelPickerSetupResolved(
 	msg modelPickerSetupResolvedMsg,
 ) (Model, tea.Cmd) {
@@ -851,26 +881,72 @@ func (m Model) handleProviderCommand(name string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
-	setup, err := providerSetupPrompt(context.Background(), updated, m.Model.EndpointResolver)
+	preset := m.activePreset()
+
+	// OpenAI-compatible readiness probes perform HTTP I/O. Keep endpoint
+	// discovery outside Bubble Tea Update and bind it to the runtime request so
+	// replacement and close cancel the probe before it can open stale UI.
+	if llm.IsOpenAICompatible(updated.Provider) {
+		requestID := m.runtimeRequest().begin("Checking provider endpoint...")
+		generation := m.Model.EventGeneration
+		loadContext := m.runtimeRequestOperationContext()
+		if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeProviderSetup {
+			m.pickerReducer().closeOverlay()
+		}
+		return m, checkProviderSetup(
+			generation,
+			requestID,
+			updated,
+			preset,
+			loadContext,
+			m.Model.EndpointResolver,
+		)
+	}
+
+	setup, err := providerSetupPrompt(m.runtimeOperationContext(), updated, m.Model.EndpointResolver)
 	if err != nil {
 		return m, cmdError(err.Error())
 	}
+	return m.openProviderSelection(updated, preset, setup)
+}
+
+func (m Model) handleProviderSetupResolved(msg providerSetupResolvedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.requestID) {
+		return m, nil
+	}
+	if !m.runtimeRequest().finish(msg.requestID) {
+		return m, nil
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		return m.handleLocalError(msg.err)
+	}
+	return m.openProviderSelection(&msg.cfg, msg.preset, msg.setup)
+}
+
+func (m Model) openProviderSelection(
+	cfg *config.Config,
+	preset Preset,
+	setup SetupPromptKind,
+) (Model, tea.Cmd) {
 	switch setup {
 	case SetupPromptAPIKey:
-		return m.openAPIKeyPrompt(updated, updated.Provider, m.activePreset())
+		return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
 	case SetupPromptEndpoint:
-		return m.openEndpointPrompt(updated, m.activePreset())
+		return m.openEndpointPrompt(cfg, preset)
 	}
 
 	// Provider setup has already been resolved above. Catalog discovery is
 	// optional and asynchronous; a listing failure must not be misreported as
 	// missing credentials.
-	def, _ := llm.Lookup(updated.Provider)
+	def, _ := llm.Lookup(cfg.Provider)
 
 	// Provider ready — open a manual model prompt when the provider does not
 	// expose discovery; otherwise use the catalog-backed picker.
 	if !def.SupportsModelListing {
-		return m.openModelIDPrompt(updated, m.activePreset())
+		return m.openModelIDPrompt(cfg, preset)
 	}
-	return m.openModelPickerForPreset(updated, m.activePreset())
+	return m.openModelPickerForPreset(cfg, preset)
 }
