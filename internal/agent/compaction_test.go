@@ -11,6 +11,29 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestShouldCompactUnknownContextWindowDoesNotLoop(t *testing.T) {
+	if ShouldCompact(1, 0, DefaultCompactionSettings()) {
+		t.Fatal("unknown context window enabled compaction")
+	}
+	if ShouldCompact(1, -1, DefaultCompactionSettings()) {
+		t.Fatal("negative context window enabled compaction")
+	}
+}
+
+func TestEstimateContextTokensFallsBackWhenUsageIsEmpty(t *testing.T) {
+	messages := []session.Message{
+		session.NewUserText("before", mustTime()),
+		&session.AssistantMessage{
+			Content:    []session.Content{session.TextContent{Text: "after"}},
+			StopReason: session.StopReasonEndTurn,
+		},
+		session.NewUserText("trailing", mustTime()),
+	}
+	if got := EstimateContextTokens(messages).Tokens; got == 0 {
+		t.Fatal("empty assistant usage suppressed heuristic context tokens")
+	}
+}
+
 // INVARIANT: EstimateContextTokens is usage-aware — uses provider usage when available.
 func TestEstimateContextTokensUsageAware(t *testing.T) {
 	// Messages without usage data → pure heuristic.

@@ -42,6 +42,36 @@ func DefaultCompactionSettings() CompactionSettings {
 	}
 }
 
+func normalizeCompactionSettings(settings CompactionSettings, contextWindow int) CompactionSettings {
+	defaults := DefaultCompactionSettings()
+	if settings.ReserveTokens <= 0 {
+		settings.ReserveTokens = defaults.ReserveTokens
+	}
+	if settings.KeepRecentTokens <= 0 {
+		settings.KeepRecentTokens = defaults.KeepRecentTokens
+	}
+	if contextWindow > 0 {
+		// Keep both the summary response and recent conversation inside the
+		// resolved model window. Without this clamp a small model is permanently
+		// over threshold and receives a summary request larger than its context.
+		maxReserve := contextWindow / 2
+		if maxReserve < 1 {
+			maxReserve = 1
+		}
+		if settings.ReserveTokens > maxReserve {
+			settings.ReserveTokens = maxReserve
+		}
+		maxRecent := contextWindow - settings.ReserveTokens
+		if maxRecent < 1 {
+			maxRecent = 1
+		}
+		if settings.KeepRecentTokens > maxRecent {
+			settings.KeepRecentTokens = maxRecent
+		}
+	}
+	return settings
+}
+
 // CompactionFileOps holds file operation details extracted during compaction.
 type CompactionFileOps struct {
 	ReadFiles     []string `json:"readFiles,omitzero"`
@@ -71,7 +101,7 @@ func GetLastAssistantUsage(messages []session.Message) *session.Usage {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if am, ok := messages[i].(*session.AssistantMessage); ok {
 			if am.StopReason != session.StopReasonAborted &&
-				am.StopReason != session.StopReasonError {
+				am.StopReason != session.StopReasonError && CalculateContextTokens(am.Usage) > 0 {
 				return &am.Usage
 			}
 		}
@@ -84,7 +114,7 @@ func GetLastAssistantUsageInfo(messages []session.Message) (usage *session.Usage
 	for i := len(messages) - 1; i >= 0; i-- {
 		if am, ok := messages[i].(*session.AssistantMessage); ok {
 			if am.StopReason != session.StopReasonAborted &&
-				am.StopReason != session.StopReasonError {
+				am.StopReason != session.StopReasonError && CalculateContextTokens(am.Usage) > 0 {
 				return &am.Usage, i
 			}
 		}
@@ -175,9 +205,14 @@ func EstimateContextTokens(messages []session.Message) ContextTokenEstimate {
 // ShouldCompact returns whether context usage exceeds the configured threshold.
 // Pi: compaction.js shouldCompact (line 130)
 func ShouldCompact(contextTokens, contextWindow int, settings CompactionSettings) bool {
-	if !settings.Enabled {
+	if !settings.Enabled || contextWindow <= 0 {
+		// An unknown model window must not turn into an always-compact runtime:
+		// contextTokens > (0 - reserve) is true for every non-empty session.
+		// The caller can still request explicit compaction, and the host should
+		// supply a resolved model window for automatic recovery.
 		return false
 	}
+	settings = normalizeCompactionSettings(settings, contextWindow)
 	return contextTokens > contextWindow-settings.ReserveTokens
 }
 
@@ -864,6 +899,7 @@ func PrepareCompaction(
 	sess session.Session,
 	settings CompactionSettings,
 ) (*CompactionPreparation, error) {
+	settings = normalizeCompactionSettings(settings, 0)
 	snap, err := sess.BuildContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
@@ -979,7 +1015,8 @@ type CompactOptions struct {
 	// Convert transforms domain messages to provider messages (for the stream).
 	Convert func([]session.Message) []llm.Message
 	// StreamFn is the provider stream function.
-	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	StreamFn      func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	ContextWindow int // 0 = unknown; used to bound compaction settings
 }
 
 // Compact performs compaction on the session.
@@ -990,6 +1027,7 @@ func Compact(
 	opts CompactOptions,
 	settings CompactionSettings,
 ) (*CompactionResult, error) {
+	settings = normalizeCompactionSettings(settings, opts.ContextWindow)
 	prep, err := PrepareCompaction(ctx, sess, settings)
 	if err != nil {
 		return nil, err
@@ -1079,6 +1117,9 @@ func Compact(
 	detailsJSON, err := json.Marshal(details)
 	if err != nil {
 		return nil, fmt.Errorf("marshal compaction details: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	_, err = sess.AppendCompaction(ctx, session.CompactionData{

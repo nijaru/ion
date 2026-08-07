@@ -12,6 +12,43 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestBranchSummaryMessagesBoundRecentContextAndSkipToolResults(t *testing.T) {
+	timestamp := time.Now()
+	entries := []session.Entry{
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "user-old", Timestamp: timestamp},
+			Message:   session.NewUserText("old branch context that should be trimmed", timestamp),
+		},
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "tool-result", Timestamp: timestamp},
+			Message: &session.ToolResultMessage{
+				ToolCallID: "call-1",
+				ToolName:   "read",
+				Content:    []session.Content{session.TextContent{Text: "File: secret.go"}},
+			},
+		},
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "user-new", Timestamp: timestamp},
+			Message:   session.NewUserText("new", timestamp),
+		},
+	}
+
+	messages := branchSummaryMessages(entries, 1)
+	if len(messages) != 1 || session.MessageText(messages[0]) != "new" {
+		t.Fatalf("bounded branch messages = %#v, want only newest user message", messages)
+	}
+	for _, message := range branchSummaryMessages(entries, -1) {
+		if _, ok := message.(*session.ToolResultMessage); ok {
+			t.Fatal("branch summary prompt included a tool result")
+		}
+	}
+
+	fileOps := branchSummaryFileOperations(entries)
+	if len(fileOps.ReadFiles) != 1 || fileOps.ReadFiles[0] != "secret.go" {
+		t.Fatalf("branch file operations = %#v, want read secret.go", fileOps.ReadFiles)
+	}
+}
+
 func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "session.db")

@@ -29,6 +29,7 @@ func (h *Controller) navigateTreeDirect(
 	stream := h.stream
 	auth := h.auth
 	reserveTokens := h.compaction.ReserveTokens
+	contextWindow := h.contextWindow
 	runCancel := h.runCancel
 	h.mu.Unlock()
 
@@ -66,6 +67,7 @@ func (h *Controller) navigateTreeDirect(
 			stream,
 			auth,
 			reserveTokens,
+			contextWindow,
 			opts.CustomInstructions,
 		)
 		if err != nil {
@@ -155,17 +157,39 @@ func (h *Controller) summarizeBranch(
 	stream func(context.Context, *llm.Request) (llm.Stream, error),
 	auth func(llm.Model) (string, map[string]string),
 	reserveTokens int,
+	contextWindow int,
 	customInstructions string,
 ) (*session.BranchSummaryData, error) {
-	messages := branchSummaryMessages(entries)
+	if contextWindow <= 0 {
+		contextWindow = model.ContextWindow
+	}
+	reserveTokens = normalizeCompactionSettings(
+		CompactionSettings{ReserveTokens: reserveTokens}, contextWindow,
+	).ReserveTokens
+	// Bound the summarization prompt to the model's available context while
+	// keeping the newest abandoned-branch work. Unknown windows remain
+	// unbounded here; the provider is still the final overflow authority.
+	tokenBudget := -1 // unknown window: unbounded preparation
+	if contextWindow > 0 {
+		tokenBudget = contextWindow - reserveTokens
+		if tokenBudget < 0 {
+			tokenBudget = 0
+		}
+	}
+	fileOps := branchSummaryFileOperations(entries)
+	messages := branchSummaryMessages(entries, tokenBudget)
 	if len(messages) == 0 {
-		return &session.BranchSummaryData{Summary: branchSummaryPreamble + "No content to summarize"}, nil
+		details, err := marshalBranchSummaryDetails(fileOps)
+		if err != nil {
+			return nil, err
+		}
+		return &session.BranchSummaryData{
+			Summary: branchSummaryPreamble + "No content to summarize" + FormatFileOperations(fileOps),
+			Details: details,
+		}, nil
 	}
 	if stream == nil {
 		return nil, errors.New("no model stream configured")
-	}
-	if reserveTokens <= 0 {
-		reserveTokens = 16384
 	}
 
 	apiKey := ""
@@ -207,13 +231,15 @@ func (h *Controller) summarizeBranch(
 		return nil, err
 	}
 
-	fileOps := ExtractFileOperations(messages, entries, -1)
+	for _, message := range messages {
+		ExtractFileOperationsFromMessage(message, fileOps)
+	}
+	details, err := marshalBranchSummaryDetails(fileOps)
+	if err != nil {
+		return nil, err
+	}
 	readFiles, modifiedFiles := ComputeFileLists(fileOps)
 	normalizedFileOps := &CompactionFileOps{ReadFiles: readFiles, ModifiedFiles: modifiedFiles}
-	details, err := json.Marshal(CompactionFileOps{ReadFiles: readFiles, ModifiedFiles: modifiedFiles})
-	if err != nil {
-		return nil, fmt.Errorf("marshal branch details: %w", err)
-	}
 	return &session.BranchSummaryData{
 		Summary: branchSummaryPreamble + summaryResult.Text + FormatFileOperations(normalizedFileOps),
 		Usage:   summaryResult.Usage,
@@ -221,31 +247,105 @@ func (h *Controller) summarizeBranch(
 	}, nil
 }
 
-func branchSummaryMessages(entries []session.Entry) []session.Message {
-	messages := make([]session.Message, 0, len(entries))
+func branchSummaryMessages(entries []session.Entry, tokenBudget int) []session.Message {
+	// Walk newest-first so a large abandoned branch retains its most recent
+	// work. Tool results are omitted from the model prompt; file-operation
+	// extraction still sees the original entries below.
+	selected := make([]session.Message, 0, len(entries))
+	totalTokens := 0
+	for index := len(entries) - 1; index >= 0; index-- {
+		message := branchSummaryMessage(entries[index])
+		if message == nil {
+			continue
+		}
+		tokens := EstimateTokens(message)
+		if tokenBudget >= 0 && totalTokens+tokens > tokenBudget {
+			// Summary markers are important context. Include one that slightly
+			// exceeds the budget when the selected context is still sparse, as
+			// Pi does, then stop at the boundary.
+			_, isCompaction := entries[index].(*session.CompactionEntry)
+			_, isBranchSummary := entries[index].(*session.BranchSummaryEntry)
+			if (!isCompaction && !isBranchSummary) || totalTokens >= tokenBudget*9/10 {
+				break
+			}
+		}
+		selected = append(selected, message)
+		totalTokens += tokens
+	}
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	return selected
+}
+
+func branchSummaryMessage(entry session.Entry) session.Message {
+	switch entry := entry.(type) {
+	case *session.MessageEntry:
+		if _, ok := entry.Message.(*session.ToolResultMessage); ok {
+			return nil
+		}
+		return entry.Message
+	case *session.CustomMessageEntry:
+		return &session.CustomMessage{
+			CustomType: entry.CustomType,
+			Content:    entry.Content,
+			Display:    entry.Display,
+			Details:    entry.Details,
+			Timestamp:  entry.Timestamp,
+		}
+	case *session.CompactionEntry:
+		return session.NewUserText(
+			session.CompactionSummaryPrefix+entry.Summary+session.CompactionSummarySuffix,
+			entry.Timestamp,
+		)
+	case *session.BranchSummaryEntry:
+		return session.NewUserText(
+			session.BranchSummaryPrefix+entry.Summary+session.BranchSummarySuffix,
+			entry.Timestamp,
+		)
+	default:
+		return nil
+	}
+}
+
+func branchSummaryFileOperations(entries []session.Entry) *CompactionFileOps {
+	fileOps := &CompactionFileOps{}
 	for _, entry := range entries {
-		switch entry := entry.(type) {
-		case *session.MessageEntry:
-			messages = append(messages, entry.Message)
-		case *session.CustomMessageEntry:
-			messages = append(messages, &session.CustomMessage{
-				CustomType: entry.CustomType,
-				Content:    entry.Content,
-				Display:    entry.Display,
-				Details:    entry.Details,
-				Timestamp:  entry.Timestamp,
-			})
-		case *session.CompactionEntry:
-			messages = append(messages, session.NewUserText(
-				session.CompactionSummaryPrefix+entry.Summary+session.CompactionSummarySuffix,
-				entry.Timestamp,
-			))
+		if messageEntry, ok := entry.(*session.MessageEntry); ok {
+			ExtractFileOperationsFromMessage(messageEntry.Message, fileOps)
+			continue
+		}
+		var rawDetails []byte
+		switch typed := entry.(type) {
 		case *session.BranchSummaryEntry:
-			messages = append(messages, session.NewUserText(
-				session.BranchSummaryPrefix+entry.Summary+session.BranchSummarySuffix,
-				entry.Timestamp,
-			))
+			rawDetails = typed.Details
+		case *session.CompactionEntry:
+			rawDetails = typed.Details
+		default:
+			continue
+		}
+		if len(rawDetails) == 0 {
+			continue
+		}
+		var details CompactionFileOps
+		if err := json.Unmarshal(rawDetails, &details); err != nil {
+			continue
+		}
+		for _, path := range details.ReadFiles {
+			addIfNew(fileOps, "read", path)
+		}
+		for _, path := range details.ModifiedFiles {
+			addIfNew(fileOps, "modified", path)
 		}
 	}
-	return messages
+	return fileOps
+}
+
+func marshalBranchSummaryDetails(fileOps *CompactionFileOps) ([]byte, error) {
+	readFiles, modifiedFiles := ComputeFileLists(fileOps)
+	details, err := json.Marshal(CompactionFileOps{ReadFiles: readFiles, ModifiedFiles: modifiedFiles})
+	if err != nil {
+		return nil, fmt.Errorf("marshal branch details: %w", err)
+	}
+	return details, nil
 }

@@ -50,6 +50,7 @@ type runtimeRequest struct {
 	// are immutable operation inputs, not a second copy of controller state.
 	turnID         string
 	parentID       string
+	runCancel      <-chan struct{}
 	sess           session.Session
 	store          session.Store
 	durable        session.DurableStore
@@ -233,6 +234,7 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 	}
 	request.turnID = c.activeTurnID
 	request.parentID = c.activeTurnLeaf
+	request.runCancel = c.runCancel
 	request.sess = c.session
 	request.store = c.store
 	request.durable = c.durable
@@ -249,8 +251,13 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 	if request.kind == runtimeFinalizeTurn {
 		request.nextTurns = len(c.nextTurn)
 	}
-	if (request.kind == runtimeFlushPending && request.event != nil) || request.kind == runtimeCompact {
-		request.autoCompact = c.activeTurnID == "" || c.durable == nil
+	if (request.kind == runtimeFlushPending && request.event != nil) ||
+		request.kind == runtimeFinalizeTurn || request.kind == runtimeCompact {
+		// Non-durable turns can compact at their turn-end save point. Durable
+		// turns must wait until CommitTurn succeeds, so runtimeFinalizeTurn
+		// carries the same immutable compaction inputs into that post-commit
+		// boundary.
+		request.autoCompact = request.kind == runtimeFinalizeTurn || c.activeTurnID == "" || c.durable == nil
 		request.compaction = c.compaction
 		request.contextWindow = c.contextWindow
 		request.model = c.model
@@ -356,6 +363,9 @@ func (c *Controller) handleRuntimeCompletion(completion runtimeCompletion) {
 				c.turnAborted = result.turnAborted
 			}
 			c.mu.Unlock()
+			if result.warning != nil {
+				c.emit(&session.Error{Err: result.warning})
+			}
 			c.emit(request.event)
 			c.emit(session.Settled{NextTurnCount: request.nextTurns})
 		}
@@ -586,6 +596,15 @@ func executeRuntimeRequest(request runtimeRequest) runtimeResult {
 		}
 		result.err = request.durable.CommitTurn(ctx, request.turnID)
 		result.turnCommitted = result.err == nil
+		if result.err == nil && result.turnCommitted && request.autoCompact && request.sess != nil &&
+			ShouldCompactAfterTurn(ctx, request.sess, request.contextWindow, request.compaction) {
+			compactionCtx, release := contextWithSignalAndRelease(ctx, request.runCancel)
+			_, result.warning = runCompaction(compactionCtx, request)
+			release()
+			if result.warning != nil && !errors.Is(result.warning, context.Canceled) {
+				result.warning = fmt.Errorf("auto-compact: %w", result.warning)
+			}
+		}
 		return result
 
 	case runtimeAbortTurn:
@@ -642,6 +661,7 @@ func runCompaction(ctx context.Context, request runtimeRequest) (*CompactionResu
 		ThinkingLevel:  request.thinking,
 		Convert:        DefaultConvert,
 		StreamFn:       request.stream,
+		ContextWindow:  request.contextWindow,
 	}, request.compaction)
 }
 
@@ -687,6 +707,26 @@ func executePendingWrites(request runtimeRequest) runtimeResult {
 	}
 	result.leafID = leaf
 	return result
+}
+
+func contextWithSignalAndRelease(parent context.Context, signal <-chan struct{}) (context.Context, func()) {
+	if signal == nil {
+		return parent, func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-signal:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, func() {
+		cancel()
+		<-done
+	}
 }
 
 func minInt(a, b int) int {

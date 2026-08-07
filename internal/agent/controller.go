@@ -1660,7 +1660,7 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 		return nil, nil, fmt.Errorf("%w: expected=%d current=%d", ErrTurnChanged, expected, current)
 	}
 	compactionCancel := h.compactionCancel
-	if compactionCancel == nil && h.phase == PhasePersisting {
+	if compactionCancel == nil && h.phase == PhasePersisting && h.activeTurnID == "" {
 		phase := h.phase
 		h.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)

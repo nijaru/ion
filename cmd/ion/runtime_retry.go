@@ -19,7 +19,7 @@ func providerWithRetryPolicy(provider llm.Provider, cfg *config.Config) llm.Prov
 	retry.Config.MaxAttempts = cfg.GetMaxRetries()
 	retry.Config.MinInterval = time.Duration(cfg.GetRetryBaseDelayMs()) * time.Millisecond
 	retry.Config.RetryForeverTransportOnly = true
-	retry.Config.RetryForever = cfg == nil || cfg.RetryUntilCancelledEnabled()
+	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 	if !retry.Config.RetryForever {
 		retry.Config.MaxAttempts = 1
 	}

@@ -403,7 +403,15 @@ func openRuntime(
 	// context provider-neutral and attributable. Leave API empty until the
 	// provider exposes its actual wire family; a provider slug is not an API
 	// type.
-	model := llm.Model{ID: runtimeCfg.Model, Provider: provider.ID()}
+	contextWindow := runtimeCfg.ContextLimit
+	if contextWindow <= 0 {
+		contextWindow = info.ContextLimit()
+	}
+	model := llm.Model{
+		ID:            runtimeCfg.Model,
+		Provider:      provider.ID(),
+		ContextWindow: contextWindow,
+	}
 
 	// Register coding tools and convert to agent.Tool. Runtime policy belongs
 	// here so the shell and optional skill surface cannot silently diverge from
@@ -541,6 +549,8 @@ func openRuntime(
 		ProcessReconciler:   tool.NewProcessReconciler(),
 		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
+		Compaction:          agent.DefaultCompactionSettings(),
+		ContextWindow:       contextWindow,
 	})
 	closeUnusableRuntime := func(openErr error) error {
 		closeErr := errors.Join(harness.Close(), closeRuntimeResources())

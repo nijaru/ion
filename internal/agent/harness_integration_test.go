@@ -611,6 +611,56 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	}
 }
 
+// INTEGRATION: Durable turns auto-compact only after their commit boundary.
+func TestHarnessIntegration_DurableAutoCompaction(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for i := 0; i < 8; i++ {
+		if _, err := sess.AppendMessage(
+			context.Background(),
+			session.NewUserText("historical context that should trigger compaction", time.Now()),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var calls int32
+	h := NewController(ControllerConfig{
+		Session:        sess,
+		Store:          store,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test", MaxTokens: 1024, ContextWindow: 40},
+		Compaction:     CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 10},
+		ContextWindow:  40,
+		StreamFn: func(_ context.Context, _ *llm.Request) (llm.Stream, error) {
+			atomic.AddInt32(&calls, 1)
+			return &mockStream{chunks: []*llm.Chunk{{Content: "ok", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "continue the work"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compactions int
+	for _, entry := range entries {
+		if _, ok := entry.(*session.CompactionEntry); ok {
+			compactions++
+		}
+	}
+	if compactions != 1 {
+		t.Fatalf("compaction entries = %d, want one post-commit auto-compaction", compactions)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("stream calls = %d, want turn plus summary", got)
+	}
+}
+
 // INTEGRATION: Steering — inject a message mid-turn via Steer().
 // The steered message should appear in the next provider request.
 func TestHarnessIntegration_Steering(t *testing.T) {
