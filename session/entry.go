@@ -47,6 +47,7 @@ type CompactionEntry struct {
 	Summary      string
 	FirstKeptID  string
 	TokensBefore int
+	Usage        Usage
 	Details      []byte
 }
 
@@ -55,6 +56,7 @@ type BranchSummaryEntry struct {
 	// FromID identifies the abandoned branch leaf summarized by this entry.
 	FromID  string
 	Summary string
+	Usage   Usage
 	Details []byte
 }
 

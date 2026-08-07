@@ -448,11 +448,30 @@ func deduplicateSlice(s []string) []string {
 
 // --- summarization ---
 
+// SummaryResult holds generated summary text and the provider-reported usage
+// for the summarization request.
+type SummaryResult struct {
+	Text  string
+	Usage session.Usage
+}
+
+func summaryUsage(usage llm.Usage) session.Usage {
+	return session.Usage{
+		Input:       usage.InputTokens,
+		Output:      usage.OutputTokens,
+		CacheRead:   usage.CacheReadTokens,
+		CacheWrite:  usage.CacheCreationTokens,
+		TotalTokens: usage.TotalTokens,
+		Cost:        session.Cost{Total: usage.Cost},
+	}
+}
+
 // CompactionResult holds the result of a compaction operation.
 type CompactionResult struct {
 	Summary          string
 	FirstKeptEntryID string
 	TokensBefore     int
+	Usage            session.Usage
 	Details          CompactionFileOps
 }
 
@@ -571,9 +590,9 @@ func GenerateSummary(
 	thinkingLevel session.ThinkingLevel,
 	convert func([]session.Message) []llm.Message,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
-) (string, error) {
+) (SummaryResult, error) {
 	if streamFn == nil {
-		return "", errors.New("compaction stream is not configured")
+		return SummaryResult{}, errors.New("compaction stream is not configured")
 	}
 	// Pi: maxTokens = min(floor(0.8 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.8 * float64(reserveTokens))
@@ -660,38 +679,46 @@ func GenerateSummary(
 	// Check abort signal before calling.
 	select {
 	case <-signal:
-		return "", fmt.Errorf("compaction summarization aborted: context cancelled")
+		return SummaryResult{}, fmt.Errorf("compaction summarization aborted: context cancelled")
 	default:
 	}
 
 	stream, err := streamFn(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("summarization failed: %w", err)
+		return SummaryResult{}, fmt.Errorf("summarization failed: %w", err)
 	}
 	defer stream.Close()
 
-	// Collect the response.
+	// Collect the response. Usage is cumulative; retain the latest provider
+	// report rather than summing repeated chunks.
 	var summary strings.Builder
+	var usage llm.Usage
 	for {
 		select {
 		case <-signal:
-			return "", fmt.Errorf("compaction summarization aborted during streaming")
+			return SummaryResult{}, fmt.Errorf("compaction summarization aborted during streaming")
 		default:
 		}
 		chunk, ok := stream.Next()
 		if !ok {
 			break
 		}
+		if chunk == nil {
+			continue
+		}
 		if chunk.Content != "" {
 			summary.WriteString(chunk.Content)
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
 		}
 	}
 
 	if err := stream.Err(); err != nil {
-		return "", fmt.Errorf("summarization stream error: %w", err)
+		return SummaryResult{}, fmt.Errorf("summarization stream error: %w", err)
 	}
 
-	return summary.String(), nil
+	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil
 }
 
 // GenerateTurnPrefixSummary generates a summary for the prefix messages of a split turn.
@@ -706,9 +733,9 @@ func GenerateTurnPrefixSummary(
 	signal <-chan struct{},
 	thinkingLevel session.ThinkingLevel,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
-) (string, error) {
+) (SummaryResult, error) {
 	if streamFn == nil {
-		return "", errors.New("compaction stream is not configured")
+		return SummaryResult{}, errors.New("compaction stream is not configured")
 	}
 	// Pi: maxTokens = min(floor(0.5 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.5 * float64(reserveTokens))
@@ -776,37 +803,44 @@ func GenerateTurnPrefixSummary(
 
 	select {
 	case <-signal:
-		return "", fmt.Errorf("turn prefix summarization aborted: context cancelled")
+		return SummaryResult{}, fmt.Errorf("turn prefix summarization aborted: context cancelled")
 	default:
 	}
 
 	stream, err := streamFn(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("turn prefix summarization failed: %w", err)
+		return SummaryResult{}, fmt.Errorf("turn prefix summarization failed: %w", err)
 	}
 	defer stream.Close()
 
 	var summary strings.Builder
+	var usage llm.Usage
 	for {
 		select {
 		case <-signal:
-			return "", fmt.Errorf("turn prefix summarization aborted during streaming")
+			return SummaryResult{}, fmt.Errorf("turn prefix summarization aborted during streaming")
 		default:
 		}
 		chunk, ok := stream.Next()
 		if !ok {
 			break
 		}
+		if chunk == nil {
+			continue
+		}
 		if chunk.Content != "" {
 			summary.WriteString(chunk.Content)
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
 		}
 	}
 
 	if err := stream.Err(); err != nil {
-		return "", fmt.Errorf("turn prefix summarization stream error: %w", err)
+		return SummaryResult{}, fmt.Errorf("turn prefix summarization stream error: %w", err)
 	}
 
-	return summary.String(), nil
+	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil
 }
 
 // CompactionPreparation holds all data needed to execute compaction.
@@ -970,36 +1004,37 @@ func Compact(
 	signal := ctx.Done()
 
 	var summary string
+	var usage session.Usage
 	if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
 		// Split-turn: summarize history and turn prefix in parallel.
 		type result struct {
-			text string
-			err  error
+			summary SummaryResult
+			err     error
 		}
 		historyCh := make(chan result, 1)
 		prefixCh := make(chan result, 1)
 
 		go func() {
-			var s string
+			var generated SummaryResult
 			var e error
 			if len(prep.MessagesToSummarize) > 0 {
-				s, e = GenerateSummary(ctx, prep.MessagesToSummarize,
+				generated, e = GenerateSummary(ctx, prep.MessagesToSummarize,
 					opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 					opts.APIKey, opts.Headers, signal,
 					opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
 					opts.Convert, opts.StreamFn)
 			} else {
-				s = "No prior history."
+				generated.Text = "No prior history."
 			}
-			historyCh <- result{s, e}
+			historyCh <- result{generated, e}
 		}()
 
 		go func() {
-			s, e := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
+			generated, e := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
 				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 				opts.APIKey, opts.Headers, signal,
 				opts.ThinkingLevel, opts.StreamFn)
-			prefixCh <- result{s, e}
+			prefixCh <- result{generated, e}
 		}()
 
 		historyResult := <-historyCh
@@ -1014,19 +1049,22 @@ func Compact(
 
 		summary = fmt.Sprintf(
 			"%s\n\n---\n\n**Turn Context (split turn):**\n\n%s",
-			historyResult.text,
-			prefixResult.text,
+			historyResult.summary.Text,
+			prefixResult.summary.Text,
 		)
+		usage = session.AddUsage(historyResult.summary.Usage, prefixResult.summary.Usage)
 	} else {
 		// Normal compaction: summarize history messages.
-		summary, err = GenerateSummary(ctx, prep.MessagesToSummarize,
+		generated, summaryErr := GenerateSummary(ctx, prep.MessagesToSummarize,
 			opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 			opts.APIKey, opts.Headers, signal,
 			opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
 			opts.Convert, opts.StreamFn)
-		if err != nil {
-			return nil, err
+		if summaryErr != nil {
+			return nil, summaryErr
 		}
+		summary = generated.Text
+		usage = generated.Usage
 	}
 
 	// Append formatted file operations to summary.
@@ -1047,6 +1085,7 @@ func Compact(
 		Summary:      summary,
 		FirstKeptID:  prep.FirstKeptEntryID,
 		TokensBefore: prep.TokensBefore,
+		Usage:        usage,
 		Details:      detailsJSON,
 	})
 	if err != nil {
@@ -1057,6 +1096,7 @@ func Compact(
 		Summary:          summary,
 		FirstKeptEntryID: prep.FirstKeptEntryID,
 		TokensBefore:     prep.TokensBefore,
+		Usage:            usage,
 		Details:          details,
 	}, nil
 }

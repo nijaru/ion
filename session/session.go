@@ -65,6 +65,7 @@ type CompactionData struct {
 	Summary      string
 	FirstKeptID  string
 	TokensBefore int
+	Usage        Usage
 	Details      []byte
 }
 
@@ -73,6 +74,7 @@ type BranchSummaryData struct {
 	// FromID identifies the leaf being left when the summary was created.
 	FromID  string
 	Summary string
+	Usage   Usage
 	Details []byte
 }
 

@@ -177,7 +177,11 @@ func TestCompactCommitsReplacementForReplay(t *testing.T) {
 	result, err := Compact(context.Background(), sess, CompactOptions{
 		Model: "test",
 		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
-			return &mockStream{chunks: []*llm.Chunk{{Content: "durable summary", StopReason: "stop"}}}, nil
+			return &mockStream{chunks: []*llm.Chunk{{
+				Content:    "durable summary",
+				StopReason: "stop",
+				Usage:      &llm.Usage{InputTokens: 11, OutputTokens: 7, TotalTokens: 18, Cost: 0.25},
+			}}}, nil
 		},
 	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
 	if err != nil {
@@ -185,6 +189,10 @@ func TestCompactCommitsReplacementForReplay(t *testing.T) {
 	}
 	if result == nil || result.FirstKeptEntryID == "" {
 		t.Fatalf("Compact result = %#v, want committed replacement", result)
+	}
+	if result.Usage.Input != 11 || result.Usage.Output != 7 || result.Usage.TotalTokens != 18 ||
+		result.Usage.Cost.Total != 0.25 {
+		t.Fatalf("compaction usage = %#v, want provider usage", result.Usage)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -195,9 +203,17 @@ func TestCompactCommitsReplacementForReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	snapshot, err := session.NewSession(reopened, 64).BuildContext(context.Background())
+	reopenedSession := session.NewSession(reopened, 64)
+	snapshot, err := reopenedSession.BuildContext(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	usage, err := reopenedSession.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("reopened usage: %v", err)
+	}
+	if usage.Input != 11 || usage.Output != 7 || usage.TotalTokens != 18 || usage.Cost.Total != 0.25 {
+		t.Fatalf("replayed usage = %#v, want compaction usage", usage)
 	}
 	if len(snapshot.Messages) != 2 {
 		t.Fatalf("replayed message count = %d, want summary plus kept message", len(snapshot.Messages))
@@ -210,6 +226,21 @@ func TestCompactCommitsReplacementForReplay(t *testing.T) {
 	}
 	if got := session.EntryText(&session.MessageEntry{Message: snapshot.Messages[1]}); got != "recent" {
 		t.Fatalf("replayed kept message = %q, want recent", got)
+	}
+	entries, err := reopened.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("reopened entries: %v", err)
+	}
+	var foundUsage session.Usage
+	for _, entry := range entries {
+		if compaction, ok := entry.(*session.CompactionEntry); ok {
+			foundUsage = compaction.Usage
+			break
+		}
+	}
+	if foundUsage.Input != 11 || foundUsage.Output != 7 || foundUsage.TotalTokens != 18 ||
+		foundUsage.Cost.Total != 0.25 {
+		t.Fatalf("replayed compaction usage = %#v, want provider usage", foundUsage)
 	}
 }
 

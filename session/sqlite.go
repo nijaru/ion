@@ -1268,6 +1268,7 @@ type entryPayload struct {
 	Summary      string `json:"summary,omitempty"`
 	FirstKeptID  string `json:"first_kept_id,omitempty"`
 	TokensBefore int    `json:"tokens_before,omitempty"`
+	Usage        Usage  `json:"usage,omitzero"`
 
 	// BranchSummary fields
 	FromID  string `json:"from_id,omitempty"`
@@ -1321,11 +1322,13 @@ func encodeEntry(e Entry) (string, []byte, error) {
 		p.Summary = e.Summary
 		p.FirstKeptID = e.FirstKeptID
 		p.TokensBefore = e.TokensBefore
+		p.Usage = e.Usage
 		p.Details = e.Details
 	case *BranchSummaryEntry:
 		typ = "branch_summary"
 		p.FromID = e.FromID
 		p.Summary = e.Summary
+		p.Usage = e.Usage
 		p.Details = e.Details
 	case *LabelEntry:
 		typ = "label"
@@ -1404,10 +1407,17 @@ func decodeEntry(base EntryBase, typ string, payload []byte) (Entry, error) {
 			Summary:      p.Summary,
 			FirstKeptID:  p.FirstKeptID,
 			TokensBefore: p.TokensBefore,
+			Usage:        p.Usage,
 			Details:      p.Details,
 		}, nil
 	case "branch_summary":
-		return &BranchSummaryEntry{EntryBase: base, FromID: p.FromID, Summary: p.Summary, Details: p.Details}, nil
+		return &BranchSummaryEntry{
+			EntryBase: base,
+			FromID:    p.FromID,
+			Summary:   p.Summary,
+			Usage:     p.Usage,
+			Details:   p.Details,
+		}, nil
 	case "label":
 		return &LabelEntry{EntryBase: base, TargetID: p.TargetID, Label: p.Label}, nil
 	case "session_info":

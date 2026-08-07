@@ -157,25 +157,36 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	}, nil
 }
 
-// UsageFromEntries accumulates token counts and cost from assistant messages
+// AddUsage returns the component-wise sum of two usage records.
+func AddUsage(left, right Usage) Usage {
+	left.Input += right.Input
+	left.Output += right.Output
+	left.CacheRead += right.CacheRead
+	left.CacheWrite += right.CacheWrite
+	left.TotalTokens += right.TotalTokens
+	left.Cost.Input += right.Cost.Input
+	left.Cost.Output += right.Cost.Output
+	left.Cost.CacheRead += right.Cost.CacheRead
+	left.Cost.CacheWrite += right.Cost.CacheWrite
+	left.Cost.Total += right.Cost.Total
+	return left
+}
+
+// UsageFromEntries accumulates token counts from assistant and summarization entries
 // in a selected branch. The runtime uses it for active-turn projections that
 // may include entries staged in a durable turn.
 func UsageFromEntries(entries []Entry) Usage {
 	var total Usage
 	for _, e := range entries {
-		if me, ok := e.(*MessageEntry); ok {
-			if am, ok := me.Message.(*AssistantMessage); ok {
-				total.Input += am.Usage.Input
-				total.Output += am.Usage.Output
-				total.CacheRead += am.Usage.CacheRead
-				total.CacheWrite += am.Usage.CacheWrite
-				total.TotalTokens += am.Usage.TotalTokens
-				total.Cost.Input += am.Usage.Cost.Input
-				total.Cost.Output += am.Usage.Cost.Output
-				total.Cost.CacheRead += am.Usage.Cost.CacheRead
-				total.Cost.CacheWrite += am.Usage.Cost.CacheWrite
-				total.Cost.Total += am.Usage.Cost.Total
+		switch entry := e.(type) {
+		case *MessageEntry:
+			if am, ok := entry.Message.(*AssistantMessage); ok {
+				total = AddUsage(total, am.Usage)
 			}
+		case *CompactionEntry:
+			total = AddUsage(total, entry.Usage)
+		case *BranchSummaryEntry:
+			total = AddUsage(total, entry.Usage)
 		}
 	}
 	return total
@@ -207,6 +218,7 @@ func (s *sessionImpl) AppendCompaction(ctx context.Context, data CompactionData)
 		Summary:      data.Summary,
 		FirstKeptID:  data.FirstKeptID,
 		TokensBefore: data.TokensBefore,
+		Usage:        data.Usage,
 		Details:      data.Details,
 	})
 }
@@ -216,6 +228,7 @@ func (s *sessionImpl) AppendBranchSummary(ctx context.Context, data BranchSummar
 		EntryBase: s.newBase(ctx),
 		FromID:    data.FromID,
 		Summary:   data.Summary,
+		Usage:     data.Usage,
 		Details:   data.Details,
 	})
 }

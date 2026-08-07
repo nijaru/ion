@@ -188,7 +188,7 @@ func (h *Controller) summarizeBranch(
 		cancel()
 	}()
 
-	summary, err := GenerateSummary(
+	summaryResult, err := GenerateSummary(
 		streamCtx,
 		messages,
 		model.ID,
@@ -215,7 +215,8 @@ func (h *Controller) summarizeBranch(
 		return nil, fmt.Errorf("marshal branch details: %w", err)
 	}
 	return &session.BranchSummaryData{
-		Summary: branchSummaryPreamble + summary + FormatFileOperations(normalizedFileOps),
+		Summary: branchSummaryPreamble + summaryResult.Text + FormatFileOperations(normalizedFileOps),
+		Usage:   summaryResult.Usage,
 		Details: details,
 	}, nil
 }
