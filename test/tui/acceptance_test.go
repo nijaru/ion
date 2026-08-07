@@ -589,9 +589,14 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	leafID := waitForAcceptanceSessionInfo(t, store, store)
 	waitForAcceptanceIdle(t, initialRunner)
 
-	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForAcceptanceOutput(t, output, "Model set to model-b", "model switch notice")
+	sendAcceptanceCommandAfterSettlement(
+		t,
+		program,
+		output,
+		"/model model-b",
+		"Model set to model-b",
+		"model switch notice",
+	)
 	switchResult := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
 	if switchResult.leafID != leafID {
 		t.Fatalf("model switch leaf = %q, want current leaf %q", switchResult.leafID, leafID)
@@ -620,14 +625,12 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
 	postResumeLeafID := waitForAcceptanceSessionInfoAfter(t, store, store, resumeResult.leafID)
 	waitForAcceptanceIdle(t, resumeResult.runner)
-	modelSwitchNoticeCount := strings.Count(output.String(), "Model set to model-b")
-	program.Send(tea.KeyPressMsg{Text: "/model model-b"})
-	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitForAcceptanceOutputAfter(
+	sendAcceptanceCommandAfterSettlement(
 		t,
+		program,
 		output,
+		"/model model-b",
 		"Model set to model-b",
-		modelSwitchNoticeCount,
 		"post-resume model switch notice",
 	)
 	postResumeSwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
@@ -825,6 +828,10 @@ func waitForAcceptanceIdle(t *testing.T, harness *agent.Controller) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if harness.IsIdle() {
+			// Controller idle state can precede delivery of the terminal Settled
+			// event to Bubble Tea. Let the frontend consume that event before the
+			// next test input is sent.
+			time.Sleep(100 * time.Millisecond)
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -895,32 +902,6 @@ func sendAcceptanceCommandAfterSettlement(
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s %q\noutput:\n%s", label, success, output.String())
-}
-
-func waitForAcceptanceOutputAfter(
-	t *testing.T,
-	output *acceptanceBuffer,
-	needle string,
-	previousCount int,
-	label string,
-) string {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		content := output.String()
-		if strings.Count(content, needle) > previousCount {
-			return content
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf(
-		"timed out waiting for %s %q after %d occurrences\noutput:\n%s",
-		label,
-		needle,
-		previousCount,
-		output.String(),
-	)
-	return ""
 }
 
 func waitForAcceptanceOutputAny(t *testing.T, output *acceptanceBuffer, label string, needles ...string) string {

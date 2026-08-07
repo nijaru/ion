@@ -273,8 +273,16 @@ func (r *smokeRunner) FollowUp(text string, _ ...session.ImageContent) error {
 	r.backend.FollowUp(text)
 	return nil
 }
-func (r *smokeRunner) NextTurn(string, ...session.ImageContent) error { return nil }
-func (r *smokeRunner) ActiveTurnToken() uint64                        { return r.turnToken.Load() }
+
+func (r *smokeRunner) NextTurn(text string, _ ...session.ImageContent) error {
+	if !r.backend.emit(context.Background(), session.QueueUpdate{
+		NextTurn: []session.Message{userEvent(text).Message},
+	}) {
+		return context.Canceled
+	}
+	return nil
+}
+func (r *smokeRunner) ActiveTurnToken() uint64 { return r.turnToken.Load() }
 func (r *smokeRunner) AbortTurn(token uint64) ([]session.Message, []session.Message, error) {
 	if token == 0 || token != r.turnToken.Load() {
 		return nil, nil, agent.ErrTurnChanged

@@ -373,7 +373,7 @@ send_deterministic_p1_tui_smoke() {
   send_line "exercise explicit queue mode"
   wait_contains "Streaming..." 30
   send_line "queued follow-up from queue mode"
-  wait_contains "Queued follow-up" 30
+  wait_contains "Queued (Alt+Up edit): queued follow-up from queue mode" 30
   assert_visible_contains "1 queued"
   assert_visible_contains "Queued (Alt+Up edit): queued follow-up from queue mode"
   assert_visible_separator_line_count 2
@@ -489,18 +489,15 @@ if [[ "$LIVE" == "1" ]]; then
   send_line 'Use the bash tool exactly once to run `sleep 3; echo ion-tmux-smoke`, then reply with the single word done.'
   wait_contains "Bash(sleep 3; echo ion-tmux-smoke)" 90
   send_line "what happened?"
-  wait_contains "Steering current turn" 30
-  wait_contains "Steering (Alt+Up edit): what happened?" 30
-  assert_visible_contains "1 queued"
+  wait_contains "1 steered" 30
   assert_visible_not_contains "Queued follow-up"
-  wait_contains "Complete" 90
+  wait_settled 90
 
   start_ion "--continue"
   assert_contains "--- resumed ---"
   assert_contains "ion-tmux-smoke"
   send_line "Reply with exactly ok-continued."
   wait_contains "• ok-continued" 90
-  wait_contains "Complete" 90
   trace_pass "live_continue"
 fi
 
