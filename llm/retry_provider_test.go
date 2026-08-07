@@ -56,6 +56,56 @@ func (*retryStreamStub) Next() (*Chunk, bool) { return nil, false }
 func (*retryStreamStub) Err() error           { return nil }
 func (*retryStreamStub) Close() error         { return nil }
 
+type retryReadFailureProvider struct {
+	calls      atomic.Int32
+	afterChunk bool
+}
+
+func (p *retryReadFailureProvider) ID() string { return "retry-read-test" }
+func (p *retryReadFailureProvider) Generate(context.Context, *Request) (*Response, error) {
+	return &Response{}, nil
+}
+
+func (p *retryReadFailureProvider) Stream(context.Context, *Request) (Stream, error) {
+	if p.calls.Add(1) == 1 {
+		return &retryReadFailureStream{afterChunk: p.afterChunk}, nil
+	}
+	return &retryStreamStub{}, nil
+}
+func (p *retryReadFailureProvider) Models(context.Context) ([]Model, error) { return nil, nil }
+func (p *retryReadFailureProvider) CountTokens(context.Context, string, []Message) (int, error) {
+	return 0, nil
+}
+func (p *retryReadFailureProvider) Cost(context.Context, string, Usage) float64 { return 0 }
+func (p *retryReadFailureProvider) Capabilities(string) Capabilities            { return Capabilities{} }
+
+func (p *retryReadFailureProvider) IsTransient(err error) bool {
+	return errors.Is(err, errRetryTransient)
+}
+func (p *retryReadFailureProvider) IsContextOverflow(error) bool { return false }
+
+type retryReadFailureStream struct {
+	afterChunk bool
+	emitted    bool
+}
+
+func (s *retryReadFailureStream) Next() (*Chunk, bool) {
+	if !s.emitted && s.afterChunk {
+		s.emitted = true
+		return &Chunk{Content: "partial"}, true
+	}
+	s.emitted = true
+	return nil, false
+}
+
+func (s *retryReadFailureStream) Err() error {
+	if s.afterChunk && !s.emitted {
+		return nil
+	}
+	return errRetryTransient
+}
+func (*retryReadFailureStream) Close() error { return nil }
+
 func retryTestConfig() RetryConfig {
 	return RetryConfig{
 		MaxAttempts: 3,
@@ -88,6 +138,56 @@ func TestRetryProviderRetriesTransientStreamFailures(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Attempt != 1 || events[1].Attempt != 2 {
 		t.Fatalf("retry events = %#v, want attempts 1 and 2", events)
+	}
+}
+
+func TestRetryProviderRetriesTransientReadFailureBeforeOutput(t *testing.T) {
+	provider := &retryReadFailureProvider{}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+	var events []RetryEvent
+	ctx := WithRetryObserver(t.Context(), func(event RetryEvent) {
+		events = append(events, event)
+	})
+
+	stream, err := retry.Stream(ctx, &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if _, ok := stream.Next(); ok {
+		t.Fatal("retried empty stream yielded a chunk")
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("retried stream error = %v, want nil", err)
+	}
+	if got := provider.calls.Load(); got != 2 {
+		t.Fatalf("provider attempts = %d, want 2", got)
+	}
+	if len(events) != 1 || events[0].Attempt != 1 {
+		t.Fatalf("retry events = %#v, want one attempt-1 event", events)
+	}
+}
+
+func TestRetryProviderDoesNotReplayAfterStreamOutput(t *testing.T) {
+	provider := &retryReadFailureProvider{afterChunk: true}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if chunk, ok := stream.Next(); !ok || chunk == nil || chunk.Content != "partial" {
+		t.Fatalf("first chunk = %#v, %t, want partial output", chunk, ok)
+	}
+	if _, ok := stream.Next(); ok {
+		t.Fatal("failed stream yielded an unexpected second chunk")
+	}
+	if !errors.Is(stream.Err(), errRetryTransient) {
+		t.Fatalf("stream error = %v, want transient failure", stream.Err())
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("provider attempts = %d, want no replay after output", got)
 	}
 }
 

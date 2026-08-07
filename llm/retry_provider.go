@@ -85,6 +85,8 @@ type retryAfterProviderError interface {
 	RetryAfter() time.Duration
 }
 
+var errProviderNilStream = errors.New("llm: provider returned a nil stream")
+
 // NewRetryProvider creates a new provider with the default retry policy.
 func NewRetryProvider(p Provider) *RetryProvider {
 	return &RetryProvider{
@@ -218,8 +220,19 @@ func (r *RetryProvider) Stream(ctx context.Context, req *Request) (Stream, error
 
 	for i := 0; ; i++ {
 		s, err := r.Provider.Stream(ctx, req)
+		if err == nil && s == nil {
+			err = errProviderNilStream
+		}
 		if err == nil {
-			return s, nil
+			return &retryStream{
+				ctx:      ctx,
+				request:  req,
+				provider: r.Provider,
+				config:   cfg,
+				stream:   s,
+				attempts: i + 1,
+				interval: interval,
+			}, nil
 		}
 
 		if !r.Provider.IsTransient(err) {
