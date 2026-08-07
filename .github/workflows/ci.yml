@@ -33,7 +33,7 @@ jobs:
       - name: Install Go quality tools
         run: |
           tool_dir="${RUNNER_TEMP}/ion-go-tools"
-          GOBIN="$tool_dir" go install github.com/segmentio/golines@v0.15.0
+          GOBIN="$tool_dir" go install github.com/segmentio/golines@v0.13.0
           GOBIN="$tool_dir" go install mvdan.cc/gofumpt@v0.10.0
           GOBIN="$tool_dir" go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
           GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
