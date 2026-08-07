@@ -47,7 +47,7 @@ run go test ./app -run '^$' \
 
 phase_note "runtime first-event snapshot"
 run go test ./internal/agent -run '^$' \
-  -bench '^Benchmark(ExecuteToolCallsParallel8|ControllerSubscribeSnapshot256|ControllerClose)$' \
+  -bench '^Benchmark(ExecuteToolCallsParallel8|ControllerSubscribeSnapshot256|ControllerClose|Compact256)$' \
   -benchmem -count "$COUNT"
 
 phase_note "session persistence and branch navigation"
@@ -67,9 +67,9 @@ Ion performance baseline finished.
 The current baseline covers startup readiness, runtime snapshot/first-event
 latency, bounded tool dispatch, controller shutdown, TUI shell/stream
 rendering, Markdown rendering, SQLite branch navigation, context
-reconstruction, and MCP subprocess open/close lifecycle. Provider latency and
-compaction remain separate measurements until current representative
-benchmarks exist.
+reconstruction, MCP subprocess open/close lifecycle, and deterministic
+compaction over a 256-message SQLite history. Provider latency remains a
+separate measurement until a representative provider workload is defined.
 
 Record this output with the machine, run count, datasets, and any follow-up
 tasks for regressions.
