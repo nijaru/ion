@@ -33,6 +33,34 @@ func TestHarnessProviderRequestsUseConfiguredThinkingLevel(t *testing.T) {
 	}
 }
 
+func TestHarnessClampsThinkingToModelCapabilities(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	caps := llm.DefaultCapabilities()
+	var effort string
+	h := NewController(ControllerConfig{
+		Session:  sess,
+		Store:    store,
+		Model:    llm.Model{ID: "chat", Capabilities: &caps},
+		Thinking: session.ThinkingHigh,
+		StreamFn: func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			effort = req.ReasoningEffort
+			return &mockStream{chunks: []*llm.Chunk{{Content: "ok", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	if got := h.GetThinkingLevel(); got != session.ThinkingOff {
+		t.Fatalf("initial thinking level = %q, want off for a chat model", got)
+	}
+	if _, err := h.Prompt(context.Background(), "chat"); err != nil {
+		t.Fatal(err)
+	}
+	if effort != string(session.ThinkingOff) {
+		t.Fatalf("request reasoning effort = %q, want disabled", effort)
+	}
+}
+
 func TestHarnessThinkingChangeIsDurableBeforeNextPrompt(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

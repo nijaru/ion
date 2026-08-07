@@ -407,10 +407,13 @@ func openRuntime(
 	if contextWindow <= 0 {
 		contextWindow = info.ContextLimit()
 	}
+	caps := provider.Capabilities(runtimeCfg.Model)
 	model := llm.Model{
 		ID:            runtimeCfg.Model,
 		Provider:      provider.ID(),
 		ContextWindow: contextWindow,
+		Reasoning:     caps.Reasoning.Kind != llm.ReasoningKindNone,
+		Capabilities:  &caps,
 	}
 
 	// Register coding tools and convert to agent.Tool. Runtime policy belongs

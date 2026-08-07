@@ -125,7 +125,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		tools:              toolMap,
 		active:             active,
 		model:              cfg.Model,
-		thinking:           cfg.Thinking,
+		thinking:           clampThinkingLevel(cfg.Model, cfg.Thinking),
 		sysprompt:          cfg.SysPrompt,
 		log:                cfg.Logger,
 		metrics:            cfg.Metrics,
@@ -322,7 +322,7 @@ func (h *Controller) runPrompt(
 		// The harness's model at construction time was a starting point.
 	}
 	if snap.Thinking != "" && !h.thinkingPending {
-		h.thinking = snap.Thinking
+		h.thinking = clampThinkingLevel(h.model, snap.Thinking)
 	}
 	if len(snap.ActiveTools) > 0 {
 		h.active = snap.ActiveTools
@@ -1359,6 +1359,7 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 		h.mu.Unlock()
 		return "", errors.New("harness is closed")
 	}
+	level = clampThinkingLevel(h.model, level)
 	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
 		phase := h.phase
 		h.mu.Unlock()
@@ -1376,6 +1377,7 @@ func (h *Controller) setThinkingDirect(ctx context.Context, level session.Thinki
 		h.mu.Unlock()
 		return "", err
 	}
+	level = clampThinkingLevel(h.model, level)
 	if h.phase == PhaseReady {
 		sess = h.session
 		h.mu.Unlock()
