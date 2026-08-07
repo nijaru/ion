@@ -51,10 +51,10 @@ func closeRuntimeResourcesAfterError(openErr error, closeResources func() error)
 
 // loadPromptTemplates reads trusted global and optional project-local .md prompt
 // templates. Global templates retain precedence on name collisions.
-func loadPromptTemplates(projectTrustRoot string) map[string]string {
+func loadPromptTemplates(projectTrustRoot string) (map[string]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
 	dirs := []string{filepath.Join(home, ".ion", "prompts")}
 	if projectTrustRoot != "" {
@@ -63,12 +63,15 @@ func loadPromptTemplates(projectTrustRoot string) map[string]string {
 	return loadPromptTemplatesFromDirs(dirs)
 }
 
-func loadPromptTemplatesFromDirs(dirs []string) map[string]string {
+func loadPromptTemplatesFromDirs(dirs []string) (map[string]string, error) {
 	var templates map[string]string
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read prompt directory %q: %w", dir, err)
 		}
 		if templates == nil {
 			templates = make(map[string]string)
@@ -81,14 +84,15 @@ func loadPromptTemplatesFromDirs(dirs []string) map[string]string {
 			if _, exists := templates[name]; exists {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			path := filepath.Join(dir, e.Name())
+			data, err := os.ReadFile(path)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("read prompt template %q: %w", path, err)
 			}
 			templates[name] = string(data)
 		}
 	}
-	return templates
+	return templates, nil
 }
 
 func recentSessionForContinue(
@@ -485,16 +489,22 @@ func openRuntime(
 		if registered.Name != "read" {
 			continue
 		}
-		if skillDirs, err := skillDirsForRuntime(projectTrustRoot); err == nil {
-			if text, err := ionskills.FormatSkillsForPromptContext(ctx, skillDirs...); err == nil {
-				skillsText = text
-			}
+		skillDirs, err := skillDirsForRuntime(projectTrustRoot)
+		if err != nil {
+			return setupFailure(fmt.Errorf("resolve skill directories: %w", err))
+		}
+		skillsText, err = ionskills.FormatSkillsForPromptContext(ctx, skillDirs...)
+		if err != nil {
+			return setupFailure(fmt.Errorf("load skills: %w", err))
 		}
 		break
 	}
 
 	// Load global and project-local prompt templates; global names win collisions.
-	promptTemplates := loadPromptTemplates(projectTrustRoot)
+	promptTemplates, err := loadPromptTemplates(projectTrustRoot)
+	if err != nil {
+		return setupFailure(fmt.Errorf("load prompt templates: %w", err))
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

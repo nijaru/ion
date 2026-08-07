@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,7 +23,10 @@ func TestLoadPromptTemplatesFromDirsGlobalPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := loadPromptTemplatesFromDirs([]string{global, project})
+	got, err := loadPromptTemplatesFromDirs([]string{global, project})
+	if err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
 	if got["shared"] != "global" || got["local"] != "project-only" {
 		t.Fatalf("templates = %#v", got)
 	}
@@ -46,7 +50,10 @@ func TestLoadPromptTemplatesIncludesProjectDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "project.md"), []byte("project"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := loadPromptTemplates(project)
+	got, err := loadPromptTemplates(project)
+	if err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
 	if got["project"] != "project" {
 		t.Fatalf("templates = %#v", got)
 	}
@@ -63,15 +70,32 @@ func TestLoadPromptTemplatesSkipsUntrustedProjectDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "project.md"), []byte("project"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := loadPromptTemplates("")
+	got, err := loadPromptTemplates("")
+	if err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
 	if _, ok := got["project"]; ok {
 		t.Fatalf("untrusted templates = %#v, want project template omitted", got)
 	}
 }
 
 func TestLoadPromptTemplatesFromDirsMissingDirectoriesAreNonFatal(t *testing.T) {
-	got := loadPromptTemplatesFromDirs([]string{filepath.Join(t.TempDir(), "missing")})
+	got, err := loadPromptTemplatesFromDirs([]string{filepath.Join(t.TempDir(), "missing")})
+	if err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
 	if got != nil {
 		t.Fatalf("templates = %#v, want nil", got)
+	}
+}
+
+func TestLoadPromptTemplatesFromDirsSurfacesReadErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(path, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadPromptTemplatesFromDirs([]string{path})
+	if err == nil || !strings.Contains(err.Error(), "read prompt directory") {
+		t.Fatalf("error = %v, want prompt directory read error", err)
 	}
 }
