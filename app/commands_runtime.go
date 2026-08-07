@@ -681,6 +681,10 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	// teardown on construction failure.
 	m.rotateRuntimeContext()
 	m.clearTreeNavigationCancel()
+	if m.Model.compactionCancel != nil {
+		m.Model.compactionCancel()
+		m.Model.compactionCancel = nil
+	}
 	m.clearTurnCancellation()
 	m.runtimeRequest().clear()
 	m.Model.Info = msg.runtime.Handles.Info

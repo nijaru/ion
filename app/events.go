@@ -110,6 +110,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "esc":
+		if m.Progress.Compacting {
+			m.clearPendingAction()
+			if m.Model.compactionCancel != nil {
+				m.Model.compactionCancel()
+				return m, m.terminalCommit().Entries(systemEntry("Canceling compaction..."))
+			}
+			return m, nil
+		}
 		// Double Escape opens tree/fork when idle.
 		if !m.InFlight.Thinking && !m.InFlight.AwaitingSettlement &&
 			m.Input.Pending == pendingActionNone {

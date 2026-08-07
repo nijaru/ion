@@ -385,6 +385,24 @@ func TestStaleCompactionResultCannotReleaseNewRuntimeQueue(t *testing.T) {
 	}
 }
 
+func TestEscapeCancelsCompaction(t *testing.T) {
+	model := readyModel(t)
+	called := false
+	model.Progress.Compacting = true
+	model.Model.compactionCancel = func() { called = true }
+
+	next, cmd := model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !called {
+		t.Fatal("escape did not cancel active compaction")
+	}
+	if cmd == nil {
+		t.Fatal("escape returned no cancellation notice command")
+	}
+	if !next.Progress.Compacting {
+		t.Fatal("escape cleared compacting before runtime settled")
+	}
+}
+
 func TestCompactionFailureClearsBusyState(t *testing.T) {
 	model := readyModel(t)
 	runner := &stubRunner{compactErr: fmt.Errorf("context budget unavailable")}

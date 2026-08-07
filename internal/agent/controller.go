@@ -1594,6 +1594,9 @@ func (h *Controller) activateToolsDirect(ctx context.Context, names []string) er
 
 // cancelActiveRun clears pending queues and signals the current run without
 // waiting for its provider or tools to return. The caller chooses the wait policy.
+// An exclusive compaction has no turn token, but it still owns a cancellable
+// runtime operation; cancel it through the same command boundary instead of
+// reporting a misleading phase conflict.
 func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message, []session.Message, error) {
 	expected := uint64(0)
 	if len(expectedToken) > 0 {
@@ -1635,7 +1638,8 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 		}
 		return nil, nil, fmt.Errorf("%w: expected=%d current=%d", ErrTurnChanged, expected, current)
 	}
-	if h.phase == PhasePersisting {
+	compactionCancel := h.compactionCancel
+	if compactionCancel == nil && h.phase == PhasePersisting {
 		phase := h.phase
 		h.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
@@ -1649,6 +1653,9 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 	h.mu.Unlock()
 	h.emitQueueUpdate()
 
+	if compactionCancel != nil {
+		compactionCancel()
+	}
 	if cancel != nil {
 		h.cancelCurrentRun()
 	}

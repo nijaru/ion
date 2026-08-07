@@ -271,6 +271,51 @@ func TestCompactCancellationDoesNotDoubleCloseSignal(t *testing.T) {
 	}
 }
 
+func TestAbortCancelsActiveCompaction(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	started := make(chan struct{})
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{ID: "summary-model"},
+		Compaction: CompactionSettings{
+			Enabled:          true,
+			ReserveTokens:    1,
+			KeepRecentTokens: 1,
+		},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	defer h.Close()
+
+	resultCh := make(chan error, 1)
+	go func() { resultCh <- h.Compact(context.Background()) }()
+	<-started
+	if _, _, err := h.Abort(); err != nil {
+		t.Fatalf("Abort() during compaction: %v", err)
+	}
+	if err := <-resultCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("compaction error = %v, want context.Canceled", err)
+	}
+	entries, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries after canceled compaction = %d, want unchanged history", len(entries))
+	}
+}
+
 func TestGenerateSummaryRequiresStream(t *testing.T) {
 	_, err := GenerateSummary(
 		context.Background(),

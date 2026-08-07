@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -399,11 +400,20 @@ func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) 
 	if msg.generation != m.Model.EventGeneration {
 		return m, nil
 	}
-	if msg.err != nil {
-		m.progressReducer().completeCompaction()
-		return m.handleLocalError(msg.err)
+	if m.Model.compactionCancel != nil {
+		m.Model.compactionCancel()
+		m.Model.compactionCancel = nil
 	}
 	m.progressReducer().completeCompaction()
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, tea.Sequence(
+				m.terminalCommit().Entries(systemEntry("Compaction cancelled")),
+				m.awaitSessionEvent(),
+			)
+		}
+		return m.handleLocalError(msg.err)
+	}
 	return m, tea.Sequence(m.terminalCommit().Entries(systemEntry(msg.notice)), m.awaitSessionEvent())
 }
 
@@ -657,7 +667,8 @@ func (m Model) handleCompactCommand() (Model, tea.Cmd) {
 	}
 	m.progressReducer().beginCompaction()
 	generation := m.Model.EventGeneration
-	ctx := m.runtimeOperationContext()
+	ctx, cancel := context.WithCancel(m.runtimeOperationContext())
+	m.Model.compactionCancel = cancel
 	return m, func() tea.Msg {
 		if err := compactor.Compact(ctx); err != nil {
 			return sessionCompactedMsg{generation: generation, err: err}

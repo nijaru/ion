@@ -144,8 +144,9 @@ type Controller struct {
 	thinkingRollbackSet bool
 
 	// --- Compaction ---
-	compaction    CompactionSettings
-	contextWindow int
+	compaction       CompactionSettings
+	contextWindow    int
+	compactionCancel context.CancelFunc
 
 	// --- Safety ---
 	approvals         *ApprovalBroker

@@ -498,6 +498,10 @@ type ModelState struct {
 	// treeNavigationCancel is the per-request cancellation boundary for branch
 	// navigation. It must not use Runtime.Abort, which is global to the runtime.
 	treeNavigationCancel context.CancelFunc
+	// compactionCancel is the app-owned cancellation boundary for manual
+	// compaction. It is separate from turn cancellation because compaction is an
+	// exclusive runtime operation without a turn token.
+	compactionCancel     context.CancelFunc
 	RuntimeSwitchRequest uint64
 	// TreeNavigationRequest fences branch navigation, replay, and runtime
 	// snapshots across both the accepted operation and its completion.
@@ -808,6 +812,9 @@ func (m *Model) Close() {
 	}
 	if m.Model.treeNavigationCancel != nil {
 		m.Model.treeNavigationCancel()
+	}
+	if m.Model.compactionCancel != nil {
+		m.Model.compactionCancel()
 	}
 	m.inputReducer().invalidateSkillCompletionRequest()
 	m.pickerReducer().closeAll()

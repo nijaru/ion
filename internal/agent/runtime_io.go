@@ -281,7 +281,15 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 		stopCaller = context.AfterFunc(callerContext, cancel)
 	}
 	request.ctx = operationContext
+	if request.kind == runtimeCompact {
+		c.compactionCancel = cancel
+	}
 	request.release = func() {
+		if request.kind == runtimeCompact {
+			c.mu.Lock()
+			c.compactionCancel = nil
+			c.mu.Unlock()
+		}
 		stopCaller()
 		cancel()
 	}
