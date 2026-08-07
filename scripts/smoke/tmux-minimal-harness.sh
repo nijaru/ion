@@ -11,6 +11,8 @@ ION_HOME="${ION_TMUX_HOME:-$HOME}"
 SMOKE_HOME="${ION_TMUX_SMOKE_HOME:-$TMP_DIR/home}"
 ION_PROVIDER_SMOKE="${ION_TMUX_PROVIDER:-ollama}"
 ION_MODEL_SMOKE="${ION_TMUX_MODEL:-ion-tmux-smoke}"
+ION_GOMODCACHE="${ION_TMUX_GOMODCACHE:-$(go env GOMODCACHE)}"
+ION_GOCACHE="${ION_TMUX_GOCACHE:-$(go env GOCACHE)}"
 LIVE="${ION_TMUX_LIVE:-0}"
 TRACE="${ION_TMUX_TRACE:-}"
 
@@ -21,7 +23,9 @@ fi
 
 cleanup() {
 	tmux kill-session -t "$SESSION" 2>/dev/null || true
-	rm -rf "$TMP_DIR"
+	if ! rm -rf "$TMP_DIR"; then
+		echo "warning: could not fully remove smoke directory $TMP_DIR" >&2
+	fi
 }
 trap cleanup EXIT
 
@@ -219,7 +223,7 @@ start_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$ION_HOME\" ION_PROVIDER=\"$ION_PROVIDER_SMOKE\" ION_MODEL=\"$ION_MODEL_SMOKE\" go run ./cmd/ion $args"
+    "cd \"$ROOT\" && HOME=\"$ION_HOME\" GOMODCACHE=\"$ION_GOMODCACHE\" GOCACHE=\"$ION_GOCACHE\" ION_PROVIDER=\"$ION_PROVIDER_SMOKE\" ION_MODEL=\"$ION_MODEL_SMOKE\" go run ./cmd/ion $args"
   wait_contains "Type a message" 30
 }
 
@@ -233,7 +237,7 @@ start_smoke_ion() {
     -s "$SESSION" \
     -x "$WIDTH" \
     -y "$HEIGHT" \
-    "cd \"$ROOT\" && HOME=\"$SMOKE_HOME\" go run ./test/tui --mode \"$mode\" --store \"$store\" $args"
+    "cd \"$ROOT\" && HOME=\"$SMOKE_HOME\" GOMODCACHE=\"$ION_GOMODCACHE\" GOCACHE=\"$ION_GOCACHE\" go run ./test/tui --mode \"$mode\" --store \"$store\" $args"
   wait_contains "Type a message" 60
 }
 
