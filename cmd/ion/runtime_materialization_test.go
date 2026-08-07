@@ -62,6 +62,7 @@ func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 		"",
 		"",
 		"",
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY not set") {
 		t.Fatalf("openRuntime error = %v, want actionable credential error", err)
@@ -118,6 +119,7 @@ func TestOpenRuntimeDoesNotMoveLeafWhenMaterializationFails(t *testing.T) {
 		promptDir,
 		"",
 		"",
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "build system prompt") {
 		t.Fatalf("openRuntime error = %v, want system prompt failure", err)
@@ -244,6 +246,7 @@ func TestOpenRuntimeFailsClosedForPrintModeWithUnsettledActionWithoutMovingLeaf(
 		"",
 		"",
 		"",
+		nil,
 		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "unsettled external action") {
@@ -297,6 +300,7 @@ func TestOpenRuntimeFailsClosedForPrintModeWithInterruptedTurn(t *testing.T) {
 		"",
 		"",
 		"",
+		nil,
 		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "interrupted turn") {

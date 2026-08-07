@@ -309,6 +309,21 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
+func resolvedContextWindow(cfg *config.Config, info app.RuntimeInfo, catalog *llm.ModelCatalog) int {
+	if cfg != nil && cfg.ContextLimit > 0 {
+		return cfg.ContextLimit
+	}
+	if catalog != nil && cfg != nil {
+		if metadata, ok := catalog.GetCachedMetadata(cfg.Provider, cfg.Model); ok && metadata.ContextLimit > 0 {
+			return metadata.ContextLimit
+		}
+	}
+	if info != nil {
+		return info.ContextLimit()
+	}
+	return 0
+}
+
 func openRuntime(
 	ctx context.Context,
 	store session.Store,
@@ -321,6 +336,7 @@ func openRuntime(
 	systemPromptOverride string,
 	appendSystemPromptOverride string,
 	projectTrustRoot string,
+	catalog *llm.ModelCatalog,
 	approvalInteractive ...bool,
 ) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
 	interactive := true
@@ -403,10 +419,7 @@ func openRuntime(
 	// context provider-neutral and attributable. Leave API empty until the
 	// provider exposes its actual wire family; a provider slug is not an API
 	// type.
-	contextWindow := runtimeCfg.ContextLimit
-	if contextWindow <= 0 {
-		contextWindow = info.ContextLimit()
-	}
+	contextWindow := resolvedContextWindow(&runtimeCfg, info, catalog)
 	caps := provider.Capabilities(runtimeCfg.Model)
 	model := llm.Model{
 		ID:            runtimeCfg.Model,

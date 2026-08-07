@@ -380,6 +380,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		cli.systemPromptOverride(),
 		cli.appendSystemPromptOverride(),
 		projectTrustRoot,
+		catalog,
 		!printRequested,
 	)
 	if err != nil {
@@ -470,6 +471,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			cli.systemPromptOverride(),
 			cli.appendSystemPromptOverride(),
 			projectTrustRoot,
+			catalog,
 			true,
 		)
 		if err != nil {
