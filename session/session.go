@@ -59,6 +59,7 @@ type ContextSnapshot struct {
 	ActiveModel    string        // from most recent ModelChangeEntry
 	Thinking       ThinkingLevel // from most recent ThinkingChangeEntry
 	ActiveTools    []string      // from most recent ToolsChangeEntry
+	ActiveToolsSet bool          // true when a ToolsChangeEntry exists, including an empty set
 }
 
 // CompactionData holds the payload for a compaction entry.

@@ -11,6 +11,45 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestHarnessRestoresExplicitlyEmptyToolSet(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendActiveToolsChange(context.Background(), []string{"registered"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendActiveToolsChange(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var requested []string
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{ID: "test"},
+		Tools:   []Tool{{Name: "registered"}},
+		Active:  []string{"registered"},
+		StreamFn: func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			requested = toolNamesFromSpecs(req.Tools)
+			return &mockStream{chunks: []*llm.Chunk{{Content: "ok", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "without tools"); err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 0 {
+		t.Fatalf("provider tools = %#v, want explicitly empty set", requested)
+	}
+	snapshot, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.ActiveToolsSet || len(snapshot.ActiveTools) != 0 {
+		t.Fatalf("context active tools = %#v (set=%t), want empty set", snapshot.ActiveTools, snapshot.ActiveToolsSet)
+	}
+}
+
 func TestHarnessActivateToolsAddsDeferredToolForNextTurn(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

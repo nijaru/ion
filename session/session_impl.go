@@ -66,6 +66,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	var activeModel string
 	var activeThinking ThinkingLevel
 	var activeTools []string
+	var activeToolsSet bool
 	for i := len(entries) - 1; i >= 0; i-- {
 		switch e := entries[i].(type) {
 		case *CompactionEntry:
@@ -82,8 +83,9 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 				activeThinking = e.Level
 			}
 		case *ToolsChangeEntry:
-			if activeTools == nil {
-				activeTools = e.ActiveTools
+			if !activeToolsSet {
+				activeTools = append([]string(nil), e.ActiveTools...)
+				activeToolsSet = true
 			}
 		case *MessageEntry:
 			// Assistant messages carry the authoritative provider/model, so the
@@ -93,7 +95,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 				activeModel = am.Model
 			}
 		}
-		if lastCompaction != nil && activeModel != "" && activeThinking != "" && activeTools != nil {
+		if lastCompaction != nil && activeModel != "" && activeThinking != "" && activeToolsSet {
 			break
 		}
 	}
@@ -158,6 +160,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 		ActiveModel:    activeModel,
 		Thinking:       activeThinking,
 		ActiveTools:    activeTools,
+		ActiveToolsSet: activeToolsSet,
 	}, nil
 }
 

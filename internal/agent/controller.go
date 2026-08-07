@@ -324,8 +324,8 @@ func (h *Controller) runPrompt(
 	if snap.Thinking != "" && !h.thinkingPending {
 		h.thinking = clampThinkingLevel(h.model, snap.Thinking)
 	}
-	if len(snap.ActiveTools) > 0 {
-		h.active = snap.ActiveTools
+	if snap.ActiveToolsSet {
+		h.active = append([]string(nil), snap.ActiveTools...)
 	}
 	h.mu.Unlock()
 
