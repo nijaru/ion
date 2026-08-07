@@ -2,8 +2,8 @@
 
 > [!NOTE]
 > Ion is a native Go coding agent. The core submit/stream/tool/cancel/persist/
-> resume path has deterministic and race coverage, while end-to-end live
-> provider, release, and some advanced integration gates remain in progress.
+> resume path has deterministic, race, and approved live OpenRouter coverage,
+> while release and some advanced integration gates remain in progress.
 
 Ion is a terminal coding agent for working on codebases from your shell. It
 opens an interactive chat UI, gives the model a small set of coding tools, and
@@ -183,13 +183,15 @@ scripts/smoke/tmux-minimal-harness.sh
 ```
 
 Live provider smoke tests are gated behind environment variables and are not
-part of the default test run. The opt-in test requires two materially
-different provider adapters and their normal credential environment variables;
-it never accepts or persists API keys:
+part of the default test run. The optional rich probe can exercise two
+materially different provider adapters when those profiles are available; it
+never accepts or persists API keys. One standards-compliant live provider path
+is sufficient for the core gate, and additional-provider failures are targeted
+compatibility work:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
-ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_MODEL_A=poolside/laguna-s-2.1:free \
 ION_LIVE_PROVIDER_B=openai-compatible \
 ION_LIVE_MODEL_B=qwen3.6:27b \
 ION_LIVE_ENDPOINT_B=http://fedora:8080/v1 \
@@ -199,18 +201,18 @@ go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 
 The example uses a local Fedora Qwen endpoint for the second adapter. Run it
 only when that endpoint and its credentials are available; it is separate from
-the cheaper paid/free Laguna basic smoke below.
+the low-cost current-model basic smoke below.
 
-For a low-cost same-model endpoint comparison, the basic smoke permits the
-paid and free OpenRouter variants. It checks streamed text, settlement,
-SQLite persistence, and replay; it is a provider smoke, not the full
-materially-different-provider conformance gate:
+For low-cost current-model verification, the basic smoke checks streamed text,
+settlement, SQLite persistence, and replay. It is sufficient for the core live
+provider path; use the richer probe only when a second adapter is available or
+specific provider compatibility needs investigation:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
-ION_LIVE_MODEL_A=poolside/laguna-s-2.1 \
+ION_LIVE_MODEL_A=poolside/laguna-s-2.1:free \
 ION_LIVE_PROVIDER_B=openrouter \
-ION_LIVE_MODEL_B=poolside/laguna-s-2.1:free \
+ION_LIVE_MODEL_B=deepseek/deepseek-v4-flash-0731 \
 ION_LIVE_BASIC=1 \
 go test ./cmd/ion -run TestLiveBasicTurn -count=1 -timeout 120s -v
 ```
@@ -224,8 +226,9 @@ model capability and the streamed event. Set `ION_LIVE_REQUIRE_THINKING=1` to
 require thinking deltas from both profiles. These checks still require the
 opt-in live run and do not replace provider failure/cancellation evidence.
 
-The failure probes are separate opt-in requests. They require the same
-explicit profiles and are never enabled by `ION_LIVE_SMOKE=1` alone:
+The failure probes are separate opt-in requests for targeted provider
+compatibility checks. They require explicit profiles and are never enabled by
+`ION_LIVE_SMOKE=1` alone:
 
 ```sh
 ION_LIVE_AUTH_FAILURE=1 ION_LIVE_SMOKE=1 \
@@ -240,7 +243,7 @@ provider/status classification. The cancellation probe sends a real request,
 then aborts at the response-body boundary and checks the aborted terminal event
 plus no durable replay. Controlled adapter tests cover deterministic 429,
 malformed, and overflow behavior separately; none of these probes replaces the
-required two-provider evidence record.
+provider-specific regression evidence.
 
 ## License
 
