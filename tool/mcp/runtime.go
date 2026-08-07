@@ -320,6 +320,10 @@ func (c *ownedClient) Close() error {
 	if c == nil {
 		return nil
 	}
+	// Kill the process group before canceling the command context. The context
+	// cancellation can reap the group leader before the explicit group kill,
+	// allowing a recycled PID to target an unrelated process group.
+	groupErr := terminateProcessGroup(c.command)
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -333,7 +337,7 @@ func (c *ownedClient) Close() error {
 		errors.Is(err, sdkmcp.ErrConnectionClosed) {
 		err = nil
 	}
-	return errors.Join(err, c.closeParentControl(), terminateProcessGroup(c.command), callCleanup(c.cleanup))
+	return errors.Join(err, c.closeParentControl(), groupErr, callCleanup(c.cleanup))
 }
 
 func (c *ownedClient) closeParentControl() error {

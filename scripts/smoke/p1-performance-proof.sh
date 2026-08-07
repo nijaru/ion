@@ -55,15 +55,21 @@ run go test ./session -run '^$' \
   -bench '^BenchmarkSQLite(Branch256|BuildContext256)$' \
   -benchmem -count "$COUNT"
 
+phase_note "MCP subprocess lifecycle"
+run go test ./tool/mcp -run '^$' \
+  -bench '^BenchmarkRuntimeOpenClose$' \
+  -benchmem -count "$COUNT"
+
 cat <<'EOF'
 
 Ion performance baseline finished.
 
 The current baseline covers startup readiness, runtime snapshot/first-event
 latency, bounded tool dispatch, controller shutdown, TUI shell/stream
-rendering, Markdown rendering, SQLite branch navigation, and context
-reconstruction. Provider latency, compaction, and subprocess/MCP teardown
-remain separate measurements until current representative benchmarks exist.
+rendering, Markdown rendering, SQLite branch navigation, context
+reconstruction, and MCP subprocess open/close lifecycle. Provider latency and
+compaction remain separate measurements until current representative
+benchmarks exist.
 
 Record this output with the machine, run count, datasets, and any follow-up
 tasks for regressions.
