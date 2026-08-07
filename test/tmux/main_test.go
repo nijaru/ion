@@ -15,6 +15,7 @@ type tmuxTest struct {
 	socket  string
 	session string
 	root    string
+	binary  string
 }
 
 func newTmuxTest(t *testing.T) *tmuxTest {
@@ -55,7 +56,20 @@ func newTmuxTest(t *testing.T) *tmuxTest {
 		t.Fatalf("session not found: %v\n%s", err, out)
 	}
 
-	tt := &tmuxTest{t: t, socket: socket, session: session, root: moduleRoot}
+	binaryPath := filepath.Join(t.TempDir(), "ion")
+	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/ion")
+	build.Dir = moduleRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build Ion for tmux acceptance: %v\n%s", err, out)
+	}
+
+	tt := &tmuxTest{
+		t:       t,
+		socket:  socket,
+		session: session,
+		root:    moduleRoot,
+		binary:  binaryPath,
+	}
 	t.Cleanup(func() {
 		tt.tmuxSafe("kill-session", "-t", session)
 		tt.tmuxSafe("kill-server")
@@ -138,13 +152,16 @@ func (tt *tmuxTest) waitFor(substr string, timeout time.Duration) string {
 // launchIon starts Ion with --no-session and waits for the composer prompt.
 func (tt *tmuxTest) launchIon() {
 	tt.t.Helper()
-	tt.typeText("./ion --no-session")
+	tt.typeText(tt.binary + " --no-session")
 	tt.enter()
 	tt.waitFor("Type a message", 15*time.Second)
 }
 
 // TestTUIInteractive verifies Ion starts and produces an assistant response.
 func TestTUIInteractive(t *testing.T) {
+	if os.Getenv("ION_TMUX_LIVE") != "1" {
+		t.Skip("live tmux acceptance requires ION_TMUX_LIVE=1")
+	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}
@@ -171,6 +188,9 @@ func TestTUIInteractive(t *testing.T) {
 
 // TestTUIToolCall verifies Ion can execute a Read tool and display the result.
 func TestTUIToolCall(t *testing.T) {
+	if os.Getenv("ION_TMUX_LIVE") != "1" {
+		t.Skip("live tmux acceptance requires ION_TMUX_LIVE=1")
+	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}

@@ -36,10 +36,13 @@ func TestRootReadWriteListAndGlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	if len(entries) != 2 ||
-		entries[0].Name() != "deep" ||
-		entries[1].Name() != "hello.txt" {
-		t.Fatalf("unexpected entries: %#v", entries)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"deep", "hello.txt"}) {
+		t.Fatalf("unexpected entries: %#v", names)
 	}
 
 	matches, err := root.Glob(t.Context(), "nested/*.txt")

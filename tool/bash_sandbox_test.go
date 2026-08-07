@@ -87,6 +87,9 @@ func TestBubblewrapBashEnforcesWorkspaceBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if output, err := NewBash(workspace).Execute(t.Context(), string(writeArgs)); err != nil {
+		if strings.Contains(output, "Operation not permitted") || strings.Contains(output, "Failed RTM_NEWADDR") {
+			t.Skipf("bubblewrap network namespace unavailable in this runner: %s", output)
+		}
 		t.Fatalf("workspace write failed: %v (output %q)", err, output)
 	}
 	data, err := os.ReadFile(marker)

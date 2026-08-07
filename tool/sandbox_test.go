@@ -60,7 +60,8 @@ func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 		sandboxLookPath = prevLookPath
 	}()
 
-	plan, err := planSeatbeltSandbox("/Users/nick/github/nijaru/ion", "go test ./...")
+	workspace := t.TempDir()
+	plan, err := planSeatbeltSandbox(workspace, "go test ./...")
 	if err != nil {
 		t.Fatalf("planSeatbeltSandbox error = %v", err)
 	}
@@ -84,7 +85,7 @@ func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 		t.Fatalf("read seatbelt profile: %v", err)
 	}
 	profile := string(data)
-	for _, want := range []string{"(deny default)", "(allow process*)", "/Users/nick/github/nijaru/ion"} {
+	for _, want := range []string{"(deny default)", "(allow process*)", workspace} {
 		if !strings.Contains(profile, want) {
 			t.Fatalf("seatbelt profile missing %q: %s", want, profile)
 		}
