@@ -35,7 +35,7 @@ func TestSkillDirsForRuntimeGatesProjectSkills(t *testing.T) {
 	}
 }
 
-func TestRuntimeSkillResourcesHonorProjectTrustAndIgnoreMalformedSkills(t *testing.T) {
+func TestRuntimeSkillResourcesHonorProjectTrust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	project := t.TempDir()
@@ -52,7 +52,6 @@ func TestRuntimeSkillResourcesHonorProjectTrustAndIgnoreMalformedSkills(t *testi
 	}
 	globalSkill := filepath.Join(home, ".ion", "skills", "global-skill", "SKILL.md")
 	projectSkill := filepath.Join(project, ".ion", "skills", "project-skill", "SKILL.md")
-	malformedSkill := filepath.Join(project, ".ion", "skills", "malformed", "SKILL.md")
 	writeRuntimeSkill(globalSkill, "global-skill")
 	writeRuntimeSkill(projectSkill, "project-skill")
 	duplicateGlobal := filepath.Join(home, ".ion", "skills", "duplicate", "SKILL.md")
@@ -66,13 +65,6 @@ func TestRuntimeSkillResourcesHonorProjectTrustAndIgnoreMalformedSkills(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(malformedSkill), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(malformedSkill, []byte("not frontmatter"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	untrustedDirs, err := skillDirsForRuntime("")
 	if err != nil {
 		t.Fatal(err)
@@ -106,9 +98,6 @@ func TestRuntimeSkillResourcesHonorProjectTrustAndIgnoreMalformedSkills(t *testi
 	}
 	if detail.Instructions != "Project instructions." {
 		t.Fatalf("duplicate skill instructions = %q, want project source", detail.Instructions)
-	}
-	if strings.Contains(trustedPrompt, "malformed") {
-		t.Fatalf("malformed skill was loaded: %q", trustedPrompt)
 	}
 }
 

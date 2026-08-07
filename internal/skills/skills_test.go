@@ -115,6 +115,16 @@ Use focused review findings.
 	}
 }
 
+func TestListContextSurfacesMalformedSkill(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, filepath.Join(root, "broken", "SKILL.md"), "not skill frontmatter")
+
+	_, err := ListContext(context.Background(), root)
+	if err == nil || !strings.Contains(err.Error(), "load skill") || !strings.Contains(err.Error(), "broken/SKILL.md") {
+		t.Fatalf("ListContext error = %v, want malformed skill error", err)
+	}
+}
+
 func TestReadSkillRejectsMissingSkill(t *testing.T) {
 	_, err := Read([]string{t.TempDir()}, "missing")
 	if err == nil || !strings.Contains(err.Error(), `skill "missing" not found`) {

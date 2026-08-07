@@ -164,9 +164,17 @@ func LoadInstructionLayers(cwd, projectTrustRoot string) ([]InstructionLayer, er
 	layers := make([]InstructionLayer, 0, 2)
 	seen := make(map[string]struct{}, 2)
 
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	if home != "" {
 		globalDir := filepath.Join(home, ".ion")
-		appendInstructionLayers(&layers, seen, instructionLayerForDir(globalDir))
+		globalLayers, err := instructionLayerForDir(globalDir)
+		if err != nil {
+			return nil, fmt.Errorf("load global instructions: %w", err)
+		}
+		appendInstructionLayers(&layers, seen, globalLayers)
 	}
 
 	projectRoot := strings.TrimSpace(projectTrustRoot)
@@ -185,7 +193,11 @@ func LoadInstructionLayers(cwd, projectTrustRoot string) ([]InstructionLayer, er
 		return layers, nil
 	}
 	for _, dir := range dirsFromRoot(projectRoot, abs) {
-		appendInstructionLayers(&layers, seen, instructionLayerForDir(dir))
+		projectLayers, err := instructionLayerForDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("load project instructions from %q: %w", dir, err)
+		}
+		appendInstructionLayers(&layers, seen, projectLayers)
 	}
 	return layers, nil
 }
@@ -217,15 +229,18 @@ func dirsFromRoot(root, cwd string) []string {
 	return dirs
 }
 
-func instructionLayerForDir(dir string) []InstructionLayer {
+func instructionLayerForDir(dir string) ([]InstructionLayer, error) {
 	for _, name := range instructionFileNames {
 		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
+		if _, err := os.Lstat(path); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			continue
+			return nil, fmt.Errorf("inspect %q: %w", path, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %q: %w", path, err)
 		}
 		content := string(data)
 		if strings.TrimSpace(content) == "" {
@@ -234,9 +249,9 @@ func instructionLayerForDir(dir string) []InstructionLayer {
 		return []InstructionLayer{{
 			Path:    path,
 			Content: content,
-		}}
+		}}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func appendInstructionLayers(

@@ -46,11 +46,17 @@ func discoverSkills(ctx context.Context, paths ...string) ([]resolvedSkill, erro
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if err != nil || info == nil || info.IsDir() || info.Name() != "SKILL.md" {
+			if err != nil {
+				return fmt.Errorf("walk skills at %q: %w", path, err)
+			}
+			if info == nil || info.IsDir() || info.Name() != "SKILL.md" {
 				return nil
 			}
 			skill, err := agentskills.Load(path)
-			if err == nil && skill != nil {
+			if err != nil {
+				return fmt.Errorf("load skill %q: %w", path, err)
+			}
+			if skill != nil {
 				byName[skill.Name] = resolvedSkill{skill: skill, path: path}
 			}
 			return nil

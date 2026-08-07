@@ -205,9 +205,6 @@ func TestLoadInstructionLayersSupportsCaseVariantsAndFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "AGENTS.md"), 0o755); err != nil {
-		t.Fatalf("mkdir unreadable AGENTS candidate: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(root, "CLAUDE.MD"), []byte("claude upper"), 0o644); err != nil {
 		t.Fatalf("write CLAUDE.MD: %v", err)
 	}
@@ -296,6 +293,19 @@ func TestLoadInstructionLayersWithoutRepoWalksAncestors(t *testing.T) {
 	}
 	if layers[1].Content != "nested instructions" {
 		t.Fatalf("nested layer content = %q, want nested instructions", layers[1].Content)
+	}
+}
+
+func TestLoadInstructionLayersSurfacesInstructionReadErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "AGENTS.md"), 0o755); err != nil {
+		t.Fatalf("mkdir AGENTS: %v", err)
+	}
+
+	_, err := LoadInstructionLayers(root, root)
+	if err == nil || !strings.Contains(err.Error(), "read") || !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("LoadInstructionLayers error = %v, want AGENTS.md read error", err)
 	}
 }
 
