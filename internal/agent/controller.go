@@ -1245,33 +1245,54 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 	sess := h.session
 	oldModel := h.model
 	changed := model.Provider != oldModel.Provider || model.ID != oldModel.ID
-	if idle && changed {
-		h.mu.Unlock()
+	h.mu.Unlock()
+
+	if idle {
 		if sess == nil {
-			return errors.New("harness has no session")
+			if changed {
+				return errors.New("harness has no session")
+			}
+			h.mu.Lock()
+			h.model = model
+			h.mu.Unlock()
+			return nil
 		}
-		finish, err := h.beginExclusive(PhasePersisting)
+		snapshot, err := sess.BuildContext(context.Background())
 		if err != nil {
-			return err
+			return fmt.Errorf("inspect persisted model: %w", err)
 		}
-		persistCtx, releasePersistCtx := h.runtimeBoundContext(context.Background())
-		defer releasePersistCtx()
-		if _, err := sess.AppendModelChange(persistCtx, model.Provider, model.ID); err != nil {
+		persistedModelChanged := (snapshot.ActiveModel != "" && snapshot.ActiveModel != model.ID) ||
+			(snapshot.ActiveProvider != "" && snapshot.ActiveProvider != model.Provider)
+		if changed || persistedModelChanged {
+			finish, err := h.beginExclusive(PhasePersisting)
+			if err != nil {
+				return err
+			}
+			persistCtx, releasePersistCtx := h.runtimeBoundContext(context.Background())
+			defer releasePersistCtx()
+			if _, err := sess.AppendModelChange(persistCtx, model.Provider, model.ID); err != nil {
+				finish()
+				return fmt.Errorf("persist model change: %w", err)
+			}
+			h.mu.Lock()
+			oldModel = h.model
+			h.model = model
+			h.emitLocked(session.ModelUpdate{
+				Model:    model.ID,
+				Previous: oldModel.ID,
+				Source:   session.UpdateSourceSet,
+			})
+			h.mu.Unlock()
 			finish()
-			return fmt.Errorf("persist model change: %w", err)
+			return nil
 		}
 		h.mu.Lock()
-		oldModel = h.model
 		h.model = model
-		h.emitLocked(session.ModelUpdate{
-			Model:    model.ID,
-			Previous: oldModel.ID,
-			Source:   session.UpdateSourceSet,
-		})
 		h.mu.Unlock()
-		finish()
 		return nil
 	}
+
+	h.mu.Lock()
 	h.model = model
 	if changed {
 		h.pending = append(h.pending, pendingWrite{

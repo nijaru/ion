@@ -615,32 +615,50 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 		"--- resumed ---",
 		"session resume replay boundary",
 	)
-	resumeResult := waitAcceptanceRuntimeSwitch(t, switches, "model-a")
+	resumeResult := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
 	if resumeResult.leafID != leafID {
 		t.Fatalf("resume leaf = %q, want selected leaf %q", resumeResult.leafID, leafID)
 	}
 	program.Send(tea.KeyPressMsg{Text: "after session resume"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitAcceptanceSignal(t, resumedProvider.started, "resumed runtime provider")
-	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "resumed runtime output")
+	waitAcceptanceSignal(t, postResumeModelBProvider.started, "resumed model-b provider")
+	waitForAcceptanceOutput(t, output, "post-resume-model-b-output", "resumed model-b runtime output")
 	postResumeLeafID := waitForAcceptanceSessionInfoAfter(t, store, store, resumeResult.leafID)
 	waitForAcceptanceIdle(t, resumeResult.runner)
 	sendAcceptanceCommandAfterSettlement(
 		t,
 		program,
 		output,
+		"/model model-a",
+		"Model set to model-a",
+		"post-resume model-a switch notice",
+	)
+	postResumeModelASwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-a")
+	if postResumeModelASwitch.leafID != postResumeLeafID {
+		t.Fatalf("post-resume model-a switch leaf = %q, want %q", postResumeModelASwitch.leafID, postResumeLeafID)
+	}
+	program.Send(tea.KeyPressMsg{Text: "after post-resume model-a switch"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitAcceptanceSignal(t, resumedProvider.started, "post-resume model-a provider")
+	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "post-resume model-a runtime output")
+	postModelALeafID := waitForAcceptanceSessionInfoAfter(t, store, store, postResumeModelASwitch.leafID)
+	waitForAcceptanceIdle(t, postResumeModelASwitch.runner)
+	sendAcceptanceCommandAfterSettlement(
+		t,
+		program,
+		output,
 		"/model model-b",
 		"Model set to model-b",
-		"post-resume model switch notice",
+		"final model-b switch notice",
 	)
-	postResumeSwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
-	if postResumeSwitch.leafID != postResumeLeafID {
-		t.Fatalf("post-resume model switch leaf = %q, want %q", postResumeSwitch.leafID, postResumeLeafID)
+	finalSwitch := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
+	if finalSwitch.leafID != postModelALeafID {
+		t.Fatalf("final model-b switch leaf = %q, want %q", finalSwitch.leafID, postModelALeafID)
 	}
-	program.Send(tea.KeyPressMsg{Text: "after post-resume model switch"})
+	program.Send(tea.KeyPressMsg{Text: "after final model switch"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitAcceptanceSignal(t, postResumeModelBProvider.started, "post-resume model-b provider")
-	waitForAcceptanceOutput(t, output, "post-resume-model-b-output", "post-resume model-b runtime output")
+	waitAcceptanceSignal(t, postResumeModelBProvider.started, "final model-b provider")
+	waitForAcceptanceOutput(t, output, "post-resume-model-b-output", "final model-b runtime output")
 
 	program.Quit()
 	finalModel := waitAcceptanceProgram(t, result)

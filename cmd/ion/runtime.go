@@ -602,6 +602,11 @@ func openRuntime(
 			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
 		}
 	}
+	if persistResumedSessionModel {
+		if err := harness.SetModel(model); err != nil {
+			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("persist runtime model: %w", err))
+		}
+	}
 	if searchTool != nil {
 		searchTool.SetActivator(harness.ActivateTools)
 	}

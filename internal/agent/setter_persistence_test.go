@@ -9,6 +9,31 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestIdleModelSelectionPersistsWhenRuntimeAlreadyUsesTarget(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendModelChange(context.Background(), "old", "old-model"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{Provider: "new", ID: "new-model"},
+	})
+	defer h.Close()
+
+	if err := h.SetModel(llm.Model{Provider: "new", ID: "new-model"}); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	snapshot, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ActiveProvider != "new" || snapshot.ActiveModel != "new-model" {
+		t.Fatalf("persisted model = %s/%s, want new/new-model", snapshot.ActiveProvider, snapshot.ActiveModel)
+	}
+}
+
 func TestIdleModelAndToolChangesPersistBeforeLiveMutation(t *testing.T) {
 	store := newTestStore(t)
 	base := session.NewSession(store, 64)

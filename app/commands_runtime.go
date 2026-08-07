@@ -746,7 +746,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 }
 
 func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
-	cmds := make([]tea.Cmd, 0, 3)
+	cmds := make([]tea.Cmd, 0, 4)
 
 	var status string
 	s := msg.runtime.Transition.Snapshot.Status
@@ -769,6 +769,9 @@ func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 				msg.runtime.Handles.Storage,
 			),
 		)
+	}
+	if catalogCmd := m.persistCurrentSessionInfoCmd(); catalogCmd != nil {
+		cmds = append(cmds, catalogCmd)
 	}
 	return append(cmds, m.awaitSessionEvent())
 }

@@ -62,6 +62,7 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	// Find the most recent compaction and state changes.
 	var lastCompaction *CompactionEntry
+	var activeProvider string
 	var activeModel string
 	var activeThinking ThinkingLevel
 	var activeTools []string
@@ -73,6 +74,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 			}
 		case *ModelChangeEntry:
 			if activeModel == "" {
+				activeProvider = e.Provider
 				activeModel = e.ModelID
 			}
 		case *ThinkingChangeEntry:
@@ -87,6 +89,7 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 			// Assistant messages carry the authoritative provider/model, so the
 			// active model is recovered even without an explicit ModelChangeEntry.
 			if am, ok := e.Message.(*AssistantMessage); ok && activeModel == "" && am.Model != "" {
+				activeProvider = am.Provider
 				activeModel = am.Model
 			}
 		}
@@ -150,10 +153,11 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	}
 
 	return ContextSnapshot{
-		Messages:    msgs,
-		ActiveModel: activeModel,
-		Thinking:    activeThinking,
-		ActiveTools: activeTools,
+		Messages:       msgs,
+		ActiveProvider: activeProvider,
+		ActiveModel:    activeModel,
+		Thinking:       activeThinking,
+		ActiveTools:    activeTools,
 	}, nil
 }
 

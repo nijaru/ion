@@ -54,10 +54,11 @@ type Session interface {
 
 // ContextSnapshot is the result of BuildContext — what the loop needs to run a turn.
 type ContextSnapshot struct {
-	Messages    []Message
-	ActiveModel string        // from most recent ModelChangeEntry
-	Thinking    ThinkingLevel // from most recent ThinkingChangeEntry
-	ActiveTools []string      // from most recent ToolsChangeEntry
+	Messages       []Message
+	ActiveProvider string        // from most recent ModelChangeEntry
+	ActiveModel    string        // from most recent ModelChangeEntry
+	Thinking       ThinkingLevel // from most recent ThinkingChangeEntry
+	ActiveTools    []string      // from most recent ToolsChangeEntry
 }
 
 // CompactionData holds the payload for a compaction entry.
