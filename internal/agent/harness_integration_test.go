@@ -541,14 +541,17 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	// Use a single harness for all pre-fill turns.
 	func() {
 		h := NewController(ControllerConfig{
-			Session: sess,
-			Model:   llm.Model{ID: "test"},
+			Session:        sess,
+			Durable:        store,
+			RequireDurable: true,
+			Model:          llm.Model{ID: "test"},
 			StreamFn: func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 				return &mockStream{chunks: []*llm.Chunk{
 					{Content: "filler", StopReason: "stop"},
 				}}, nil
 			},
 		})
+		defer h.Close()
 		for i := 0; i < 20; i++ {
 			_, err := h.Prompt(context.Background(), "fill")
 			if err != nil {
@@ -572,11 +575,13 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	}
 
 	h := NewController(ControllerConfig{
-		Session:       sess,
-		Model:         llm.Model{ID: "test"},
-		StreamFn:      streamFn,
-		Compaction:    CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 10},
-		ContextWindow: 100,
+		Session:        sess,
+		Model:          llm.Model{ID: "test"},
+		Durable:        store,
+		RequireDurable: true,
+		StreamFn:       streamFn,
+		Compaction:     CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 10},
+		ContextWindow:  100,
 	})
 	defer h.Close()
 
@@ -587,6 +592,22 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	am := msg.(*session.AssistantMessage)
 	if textContentMsg(am) != "recovered after compact" {
 		t.Errorf("expected 'recovered after compact', got %q", textContentMsg(am))
+	}
+	if got := atomic.LoadInt32(&callNum); got < 3 {
+		t.Fatalf("stream calls = %d, want overflow, compaction, and durable retry", got)
+	}
+	entries, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+	var compactions int
+	for _, entry := range entries {
+		if _, ok := entry.(*session.CompactionEntry); ok {
+			compactions++
+		}
+	}
+	if compactions != 1 {
+		t.Fatalf("compaction entries = %d, want one committed recovery summary", compactions)
 	}
 }
 

@@ -443,9 +443,24 @@ func (h *Controller) runPrompt(
 		if !overflow {
 			break // no overflow, done
 		}
-		// Compact and retry.
-		if compactErr := h.compactAfterTurn(ctx); compactErr != nil {
+		// Compact and retry. A durable turn that overflowed is aborted before
+		// compaction so the summary is appended to committed history rather than
+		// being mixed with an uncommitted turn. The retry starts a fresh durable
+		// turn with the original user input.
+		restartedTurn, compactErr := h.compactAfterTurn(ctx)
+		if compactErr != nil {
 			break // can't compact, give up
+		}
+		if restartedTurn {
+			result := h.requestRuntime(ctx, runtimeRequest{
+				kind:   runtimeBeginTurn,
+				input:  text,
+				images: cloneImageContents(promptImages),
+			})
+			if result.err != nil {
+				break
+			}
+			prompts = []session.Message{newUserMessage(text, promptImages, time.Now())}
 		}
 		snap, err = h.contextSnapshot(ctx)
 		if err != nil {
@@ -541,18 +556,28 @@ func (h *Controller) contextSnapshot(ctx context.Context) (session.ContextSnapsh
 	return h.requestContextSnapshot(ctx)
 }
 
-func (h *Controller) canCompactAfterTurn() bool {
+func (h *Controller) compactAfterTurn(ctx context.Context) (bool, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.activeTurnID == "" || h.durable == nil
-}
+	durableTurn := h.activeTurnID != "" && h.durable != nil
+	h.mu.Unlock()
 
-func (h *Controller) compactAfterTurn(ctx context.Context) error {
-	if !h.canCompactAfterTurn() {
-		return errors.New("compaction cannot run inside an uncommitted durable turn")
+	if durableTurn {
+		result := h.requestRuntime(ctx, runtimeRequest{
+			kind:   runtimeAbortTurn,
+			reason: "context overflow; retrying after compaction",
+		})
+		if result.err != nil {
+			return false, fmt.Errorf("abort overflowed turn: %w", result.err)
+		}
 	}
-	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeCompact})
-	return result.err
+
+	// Overflow is authoritative even if the normal token estimate did not
+	// predict it, so force the summary operation after the failed attempt.
+	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeCompact, force: true})
+	if result.err != nil {
+		return false, result.err
+	}
+	return durableTurn, nil
 }
 
 func terminalTurnFailure(messages []session.Message) string {
