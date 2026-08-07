@@ -182,6 +182,22 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 		if err != nil {
 			return nil, fmt.Errorf("build runtime snapshot: %w", err)
 		}
+		persisted, err := session.ProjectContext(branch)
+		if err != nil {
+			return nil, fmt.Errorf("restore runtime state for snapshot: %w", err)
+		}
+		h.mu.Lock()
+		if !phase.activeTurn() {
+			if persisted.Thinking != "" && !h.thinkingPending {
+				h.thinking = clampThinkingLevel(h.model, persisted.Thinking)
+			}
+			if persisted.ActiveToolsSet {
+				h.active = append([]string(nil), persisted.ActiveTools...)
+			}
+			snapshot.Thinking = h.thinking
+			snapshot.ActiveTools = append([]string(nil), h.active...)
+		}
+		h.mu.Unlock()
 		snapshot.Branch = append([]session.Entry(nil), branch...)
 		if h.eventHub.cursor() != expected || h.session.GetLeafID() != leafID {
 			continue

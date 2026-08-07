@@ -35,6 +35,16 @@ func TestHarnessRestoresExplicitlyEmptyToolSet(t *testing.T) {
 	})
 	defer h.Close()
 
+	subscription, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subscription.Snapshot.ActiveTools) != 0 {
+		subscription.Close()
+		t.Fatalf("initial runtime snapshot tools = %#v, want explicitly empty set", subscription.Snapshot.ActiveTools)
+	}
+	subscription.Close()
+
 	if _, err := h.Prompt(context.Background(), "without tools"); err != nil {
 		t.Fatal(err)
 	}
