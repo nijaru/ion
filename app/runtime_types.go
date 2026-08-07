@@ -262,8 +262,9 @@ type SwitchInput struct {
 
 // SwitchResult holds the result of a model switch.
 type SwitchResult struct {
-	Runtime  Accepted
-	Previous Handles
+	Runtime      Accepted
+	Previous     Handles
+	Subscription *agent.EventSubscription
 }
 
 // ResumeInput holds the parameters for resuming a session.
@@ -330,12 +331,21 @@ func Switch(ctx context.Context, input SwitchInput) (SwitchResult, error) {
 			CloseHandles(newHandles),
 		)
 	}
+	subscription, err := newHandles.Runner.Subscribe(ctx, agent.EventCursor{})
+	if err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("switch: subscribe replacement: %w", err),
+			CloseHandles(newHandles),
+		)
+	}
 	if err := transition.Persist(input.SaveState); err != nil {
+		subscription.Close()
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("switch: persist runtime state: %w", err),
 			CloseHandles(newHandles),
 		)
 	}
+	result.Subscription = subscription
 
 	return result, nil
 }
@@ -375,15 +385,24 @@ func Resume(ctx context.Context, input ResumeInput) (SwitchResult, error) {
 			CloseHandles(newHandles),
 		)
 	}
+	subscription, err := newHandles.Runner.Subscribe(ctx, agent.EventCursor{})
+	if err != nil {
+		return SwitchResult{}, errors.Join(
+			fmt.Errorf("resume: subscribe replacement: %w", err),
+			CloseHandles(newHandles),
+		)
+	}
 	if err := transition.Persist(input.SaveState); err != nil {
+		subscription.Close()
 		return SwitchResult{}, errors.Join(
 			fmt.Errorf("resume: persist runtime state: %w", err),
 			CloseHandles(newHandles),
 		)
 	}
 	return SwitchResult{
-		Runtime:  NewAccepted(transition, newHandles),
-		Previous: input.Current,
+		Runtime:      NewAccepted(transition, newHandles),
+		Previous:     input.Current,
+		Subscription: subscription,
 	}, nil
 }
 

@@ -554,6 +554,7 @@ func (m Model) switchRuntimeCommandWithOptions(
 			switchID:       requestID,
 			runtime:        result.Runtime,
 			previous:       result.Previous,
+			subscription:   result.Subscription,
 			leafID:         leafID,
 			worktreeBranch: worktreeBranch,
 			keybindings:    options.keybindings,
@@ -610,6 +611,7 @@ func (m Model) resumeRuntimeCommand(
 			switchID:       switchID,
 			runtime:        result.Runtime,
 			previous:       result.Previous,
+			subscription:   result.Subscription,
 			leafID:         leafID,
 			worktreeBranch: projection.WorktreeBranch,
 			printLines:     printLines,
@@ -641,6 +643,9 @@ func selectedRuntimeProjection(ctx context.Context, runner agent.Runtime) (agent
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 	if msg.generation != m.Model.EventGeneration || !m.runtimeRequest().matches(msg.switchID) {
+		if msg.subscription != nil {
+			msg.subscription.Close()
+		}
 		if err := closeRuntimeHandles(msg.runtime.Handles); err != nil {
 			return m.handleLocalError(fmt.Errorf("close stale runtime: %w", err))
 		}
@@ -709,7 +714,9 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	}
 	closeErr := closeRuntimeHandles(msg.previous)
 	m.Model.EventGeneration++
-	m.Model.EventCursor = agent.EventCursor{}
+	if msg.subscription == nil {
+		m.Model.EventCursor = agent.EventCursor{}
+	}
 	if state := m.Model.EventSubscriptionState; state != nil {
 		state.generation = m.Model.EventGeneration
 		state.pending = false
@@ -727,6 +734,10 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	m.clearPendingAction()
 	m.progressReducer().resetSessionUsage()
 	m.resetHistoryCursor()
+	if msg.subscription != nil {
+		m.Model.EventSubscription = msg.subscription
+		m.Model.EventCursor = msg.subscription.Snapshot.Cursor
+	}
 	return closeErr
 }
 

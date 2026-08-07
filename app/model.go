@@ -102,6 +102,7 @@ type runtimeSwitchedMsg struct {
 	switchID       uint64
 	runtime        Accepted
 	previous       Handles
+	subscription   *agent.EventSubscription
 	leafID         string
 	worktreeBranch string
 	keybindings    *KeybindingsManager
