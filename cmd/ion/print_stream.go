@@ -92,7 +92,7 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.MessageUpdate:
-		if msg.BlockType == "text" {
+		if msg.BlockType == "text" || (msg.BlockType == "" && isTextDelta(msg.Delta)) {
 			text := session.DeltaText(msg.Delta)
 			o.text.WriteString(text)
 			if text != "" {
@@ -415,6 +415,11 @@ func messageEventData(msg session.Message) map[string]any {
 		"role": messageRole(msg),
 		"text": session.MessageText(msg),
 	}
+}
+
+func isTextDelta(delta session.Delta) bool {
+	_, ok := delta.(session.TextDelta)
+	return ok
 }
 
 func messageUpdateData(msg session.MessageUpdate) map[string]any {

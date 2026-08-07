@@ -563,6 +563,22 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 	}
 }
 
+func TestPrintModeStreamsTypedTextDeltaWithoutBlockType(t *testing.T) {
+	sess := &printSession{events: make(chan agent.EventEnvelope, 2)}
+	sess.events <- printEnvelope(session.MessageUpdate{
+		Delta: session.TextDelta{Text: "typed"},
+	})
+	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+
+	var out bytes.Buffer
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "text"); err != nil {
+		t.Fatalf("runPrintMode returned error: %v", err)
+	}
+	if got := out.String(); got != "typed\n" {
+		t.Fatalf("text output = %q, want typed newline", got)
+	}
+}
+
 func TestPrintModeStreamsTextBeforePromptSettles(t *testing.T) {
 	base := &printSession{events: make(chan agent.EventEnvelope, 2)}
 	base.events <- printEnvelope(session.MessageUpdate{

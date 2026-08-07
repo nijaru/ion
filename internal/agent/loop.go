@@ -320,18 +320,30 @@ func streamAssistantResponse(
 
 		// Emit delta events.
 		if chunk.Content != "" {
-			emit(session.MessageUpdate{Message: &partial, Delta: session.TextDelta{Text: chunk.Content}})
+			emit(session.MessageUpdate{
+				Message:   &partial,
+				Delta:     session.TextDelta{Text: chunk.Content},
+				BlockType: "text",
+			})
 		}
 		if chunk.Reasoning != "" {
-			emit(session.MessageUpdate{Message: &partial, Delta: session.ThinkingDelta{Text: chunk.Reasoning}})
+			emit(session.MessageUpdate{
+				Message:   &partial,
+				Delta:     session.ThinkingDelta{Text: chunk.Reasoning},
+				BlockType: "thinking",
+			})
 		}
 		for _, call := range chunk.Calls {
 			args, _ := json.Marshal(call.Function.Arguments)
-			emit(session.MessageUpdate{Message: &partial, Delta: session.ToolCallDelta{
-				ToolCallID:     call.ID,
-				Name:           call.Function.Name,
-				ArgumentsChunk: string(args),
-			}})
+			emit(session.MessageUpdate{
+				Message: &partial,
+				Delta: session.ToolCallDelta{
+					ToolCallID:     call.ID,
+					Name:           call.Function.Name,
+					ArgumentsChunk: string(args),
+				},
+				BlockType: "tool_call",
+			})
 		}
 	}
 
