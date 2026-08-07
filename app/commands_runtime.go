@@ -692,6 +692,8 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	m.Model.Storage = msg.runtime.Handles.Storage
 	m.Model.SessionCatalog = nil
 	m.Model.InputHistory = nil
+	m.Model.ActiveTools = nil
+	m.Model.ActiveToolsSet = false
 	m.Model.LeafID = strings.TrimSpace(msg.leafID)
 	m.Model.Recovery = nil
 	m.Model.InterruptedTurns = nil

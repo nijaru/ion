@@ -199,7 +199,7 @@ func runtimeStatusSummary(m Model) string {
 	}
 	if summarizer, ok := m.Model.Info.(ToolSummarizer); ok {
 		surface := summarizer.ToolSurface()
-		if len(m.Model.ActiveTools) > 0 {
+		if m.Model.ActiveToolsSet {
 			surface.ActiveNames = slices.Clone(m.Model.ActiveTools)
 		}
 		lines = append(lines, toolSurfaceSummary(surface))

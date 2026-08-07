@@ -18,6 +18,7 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	m.Model.Runtime.Reasoning = normalizeThinkingValue(string(snapshot.Thinking))
 	m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
 	m.Model.ActiveTools = append(m.Model.ActiveTools[:0], snapshot.ActiveTools...)
+	m.Model.ActiveToolsSet = true
 	if snapshot.ActiveTurnToken == 0 {
 		if m.Model.turnCancellation == nil || m.Model.turnCancellation.isStarted() {
 			m.clearTurnCancellation()

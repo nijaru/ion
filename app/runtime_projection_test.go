@@ -189,8 +189,8 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 	if got, want := model.InFlight.QueuedTurns, []string{"follow up", "next turn"}; !equalStrings(got, want) {
 		t.Fatalf("turn queue = %#v, want %#v", got, want)
 	}
-	if !equalStrings(model.Model.ActiveTools, []string{"read", "edit"}) {
-		t.Fatalf("active tools = %#v", model.Model.ActiveTools)
+	if !model.Model.ActiveToolsSet || !equalStrings(model.Model.ActiveTools, []string{"read", "edit"}) {
+		t.Fatalf("active tools = %#v (set=%t)", model.Model.ActiveTools, model.Model.ActiveToolsSet)
 	}
 	if model.Picker.Approval == nil || model.Picker.Approval.request.ID != "approval-1" ||
 		model.Picker.Approval.request.Resource != "config.toml" || !model.Picker.Approval.resolving {

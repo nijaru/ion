@@ -13,6 +13,33 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+type statusToolRuntime struct {
+	stubBackend
+	surface ToolSurface
+}
+
+func (r statusToolRuntime) ToolSurface() ToolSurface { return r.surface }
+
+func TestRuntimeStatusSummaryHonorsEmptyActiveToolsSnapshot(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Info = statusToolRuntime{
+		stubBackend: stubBackend{provider: "openai", model: "test-model"},
+		surface: ToolSurface{
+			Count:       2,
+			Names:       []string{"read", "edit"},
+			ActiveNames: []string{"read"},
+			Mode:        "coding",
+		},
+	}
+	model.Model.ActiveToolsSet = true
+	model.Model.ActiveTools = nil
+
+	got := runtimeStatusSummary(model)
+	if strings.Contains(got, "Active (coding):") {
+		t.Fatalf("runtime status retained stale active tools: %q", got)
+	}
+}
+
 func TestCanceledFrontendTimersStopWithoutMessages(t *testing.T) {
 	model := Model{}
 	model.Model.runtimeContext, model.Model.runtimeCancel = context.WithCancel(context.Background())

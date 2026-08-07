@@ -532,8 +532,10 @@ type ModelState struct {
 	InterruptedTurnRequest uint64
 	// ActiveTools is the runtime-owned active tool projection. It is refreshed
 	// from RuntimeSnapshot on subscription/resync; ToolSurface remains the
-	// registry-level startup description.
-	ActiveTools []string
+	// registry-level startup description. ActiveToolsSet distinguishes an
+	// authoritative empty runtime set from the pre-subscription zero value.
+	ActiveTools    []string
+	ActiveToolsSet bool
 	// LeafID is the current runtime-selected tree leaf from an authoritative
 	// event snapshot or successful branch replay. It is a render/query hint,
 	// never a mutation authority.
