@@ -202,7 +202,10 @@ wait_settled() {
   start="$(date +%s)"
   while true; do
     capture_visible
-    if ! grep -Eq 'Submitting\.\.\.|Ionizing\.\.\.|Streaming\.\.\.|Working\.\.\.|Compacting context\.\.\.' "$CAPTURE"; then
+    # Inline-mode rendering can leave earlier transient frames in the
+    # visible scrollback after a long streamed response. Only the bottom
+    # shell chrome is authoritative for the current settled state.
+    if ! sed '/^[[:space:]]*$/d' "$CAPTURE" | tail -n 8 | grep -Eq 'Submitting\.\.\.|Ionizing\.\.\.|Streaming\.\.\.|Working\.\.\.|Compacting context\.\.\.'; then
       return 0
     fi
     if (($(date +%s) - start >= timeout)); then
@@ -399,6 +402,7 @@ send_deterministic_p1_tui_smoke() {
   start_smoke_ion "markdown"
   send_line "exercise final markdown commit"
   wait_contains "Here's the summary of both status files:" 30
+  wait_settled 30
   assert_not_contains "## Canto"
   assert_line_count_at_most "• Here's the summary of both status files:" 1
   # Verify code block is rendered (not raw markdown)
