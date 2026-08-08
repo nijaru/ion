@@ -428,6 +428,60 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 	}
 }
 
+// INTEGRATION: A late stream failure preserves safe partial output in the
+// durable assistant failure message and does not leave a partial tool call.
+func TestHarnessIntegration_LateStreamFailurePreservesSafeOutput(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	streamErr := errors.New("provider disconnected after output")
+	streamFn := func(context.Context, *llm.Request) (llm.Stream, error) {
+		return &faultStream{
+			chunk:     &llm.Chunk{Content: "partial answer"},
+			ok:        true,
+			streamErr: streamErr,
+		}, nil
+	}
+
+	h := NewController(ControllerConfig{
+		Session:  sess,
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+	})
+	defer h.Close()
+
+	message, err := h.Prompt(context.Background(), "first")
+	var turnErr *TurnError
+	if !errors.As(err, &turnErr) || message == nil {
+		t.Fatalf("prompt error = %v, message = %#v, want terminal turn failure", err, message)
+	}
+	assistant, ok := message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, streamErr.Error()) {
+		t.Fatalf("message = %#v, want stream failure", message)
+	}
+	if textContentMsg(assistant) != "partial answer" {
+		t.Fatalf("failure text = %q, want safe partial output", textContentMsg(assistant))
+	}
+
+	snapshot, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted *session.AssistantMessage
+	for _, candidate := range snapshot.Messages {
+		if assistant, ok := candidate.(*session.AssistantMessage); ok {
+			persisted = assistant
+		}
+	}
+	if persisted == nil || textContentMsg(persisted) != "partial answer" {
+		t.Fatalf("persisted failure = %#v, want safe partial output", persisted)
+	}
+	for _, content := range persisted.Content {
+		if _, ok := content.(*session.ToolCall); ok {
+			t.Fatal("persisted failure retained an executable partial tool call")
+		}
+	}
+}
+
 // INTEGRATION: Cancellation — cancel a run mid-stream via Abort(), verify
 // harness returns to idle and can accept new prompts.
 func TestHarnessIntegration_Cancel(t *testing.T) {
