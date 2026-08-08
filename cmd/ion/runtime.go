@@ -530,7 +530,7 @@ func openRuntime(
 		return setupFailure(fmt.Errorf("load prompt templates: %w", err))
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	log := runtimeLogger(interactive, os.Stderr)
 
 	// Build the complete system prompt once at startup. The instructions package
 	// owns base policy, project-context layering, resources, and runtime metadata;
@@ -639,6 +639,16 @@ func openRuntime(
 	}
 
 	return info, sess, harness, nil
+}
+
+func runtimeLogger(interactive bool, stderr io.Writer) *slog.Logger {
+	if interactive {
+		// Bubble Tea owns the terminal in interactive mode. Internal lifecycle
+		// logs must not interleave with its inline renderer; /debug is the
+		// explicit user-facing diagnostic path.
+		return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
+	return slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 func closeRuntimeOpenError(

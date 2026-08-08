@@ -170,16 +170,16 @@ func TestTUIInteractive(t *testing.T) {
 	tt.launchIon()
 	t.Log("Ion started")
 
-	tt.send("Say the word BANANA exactly, nothing else.")
-	t.Log("sent prompt, waiting for response...")
+	tt.send("Which planet is third from the Sun? Reply with exactly one word and no punctuation.")
+	t.Log("sent prompt, waiting for committed assistant response...")
 
-	// Wait for the durable assistant response. The transient Submitting status
-	// may be shorter than the capture polling interval with a fast provider.
-	content := tt.waitFor("BANANA", 60*time.Second)
+	// Wait for the committed assistant response, not the user prompt. The
+	// expected word must not appear in the prompt so this cannot pass early.
+	content := tt.waitFor("• Earth", 60*time.Second)
 	t.Logf("full output after turn:\n%s", content)
 
-	if !strings.Contains(content, "BANANA") {
-		t.Fatalf("expected BANANA in terminal output")
+	if !strings.Contains(content, "• Earth") {
+		t.Fatalf("expected committed Earth response in terminal output")
 	}
 
 	tt.sendKeys("C-c")

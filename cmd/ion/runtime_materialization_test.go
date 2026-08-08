@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -15,6 +16,20 @@ import (
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
+
+func TestRuntimeLoggerDoesNotInterleaveWithInteractiveTUI(t *testing.T) {
+	var interactive bytes.Buffer
+	runtimeLogger(true, &interactive).Info("hidden from terminal")
+	if interactive.Len() != 0 {
+		t.Fatalf("interactive logger wrote %q, want no terminal output", interactive.String())
+	}
+
+	var print bytes.Buffer
+	runtimeLogger(false, &print).Info("print diagnostic")
+	if print.Len() == 0 {
+		t.Fatal("print logger discarded diagnostic output")
+	}
+}
 
 func TestCloseRuntimeResourcesAfterErrorPreservesBothFailures(t *testing.T) {
 	openErr := errors.New("open failed")
