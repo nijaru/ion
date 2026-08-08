@@ -1109,6 +1109,7 @@ func (s *SQLiteStore) MoveTo(ctx context.Context, entryID string, summary *Branc
 			EntryBase: EntryBase{ID: newID(), ParentID: entryID, Timestamp: time.Now()},
 			FromID:    fromID,
 			Summary:   summary.Summary,
+			Usage:     summary.Usage,
 			Details:   append([]byte(nil), summary.Details...),
 		}
 		summaryID, err = s.appendTx(ctx, tx, "", summaryEntry)

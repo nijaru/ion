@@ -76,7 +76,10 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 		Model:   llm.Model{ID: "summary-model", MaxTokens: 2048},
 		StreamFn: func(_ context.Context, req *llm.Request) (llm.Stream, error) {
 			request = *req
-			return &mockStream{chunks: []*llm.Chunk{{Content: "branch work", StopReason: "stop"}}}, nil
+			return &mockStream{chunks: []*llm.Chunk{{
+				Content: "branch work", StopReason: "stop",
+				Usage: &llm.Usage{InputTokens: 11, OutputTokens: 7, TotalTokens: 18, Cost: 0.25},
+			}}}, nil
 		},
 		Compaction: CompactionSettings{ReserveTokens: 1024},
 	})
@@ -125,6 +128,10 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 			oldLeafID,
 		)
 	}
+	if summary.Usage.Input != 11 || summary.Usage.Output != 7 ||
+		summary.Usage.TotalTokens != 18 || summary.Usage.Cost.Total != 0.25 {
+		t.Fatalf("summary usage = %#v, want provider usage", summary.Usage)
+	}
 
 	snapshot, err := sess.BuildContext(ctx)
 	if err != nil {
@@ -146,6 +153,10 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	reopenedSummary, ok := mustBranchEntry(t, reopened, result.SummaryEntryID).(*session.BranchSummaryEntry)
 	if !ok || reopenedSummary.FromID != oldLeafID {
 		t.Fatalf("reopened summary = %#v, want persisted FromID %q", reopenedSummary, oldLeafID)
+	}
+	if reopenedSummary.Usage.Input != 11 || reopenedSummary.Usage.Output != 7 ||
+		reopenedSummary.Usage.TotalTokens != 18 || reopenedSummary.Usage.Cost.Total != 0.25 {
+		t.Fatalf("reopened summary usage = %#v, want provider usage", reopenedSummary.Usage)
 	}
 }
 

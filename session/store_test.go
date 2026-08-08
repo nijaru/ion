@@ -835,6 +835,36 @@ func TestInterruptedTurnIsRetainedButExcludedFromReplay(t *testing.T) {
 	}
 }
 
+func TestMoveToPersistsBranchSummaryUsage(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := NewSession(store, 0)
+	first, err := sess.AppendMessage(ctx, NewUserText("first", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, NewUserText("second", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	usage := Usage{Input: 11, Output: 7, TotalTokens: 18, Cost: Cost{Total: 0.25}}
+	summaryID, err := sess.MoveTo(ctx, first, &BranchSummaryData{Summary: "branch", Usage: usage})
+	if err != nil {
+		t.Fatalf("MoveTo: %v", err)
+	}
+	entry, err := store.GetEntry(ctx, summaryID)
+	if err != nil {
+		t.Fatalf("GetEntry(summary): %v", err)
+	}
+	summary, ok := entry.(*BranchSummaryEntry)
+	if !ok {
+		t.Fatalf("summary entry = %T, want *BranchSummaryEntry", entry)
+	}
+	if summary.Usage != usage {
+		t.Fatalf("summary usage = %#v, want %#v", summary.Usage, usage)
+	}
+}
+
 func TestMoveToIsAtomicAndRejectsMissingTarget(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
