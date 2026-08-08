@@ -37,6 +37,9 @@ func TestBranchSummaryMessagesBoundRecentContextAndSkipToolResults(t *testing.T)
 	if len(messages) != 1 || session.MessageText(messages[0]) != "new" {
 		t.Fatalf("bounded branch messages = %#v, want only newest user message", messages)
 	}
+	if messages = branchSummaryMessages(entries, 0); len(messages) != 2 {
+		t.Fatalf("zero-budget branch messages = %d, want unbounded user messages", len(messages))
+	}
 	for _, message := range branchSummaryMessages(entries, -1) {
 		if _, ok := message.(*session.ToolResultMessage); ok {
 			t.Fatal("branch summary prompt included a tool result")

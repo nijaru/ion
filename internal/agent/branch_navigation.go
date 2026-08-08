@@ -273,7 +273,7 @@ func branchSummaryMessages(entries []session.Entry, tokenBudget int) []session.M
 			continue
 		}
 		tokens := EstimateTokens(message)
-		if tokenBudget >= 0 && totalTokens+tokens > tokenBudget {
+		if tokenBudget > 0 && totalTokens+tokens > tokenBudget {
 			// Summary markers are important context. Include one that slightly
 			// exceeds the budget when the selected context is still sparse, as
 			// Pi does, then stop at the boundary.
