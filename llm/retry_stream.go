@@ -147,7 +147,9 @@ func (s *retryStream) retryAfter(streamErr error) error {
 		if retryLimitReached(s.config, s.attempts, streamErr) {
 			return retryExhausted(s.attempts, streamErr)
 		}
-		_ = s.stream.Close()
+		if closeErr := s.stream.Close(); closeErr != nil {
+			return closeErr
+		}
 		delay := retryDelay(s.config, s.interval, streamErr)
 		notifyRetry(s.ctx, s.config, RetryEvent{
 			Attempt: s.attempts,

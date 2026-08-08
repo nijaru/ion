@@ -88,9 +88,10 @@ func (*nilChunkProvider) Stream(context.Context, *Request) (Stream, error) {
 }
 
 type retryReadFailureProvider struct {
-	calls        atomic.Int32
-	afterChunk   bool
-	retrySuccess Stream
+	calls         atomic.Int32
+	afterChunk    bool
+	firstCloseErr error
+	retrySuccess  Stream
 }
 
 func (p *retryReadFailureProvider) ID() string { return "retry-read-test" }
@@ -100,7 +101,7 @@ func (p *retryReadFailureProvider) Generate(context.Context, *Request) (*Respons
 
 func (p *retryReadFailureProvider) Stream(context.Context, *Request) (Stream, error) {
 	if p.calls.Add(1) == 1 {
-		return &retryReadFailureStream{afterChunk: p.afterChunk}, nil
+		return &retryReadFailureStream{afterChunk: p.afterChunk, closeErr: p.firstCloseErr}, nil
 	}
 	if p.retrySuccess != nil {
 		return p.retrySuccess, nil
@@ -122,6 +123,7 @@ func (p *retryReadFailureProvider) IsContextOverflow(error) bool { return false 
 type retryReadFailureStream struct {
 	afterChunk bool
 	emitted    bool
+	closeErr   error
 }
 
 func (s *retryReadFailureStream) Next() (*Chunk, bool) {
@@ -139,7 +141,7 @@ func (s *retryReadFailureStream) Err() error {
 	}
 	return errRetryTransient
 }
-func (*retryReadFailureStream) Close() error { return nil }
+func (s *retryReadFailureStream) Close() error { return s.closeErr }
 
 type retryCompletionStream struct {
 	chunk *Chunk
@@ -215,6 +217,27 @@ func TestRetryProviderRetriesTransientReadFailureBeforeOutput(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Attempt != 1 {
 		t.Fatalf("retry events = %#v, want one attempt-1 event", events)
+	}
+}
+
+func TestRetryProviderStopsWhenFailedStreamCannotClose(t *testing.T) {
+	closeErr := errors.New("failed stream close")
+	provider := &retryReadFailureProvider{firstCloseErr: closeErr}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if _, ok := stream.Next(); ok {
+		t.Fatal("failed stream yielded a chunk")
+	}
+	if !errors.Is(stream.Err(), closeErr) {
+		t.Fatalf("stream error = %v, want close failure", stream.Err())
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("provider attempts = %d, want no retry after close failure", got)
 	}
 }
 
