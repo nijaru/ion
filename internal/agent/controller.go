@@ -390,10 +390,75 @@ func (h *Controller) runPrompt(
 	// Build LoopConfig after the persistence failure callback exists so
 	// PrepareNextTurn can stop the run when a buffered write fails.
 	cfg := h.buildLoopConfig(ctx, tools, recordPersistErr)
+	runAttempt := 0
+	var recoverySteer []session.Message
+	skipRetryInitialSteer := false
+	originalDrainSteer := cfg.DrainSteer
+	cfg.DrainSteer = func() []session.Message {
+		if runAttempt > 0 && skipRetryInitialSteer {
+			skipRetryInitialSteer = false
+			return nil
+		}
+		if originalDrainSteer == nil {
+			return nil
+		}
+		drained := originalDrainSteer()
+		if len(recoverySteer) == 0 {
+			recoverySteer = append(recoverySteer, drained...)
+		}
+		return drained
+	}
+	acceptedPrompts := append([]session.Message(nil), prompts...)
+	var finalLoopOutcome loopResult
+	var recoveryTurnAborted bool
+	var recoveryErr error
+	retryStartSuppressed := false
+	retryPromptMessagesRemaining := 0
+	retryPromptMessageStarted := false
 	emitWrap := func(e session.Event) {
 		if turnStart, ok := e.(session.TurnStart); ok {
 			turnStart.TurnToken = h.ActiveTurnToken()
 			e = turnStart
+		}
+		if runAttempt > 0 && retryPromptMessagesRemaining > 0 {
+			switch event := e.(type) {
+			case session.MessageStart:
+				// Only the initial replay prefix is already visible. Later
+				// steering/follow-up messages must retain normal lifecycle events.
+				retryPromptMessageStarted = true
+				return
+			case session.MessageEnd:
+				if !retryPromptMessageStarted {
+					break
+				}
+				retryPromptMessageStarted = false
+				retryPromptMessagesRemaining--
+				// A durable retry needs its prompt in the new turn, but
+				// publishing it would duplicate the visible transcript entry.
+				h.mu.Lock()
+				durableRetry := h.durable != nil && h.activeTurnID != ""
+				h.mu.Unlock()
+				if durableRetry {
+					result := h.requestRuntime(ctx, runtimeRequest{
+						kind:      runtimePersistMessage,
+						message:   event.Message,
+						timestamp: event.Timestamp,
+					})
+					if result.err != nil {
+						recordPersistErr(result.err)
+					}
+				}
+				return
+			}
+		}
+		if runAttempt > 0 && !retryStartSuppressed {
+			switch e.(type) {
+			case session.AgentStart:
+				return
+			case session.TurnStart:
+				retryStartSuppressed = true
+				return
+			}
 		}
 		if ae, ok := e.(session.AgentEnd); ok {
 			lastAgentEnd = ae
@@ -407,6 +472,14 @@ func (h *Controller) runPrompt(
 		}
 	}
 	for attempt := 0; attempt < 2; attempt++ {
+		runAttempt = attempt
+		retryStartSuppressed = false
+		retryPromptMessagesRemaining = 0
+		retryPromptMessageStarted = false
+		if attempt > 0 {
+			retryPromptMessagesRemaining = len(prompts)
+		}
+		var loopOutcome loopResult
 		func() {
 			// Recover from panics in RunLoop: emit failure message + lifecycle events.
 			// Reference: Pi agent-harness.js emitRunFailure (line 471).
@@ -423,49 +496,32 @@ func (h *Controller) runPrompt(
 					h.logf(slog.LevelError, "loop panic recovered", slog.String("error", err.Error()))
 				}
 			}()
-			msgs = RunLoop(ctx, prompts, TurnContext{
+			loopOutcome = runLoop(ctx, prompts, TurnContext{
 				SystemPrompt: h.sysprompt,
 				Messages:     snap.Messages,
 			}, cfg, emitWrap, cancel)
+			msgs = loopOutcome.messages
+			finalLoopOutcome = loopOutcome
 		}()
 		if persistErr != nil {
 			break
 		}
 
-		// After the first attempt, prompts have been persisted to the session tree.
-		// If the turn overflows and we compact + retry, the rebuilt context already
-		// contains the user message. Re-sending prompts would duplicate them.
-		prompts = nil
-
-		// Overflow is surfaced by providers as a request error in
-		// AssistantMessage.Error with empty Content, but some paths surface it
-		// inline in the content text. Check both.
-		overflow := false
-		if len(msgs) > 0 {
-			if am, ok := msgs[len(msgs)-1].(*session.AssistantMessage); ok {
-				check := am.Error
-				if check == "" {
-					for _, c := range am.Content {
-						if tc, ok := c.(session.TextContent); ok {
-							check = tc.Text
-							break
-						}
-					}
-				}
-				if check != "" && IsContextOverflowError(fmt.Errorf("%s", check)) {
-					overflow = true
-				}
-			}
-		}
-		if !overflow {
-			break // no overflow, done
+		// Context recovery is permitted only when the stateless loop proves
+		// that overflow happened before any provider chunk or external effect
+		// crossed the user-visible frontier. A text fragment that merely looks
+		// like an overflow error is ordinary model output, not a retry signal.
+		if !loopOutcome.replaySafeContextOverflow || attempt == 1 {
+			break
 		}
 		// Compact and retry. A durable turn that overflowed is aborted before
 		// compaction so the summary is appended to committed history rather than
 		// being mixed with an uncommitted turn. The retry starts a fresh durable
 		// turn with the original user input.
-		restartedTurn, compactErr := h.compactAfterTurn(ctx)
+		restartedTurn, turnAborted, compactErr := h.compactAfterTurn(ctx)
 		if compactErr != nil {
+			recoveryTurnAborted = turnAborted
+			recoveryErr = fmt.Errorf("context recovery: %w", compactErr)
 			break // can't compact, give up
 		}
 		if restartedTurn {
@@ -475,16 +531,76 @@ func (h *Controller) runPrompt(
 				images: cloneImageContents(promptImages),
 			})
 			if result.err != nil {
+				recoveryTurnAborted = turnAborted
+				recoveryErr = fmt.Errorf("begin recovery turn: %w", result.err)
 				break
 			}
-			prompts = []session.Message{newUserMessage(text, promptImages, time.Now())}
+			// Overflow recovery aborts the first durable turn and begins a new
+			// one. Action identities in the retry must be scoped to that new
+			// durable turn, not the aborted turn captured in the first config.
+			cfg.TurnID = result.turn.ID
 		}
 		snap, err = h.contextSnapshot(ctx)
 		if err != nil {
+			recoveryErr = fmt.Errorf("build recovery context: %w", err)
 			break
+		}
+		// Durable recovery owns a replacement turn, so it must replay the
+		// accepted prompt batch and consumed steering. A non-durable session
+		// already committed that batch; its rebuilt context is authoritative.
+		if restartedTurn {
+			prompts = append([]session.Message(nil), acceptedPrompts...)
+			prompts = append(prompts, recoverySteer...)
+			skipRetryInitialSteer = len(recoverySteer) > 0
+		} else {
+			prompts = nil
+			skipRetryInitialSteer = len(recoverySteer) > 0
 		}
 	}
 
+	if recoveryErr != nil {
+		failure := newFailureMessage(h.model, recoveryErr, false, h.thinking)
+		replaced := false
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if _, ok := msgs[i].(*session.AssistantMessage); ok {
+				msgs[i] = &failure
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			msgs = append(msgs, &failure)
+		}
+		finalLoopOutcome.replaySafeContextOverflow = true
+	}
+	if finalLoopOutcome.replaySafeContextOverflow && lastAgentEnd.Messages == nil {
+		var failure *session.AssistantMessage
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if assistant, ok := msgs[i].(*session.AssistantMessage); ok {
+				failure = assistant
+				break
+			}
+		}
+		if failure != nil {
+			if recoveryTurnAborted {
+				for _, event := range []session.Event{
+					session.MessageStart{Message: failure},
+					session.MessageEnd{Message: failure},
+					session.TurnEnd{Message: *failure},
+				} {
+					if err := h.requestEvent(context.Background(), event); err != nil {
+						recordPersistErr(err)
+						break
+					}
+				}
+			} else {
+				emitWrap(session.MessageStart{Message: failure})
+				emitWrap(session.MessageEnd{Message: failure})
+				emitWrap(session.TurnEnd{Message: *failure})
+			}
+			lastAgentEnd = session.AgentEnd{Messages: msgs}
+		}
+	}
 	if persistErr != nil {
 		return nil, persistErr
 	}
@@ -573,7 +689,7 @@ func (h *Controller) contextSnapshot(ctx context.Context) (session.ContextSnapsh
 	return h.requestContextSnapshot(ctx)
 }
 
-func (h *Controller) compactAfterTurn(ctx context.Context) (bool, error) {
+func (h *Controller) compactAfterTurn(ctx context.Context) (restartedTurn, turnAborted bool, err error) {
 	h.mu.Lock()
 	durableTurn := h.activeTurnID != "" && h.durable != nil
 	h.mu.Unlock()
@@ -584,7 +700,7 @@ func (h *Controller) compactAfterTurn(ctx context.Context) (bool, error) {
 			reason: "context overflow; retrying after compaction",
 		})
 		if result.err != nil {
-			return false, fmt.Errorf("abort overflowed turn: %w", result.err)
+			return false, false, fmt.Errorf("abort overflowed turn: %w", result.err)
 		}
 	}
 
@@ -592,9 +708,9 @@ func (h *Controller) compactAfterTurn(ctx context.Context) (bool, error) {
 	// predict it, so force the summary operation after the failed attempt.
 	result := h.requestRuntime(ctx, runtimeRequest{kind: runtimeCompact, force: true})
 	if result.err != nil {
-		return false, result.err
+		return false, durableTurn, result.err
 	}
-	return durableTurn, nil
+	return durableTurn, durableTurn, nil
 }
 
 func terminalTurnFailure(messages []session.Message) string {

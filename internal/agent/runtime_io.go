@@ -350,7 +350,9 @@ func (c *Controller) handleRuntimeCompletion(completion runtimeCompletion) {
 		switch request.kind {
 		case runtimePersistMessage:
 			c.logMessage(request.message)
-			c.emit(request.event)
+			if request.event != nil {
+				c.emit(request.event)
+			}
 		case runtimeFlushPending:
 			if request.event != nil {
 				c.emit(session.SavePoint{HadPendingMutations: request.hadPending})
@@ -583,6 +585,23 @@ func executeRuntimeRequest(request runtimeRequest) runtimeResult {
 	case runtimeFinalizeTurn:
 		if request.requireDurable && request.durable == nil {
 			return runtimeResult{err: errors.New("durable runtime requires a DurableStore")}
+		}
+		if request.durable != nil && request.turnID != "" {
+			turn, err := request.durable.GetTurn(ctx, request.turnID)
+			if err != nil {
+				return runtimeResult{err: err}
+			}
+			if turn.State == session.TurnAborted {
+				if request.failed && request.reason != "" {
+					if err := request.durable.AbortTurn(ctx, request.turnID, request.reason); err != nil {
+						return runtimeResult{err: err}
+					}
+				}
+				return runtimeResult{turnAborted: true}
+			}
+			if turn.State == session.TurnCommitted {
+				return runtimeResult{turnCommitted: true}
+			}
 		}
 		result := executePendingWrites(request)
 		if result.err != nil {

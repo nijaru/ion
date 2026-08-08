@@ -31,11 +31,12 @@ func (s *mockStream) Err() error   { return nil }
 func (s *mockStream) Close() error { return nil }
 
 type faultStream struct {
-	chunk     *llm.Chunk
-	ok        bool
-	emitted   bool
-	streamErr error
-	closeErr  error
+	chunk      *llm.Chunk
+	ok         bool
+	emitted    bool
+	streamErr  error
+	closeErr   error
+	closeCalls int
 }
 
 func (s *faultStream) Next() (*llm.Chunk, bool) {
@@ -47,6 +48,7 @@ func (s *faultStream) Next() (*llm.Chunk, bool) {
 }
 func (s *faultStream) Err() error { return s.streamErr }
 func (s *faultStream) Close() error {
+	s.closeCalls++
 	return s.closeErr
 }
 
@@ -61,6 +63,159 @@ func TestIsContextOverflowUsesProviderClassifierBeforeFallback(t *testing.T) {
 	}
 	if !isContextOverflow(LoopConfig{}, errors.New("maximum context length exceeded")) {
 		t.Fatal("fallback overflow classifier did not recognize overflow")
+	}
+}
+
+func TestRunLoopContextOverflowRequiresReplaySafeFrontier(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &faultStream{
+					chunk:     &llm.Chunk{Content: "partial"},
+					ok:        true,
+					streamErr: overflow,
+				}, nil
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if result.replaySafeContextOverflow {
+		t.Fatal("partial provider output made context overflow replayable")
+	}
+}
+
+func TestRunLoopContextOverflowBeforeStreamIsReplaySafe(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return nil, overflow
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if !result.replaySafeContextOverflow {
+		t.Fatal("pre-response context overflow was not replayable")
+	}
+}
+
+func TestRunLoopContextOverflowWithCloseFailureIsNotReplayable(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	closeErr := errors.New("stream cleanup failed")
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &faultStream{streamErr: overflow, closeErr: closeErr}, nil
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if result.replaySafeContextOverflow {
+		t.Fatal("stream cleanup failure made context overflow replayable")
+	}
+}
+
+func TestRunLoopReturnedStreamWithOverflowErrorIsCleanedUp(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	closeErr := errors.New("returned stream cleanup failed")
+	returned := &faultStream{closeErr: closeErr}
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return returned, overflow
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if result.replaySafeContextOverflow {
+		t.Fatal("returned stream cleanup failure made context overflow replayable")
+	}
+	if returned.closeCalls != 1 {
+		t.Fatalf("returned stream close calls = %d, want one", returned.closeCalls)
+	}
+}
+
+func TestRunLoopNilChunkWithOverflowErrorIsNotReplayable(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &faultStream{ok: true, streamErr: overflow}, nil
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if result.replaySafeContextOverflow {
+		t.Fatal("nil-chunk protocol failure made context overflow replayable")
+	}
+}
+
+func TestRunLoopCompletedEmptyResponseBlocksLaterOverflowReplay(t *testing.T) {
+	overflow := errors.New("provider-specific overflow")
+	followUp := []session.Message{session.NewUserText("follow-up", time.Now())}
+	calls := 0
+	result := runLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:           llm.Model{ID: "test"},
+			ContextOverflow: func(err error) bool { return errors.Is(err, overflow) },
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				calls++
+				if calls == 1 {
+					return &mockStream{}, nil
+				}
+				return nil, overflow
+			},
+			DrainFollowUp: func() []session.Message {
+				if len(followUp) == 0 {
+					return nil
+				}
+				messages := followUp
+				followUp = nil
+				return messages
+			},
+		},
+		func(session.Event) {},
+		nil,
+	)
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want empty response plus follow-up overflow", calls)
+	}
+	if result.replaySafeContextOverflow {
+		t.Fatal("later overflow replayed across a completed response and follow-up")
 	}
 }
 

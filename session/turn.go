@@ -405,7 +405,19 @@ func (s *SQLiteStore) AbortTurn(ctx context.Context, turnID string, reason strin
 		return err
 	}
 	if record.State == TurnAborted {
-		_ = tx.Rollback()
+		if strings.TrimSpace(reason) == "" || record.Error == reason {
+			_ = tx.Rollback()
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE turns SET error = ? WHERE turn_id = ? AND state = ?",
+			reason, turnID, string(TurnAborted)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("update aborted turn reason: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return classifySQLiteError("commit aborted turn reason", err)
+		}
 		return nil
 	}
 	if record.State == TurnCommitted {

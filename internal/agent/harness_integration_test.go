@@ -617,11 +617,10 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	callNum := int32(0)
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		n := atomic.AddInt32(&callNum, 1)
-		// First call: overflow. Subsequent calls: success.
+		// First call: a pre-response context overflow. Subsequent calls:
+		// compaction and the recovered turn.
 		if n == 1 {
-			return &mockStream{chunks: []*llm.Chunk{
-				{Content: "context_length_exceeded: too many tokens", StopReason: "stop"},
-			}}, nil
+			return nil, errors.New("context_length_exceeded: too many tokens")
 		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Content: "recovered after compact", StopReason: "stop"},
@@ -662,6 +661,312 @@ func TestHarnessIntegration_ContextOverflow(t *testing.T) {
 	}
 	if compactions != 1 {
 		t.Fatalf("compaction entries = %d, want one committed recovery summary", compactions)
+	}
+}
+
+// INTEGRATION: Context overflow after a visible provider chunk is terminal;
+// replay would duplicate output and must not be attempted.
+func TestHarnessIntegration_DoesNotReplayPartialContextOverflow(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	overflow := errors.New("context_length_exceeded: too many tokens")
+	var calls int32
+	h := NewController(ControllerConfig{
+		Session:        sess,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test"},
+		StreamFn: func(_ context.Context, _ *llm.Request) (llm.Stream, error) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				return &faultStream{
+					chunk:     &llm.Chunk{Content: "partial"},
+					ok:        true,
+					streamErr: overflow,
+				}, nil
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "must not replay", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "overflow after output"); err == nil {
+		t.Fatal("partial context overflow was reported as a successful replay")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("stream calls = %d, want one terminal attempt", got)
+	}
+}
+
+// REGRESSION: durable overflow recovery replays messages injected by the
+// before_agent_start hook instead of silently dropping accepted input.
+func TestHarnessIntegration_OverflowRetryPreservesAcceptedPromptPatch(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	calls := 0
+	sawInjected := false
+	streamFn := func(_ context.Context, request *llm.Request) (llm.Stream, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("context_length_exceeded: too many tokens")
+		}
+		for _, message := range request.Messages {
+			if strings.Contains(message.Content, "injected by hook") {
+				sawInjected = true
+			}
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "recovered", StopReason: "stop"}}}, nil
+	}
+	h := NewController(ControllerConfig{
+		Session:        sess,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test"},
+		StreamFn:       streamFn,
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookBeforeAgentStart, func(any) (any, error) {
+		return &BeforeAgentStartPatch{
+			Messages: []session.Message{session.NewUserText("injected by hook", time.Now())},
+		}, nil
+	})
+	defer unsubscribe()
+
+	if _, err := h.Prompt(context.Background(), "recover hook input"); err != nil {
+		t.Fatal(err)
+	}
+	if !sawInjected {
+		t.Fatal("retry request dropped before_agent_start injected input")
+	}
+}
+
+// REGRESSION: overflow recovery replays only the steering message consumed
+// by the first attempt; the remaining one stays for the next response turn.
+func TestHarnessIntegration_OverflowRetryPreservesSteeringBoundary(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	calls := 0
+	var sawFirst, sawSecond, sawRemaining bool
+	var h *Controller
+	streamFn := func(_ context.Context, request *llm.Request) (llm.Stream, error) {
+		calls++
+		var content string
+		for _, message := range request.Messages {
+			content += "\n" + message.Content
+		}
+		switch calls {
+		case 1:
+			return nil, errors.New("context_length_exceeded: too many tokens")
+		case 2:
+			sawFirst = strings.Contains(content, "steer one")
+			sawSecond = strings.Contains(content, "steer two")
+			return &mockStream{chunks: []*llm.Chunk{{Content: "retry", StopReason: "stop"}}}, nil
+		default:
+			sawRemaining = strings.Contains(content, "steer two")
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		}
+	}
+	h = NewController(ControllerConfig{
+		Session:        sess,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test"},
+		StreamFn:       streamFn,
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookBeforeAgentStart, func(any) (any, error) {
+		if err := h.Steer("steer one"); err != nil {
+			return nil, err
+		}
+		if err := h.Steer("steer two"); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	defer unsubscribe()
+
+	if _, err := h.Prompt(context.Background(), "recover steering"); err != nil {
+		t.Fatal(err)
+	}
+	if !sawFirst || sawSecond || !sawRemaining {
+		t.Fatalf("steering recovery = first:%v second:%v remaining:%v", sawFirst, sawSecond, sawRemaining)
+	}
+}
+
+// REGRESSION: the non-durable recovery path also leaves the next steering
+// message for the next response boundary.
+func TestHarnessIntegration_NonDurableOverflowRetryPreservesSteeringBoundary(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	calls := 0
+	sawSecondOnRetry := false
+	var h *Controller
+	streamFn := func(_ context.Context, request *llm.Request) (llm.Stream, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("context_length_exceeded: too many tokens")
+		}
+		if calls == 2 {
+			for _, message := range request.Messages {
+				if strings.Contains(message.Content, "steer two") {
+					sawSecondOnRetry = true
+				}
+			}
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+	}
+	h = NewController(ControllerConfig{
+		Session:  sess,
+		Model:    llm.Model{ID: "test"},
+		StreamFn: streamFn,
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookBeforeAgentStart, func(any) (any, error) {
+		if err := h.Steer("steer one"); err != nil {
+			return nil, err
+		}
+		if err := h.Steer("steer two"); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	defer unsubscribe()
+
+	if _, err := h.Prompt(context.Background(), "recover non-durable steering"); err != nil {
+		t.Fatal(err)
+	}
+	if sawSecondOnRetry {
+		t.Fatal("non-durable recovery drained the remaining steering message too early")
+	}
+}
+
+// REGRESSION: a second replay-safe overflow is terminal and must not start
+// a third durable turn.
+func TestHarnessIntegration_SecondOverflowDoesNotStartThirdTurn(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	calls := 0
+	h := NewController(ControllerConfig{
+		Session:        sess,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			return nil, errors.New("context_length_exceeded: too many tokens")
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "overflow twice"); err == nil {
+		t.Fatal("second context overflow was reported as success")
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want two attempts", calls)
+	}
+	latest, err := store.LatestTurn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.State != session.TurnAborted {
+		t.Fatalf("latest turn state = %s, want aborted", latest.State)
+	}
+	entries, err := sess.Branch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("committed branch entries = %d, want no aborted-turn entries", len(entries))
+	}
+}
+
+// REGRESSION: if compaction cannot recover a pre-response overflow, the
+// already-aborted durable turn still gets a terminal failure lifecycle.
+func TestHarnessIntegration_CompactionFailureAfterOverflowIsTerminal(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for i := 0; i < 8; i++ {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText("history", time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	var h *Controller
+	h = NewController(ControllerConfig{
+		Session:        sess,
+		Durable:        store,
+		RequireDurable: true,
+		Model:          llm.Model{ID: "test"},
+		Compaction:     CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1},
+		ContextWindow:  100,
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			if calls == 1 {
+				if _, err := h.SetThinking(context.Background(), session.ThinkingHigh); err != nil {
+					return nil, fmt.Errorf("queue thinking change: %w", err)
+				}
+				return nil, errors.New("context_length_exceeded: too many tokens")
+			}
+			return nil, errors.New("summary provider unavailable")
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "overflow then compaction failure"); err == nil {
+		t.Fatal("compaction failure was reported as success")
+	} else if !strings.Contains(err.Error(), "summary provider unavailable") {
+		t.Fatalf("Prompt error = %v, want compaction failure cause", err)
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want overflow plus summary", calls)
+	}
+	latest, err := store.LatestTurn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.State != session.TurnAborted {
+		t.Fatalf("latest turn state = %s, want aborted", latest.State)
+	}
+	if !strings.Contains(latest.Error, "summary provider unavailable") {
+		t.Fatalf("latest turn error = %q, want compaction failure cause", latest.Error)
+	}
+}
+
+// REGRESSION: non-durable overflow recovery must not append the accepted
+// prompt a second time because the first attempt already committed it.
+func TestHarnessIntegration_NonDurableOverflowRetryDoesNotDuplicatePrompt(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	calls := 0
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("context_length_exceeded: too many tokens")
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "recovered", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	if _, err := h.Prompt(context.Background(), "recover once"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := sess.Branch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userMessages int
+	for _, entry := range entries {
+		if messageEntry, ok := entry.(*session.MessageEntry); ok {
+			if _, ok := messageEntry.Message.(*session.UserMessage); ok {
+				userMessages++
+			}
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("user messages after non-durable recovery = %d, want one", userMessages)
 	}
 }
 
@@ -1221,11 +1526,9 @@ func TestHarnessIntegration_SingleAgentEndOnOverflowRetry(t *testing.T) {
 	callNum := int32(0)
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		n := atomic.AddInt32(&callNum, 1)
-		// First call: overflow. Subsequent calls: success.
+		// First call: a pre-response context overflow. The retry succeeds.
 		if n == 1 {
-			return &mockStream{chunks: []*llm.Chunk{
-				{Content: "context_length_exceeded: too many tokens", StopReason: "stop"},
-			}}, nil
+			return nil, errors.New("context_length_exceeded: too many tokens")
 		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Content: "recovered after compact", StopReason: "stop"},

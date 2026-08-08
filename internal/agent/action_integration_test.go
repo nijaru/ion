@@ -184,3 +184,123 @@ func TestHarnessRoutesEffectThroughDurableActionBoundary(t *testing.T) {
 		}
 	}
 }
+
+// REGRESSION: overflow recovery starts a new durable turn. Retried external
+// actions must be journaled against that committed retry, not the aborted turn.
+func TestHarnessOverflowRetryScopesActionsToNewDurableTurn(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+
+	mutatingTool := Tool{
+		Name:           "write_probe",
+		Description:    "test mutation",
+		RequiresAction: true,
+		Parameters:     `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`,
+		ApprovalRequirement: func(json.RawMessage) (ApprovalRequirement, bool, error) {
+			return ApprovalRequirement{
+				Category:      "write",
+				Operation:     "write",
+				Resource:      "probe.txt",
+				Paths:         []string{"probe.txt"},
+				AlwaysConfirm: true,
+			}, true, nil
+		},
+		Execute: func(_ context.Context, id string, _ json.RawMessage, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			return session.ToolResultMessage{
+				ToolCallID: id,
+				ToolName:   "write_probe",
+				Content:    []session.Content{session.TextContent{Text: "ok"}},
+				Terminate:  true,
+			}, nil
+		},
+	}
+
+	calls := 0
+	h := NewController(ControllerConfig{
+		Session:             sess,
+		Store:               store,
+		Durable:             store,
+		RequireDurable:      true,
+		ActionJournal:       store,
+		Workdir:             t.TempDir(),
+		Model:               llm.Model{ID: "test"},
+		Tools:               []Tool{mutatingTool},
+		ApprovalMode:        ApprovalConfirm,
+		ApprovalInteractive: true,
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("context_length_exceeded: too many tokens")
+			}
+			return &mockStream{chunks: []*llm.Chunk{{
+				Calls: []llm.Call{{
+					ID:   "write-retry",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "write_probe", Arguments: `{"path":"probe.txt"}`},
+				}},
+				StopReason: "toolUse",
+			}}}, nil
+		},
+	})
+	defer h.Close()
+
+	sub, err := h.Subscribe(ctx, EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := h.Prompt(ctx, "write a probe after recovery")
+		promptDone <- err
+	}()
+
+	var approval session.ApprovalRequest
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for approval.ID == "" {
+		select {
+		case envelope := <-sub.Events:
+			if candidate, ok := envelope.Event.(session.ApprovalRequest); ok {
+				approval = candidate
+			}
+		case <-deadline.C:
+			t.Fatal("timed out waiting for retry action approval")
+		}
+	}
+	if err := h.ResolveApproval(approval.ID, session.ApprovalAllow); err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+
+	select {
+	case err := <-promptDone:
+		if err != nil {
+			t.Fatalf("Prompt: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for recovered Prompt")
+	}
+
+	latest, err := store.LatestTurn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.State != session.TurnCommitted {
+		t.Fatalf("latest turn state = %s, want committed", latest.State)
+	}
+	action, err := store.GetAction(ctx, approval.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.State != session.ActionCompleted {
+		t.Fatalf("action state = %s, want completed", action.State)
+	}
+	if action.TurnID != latest.ID {
+		t.Fatalf("action turn ID = %q, latest committed turn = %q", action.TurnID, latest.ID)
+	}
+}

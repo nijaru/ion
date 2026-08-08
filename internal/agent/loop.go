@@ -23,6 +23,15 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+// loopResult is the stateless turn engine result used by the controller.
+// ReplaySafeContextOverflow is true only when the provider reported context
+// overflow before any response chunk or external tool effect crossed the loop
+// boundary. The controller may compact and replay only at that safe frontier.
+type loopResult struct {
+	messages                  []session.Message
+	replaySafeContextOverflow bool
+}
+
 // RunLoop is the stateless turn engine. All inputs are arguments.
 // Emits events via emit. Returns new messages produced during the run.
 // Failure is terminal: on error/abort, synthesize a failure AssistantMessage,
@@ -37,6 +46,31 @@ func RunLoop(
 	emit func(session.Event),
 	signal <-chan struct{},
 ) []session.Message {
+	result := runLoop(ctx, prompts, snapshot, cfg, emit, signal)
+	if result.replaySafeContextOverflow {
+		for i := len(result.messages) - 1; i >= 0; i-- {
+			assistant, ok := result.messages[i].(*session.AssistantMessage)
+			if !ok {
+				continue
+			}
+			emit(session.MessageStart{Message: assistant})
+			emit(session.MessageEnd{Message: assistant})
+			emit(session.TurnEnd{Message: *assistant})
+			emit(session.AgentEnd{Messages: result.messages})
+			break
+		}
+	}
+	return result.messages
+}
+
+func runLoop(
+	ctx context.Context,
+	prompts []session.Message,
+	snapshot TurnContext,
+	cfg LoopConfig,
+	emit func(session.Event),
+	signal <-chan struct{},
+) loopResult {
 	convert := cfg.Convert
 	if convert == nil {
 		convert = DefaultConvert
@@ -60,6 +94,7 @@ func RunLoop(
 	}
 
 	firstTurn := true
+	replaySafe := true
 
 	// Drain initial steering messages.
 	pending := drain(cfg.DrainSteer)
@@ -88,7 +123,7 @@ func RunLoop(
 				emit(session.MessageEnd{Message: &msg})
 				emit(session.TurnEnd{Message: msg})
 				emit(session.AgentEnd{Messages: newMessages})
-				return newMessages
+				return loopResult{messages: newMessages}
 			}
 			if !firstTurn {
 				emit(session.TurnStart{})
@@ -105,15 +140,30 @@ func RunLoop(
 			pending = nil
 
 			// Stream assistant response.
-			assistantMsg, aborted := streamAssistantResponse(ctx, currentCtx, cfg, convert, emit, signal)
+			response := streamAssistantResponse(ctx, currentCtx, cfg, convert, emit, signal)
+			assistantMsg, aborted := response.message, response.aborted
+			if response.providerProgress || !response.aborted {
+				// Any completed assistant response establishes a visible
+				// turn boundary, even when the provider yielded no chunks.
+				// A later overflow must not replay past accepted follow-ups.
+				replaySafe = false
+			}
 			newMessages = append(newMessages, assistantMsg)
 			currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
 
 			if aborted {
-				// Terminal: emit turn_end + agent_end and return.
-				emit(session.TurnEnd{Message: assistantMsg})
-				emit(session.AgentEnd{Messages: newMessages})
-				return newMessages
+				// A replay-safe overflow is an internal recovery boundary, not a
+				// terminal logical turn. Do not publish TurnEnd/AgentEnd or the
+				// transient failure message before compaction decides the retry.
+				replaySafeOverflow := replaySafe && response.replaySafeOverflow
+				if !replaySafeOverflow {
+					emit(session.TurnEnd{Message: assistantMsg})
+					emit(session.AgentEnd{Messages: newMessages})
+				}
+				return loopResult{
+					messages:                  newMessages,
+					replaySafeContextOverflow: replaySafeOverflow,
+				}
 			}
 
 			// Check for tool calls in the assistant response.
@@ -195,7 +245,7 @@ func RunLoop(
 				Context:     currentCtx,
 			}) {
 				emit(session.AgentEnd{Messages: newMessages})
-				return newMessages
+				return loopResult{messages: newMessages}
 			}
 
 			// Drain steering messages for next inner iteration.
@@ -213,7 +263,7 @@ func RunLoop(
 	}
 
 	emit(session.AgentEnd{Messages: newMessages})
-	return newMessages
+	return loopResult{messages: newMessages}
 }
 
 func isContextOverflow(cfg LoopConfig, err error) bool {
@@ -224,6 +274,16 @@ func isContextOverflow(cfg LoopConfig, err error) bool {
 		return true
 	}
 	return IsContextOverflowError(err)
+}
+
+// streamResult describes one provider response for the controller-owned
+// recovery frontier. A response can be replayed for context overflow only if
+// no provider chunk was observed and the run had not already made progress.
+type streamResult struct {
+	message            *session.AssistantMessage
+	aborted            bool
+	replaySafeOverflow bool
+	providerProgress   bool
 }
 
 // streamAssistantResponse calls the LLM and accumulates the response into an AssistantMessage.
@@ -237,13 +297,13 @@ func streamAssistantResponse(
 	convert func([]session.Message) []llm.Message,
 	emit func(session.Event),
 	signal <-chan struct{},
-) (*session.AssistantMessage, bool) {
+) streamResult {
 	if isCanceled(ctx, signal) {
 		msg := newFailureMessage(cfg.Model, context.Canceled, true, cfg.Thinking)
 		msg.Error = "response aborted"
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
-		return &msg, true
+		return streamResult{message: &msg, aborted: true}
 	}
 
 	// Derive a cancellable context from the signal channel so the
@@ -307,7 +367,7 @@ func streamAssistantResponse(
 		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
-		return &msg, true
+		return streamResult{message: &msg, aborted: true}
 	}
 
 	stream, err := cfg.StreamFn(streamCtx, req)
@@ -315,16 +375,32 @@ func streamAssistantResponse(
 		err = fmt.Errorf("provider returned a nil stream")
 	}
 	if err != nil {
-		if isContextOverflow(cfg, err) {
-			err = fmt.Errorf("context_length_exceeded: %w", err)
+		var cleanupErr error
+		if stream != nil {
+			cleanupErr = errors.Join(stream.Close(), stream.Err())
+		}
+		replaySafeOverflow := isContextOverflow(cfg, err) && cleanupErr == nil
+		if replaySafeOverflow {
+			// Keep this internal recovery attempt invisible. The controller
+			// will compact and retry without publishing a transient failure.
+			msg := newFailureMessage(cfg.Model, fmt.Errorf("context_length_exceeded: %w", err), false, cfg.Thinking)
+			return streamResult{
+				message:            &msg,
+				aborted:            true,
+				replaySafeOverflow: true,
+			}
+		}
+		if cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
 		}
 		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
-		return &msg, true
+		return streamResult{message: &msg, aborted: true}
 	}
 	var acc llm.StreamAccumulator
 	started := false
+	providerProgress := false
 	var streamErr error
 	previousToolArguments := make(map[string]string)
 
@@ -339,6 +415,7 @@ func streamAssistantResponse(
 		}
 
 		acc.Add(chunk)
+		providerProgress = true
 
 		// Build partial message from accumulator state.
 		partial := buildPartialMessage(acc, cfg.Model)
@@ -352,9 +429,10 @@ func streamAssistantResponse(
 
 	// Close is part of the provider boundary. A stream that cannot be closed
 	// cleanly is not a successful assistant response, even after it yielded EOF.
+	iterationErr := streamErr
 	closeErr := stream.Close()
 	providerErr := stream.Err()
-	streamErr = errors.Join(streamErr, providerErr, closeErr)
+	streamErr = errors.Join(iterationErr, providerErr, closeErr)
 
 	if isCanceled(ctx, signal) {
 		// Cancellation may surface as ok=false with a nil stream error;
@@ -367,9 +445,24 @@ func streamAssistantResponse(
 			emit(session.MessageStart{Message: &final})
 		}
 		emit(session.MessageEnd{Message: &final})
-		return &final, true
+		return streamResult{message: &final, aborted: true, providerProgress: providerProgress}
 	}
 	if streamErr != nil {
+		replaySafeOverflow := iterationErr == nil &&
+			isContextOverflow(cfg, providerErr) && !providerProgress && closeErr == nil
+		if replaySafeOverflow {
+			msg := buildFailureAssistantMessage(
+				acc,
+				cfg.Model,
+				cfg.Thinking,
+				fmt.Errorf("context_length_exceeded: %w", streamErr),
+			)
+			return streamResult{
+				message:            &msg,
+				aborted:            true,
+				replaySafeOverflow: true,
+			}
+		}
 		if isContextOverflow(cfg, streamErr) {
 			streamErr = fmt.Errorf("context_length_exceeded: %w", streamErr)
 		}
@@ -378,7 +471,7 @@ func streamAssistantResponse(
 			emit(session.MessageStart{Message: &msg})
 		}
 		emit(session.MessageEnd{Message: &msg})
-		return &msg, true
+		return streamResult{message: &msg, aborted: true, providerProgress: providerProgress}
 	}
 
 	// Build final message from accumulator. Malformed tool arguments are a
@@ -390,13 +483,13 @@ func streamAssistantResponse(
 			emit(session.MessageStart{Message: &msg})
 		}
 		emit(session.MessageEnd{Message: &msg})
-		return &msg, true
+		return streamResult{message: &msg, aborted: true, providerProgress: providerProgress}
 	}
 	if !started {
 		emit(session.MessageStart{Message: &final})
 	}
 	emit(session.MessageEnd{Message: &final})
-	return &final, false
+	return streamResult{message: &final, providerProgress: providerProgress}
 }
 
 func emitStreamChunkUpdates(
