@@ -406,7 +406,16 @@ func runPromptTurnObserved(
 	if strings.TrimSpace(result.Response) == "" {
 		return printResult{}, fmt.Errorf("turn finished without assistant response")
 	}
-	result.SessionID = runtimeSessionID(runner)
+	// The resumable CLI/TUI handle is the selected tree leaf, not the stable
+	// SQLite store identity. The latter is useful for runtime ownership but
+	// cannot be passed to ResumeSession.
+	leafID, err := runtimeLeafID(ctx, runner)
+	if err != nil {
+		return printResult{}, err
+	}
+	if leafID != "" {
+		result.SessionID = leafID
+	}
 	return result, nil
 }
 

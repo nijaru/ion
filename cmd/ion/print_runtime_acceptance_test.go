@@ -183,8 +183,15 @@ func TestStructuredPrintModeUsesTheDurableRuntime(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatalf("decode structured result: %v", err)
 	}
-	if result.Response != "structured" || result.SessionID != "events-acceptance" {
-		t.Fatalf("structured result = %#v", result)
+	leafID := store.GetLeafID()
+	if leafID == "" {
+		t.Fatal("structured print turn did not materialize a session leaf")
+	}
+	if result.Response != "structured" || result.SessionID != leafID {
+		t.Fatalf("structured result = %#v, want resumable leaf %q", result, leafID)
+	}
+	if err := store.ResumeSession(ctx, result.SessionID); err != nil {
+		t.Fatalf("structured result session_id is not resumable: %v", err)
 	}
 }
 
