@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -83,20 +84,20 @@ func (s *SQLiteStore) TurnBranch(ctx context.Context, turnID string) ([]Entry, e
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		WITH RECURSIVE branch(id, parent_id, depth, path) AS (
-			SELECT e.id, e.parent_id, 0, '/' || e.id || '/'
+			SELECT e.id, e.parent_id, 0, '/' || hex(e.id) || '/'
 			FROM entries e
 			WHERE e.id = ?
 			  AND (e.turn_id IS NULL OR e.turn_id = ? OR EXISTS (
 				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
 			  ))
 			UNION ALL
-			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || e.id || '/'
+			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || hex(e.id) || '/'
 			FROM entries e
 			JOIN branch ON e.id = branch.parent_id
 			WHERE (e.turn_id IS NULL OR e.turn_id = ? OR EXISTS (
 				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
 			  ))
-			  AND instr(branch.path, '/' || e.id || '/') = 0
+			  AND instr(branch.path, '/' || hex(e.id) || '/') = 0
 		)
 		SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
 		FROM branch
@@ -119,6 +120,9 @@ func (s *SQLiteStore) TurnBranch(ctx context.Context, turnID string) ([]Entry, e
 	}
 	if len(entries) == 0 {
 		return nil, sql.ErrNoRows
+	}
+	if err := validateBranchRoot(entries, record.LeafID); err != nil {
+		return nil, err
 	}
 	return entries, nil
 }
@@ -278,6 +282,46 @@ func (s *SQLiteStore) AppendTurnEntry(ctx context.Context, turnID string, entry 
 		_ = tx.Rollback()
 		return "", fmt.Errorf("entry ID is required")
 	}
+	entryType, entryPayload, err := encodeEntry(entry)
+	if err != nil {
+		_ = tx.Rollback()
+		return "", err
+	}
+	var (
+		existingTurn    sql.NullString
+		existingParent  string
+		existingType    string
+		existingTS      int64
+		existingPayload []byte
+	)
+	lookupErr := tx.QueryRowContext(ctx, `
+		SELECT turn_id, parent_id, type, timestamp, payload
+		FROM entries WHERE id = ?`, entry.ID()).Scan(
+		&existingTurn, &existingParent, &existingType, &existingTS, &existingPayload,
+	)
+	if lookupErr == nil {
+		if existingTurn.Valid && existingTurn.String == turnID {
+			if existingParent == entry.ParentID() &&
+				existingType == entryType &&
+				existingTS == entry.When().UnixMilli() &&
+				bytes.Equal(existingPayload, entryPayload) {
+				_ = tx.Rollback()
+				return entry.ID(), nil
+			}
+			_ = tx.Rollback()
+			return "", fmt.Errorf(
+				"%w: entry %q was already recorded with different content",
+				ErrTurnEntryConflict,
+				entry.ID(),
+			)
+		}
+		_ = tx.Rollback()
+		return "", fmt.Errorf("entry %q already exists", entry.ID())
+	}
+	if lookupErr != sql.ErrNoRows {
+		_ = tx.Rollback()
+		return "", fmt.Errorf("check turn entry %q: %w", entry.ID(), lookupErr)
+	}
 	if entry.ParentID() != record.LeafID {
 		_ = tx.Rollback()
 		return "", fmt.Errorf(
@@ -286,20 +330,6 @@ func (s *SQLiteStore) AppendTurnEntry(ctx context.Context, turnID string, entry 
 			entry.ParentID(),
 			record.LeafID,
 		)
-	}
-	var existingTurn sql.NullString
-	lookupErr := tx.QueryRowContext(ctx, "SELECT turn_id FROM entries WHERE id = ?", entry.ID()).Scan(&existingTurn)
-	if lookupErr == nil {
-		if existingTurn.Valid && existingTurn.String == turnID {
-			_ = tx.Rollback()
-			return entry.ID(), nil
-		}
-		_ = tx.Rollback()
-		return "", fmt.Errorf("entry %q already exists", entry.ID())
-	}
-	if lookupErr != sql.ErrNoRows {
-		_ = tx.Rollback()
-		return "", fmt.Errorf("check turn entry %q: %w", entry.ID(), lookupErr)
 	}
 	id, err := s.appendTx(ctx, tx, turnID, entry)
 	if err != nil {

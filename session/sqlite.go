@@ -45,6 +45,7 @@ var (
 	ErrCorruptSession    = errors.New("corrupt session store")
 	ErrTurnNotFound      = errors.New("turn not found")
 	ErrTurnState         = errors.New("invalid turn state")
+	ErrTurnEntryConflict = errors.New("turn entry conflict")
 )
 
 // Schema holds the SQL for creating the tables.
@@ -716,6 +717,9 @@ func (s *SQLiteStore) validateLoadedState() error {
 	if err != nil {
 		return fmt.Errorf("validate session leaf: %w", err)
 	}
+	if _, err := s.branchAtLocked(context.Background(), s.leaf); err != nil {
+		return fmt.Errorf("%w: validate session branch from leaf %q: %v", ErrCorruptSession, s.leaf, err)
+	}
 	return nil
 }
 
@@ -1174,24 +1178,24 @@ func (s *SQLiteStore) branchAtLocked(ctx context.Context, leafID string) ([]Entr
 	}
 
 	// Reconstruct the parent chain and decode its rows in one query. The path
-	// guard keeps malformed cycles from spinning forever; valid entry IDs are
-	// generated hex strings, so slash-delimited membership is unambiguous.
+	// guard keeps malformed cycles from spinning forever. IDs are hex-encoded
+	// inside the path so recursion remains safe for opaque imported IDs.
 	rows, err := s.db.QueryContext(ctx, `
 		WITH RECURSIVE branch(id, parent_id, depth, path) AS (
-			SELECT e.id, e.parent_id, 0, '/' || e.id || '/'
+			SELECT e.id, e.parent_id, 0, '/' || hex(e.id) || '/'
 			FROM entries e
 			WHERE e.id = ?
 			  AND (e.turn_id IS NULL OR EXISTS (
 				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
 			  ))
 			UNION ALL
-			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || e.id || '/'
+			SELECT e.id, e.parent_id, branch.depth + 1, branch.path || hex(e.id) || '/'
 			FROM entries e
 			JOIN branch ON e.id = branch.parent_id
 			WHERE (e.turn_id IS NULL OR EXISTS (
 				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
 			))
-			  AND instr(branch.path, '/' || e.id || '/') = 0
+			  AND instr(branch.path, '/' || hex(e.id) || '/') = 0
 		)
 		SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
 		FROM branch
@@ -1217,7 +1221,26 @@ func (s *SQLiteStore) branchAtLocked(ctx context.Context, leafID string) ([]Entr
 	if len(entries) == 0 {
 		return nil, sql.ErrNoRows
 	}
+	if err := validateBranchRoot(entries, leafID); err != nil {
+		return nil, err
+	}
 	return entries, nil
+}
+
+func validateBranchRoot(entries []Entry, leafID string) error {
+	if len(entries) == 0 {
+		return fmt.Errorf("%w: branch leaf %q has no entries", ErrCorruptSession, leafID)
+	}
+	if parentID := entries[0].ParentID(); parentID != "" {
+		return fmt.Errorf(
+			"%w: branch leaf %q stops at entry %q with missing or cyclic parent %q",
+			ErrCorruptSession,
+			leafID,
+			entries[0].ID(),
+			parentID,
+		)
+	}
+	return nil
 }
 
 // Entries returns all entries in the session.

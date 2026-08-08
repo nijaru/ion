@@ -110,6 +110,34 @@ func TestStoreBranchOrder(t *testing.T) {
 	}
 }
 
+func TestStoreBranchSupportsOpaqueIDs(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	root := &MessageEntry{
+		EntryBase: EntryBase{ID: "b", Timestamp: time.Now()},
+		Message:   NewUserText("root", time.Now()),
+	}
+	child := &MessageEntry{
+		EntryBase: EntryBase{ID: "a/b", ParentID: root.ID(), Timestamp: time.Now()},
+		Message:   NewUserText("child", time.Now()),
+	}
+	for _, entry := range []Entry{root, child} {
+		if _, err := s.Append(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetLeafID(child.ID()); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := s.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 2 || branch[0].ID() != root.ID() || branch[1].ID() != child.ID() {
+		t.Fatalf("branch = %v, want [%q %q]", entryIDs(branch), root.ID(), child.ID())
+	}
+}
+
 func TestStoreBranchMissingLeafReturnsNoRows(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.SetLeafID("missing"); !errors.Is(err, sql.ErrNoRows) {
@@ -633,6 +661,46 @@ func TestSQLiteStoreRejectsCorruptLeafOnOpen(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreRejectsCorruptParentChainOnOpen(t *testing.T) {
+	for name, entries := range map[string][]*MessageEntry{
+		"missing parent": {
+			{EntryBase: EntryBase{ID: "orphan", ParentID: "missing"}, Message: NewUserText("orphan", time.Now())},
+		},
+		"cycle": {
+			{EntryBase: EntryBase{ID: "cycle-a", ParentID: "cycle-b"}, Message: NewUserText("a", time.Now())},
+			{EntryBase: EntryBase{ID: "cycle-b", ParentID: "cycle-a"}, Message: NewUserText("b", time.Now())},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.db")
+			store, err := NewSQLiteStore(path, "corrupt-parent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if _, err := store.Append(context.Background(), entry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			leaf := entries[len(entries)-1].ID()
+			if err := store.SetLeafID(leaf); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			opened, err := NewSQLiteStore(path, "corrupt-parent-reopen")
+			if opened != nil {
+				_ = opened.Close()
+			}
+			if !errors.Is(err, ErrCorruptSession) {
+				t.Fatalf("reopen error = %v, want ErrCorruptSession", err)
+			}
+		})
+	}
+}
+
 func TestSQLiteResumeSession(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -769,6 +837,48 @@ func TestTurnEntriesBecomeVisibleOnlyAfterCommit(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTurnEntryRetryIsIdempotentAndRejectsConflict(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	baseID, err := store.Append(ctx, &MessageEntry{
+		EntryBase: EntryBase{ID: "turn-base", Timestamp: time.Now()},
+		Message:   NewUserText("base", time.Now()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(baseID); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := store.BeginTurn(ctx, "turn-retry", "input", nil, "context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := &MessageEntry{
+		EntryBase: EntryBase{ID: "turn-draft", ParentID: baseID, Timestamp: time.Now()},
+		Message:   NewUserText("draft", time.Now()),
+	}
+	id, err := store.AppendTurnEntry(ctx, turn.ID, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried, err := store.AppendTurnEntry(ctx, turn.ID, draft); err != nil || retried != id {
+		t.Fatalf("identical retry = (%q, %v), want (%q, nil)", retried, err, id)
+	}
+	changed := *draft
+	changed.Message = NewUserText("changed", draft.When())
+	if _, err := store.AppendTurnEntry(ctx, turn.ID, &changed); !errors.Is(err, ErrTurnEntryConflict) {
+		t.Fatalf("changed retry error = %v, want ErrTurnEntryConflict", err)
+	}
+	branch, err := store.TurnBranch(ctx, turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 2 || MessageText(branch[1].(*MessageEntry).Message) != "draft" {
+		t.Fatalf("turn branch after retries = %v, want original draft", entryIDs(branch))
 	}
 }
 
