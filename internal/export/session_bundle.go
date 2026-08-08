@@ -166,6 +166,9 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	if err := validateImportedEntries(byID); err != nil {
 		return "", fmt.Errorf("validate imported session: %w", err)
 	}
+	if err := validateImportedCompactions(byID); err != nil {
+		return "", fmt.Errorf("validate imported session: %w", err)
+	}
 
 	preserveIDs := strings.TrimSpace(bundle.RootSessionID) != ""
 	remap := make(map[string]string, len(sourceEntries))
@@ -265,6 +268,38 @@ func validateImportedEntries(byID map[string]session.Entry) error {
 	return nil
 }
 
+func validateImportedCompactions(byID map[string]session.Entry) error {
+	for _, entry := range byID {
+		compaction, ok := entry.(*session.CompactionEntry)
+		if !ok {
+			continue
+		}
+		if compaction.FirstKeptID == "" {
+			return fmt.Errorf("compaction %q has no first-kept entry", compaction.ID())
+		}
+		found := false
+		for currentID := compaction.ParentID(); currentID != ""; {
+			if currentID == compaction.FirstKeptID {
+				found = true
+				break
+			}
+			parent, ok := byID[currentID]
+			if !ok {
+				return fmt.Errorf("compaction %q parent %q not found", compaction.ID(), currentID)
+			}
+			currentID = parent.ParentID()
+		}
+		if !found {
+			return fmt.Errorf(
+				"compaction %q first-kept entry %q is not an ancestor",
+				compaction.ID(),
+				compaction.FirstKeptID,
+			)
+		}
+	}
+	return nil
+}
+
 func branchAt(ctx context.Context, store session.Store, leafID string) ([]session.Entry, error) {
 	entries, err := store.Entries(ctx)
 	if err != nil {
@@ -332,7 +367,13 @@ func cloneEntry(source session.Entry, base session.EntryBase, remap map[string]s
 		if id == "" {
 			return ""
 		}
-		return remap[id]
+		if mapped, ok := remap[id]; ok {
+			return mapped
+		}
+		// Branch-summary provenance may point at an abandoned branch that is
+		// intentionally outside this exported branch. Preserve that opaque
+		// reference instead of silently erasing it.
+		return id
 	}
 	switch entry := source.(type) {
 	case *session.MessageEntry:

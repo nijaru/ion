@@ -112,6 +112,71 @@ func TestImportSessionBundleRejectsBrokenBranchBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestImportSessionBundleRejectsMissingCompactionReferenceBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewSQLiteStore(":memory:", "compaction-validation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	originalID, err := session.NewSession(store, 0).AppendMessage(ctx, session.NewUserText("existing", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalInfo := session.SessionInfoEntry{
+		EntryBase:   session.EntryBase{ID: originalID},
+		Workdir:     "/repo",
+		Name:        "existing session",
+		LastPreview: "existing",
+		UpdatedAt:   time.Now(),
+	}
+	if err := store.UpdateSession(ctx, originalInfo); err != nil {
+		t.Fatal(err)
+	}
+	root := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "compact-root", Timestamp: time.Now()},
+		Message:   session.NewUserText("root", time.Now()),
+	}
+	compaction := &session.CompactionEntry{
+		EntryBase:   session.EntryBase{ID: "compact", ParentID: root.ID(), Timestamp: time.Now()},
+		Summary:     "bad summary",
+		FirstKeptID: "missing-kept-entry",
+	}
+	events := make([]json.RawMessage, 0, 2)
+	for _, entry := range []session.Entry{root, compaction} {
+		raw, err := session.MarshalEntry(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, raw)
+	}
+	if _, err := ImportSessionBundle(ctx, store, SessionBundle{
+		Version:       sessionBundleVersion,
+		RootSessionID: compaction.ID(),
+		Sessions:      []SessionBundleRecord{{Info: SessionBundleInfo{ID: compaction.ID()}, Events: events}},
+	}); err == nil {
+		t.Fatal("missing compaction reference import unexpectedly succeeded")
+	}
+	if got := store.GetLeafID(); got != originalID {
+		t.Fatalf("leaf after rejected import = %q, want %q", got, originalID)
+	}
+	entries, err := store.Entries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID() != originalID {
+		t.Fatalf("entries after rejected import = %#v, want original entry", entries)
+	}
+	gotInfo, err := store.GetSessionInfo(ctx, originalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotInfo.Workdir != originalInfo.Workdir || gotInfo.Name != originalInfo.Name ||
+		gotInfo.LastPreview != originalInfo.LastPreview {
+		t.Fatalf("catalog after rejected import = %+v, want %+v", gotInfo, originalInfo)
+	}
+}
+
 func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
