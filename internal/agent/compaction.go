@@ -815,6 +815,7 @@ func GenerateTurnPrefixSummary(
 	headers map[string]string,
 	signal <-chan struct{},
 	thinkingLevel session.ThinkingLevel,
+	convert func([]session.Message) []llm.Message,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
 	retryPolicy llm.StreamRetryPolicy,
 ) (SummaryResult, error) {
@@ -832,7 +833,7 @@ func GenerateTurnPrefixSummary(
 
 	promptText := fmt.Sprintf(
 		"<conversation>\n%s</conversation>\n\n%s",
-		serializeCompactionMessages(messages, DefaultConvert),
+		serializeCompactionMessages(messages, convert),
 		TurnPrefixSummarizationPrompt,
 	)
 
@@ -1085,7 +1086,7 @@ func Compact(
 			generated, e := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
 				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 				opts.APIKey, opts.Headers, signal,
-				opts.ThinkingLevel, opts.StreamFn, opts.SummaryRetry)
+				opts.ThinkingLevel, opts.Convert, opts.StreamFn, opts.SummaryRetry)
 			prefixCh <- result{generated, e}
 		}()
 

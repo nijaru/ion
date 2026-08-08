@@ -257,10 +257,15 @@ func TestCompactSplitTurnWithNoPriorHistorySummarizesPrefix(t *testing.T) {
 	}
 
 	var calls int
+	var prefixRequest llm.Request
 	result, err := Compact(context.Background(), sess, CompactOptions{
 		Model: "test",
-		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+		Convert: func([]session.Message) []llm.Message {
+			return []llm.Message{{Role: llm.RoleUser, Content: "converted prefix"}}
+		},
+		StreamFn: func(_ context.Context, request *llm.Request) (llm.Stream, error) {
 			calls++
+			prefixRequest = *request
 			return &mockStream{chunks: []*llm.Chunk{{Content: "prefix summary", StopReason: "stop"}}}, nil
 		},
 	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
@@ -269,6 +274,9 @@ func TestCompactSplitTurnWithNoPriorHistorySummarizesPrefix(t *testing.T) {
 	}
 	if calls != 1 || result == nil {
 		t.Fatalf("Compact result = %#v, stream calls = %d, want one prefix summary", result, calls)
+	}
+	if !strings.Contains(prefixRequest.Messages[1].Content, "converted prefix") {
+		t.Fatalf("prefix summary prompt = %q, want provider-converted content", prefixRequest.Messages[1].Content)
 	}
 	if !strings.Contains(result.Summary, "Turn Context (split turn)") ||
 		!strings.Contains(result.Summary, "prefix summary") {
@@ -548,7 +556,7 @@ func TestGenerateTurnPrefixSummaryRespectsSmallModelOutputLimit(t *testing.T) {
 	_, err := GenerateTurnPrefixSummary(
 		context.Background(),
 		[]session.Message{session.NewUserText("history", time.Now())},
-		"test", 1, 32, "", nil, nil, "",
+		"test", 1, 32, "", nil, nil, "", nil,
 		func(_ context.Context, req *llm.Request) (llm.Stream, error) {
 			request = *req
 			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
