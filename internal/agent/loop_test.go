@@ -731,6 +731,57 @@ func TestRunLoopStopReasonLengthFailsToolCalls(t *testing.T) {
 // REGRESSION: a clean cancellation mid-stream (provider returns ok=false with a
 // nil stream error) must be classified as an aborted turn, not a completed one.
 // Previously the partial response was finalized and treated as success.
+func TestRunLoopMissingStreamFunctionIsTerminalFailure(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{Model: llm.Model{ID: "test"}},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, "stream function is not configured") {
+		t.Fatalf("turn-end message = %#v, want missing stream failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopNilStreamIsTerminalFailure(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return nil, nil
+			},
+		},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, "provider returned a nil stream") {
+		t.Fatalf("turn-end message = %#v, want nil-stream failure", turnEnd.Message)
+	}
+}
+
 func TestRunLoopAbortMidStreamClassified(t *testing.T) {
 	signal := make(chan struct{})
 	close(signal) // aborted at stream start

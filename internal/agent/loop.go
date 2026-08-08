@@ -301,7 +301,18 @@ func streamAssistantResponse(
 		req.Model = cfg.Model.ID
 	}
 
+	if cfg.StreamFn == nil {
+		err := fmt.Errorf("stream function is not configured")
+		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
+		emit(session.MessageStart{Message: &msg})
+		emit(session.MessageEnd{Message: &msg})
+		return &msg, true
+	}
+
 	stream, err := cfg.StreamFn(streamCtx, req)
+	if err == nil && stream == nil {
+		err = fmt.Errorf("provider returned a nil stream")
+	}
 	if err != nil {
 		if isContextOverflow(cfg, err) {
 			err = fmt.Errorf("context_length_exceeded: %w", err)
