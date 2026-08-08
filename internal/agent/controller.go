@@ -1255,11 +1255,12 @@ func (h *Controller) setModelDirect(model llm.Model) error {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() {
+	phase := h.phase
+	if phase.activeTurn() && !phase.acceptsTurnInput() {
 		h.mu.Unlock()
-		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, h.phase)
+		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
-	idle := h.phase == PhaseReady
+	idle := phase == PhaseReady
 	sess := h.session
 	oldModel := h.model
 	changed := model.Provider != oldModel.Provider || model.ID != oldModel.ID
