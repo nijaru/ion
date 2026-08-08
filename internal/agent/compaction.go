@@ -609,6 +609,57 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix.`
 
+func serializeCompactionMessages(messages []session.Message, convert func([]session.Message) []llm.Message) string {
+	if convert == nil {
+		convert = DefaultConvert
+	}
+	converted := convert(messages)
+	var conversation strings.Builder
+	for _, msg := range converted {
+		conversation.WriteString(string(msg.Role))
+		if msg.Name != "" {
+			conversation.WriteString(" (")
+			conversation.WriteString(msg.Name)
+			conversation.WriteString(")")
+		}
+		if msg.ToolID != "" {
+			conversation.WriteString(" [")
+			conversation.WriteString(msg.ToolID)
+			conversation.WriteString("]")
+		}
+		conversation.WriteString(": ")
+		if msg.Content != "" {
+			conversation.WriteString(msg.Content)
+		} else {
+			for _, part := range msg.Parts {
+				if part.Type == llm.ContentPartImage {
+					conversation.WriteString("[image")
+					if part.MIMEType != "" {
+						conversation.WriteByte(' ')
+						conversation.WriteString(part.MIMEType)
+					}
+					conversation.WriteByte(']')
+					continue
+				}
+				conversation.WriteString(part.Text)
+			}
+		}
+		if msg.Reasoning != "" {
+			conversation.WriteString("\nReasoning: ")
+			conversation.WriteString(msg.Reasoning)
+		}
+		for _, call := range msg.Calls {
+			conversation.WriteString("\nTool call ")
+			conversation.WriteString(call.Function.Name)
+			conversation.WriteString("(")
+			conversation.WriteString(call.Function.Arguments)
+			conversation.WriteByte(')')
+		}
+		conversation.WriteString("\n\n")
+	}
+	return conversation.String()
+}
+
 // GenerateSummary calls the LLM to generate a conversation summary.
 // Uses auth/headers/signal and computes maxTokens from reserve settings for Pi fidelity.
 // Pi: compaction.js generateSummary (line 350)
@@ -647,41 +698,12 @@ func GenerateSummary(
 		basePrompt = fmt.Sprintf("%s\n\nAdditional focus: %s", basePrompt, customInstructions)
 	}
 
-	// Build conversation text from messages.
-	var conversation strings.Builder
-	for _, msg := range messages {
-		switch m := msg.(type) {
-		case *session.UserMessage:
-			conversation.WriteString("User: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		case *session.AssistantMessage:
-			conversation.WriteString("Assistant: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		case *session.ToolResultMessage:
-			conversation.WriteString("Tool Result: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		}
-	}
-
-	// Build prompt.
+	// Build prompt from the provider-neutral conversion so tool calls,
+	// reasoning, custom messages, and image placeholders remain visible to the
+	// summarizer instead of being reduced to assistant text only.
 	var prompt strings.Builder
 	prompt.WriteString("<conversation>\n")
-	prompt.WriteString(conversation.String())
+	prompt.WriteString(serializeCompactionMessages(messages, convert))
 	prompt.WriteString("</conversation>\n\n")
 
 	if previousSummary != "" {
@@ -781,40 +803,9 @@ func GenerateTurnPrefixSummary(
 		maxTokens = 128
 	}
 
-	// Build conversation text.
-	var conversation strings.Builder
-	for _, msg := range messages {
-		switch m := msg.(type) {
-		case *session.UserMessage:
-			conversation.WriteString("User: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		case *session.AssistantMessage:
-			conversation.WriteString("Assistant: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		case *session.ToolResultMessage:
-			conversation.WriteString("Tool Result: ")
-			for _, c := range m.Content {
-				if tc, ok := c.(session.TextContent); ok {
-					conversation.WriteString(tc.Text)
-				}
-			}
-			conversation.WriteString("\n\n")
-		}
-	}
-
 	promptText := fmt.Sprintf(
 		"<conversation>\n%s</conversation>\n\n%s",
-		conversation.String(),
+		serializeCompactionMessages(messages, DefaultConvert),
 		TurnPrefixSummarizationPrompt,
 	)
 

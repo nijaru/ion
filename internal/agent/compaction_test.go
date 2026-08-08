@@ -339,6 +339,40 @@ func TestAbortCancelsActiveCompaction(t *testing.T) {
 	}
 }
 
+func TestGenerateSummarySerializesConvertedToolCalls(t *testing.T) {
+	var request llm.Request
+	messages := []session.Message{
+		session.NewUserText("inspect the project", time.Now()),
+		&session.AssistantMessage{
+			Content: []session.Content{&session.ToolCall{
+				ID:        "call-1",
+				Name:      "read",
+				Arguments: map[string]any{"path": "main.go"},
+			}},
+		},
+		&session.ToolResultMessage{
+			ToolCallID: "call-1",
+			ToolName:   "read",
+			Content:    []session.Content{session.TextContent{Text: "package main"}},
+		},
+	}
+	_, err := GenerateSummary(
+		context.Background(), messages, "test", 1024, 0, "", nil, nil, "", "", "", nil,
+		func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			request = *req
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	if len(request.Messages) != 2 || !strings.Contains(request.Messages[1].Content, "read") ||
+		!strings.Contains(request.Messages[1].Content, "main.go") ||
+		!strings.Contains(request.Messages[1].Content, "package main") {
+		t.Fatalf("summary request = %#v, want tool call and result context", request.Messages)
+	}
+}
+
 func TestGenerateSummaryRequiresStream(t *testing.T) {
 	_, err := GenerateSummary(
 		context.Background(),
