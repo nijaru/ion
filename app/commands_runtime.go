@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/config"
@@ -47,6 +48,25 @@ func (m Model) storedSessionConfig(
 	catalog agent.SessionCatalog,
 	sessionID string,
 ) (*config.Config, error) {
+	if reader, ok := m.Model.Runner.(agent.SessionBranchAtReader); ok {
+		entries, err := reader.SessionBranchAt(ctx, sessionID)
+		if err == nil {
+			projection, projectionErr := session.ProjectContext(entries)
+			if projectionErr != nil {
+				return nil, fmt.Errorf("failed to project session %s: %w", sessionID, projectionErr)
+			}
+			provider, modelName := projection.ActiveProvider, projection.ActiveModel
+			if provider != "" && modelName != "" {
+				cfg, cfgErr := m.configForStoredSession(provider, modelName)
+				if cfgErr != nil {
+					return nil, fmt.Errorf("failed to apply session metadata: %w", cfgErr)
+				}
+				return cfg, nil
+			}
+		} else if ctx.Err() != nil {
+			return nil, err
+		}
+	}
 	if catalog == nil {
 		return nil, fmt.Errorf("session catalog is unavailable")
 	}
@@ -523,20 +543,18 @@ func (m Model) switchRuntimeCommandWithOptions(
 	ctx := m.runtimeRequestOperationContext()
 
 	return m, func() tea.Msg {
-		var leafID string
-		var worktreeBranch string
+		var projection agent.SessionProjection
 		result, err := Switch(ctx, SwitchInput{
 			Switcher:        switcher,
 			Transition:      transition,
 			Current:         current,
 			TargetSessionID: sessionID,
 			ValidateReplacement: func(validateCtx context.Context, handles Handles) error {
-				projection, validateErr := selectedRuntimeProjection(validateCtx, handles.Runner)
+				var validateErr error
+				projection, validateErr = selectedRuntimeProjection(validateCtx, handles.Runner)
 				if validateErr != nil {
 					return fmt.Errorf("read selected projection: %w", validateErr)
 				}
-				leafID = strings.TrimSpace(projection.LeafID)
-				worktreeBranch = strings.TrimSpace(projection.WorktreeBranch)
 				return nil
 			},
 			SaveState: saveRuntimeState,
@@ -549,13 +567,32 @@ func (m Model) switchRuntimeCommandWithOptions(
 				retry:      options.retrySetup,
 			}
 		}
+		worktreeBranch := strings.TrimSpace(projection.WorktreeBranch)
+		if err := persistAcceptedSessionCatalog(
+			ctx,
+			result.Runtime.Handles.Runner,
+			projection,
+			m.App.Workdir,
+			worktreeBranch,
+			runtimeInfoModelName(result.Runtime.Handles.Info),
+		); err != nil {
+			result.Subscription.Close()
+			return runtimeSwitchErrorMsg{
+				generation: generation,
+				switchID:   requestID,
+				err: errors.Join(
+					fmt.Errorf("persist replacement session metadata: %w", err),
+					CloseHandles(result.Runtime.Handles),
+				),
+			}
+		}
 		return runtimeSwitchedMsg{
 			generation:     generation,
 			switchID:       requestID,
 			runtime:        result.Runtime,
 			previous:       result.Previous,
 			subscription:   result.Subscription,
-			leafID:         leafID,
+			leafID:         projection.LeafID,
 			worktreeBranch: worktreeBranch,
 			keybindings:    options.keybindings,
 			notice:         session.EntryText(notice),
@@ -601,6 +638,24 @@ func (m Model) resumeRuntimeCommand(
 		if resumeBranch == "" {
 			resumeBranch = m.App.Branch
 		}
+		if err := persistAcceptedSessionCatalog(
+			ctx,
+			result.Runtime.Handles.Runner,
+			projection,
+			m.App.Workdir,
+			resumeBranch,
+			runtimeInfoModelName(result.Runtime.Handles.Info),
+		); err != nil {
+			result.Subscription.Close()
+			return runtimeSwitchErrorMsg{
+				generation: generation,
+				switchID:   switchID,
+				err: errors.Join(
+					fmt.Errorf("persist resumed session metadata: %w", err),
+					CloseHandles(result.Runtime.Handles),
+				),
+			}
+		}
 		printLines := []string{m.runtimeHeaderLine(result.Runtime.Handles.Info)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
 			printLines = append(printLines, header)
@@ -613,7 +668,7 @@ func (m Model) resumeRuntimeCommand(
 			previous:       result.Previous,
 			subscription:   result.Subscription,
 			leafID:         leafID,
-			worktreeBranch: projection.WorktreeBranch,
+			worktreeBranch: resumeBranch,
 			printLines:     printLines,
 			replayEntries:  projection.Branch,
 			notice:         session.EntryText(notice),
@@ -639,6 +694,45 @@ func selectedRuntimeProjection(ctx context.Context, runner agent.Runtime) (agent
 		return agent.SessionProjection{LeafID: strings.TrimSpace(tree.LeafID)}, nil
 	}
 	return agent.SessionProjection{}, nil
+}
+
+func persistAcceptedSessionCatalog(
+	ctx context.Context,
+	runner agent.Runtime,
+	projection agent.SessionProjection,
+	workdir, branch, modelName string,
+) error {
+	catalog, ok := runner.(agent.SessionCatalog)
+	if !ok || strings.TrimSpace(projection.LeafID) == "" {
+		return nil
+	}
+	info, ok := sessionInfoFromBranch(
+		projection.LeafID,
+		workdir,
+		branch,
+		modelName,
+		projection.Branch,
+		time.Now(),
+	)
+	if !ok {
+		return nil
+	}
+	return catalog.UpdateSession(ctx, info)
+}
+
+func runtimeInfoModelName(info RuntimeInfo) string {
+	if info == nil {
+		return ""
+	}
+	provider := strings.TrimSpace(info.Provider())
+	model := strings.TrimSpace(info.Model())
+	if provider == "" {
+		return model
+	}
+	if model == "" {
+		return provider
+	}
+	return provider + "/" + model
 }
 
 func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {

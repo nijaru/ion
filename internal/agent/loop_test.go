@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,18 @@ func (s *mockStream) Err() error   { return nil }
 func (s *mockStream) Close() error { return nil }
 
 // --- Loop contract tests ---
+
+func TestIsContextOverflowUsesProviderClassifierBeforeFallback(t *testing.T) {
+	providerErr := errors.New("provider-specific overflow")
+	if !isContextOverflow(LoopConfig{ContextOverflow: func(err error) bool {
+		return errors.Is(err, providerErr)
+	}}, providerErr) {
+		t.Fatal("provider classifier did not recognize overflow")
+	}
+	if !isContextOverflow(LoopConfig{}, errors.New("maximum context length exceeded")) {
+		t.Fatal("fallback overflow classifier did not recognize overflow")
+	}
+}
 
 // INVARIANT: RunLoop emits AgentStart, then AgentEnd (lifecycle bookends).
 func TestRunLoopLifecycleEvents(t *testing.T) {

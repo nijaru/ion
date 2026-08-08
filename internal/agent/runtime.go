@@ -64,10 +64,11 @@ type Controller struct {
 	metrics   *Metrics
 
 	// --- Provider plumbing ---
-	stream    func(ctx context.Context, req *llm.Request) (llm.Stream, error)
-	auth      func(model llm.Model) (apiKey string, headers map[string]string)
-	transport http.RoundTripper
-	timeout   time.Duration
+	stream          func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	auth            func(model llm.Model) (apiKey string, headers map[string]string)
+	contextOverflow func(error) bool
+	transport       http.RoundTripper
+	timeout         time.Duration
 
 	// --- Host resources ---
 	promptTemplates map[string]string
@@ -144,9 +145,11 @@ type Controller struct {
 	thinkingRollbackSet bool
 
 	// --- Compaction ---
-	compaction       CompactionSettings
-	contextWindow    int
-	compactionCancel context.CancelFunc
+	compaction                CompactionSettings
+	contextWindow             int
+	compactionCancel          context.CancelFunc
+	compactionCancelToken     uint64
+	nextCompactionCancelToken uint64
 
 	// --- Safety ---
 	approvals         *ApprovalBroker
@@ -272,6 +275,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleSessionProjection(cmd)
 	case *SessionBranchCmd:
 		c.handleSessionBranch(cmd)
+	case *SessionBranchAtCmd:
+		c.handleSessionBranchAt(cmd)
 	case *SessionTreeCmd:
 		c.handleSessionTree(cmd)
 	case *SessionCatalogListCmd:
@@ -347,6 +352,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 	case *SessionProjectionCmd:
 		sendResult(cmd.Reply, SessionProjectionResult{Err: ErrRuntimeClosed})
 	case *SessionBranchCmd:
+		sendResult(cmd.Reply, SessionBranchResult{Err: ErrRuntimeClosed})
+	case *SessionBranchAtCmd:
 		sendResult(cmd.Reply, SessionBranchResult{Err: ErrRuntimeClosed})
 	case *SessionTreeCmd:
 		sendResult(cmd.Reply, SessionTreeResult{Err: ErrRuntimeClosed})

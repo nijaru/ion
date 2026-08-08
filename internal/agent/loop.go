@@ -215,6 +215,16 @@ func RunLoop(
 	return newMessages
 }
 
+func isContextOverflow(cfg LoopConfig, err error) bool {
+	if err == nil {
+		return false
+	}
+	if cfg.ContextOverflow != nil && cfg.ContextOverflow(err) {
+		return true
+	}
+	return IsContextOverflowError(err)
+}
+
 // streamAssistantResponse calls the LLM and accumulates the response into an AssistantMessage.
 // Returns the message and whether the stream was aborted.
 //
@@ -293,6 +303,9 @@ func streamAssistantResponse(
 
 	stream, err := cfg.StreamFn(streamCtx, req)
 	if err != nil {
+		if isContextOverflow(cfg, err) {
+			err = fmt.Errorf("context_length_exceeded: %w", err)
+		}
 		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		emit(session.MessageStart{Message: &msg})
 		emit(session.MessageEnd{Message: &msg})
@@ -360,6 +373,9 @@ func streamAssistantResponse(
 		return &final, true
 	}
 	if err := stream.Err(); err != nil {
+		if isContextOverflow(cfg, err) {
+			err = fmt.Errorf("context_length_exceeded: %w", err)
+		}
 		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
 		if !started {
 			emit(session.MessageStart{Message: &msg})

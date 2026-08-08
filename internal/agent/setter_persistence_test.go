@@ -9,6 +9,40 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestPromptRejectsPersistedBranchModelMismatch(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendModelChange(context.Background(), "openrouter", "historic-model"); err != nil {
+		t.Fatal(err)
+	}
+	var streamCalls int
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{Provider: "openrouter", ID: "current-model"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			streamCalls++
+			return &mockStream{chunks: []*llm.Chunk{{Content: "unexpected", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+
+	_, err := h.Prompt(context.Background(), "must not use stale runtime")
+	if err == nil || !strings.Contains(err.Error(), "replace the runtime") {
+		t.Fatalf("Prompt error = %v, want explicit runtime replacement error", err)
+	}
+	if streamCalls != 0 {
+		t.Fatalf("provider stream calls = %d, want 0", streamCalls)
+	}
+	snapshot, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 0 {
+		t.Fatalf("mismatched prompt persisted messages = %#v, want none", snapshot.Messages)
+	}
+}
+
 func TestIdleModelSelectionPersistsWhenRuntimeAlreadyUsesTarget(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

@@ -55,6 +55,14 @@ func (h *Controller) navigateTreeDirect(
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: collect branch: %w", err)
 	}
+	targetBranch, err := h.session.BranchAt(navigationCtx, targetID)
+	if err != nil {
+		return result, fmt.Errorf("navigate tree: read target branch: %w", err)
+	}
+	targetContext, err := session.ProjectContext(targetBranch)
+	if err != nil {
+		return result, fmt.Errorf("navigate tree: restore target runtime state: %w", err)
+	}
 
 	var summary *session.BranchSummaryData
 	if opts.Summarize {
@@ -89,6 +97,8 @@ func (h *Controller) navigateTreeDirect(
 		return result, fmt.Errorf("navigate tree: move session: %w", err)
 	}
 	result.LeafID = h.session.GetLeafID()
+	result.ActiveProvider = targetContext.ActiveProvider
+	result.ActiveModel = targetContext.ActiveModel
 	return result, nil
 }
 

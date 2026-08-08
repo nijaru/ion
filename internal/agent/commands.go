@@ -422,6 +422,17 @@ type SessionBranchResult struct {
 	Err     error
 }
 
+// SessionBranchAtCmd reads a selected branch through the controller. The
+// target is a leaf entry in this runtime's session tree; callers receive only
+// immutable entries, never the storage owner.
+type SessionBranchAtCmd struct {
+	Ctx    context.Context
+	LeafID string
+	Reply  chan<- SessionBranchResult
+}
+
+func (SessionBranchAtCmd) command() {}
+
 // SessionTreeCmd reads the active session tree and selected leaf through the
 // controller. The app receives a projection, never the store.
 type SessionTreeCmd struct {

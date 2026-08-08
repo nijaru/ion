@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -39,11 +40,13 @@ type treePickerLoadedMsg struct {
 
 // treePickerMoveMsg confirms that a NavigateTree operation completed.
 type treePickerMoveMsg struct {
-	generation uint64
-	requestID  uint64
-	leafID     string
-	err        error
-	cancelled  bool
+	generation     uint64
+	requestID      uint64
+	leafID         string
+	activeProvider string
+	activeModel    string
+	err            error
+	cancelled      bool
 }
 
 func (m Model) openTreePicker() (Model, tea.Cmd) {
@@ -335,10 +338,52 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 		m.Model.LeafID = msg.leafID
 	}
 	m.Model.TreeNavigationRequest++
+	replay := m.replayCurrentBranch(m.Model.TreeNavigationRequest)
+	if branchModel := strings.TrimSpace(msg.activeModel); branchModel != "" &&
+		branchRuntimeModelDiffers(m, msg.activeProvider, branchModel) {
+		cfg, err := m.commandConfig()
+		if err != nil {
+			return m, sequenceCmds(replay, cmdError(fmt.Sprintf("restore branch model: %v", err)))
+		}
+		provider := strings.TrimSpace(msg.activeProvider)
+		if provider != "" {
+			cfg, err = updateProviderSelection(cfg, provider)
+			if err != nil {
+				return m, sequenceCmds(replay, cmdError(fmt.Sprintf("restore branch provider: %v", err)))
+			}
+		}
+		cfg = updateModelForPreset(cfg, branchModel, m.activePreset())
+		runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
+		if err != nil {
+			return m, sequenceCmds(replay, cmdError(fmt.Sprintf("restore branch model: %v", err)))
+		}
+		transition := newRuntimeTransition(cfg, runtimeCfg, m.activePreset(), "")
+		switchModel, switchCmd := m.switchRuntimeCommand(
+			transition,
+			systemEntry("Restored branch model "+branchModel),
+			m.currentResumeLeafID(),
+			false,
+		)
+		return switchModel, sequenceCmds(replay, switchCmd)
+	}
 	return m, sequenceCmds(
-		m.replayCurrentBranch(m.Model.TreeNavigationRequest),
+		replay,
+		m.persistCurrentSessionInfoCmd(),
 		m.retrySessionEventAfterNavigation(),
 	)
+}
+
+func branchRuntimeModelDiffers(m Model, provider, model string) bool {
+	currentModel := strings.TrimSpace(m.runtimeModel())
+	if currentModel != "" && currentModel != strings.TrimSpace(model) {
+		return true
+	}
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false
+	}
+	currentProvider := strings.TrimSpace(m.runtimeProvider())
+	return currentProvider == "" || llm.ResolveID(currentProvider) != llm.ResolveID(provider)
 }
 
 // replayCurrentBranch loads entries from the current session branch and replays them.

@@ -171,11 +171,13 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 	return m, func() tea.Msg {
 		result, err := navigator.NavigateTree(ctx, targetID, opts)
 		return treePickerMoveMsg{
-			generation: generation,
-			requestID:  requestID,
-			leafID:     result.LeafID,
-			err:        err,
-			cancelled:  errors.Is(err, context.Canceled),
+			generation:     generation,
+			requestID:      requestID,
+			leafID:         result.LeafID,
+			activeProvider: result.ActiveProvider,
+			activeModel:    result.ActiveModel,
+			err:            err,
+			cancelled:      errors.Is(err, context.Canceled),
 		}
 	}
 }

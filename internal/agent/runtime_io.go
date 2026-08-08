@@ -295,6 +295,7 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 		if request.kind == runtimeCompact {
 			c.mu.Lock()
 			c.compactionCancel = nil
+			c.compactionCancelToken = 0
 			c.mu.Unlock()
 		}
 		stopCaller()

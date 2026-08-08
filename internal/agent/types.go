@@ -44,6 +44,10 @@ type LoopConfig struct {
 	// StreamFn calls the LLM provider. The loop constructs an llm.Request
 	// and passes it here. The harness wraps this with auth/hooks.
 	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	// ContextOverflow classifies provider errors that indicate the request
+	// exceeded the model window. The loop retains a string fallback for test
+	// doubles and adapters that expose only untyped errors.
+	ContextOverflow func(error) bool
 
 	// Convert transforms domain Messages to provider Messages at the boundary.
 	// Default: filter to user/assistant/tool_result roles.
@@ -427,6 +431,12 @@ type SessionReader interface {
 	SessionTree(ctx context.Context) (SessionTreeSnapshot, error)
 }
 
+// SessionBranchAtReader reads a selected branch without changing the active
+// leaf. It is optional so bootstrap-only and test runtimes need not expose it.
+type SessionBranchAtReader interface {
+	SessionBranchAt(ctx context.Context, leafID string) ([]session.Entry, error)
+}
+
 // SessionProjection is the immutable active-session view used by frontends
 // for semantic reads. Branch contains the selected branch and includes staged
 // entries while a durable turn is active; Usage is computed from that same
@@ -505,4 +515,9 @@ type NavigateOptions struct {
 type NavigateResult struct {
 	LeafID         string
 	SummaryEntryID string
+	// ActiveProvider and ActiveModel are the selected branch's persisted
+	// runtime model. The host may need to replace the provider runtime before
+	// the next turn when this differs from the current runtime.
+	ActiveProvider string
+	ActiveModel    string
 }

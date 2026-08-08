@@ -54,6 +54,9 @@ type ControllerConfig struct {
 	Transport http.RoundTripper
 	// Timeout is an optional per-request timeout.
 	Timeout time.Duration
+	// ContextOverflow classifies provider errors that mean the model window was
+	// exceeded. The fallback matcher remains in the stateless loop.
+	ContextOverflow func(error) bool
 
 	// Logger is used for structured logging throughout the harness lifecycle.
 	// When nil, logging is silent.
@@ -132,6 +135,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		promptTemplates:    cfg.PromptTemplates,
 		stream:             cfg.StreamFn,
 		auth:               cfg.Auth,
+		contextOverflow:    cfg.ContextOverflow,
 		transport:          cfg.Transport,
 		timeout:            cfg.Timeout,
 		phase:              PhaseReady,
@@ -299,6 +303,17 @@ func (h *Controller) runPrompt(
 	snap, err := h.requestContextSnapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
+	}
+
+	h.mu.Lock()
+	currentModel := h.model
+	h.mu.Unlock()
+	if snap.ActiveModel != "" && (snap.ActiveModel != currentModel.ID ||
+		(snap.ActiveProvider != "" && llm.ResolveID(snap.ActiveProvider) != llm.ResolveID(currentModel.Provider))) {
+		return nil, fmt.Errorf(
+			"session branch selects %s/%s but runtime uses %s/%s; replace the runtime before prompting",
+			snap.ActiveProvider, snap.ActiveModel, currentModel.Provider, currentModel.ID,
+		)
 	}
 
 	// Begin the durable turn before hooks or provider work. The accepted input
@@ -644,6 +659,7 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 		ActionBoundary:   h.actionBoundary,
 		MaxParallelTools: h.maxParallelTools,
 		StreamFn:         h.wrapStreamFn(),
+		ContextOverflow:  h.contextOverflow,
 		Convert:          DefaultConvert,
 		Auth:             h.auth,
 		DrainSteer: func() []session.Message {

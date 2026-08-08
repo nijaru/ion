@@ -403,11 +403,32 @@ func (c *Controller) handleCompact(cmd *CompactCmd) {
 		sendResult(cmd.Reply, err)
 		return
 	}
+	compactCtx, compactCancel := context.WithCancel(commandContext(cmd.Ctx))
+	c.mu.Lock()
+	c.nextCompactionCancelToken++
+	token := c.nextCompactionCancelToken
+	c.compactionCancelToken = token
+	c.compactionCancel = compactCancel
+	c.mu.Unlock()
 	if err := c.startReservedOperation(finish, func() {
-		result := c.requestRuntime(cmd.Ctx, runtimeRequest{kind: runtimeCompact, force: true})
+		result := c.requestRuntime(compactCtx, runtimeRequest{kind: runtimeCompact, force: true})
+		compactCancel()
+		c.mu.Lock()
+		if c.compactionCancelToken == token {
+			c.compactionCancel = nil
+			c.compactionCancelToken = 0
+		}
+		c.mu.Unlock()
 		finish()
 		sendResult(cmd.Reply, result.err)
 	}); err != nil {
+		compactCancel()
+		c.mu.Lock()
+		if c.compactionCancelToken == token {
+			c.compactionCancel = nil
+			c.compactionCancelToken = 0
+		}
+		c.mu.Unlock()
 		sendResult(cmd.Reply, err)
 	}
 }
@@ -567,6 +588,22 @@ func (c *Controller) handleSessionBranch(cmd *SessionBranchCmd) {
 	})
 }
 
+func (c *Controller) handleSessionBranchAt(cmd *SessionBranchAtCmd) {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		if c.session == nil {
+			sendResult(cmd.Reply, SessionBranchResult{Err: errors.New("session is unavailable")})
+			return
+		}
+		leafID := strings.TrimSpace(cmd.LeafID)
+		if leafID == "" {
+			sendResult(cmd.Reply, SessionBranchResult{Err: errors.New("session leaf is required")})
+			return
+		}
+		entries, err := c.session.BranchAt(ctx, leafID)
+		sendResult(cmd.Reply, SessionBranchResult{Entries: entries, Err: err})
+	})
+}
+
 func (c *Controller) handleSessionTree(cmd *SessionTreeCmd) {
 	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		if c.store == nil {
@@ -717,6 +754,21 @@ func (c *Controller) SessionBranch(ctx context.Context) ([]session.Entry, error)
 	ctx = commandContext(ctx)
 	reply := make(chan SessionBranchResult, 1)
 	if err := c.enqueue(ctx, &SessionBranchCmd{Ctx: ctx, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Entries, result.Err
+}
+
+// SessionBranchAt reads a selected branch through the controller command
+// queue. It is used for resume/model restoration before that leaf is active.
+func (c *Controller) SessionBranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionBranchResult, 1)
+	if err := c.enqueue(ctx, &SessionBranchAtCmd{Ctx: ctx, LeafID: leafID, Reply: reply}); err != nil {
 		return nil, err
 	}
 	result, err := waitCommandReply(ctx, reply)

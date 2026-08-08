@@ -149,6 +149,41 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	}
 }
 
+func TestNavigateTreeReportsSelectedBranchModel(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(ctx, session.NewUserText("target", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	targetModelLeaf, err := sess.AppendModelChange(ctx, "openrouter", "target-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, session.NewUserText("abandoned", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{Provider: "openrouter", ID: "current-model"},
+	})
+	defer h.Close()
+
+	result, err := h.NavigateTree(ctx, targetModelLeaf, NavigateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveProvider != "openrouter" || result.ActiveModel != "target-model" {
+		t.Fatalf(
+			"selected branch model = %s/%s, want openrouter/target-model",
+			result.ActiveProvider,
+			result.ActiveModel,
+		)
+	}
+}
+
 func TestNavigateTreeCancellationLeavesSessionUnchanged(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

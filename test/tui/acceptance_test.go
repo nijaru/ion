@@ -567,6 +567,9 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 		}
 		switchedSession := session.NewSession(store, 128)
 		runner := newAcceptanceRuntime(store, switchedSession, cfg, provider)
+		if err := runner.SetModel(acceptanceModelNamed(cfg.Provider, cfg.Model)); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist switched model: %w", err)
+		}
 		switches <- acceptanceRuntimeSwitch{model: cfg.Model, leafID: leafID, runner: runner}
 		return acceptanceBackend(cfg), runner, switchedSession, nil
 	}
@@ -606,18 +609,19 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	waitAcceptanceSignal(t, modelBProvider.started, "model-b provider")
 	waitForAcceptanceOutput(t, output, "model-b-output", "model-b runtime output")
 	waitForAcceptanceIdle(t, switchResult.runner)
+	resumeLeafID := strings.TrimSpace(store.GetLeafID())
 
 	sendAcceptanceCommandAfterSettlement(
 		t,
 		program,
 		output,
-		"/resume "+leafID,
+		"/resume "+resumeLeafID,
 		"--- resumed ---",
 		"session resume replay boundary",
 	)
 	resumeResult := waitAcceptanceRuntimeSwitch(t, switches, "model-b")
-	if resumeResult.leafID != leafID {
-		t.Fatalf("resume leaf = %q, want selected leaf %q", resumeResult.leafID, leafID)
+	if resumeResult.leafID != resumeLeafID {
+		t.Fatalf("resume leaf = %q, want selected leaf %q", resumeResult.leafID, resumeLeafID)
 	}
 	program.Send(tea.KeyPressMsg{Text: "after session resume"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})

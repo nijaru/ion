@@ -556,6 +556,7 @@ func openRuntime(
 		Tools:               agentTools,
 		Active:              activeToolNames,
 		StreamFn:            provider.Stream,
+		ContextOverflow:     provider.IsContextOverflow,
 		PromptTemplates:     promptTemplates,
 		SysPrompt:           sysPrompt,
 		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
