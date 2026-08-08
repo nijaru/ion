@@ -11,8 +11,8 @@ func TestActionPathLocksOrderOverlappingPathsWithoutDeadlock(t *testing.T) {
 	secondAcquired := make(chan struct{})
 	go func() {
 		release := locks.acquire([]string{"a.txt", "b.txt"})
-		close(secondAcquired)
 		release()
+		close(secondAcquired)
 	}()
 
 	select {
