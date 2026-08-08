@@ -28,6 +28,21 @@ func TestImportSessionBundleRejectsBrokenBranchBeforeMutation(t *testing.T) {
 			},
 			leaf: "cycle-a",
 		},
+		"detached missing parent": {
+			entries: []*session.MessageEntry{
+				{EntryBase: session.EntryBase{ID: "valid-root", Timestamp: time.Now()}, Message: session.NewUserText("root", time.Now())},
+				{EntryBase: session.EntryBase{ID: "detached", ParentID: "missing", Timestamp: time.Now()}, Message: session.NewUserText("detached", time.Now())},
+			},
+			leaf: "valid-root",
+		},
+		"detached cycle": {
+			entries: []*session.MessageEntry{
+				{EntryBase: session.EntryBase{ID: "valid-root", Timestamp: time.Now()}, Message: session.NewUserText("root", time.Now())},
+				{EntryBase: session.EntryBase{ID: "cycle-a", ParentID: "cycle-b", Timestamp: time.Now()}, Message: session.NewUserText("a", time.Now())},
+				{EntryBase: session.EntryBase{ID: "cycle-b", ParentID: "cycle-a", Timestamp: time.Now()}, Message: session.NewUserText("b", time.Now())},
+			},
+			leaf: "valid-root",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -39,6 +54,16 @@ func TestImportSessionBundleRejectsBrokenBranchBeforeMutation(t *testing.T) {
 			originalID, err := session.NewSession(store, 0).
 				AppendMessage(ctx, session.NewUserText("existing", time.Now()))
 			if err != nil {
+				t.Fatal(err)
+			}
+			originalInfo := session.SessionInfoEntry{
+				EntryBase:   session.EntryBase{ID: originalID},
+				Workdir:     "/repo",
+				Name:        "existing session",
+				LastPreview: "existing",
+				UpdatedAt:   time.Now(),
+			}
+			if err := store.UpdateSession(ctx, originalInfo); err != nil {
 				t.Fatal(err)
 			}
 
@@ -74,6 +99,14 @@ func TestImportSessionBundleRejectsBrokenBranchBeforeMutation(t *testing.T) {
 			}
 			if len(entries) != 1 {
 				t.Fatalf("entries after rejected import = %d, want 1", len(entries))
+			}
+			gotInfo, err := store.GetSessionInfo(ctx, originalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotInfo.Workdir != originalInfo.Workdir || gotInfo.Name != originalInfo.Name ||
+				gotInfo.LastPreview != originalInfo.LastPreview {
+				t.Fatalf("catalog after rejected import = %+v, want %+v", gotInfo, originalInfo)
 			}
 		})
 	}

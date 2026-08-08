@@ -163,7 +163,7 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	if _, ok := byID[sourceLeaf]; !ok {
 		return "", fmt.Errorf("session bundle leaf %q is not present in entries", sourceLeaf)
 	}
-	if err := validateImportedBranch(byID, sourceLeaf); err != nil {
+	if err := validateImportedEntries(byID); err != nil {
 		return "", fmt.Errorf("validate imported session: %w", err)
 	}
 
@@ -222,26 +222,47 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	return newLeafID, nil
 }
 
-func validateImportedBranch(byID map[string]session.Entry, leafID string) error {
-	seen := make(map[string]struct{})
-	currentID := leafID
-	for {
-		if _, exists := seen[currentID]; exists {
-			return fmt.Errorf("entry parent cycle at %q", currentID)
+func validateImportedEntries(byID map[string]session.Entry) error {
+	const (
+		visiting = 1
+		complete = 2
+	)
+	states := make(map[string]uint8, len(byID))
+	for entryID := range byID {
+		if states[entryID] == complete {
+			continue
 		}
-		seen[currentID] = struct{}{}
-		current, ok := byID[currentID]
-		if !ok {
-			return fmt.Errorf("entry %q is not present in imported entries", currentID)
+		var path []string
+		currentID := entryID
+		for {
+			switch states[currentID] {
+			case visiting:
+				return fmt.Errorf("entry parent cycle at %q", currentID)
+			case complete:
+				currentID = ""
+			}
+			if currentID == "" {
+				break
+			}
+			current, ok := byID[currentID]
+			if !ok {
+				return fmt.Errorf("entry %q is not present in imported entries", currentID)
+			}
+			states[currentID] = visiting
+			path = append(path, currentID)
+			if current.ParentID() == "" {
+				break
+			}
+			if _, ok := byID[current.ParentID()]; !ok {
+				return fmt.Errorf("entry %q parent %q not found", current.ID(), current.ParentID())
+			}
+			currentID = current.ParentID()
 		}
-		if current.ParentID() == "" {
-			return nil
+		for _, id := range path {
+			states[id] = complete
 		}
-		if _, ok := byID[current.ParentID()]; !ok {
-			return fmt.Errorf("entry %q parent %q not found", current.ID(), current.ParentID())
-		}
-		currentID = current.ParentID()
 	}
+	return nil
 }
 
 func branchAt(ctx context.Context, store session.Store, leafID string) ([]session.Entry, error) {
