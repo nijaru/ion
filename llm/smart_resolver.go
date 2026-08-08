@@ -84,6 +84,9 @@ func (r *SmartResolver) Stream(ctx context.Context, req *Request) (Stream, error
 	var lastErr error
 	for _, p := range healthy {
 		s, err := p.provider.Stream(ctx, req)
+		if err == nil && s == nil {
+			err = errProviderNilStream
+		}
 		if err == nil {
 			return &smartResolverStream{
 				Stream:   s,

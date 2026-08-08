@@ -1,10 +1,53 @@
 package llm_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/llm"
 )
+
+type streamCollectorFault struct {
+	chunk    *llm.Chunk
+	ok       bool
+	emitted  bool
+	closeErr error
+}
+
+func (s *streamCollectorFault) Next() (*llm.Chunk, bool) {
+	if s.emitted {
+		return nil, false
+	}
+	s.emitted = true
+	return s.chunk, s.ok
+}
+func (*streamCollectorFault) Err() error { return nil }
+func (s *streamCollectorFault) Close() error {
+	return s.closeErr
+}
+
+func TestGenerateFromStreamRejectsNilChunk(t *testing.T) {
+	_, err := llm.GenerateFromStream(&streamCollectorFault{ok: true})
+	if err == nil || !strings.Contains(err.Error(), "nil chunk") {
+		t.Fatalf("GenerateFromStream() error = %v, want nil-chunk protocol error", err)
+	}
+}
+
+func TestGenerateFromStreamReportsCloseFailure(t *testing.T) {
+	closeErr := errors.New("response stream close failed")
+	response, err := llm.GenerateFromStream(&streamCollectorFault{
+		chunk:    &llm.Chunk{Content: "complete"},
+		ok:       true,
+		closeErr: closeErr,
+	})
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("GenerateFromStream() error = %v, want close failure", err)
+	}
+	if response != nil {
+		t.Fatalf("GenerateFromStream() response = %#v, want nil on close failure", response)
+	}
+}
 
 func TestStreamAccumulatorBlockText(t *testing.T) {
 	var acc llm.StreamAccumulator

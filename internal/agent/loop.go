@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -322,14 +323,17 @@ func streamAssistantResponse(
 		emit(session.MessageEnd{Message: &msg})
 		return &msg, true
 	}
-	defer stream.Close()
-
 	var acc llm.StreamAccumulator
 	started := false
+	var streamErr error
 
 	for {
 		chunk, ok := stream.Next()
 		if !ok {
+			break
+		}
+		if chunk == nil {
+			streamErr = errors.New("provider returned a nil stream chunk")
 			break
 		}
 
@@ -371,6 +375,12 @@ func streamAssistantResponse(
 		}
 	}
 
+	// Close is part of the provider boundary. A stream that cannot be closed
+	// cleanly is not a successful assistant response, even after it yielded EOF.
+	closeErr := stream.Close()
+	providerErr := stream.Err()
+	streamErr = errors.Join(streamErr, providerErr, closeErr)
+
 	if isCanceled(ctx, signal) {
 		// Cancellation may surface as ok=false with a nil stream error;
 		// treat it as an aborted turn, not a completed one. Pi agent-loop.js abort branch.
@@ -383,11 +393,11 @@ func streamAssistantResponse(
 		emit(session.MessageEnd{Message: &final})
 		return &final, true
 	}
-	if err := stream.Err(); err != nil {
-		if isContextOverflow(cfg, err) {
-			err = fmt.Errorf("context_length_exceeded: %w", err)
+	if streamErr != nil {
+		if isContextOverflow(cfg, streamErr) {
+			streamErr = fmt.Errorf("context_length_exceeded: %w", streamErr)
 		}
-		msg := newFailureMessage(cfg.Model, err, false, cfg.Thinking)
+		msg := newFailureMessage(cfg.Model, streamErr, false, cfg.Thinking)
 		if !started {
 			emit(session.MessageStart{Message: &msg})
 		}

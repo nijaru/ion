@@ -56,6 +56,37 @@ func (*retryStreamStub) Next() (*Chunk, bool) { return nil, false }
 func (*retryStreamStub) Err() error           { return nil }
 func (*retryStreamStub) Close() error         { return nil }
 
+type retryFaultStream struct {
+	chunk    *Chunk
+	ok       bool
+	emitted  bool
+	closeErr error
+}
+
+func (s *retryFaultStream) Next() (*Chunk, bool) {
+	if s.emitted {
+		return nil, false
+	}
+	s.emitted = true
+	return s.chunk, s.ok
+}
+func (*retryFaultStream) Err() error { return nil }
+func (s *retryFaultStream) Close() error {
+	return s.closeErr
+}
+
+type nilStreamResolverProvider struct{ retryProviderStub }
+
+func (*nilStreamResolverProvider) Stream(context.Context, *Request) (Stream, error) {
+	return nil, nil
+}
+
+type nilChunkProvider struct{ retryProviderStub }
+
+func (*nilChunkProvider) Stream(context.Context, *Request) (Stream, error) {
+	return &retryFaultStream{ok: true}, nil
+}
+
 type retryReadFailureProvider struct {
 	calls        atomic.Int32
 	afterChunk   bool
@@ -231,6 +262,55 @@ func TestCollectStreamWithRetryDiscardsPartialAttempt(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 2 {
 		t.Fatalf("provider attempts = %d, want one retry after partial failure", got)
+	}
+}
+
+func TestCollectStreamWithRetryReportsCloseFailure(t *testing.T) {
+	closeErr := errors.New("summary stream close failed")
+	chunks, err := CollectStreamWithRetry(
+		t.Context(),
+		&Request{},
+		func(context.Context, *Request) (Stream, error) {
+			return &retryFaultStream{
+				chunk:    &Chunk{Content: "summary"},
+				ok:       true,
+				closeErr: closeErr,
+			}, nil
+		},
+		StreamRetryPolicy{},
+	)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("CollectStreamWithRetry() error = %v, want close failure", err)
+	}
+	if chunks != nil {
+		t.Fatalf("collected chunks = %#v, want nil on close failure", chunks)
+	}
+}
+
+func TestRetryProviderRejectsNilStreamChunk(t *testing.T) {
+	retry := NewRetryProvider(&nilChunkProvider{})
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if chunk, ok := stream.Next(); ok || chunk != nil {
+		t.Fatalf("first chunk = %#v, %t, want terminal nil chunk", chunk, ok)
+	}
+	if !errors.Is(stream.Err(), errNilStreamChunk) {
+		t.Fatalf("stream error = %v, want nil-chunk protocol error", stream.Err())
+	}
+}
+
+func TestSmartResolverRejectsNilStream(t *testing.T) {
+	resolver := NewSmartResolver(StrategyPriority, &nilStreamResolverProvider{})
+	stream, err := resolver.Stream(t.Context(), &Request{})
+	if stream != nil {
+		t.Fatalf("Stream() stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, errProviderNilStream) {
+		t.Fatalf("Stream() error = %v, want nil-provider-stream error", err)
 	}
 }
 

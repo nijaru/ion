@@ -2,6 +2,8 @@ package llm
 
 import "errors"
 
+var errNilStreamChunk = errors.New("llm: stream returned a nil chunk")
+
 // GenerateFromStream collects chunks from a stream and assembles a Response.
 // It is intended for use by Provider implementations to avoid duplicating
 // the complex logic of assembling streaming chunks.
@@ -21,6 +23,9 @@ func GenerateFromStream(s Stream) (response *Response, err error) {
 		chunk, ok := s.Next()
 		if !ok {
 			break
+		}
+		if chunk == nil {
+			return nil, errNilStreamChunk
 		}
 		acc.Add(chunk)
 	}

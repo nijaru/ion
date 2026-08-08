@@ -62,7 +62,7 @@ func collectStreamAttempt(
 	ctx context.Context,
 	req *Request,
 	streamFn func(context.Context, *Request) (Stream, error),
-) ([]*Chunk, error) {
+) (chunks []*Chunk, err error) {
 	stream, err := streamFn(ctx, req)
 	if err != nil {
 		return nil, err
@@ -70,9 +70,10 @@ func collectStreamAttempt(
 	if stream == nil {
 		return nil, errProviderNilStream
 	}
-	defer stream.Close()
 
-	var chunks []*Chunk
+	defer func() {
+		err = errors.Join(err, stream.Close())
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -81,11 +82,15 @@ func collectStreamAttempt(
 		}
 		chunk, ok := stream.Next()
 		if ok {
+			if chunk == nil {
+				return nil, errNilStreamChunk
+			}
 			chunks = append(chunks, chunk)
 			continue
 		}
-		if err := stream.Err(); err != nil {
-			return nil, err
+		streamErr := stream.Err()
+		if streamErr != nil {
+			return nil, streamErr
 		}
 		return chunks, nil
 	}
@@ -115,6 +120,10 @@ func (s *retryStream) Next() (*Chunk, bool) {
 	for {
 		chunk, ok := s.stream.Next()
 		if ok {
+			if chunk == nil {
+				s.err = errNilStreamChunk
+				return nil, false
+			}
 			s.emitted = true
 			return chunk, true
 		}

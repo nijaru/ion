@@ -30,6 +30,25 @@ func (s *mockStream) Next() (*llm.Chunk, bool) {
 func (s *mockStream) Err() error   { return nil }
 func (s *mockStream) Close() error { return nil }
 
+type faultStream struct {
+	chunk    *llm.Chunk
+	ok       bool
+	emitted  bool
+	closeErr error
+}
+
+func (s *faultStream) Next() (*llm.Chunk, bool) {
+	if s.emitted {
+		return nil, false
+	}
+	s.emitted = true
+	return s.chunk, s.ok
+}
+func (*faultStream) Err() error { return nil }
+func (s *faultStream) Close() error {
+	return s.closeErr
+}
+
 // --- Loop contract tests ---
 
 func TestIsContextOverflowUsesProviderClassifierBeforeFallback(t *testing.T) {
@@ -779,6 +798,64 @@ func TestRunLoopNilStreamIsTerminalFailure(t *testing.T) {
 	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
 	if !ok || !strings.Contains(assistant.Error, "provider returned a nil stream") {
 		t.Fatalf("turn-end message = %#v, want nil-stream failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopNilStreamChunkIsTerminalFailure(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &faultStream{ok: true}, nil
+			},
+		},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, "nil stream chunk") {
+		t.Fatalf("turn-end message = %#v, want nil-chunk failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopStreamCloseFailureIsTerminalFailure(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	closeErr := errors.New("stream close failed")
+	stream := &faultStream{closeErr: closeErr}
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return stream, nil
+			},
+		},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, closeErr.Error()) {
+		t.Fatalf("turn-end message = %#v, want close failure", turnEnd.Message)
 	}
 }
 
