@@ -448,6 +448,46 @@ func TestGenerateSummarySerializesConvertedToolCalls(t *testing.T) {
 	}
 }
 
+func TestGenerateSummaryRespectsSmallModelOutputLimit(t *testing.T) {
+	var request llm.Request
+	_, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1, 64, "", nil, nil, "", "", "", nil,
+		func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			request = *req
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+		llm.StreamRetryPolicy{},
+	)
+	if err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	if request.MaxTokens != 64 {
+		t.Fatalf("summary max tokens = %d, want model limit 64", request.MaxTokens)
+	}
+}
+
+func TestGenerateTurnPrefixSummaryRespectsSmallModelOutputLimit(t *testing.T) {
+	var request llm.Request
+	_, err := GenerateTurnPrefixSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1, 32, "", nil, nil, "",
+		func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			request = *req
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+		llm.StreamRetryPolicy{},
+	)
+	if err != nil {
+		t.Fatalf("GenerateTurnPrefixSummary: %v", err)
+	}
+	if request.MaxTokens != 32 {
+		t.Fatalf("prefix summary max tokens = %d, want model limit 32", request.MaxTokens)
+	}
+}
+
 func TestGenerateSummaryRetriesAfterPartialTransientFailure(t *testing.T) {
 	var attempts int
 	transient := errors.New("summary connection lost")

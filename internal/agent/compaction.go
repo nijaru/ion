@@ -686,11 +686,11 @@ func GenerateSummary(
 	}
 	// Pi: maxTokens = min(floor(0.8 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.8 * float64(reserveTokens))
-	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
-		maxTokens = modelMaxTokens
-	}
 	if maxTokens < 256 {
 		maxTokens = 256 // floor
+	}
+	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
+		maxTokens = modelMaxTokens
 	}
 
 	// Select prompt based on whether we're updating.
@@ -798,11 +798,11 @@ func GenerateTurnPrefixSummary(
 	}
 	// Pi: maxTokens = min(floor(0.5 * reserveTokens), model.maxTokens)
 	maxTokens := int(0.5 * float64(reserveTokens))
-	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
-		maxTokens = modelMaxTokens
-	}
 	if maxTokens < 128 {
 		maxTokens = 128
+	}
+	if modelMaxTokens > 0 && modelMaxTokens < maxTokens {
+		maxTokens = modelMaxTokens
 	}
 
 	promptText := fmt.Sprintf(
