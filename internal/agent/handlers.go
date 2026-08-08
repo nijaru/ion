@@ -82,7 +82,34 @@ func (c *Controller) startPromptWorker(cmd *PromptCmd, runDone chan struct{}) {
 // handleTurnCompletion is the single lifecycle finalizer for prompt workers.
 // It converts the raw worker error into the public typed result, closes the
 // turn wait channel, and only then acknowledges the worker.
+func turnCompletionFailure(completion turnCompletion) string {
+	if errors.Is(completion.runErr, context.Canceled) || errors.Is(completion.runErr, context.DeadlineExceeded) {
+		return ""
+	}
+	var turnErr *TurnError
+	if errors.As(completion.runErr, &turnErr) && turnErr.Kind == KindCancellation {
+		return ""
+	}
+	if assistant, ok := completion.message.(*session.AssistantMessage); ok &&
+		assistant.StopReason == session.StopReasonAborted {
+		return ""
+	}
+	if assistant, ok := completion.message.(*session.AssistantMessage); ok && strings.TrimSpace(assistant.Error) != "" {
+		return assistant.Error
+	}
+	if completion.runErr != nil {
+		return completion.runErr.Error()
+	}
+	return ""
+}
+
 func (c *Controller) handleTurnCompletion(completion turnCompletion) {
+	var (
+		settle            bool
+		readyCorrection   bool
+		settledNextTurn   int
+		correctionFailure string
+	)
 	c.mu.Lock()
 	result := PromptResult{Message: completion.message}
 	if completion.runErr != nil {
@@ -94,6 +121,14 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		}
 	}
 	if c.runDone == completion.runDone {
+		if completion.runErr != nil {
+			// A persistence/setup failure can terminate before the normal
+			// Settled event reaches the hub. Do not expose the previous live
+			// assistant draft from an otherwise idle replacement snapshot.
+			c.activeAssistant = nil
+			c.activeAssistantCommitted = false
+			c.activeTools = nil
+		}
 		if c.closed {
 			if c.phase != PhaseClosed {
 				_ = c.transitionPhase(c.phase, PhaseClosed)
@@ -111,6 +146,25 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 				_ = c.transitionPhase(PhaseSettled, PhaseReady)
 			}
 		}
+		if c.settledPending {
+			settle = true
+			settledNextTurn = c.settledNextTurns
+			c.settledPending = false
+			c.settledNextTurns = 0
+			c.runtimeFailure = turnCompletionFailure(completion)
+		} else if !c.closed {
+			correctionFailure = turnCompletionFailure(completion)
+			c.runtimeFailure = correctionFailure
+			// Setup or persistence failures can finish without a normal
+			// AgentEnd/Settled pair. Publish a correction after the controller
+			// returns to ready so an attached frontend cannot remain streaming
+			// on a state that no longer exists.
+			readyCorrection = true
+		}
+		c.activeAssistant = nil
+		c.activeAssistantCommitted = false
+		c.activeTools = nil
+		c.snapshotRevision++
 		c.activeTurnID = ""
 		c.activeTurnLeaf = ""
 		c.activeTurnToken = 0
@@ -125,6 +179,13 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		c.runContextCancel = nil
 		close(completion.runDone)
 		c.runDone = nil
+	}
+	if settle {
+		c.emitLocked(session.Settled{NextTurnCount: settledNextTurn})
+	} else if readyCorrection {
+		c.emitLocked(session.RuntimeReady{
+			Turn: true, Failed: correctionFailure != "", Error: correctionFailure,
+		})
 	}
 	c.mu.Unlock()
 

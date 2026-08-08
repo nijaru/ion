@@ -664,6 +664,7 @@ func (h *Controller) handleEvent(ctx context.Context, e session.Event) error {
 	case session.AgentEnd:
 		request.kind = runtimeFinalizeTurn
 		request.failed = terminalTurnFailure(event.Messages) != ""
+		request.failureKind = terminalTurnFailureKind(event.Messages)
 		request.reason = terminalTurnFailure(event.Messages)
 	}
 	result := h.requestRuntime(ctx, request)

@@ -644,6 +644,18 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleSettled(msg)
 
 	case session.RuntimeReady:
+		if msg.Turn {
+			// A failed/canceled turn setup or persistence boundary has no normal
+			// Settled event, so this correction owns cancellation and projection.
+			m.clearTurnCancellation()
+			m.turnReducer().ClearActiveState(true)
+			if msg.Failed {
+				m.turnReducer().FailTurn(msg.Error)
+			} else {
+				m.turnReducer().RejectSubmit("")
+			}
+			return m, m.awaitSessionEvent()
+		}
 		// A user turn may be accepted between the operation result and this
 		// lifecycle event. That turn owns cancellation, buffers, and queues; do
 		// not let an older exclusive-operation completion clear them.
@@ -744,6 +756,7 @@ func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
 // handleSettled marks the harness as idle — enables submit button and clears in-flight state.
 func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
 	m.clearTurnCancellation()
+	m.turnReducer().ClearActiveState(false)
 	m.InFlight.AgentCommitted = false
 	m.InFlight.Thinking = false
 	m.InFlight.Canceling = false
@@ -860,12 +873,12 @@ func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
 	if printAssistant {
 		cmds = append(cmds, m.terminalCommit().Entries(assistant))
-		if errText := assistantErrorText(assistant); errText != "" {
-			terminalFailure = true
-			failureReason = errText
-			notice, _ := session.EntrySystem("Error: "+errText, time.Now())
-			cmds = append(cmds, m.terminalCommit().Entries(notice))
-		}
+	}
+	if errText := assistantErrorText(assistant); errText != "" {
+		terminalFailure = true
+		failureReason = errText
+		notice, _ := session.EntrySystem("Error: "+errText, time.Now())
+		cmds = append(cmds, m.terminalCommit().Entries(notice))
 	}
 	if entry, ok := m.turnReducer().FinishTurnMode(assistantCompleted); ok {
 		cmds = append(cmds, m.terminalCommit().Entries(entry))

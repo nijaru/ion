@@ -40,7 +40,13 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 
 	turn := m.turnReducer()
 	turn.ClearActiveState(true)
+	turn.RestoreActiveTurn(snapshot.ActiveTurn, snapshot.Resynced, m.formatToolTitle)
 	turn.RestoreRuntimePhase(snapshot.Phase)
+	if snapshot.Failure != "" {
+		m.clearTurnCancellation()
+		turn.ClearActiveState(true)
+		turn.FailTurn(snapshot.Failure)
+	}
 	m.preserveCancellationProjection()
 	steer, followUp, nextTurn := snapshot.Queues.Texts()
 	m.InFlight.QueuedSteering = steer

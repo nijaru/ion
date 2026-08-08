@@ -28,17 +28,18 @@ const (
 )
 
 type runtimeRequest struct {
-	kind      runtimeOperation
-	ctx       context.Context
-	event     session.Event
-	message   session.Message
-	timestamp time.Time
-	input     string
-	images    []session.ImageContent
-	reason    string
-	failed    bool
-	force     bool
-	reply     chan<- runtimeResult
+	kind        runtimeOperation
+	ctx         context.Context
+	event       session.Event
+	message     session.Message
+	timestamp   time.Time
+	input       string
+	images      []session.ImageContent
+	reason      string
+	failed      bool
+	failureKind ErrorKind
+	force       bool
+	reply       chan<- runtimeResult
 
 	// returnOnCallerCancellation lets an explicit shutdown stop waiting for a
 	// durable operation without canceling that operation. Its worker remains
@@ -183,6 +184,7 @@ func (c *Controller) handleRuntimeRequest(request runtimeRequest) {
 			return
 		}
 		c.runtimeBusy = true
+		c.runtimeBusyDone = make(chan struct{})
 		c.mu.Unlock()
 		c.handleRuntimePublish(request)
 		return
@@ -217,12 +219,16 @@ func (c *Controller) handleRuntimeRequest(request runtimeRequest) {
 		return
 	}
 	c.runtimeBusy = true
+	c.runtimeBusyDone = make(chan struct{})
 	c.mu.Unlock()
 	c.startRuntimeOperation(prepared)
 }
 
 func (c *Controller) handleRuntimePublish(request runtimeRequest) {
-	c.emit(request.event)
+	c.mu.Lock()
+	c.observeRuntimeEventLocked(request.event, false)
+	c.emitLocked(request.event)
+	c.mu.Unlock()
 	sendResult(request.reply, runtimeResult{})
 	c.startNextRuntimeOperation()
 }
@@ -345,13 +351,22 @@ func (c *Controller) handleRuntimeCompletion(completion runtimeCompletion) {
 		c.turnAborted = false
 		c.mu.Unlock()
 	}
+	// Pending writes and turn state have now been reflected in controller
+	// fields. A subscription that captured the previous revision must retry
+	// instead of pairing its branch read with this newer state.
+	c.mu.Lock()
+	c.snapshotRevision++
+	c.mu.Unlock()
 
 	if result.err == nil {
 		switch request.kind {
 		case runtimePersistMessage:
 			c.logMessage(request.message)
 			if request.event != nil {
-				c.emit(request.event)
+				c.mu.Lock()
+				c.observeRuntimeEventLocked(request.event, true)
+				c.emitLocked(request.event)
+				c.mu.Unlock()
 			}
 		case runtimeFlushPending:
 			if request.event != nil {
@@ -366,13 +381,19 @@ func (c *Controller) handleRuntimeCompletion(completion runtimeCompletion) {
 			if request.turnID == c.activeTurnID {
 				c.turnCommitted = result.turnCommitted
 				c.turnAborted = result.turnAborted
+				c.settledNextTurns = request.nextTurns
+				c.settledPending = true
+				if request.failed && request.failureKind != KindCancellation {
+					c.runtimeFailure = request.reason
+				} else if !request.failed || request.failureKind == KindCancellation {
+					c.runtimeFailure = ""
+				}
 			}
 			c.mu.Unlock()
 			if result.warning != nil {
 				c.emit(&session.Error{Err: result.warning})
 			}
 			c.emit(request.event)
-			c.emit(session.Settled{NextTurnCount: request.nextTurns})
 		}
 	}
 
@@ -389,6 +410,11 @@ func (c *Controller) startNextRuntimeOperation() {
 		c.mu.Lock()
 		if len(c.runtimeQueue) == 0 {
 			c.runtimeBusy = false
+			busyDone := c.runtimeBusyDone
+			c.runtimeBusyDone = nil
+			if busyDone != nil {
+				close(busyDone)
+			}
 			c.mu.Unlock()
 			return
 		}
@@ -420,6 +446,11 @@ func (c *Controller) rejectRuntimeRequests() {
 			queued := c.runtimeQueue
 			c.runtimeQueue = nil
 			c.runtimeBusy = false
+			busyDone := c.runtimeBusyDone
+			c.runtimeBusyDone = nil
+			if busyDone != nil {
+				close(busyDone)
+			}
 			c.mu.Unlock()
 			for _, request := range queued {
 				sendResult(request.reply, runtimeResult{err: ErrRuntimeClosed})

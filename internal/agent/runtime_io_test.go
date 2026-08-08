@@ -256,10 +256,18 @@ func TestRuntimeDurableAppendFailureAbortsWithoutTerminalPublication(t *testing.
 		},
 	})
 	var terminal atomic.Int32
+	var correction atomic.Int32
+	correctionSeen := make(chan struct{}, 1)
 	watchEvents(t, h, func(event session.Event) {
 		switch event.(type) {
 		case session.AgentEnd, session.Settled:
 			terminal.Add(1)
+		case session.RuntimeReady:
+			correction.Add(1)
+			select {
+			case correctionSeen <- struct{}{}:
+			default:
+			}
 		}
 	})
 
@@ -269,6 +277,14 @@ func TestRuntimeDurableAppendFailureAbortsWithoutTerminalPublication(t *testing.
 	}
 	if got := store.appendCalls.Load(); got != 2 {
 		t.Fatalf("durable append calls = %d, want user plus failed assistant append", got)
+	}
+	select {
+	case <-correctionSeen:
+	case <-time.After(time.Second):
+		t.Fatal("runtime correction was not observed")
+	}
+	if got := correction.Load(); got != 1 {
+		t.Fatalf("runtime corrections after durable append failure = %d, want 1", got)
 	}
 	if got := terminal.Load(); got != 0 {
 		t.Fatalf("terminal events after durable append failure = %d, want 0", got)
@@ -339,6 +355,16 @@ func TestRuntimeAbortPublishesSettled(t *testing.T) {
 			return
 		}
 		if settled {
+			recovered, err := h.Subscribe(context.Background(), EventCursor{})
+			if err != nil {
+				t.Fatalf("subscribe after Settled: %v", err)
+			}
+			defer recovered.Close()
+			if recovered.Snapshot.Phase != PhaseReady || recovered.Snapshot.ActiveTurnToken != 0 ||
+				recovered.Snapshot.Failure != "" {
+				t.Fatalf("snapshot after Settled = phase=%s token=%d failure=%q, want ready/zero/empty",
+					recovered.Snapshot.Phase, recovered.Snapshot.ActiveTurnToken, recovered.Snapshot.Failure)
+			}
 			return
 		}
 	}

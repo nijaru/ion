@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -68,18 +69,42 @@ func queueMessageTexts(messages []session.Message) []string {
 	return texts
 }
 
+// ActiveToolSnapshot is the bounded, renderable identity of a tool call that
+// is currently executing. Tool progress is intentionally not copied here:
+// ToolPartial is an open-ended provider/tool value and the next event remains
+// the authoritative update for subscribers that are not resynchronizing.
+type ActiveToolSnapshot struct {
+	ToolCallID string
+	Name       string
+	Args       []byte
+}
+
+// ActiveTurnSnapshot contains the in-flight state that is not necessarily in
+// the selected durable branch yet. It lets a lagged frontend rebuild the
+// visible assistant draft and running-tool indicators without treating UI
+// state as a second persistence owner.
+type ActiveTurnSnapshot struct {
+	Assistant          *session.AssistantMessage
+	AssistantCommitted bool
+	AssistantInBranch  bool
+	Tools              []ActiveToolSnapshot
+}
+
 // RuntimeSnapshot is the authoritative renderable runtime projection returned
 // when a subscription is opened or resynchronized. Branch is read at the
-// captured leaf; active fields are ephemeral controller state. Pending
+// captured leaf, or from the active durable turn while one is running; active
+// fields are ephemeral controller state. Pending
 // approvals are included because an approval event can be missed during
 // subscription recovery while the tool remains blocked on the broker.
 type RuntimeSnapshot struct {
-	Cursor    EventCursor
-	Resynced  bool
-	SessionID string
-	LeafID    string
-	Branch    []session.Entry
-	Phase     Phase
+	Cursor     EventCursor
+	Resynced   bool
+	SessionID  string
+	LeafID     string
+	Branch     []session.Entry
+	ActiveTurn ActiveTurnSnapshot
+	Failure    string
+	Phase      Phase
 	// ActiveTurnToken identifies the active turn for turn-scoped frontend
 	// cancellation. It is zero when the runtime has no active turn.
 	ActiveTurnToken  uint64
@@ -136,6 +161,151 @@ type eventHub struct {
 // Subscribe is now in runtime.go — it sends a SubscribeCmd through the
 // typed command queue and calls subscribeDirect from the command goroutine.
 
+// observeRuntimeEventLocked records only the bounded render state needed to
+// rebuild an active turn after subscription lag. It runs on the controller
+// boundary; messages are copied before publication because provider streams
+// may continue mutating their accumulated assistant value after a
+// MessageUpdate returns. The caller must hold c.mu.
+func (c *Controller) observeRuntimeEventLocked(event session.Event, persisted bool) {
+	switch event := event.(type) {
+	case session.AgentStart, session.TurnStart:
+		c.activeAssistant = nil
+		c.activeAssistantCommitted = false
+		c.activeTools = nil
+	case session.MessageStart:
+		if assistant, ok := event.Message.(*session.AssistantMessage); ok {
+			c.activeAssistant = cloneAssistantForSnapshot(assistant)
+			c.activeAssistantCommitted = false
+		}
+	case session.MessageUpdate:
+		if assistant, ok := event.Message.(*session.AssistantMessage); ok {
+			c.activeAssistant = cloneAssistantForSnapshot(assistant)
+			c.activeAssistantCommitted = false
+		}
+	case session.MessageEnd:
+		if assistant, ok := event.Message.(*session.AssistantMessage); ok {
+			c.activeAssistant = cloneAssistantForSnapshot(assistant)
+			c.activeAssistantCommitted = persisted
+		}
+	case session.ToolExecStart:
+		if c.activeTools == nil {
+			c.activeTools = make(map[string]ActiveToolSnapshot)
+		}
+		c.activeTools[event.ToolCallID] = ActiveToolSnapshot{
+			ToolCallID: event.ToolCallID,
+			Name:       event.Name,
+			Args:       append([]byte(nil), event.Args...),
+		}
+	case session.ToolExecEnd:
+		delete(c.activeTools, event.ToolCallID)
+	case session.Settled:
+		c.activeAssistant = nil
+		c.activeAssistantCommitted = false
+		c.activeTools = nil
+	}
+}
+
+func cloneAssistantForSnapshot(assistant *session.AssistantMessage) *session.AssistantMessage {
+	if assistant == nil {
+		return nil
+	}
+	clone := *assistant
+	clone.Content = make([]session.Content, 0, len(assistant.Content))
+	for _, content := range assistant.Content {
+		switch content := content.(type) {
+		case session.TextContent:
+			clone.Content = append(clone.Content, content)
+		case session.ThinkingContent:
+			clone.Content = append(clone.Content, content)
+		case session.ImageContent:
+			image := content
+			image.Data = append([]byte(nil), content.Data...)
+			clone.Content = append(clone.Content, image)
+		case *session.ToolCall:
+			if content == nil {
+				clone.Content = append(clone.Content, (*session.ToolCall)(nil))
+				continue
+			}
+			call := *content
+			call.Arguments = cloneJSONMap(content.Arguments)
+			clone.Content = append(clone.Content, &call)
+		default:
+			clone.Content = append(clone.Content, content)
+		}
+	}
+	return &clone
+}
+
+func cloneJSONMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(values))
+	for key, value := range values {
+		clone[key] = cloneJSONValue(value)
+	}
+	return clone
+}
+
+func cloneJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(value)
+	case []any:
+		clone := make([]any, len(value))
+		for i, item := range value {
+			clone[i] = cloneJSONValue(item)
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
+func branchContainsAssistant(entries []session.Entry, assistant *session.AssistantMessage) bool {
+	if assistant == nil {
+		return false
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry, ok := entries[i].(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		candidate, ok := entry.Message.(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		if assistant.ResponseID != "" && candidate.ResponseID == assistant.ResponseID {
+			return true
+		}
+		if candidate.Timestamp.UnixMilli() == assistant.Timestamp.UnixMilli() &&
+			candidate.StopReason == assistant.StopReason &&
+			candidate.Error == assistant.Error && session.MessageText(candidate) == session.MessageText(assistant) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Controller) activeTurnSnapshotLocked() ActiveTurnSnapshot {
+	snapshot := ActiveTurnSnapshot{
+		Assistant:          cloneAssistantForSnapshot(c.activeAssistant),
+		AssistantCommitted: c.activeAssistantCommitted,
+	}
+	if len(c.activeTools) == 0 {
+		return snapshot
+	}
+	snapshot.Tools = make([]ActiveToolSnapshot, 0, len(c.activeTools))
+	for _, tool := range c.activeTools {
+		tool.Args = append([]byte(nil), tool.Args...)
+		snapshot.Tools = append(snapshot.Tools, tool)
+	}
+	slices.SortFunc(snapshot.Tools, func(left, right ActiveToolSnapshot) int {
+		return strings.Compare(left.ToolCallID, right.ToolCallID)
+	})
+	return snapshot
+}
+
 func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*EventSubscription, error) {
 	ctx, releaseContext := h.runtimeBoundContext(ctx)
 	defer releaseContext()
@@ -143,8 +313,21 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 		return nil, ErrRuntimeClosed
 	}
 	for attempt := 0; attempt < 4; attempt++ {
-		expected := h.eventHub.cursor()
 		h.mu.Lock()
+		if h.runtimeBusy {
+			busyDone := h.runtimeBusyDone
+			h.mu.Unlock()
+			if busyDone == nil {
+				return nil, ErrSnapshotChanged
+			}
+			select {
+			case <-busyDone:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		expected := h.eventHub.cursor()
 		if h.closed {
 			h.mu.Unlock()
 			return nil, ErrRuntimeClosed
@@ -154,6 +337,9 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 			pendingApprovals = h.approvals.snapshot()
 		}
 		phase := h.phase
+		activeTurnID := h.activeTurnID
+		activeTurn := h.activeTurnSnapshotLocked()
+		snapshotRevision := h.snapshotRevision
 		if len(pendingApprovals) > 0 {
 			// ApprovalBroker owns the pending decision while the turn worker is
 			// blocked; expose the renderable phase even though the controller's
@@ -163,6 +349,8 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 		snapshot := RuntimeSnapshot{
 			SessionID:        h.session.ID(),
 			LeafID:           h.session.GetLeafID(),
+			ActiveTurn:       activeTurn,
+			Failure:          h.runtimeFailure,
 			Phase:            phase,
 			ActiveTurnToken:  h.activeTurnToken,
 			Model:            h.model,
@@ -178,7 +366,23 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 		leafID := snapshot.LeafID
 		h.mu.Unlock()
 
-		branch, err := h.session.BranchAt(ctx, leafID)
+		var branch []session.Entry
+		var err error
+		if activeTurnID != "" && h.durable != nil {
+			// Ordinary BranchAt intentionally hides an uncommitted turn. The
+			// active runtime snapshot is the one consumer that must include its
+			// durable staged entries so a lagged frontend can rebuild the live
+			// transcript before TurnCommit.
+			branch, err = h.durable.TurnBranch(ctx, activeTurnID)
+			if errors.Is(err, session.ErrTurnState) {
+				// A terminal abort can clear the durable turn before the
+				// controller publishes Settled. The committed branch remains the
+				// authoritative snapshot for that short lifecycle boundary.
+				branch, err = h.session.BranchAt(ctx, leafID)
+			}
+		} else {
+			branch, err = h.session.BranchAt(ctx, leafID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("build runtime snapshot: %w", err)
 		}
@@ -199,10 +403,23 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 		}
 		h.mu.Unlock()
 		snapshot.Branch = append([]session.Entry(nil), branch...)
-		if h.eventHub.cursor() != expected || h.session.GetLeafID() != leafID {
+		if snapshot.ActiveTurn.AssistantCommitted {
+			snapshot.ActiveTurn.AssistantInBranch = branchContainsAssistant(
+				branch, snapshot.ActiveTurn.Assistant,
+			)
+		}
+		h.mu.Lock()
+		turnChanged := h.activeTurnID != activeTurnID
+		revisionChanged := h.snapshotRevision != snapshotRevision
+		currentCursor := h.eventHub.cursor()
+		currentLeaf := h.session.GetLeafID()
+		busy := h.runtimeBusy
+		if currentCursor != expected || currentLeaf != leafID || turnChanged || revisionChanged || busy {
+			h.mu.Unlock()
 			continue
 		}
 		sub, err := h.eventHub.subscribe(snapshot, expected, after)
+		h.mu.Unlock()
 		if errors.Is(err, ErrSnapshotChanged) {
 			continue
 		}

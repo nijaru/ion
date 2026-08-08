@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +24,38 @@ type blockingBranchSession struct {
 	session.Session
 	started chan struct{}
 	release chan struct{}
+}
+
+type blockedChunkStream struct {
+	chunks    []*llm.Chunk
+	index     int
+	ready     chan<- struct{}
+	release   <-chan struct{}
+	closeOnce *sync.Once
+	closeFn   func()
+}
+
+func (s *blockedChunkStream) Next() (*llm.Chunk, bool) {
+	if s.index < len(s.chunks) {
+		chunk := s.chunks[s.index]
+		s.index++
+		if s.index == len(s.chunks) && s.ready != nil {
+			close(s.ready)
+			s.ready = nil
+		}
+		return chunk, true
+	}
+	<-s.release
+	return nil, false
+}
+
+func (*blockedChunkStream) Err() error { return nil }
+
+func (s *blockedChunkStream) Close() error {
+	if s.closeOnce != nil {
+		s.closeOnce.Do(s.closeFn)
+	}
+	return nil
 }
 
 func (s *blockingModelChangeSession) AppendModelChange(
@@ -85,6 +121,207 @@ func TestEventStreamDetachesSlowSubscriberAtBound(t *testing.T) {
 	}
 	if count != eventSubscriberCapacity {
 		t.Fatalf("delivered events = %d, want bounded prefix %d", count, eventSubscriberCapacity)
+	}
+}
+
+func TestEventStreamResyncIncludesActiveDurableTurn(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "event-resync.db")
+	store, err := session.NewSQLiteStore(path, "event-resync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 0)
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	closeOnce := new(sync.Once)
+	chunks := make([]*llm.Chunk, 600)
+	for i := range chunks {
+		chunks[i] = &llm.Chunk{Content: "x"}
+	}
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &blockedChunkStream{
+				chunks:    chunks,
+				ready:     ready,
+				release:   release,
+				closeOnce: closeOnce,
+				closeFn:   func() { close(release) },
+			}, nil
+		},
+	})
+	defer h.Close()
+
+	first, err := h.Subscribe(ctx, EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	promptDone := make(chan error, 1)
+	go func() {
+		_, promptErr := h.Prompt(ctx, "resync this turn")
+		promptDone <- promptErr
+	}()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked stream did not emit its chunks")
+	}
+
+	deadline := time.After(2 * time.Second)
+	for first.Err() == nil {
+		select {
+		case <-deadline:
+			t.Fatal("subscription did not detach after exceeding its bounded stream")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if !errors.Is(first.Err(), ErrSubscriptionLagged) {
+		t.Fatalf("subscription error = %v, want ErrSubscriptionLagged", first.Err())
+	}
+
+	resynced, err := h.Subscribe(ctx, first.Snapshot.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resynced.Close()
+	assistant := resynced.Snapshot.ActiveTurn.Assistant
+	if assistant == nil {
+		t.Fatalf("resync snapshot omitted the active assistant: %#v", resynced.Snapshot)
+	}
+	if got, want := session.MessageText(assistant), strings.Repeat("x", len(chunks)); got != want {
+		t.Fatalf("active assistant text length=%d, want %d", len(got), len(want))
+	}
+	foundPrompt := false
+	for _, entry := range resynced.Snapshot.Branch {
+		if session.EntryText(entry) == "resync this turn" {
+			foundPrompt = true
+			break
+		}
+	}
+	if !foundPrompt {
+		t.Fatalf("resync branch omitted the durable prompt: %#v", resynced.Snapshot.Branch)
+	}
+
+	closeOnce.Do(func() { close(release) })
+	select {
+	case promptErr := <-promptDone:
+		if promptErr != nil {
+			t.Fatalf("prompt after resync: %v", promptErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("prompt did not settle after resync")
+	}
+}
+
+func TestEventStreamResyncIncludesCommittedAssistantAndRunningTool(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "event-tool-resync.db")
+	store, err := session.NewSQLiteStore(path, "event-tool-resync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 0)
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	var streamCalls int
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "test"},
+		Tools: []Tool{
+			{
+				Name: "blocked",
+				Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+					close(toolStarted)
+					<-releaseTool
+					return session.ToolResultMessage{
+						ToolCallID: "call-1",
+						ToolName:   "blocked",
+						Content:    []session.Content{session.TextContent{Text: "done"}},
+					}, nil
+				},
+			},
+		},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			streamCalls++
+			if streamCalls == 1 {
+				return &mockStream{chunks: []*llm.Chunk{{
+					Calls: []llm.Call{{
+						ID:   "call-1",
+						Type: "function",
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{Name: "blocked", Arguments: `{}`},
+					}},
+					StopReason: llm.StopReasonToolUse,
+				}}}, nil
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "finished", StopReason: llm.StopReasonStop}}}, nil
+		},
+	})
+	defer h.Close()
+
+	first, err := h.Subscribe(ctx, EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	promptDone := make(chan error, 1)
+	go func() {
+		_, promptErr := h.Prompt(ctx, "run the blocked tool")
+		promptDone <- promptErr
+	}()
+	select {
+	case <-toolStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked tool did not start")
+	}
+	for i := 0; i <= eventSubscriberCapacity; i++ {
+		h.emit(session.ProviderRetry{Attempt: i + 1})
+	}
+	if !errors.Is(first.Err(), ErrSubscriptionLagged) {
+		t.Fatalf("subscription error = %v, want ErrSubscriptionLagged", first.Err())
+	}
+
+	resynced, err := h.Subscribe(ctx, first.Snapshot.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resynced.Close()
+	if !resynced.Snapshot.ActiveTurn.AssistantCommitted {
+		t.Fatalf("resync snapshot lost committed assistant: %#v", resynced.Snapshot.ActiveTurn)
+	}
+	if len(resynced.Snapshot.ActiveTurn.Tools) != 1 || resynced.Snapshot.ActiveTurn.Tools[0].ToolCallID != "call-1" {
+		t.Fatalf("resync running tools = %#v, want call-1", resynced.Snapshot.ActiveTurn.Tools)
+	}
+	foundAssistant := false
+	for _, entry := range resynced.Snapshot.Branch {
+		if session.EntryRole(entry) == session.RoleAgent {
+			foundAssistant = true
+			break
+		}
+	}
+	if !foundAssistant {
+		t.Fatalf("resync branch lost committed assistant: %#v", resynced.Snapshot.Branch)
+	}
+
+	close(releaseTool)
+	select {
+	case promptErr := <-promptDone:
+		if promptErr != nil {
+			t.Fatalf("prompt after tool resync: %v", promptErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool resync prompt did not settle")
 	}
 }
 

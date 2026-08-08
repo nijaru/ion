@@ -233,7 +233,11 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.RuntimeReady:
-		if err := o.emit(envelope, "runtime_ready", nil); err != nil {
+		if err := o.emit(envelope, "runtime_ready", map[string]any{
+			"turn":   msg.Turn,
+			"failed": msg.Failed,
+			"error":  msg.Error,
+		}); err != nil {
 			return false, err
 		}
 	case session.SavePoint:

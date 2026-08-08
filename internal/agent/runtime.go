@@ -107,15 +107,25 @@ type Controller struct {
 	runtimeRequests  chan runtimeRequest
 	runtimeResults   chan runtimeCompletion
 	runtimeBusy      bool
+	runtimeBusyDone  chan struct{}
 	runtimeQueue     []runtimeRequest
 	runtimeContext   context.Context
 	runtimeCancel    context.CancelFunc
 
 	// --- Event delivery ---
-	eventHub  *eventHub
-	done      chan struct{}
-	closeDone chan struct{}
-	closeErr  error
+	eventHub *eventHub
+	// activeAssistant and activeTools are the controller-owned render snapshot
+	// for a live turn. They cover the interval between event publication and
+	// durable MessageEnd/TurnCommit so a lagged frontend can resynchronize
+	// without inventing a second transcript.
+	activeAssistant          *session.AssistantMessage
+	activeAssistantCommitted bool
+	activeTools              map[string]ActiveToolSnapshot
+	runtimeFailure           string
+	snapshotRevision         uint64
+	done                     chan struct{}
+	closeDone                chan struct{}
+	closeErr                 error
 
 	// --- Hooks (Pi on/emitHook pattern) ---
 	hooks      map[string][]hookRegistration
@@ -137,6 +147,8 @@ type Controller struct {
 	canceledTurnTokens map[uint64]struct{}
 	turnCommitted      bool
 	turnAborted        bool
+	settledNextTurns   int
+	settledPending     bool
 
 	// --- Thinking state coordination ---
 	thinkingPending     bool
@@ -583,6 +595,7 @@ func (c *Controller) beginTurn(parent context.Context, requestedToken ...uint64)
 		token = c.nextTurnToken
 	}
 	c.activeTurnToken = token
+	c.runtimeFailure = ""
 	c.runCancel = make(chan struct{})
 	c.runCancelOnce = new(sync.Once)
 	turnContext, cancelContext := context.WithCancel(parent)
@@ -635,6 +648,8 @@ func (c *Controller) beginExclusive(phase Phase) (func(), error) {
 			// settlement: no AgentEnd occurred, so use the operation-specific
 			// RuntimeReady event instead of Settled.
 			if ready && !c.closed {
+				c.runtimeFailure = ""
+				c.snapshotRevision++
 				c.emitLocked(session.RuntimeReady{})
 			}
 		}

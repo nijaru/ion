@@ -158,6 +158,15 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 			Resource: "config.toml",
 			Paths:    []string{"config.toml"},
 		}},
+		ActiveTurn: agent.ActiveTurnSnapshot{
+			Assistant: &session.AssistantMessage{
+				Content: []session.Content{session.TextContent{Text: "in-flight answer"}},
+			},
+			AssistantCommitted: true,
+			Tools: []agent.ActiveToolSnapshot{
+				{ToolCallID: "call-1", Name: "bash", Args: []byte(`{"command":"go test"}`)},
+			},
+		},
 		Queues: agent.QueueSnapshot{
 			Steer: []session.Message{
 				&session.UserMessage{Content: []session.Content{session.TextContent{Text: "steer me"}}},
@@ -196,12 +205,68 @@ func TestApplyAgentRuntimeSnapshotRehydratesCompleteProjection(t *testing.T) {
 		model.Picker.Approval.request.Resource != "config.toml" || !model.Picker.Approval.resolving {
 		t.Fatalf("approval projection = %#v, want approval-1 still resolving", model.Picker.Approval)
 	}
+	if got := model.InFlight.StreamBuf; got != "in-flight answer" {
+		t.Fatalf("resynced assistant = %q, want in-flight answer", got)
+	}
+	if !model.InFlight.AgentCommitted || model.InFlight.CommittedAssistant == nil {
+		t.Fatalf("resynced committed assistant = %#v, want committed assistant", model.InFlight)
+	}
+	if len(model.InFlight.PendingTools) != 1 {
+		t.Fatalf("resynced pending tools = %#v, want one tool", model.InFlight.PendingTools)
+	}
+	if _, ok := model.InFlight.PendingTools["call-1"]; !ok {
+		t.Fatalf("resynced pending tool IDs = %#v, want call-1", model.InFlight.PendingTools)
+	}
 
 	resolved := snapshot
 	resolved.PendingApprovals = nil
 	model.applyAgentRuntimeSnapshot(resolved)
 	if model.Picker.Approval != nil {
 		t.Fatalf("resolved approval remained after snapshot: %#v", model.Picker.Approval)
+	}
+}
+
+func TestResyncedCommittedAssistantIsNotPrintedTwice(t *testing.T) {
+	model := readyModel(t)
+	model.applyAgentRuntimeSnapshot(agent.RuntimeSnapshot{
+		Resynced: true,
+		Phase:    agent.PhaseStreaming,
+		ActiveTurn: agent.ActiveTurnSnapshot{
+			Assistant: &session.AssistantMessage{
+				Content: []session.Content{session.TextContent{Text: "already replayed"}},
+			},
+			AssistantCommitted: true,
+			AssistantInBranch:  true,
+		},
+	})
+	entry, completed, print := model.turnReducer().FinishPendingAssistant()
+	if entry == nil || !completed || print {
+		t.Fatalf(
+			"resynced committed assistant finish = entry=%#v completed=%t print=%t, want semantic copy without duplicate",
+			entry,
+			completed,
+			print,
+		)
+	}
+}
+
+func TestResyncedFailedAssistantRetainsErrorSemantics(t *testing.T) {
+	model := readyModel(t)
+	model.applyAgentRuntimeSnapshot(agent.RuntimeSnapshot{
+		Resynced: true,
+		Phase:    agent.PhaseStreaming,
+		ActiveTurn: agent.ActiveTurnSnapshot{
+			Assistant: &session.AssistantMessage{
+				StopReason: session.StopReasonError,
+				Error:      "provider unavailable",
+			},
+			AssistantCommitted: true,
+			AssistantInBranch:  true,
+		},
+	})
+	model, cmd := model.handleTurnFinished(session.TurnEnd{})
+	if cmd == nil || model.Progress.Mode != StateError || model.Progress.LastError != "provider unavailable" {
+		t.Fatalf("resynced failed assistant = progress=%#v, want provider error", model.Progress)
 	}
 }
 
@@ -237,6 +302,28 @@ func TestAuthoritativeRuntimeSnapshotClearsStaleSelections(t *testing.T) {
 	}
 }
 
+func TestFailedRuntimeSnapshotRehydratesError(t *testing.T) {
+	model := readyModel(t)
+	state, _ := newTurnCancellationState(context.Background())
+	state.setToken(11)
+	state.markStarted()
+	model.Model.turnCancellation = state
+	model.InFlight.Thinking = true
+
+	model.applyAgentRuntimeSnapshot(agent.RuntimeSnapshot{
+		Phase:   agent.PhaseReady,
+		Failure: "turn persistence failed",
+	})
+	if model.Model.turnCancellation != nil || model.InFlight.Thinking || model.Progress.Mode != StateError ||
+		model.Progress.LastError != "turn persistence failed" {
+		t.Fatalf(
+			"failed runtime snapshot = in-flight=%#v progress=%#v, want rehydrated error",
+			model.InFlight,
+			model.Progress,
+		)
+	}
+}
+
 func TestRuntimeReadyClearsExclusivePersistenceProjection(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
@@ -250,6 +337,35 @@ func TestRuntimeReadyClearsExclusivePersistenceProjection(t *testing.T) {
 	if next.InFlight.Thinking || next.Progress.Compacting ||
 		next.Progress.Mode != StateReady || next.Progress.Status != "" {
 		t.Fatalf("RuntimeReady projection = in-flight=%#v progress=%#v, want ready", next.InFlight, next.Progress)
+	}
+}
+
+func TestFailedRuntimeReadyClearsAcceptedTurnAndShowsError(t *testing.T) {
+	model := readyModel(t)
+	state, _ := newTurnCancellationState(context.Background())
+	state.setToken(9)
+	state.markStarted()
+	model.Model.turnCancellation = state
+	model.InFlight.Thinking = true
+	model.InFlight.Pending = func() *session.Entry {
+		var entry session.Entry = &session.MessageEntry{Message: &session.AssistantMessage{
+			Content: []session.Content{session.TextContent{Text: "partial"}},
+		}}
+		return &entry
+	}()
+	model.Progress.Mode = StateStreaming
+
+	next, cmd := model.handleSessionEvent(session.RuntimeReady{Turn: true, Failed: true, Error: "persist failed"})
+	if cmd == nil {
+		t.Fatal("failed RuntimeReady did not re-arm the event stream")
+	}
+	if next.Model.turnCancellation != nil || next.InFlight.Thinking || next.InFlight.Pending != nil ||
+		next.Progress.Mode != StateError || next.Progress.LastError != "persist failed" {
+		t.Fatalf(
+			"failed RuntimeReady projection = in-flight=%#v progress=%#v, want terminal error",
+			next.InFlight,
+			next.Progress,
+		)
 	}
 }
 

@@ -45,11 +45,12 @@ type InFlightState struct {
 	QueuedTurns        []string
 	Thinking           bool
 	// AwaitingSettlement keeps runtime replacement blocked after terminal output until Settled.
-	AwaitingSettlement    bool
-	Canceling             bool
-	AgentCommitted        bool
-	DrainUntilTurnStarted bool
-	DrainStartedAt        time.Time
+	AwaitingSettlement     bool
+	Canceling              bool
+	AgentCommitted         bool
+	SuppressAssistantPrint bool
+	DrainUntilTurnStarted  bool
+	DrainStartedAt         time.Time
 }
 
 // ProgressState holds turn-level metrics and overall progress status.
@@ -487,6 +488,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	t.inFlight.ReasonBuf = ""
 	t.inFlight.StreamChunks = nil
 	t.inFlight.AgentCommitted = false
+	t.inFlight.SuppressAssistantPrint = false
 	t.inFlight.DrainUntilTurnStarted = false
 	t.inFlight.DrainStartedAt = time.Time{}
 	t.inFlight.Canceling = false
@@ -743,12 +745,14 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 			}
 		}
 	}
+	print := !t.inFlight.SuppressAssistantPrint
 	t.inFlight.Pending = nil
 	t.inFlight.CommittedAssistant = nil
+	t.inFlight.SuppressAssistantPrint = false
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
 	t.inFlight.StreamChunks = nil
-	return entry, completed, true
+	return entry, completed, print
 }
 
 func (t TurnReducer) RecordFinishedTurnSummary(now time.Time) {
@@ -874,11 +878,53 @@ func (t TurnReducer) syncFallbackAssistant(ts time.Time) {
 	assistant.Content = content
 }
 
+func (t TurnReducer) RestoreActiveTurn(
+	snapshot agent.ActiveTurnSnapshot,
+	branchReplayed bool,
+	toolTitle func(name, args string) string,
+) {
+	if t.inFlight == nil {
+		return
+	}
+	if snapshot.Assistant != nil {
+		if branchReplayed && snapshot.AssistantInBranch {
+			// The assistant is already rendered from the authoritative branch.
+			// Keep a semantic copy for error inspection, but suppress the
+			// duplicate visual print when TurnEnd arrives.
+			if snapshot.AssistantCommitted {
+				entry := &session.MessageEntry{Message: snapshot.Assistant}
+				var semantic session.Entry = entry
+				t.inFlight.CommittedAssistant = &semantic
+				t.inFlight.AgentCommitted = true
+			}
+			t.inFlight.SuppressAssistantPrint = true
+		} else {
+			t.StartAssistantMessage(snapshot.Assistant)
+			if snapshot.AssistantCommitted {
+				if t.inFlight.Pending != nil {
+					t.inFlight.CommittedAssistant = t.inFlight.Pending
+				}
+				t.inFlight.AgentCommitted = true
+			}
+		}
+	}
+	for _, tool := range snapshot.Tools {
+		title := tool.Name
+		if toolTitle != nil {
+			title = config.Redact(toolTitle(tool.Name, string(tool.Args)))
+		}
+		t.StartToolCall(tool.ToolCallID, time.Now(), title)
+	}
+}
+
 func (t TurnReducer) StartAssistantMessage(msg session.Message) {
 	am, ok := msg.(*session.AssistantMessage)
 	if !ok || t.inFlight == nil {
 		return
 	}
+	t.inFlight.SuppressAssistantPrint = false
+	t.inFlight.AgentCommitted = false
+	t.inFlight.CommittedAssistant = nil
 	entry := &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: am.Timestamp},
 		Message:   am,

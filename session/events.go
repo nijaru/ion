@@ -219,9 +219,16 @@ type Settled struct {
 	NextTurnCount int
 }
 
-// RuntimeReady is emitted after a non-turn exclusive operation returns the
-// runtime to ready. It is distinct from Settled because no agent turn ended.
-type RuntimeReady struct{}
+// RuntimeReady is emitted after a non-turn exclusive operation, or a failed
+// turn setup/persistence boundary, returns the runtime to ready. It is
+// distinct from Settled because no successful terminal agent turn was
+// published. Failed carries the terminal error when no normal AgentEnd /
+// Settled pair could be published.
+type RuntimeReady struct {
+	Turn   bool
+	Failed bool
+	Error  string
+}
 
 // SavePoint is emitted after turn_end flush, signaling all writes are durable.
 type SavePoint struct {

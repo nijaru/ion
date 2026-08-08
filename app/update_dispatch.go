@@ -405,12 +405,27 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		// The initial subscription can be established after the runtime has
 		// already entered an approval wait. Reconcile every authoritative
 		// snapshot; only a cursor-based recovery needs transcript replay.
-		m.applyAgentRuntimeSnapshot(msg.subscription.Snapshot)
+		snapshot := msg.subscription.Snapshot
+		replayBranch := snapshot.Branch
+		syntheticAssistant := snapshot.Resynced && snapshot.ActiveTurn.Assistant != nil &&
+			snapshot.ActiveTurn.AssistantCommitted && !snapshot.ActiveTurn.AssistantInBranch
+		if syntheticAssistant {
+			replayBranch = append(append([]session.Entry(nil), replayBranch...), &session.MessageEntry{
+				Message: snapshot.ActiveTurn.Assistant,
+			})
+		}
+		m.applyAgentRuntimeSnapshot(snapshot)
+		if syntheticAssistant && snapshot.ActiveTurn.AssistantCommitted {
+			// The synthetic entry is already rendered by SwitchReplay. Keep the
+			// semantic assistant for error inspection, but do not print it again
+			// when the missed TurnEnd is received.
+			m.InFlight.SuppressAssistantPrint = true
+		}
 		var snapshotCmd tea.Cmd
-		if msg.subscription.Snapshot.Resynced {
+		if snapshot.Resynced {
 			snapshotCmd = m.terminalCommit().SwitchReplay(
 				nil,
-				msg.subscription.Snapshot.Branch,
+				replayBranch,
 				"Runtime resynchronized from the session snapshot.",
 				"",
 			)
