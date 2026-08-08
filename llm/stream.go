@@ -148,6 +148,14 @@ func (a *StreamAccumulator) addBlock(block ContentBlock) {
 	case ThinkingBlock:
 		if lastIdx := len(a.resp.Blocks) - 1; lastIdx >= 0 {
 			if last, ok := a.resp.Blocks[lastIdx].(ThinkingBlock); ok {
+				if b.Thinking == "" && b.Signature != "" && b.Redacted == last.Redacted {
+					a.resp.Blocks[lastIdx] = ThinkingBlock{
+						Thinking:  last.Thinking,
+						Signature: last.Signature + b.Signature,
+						Redacted:  last.Redacted,
+					}
+					return
+				}
 				if b.Signature == "" && b.Redacted == last.Redacted {
 					a.resp.Blocks[lastIdx] = ThinkingBlock{
 						Thinking:  last.Thinking + b.Thinking,

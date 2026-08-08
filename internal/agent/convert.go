@@ -66,7 +66,7 @@ func convertAssistant(m *session.AssistantMessage) llm.Message {
 		case session.ThinkingContent:
 			msg.Reasoning += c.Text
 			msg.ThinkingBlocks = append(msg.ThinkingBlocks, llm.ThinkingBlock{
-				Thinking: c.Text,
+				Thinking: c.Text, Signature: c.Signature, Redacted: c.Redacted,
 			})
 		case *session.ToolCall:
 			args, _ := json.Marshal(c.Arguments)

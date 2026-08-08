@@ -31,10 +31,11 @@ func (s *mockStream) Err() error   { return nil }
 func (s *mockStream) Close() error { return nil }
 
 type faultStream struct {
-	chunk    *llm.Chunk
-	ok       bool
-	emitted  bool
-	closeErr error
+	chunk     *llm.Chunk
+	ok        bool
+	emitted   bool
+	streamErr error
+	closeErr  error
 }
 
 func (s *faultStream) Next() (*llm.Chunk, bool) {
@@ -44,7 +45,7 @@ func (s *faultStream) Next() (*llm.Chunk, bool) {
 	s.emitted = true
 	return s.chunk, s.ok
 }
-func (*faultStream) Err() error { return nil }
+func (s *faultStream) Err() error { return s.streamErr }
 func (s *faultStream) Close() error {
 	return s.closeErr
 }
@@ -265,6 +266,21 @@ func TestRunLoopPreCancelledContextSkipsProvider(t *testing.T) {
 // INVARIANT: RunLoop is stateless — no fields, no persistence.
 // This is a compile-time invariant enforced by rg guard, but we verify
 // the function signature takes all inputs as args.
+func TestDefaultConvertPreservesThinkingMetadata(t *testing.T) {
+	messages := DefaultConvert([]session.Message{&session.AssistantMessage{
+		Content: []session.Content{session.ThinkingContent{
+			Text: "reasoning", Signature: "sig", Redacted: true,
+		}},
+	}})
+	if len(messages) != 1 || len(messages[0].ThinkingBlocks) != 1 {
+		t.Fatalf("converted messages = %#v, want one thinking block", messages)
+	}
+	block := messages[0].ThinkingBlocks[0]
+	if block.Thinking != "reasoning" || block.Signature != "sig" || !block.Redacted {
+		t.Fatalf("thinking block = %#v, want metadata preserved", block)
+	}
+}
+
 func TestRunLoopIsStateless(t *testing.T) {
 	// Verify RunLoop can be called with no prior state.
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
@@ -914,6 +930,42 @@ func TestRunLoopNilStreamChunkIsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestRunLoopStreamErrorPreservesSafePartialContent(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	streamErr := errors.New("stream read failed")
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &faultStream{
+					chunk:     &llm.Chunk{Content: "partial"},
+					ok:        true,
+					streamErr: streamErr,
+				}, nil
+			},
+		},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, streamErr.Error()) {
+		t.Fatalf("turn-end message = %#v, want stream failure", turnEnd.Message)
+	}
+	if session.MessageText(assistant) != "partial" {
+		t.Fatalf("partial failure text = %q, want preserved content", session.MessageText(assistant))
+	}
+}
+
 func TestRunLoopStreamCloseFailureIsTerminalFailure(t *testing.T) {
 	var turnEnd *session.TurnEnd
 	closeErr := errors.New("stream close failed")
@@ -941,6 +993,56 @@ func TestRunLoopStreamCloseFailureIsTerminalFailure(t *testing.T) {
 	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
 	if !ok || !strings.Contains(assistant.Error, closeErr.Error()) {
 		t.Fatalf("turn-end message = %#v, want close failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopRejectsMalformedFinalToolArguments(t *testing.T) {
+	var turnEnd *session.TurnEnd
+	executed := false
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("use tool", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &mockStream{chunks: []*llm.Chunk{{
+					Calls: []llm.Call{{
+						ID: "malformed",
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{Name: "unsafe-tool", Arguments: `{"path":"file"} trailing`},
+					}},
+					StopReason: "toolUse",
+				}}}, nil
+			},
+			Tools: []Tool{
+				{
+					Name: "unsafe-tool",
+					Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						executed = true
+						return session.ToolResultMessage{}, nil
+					},
+				},
+			},
+		},
+		func(event session.Event) {
+			if message, ok := event.(session.TurnEnd); ok {
+				turnEnd = &message
+			}
+		},
+		nil,
+	)
+	if executed {
+		t.Fatal("malformed tool arguments were executed")
+	}
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, "trailing JSON value") {
+		t.Fatalf("turn-end message = %#v, want malformed-arguments failure", turnEnd.Message)
 	}
 }
 

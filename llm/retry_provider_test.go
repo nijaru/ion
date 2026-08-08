@@ -88,10 +88,12 @@ func (*nilChunkProvider) Stream(context.Context, *Request) (Stream, error) {
 }
 
 type retryReadFailureProvider struct {
-	calls         atomic.Int32
-	afterChunk    bool
-	firstCloseErr error
-	retrySuccess  Stream
+	calls             atomic.Int32
+	afterChunk        bool
+	firstCloseErr     error
+	firstStream       Stream
+	replacementErrors []error
+	retrySuccess      Stream
 }
 
 func (p *retryReadFailureProvider) ID() string { return "retry-read-test" }
@@ -100,8 +102,16 @@ func (p *retryReadFailureProvider) Generate(context.Context, *Request) (*Respons
 }
 
 func (p *retryReadFailureProvider) Stream(context.Context, *Request) (Stream, error) {
-	if p.calls.Add(1) == 1 {
+	call := int(p.calls.Add(1)) - 1
+	if call == 0 {
+		if p.firstStream != nil {
+			return p.firstStream, nil
+		}
 		return &retryReadFailureStream{afterChunk: p.afterChunk, closeErr: p.firstCloseErr}, nil
+	}
+	replacement := call - 1
+	if replacement < len(p.replacementErrors) {
+		return nil, p.replacementErrors[replacement]
 	}
 	if p.retrySuccess != nil {
 		return p.retrySuccess, nil
@@ -121,9 +131,10 @@ func (p *retryReadFailureProvider) IsTransient(err error) bool {
 func (p *retryReadFailureProvider) IsContextOverflow(error) bool { return false }
 
 type retryReadFailureStream struct {
-	afterChunk bool
-	emitted    bool
-	closeErr   error
+	afterChunk   bool
+	emitted      bool
+	closeErr     error
+	closeCounter *atomic.Int32
 }
 
 func (s *retryReadFailureStream) Next() (*Chunk, bool) {
@@ -141,7 +152,13 @@ func (s *retryReadFailureStream) Err() error {
 	}
 	return errRetryTransient
 }
-func (s *retryReadFailureStream) Close() error { return s.closeErr }
+
+func (s *retryReadFailureStream) Close() error {
+	if s.closeCounter != nil {
+		s.closeCounter.Add(1)
+	}
+	return s.closeErr
+}
 
 type retryCompletionStream struct {
 	chunk *Chunk
@@ -217,6 +234,33 @@ func TestRetryProviderRetriesTransientReadFailureBeforeOutput(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Attempt != 1 {
 		t.Fatalf("retry events = %#v, want one attempt-1 event", events)
+	}
+}
+
+func TestRetryProviderDoesNotCloseFailedStreamAgainDuringReplacement(t *testing.T) {
+	closeCount := atomic.Int32{}
+	provider := &retryReadFailureProvider{
+		firstStream:       &retryReadFailureStream{closeCounter: &closeCount},
+		replacementErrors: []error{errRetryTransient, errRetryTransient},
+		retrySuccess:      &retryCompletionStream{chunk: &Chunk{Content: "complete"}},
+	}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+	retry.Config.MaxAttempts = 4
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	chunk, ok := stream.Next()
+	if !ok || chunk == nil || chunk.Content != "complete" {
+		t.Fatalf("retried chunk = %#v, %t, want complete", chunk, ok)
+	}
+	if got := closeCount.Load(); got != 1 {
+		t.Fatalf("failed stream close count = %d, want one", got)
+	}
+	if got := provider.calls.Load(); got != 4 {
+		t.Fatalf("provider attempts = %d, want initial plus two failures and success", got)
 	}
 }
 

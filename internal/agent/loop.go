@@ -359,7 +359,8 @@ func streamAssistantResponse(
 	if isCanceled(ctx, signal) {
 		// Cancellation may surface as ok=false with a nil stream error;
 		// treat it as an aborted turn, not a completed one. Pi agent-loop.js abort branch.
-		final := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
+		final := buildPartialMessage(acc, cfg.Model)
+		final.ThinkingLevel = cfg.Thinking
 		final.StopReason = session.StopReasonAborted
 		final.Error = "response aborted"
 		if !started {
@@ -372,7 +373,7 @@ func streamAssistantResponse(
 		if isContextOverflow(cfg, streamErr) {
 			streamErr = fmt.Errorf("context_length_exceeded: %w", streamErr)
 		}
-		msg := newFailureMessage(cfg.Model, streamErr, false, cfg.Thinking)
+		msg := buildFailureAssistantMessage(acc, cfg.Model, cfg.Thinking, streamErr)
 		if !started {
 			emit(session.MessageStart{Message: &msg})
 		}
@@ -380,8 +381,17 @@ func streamAssistantResponse(
 		return &msg, true
 	}
 
-	// Build final message from accumulator.
-	final := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
+	// Build final message from accumulator. Malformed tool arguments are a
+	// provider failure, not an empty argument object that may execute.
+	final, buildErr := buildAssistantMessage(acc, cfg.Model, cfg.Thinking)
+	if buildErr != nil {
+		msg := buildFailureAssistantMessage(acc, cfg.Model, cfg.Thinking, buildErr)
+		if !started {
+			emit(session.MessageStart{Message: &msg})
+		}
+		emit(session.MessageEnd{Message: &msg})
+		return &msg, true
+	}
 	if !started {
 		emit(session.MessageStart{Message: &final})
 	}
@@ -1806,13 +1816,34 @@ func schemaSchemas(value any) []map[string]any {
 // --- helpers ---
 
 func decodeToolArguments(raw string) map[string]any {
-	args := map[string]any{}
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&args); err != nil {
+	args, err := decodeToolArgumentsStrict(raw)
+	if err != nil {
 		return map[string]any{}
 	}
 	return args
+}
+
+func decodeToolArgumentsStrict(raw string) (map[string]any, error) {
+	args := map[string]any{}
+	if strings.TrimSpace(raw) == "" {
+		return args, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		return nil, errors.New("arguments must be a JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("trailing JSON value")
+		}
+		return nil, fmt.Errorf("trailing JSON value: %w", err)
+	}
+	return args, nil
 }
 
 func drain(fn func() []session.Message) []session.Message {
@@ -1900,7 +1931,9 @@ func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.Ass
 		case llm.TextBlock:
 			msg.Content = append(msg.Content, session.TextContent{Text: b.Text})
 		case llm.ThinkingBlock:
-			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
+			msg.Content = append(msg.Content, session.ThinkingContent{
+				Text: b.Thinking, Signature: b.Signature, Redacted: b.Redacted,
+			})
 		case llm.ToolCallBlock:
 			msg.Content = append(
 				msg.Content,
@@ -1911,11 +1944,42 @@ func buildPartialMessage(acc llm.StreamAccumulator, model llm.Model) session.Ass
 	return msg
 }
 
+func buildFailureAssistantMessage(
+	acc llm.StreamAccumulator,
+	model llm.Model,
+	thinking session.ThinkingLevel,
+	err error,
+) session.AssistantMessage {
+	msg := buildPartialMessage(acc, model)
+	resp := acc.Response()
+	msg.Usage = session.Usage{
+		Input:       resp.Usage.InputTokens,
+		Output:      resp.Usage.OutputTokens,
+		CacheRead:   resp.Usage.CacheReadTokens,
+		CacheWrite:  resp.Usage.CacheCreationTokens,
+		TotalTokens: resp.Usage.TotalTokens,
+		Cost:        session.Cost{Total: resp.Usage.Cost},
+	}
+	msg.ThinkingLevel = thinking
+	msg.StopReason = session.StopReasonError
+	msg.Error = err.Error()
+	// A partial tool call is not executable evidence. Preserve visible text and
+	// thinking for replay, but never persist a malformed call without a result.
+	content := msg.Content[:0]
+	for _, block := range msg.Content {
+		if _, ok := block.(*session.ToolCall); !ok {
+			content = append(content, block)
+		}
+	}
+	msg.Content = content
+	return msg
+}
+
 func buildAssistantMessage(
 	acc llm.StreamAccumulator,
 	model llm.Model,
 	thinking session.ThinkingLevel,
-) session.AssistantMessage {
+) (session.AssistantMessage, error) {
 	resp := acc.Response()
 	msg := session.AssistantMessage{
 		API:           resp.API,
@@ -1947,13 +2011,21 @@ func buildAssistantMessage(
 		case llm.TextBlock:
 			msg.Content = append(msg.Content, session.TextContent{Text: b.Text})
 		case llm.ThinkingBlock:
-			msg.Content = append(msg.Content, session.ThinkingContent{Text: b.Thinking})
+			msg.Content = append(msg.Content, session.ThinkingContent{
+				Text: b.Thinking, Signature: b.Signature, Redacted: b.Redacted,
+			})
 		case llm.ToolCallBlock:
+			args, err := decodeToolArgumentsStrict(b.Arguments)
+			if err != nil {
+				return session.AssistantMessage{}, fmt.Errorf(
+					"tool call %q has invalid arguments: %w", b.Name, err,
+				)
+			}
 			msg.Content = append(
 				msg.Content,
-				&session.ToolCall{ID: b.ID, Name: b.Name, Arguments: decodeToolArguments(b.Arguments)},
+				&session.ToolCall{ID: b.ID, Name: b.Name, Arguments: args, Type: b.Type},
 			)
 		}
 	}
-	return msg
+	return msg, nil
 }

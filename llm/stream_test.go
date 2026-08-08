@@ -89,6 +89,21 @@ func TestStreamAccumulatorBlockThinking(t *testing.T) {
 	}
 }
 
+func TestStreamAccumulatorUpdatesThinkingSignatureDelta(t *testing.T) {
+	var acc llm.StreamAccumulator
+	acc.Add(&llm.Chunk{Block: llm.ThinkingBlock{Thinking: "step"}})
+	acc.Add(&llm.Chunk{Block: llm.ThinkingBlock{Signature: "sig"}})
+
+	resp := acc.Response()
+	if len(resp.Blocks) != 1 {
+		t.Fatalf("got %d blocks, want one updated thinking block", len(resp.Blocks))
+	}
+	block, ok := resp.Blocks[0].(llm.ThinkingBlock)
+	if !ok || block.Thinking != "step" || block.Signature != "sig" {
+		t.Fatalf("thinking block = %#v, want text plus signature", resp.Blocks[0])
+	}
+}
+
 func TestStreamAccumulatorBlockThinkingSignatureBreaksMerge(t *testing.T) {
 	var acc llm.StreamAccumulator
 	acc.Add(&llm.Chunk{Block: llm.ThinkingBlock{Thinking: "step 1"}})

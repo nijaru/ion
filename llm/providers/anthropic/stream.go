@@ -17,15 +17,16 @@ type Stream struct {
 		Err() error
 		Close() error
 	}
-	err           error
-	activeCall    *llm.Call
-	targetName    string
-	model         string
-	responseModel string
-	responseID    string
-	p             *Provider
-	ctx           context.Context
-	usage         llm.Usage
+	err            error
+	activeCall     *llm.Call
+	activeThinking *llm.ThinkingBlock
+	targetName     string
+	model          string
+	responseModel  string
+	responseID     string
+	p              *Provider
+	ctx            context.Context
+	usage          llm.Usage
 }
 
 func (s *Stream) Next() (*llm.Chunk, bool) {
@@ -62,6 +63,7 @@ func (s *Stream) Next() (*llm.Chunk, bool) {
 			return chunk, true
 		case "content_block_stop":
 			s.activeCall = nil
+			s.activeThinking = nil
 		case "message_stop":
 			return nil, false
 		}
@@ -90,6 +92,7 @@ func mapStopReason(reason string) llm.StopReason {
 }
 
 func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk {
+	s.activeThinking = nil
 	switch start.ContentBlock.Type {
 	case "tool_use":
 		s.activeCall = &llm.Call{
@@ -103,6 +106,7 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 			Thinking:  start.ContentBlock.Thinking,
 			Signature: start.ContentBlock.Signature,
 		}
+		s.activeThinking = &block
 		return &llm.Chunk{
 			Reasoning:      start.ContentBlock.Thinking,
 			ThinkingBlocks: []llm.ThinkingBlock{block},
@@ -113,6 +117,7 @@ func (s *Stream) contentBlockStart(start sdk.ContentBlockStartEvent) *llm.Chunk 
 			Redacted:  true,
 			Signature: start.ContentBlock.Signature,
 		}
+		s.activeThinking = &block
 		return &llm.Chunk{
 			Reasoning:      "<redacted_thinking />",
 			ThinkingBlocks: []llm.ThinkingBlock{block},
@@ -131,6 +136,9 @@ func (s *Stream) contentBlockDelta(delta sdk.ContentBlockDeltaEvent) *llm.Chunk 
 			Block:   llm.TextBlock{Text: delta.Delta.Text},
 		}
 	case "thinking_delta":
+		if s.activeThinking != nil {
+			s.activeThinking.Thinking += delta.Delta.Thinking
+		}
 		return &llm.Chunk{
 			Reasoning: delta.Delta.Thinking,
 			ThinkingBlocks: []llm.ThinkingBlock{{
@@ -138,6 +146,16 @@ func (s *Stream) contentBlockDelta(delta sdk.ContentBlockDeltaEvent) *llm.Chunk 
 			}},
 			Block: llm.ThinkingBlock{Thinking: delta.Delta.Thinking},
 		}
+	case "signature_delta":
+		if s.activeThinking == nil {
+			return nil
+		}
+		s.activeThinking.Signature += delta.Delta.Signature
+		block := llm.ThinkingBlock{
+			Signature: delta.Delta.Signature,
+			Redacted:  s.activeThinking.Redacted,
+		}
+		return &llm.Chunk{ThinkingBlocks: []llm.ThinkingBlock{block}, Block: block}
 	case "input_json_delta":
 		if s.activeCall == nil {
 			return nil

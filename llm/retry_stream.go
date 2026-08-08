@@ -143,12 +143,14 @@ func (s *retryStream) Next() (*Chunk, bool) {
 }
 
 func (s *retryStream) retryAfter(streamErr error) error {
+	failedStream := s.stream
+	s.stream = nil
+	if closeErr := failedStream.Close(); closeErr != nil {
+		return closeErr
+	}
 	for {
 		if retryLimitReached(s.config, s.attempts, streamErr) {
 			return retryExhausted(s.attempts, streamErr)
-		}
-		if closeErr := s.stream.Close(); closeErr != nil {
-			return closeErr
 		}
 		delay := retryDelay(s.config, s.interval, streamErr)
 		notifyRetry(s.ctx, s.config, RetryEvent{

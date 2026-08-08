@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -208,6 +209,28 @@ func TestIsContextOverflowMessage(t *testing.T) {
 	}
 	if isContextOverflowMessage("rate limit exceeded") {
 		t.Fatal("expected unrelated message not to match")
+	}
+}
+
+func TestStreamSignatureDeltaUpdatesActiveThinkingBlock(t *testing.T) {
+	stream := &Stream{activeThinking: &llm.ThinkingBlock{Thinking: "reasoning"}}
+	var event sdk.ContentBlockDeltaEvent
+	if err := json.Unmarshal(
+		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`),
+		&event,
+	); err != nil {
+		t.Fatalf("decode signature event: %v", err)
+	}
+	chunk := stream.contentBlockDelta(event)
+	if chunk == nil {
+		t.Fatal("signature delta produced no chunk")
+	}
+	block, ok := chunk.Block.(llm.ThinkingBlock)
+	if !ok || block.Signature != "sig" {
+		t.Fatalf("chunk block = %#v, want signature delta", chunk.Block)
+	}
+	if stream.activeThinking.Signature != "sig" {
+		t.Fatalf("active signature = %q, want sig", stream.activeThinking.Signature)
 	}
 }
 
