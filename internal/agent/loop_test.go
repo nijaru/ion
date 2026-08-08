@@ -52,6 +52,27 @@ func (s *faultStream) Close() error {
 	return s.closeErr
 }
 
+type abortingStream struct {
+	signal    chan struct{}
+	closeErr  error
+	emitted   bool
+	closeOnce bool
+}
+
+func (s *abortingStream) Next() (*llm.Chunk, bool) {
+	if s.emitted {
+		return nil, false
+	}
+	s.emitted = true
+	if !s.closeOnce {
+		close(s.signal)
+		s.closeOnce = true
+	}
+	return &llm.Chunk{Content: "partial"}, true
+}
+func (s *abortingStream) Err() error   { return nil }
+func (s *abortingStream) Close() error { return s.closeErr }
+
 // --- Loop contract tests ---
 
 func TestIsContextOverflowUsesProviderClassifierBeforeFallback(t *testing.T) {
@@ -1198,6 +1219,69 @@ func TestRunLoopRejectsMalformedFinalToolArguments(t *testing.T) {
 	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
 	if !ok || !strings.Contains(assistant.Error, "trailing JSON value") {
 		t.Fatalf("turn-end message = %#v, want malformed-arguments failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopAbortPreservesStreamCleanupFailure(t *testing.T) {
+	signal := make(chan struct{})
+	closeErr := errors.New("abort stream cleanup failed")
+	var turnEnd *session.TurnEnd
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &abortingStream{signal: signal, closeErr: closeErr}, nil
+			},
+		},
+		func(e session.Event) {
+			if te, ok := e.(session.TurnEnd); ok {
+				turnEnd = &te
+			}
+		},
+		signal,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || !strings.Contains(assistant.Error, closeErr.Error()) {
+		t.Fatalf("turn-end message = %#v, want cancellation cleanup failure", turnEnd.Message)
+	}
+}
+
+func TestRunLoopAbortDuringStreamSetupClassifiedAsCancellation(t *testing.T) {
+	signal := make(chan struct{})
+	var turnEnd *session.TurnEnd
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				close(signal)
+				return nil, &hookError{hookType: HookAfterProviderResponse, err: errors.New("hook blocked")}
+			},
+		},
+		func(e session.Event) {
+			if te, ok := e.(session.TurnEnd); ok {
+				turnEnd = &te
+			}
+		},
+		signal,
+	)
+	if turnEnd == nil {
+		t.Fatal("expected TurnEnd")
+	}
+	assistant, ok := turnEnd.Message.(*session.AssistantMessage)
+	if !ok || assistant.StopReason != session.StopReasonAborted {
+		t.Fatalf("turn-end message = %#v, want aborted assistant", turnEnd.Message)
+	}
+	if !strings.Contains(assistant.Error, "hook blocked") {
+		t.Fatalf("turn-end error = %q, want setup failure evidence", assistant.Error)
 	}
 }
 

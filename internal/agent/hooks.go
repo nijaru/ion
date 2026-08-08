@@ -1,6 +1,9 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // HookHandler is a function registered for a hook type. It receives a payload
 // and returns a patch (nil if no change) or an error.
@@ -20,6 +23,25 @@ const (
 type hookRegistration struct {
 	id      uint64
 	handler HookHandler
+}
+
+type hookError struct {
+	hookType string
+	err      error
+}
+
+func (e *hookError) Error() string {
+	if e == nil || e.err == nil {
+		return "hook failed"
+	}
+	return fmt.Sprintf("%s hook: %v", e.hookType, e.err)
+}
+
+func (e *hookError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 // On registers a handler for a hook type. Returns an idempotent unsubscribe
@@ -51,6 +73,15 @@ func (h *Controller) On(hookType string, handler HookHandler) func() {
 
 // emitHook fans out a payload to all handlers registered for hookType.
 // Returns collected patches. Uses snapshot-and-release to avoid reentry deadlock.
+func callHook(handler HookHandler, payload any) (patch any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = errors.New("hook panic: " + fmt.Sprint(recovered))
+		}
+	}()
+	return handler(payload)
+}
+
 func (h *Controller) emitHook(hookType string, payload any) (patches []any, err error) {
 	h.mu.Lock()
 	snapshot := make([]HookHandler, 0, len(h.hooks[hookType]))
@@ -63,9 +94,9 @@ func (h *Controller) emitHook(hookType string, payload any) (patches []any, err 
 
 	var hookErrors []error
 	for _, fn := range snapshot {
-		patch, fnErr := fn(payload)
+		patch, fnErr := callHook(fn, payload)
 		if fnErr != nil {
-			hookErrors = append(hookErrors, fnErr)
+			hookErrors = append(hookErrors, &hookError{hookType: hookType, err: fnErr})
 			continue
 		}
 		if patch != nil {

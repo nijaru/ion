@@ -699,6 +699,17 @@ func serializeCompactionMessages(messages []session.Message, convert func([]sess
 	return conversation.String()
 }
 
+func summaryRetryPolicy(policy llm.StreamRetryPolicy) llm.StreamRetryPolicy {
+	isTransient := policy.IsTransient
+	policy.IsTransient = func(err error) bool {
+		if isHookError(err) || llm.IsStreamCleanupError(err) {
+			return false
+		}
+		return isTransient != nil && isTransient(err)
+	}
+	return policy
+}
+
 // GenerateSummary calls the LLM to generate a conversation summary.
 // Uses auth/headers/signal and computes maxTokens from reserve settings for Pi fidelity.
 // Pi: compaction.js generateSummary (line 350)
@@ -780,11 +791,17 @@ func GenerateSummary(
 	default:
 	}
 
-	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, retryPolicy)
+	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, summaryRetryPolicy(retryPolicy))
 	if err != nil {
 		if signal != nil {
 			select {
 			case <-signal:
+				if llm.IsStreamCleanupError(err) {
+					return SummaryResult{}, fmt.Errorf(
+						"compaction summarization aborted during streaming: %w",
+						errors.Join(context.Canceled, err),
+					)
+				}
 				return SummaryResult{}, fmt.Errorf(
 					"compaction summarization aborted during streaming: %w",
 					context.Canceled,
@@ -872,11 +889,17 @@ func GenerateTurnPrefixSummary(
 	default:
 	}
 
-	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, retryPolicy)
+	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, summaryRetryPolicy(retryPolicy))
 	if err != nil {
 		if signal != nil {
 			select {
 			case <-signal:
+				if llm.IsStreamCleanupError(err) {
+					return SummaryResult{}, fmt.Errorf(
+						"turn prefix summarization aborted during streaming: %w",
+						errors.Join(context.Canceled, err),
+					)
+				}
 				return SummaryResult{}, fmt.Errorf(
 					"turn prefix summarization aborted during streaming: %w",
 					context.Canceled,
@@ -1070,53 +1093,42 @@ func Compact(
 	var summary string
 	var usage session.Usage
 	if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
-		// Split-turn: summarize history and turn prefix in parallel.
-		type result struct {
-			summary SummaryResult
-			err     error
-		}
-		historyCh := make(chan result, 1)
-		prefixCh := make(chan result, 1)
-
-		go func() {
-			var generated SummaryResult
-			var e error
-			if len(prep.MessagesToSummarize) > 0 {
-				generated, e = GenerateSummary(ctx, prep.MessagesToSummarize,
-					opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
-					opts.APIKey, opts.Headers, signal,
-					opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
-					opts.Convert, opts.StreamFn, opts.SummaryRetry)
-			} else {
-				generated.Text = "No prior history."
-			}
-			historyCh <- result{generated, e}
-		}()
-
-		go func() {
-			generated, e := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
+		// Split-turn summaries share the runtime provider-hook boundary. Keep
+		// preparation and hook execution ordered so stateful hook handlers see
+		// deterministic request order; summary retry remains explicitly
+		// discardable inside each request.
+		var historySummary SummaryResult
+		if len(prep.MessagesToSummarize) > 0 {
+			var err error
+			historySummary, err = GenerateSummary(ctx, prep.MessagesToSummarize,
 				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 				opts.APIKey, opts.Headers, signal,
-				opts.ThinkingLevel, opts.Convert, opts.StreamFn, opts.SummaryRetry)
-			prefixCh <- result{generated, e}
-		}()
-
-		historyResult := <-historyCh
-		prefixResult := <-prefixCh
-
-		if historyResult.err != nil {
-			return nil, historyResult.err
+				opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
+				opts.Convert, opts.StreamFn, opts.SummaryRetry)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			historySummary.Text = "No prior history."
 		}
-		if prefixResult.err != nil {
-			return nil, prefixResult.err
+
+		prefixSummary, err := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
+			opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
+			opts.APIKey, opts.Headers, signal,
+			opts.ThinkingLevel, opts.Convert, opts.StreamFn, opts.SummaryRetry)
+		if err != nil {
+			return nil, err
 		}
+
+		historyResult := historySummary
+		prefixResult := prefixSummary
 
 		summary = fmt.Sprintf(
 			"%s\n\n---\n\n**Turn Context (split turn):**\n\n%s",
-			historyResult.summary.Text,
-			prefixResult.summary.Text,
+			historyResult.Text,
+			prefixResult.Text,
 		)
-		usage = session.AddUsage(historyResult.summary.Usage, prefixResult.summary.Usage)
+		usage = session.AddUsage(historyResult.Usage, prefixResult.Usage)
 	} else {
 		// Normal compaction: summarize history messages.
 		generated, summaryErr := GenerateSummary(ctx, prep.MessagesToSummarize,

@@ -267,13 +267,18 @@ func runLoop(
 }
 
 func isContextOverflow(cfg LoopConfig, err error) bool {
-	if err == nil {
+	if err == nil || llm.IsStreamCleanupError(err) || isHookError(err) {
 		return false
 	}
 	if cfg.ContextOverflow != nil && cfg.ContextOverflow(err) {
 		return true
 	}
 	return IsContextOverflowError(err)
+}
+
+func isHookError(err error) bool {
+	var hookErr *hookError
+	return errors.As(err, &hookErr)
 }
 
 // streamResult describes one provider response for the controller-owned
@@ -379,6 +384,15 @@ func streamAssistantResponse(
 		if stream != nil {
 			cleanupErr = errors.Join(stream.Close(), stream.Err())
 		}
+		if isCanceled(ctx, signal) {
+			if cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+			msg := newFailureMessage(cfg.Model, fmt.Errorf("response aborted: %w", err), true, cfg.Thinking)
+			emit(session.MessageStart{Message: &msg})
+			emit(session.MessageEnd{Message: &msg})
+			return streamResult{message: &msg, aborted: true}
+		}
 		replaySafeOverflow := isContextOverflow(cfg, err) && cleanupErr == nil
 		if replaySafeOverflow {
 			// Keep this internal recovery attempt invisible. The controller
@@ -441,6 +455,9 @@ func streamAssistantResponse(
 		final.ThinkingLevel = cfg.Thinking
 		final.StopReason = session.StopReasonAborted
 		final.Error = "response aborted"
+		if streamErr != nil {
+			final.Error = fmt.Sprintf("response aborted: %v", streamErr)
+		}
 		if !started {
 			emit(session.MessageStart{Message: &final})
 		}

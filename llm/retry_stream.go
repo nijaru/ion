@@ -15,6 +15,48 @@ type StreamRetryPolicy struct {
 	IsTransient func(error) bool
 }
 
+// streamCleanupError marks a failure while closing or inspecting a stream.
+// Cleanup failures are terminal: retrying after an incomplete stream cleanup
+// could duplicate an effect or leak provider resources.
+type streamCleanupError struct {
+	err error
+}
+
+func (e *streamCleanupError) Error() string {
+	if e == nil || e.err == nil {
+		return "llm: stream cleanup failed"
+	}
+	return e.err.Error()
+}
+
+func (e *streamCleanupError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func wrapStreamCleanup(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &streamCleanupError{err: err}
+}
+
+// WrapStreamCleanupError marks a stream teardown failure as terminal. Callers
+// use this when they own a provider stream's cleanup boundary.
+func WrapStreamCleanupError(err error) error {
+	return wrapStreamCleanup(err)
+}
+
+// IsStreamCleanupError reports whether err contains a stream teardown failure.
+// Callers must treat this marker as terminal even when the underlying provider
+// error is otherwise transient or indicates context overflow.
+func IsStreamCleanupError(err error) bool {
+	var cleanupErr *streamCleanupError
+	return errors.As(err, &cleanupErr)
+}
+
 // CollectStreamWithRetry consumes a replay-safe stream to completion. A failed
 // attempt's chunks are discarded before a transient retry, so a partial
 // summary cannot be duplicated in the next attempt. Callers must not expose
@@ -35,9 +77,15 @@ func CollectStreamWithRetry(
 	cfg := normalizedRetryConfig(policy.Config)
 	interval := cfg.MinInterval
 	for attempts := 1; ; attempts++ {
-		chunks, err := collectStreamAttempt(ctx, req, streamFn)
+		chunks, err := collectStreamAttempt(ctx, req.Clone(), streamFn)
 		if err == nil {
 			return chunks, nil
+		}
+		if IsStreamCleanupError(err) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, errors.Join(ctxErr, err)
+			}
+			return nil, err
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -65,6 +113,11 @@ func collectStreamAttempt(
 ) (chunks []*Chunk, err error) {
 	stream, err := streamFn(ctx, req)
 	if err != nil {
+		if stream != nil {
+			closeErr := stream.Close()
+			streamErr := stream.Err()
+			err = errors.Join(err, streamErr, wrapStreamCleanup(closeErr))
+		}
 		return nil, err
 	}
 	if stream == nil {
@@ -72,7 +125,7 @@ func collectStreamAttempt(
 	}
 
 	defer func() {
-		err = errors.Join(err, stream.Close())
+		err = errors.Join(err, wrapStreamCleanup(stream.Close()))
 	}()
 	for {
 		select {
@@ -146,7 +199,7 @@ func (s *retryStream) retryAfter(streamErr error) error {
 	failedStream := s.stream
 	s.stream = nil
 	if closeErr := failedStream.Close(); closeErr != nil {
-		return closeErr
+		return wrapStreamCleanup(closeErr)
 	}
 	for {
 		if retryLimitReached(s.config, s.attempts, streamErr) {
@@ -163,6 +216,14 @@ func (s *retryStream) retryAfter(streamErr error) error {
 		}
 		s.attempts++
 		next, err := s.provider.Stream(s.ctx, s.request)
+		if err != nil && next != nil {
+			closeErr := next.Close()
+			nextErr := next.Err()
+			if closeErr != nil {
+				return errors.Join(err, nextErr, wrapStreamCleanup(closeErr))
+			}
+			err = errors.Join(err, nextErr)
+		}
 		if err == nil && next == nil {
 			err = errProviderNilStream
 		}
@@ -201,5 +262,5 @@ func (s *retryStream) Close() error {
 	if s.stream == nil {
 		return nil
 	}
-	return s.stream.Close()
+	return wrapStreamCleanup(s.stream.Close())
 }

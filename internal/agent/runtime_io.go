@@ -265,7 +265,7 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 		request.model = c.model
 		request.thinking = c.thinking
 		request.auth = c.auth
-		request.stream = c.stream
+		request.stream = c.wrapStreamFn()
 	}
 	if request.kind == runtimeAbortTurn && request.turnID == "" {
 		return runtimeRequest{}, ErrNoActiveTurn

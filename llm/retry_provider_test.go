@@ -57,10 +57,12 @@ func (*retryStreamStub) Err() error           { return nil }
 func (*retryStreamStub) Close() error         { return nil }
 
 type retryFaultStream struct {
-	chunk    *Chunk
-	ok       bool
-	emitted  bool
-	closeErr error
+	chunk      *Chunk
+	ok         bool
+	emitted    bool
+	streamErr  error
+	closeErr   error
+	closeCalls atomic.Int32
 }
 
 func (s *retryFaultStream) Next() (*Chunk, bool) {
@@ -70,9 +72,23 @@ func (s *retryFaultStream) Next() (*Chunk, bool) {
 	s.emitted = true
 	return s.chunk, s.ok
 }
-func (*retryFaultStream) Err() error { return nil }
+func (s *retryFaultStream) Err() error { return s.streamErr }
 func (s *retryFaultStream) Close() error {
+	s.closeCalls.Add(1)
 	return s.closeErr
+}
+
+type returnedStreamErrorProvider struct {
+	retryProviderStub
+	stream Stream
+	calls  atomic.Int32
+}
+
+func (p *returnedStreamErrorProvider) Stream(context.Context, *Request) (Stream, error) {
+	if p.calls.Add(1) == 1 {
+		return p.stream, errRetryTransient
+	}
+	return &retryStreamStub{}, nil
 }
 
 type nilStreamResolverProvider struct{ retryProviderStub }
@@ -88,12 +104,13 @@ func (*nilChunkProvider) Stream(context.Context, *Request) (Stream, error) {
 }
 
 type retryReadFailureProvider struct {
-	calls             atomic.Int32
-	afterChunk        bool
-	firstCloseErr     error
-	firstStream       Stream
-	replacementErrors []error
-	retrySuccess      Stream
+	calls              atomic.Int32
+	afterChunk         bool
+	firstCloseErr      error
+	firstStream        Stream
+	replacementErrors  []error
+	replacementStreams []Stream
+	retrySuccess       Stream
 }
 
 func (p *retryReadFailureProvider) ID() string { return "retry-read-test" }
@@ -111,7 +128,11 @@ func (p *retryReadFailureProvider) Stream(context.Context, *Request) (Stream, er
 	}
 	replacement := call - 1
 	if replacement < len(p.replacementErrors) {
-		return nil, p.replacementErrors[replacement]
+		var replacementStream Stream
+		if replacement < len(p.replacementStreams) {
+			replacementStream = p.replacementStreams[replacement]
+		}
+		return replacementStream, p.replacementErrors[replacement]
 	}
 	if p.retrySuccess != nil {
 		return p.retrySuccess, nil
@@ -181,6 +202,61 @@ func retryTestConfig() RetryConfig {
 		MinInterval: time.Nanosecond,
 		MaxInterval: time.Nanosecond,
 		Multiplier:  1,
+	}
+}
+
+func TestRetryProviderRetriesSetupStreamErrorAfterSuccessfulClose(t *testing.T) {
+	first := &retryFaultStream{streamErr: errRetryTransient}
+	provider := &returnedStreamErrorProvider{stream: first}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("RetryProvider.Stream: %v", err)
+	}
+	if first.closeCalls.Load() != 1 {
+		t.Fatalf("returned stream close calls = %d, want one", first.closeCalls.Load())
+	}
+	if provider.calls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want one retry", provider.calls.Load())
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetryProviderClosesStreamReturnedWithSetupError(t *testing.T) {
+	first := &retryFaultStream{closeErr: nil}
+	provider := &returnedStreamErrorProvider{stream: first}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("RetryProvider.Stream: %v", err)
+	}
+	if first.closeCalls.Load() != 1 {
+		t.Fatalf("returned stream close calls = %d, want one", first.closeCalls.Load())
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetryProviderDoesNotRetryWhenReturnedStreamCleanupFails(t *testing.T) {
+	closeErr := errors.New("setup stream cleanup failed")
+	first := &retryFaultStream{closeErr: closeErr}
+	provider := &returnedStreamErrorProvider{stream: first}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	_, err := retry.Stream(t.Context(), &Request{})
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("RetryProvider.Stream error = %v, want cleanup failure", err)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("provider calls = %d, want no retry after cleanup failure", provider.calls.Load())
 	}
 }
 
@@ -264,6 +340,30 @@ func TestRetryProviderDoesNotCloseFailedStreamAgainDuringReplacement(t *testing.
 	}
 }
 
+func TestRetryProviderStopsWhenReplacementStreamCannotClose(t *testing.T) {
+	closeErr := errors.New("replacement stream close failed")
+	provider := &retryReadFailureProvider{
+		replacementErrors:  []error{errRetryTransient},
+		replacementStreams: []Stream{&retryFaultStream{closeErr: closeErr}},
+	}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if _, ok := stream.Next(); ok {
+		t.Fatal("replacement stream yielded a chunk")
+	}
+	if !errors.Is(stream.Err(), closeErr) {
+		t.Fatalf("stream error = %v, want replacement close failure", stream.Err())
+	}
+	if got := provider.calls.Load(); got != 2 {
+		t.Fatalf("provider attempts = %d, want initial plus one replacement", got)
+	}
+}
+
 func TestRetryProviderStopsWhenFailedStreamCannotClose(t *testing.T) {
 	closeErr := errors.New("failed stream close")
 	provider := &retryReadFailureProvider{firstCloseErr: closeErr}
@@ -282,6 +382,28 @@ func TestRetryProviderStopsWhenFailedStreamCannotClose(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("provider attempts = %d, want no retry after close failure", got)
+	}
+}
+
+func TestRetryProviderMarksFinalCloseFailureAsTerminal(t *testing.T) {
+	closeErr := errors.New("connection reset during stream close")
+	provider := &retryReadFailureProvider{
+		retrySuccess: &retryFaultStream{closeErr: closeErr},
+	}
+	retry := NewRetryProvider(provider)
+	retry.Config = retryTestConfig()
+
+	stream, err := retry.Stream(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if _, ok := stream.Next(); ok {
+		t.Fatal("replacement stream yielded a chunk")
+	}
+	if err := stream.Close(); !errors.Is(err, closeErr) {
+		t.Fatalf("stream close error = %v, want close failure", err)
+	} else if !IsStreamCleanupError(err) {
+		t.Fatalf("stream close error = %v, want cleanup marker", err)
 	}
 }
 

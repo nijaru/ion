@@ -803,7 +803,10 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 				Args:       ctx.Args,
 			})
 			if err != nil {
-				return nil
+				return &ToolCallDecision{
+					Block:  true,
+					Reason: err.Error(),
+				}
 			}
 			for _, p := range patches {
 				if bp, ok := p.(*ToolCallDecision); ok && bp != nil && bp.Block {
@@ -955,9 +958,16 @@ func (s *cancelOnCloseStream) Close() error {
 func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 	base := h.stream
 	return func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		if base == nil {
+			return nil, errors.New("stream function is not configured")
+		}
+		if req == nil {
+			return nil, errors.New("provider request is nil")
+		}
 		// Snapshot model headers and ID under lock (concurrent-setters-proof).
 		h.mu.Lock()
 		modelID := h.model.ID
+		sess := h.session
 		modelHeaders := map[string]string{}
 		for k, v := range h.model.Headers {
 			modelHeaders[k] = v
@@ -965,6 +975,13 @@ func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) 
 		timeout := h.timeout
 		transport := h.transport
 		h.mu.Unlock()
+		sessionID := ""
+		if sess != nil {
+			sessionID = sess.Meta().ID
+		}
+		if req.SessionID == "" {
+			req.SessionID = sessionID
+		}
 
 		// Transport is request-scoped: start from the harness snapshot and let
 		// ordered hook patches override only this request.
@@ -983,7 +1000,7 @@ func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) 
 			Headers:   effectiveHeaders,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("before_provider_request hook: %w", err)
+			return nil, err
 		}
 
 		// Apply patches to this request only. Pi's before_provider_request
@@ -1013,12 +1030,15 @@ func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) 
 			Payload: rawPayload,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("before_provider_payload hook: %w", err)
+			return nil, err
 		}
 		for _, p := range payloadPatches {
 			if pp, ok := p.(*BeforeProviderPayloadPatch); ok && pp != nil && len(pp.Payload) > 0 {
 				if err := json.Unmarshal(pp.Payload, req); err != nil {
-					return nil, fmt.Errorf("apply payload patch: %w", err)
+					return nil, &hookError{
+						hookType: HookBeforeProviderPayload,
+						err:      fmt.Errorf("apply payload patch: %w", err),
+					}
 				}
 			}
 		}
@@ -1038,6 +1058,12 @@ func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) 
 			})
 		})
 		stream, err := base(streamCtx, req)
+		if err == nil && stream == nil {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, errors.New("provider returned a nil stream")
+		}
 		if err != nil {
 			if cancel != nil {
 				cancel()
@@ -1048,9 +1074,17 @@ func (h *Controller) wrapStreamFn() func(ctx context.Context, req *llm.Request) 
 
 		// Notify registered handlers after the provider responds. The hook is the
 		// behavior-bearing extension point; no synthetic event is needed.
-		h.emitHook(HookAfterProviderResponse, afterProviderResponsePayload{
+		_, hookErr := h.emitHook(HookAfterProviderResponse, afterProviderResponsePayload{
 			Model: modelID,
 		})
+		if hookErr != nil {
+			if stream != nil {
+				closeErr := stream.Close()
+				streamErr := stream.Err()
+				hookErr = errors.Join(hookErr, streamErr, llm.WrapStreamCleanupError(closeErr))
+			}
+			return nil, errors.Join(hookErr, err)
+		}
 
 		return stream, err
 	}

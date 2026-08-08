@@ -37,6 +37,26 @@ func TestEmitHookRunsAllHandlersAndJoinsErrors(t *testing.T) {
 	}
 }
 
+func TestEmitHookConvertsPanicsToErrors(t *testing.T) {
+	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
+	defer func() { _ = h.Close() }()
+
+	calledAfterPanic := false
+	h.On("test", func(any) (any, error) {
+		panic("hook exploded")
+	})
+	h.On("test", func(any) (any, error) {
+		calledAfterPanic = true
+		return nil, nil
+	})
+	if _, err := h.emitHook("test", nil); err == nil || !strings.Contains(err.Error(), "hook panic: hook exploded") {
+		t.Fatalf("panic error = %v, want recovered hook panic", err)
+	}
+	if !calledAfterPanic {
+		t.Fatal("hook dispatch stopped after recovering a panic")
+	}
+}
+
 func TestHookUnsubscribeSurvivesLaterRegistration(t *testing.T) {
 	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
 	defer func() { _ = h.Close() }()
@@ -62,6 +82,26 @@ func TestHookUnsubscribeSurvivesLaterRegistration(t *testing.T) {
 	}
 	if secondCalls != 1 {
 		t.Fatalf("remaining hook calls = %d, want 1", secondCalls)
+	}
+}
+
+func TestBeforeToolCallHookPanicBlocksExecution(t *testing.T) {
+	h := NewController(ControllerConfig{Session: session.NewSession(newTestStore(t), 64)})
+	defer func() { _ = h.Close() }()
+
+	h.On(HookBeforeToolCall, func(any) (any, error) {
+		panic("tool policy hook exploded")
+	})
+	cfg := h.buildLoopConfig(context.Background(), nil, nil)
+	decision := cfg.BeforeToolCall(ToolCallContext{
+		RunContext: context.Background(),
+		ToolCall:   &session.ToolCall{ID: "call-1", Name: "write"},
+	})
+	if decision == nil || !decision.Block {
+		t.Fatalf("decision = %#v, want blocking decision", decision)
+	}
+	if !strings.Contains(decision.Reason, "before_tool_call hook: hook panic: tool policy hook exploded") {
+		t.Fatalf("decision reason = %q, want recovered hook error", decision.Reason)
 	}
 }
 

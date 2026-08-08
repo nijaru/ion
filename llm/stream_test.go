@@ -1,18 +1,22 @@
 package llm_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/llm"
 )
 
 type streamCollectorFault struct {
-	chunk    *llm.Chunk
-	ok       bool
-	emitted  bool
-	closeErr error
+	chunk      *llm.Chunk
+	ok         bool
+	emitted    bool
+	streamErr  error
+	closeErr   error
+	closeCalls int
 }
 
 func (s *streamCollectorFault) Next() (*llm.Chunk, bool) {
@@ -22,9 +26,98 @@ func (s *streamCollectorFault) Next() (*llm.Chunk, bool) {
 	s.emitted = true
 	return s.chunk, s.ok
 }
-func (*streamCollectorFault) Err() error { return nil }
+func (s *streamCollectorFault) Err() error { return s.streamErr }
 func (s *streamCollectorFault) Close() error {
+	s.closeCalls++
 	return s.closeErr
+}
+
+func TestCollectStreamWithRetryResetsRequestPerAttempt(t *testing.T) {
+	transient := errors.New("temporary summary failure")
+	request := &llm.Request{Headers: map[string]string{"X-Original": "yes"}}
+	attempts := 0
+	chunks, err := llm.CollectStreamWithRetry(
+		context.Background(),
+		request,
+		func(_ context.Context, attempt *llm.Request) (llm.Stream, error) {
+			attempts++
+			if attempt.Headers["X-Original"] != "yes" {
+				t.Fatalf("attempt %d lost original headers: %#v", attempts, attempt.Headers)
+			}
+			if attempts == 1 {
+				attempt.Headers["X-Patched"] = "first-attempt-only"
+				return &streamCollectorFault{
+					chunk:     &llm.Chunk{Content: "partial"},
+					ok:        true,
+					streamErr: transient,
+				}, nil
+			}
+			if attempt.Headers["X-Patched"] != "" {
+				t.Fatalf("retry inherited first-attempt patch: %#v", attempt.Headers)
+			}
+			return &streamCollectorFault{
+				chunk: &llm.Chunk{Content: "complete"},
+				ok:    true,
+			}, nil
+		},
+		llm.StreamRetryPolicy{
+			Config: llm.RetryConfig{
+				MaxAttempts: 2, MinInterval: time.Nanosecond, MaxInterval: time.Nanosecond, Multiplier: 1,
+			},
+			IsTransient: func(err error) bool { return errors.Is(err, transient) },
+		},
+	)
+	if err != nil {
+		t.Fatalf("CollectStreamWithRetry: %v", err)
+	}
+	if attempts != 2 || len(chunks) != 1 || chunks[0].Content != "complete" {
+		t.Fatalf("retry result = attempts %d chunks %#v, want two attempts and complete chunk", attempts, chunks)
+	}
+	if _, ok := request.Headers["X-Patched"]; ok {
+		t.Fatalf("caller request mutated by retry attempt: %#v", request.Headers)
+	}
+}
+
+func TestCollectStreamWithRetryDoesNotRetryAfterCleanupFailure(t *testing.T) {
+	transient := errors.New("temporary summary failure")
+	closeErr := errors.New("returned stream close failed")
+	returned := &streamCollectorFault{closeErr: closeErr}
+	attempts := 0
+	_, err := llm.CollectStreamWithRetry(
+		context.Background(),
+		&llm.Request{},
+		func(context.Context, *llm.Request) (llm.Stream, error) {
+			attempts++
+			return returned, transient
+		},
+		llm.StreamRetryPolicy{IsTransient: func(error) bool { return true }},
+	)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("CollectStreamWithRetry error = %v, want close failure", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("retry attempts = %d, want one after cleanup failure", attempts)
+	}
+}
+
+func TestCollectStreamWithRetryClosesReturnedStreamOnError(t *testing.T) {
+	transient := errors.New("temporary summary failure")
+	closeErr := errors.New("returned stream close failed")
+	returned := &streamCollectorFault{closeErr: closeErr}
+	_, err := llm.CollectStreamWithRetry(
+		context.Background(),
+		&llm.Request{},
+		func(context.Context, *llm.Request) (llm.Stream, error) {
+			return returned, transient
+		},
+		llm.StreamRetryPolicy{IsTransient: func(error) bool { return true }},
+	)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("CollectStreamWithRetry error = %v, want close failure", err)
+	}
+	if returned.closeCalls != 1 {
+		t.Fatalf("returned stream close calls = %d, want one", returned.closeCalls)
+	}
 }
 
 func TestGenerateFromStreamRejectsNilChunk(t *testing.T) {

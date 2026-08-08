@@ -198,6 +198,64 @@ func TestNavigateTreeReportsSelectedBranchModel(t *testing.T) {
 	}
 }
 
+func TestNavigateTreeProviderHookPanicIsError(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	targetID, err := sess.AppendMessage(ctx, session.NewUserText("target", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, session.NewUserText("abandoned", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model:   llm.Model{ID: "summary-model"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookAfterProviderResponse, func(any) (any, error) {
+		panic("branch response hook exploded")
+	})
+	defer unsubscribe()
+
+	_, err = h.NavigateTree(ctx, targetID, NavigateOptions{Summarize: true})
+	if err == nil || !strings.Contains(err.Error(), "after_provider_response hook") {
+		t.Fatalf("NavigateTree error = %v, want provider hook failure", err)
+	}
+	if got := sess.GetLeafID(); got == targetID {
+		t.Fatal("navigation moved the leaf after provider hook failure")
+	}
+}
+
+func TestNavigateTreeWithoutStreamReturnsConfigurationError(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	targetID, err := sess.AppendMessage(ctx, session.NewUserText("target", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(ctx, session.NewUserText("abandoned", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewController(ControllerConfig{Session: sess, Store: store, Model: llm.Model{ID: "summary-model"}})
+	defer h.Close()
+	_, err = h.NavigateTree(ctx, targetID, NavigateOptions{Summarize: true})
+	if err == nil || !strings.Contains(err.Error(), "stream function is not configured") {
+		t.Fatalf("NavigateTree error = %v, want missing stream configuration", err)
+	}
+	if got := sess.GetLeafID(); got == targetID {
+		t.Fatal("navigation moved the leaf after missing stream configuration")
+	}
+}
+
 func TestNavigateTreeCancellationLeavesSessionUnchanged(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

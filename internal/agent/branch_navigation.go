@@ -26,13 +26,13 @@ func (h *Controller) navigateTreeDirect(
 	h.mu.Lock()
 	model := h.model
 	thinking := h.thinking
-	stream := h.stream
 	auth := h.auth
 	summaryRetry := h.summaryRetry
 	reserveTokens := h.compaction.ReserveTokens
 	contextWindow := h.contextWindow
 	runCancel := h.runCancel
 	h.mu.Unlock()
+	stream := h.wrapStreamFn()
 
 	if h.session == nil {
 		return result, errors.New("harness has no session")
@@ -82,6 +82,9 @@ func (h *Controller) navigateTreeDirect(
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || navigationCanceled(navigationCtx, runCancel) {
+				if llm.IsStreamCleanupError(err) {
+					return result, errors.Join(context.Canceled, err)
+				}
 				return result, context.Canceled
 			}
 			return result, fmt.Errorf("navigate tree: summarize branch: %w", err)

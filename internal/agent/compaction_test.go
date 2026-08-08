@@ -483,6 +483,147 @@ func TestCompactCancellationDoesNotDoubleCloseSignal(t *testing.T) {
 	}
 }
 
+func TestControllerCompactionUsesProviderRequestBoundary(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var hookCalls int
+	sawModelHeader := false
+	sawSessionID := false
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Model: llm.Model{
+			ID:      "summary-model",
+			Headers: map[string]string{"X-Model-Header": "present"},
+		},
+		Compaction: CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1},
+		StreamFn: func(_ context.Context, request *llm.Request) (llm.Stream, error) {
+			sawModelHeader = request.Headers["X-Model-Header"] == "present"
+			sawSessionID = request.SessionID == sess.Meta().ID
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookBeforeProviderRequest, func(any) (any, error) {
+		hookCalls++
+		return nil, nil
+	})
+	defer unsubscribe()
+
+	if err := h.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hookCalls != 1 || !sawModelHeader || !sawSessionID {
+		t.Fatalf(
+			"compaction provider boundary = hook calls %d, model header %v, session ID %v; want 1, true, true",
+			hookCalls,
+			sawModelHeader,
+			sawSessionID,
+		)
+	}
+}
+
+func TestControllerCompactionWithoutStreamReturnsConfigurationError(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewController(ControllerConfig{
+		Session:    sess,
+		Store:      store,
+		Model:      llm.Model{ID: "summary-model"},
+		Compaction: CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1},
+	})
+	defer h.Close()
+
+	if err := h.Compact(
+		context.Background(),
+	); err == nil ||
+		!strings.Contains(err.Error(), "stream function is not configured") {
+		t.Fatalf("Compact error = %v, want missing stream configuration", err)
+	}
+}
+
+func TestControllerCompactionProviderHookPanicIsError(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	streamCalls := 0
+	closeErr := errors.New("summary response cleanup failed")
+	h := NewController(ControllerConfig{
+		Session:    sess,
+		Store:      store,
+		Model:      llm.Model{ID: "summary-model"},
+		Compaction: CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1},
+		SummaryRetry: llm.StreamRetryPolicy{
+			Config:      llm.RetryConfig{MaxAttempts: 2},
+			IsTransient: func(error) bool { return true },
+		},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			streamCalls++
+			return &faultStream{
+				chunk:    &llm.Chunk{Content: "summary", StopReason: "stop"},
+				ok:       true,
+				closeErr: closeErr,
+			}, nil
+		},
+	})
+	defer h.Close()
+	unsubscribe := h.On(HookAfterProviderResponse, func(any) (any, error) {
+		panic("summary response hook exploded")
+	})
+	defer unsubscribe()
+
+	err := h.Compact(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "after_provider_response hook") {
+		t.Fatalf("Compact error = %v, want provider hook failure", err)
+	}
+	if streamCalls != 1 {
+		t.Fatalf("summary stream calls = %d, want no retry after hook failure", streamCalls)
+	}
+	if !strings.Contains(err.Error(), closeErr.Error()) {
+		t.Fatalf("Compact error = %v, want cleanup failure", err)
+	}
+}
+
+func TestControllerCompactionRejectsNilProviderStreamWithTimeout(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewController(ControllerConfig{
+		Session:    sess,
+		Store:      store,
+		Model:      llm.Model{ID: "summary-model"},
+		Timeout:    time.Second,
+		Compaction: CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return nil, nil
+		},
+	})
+	defer h.Close()
+
+	if err := h.Compact(context.Background()); err == nil || !strings.Contains(err.Error(), "nil stream") {
+		t.Fatalf("Compact error = %v, want nil stream configuration error", err)
+	}
+}
+
 func TestAbortCancelsActiveCompaction(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

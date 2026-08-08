@@ -1,5 +1,7 @@
 package llm
 
+import "encoding/json"
+
 // Clone returns a deep copy of r's mutable request fields.
 func (r *Request) Clone() *Request {
 	if r == nil {
@@ -7,6 +9,12 @@ func (r *Request) Clone() *Request {
 	}
 	clone := *r
 	clone.Messages = cloneMessages(r.Messages)
+	if r.Headers != nil {
+		clone.Headers = make(map[string]string, len(r.Headers))
+		for key, value := range r.Headers {
+			clone.Headers[key] = value
+		}
+	}
 	if len(r.Tools) > 0 {
 		clone.Tools = make([]*Spec, len(r.Tools))
 		for i, spec := range r.Tools {
@@ -24,7 +32,7 @@ func (r *Request) Clone() *Request {
 	}
 	if r.ResponseFormat != nil {
 		format := *r.ResponseFormat
-		if len(r.ResponseFormat.Schema) > 0 {
+		if r.ResponseFormat.Schema != nil {
 			format.Schema = cloneJSONMap(r.ResponseFormat.Schema)
 		}
 		clone.ResponseFormat = &format
@@ -83,7 +91,7 @@ func (r *Request) insertMessage(index int, msg Message) {
 }
 
 func cloneMessages(messages []Message) []Message {
-	if len(messages) == 0 {
+	if messages == nil {
 		return nil
 	}
 	cloned := make([]Message, len(messages))
@@ -114,7 +122,7 @@ func cloneMessage(msg Message) Message {
 }
 
 func cloneJSONMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
+	if src == nil {
 		return nil
 	}
 	dst := make(map[string]any, len(src))
@@ -125,7 +133,7 @@ func cloneJSONMap(src map[string]any) map[string]any {
 }
 
 func cloneJSONSlice(src []any) []any {
-	if len(src) == 0 {
+	if src == nil {
 		return nil
 	}
 	dst := make([]any, len(src))
@@ -142,13 +150,23 @@ func cloneJSONValue(value any) any {
 	case []any:
 		return cloneJSONSlice(v)
 	case []string:
-		return append([]string(nil), v...)
+		return append(make([]string, 0, len(v)), v...)
 	case []int:
-		return append([]int(nil), v...)
+		return append(make([]int, 0, len(v)), v...)
 	case []float64:
-		return append([]float64(nil), v...)
+		return append(make([]float64, 0, len(v)), v...)
 	case []bool:
-		return append([]bool(nil), v...)
+		return append(make([]bool, 0, len(v)), v...)
+	case map[string]string:
+		clone := make(map[string]string, len(v))
+		for key, value := range v {
+			clone[key] = value
+		}
+		return clone
+	case json.RawMessage:
+		return append(make(json.RawMessage, 0, len(v)), v...)
+	case []byte:
+		return append(make([]byte, 0, len(v)), v...)
 	default:
 		return value
 	}

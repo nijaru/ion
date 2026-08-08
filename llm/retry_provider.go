@@ -220,6 +220,14 @@ func (r *RetryProvider) Stream(ctx context.Context, req *Request) (Stream, error
 
 	for i := 0; ; i++ {
 		s, err := r.Provider.Stream(ctx, req)
+		if err != nil && s != nil {
+			closeErr := s.Close()
+			streamErr := s.Err()
+			if closeErr != nil {
+				return nil, errors.Join(err, streamErr, wrapStreamCleanup(closeErr))
+			}
+			err = errors.Join(err, streamErr)
+		}
 		if err == nil && s == nil {
 			err = errProviderNilStream
 		}
@@ -256,8 +264,15 @@ func (r *RetryProvider) Stream(ctx context.Context, req *Request) (Stream, error
 
 func (r *RetryProvider) IsTransient(err error) bool {
 	var exhausted *RetryExhaustedError
-	if errors.As(err, &exhausted) {
+	if errors.As(err, &exhausted) || IsStreamCleanupError(err) {
 		return false
 	}
 	return r.Provider.IsTransient(err)
+}
+
+func (r *RetryProvider) IsContextOverflow(err error) bool {
+	if IsStreamCleanupError(err) {
+		return false
+	}
+	return r.Provider.IsContextOverflow(err)
 }
