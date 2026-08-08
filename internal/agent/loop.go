@@ -639,6 +639,34 @@ func executeToolCalls(
 	return executeToolCallsParallel(ctx, snapshot, assistantMsg, toolCalls, cfg, emit, signal)
 }
 
+type toolProgressGate struct {
+	stateMu sync.Mutex
+	emitMu  *sync.Mutex
+	emit    func(session.Event)
+	open    bool
+}
+
+func newToolProgressGate(emit func(session.Event), emitMu *sync.Mutex) *toolProgressGate {
+	return &toolProgressGate{emitMu: emitMu, emit: emit, open: true}
+}
+
+func (g *toolProgressGate) emitUpdate(event session.Event) {
+	g.stateMu.Lock()
+	defer g.stateMu.Unlock()
+	if !g.open {
+		return
+	}
+	g.emitMu.Lock()
+	defer g.emitMu.Unlock()
+	g.emit(event)
+}
+
+func (g *toolProgressGate) close() {
+	g.stateMu.Lock()
+	g.open = false
+	g.stateMu.Unlock()
+}
+
 func executeToolCallsSequential(
 	ctx context.Context,
 	snapshot TurnContext,
@@ -649,6 +677,7 @@ func executeToolCallsSequential(
 	signal <-chan struct{},
 ) ([]session.ToolResultMessage, bool) {
 	var results []session.ToolResultMessage
+	progressEmitMu := new(sync.Mutex)
 
 	for _, tc := range toolCalls {
 		argsRaw, _ := json.Marshal(tc.Arguments)
@@ -659,7 +688,18 @@ func executeToolCallsSequential(
 			result = *preparationResult
 			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 		} else {
-			result = executePreparedToolCall(ctx, snapshot, assistantMsg, prepared, cfg, emit, signal)
+			progress := newToolProgressGate(emit, progressEmitMu)
+			result = executePreparedToolCall(ctx, snapshot, assistantMsg, prepared, cfg, func(event session.Event) {
+				if _, end := event.(session.ToolExecEnd); end {
+					progress.close()
+				}
+				if _, live := event.(session.ToolExecUpdate); live {
+					progress.emitUpdate(event)
+					return
+				}
+				emit(event)
+			}, signal)
+			progress.close()
 		}
 		results = append(results, result)
 		if isCanceled(ctx, signal) {
@@ -934,13 +974,14 @@ func executeToolCallsParallel(
 	// This is critical for hook safety — BeforeToolCall must not race.
 	var prepared []preparedToolCall
 	results := make([]session.ToolResultMessage, len(toolCalls))
+	eventBuffers := make([][]session.Event, len(toolCalls))
 	processed := 0
 	for i, tc := range toolCalls {
 		argsRaw, _ := json.Marshal(tc.Arguments)
 		emit(session.ToolExecStart{ToolCallID: tc.ID, Name: tc.Name, Args: argsRaw})
 		p, errResult := prepareToolCall(ctx, snapshot, assistantMsg, tc, cfg, signal)
 		if errResult != nil {
-			emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: *errResult})
+			eventBuffers[i] = append(eventBuffers[i], session.ToolExecEnd{ToolCallID: tc.ID, Result: *errResult})
 			results[i] = *errResult
 		} else {
 			p.index = i
@@ -964,17 +1005,30 @@ func executeToolCallsParallel(
 	}
 	jobs := make(chan preparedToolCall)
 	ch := make(chan indexedResult, len(prepared))
-	eventBuffers := make([][]session.Event, len(toolCalls))
+	progressEmitMu := new(sync.Mutex)
 	var workers sync.WaitGroup
 	workers.Add(workerLimit)
 	for i := 0; i < workerLimit; i++ {
 		go func() {
 			defer workers.Done()
 			for p := range jobs {
+				progress := newToolProgressGate(emit, progressEmitMu)
 				bufferedEmit := func(event session.Event) {
+					if _, end := event.(session.ToolExecEnd); end {
+						progress.close()
+					}
+					if _, live := event.(session.ToolExecUpdate); live {
+						// Progress is ephemeral and must reach the frontend while
+						// the tool is still running. Tool start/end and result
+						// ordering remain coordinator-owned below.
+						progress.emitUpdate(event)
+						return
+					}
 					eventBuffers[p.index] = append(eventBuffers[p.index], event)
 				}
-				ch <- indexedResult{p.index, executePreparedToolCall(ctx, snapshot, assistantMsg, p, cfg, bufferedEmit, signal)}
+				result := executePreparedToolCall(ctx, snapshot, assistantMsg, p, cfg, bufferedEmit, signal)
+				progress.close()
+				ch <- indexedResult{p.index, result}
 			}
 		}()
 	}
@@ -987,8 +1041,8 @@ func executeToolCallsParallel(
 	for r := range ch {
 		results[r.index] = r.result
 	}
-	for _, p := range prepared {
-		for _, event := range eventBuffers[p.index] {
+	for i := range eventBuffers {
+		for _, event := range eventBuffers[i] {
 			emit(event)
 		}
 	}
