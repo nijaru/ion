@@ -163,6 +163,9 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	if _, ok := byID[sourceLeaf]; !ok {
 		return "", fmt.Errorf("session bundle leaf %q is not present in entries", sourceLeaf)
 	}
+	if err := validateImportedBranch(byID, sourceLeaf); err != nil {
+		return "", fmt.Errorf("validate imported session: %w", err)
+	}
 
 	preserveIDs := strings.TrimSpace(bundle.RootSessionID) != ""
 	remap := make(map[string]string, len(sourceEntries))
@@ -217,6 +220,28 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 		}
 	}
 	return newLeafID, nil
+}
+
+func validateImportedBranch(byID map[string]session.Entry, leafID string) error {
+	seen := make(map[string]struct{})
+	currentID := leafID
+	for {
+		if _, exists := seen[currentID]; exists {
+			return fmt.Errorf("entry parent cycle at %q", currentID)
+		}
+		seen[currentID] = struct{}{}
+		current, ok := byID[currentID]
+		if !ok {
+			return fmt.Errorf("entry %q is not present in imported entries", currentID)
+		}
+		if current.ParentID() == "" {
+			return nil
+		}
+		if _, ok := byID[current.ParentID()]; !ok {
+			return fmt.Errorf("entry %q parent %q not found", current.ID(), current.ParentID())
+		}
+		currentID = current.ParentID()
+	}
 }
 
 func branchAt(ctx context.Context, store session.Store, leafID string) ([]session.Entry, error) {

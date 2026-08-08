@@ -9,6 +9,76 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestImportSessionBundleRejectsBrokenBranchBeforeMutation(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		entries []*session.MessageEntry
+		leaf    string
+	}{
+		"missing parent": {
+			entries: []*session.MessageEntry{{
+				EntryBase: session.EntryBase{ID: "orphan", ParentID: "missing", Timestamp: time.Now()},
+				Message:   session.NewUserText("orphan", time.Now()),
+			}},
+			leaf: "orphan",
+		},
+		"cycle": {
+			entries: []*session.MessageEntry{
+				{EntryBase: session.EntryBase{ID: "cycle-a", ParentID: "cycle-b", Timestamp: time.Now()}, Message: session.NewUserText("a", time.Now())},
+				{EntryBase: session.EntryBase{ID: "cycle-b", ParentID: "cycle-a", Timestamp: time.Now()}, Message: session.NewUserText("b", time.Now())},
+			},
+			leaf: "cycle-a",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := session.NewSQLiteStore(":memory:", "import-validation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			originalID, err := session.NewSession(store, 0).
+				AppendMessage(ctx, session.NewUserText("existing", time.Now()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			events := make([]json.RawMessage, 0, len(testCase.entries))
+			for _, entry := range testCase.entries {
+				raw, err := session.MarshalEntry(entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				events = append(events, raw)
+			}
+			_, err = ImportSessionBundle(ctx, store, SessionBundle{
+				Version:       sessionBundleVersion,
+				RootSessionID: testCase.leaf,
+				Sessions:      []SessionBundleRecord{{Info: SessionBundleInfo{ID: testCase.leaf}, Events: events}},
+			})
+			if err == nil {
+				t.Fatal("broken branch import unexpectedly succeeded")
+			}
+			if got := store.GetLeafID(); got != originalID {
+				t.Fatalf("leaf after rejected import = %q, want %q", got, originalID)
+			}
+			branch, err := store.Branch(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(branch) != 1 || branch[0].ID() != originalID {
+				t.Fatalf("branch after rejected import = %#v, want original entry", branch)
+			}
+			entries, err := store.Entries(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("entries after rejected import = %d, want 1", len(entries))
+			}
+		})
+	}
+}
+
 func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
