@@ -141,8 +141,8 @@ func EstimateTokens(msg session.Message) int {
 			chars += contentChars(c)
 		}
 	case *session.CustomMessage:
-		if len(m.Content) > 0 {
-			chars += len(m.Content)
+		for _, content := range m.Content {
+			chars += contentChars(content)
 		}
 	}
 	if chars == 0 {

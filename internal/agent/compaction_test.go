@@ -53,6 +53,15 @@ func TestFindCutPointNeverStartsAtToolResult(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensCountsCustomMessageContent(t *testing.T) {
+	message := &session.CustomMessage{
+		Content: []session.Content{session.TextContent{Text: strings.Repeat("x", 100)}},
+	}
+	if got := EstimateTokens(message); got != 25 {
+		t.Fatalf("custom message tokens = %d, want 25", got)
+	}
+}
+
 func TestEstimateContextTokensFallsBackWhenUsageIsEmpty(t *testing.T) {
 	messages := []session.Message{
 		session.NewUserText("before", mustTime()),
