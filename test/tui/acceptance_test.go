@@ -641,11 +641,12 @@ func TestDeterministicTUIAcceptanceRuntimeSwitches(t *testing.T) {
 	if postResumeModelASwitch.leafID != postResumeLeafID {
 		t.Fatalf("post-resume model-a switch leaf = %q, want %q", postResumeModelASwitch.leafID, postResumeLeafID)
 	}
+	postResumeModelAInitialLeaf := strings.TrimSpace(store.GetLeafID())
 	program.Send(tea.KeyPressMsg{Text: "after post-resume model-a switch"})
 	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitAcceptanceSignal(t, resumedProvider.started, "post-resume model-a provider")
 	waitForAcceptanceOutput(t, output, "model-a-resumed-output", "post-resume model-a runtime output")
-	postModelALeafID := waitForAcceptanceSessionInfoAfter(t, store, store, postResumeModelASwitch.leafID)
+	postModelALeafID := waitForAcceptanceSessionInfoAfter(t, store, store, postResumeModelAInitialLeaf)
 	waitForAcceptanceIdle(t, postResumeModelASwitch.runner)
 	sendAcceptanceCommandAfterSettlement(
 		t,
