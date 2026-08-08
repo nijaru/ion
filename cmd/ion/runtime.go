@@ -567,7 +567,11 @@ func openRuntime(
 		CloseResources:      []func() error{closeRuntimeResources},
 		Logger:              log,
 		Compaction:          agent.DefaultCompactionSettings(),
-		ContextWindow:       contextWindow,
+		SummaryRetry: llm.StreamRetryPolicy{
+			Config:      retryPolicyForConfig(&runtimeCfg),
+			IsTransient: provider.IsTransient,
+		},
+		ContextWindow: contextWindow,
 	})
 	closeUnusableRuntime := func(openErr error) error {
 		closeErr := errors.Join(harness.Close(), closeRuntimeResources())

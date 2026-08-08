@@ -61,6 +61,7 @@ type runtimeRequest struct {
 	hadPending     bool
 	autoCompact    bool
 	compaction     CompactionSettings
+	summaryRetry   llm.StreamRetryPolicy
 	contextWindow  int
 	model          llm.Model
 	thinking       session.ThinkingLevel
@@ -259,6 +260,7 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 		// boundary.
 		request.autoCompact = request.kind == runtimeFinalizeTurn || c.activeTurnID == "" || c.durable == nil
 		request.compaction = c.compaction
+		request.summaryRetry = c.summaryRetry
 		request.contextWindow = c.contextWindow
 		request.model = c.model
 		request.thinking = c.thinking
@@ -662,6 +664,7 @@ func runCompaction(ctx context.Context, request runtimeRequest) (*CompactionResu
 		ThinkingLevel:  request.thinking,
 		Convert:        DefaultConvert,
 		StreamFn:       request.stream,
+		SummaryRetry:   request.summaryRetry,
 		ContextWindow:  request.contextWindow,
 	}, request.compaction)
 }

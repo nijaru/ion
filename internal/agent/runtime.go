@@ -146,6 +146,7 @@ type Controller struct {
 
 	// --- Compaction ---
 	compaction                CompactionSettings
+	summaryRetry              llm.StreamRetryPolicy
 	contextWindow             int
 	compactionCancel          context.CancelFunc
 	compactionCancelToken     uint64

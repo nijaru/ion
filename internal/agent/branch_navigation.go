@@ -28,6 +28,7 @@ func (h *Controller) navigateTreeDirect(
 	thinking := h.thinking
 	stream := h.stream
 	auth := h.auth
+	summaryRetry := h.summaryRetry
 	reserveTokens := h.compaction.ReserveTokens
 	contextWindow := h.contextWindow
 	runCancel := h.runCancel
@@ -77,6 +78,7 @@ func (h *Controller) navigateTreeDirect(
 			reserveTokens,
 			contextWindow,
 			opts.CustomInstructions,
+			summaryRetry,
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || navigationCanceled(navigationCtx, runCancel) {
@@ -169,6 +171,7 @@ func (h *Controller) summarizeBranch(
 	reserveTokens int,
 	contextWindow int,
 	customInstructions string,
+	summaryRetry llm.StreamRetryPolicy,
 ) (*session.BranchSummaryData, error) {
 	if contextWindow <= 0 {
 		contextWindow = model.ContextWindow
@@ -236,6 +239,7 @@ func (h *Controller) summarizeBranch(
 		thinking,
 		DefaultConvert,
 		stream,
+		summaryRetry,
 	)
 	if err != nil {
 		return nil, err

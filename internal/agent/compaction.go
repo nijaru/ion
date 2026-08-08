@@ -676,6 +676,7 @@ func GenerateSummary(
 	thinkingLevel session.ThinkingLevel,
 	convert func([]session.Message) []llm.Message,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
+	retryPolicy llm.StreamRetryPolicy,
 ) (SummaryResult, error) {
 	if streamFn == nil {
 		return SummaryResult{}, errors.New("compaction stream is not configured")
@@ -736,30 +737,31 @@ func GenerateSummary(
 	// Check abort signal before calling.
 	select {
 	case <-signal:
-		return SummaryResult{}, fmt.Errorf("compaction summarization aborted: context cancelled")
+		return SummaryResult{}, fmt.Errorf("compaction summarization aborted: %w", context.Canceled)
 	default:
 	}
 
-	stream, err := streamFn(ctx, req)
+	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, retryPolicy)
 	if err != nil {
+		if signal != nil {
+			select {
+			case <-signal:
+				return SummaryResult{}, fmt.Errorf(
+					"compaction summarization aborted during streaming: %w",
+					context.Canceled,
+				)
+			default:
+			}
+		}
 		return SummaryResult{}, fmt.Errorf("summarization failed: %w", err)
 	}
-	defer stream.Close()
 
-	// Collect the response. Usage is cumulative; retain the latest provider
-	// report rather than summing repeated chunks.
+	// Usage is cumulative; retain the latest provider report rather than
+	// summing repeated chunks. Failed replay-safe attempts were discarded by
+	// CollectStreamWithRetry before these chunks became visible here.
 	var summary strings.Builder
 	var usage llm.Usage
-	for {
-		select {
-		case <-signal:
-			return SummaryResult{}, fmt.Errorf("compaction summarization aborted during streaming")
-		default:
-		}
-		chunk, ok := stream.Next()
-		if !ok {
-			break
-		}
+	for _, chunk := range chunks {
 		if chunk == nil {
 			continue
 		}
@@ -769,10 +771,6 @@ func GenerateSummary(
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
 		}
-	}
-
-	if err := stream.Err(); err != nil {
-		return SummaryResult{}, fmt.Errorf("summarization stream error: %w", err)
 	}
 
 	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil
@@ -790,6 +788,7 @@ func GenerateTurnPrefixSummary(
 	signal <-chan struct{},
 	thinkingLevel session.ThinkingLevel,
 	streamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error),
+	retryPolicy llm.StreamRetryPolicy,
 ) (SummaryResult, error) {
 	if streamFn == nil {
 		return SummaryResult{}, errors.New("compaction stream is not configured")
@@ -829,28 +828,28 @@ func GenerateTurnPrefixSummary(
 
 	select {
 	case <-signal:
-		return SummaryResult{}, fmt.Errorf("turn prefix summarization aborted: context cancelled")
+		return SummaryResult{}, fmt.Errorf("turn prefix summarization aborted: %w", context.Canceled)
 	default:
 	}
 
-	stream, err := streamFn(ctx, req)
+	chunks, err := llm.CollectStreamWithRetry(ctx, req, streamFn, retryPolicy)
 	if err != nil {
+		if signal != nil {
+			select {
+			case <-signal:
+				return SummaryResult{}, fmt.Errorf(
+					"turn prefix summarization aborted during streaming: %w",
+					context.Canceled,
+				)
+			default:
+			}
+		}
 		return SummaryResult{}, fmt.Errorf("turn prefix summarization failed: %w", err)
 	}
-	defer stream.Close()
 
 	var summary strings.Builder
 	var usage llm.Usage
-	for {
-		select {
-		case <-signal:
-			return SummaryResult{}, fmt.Errorf("turn prefix summarization aborted during streaming")
-		default:
-		}
-		chunk, ok := stream.Next()
-		if !ok {
-			break
-		}
+	for _, chunk := range chunks {
 		if chunk == nil {
 			continue
 		}
@@ -860,10 +859,6 @@ func GenerateTurnPrefixSummary(
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
 		}
-	}
-
-	if err := stream.Err(); err != nil {
-		return SummaryResult{}, fmt.Errorf("turn prefix summarization stream error: %w", err)
 	}
 
 	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil
@@ -1006,7 +1001,10 @@ type CompactOptions struct {
 	// Convert transforms domain messages to provider messages (for the stream).
 	Convert func([]session.Message) []llm.Message
 	// StreamFn is the provider stream function.
-	StreamFn      func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	StreamFn func(ctx context.Context, req *llm.Request) (llm.Stream, error)
+	// SummaryRetry permits replay of incomplete summary requests only. Summary
+	// output is discarded until completion, unlike visible assistant streams.
+	SummaryRetry  llm.StreamRetryPolicy
 	ContextWindow int // 0 = unknown; used to bound compaction settings
 }
 
@@ -1051,7 +1049,7 @@ func Compact(
 					opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 					opts.APIKey, opts.Headers, signal,
 					opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
-					opts.Convert, opts.StreamFn)
+					opts.Convert, opts.StreamFn, opts.SummaryRetry)
 			} else {
 				generated.Text = "No prior history."
 			}
@@ -1062,7 +1060,7 @@ func Compact(
 			generated, e := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
 				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 				opts.APIKey, opts.Headers, signal,
-				opts.ThinkingLevel, opts.StreamFn)
+				opts.ThinkingLevel, opts.StreamFn, opts.SummaryRetry)
 			prefixCh <- result{generated, e}
 		}()
 
@@ -1088,7 +1086,7 @@ func Compact(
 			opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 			opts.APIKey, opts.Headers, signal,
 			opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
-			opts.Convert, opts.StreamFn)
+			opts.Convert, opts.StreamFn, opts.SummaryRetry)
 		if summaryErr != nil {
 			return nil, summaryErr
 		}

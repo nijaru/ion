@@ -57,8 +57,9 @@ func (*retryStreamStub) Err() error           { return nil }
 func (*retryStreamStub) Close() error         { return nil }
 
 type retryReadFailureProvider struct {
-	calls      atomic.Int32
-	afterChunk bool
+	calls        atomic.Int32
+	afterChunk   bool
+	retrySuccess Stream
 }
 
 func (p *retryReadFailureProvider) ID() string { return "retry-read-test" }
@@ -69,6 +70,9 @@ func (p *retryReadFailureProvider) Generate(context.Context, *Request) (*Respons
 func (p *retryReadFailureProvider) Stream(context.Context, *Request) (Stream, error) {
 	if p.calls.Add(1) == 1 {
 		return &retryReadFailureStream{afterChunk: p.afterChunk}, nil
+	}
+	if p.retrySuccess != nil {
+		return p.retrySuccess, nil
 	}
 	return &retryStreamStub{}, nil
 }
@@ -105,6 +109,21 @@ func (s *retryReadFailureStream) Err() error {
 	return errRetryTransient
 }
 func (*retryReadFailureStream) Close() error { return nil }
+
+type retryCompletionStream struct {
+	chunk *Chunk
+	done  bool
+}
+
+func (s *retryCompletionStream) Next() (*Chunk, bool) {
+	if s.done {
+		return nil, false
+	}
+	s.done = true
+	return s.chunk, true
+}
+func (*retryCompletionStream) Err() error   { return nil }
+func (*retryCompletionStream) Close() error { return nil }
 
 func retryTestConfig() RetryConfig {
 	return RetryConfig{
@@ -188,6 +207,30 @@ func TestRetryProviderDoesNotReplayAfterStreamOutput(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("provider attempts = %d, want no replay after output", got)
+	}
+}
+
+func TestCollectStreamWithRetryDiscardsPartialAttempt(t *testing.T) {
+	provider := &retryReadFailureProvider{
+		afterChunk: true,
+		retrySuccess: &retryCompletionStream{
+			chunk: &Chunk{Content: "complete"},
+		},
+	}
+	chunks, err := CollectStreamWithRetry(
+		t.Context(),
+		&Request{},
+		provider.Stream,
+		StreamRetryPolicy{Config: retryTestConfig(), IsTransient: provider.IsTransient},
+	)
+	if err != nil {
+		t.Fatalf("CollectStreamWithRetry() error = %v", err)
+	}
+	if len(chunks) != 1 || chunks[0] == nil || chunks[0].Content != "complete" {
+		t.Fatalf("collected chunks = %#v, want only complete retry", chunks)
+	}
+	if got := provider.calls.Load(); got != 2 {
+		t.Fatalf("provider attempts = %d, want one retry after partial failure", got)
 	}
 }
 

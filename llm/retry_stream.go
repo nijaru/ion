@@ -2,8 +2,94 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// StreamRetryPolicy controls replay-safe stream collection. It is intended for
+// internal requests whose partial output has not crossed a user-visible or
+// durable boundary, such as context summaries. Normal assistant streams use
+// RetryProvider.Stream and never replay after output.
+type StreamRetryPolicy struct {
+	Config      RetryConfig
+	IsTransient func(error) bool
+}
+
+// CollectStreamWithRetry consumes a replay-safe stream to completion. A failed
+// attempt's chunks are discarded before a transient retry, so a partial
+// summary cannot be duplicated in the next attempt. Callers must not expose
+// collected chunks until this function succeeds.
+func CollectStreamWithRetry(
+	ctx context.Context,
+	req *Request,
+	streamFn func(context.Context, *Request) (Stream, error),
+	policy StreamRetryPolicy,
+) ([]*Chunk, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if streamFn == nil {
+		return nil, errors.New("llm: replay-safe stream function is not configured")
+	}
+
+	cfg := normalizedRetryConfig(policy.Config)
+	interval := cfg.MinInterval
+	for attempts := 1; ; attempts++ {
+		chunks, err := collectStreamAttempt(ctx, req, streamFn)
+		if err == nil {
+			return chunks, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if policy.IsTransient == nil || !policy.IsTransient(err) {
+			return nil, err
+		}
+		if retryLimitReached(cfg, attempts, err) {
+			return nil, retryExhausted(attempts, err)
+		}
+
+		delay := retryDelay(cfg, interval, err)
+		notifyRetry(ctx, cfg, RetryEvent{Attempt: attempts, Delay: delay, Err: err})
+		if err := waitForRetry(ctx, delay); err != nil {
+			return nil, err
+		}
+		interval = advanceRetryInterval(cfg, interval)
+	}
+}
+
+func collectStreamAttempt(
+	ctx context.Context,
+	req *Request,
+	streamFn func(context.Context, *Request) (Stream, error),
+) ([]*Chunk, error) {
+	stream, err := streamFn(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if stream == nil {
+		return nil, errProviderNilStream
+	}
+	defer stream.Close()
+
+	var chunks []*Chunk
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		chunk, ok := stream.Next()
+		if ok {
+			chunks = append(chunks, chunk)
+			continue
+		}
+		if err := stream.Err(); err != nil {
+			return nil, err
+		}
+		return chunks, nil
+	}
+}
 
 // retryStream retries a provider stream only when it fails before yielding its
 // first chunk. Once a chunk has crossed the stream boundary, replaying the

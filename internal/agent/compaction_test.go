@@ -362,6 +362,7 @@ func TestGenerateSummarySerializesConvertedToolCalls(t *testing.T) {
 			request = *req
 			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
 		},
+		llm.StreamRetryPolicy{},
 	)
 	if err != nil {
 		t.Fatalf("GenerateSummary: %v", err)
@@ -373,16 +374,65 @@ func TestGenerateSummarySerializesConvertedToolCalls(t *testing.T) {
 	}
 }
 
+func TestGenerateSummaryRetriesAfterPartialTransientFailure(t *testing.T) {
+	var attempts int
+	transient := errors.New("summary connection lost")
+	result, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "", nil, nil, "", "", "", nil,
+		func(context.Context, *llm.Request) (llm.Stream, error) {
+			attempts++
+			if attempts == 1 {
+				return &compactionTransientStream{err: transient}, nil
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "complete", StopReason: "stop"}}}, nil
+		},
+		llm.StreamRetryPolicy{
+			Config: llm.RetryConfig{
+				MaxAttempts: 2, MinInterval: time.Nanosecond, MaxInterval: time.Nanosecond, Multiplier: 1,
+			},
+			IsTransient: func(err error) bool { return errors.Is(err, transient) },
+		},
+	)
+	if err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("summary attempts = %d, want one replay-safe retry", attempts)
+	}
+	if result.Text != "complete" {
+		t.Fatalf("summary text = %q, want only the completed retry", result.Text)
+	}
+}
+
 func TestGenerateSummaryRequiresStream(t *testing.T) {
 	_, err := GenerateSummary(
 		context.Background(),
 		[]session.Message{session.NewUserText("history", time.Now())},
 		"test", 1024, 0, "", nil, nil, "", "", "", nil, nil,
+		llm.StreamRetryPolicy{},
 	)
 	if err == nil || err.Error() != "compaction stream is not configured" {
 		t.Fatalf("GenerateSummary error = %v, want missing stream error", err)
 	}
 }
+
+type compactionTransientStream struct {
+	err     error
+	emitted bool
+}
+
+func (s *compactionTransientStream) Next() (*llm.Chunk, bool) {
+	if s.emitted {
+		return nil, false
+	}
+	s.emitted = true
+	return &llm.Chunk{Content: "partial"}, true
+}
+
+func (s *compactionTransientStream) Err() error { return s.err }
+func (*compactionTransientStream) Close() error { return nil }
 
 // mustTime returns a fixed time for test use.
 func mustTime() time.Time {

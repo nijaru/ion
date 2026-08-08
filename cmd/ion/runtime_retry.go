@@ -10,18 +10,24 @@ import (
 // providerWithRetryPolicy installs the runtime-owned transient failure policy.
 // Transport failures may wait for the caller to cancel the active turn; API
 // failures remain bounded so a provider-side outage cannot spin forever.
+func retryPolicyForConfig(cfg *config.Config) llm.RetryConfig {
+	policy := llm.DefaultRetryConfig()
+	policy.MaxAttempts = cfg.GetMaxRetries()
+	policy.MinInterval = time.Duration(cfg.GetRetryBaseDelayMs()) * time.Millisecond
+	policy.RetryForeverTransportOnly = true
+	policy.RetryForever = cfg.RetryUntilCancelledEnabled()
+	if !policy.RetryForever {
+		policy.MaxAttempts = 1
+	}
+	return policy
+}
+
 func providerWithRetryPolicy(provider llm.Provider, cfg *config.Config) llm.Provider {
 	if provider == nil {
 		return nil
 	}
 
 	retry := llm.NewRetryProvider(provider)
-	retry.Config.MaxAttempts = cfg.GetMaxRetries()
-	retry.Config.MinInterval = time.Duration(cfg.GetRetryBaseDelayMs()) * time.Millisecond
-	retry.Config.RetryForeverTransportOnly = true
-	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
-	if !retry.Config.RetryForever {
-		retry.Config.MaxAttempts = 1
-	}
+	retry.Config = retryPolicyForConfig(cfg)
 	return retry
 }

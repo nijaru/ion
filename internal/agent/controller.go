@@ -78,6 +78,7 @@ type ControllerConfig struct {
 
 	// Compaction settings.
 	Compaction    CompactionSettings
+	SummaryRetry  llm.StreamRetryPolicy
 	ContextWindow int // model context window size in tokens
 
 	// ApprovalMode controls requirement-bearing tool calls. Confirm is
@@ -151,6 +152,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		done:               make(chan struct{}),
 		closeDone:          make(chan struct{}),
 		compaction:         cfg.Compaction,
+		summaryRetry:       cfg.SummaryRetry,
 		contextWindow:      cfg.ContextWindow,
 		steeringMode:       cfg.SteeringMode,
 		followUpMode:       cfg.FollowUpMode,
