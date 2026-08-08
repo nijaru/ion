@@ -621,6 +621,17 @@ Be concise. Focus on what's needed to understand the kept suffix.`
 
 const summaryToolResultMaxChars = 2000
 
+func cloneCompactionHeaders(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(headers)+1)
+	for key, value := range headers {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func truncateSummaryText(text string, maxChars int) string {
 	if len(text) <= maxChars {
 		return text
@@ -750,7 +761,7 @@ func GenerateSummary(
 			{Role: "user", Content: prompt.String()},
 		},
 		MaxTokens:       maxTokens,
-		Headers:         headers,
+		Headers:         cloneCompactionHeaders(headers),
 		ReasoningEffort: providerReasoningEffort(thinkingLevel),
 		ThinkingBudget:  0, // summarization doesn't need deep thinking
 	}
@@ -844,7 +855,7 @@ func GenerateTurnPrefixSummary(
 			{Role: "user", Content: promptText},
 		},
 		MaxTokens:       maxTokens,
-		Headers:         headers,
+		Headers:         cloneCompactionHeaders(headers),
 		ReasoningEffort: providerReasoningEffort(thinkingLevel),
 	}
 

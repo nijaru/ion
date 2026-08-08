@@ -137,6 +137,38 @@ func TestGenerateSummaryTruncatesToolResults(t *testing.T) {
 	}
 }
 
+func TestCompactionSummariesCloneHeadersBeforeAddingAuthorization(t *testing.T) {
+	headers := map[string]string{"X-Test": "original"}
+	stream := func(_ context.Context, request *llm.Request) (llm.Stream, error) {
+		if request.Headers["Authorization"] != "Bearer test-key" {
+			return nil, errors.New("summary request did not receive authorization")
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+	}
+	if _, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "test-key", headers, nil, "", "", "", nil,
+		stream, llm.StreamRetryPolicy{},
+	); err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	if _, err := GenerateTurnPrefixSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "test-key", headers, nil, "", nil,
+		stream, llm.StreamRetryPolicy{},
+	); err != nil {
+		t.Fatalf("GenerateTurnPrefixSummary: %v", err)
+	}
+	if _, ok := headers["Authorization"]; ok {
+		t.Fatal("compaction mutated caller headers with Authorization")
+	}
+	if headers["X-Test"] != "original" {
+		t.Fatalf("caller headers changed = %#v", headers)
+	}
+}
+
 func TestEstimateContextTokensFallsBackWhenUsageIsEmpty(t *testing.T) {
 	messages := []session.Message{
 		session.NewUserText("before", mustTime()),
