@@ -292,6 +292,7 @@ func TestRunLoopIsStateless(t *testing.T) {
 // INVARIANT: tool calls are executed and ToolExecStart/End emitted.
 func TestRunLoopToolExecution(t *testing.T) {
 	var toolEvents []session.Event
+	var updateEvents []session.MessageUpdate
 	callCount := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
 		callCount++
@@ -328,7 +329,12 @@ func TestRunLoopToolExecution(t *testing.T) {
 		[]session.Message{session.NewUserText("use tool", time.Now())},
 		TurnContext{},
 		LoopConfig{Model: llm.Model{ID: "test"}, StreamFn: streamFn, Tools: []Tool{tool}},
-		func(e session.Event) { toolEvents = append(toolEvents, e) },
+		func(e session.Event) {
+			toolEvents = append(toolEvents, e)
+			if update, ok := e.(session.MessageUpdate); ok {
+				updateEvents = append(updateEvents, update)
+			}
+		},
 		nil,
 	)
 
@@ -346,6 +352,85 @@ func TestRunLoopToolExecution(t *testing.T) {
 	}
 	if !hasEnd {
 		t.Fatal("expected ToolExecEnd event")
+	}
+	foundRawArguments := false
+	for _, update := range updateEvents {
+		if delta, ok := update.Delta.(session.ToolCallDelta); ok {
+			if delta.ArgumentsChunk != `{"x":1}` {
+				t.Fatalf("tool arguments chunk = %q, want raw JSON", delta.ArgumentsChunk)
+			}
+			foundRawArguments = true
+		}
+	}
+	if !foundRawArguments {
+		t.Fatal("expected tool call message update")
+	}
+}
+
+func TestRunLoopProjectsStructuredBlocksAndRawToolDeltas(t *testing.T) {
+	var updates []session.MessageUpdate
+	callCount := 0
+	streamFn := func(context.Context, *llm.Request) (llm.Stream, error) {
+		callCount++
+		if callCount == 1 {
+			return &mockStream{chunks: []*llm.Chunk{
+				{Block: llm.ToolCallBlock{
+					ID: "call-structured", Name: "structured-tool", Arguments: `{"path":"`, Type: "function",
+				}},
+				{Block: llm.ToolCallBlock{
+					ID: "call-structured", Name: "structured-tool", Arguments: `{"path":"file.go"}`, Type: "function",
+				}, StopReason: "toolUse"},
+			}}, nil
+		}
+		return &mockStream{chunks: []*llm.Chunk{
+			{Block: llm.TextBlock{Text: "structured response"}, StopReason: "stop"},
+		}}, nil
+	}
+
+	RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("use structured tool", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:    llm.Model{ID: "test"},
+			StreamFn: streamFn,
+			Tools: []Tool{
+				{
+					Name: "structured-tool",
+					Execute: func(_ context.Context, id string, args json.RawMessage, _ <-chan struct{}, _ func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						return session.ToolResultMessage{
+							ToolCallID: id,
+							ToolName:   "structured-tool",
+							Content:    []session.Content{session.TextContent{Text: string(args)}},
+							Timestamp:  time.Now(),
+						}, nil
+					},
+				},
+			},
+		},
+		func(event session.Event) {
+			if update, ok := event.(session.MessageUpdate); ok {
+				updates = append(updates, update)
+			}
+		},
+		nil,
+	)
+
+	var argumentDeltas []string
+	var textDelta string
+	for _, update := range updates {
+		switch delta := update.Delta.(type) {
+		case session.ToolCallDelta:
+			argumentDeltas = append(argumentDeltas, delta.ArgumentsChunk)
+		case session.TextDelta:
+			textDelta += delta.Text
+		}
+	}
+	if len(argumentDeltas) != 2 || argumentDeltas[0] != `{"path":"` || argumentDeltas[1] != `file.go"}` {
+		t.Fatalf("tool argument deltas = %#v, want raw incremental chunks", argumentDeltas)
+	}
+	if textDelta != "structured response" {
+		t.Fatalf("structured text delta = %q, want response text", textDelta)
 	}
 }
 

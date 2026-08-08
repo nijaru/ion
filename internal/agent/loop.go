@@ -326,6 +326,7 @@ func streamAssistantResponse(
 	var acc llm.StreamAccumulator
 	started := false
 	var streamErr error
+	previousToolArguments := make(map[string]string)
 
 	for {
 		chunk, ok := stream.Next()
@@ -346,33 +347,7 @@ func streamAssistantResponse(
 			started = true
 		}
 
-		// Emit delta events.
-		if chunk.Content != "" {
-			emit(session.MessageUpdate{
-				Message:   &partial,
-				Delta:     session.TextDelta{Text: chunk.Content},
-				BlockType: "text",
-			})
-		}
-		if chunk.Reasoning != "" {
-			emit(session.MessageUpdate{
-				Message:   &partial,
-				Delta:     session.ThinkingDelta{Text: chunk.Reasoning},
-				BlockType: "thinking",
-			})
-		}
-		for _, call := range chunk.Calls {
-			args, _ := json.Marshal(call.Function.Arguments)
-			emit(session.MessageUpdate{
-				Message: &partial,
-				Delta: session.ToolCallDelta{
-					ToolCallID:     call.ID,
-					Name:           call.Function.Name,
-					ArgumentsChunk: string(args),
-				},
-				BlockType: "tool_call",
-			})
-		}
+		emitStreamChunkUpdates(&partial, chunk, previousToolArguments, emit)
 	}
 
 	// Close is part of the provider boundary. A stream that cannot be closed
@@ -412,6 +387,108 @@ func streamAssistantResponse(
 	}
 	emit(session.MessageEnd{Message: &final})
 	return &final, false
+}
+
+func emitStreamChunkUpdates(
+	partial *session.AssistantMessage,
+	chunk *llm.Chunk,
+	previousToolArguments map[string]string,
+	emit func(session.Event),
+) {
+	if chunk == nil {
+		return
+	}
+	textEmitted := false
+	thinkingEmitted := false
+	emittedToolCalls := make(map[string]struct{})
+	switch block := chunk.Block.(type) {
+	case llm.TextBlock:
+		if block.Text != "" {
+			emit(session.MessageUpdate{
+				Message:   partial,
+				Delta:     session.TextDelta{Text: block.Text},
+				BlockType: "text",
+			})
+			textEmitted = true
+		}
+	case llm.ThinkingBlock:
+		if block.Thinking != "" {
+			emit(session.MessageUpdate{
+				Message:   partial,
+				Delta:     session.ThinkingDelta{Text: block.Thinking},
+				BlockType: "thinking",
+			})
+			thinkingEmitted = true
+		}
+	case llm.ToolCallBlock:
+		emitToolCallDelta(partial, block.ID, block.Name, block.Arguments, previousToolArguments, emit)
+		if block.ID != "" {
+			emittedToolCalls[block.ID] = struct{}{}
+		}
+	}
+	if !textEmitted && chunk.Content != "" {
+		emit(session.MessageUpdate{
+			Message:   partial,
+			Delta:     session.TextDelta{Text: chunk.Content},
+			BlockType: "text",
+		})
+	}
+	if !thinkingEmitted {
+		if chunk.Reasoning != "" {
+			emit(session.MessageUpdate{
+				Message:   partial,
+				Delta:     session.ThinkingDelta{Text: chunk.Reasoning},
+				BlockType: "thinking",
+			})
+		} else if _, typed := chunk.Block.(llm.ThinkingBlock); !typed {
+			for _, block := range chunk.ThinkingBlocks {
+				if block.Thinking == "" {
+					continue
+				}
+				emit(session.MessageUpdate{
+					Message:   partial,
+					Delta:     session.ThinkingDelta{Text: block.Thinking},
+					BlockType: "thinking",
+				})
+			}
+		}
+	}
+	for _, call := range chunk.Calls {
+		if _, emitted := emittedToolCalls[call.ID]; emitted {
+			continue
+		}
+		emitToolCallDelta(
+			partial,
+			call.ID,
+			call.Function.Name,
+			call.Function.Arguments,
+			previousToolArguments,
+			emit,
+		)
+	}
+}
+
+func emitToolCallDelta(
+	partial *session.AssistantMessage,
+	id, name, arguments string,
+	previousToolArguments map[string]string,
+	emit func(session.Event),
+) {
+	previous := previousToolArguments[id]
+	chunk := arguments
+	if strings.HasPrefix(arguments, previous) {
+		chunk = arguments[len(previous):]
+	}
+	previousToolArguments[id] = arguments
+	emit(session.MessageUpdate{
+		Message: partial,
+		Delta: session.ToolCallDelta{
+			ToolCallID:     id,
+			Name:           name,
+			ArgumentsChunk: chunk,
+		},
+		BlockType: "tool_call",
+	})
 }
 
 // executeToolCalls executes tool calls from an assistant message.
