@@ -356,6 +356,39 @@ func assertBranchSummaryContext(t *testing.T, sess Session) {
 	t.Fatal("branch summary entry not found")
 }
 
+func TestProjectContextUsesCompactionTimestamp(t *testing.T) {
+	timestamp := time.Date(2026, 8, 8, 12, 34, 56, 0, time.UTC)
+	entries := []Entry{
+		&MessageEntry{
+			EntryBase: EntryBase{ID: "old", Timestamp: timestamp.Add(-time.Hour)},
+			Message:   NewUserText("old", timestamp.Add(-time.Hour)),
+		},
+		&CompactionEntry{
+			EntryBase:   EntryBase{ID: "compact", Timestamp: timestamp},
+			Summary:     "checkpoint",
+			FirstKeptID: "kept",
+		},
+		&MessageEntry{
+			EntryBase: EntryBase{ID: "kept", ParentID: "compact", Timestamp: timestamp.Add(time.Minute)},
+			Message:   NewUserText("kept", timestamp.Add(time.Minute)),
+		},
+	}
+	contextSnapshot, err := ProjectContext(entries)
+	if err != nil {
+		t.Fatalf("ProjectContext: %v", err)
+	}
+	if len(contextSnapshot.Messages) != 2 {
+		t.Fatalf("context messages = %d, want summary plus kept message", len(contextSnapshot.Messages))
+	}
+	summary, ok := contextSnapshot.Messages[0].(*UserMessage)
+	if !ok {
+		t.Fatalf("summary message = %T, want *UserMessage", contextSnapshot.Messages[0])
+	}
+	if !summary.Timestamp.Equal(timestamp) {
+		t.Fatalf("summary timestamp = %s, want %s", summary.Timestamp, timestamp)
+	}
+}
+
 func TestCustomMessageEntryInBuildContext(t *testing.T) {
 	store, _ := NewSQLiteStore(":memory:", "contract")
 	sess := NewSession(store, 64)

@@ -152,7 +152,8 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	// Prepend the compaction summary when one is present.
 	if lastCompaction != nil && lastCompaction.Summary != "" {
 		msgs = append(msgs, NewUserText(
-			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix, time.Now(),
+			CompactionSummaryPrefix+lastCompaction.Summary+CompactionSummarySuffix,
+			lastCompaction.Timestamp,
 		))
 	}
 
