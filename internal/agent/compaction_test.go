@@ -20,6 +20,39 @@ func TestShouldCompactUnknownContextWindowDoesNotLoop(t *testing.T) {
 	}
 }
 
+func TestFindCutPointNeverStartsAtToolResult(t *testing.T) {
+	entries := []session.Entry{
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "user"},
+			Message:   session.NewUserText("inspect", mustTime()),
+		},
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "assistant"},
+			Message: &session.AssistantMessage{
+				Content: []session.Content{&session.ToolCall{
+					ID: "call-1", Name: "read", Arguments: map[string]any{"path": "main.go"},
+				}},
+			},
+		},
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "tool-result"},
+			Message: &session.ToolResultMessage{
+				ToolCallID: "call-1",
+				ToolName:   "read",
+				Content:    []session.Content{session.TextContent{Text: strings.Repeat("tool output ", 40)}},
+			},
+		},
+	}
+
+	cut := FindCutPoint(entries, 0, len(entries), 1)
+	if cut.FirstKeptEntryIndex != 0 {
+		t.Fatalf("cut point = %#v, want the preceding valid boundary", cut)
+	}
+	if entries[cut.FirstKeptEntryIndex].ID() == "tool-result" {
+		t.Fatal("compaction cut orphaned a tool result")
+	}
+}
+
 func TestEstimateContextTokensFallsBackWhenUsageIsEmpty(t *testing.T) {
 	messages := []session.Message{
 		session.NewUserText("before", mustTime()),
@@ -124,6 +157,38 @@ func TestExtractFileOperationsInheritsPrevious(t *testing.T) {
 	fileOps := ExtractFileOperations(nil, entries, 0)
 	if fileOps == nil {
 		t.Fatal("expected non-nil fileOps")
+	}
+}
+
+func TestCompactSplitTurnWithNoPriorHistorySummarizesPrefix(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("start work", mustTime())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), &session.AssistantMessage{
+		Content: []session.Content{session.TextContent{Text: "partial work"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls int
+	result, err := Compact(context.Background(), sess, CompactOptions{
+		Model: "test",
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			return &mockStream{chunks: []*llm.Chunk{{Content: "prefix summary", StopReason: "stop"}}}, nil
+		},
+	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if calls != 1 || result == nil {
+		t.Fatalf("Compact result = %#v, stream calls = %d, want one prefix summary", result, calls)
+	}
+	if !strings.Contains(result.Summary, "Turn Context (split turn)") ||
+		!strings.Contains(result.Summary, "prefix summary") {
+		t.Fatalf("split-turn summary = %q", result.Summary)
 	}
 }
 

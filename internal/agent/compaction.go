@@ -235,12 +235,9 @@ func FindCutPoint(entries []session.Entry, startIndex, endIndex, keepRecentToken
 	accumulatedTokens := 0
 	cutIndex := cutPoints[0]
 	for i := endIndex - 1; i >= startIndex; i-- {
-		me, ok := entries[i].(*session.MessageEntry)
-		if !ok {
-			continue
+		for _, message := range session.ContextMessagesForEntry(entries[i]) {
+			accumulatedTokens += EstimateTokens(message)
 		}
-		tokens := EstimateTokens(me.Message)
-		accumulatedTokens += tokens
 		if accumulatedTokens >= keepRecentTokens {
 			for _, c := range cutPoints {
 				if c >= i {
@@ -265,46 +262,52 @@ func FindCutPoint(entries []session.Entry, startIndex, endIndex, keepRecentToken
 	}
 
 	cutEntry := entries[cutIndex]
-	isUserMessage := false
-	if me, ok := cutEntry.(*session.MessageEntry); ok {
-		if _, ok := me.Message.(*session.UserMessage); ok {
-			isUserMessage = true
-		}
-	}
-
+	startsTurn := isTurnStartEntry(cutEntry)
 	turnStartIndex := -1
-	if !isUserMessage {
+	if !startsTurn {
 		turnStartIndex = findTurnStartIndex(entries, cutIndex, startIndex)
 	}
 
 	return CutPoint{
 		FirstKeptEntryIndex: cutIndex,
 		TurnStartIndex:      turnStartIndex,
-		IsSplitTurn:         !isUserMessage && turnStartIndex != -1,
+		IsSplitTurn:         !startsTurn && turnStartIndex != -1,
 	}
 }
 
 func findValidCutPoints(entries []session.Entry, startIndex, endIndex int) []int {
 	var cutPoints []int
 	for i := startIndex; i < endIndex; i++ {
-		switch entries[i].(type) {
-		case *session.MessageEntry:
-			cutPoints = append(cutPoints, i)
-		case *session.BranchSummaryEntry:
-			cutPoints = append(cutPoints, i)
+		for _, message := range session.ContextMessagesForEntry(entries[i]) {
+			// A tool result is only valid after its assistant tool call. Cutting
+			// at it would orphan the result in the retained context.
+			if _, ok := message.(*session.ToolResultMessage); !ok {
+				cutPoints = append(cutPoints, i)
+				break
+			}
 		}
 	}
 	return cutPoints
 }
 
+func isTurnStartEntry(entry session.Entry) bool {
+	for _, message := range session.ContextMessagesForEntry(entry) {
+		switch message.(type) {
+		case *session.UserMessage, *session.CustomMessage:
+			return true
+		}
+	}
+	return false
+}
+
 func findTurnStartIndex(entries []session.Entry, entryIndex, startIndex int) int {
 	for i := entryIndex; i >= startIndex; i-- {
-		switch e := entries[i].(type) {
-		case *session.BranchSummaryEntry, *session.CompactionEntry:
+		if _, ok := entries[i].(*session.CompactionEntry); ok {
 			return i
-		case *session.MessageEntry:
-			switch e.Message.(type) {
-			case *session.UserMessage:
+		}
+		for _, message := range session.ContextMessagesForEntry(entries[i]) {
+			switch message.(type) {
+			case *session.UserMessage, *session.CustomMessage:
 				return i
 			}
 		}
@@ -953,18 +956,14 @@ func PrepareCompaction(
 
 	var messagesToSummarize []session.Message
 	for i := boundaryStart; i < historyEnd; i++ {
-		if me, ok := entries[i].(*session.MessageEntry); ok {
-			messagesToSummarize = append(messagesToSummarize, me.Message)
-		}
+		messagesToSummarize = append(messagesToSummarize, session.ContextMessagesForEntry(entries[i])...)
 	}
 
 	// Extract turn prefix messages (split-turn support).
 	var turnPrefixMessages []session.Message
 	if cutPoint.IsSplitTurn {
 		for i := cutPoint.TurnStartIndex; i < cutPoint.FirstKeptEntryIndex; i++ {
-			if me, ok := entries[i].(*session.MessageEntry); ok {
-				turnPrefixMessages = append(turnPrefixMessages, me.Message)
-			}
+			turnPrefixMessages = append(turnPrefixMessages, session.ContextMessagesForEntry(entries[i])...)
 		}
 	}
 
@@ -1021,7 +1020,8 @@ func Compact(
 	if err != nil {
 		return nil, err
 	}
-	if prep == nil || len(prep.MessagesToSummarize) == 0 {
+	if prep == nil ||
+		(len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0) {
 		return nil, nil
 	}
 

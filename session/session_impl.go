@@ -55,6 +55,33 @@ func (s *sessionImpl) BuildContext(ctx context.Context) (ContextSnapshot, error)
 	return ProjectContext(entries)
 }
 
+// ContextMessagesForEntry returns the provider-visible messages represented by
+// one durable entry. Metadata entries have no context projection. Session owns
+// this mapping so compaction and replay cannot silently diverge.
+func ContextMessagesForEntry(entry Entry) []Message {
+	switch e := entry.(type) {
+	case *MessageEntry:
+		if e.Message != nil {
+			return []Message{e.Message}
+		}
+	case *BranchSummaryEntry:
+		if e.Summary != "" {
+			return []Message{NewUserText(
+				BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp,
+			)}
+		}
+	case *CustomMessageEntry:
+		return []Message{&CustomMessage{
+			CustomType: e.CustomType,
+			Content:    e.Content,
+			Display:    e.Display,
+			Details:    e.Details,
+			Timestamp:  e.EntryBase.Timestamp,
+		}}
+	}
+	return nil
+}
+
 // ProjectContext projects a selected branch into the immutable context passed
 // to the turn engine. The runtime also uses it for a live, uncommitted turn
 // branch; keeping the projection pure prevents storage state from leaking into
@@ -130,28 +157,8 @@ func ProjectContext(entries []Entry) (ContextSnapshot, error) {
 	}
 
 	// Extract messages from the kept portion of the branch.
-	for _, e := range entries[startIdx:] {
-		switch e := e.(type) {
-		case *MessageEntry:
-			msgs = append(msgs, e.Message)
-		case *BranchSummaryEntry:
-			if e.Summary != "" {
-				msgs = append(msgs, NewUserText(
-					BranchSummaryPrefix+e.Summary+BranchSummarySuffix, e.EntryBase.Timestamp,
-				))
-			}
-		case *CustomMessageEntry:
-			// Custom message entries project as CustomMessage in context.
-			msgs = append(msgs, &CustomMessage{
-				CustomType: e.CustomType,
-				Content:    e.Content,
-				Display:    e.Display,
-				Details:    e.Details,
-				Timestamp:  e.EntryBase.Timestamp,
-			})
-		case *LeafEntry:
-			// LeafEntry is metadata; skip in context projection.
-		}
+	for _, entry := range entries[startIdx:] {
+		msgs = append(msgs, ContextMessagesForEntry(entry)...)
 	}
 
 	return ContextSnapshot{
