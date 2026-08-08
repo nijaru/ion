@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nijaru/ion/llm"
@@ -249,13 +250,15 @@ func FindCutPoint(entries []session.Entry, startIndex, endIndex, keepRecentToken
 		}
 	}
 
-	// Back up to avoid splitting metadata
+	// Back up to include adjacent metadata, but never cross a compaction
+	// boundary or another context-visible entry. This keeps the durable cut
+	// aligned with the same provider-visible boundaries used by replay.
 	for cutIndex > startIndex {
 		prev := entries[cutIndex-1]
 		if _, ok := prev.(*session.CompactionEntry); ok {
 			break
 		}
-		if _, ok := prev.(*session.MessageEntry); ok {
+		if len(session.ContextMessagesForEntry(prev)) > 0 {
 			break
 		}
 		cutIndex--
@@ -302,9 +305,6 @@ func isTurnStartEntry(entry session.Entry) bool {
 
 func findTurnStartIndex(entries []session.Entry, entryIndex, startIndex int) int {
 	for i := entryIndex; i >= startIndex; i-- {
-		if _, ok := entries[i].(*session.CompactionEntry); ok {
-			return i
-		}
 		for _, message := range session.ContextMessagesForEntry(entries[i]) {
 			switch message.(type) {
 			case *session.UserMessage, *session.CustomMessage:
@@ -345,18 +345,19 @@ func extractFromToolCall(tc *session.ToolCall, fileOps *CompactionFileOps) {
 		return
 	}
 
-	// Common file operation tools: read, write, edit, bash
+	path, _ := args["path"].(string)
+	if path == "" {
+		return
+	}
+
+	// Match Pi's durable summary provenance: read/write/edit tools identify
+	// paths from their assistant tool-call arguments. Bash is intentionally not
+	// inferred because arbitrary shell commands do not have a canonical path.
 	switch tc.Name {
-	case "read", "bash":
-		// Track reads only — writes/edits are tracked from tool results
-	case "edit":
-		if path, ok := args["path"].(string); ok && path != "" {
-			addOrReplace(fileOps, "modified", path)
-		}
-	case "write":
-		if path, ok := args["path"].(string); ok && path != "" {
-			addOrReplace(fileOps, "modified", path)
-		}
+	case "read":
+		addIfNew(fileOps, "read", path)
+	case "edit", "write":
+		addIfNew(fileOps, "modified", path)
 	}
 }
 
@@ -396,20 +397,6 @@ func addIfNew(fileOps *CompactionFileOps, kind, path string) {
 	*list = append(*list, path)
 }
 
-func addOrReplace(fileOps *CompactionFileOps, kind, path string) {
-	list := &fileOps.ReadFiles
-	if kind == "modified" {
-		list = &fileOps.ModifiedFiles
-	}
-	for i, f := range *list {
-		if f == path {
-			return
-		}
-		_ = i
-	}
-	*list = append(*list, path)
-}
-
 // ExtractFileOperations scans messages and previous compaction for file ops.
 // Pi: compaction.js extractFileOperations (line 35)
 func ExtractFileOperations(
@@ -437,16 +424,18 @@ func ExtractFileOperations(
 	return fileOps
 }
 
-// FormatFileOperations returns a formatted string for appending to the compaction summary.
-// Pi: compaction/utils.js formatFileOperations
+// FormatFileOperations returns a stable formatted string for appending to the
+// compaction summary. Ion keeps its established human-readable form while
+// preserving Pi's read-only versus modified distinction.
 func FormatFileOperations(fileOps *CompactionFileOps) string {
+	readFiles, modifiedFiles := ComputeFileLists(fileOps)
 	var b strings.Builder
-	if len(fileOps.ReadFiles) > 0 || len(fileOps.ModifiedFiles) > 0 {
+	if len(readFiles) > 0 || len(modifiedFiles) > 0 {
 		b.WriteString("\n\nFiles referenced in this conversation:\n")
 	}
-	if len(fileOps.ReadFiles) > 0 {
+	if len(readFiles) > 0 {
 		b.WriteString("- Read: ")
-		for i, f := range fileOps.ReadFiles {
+		for i, f := range readFiles {
 			if i > 0 {
 				b.WriteString(", ")
 			}
@@ -454,9 +443,9 @@ func FormatFileOperations(fileOps *CompactionFileOps) string {
 		}
 		b.WriteString("\n")
 	}
-	if len(fileOps.ModifiedFiles) > 0 {
+	if len(modifiedFiles) > 0 {
 		b.WriteString("- Modified: ")
-		for i, f := range fileOps.ModifiedFiles {
+		for i, f := range modifiedFiles {
 			if i > 0 {
 				b.WriteString(", ")
 			}
@@ -467,20 +456,38 @@ func FormatFileOperations(fileOps *CompactionFileOps) string {
 	return b.String()
 }
 
-// ComputeFileLists deduplicates and trims file operation lists.
+// ComputeFileLists deduplicates file operation lists, removes modified files
+// from the read-only list, and sorts both lists for stable durable summaries.
 func ComputeFileLists(fileOps *CompactionFileOps) (readFiles, modifiedFiles []string) {
-	return deduplicateSlice(fileOps.ReadFiles), deduplicateSlice(fileOps.ModifiedFiles)
+	if fileOps == nil {
+		return nil, nil
+	}
+	modifiedFiles = deduplicateSlice(fileOps.ModifiedFiles)
+	modifiedSet := make(map[string]struct{}, len(modifiedFiles))
+	for _, path := range modifiedFiles {
+		modifiedSet[path] = struct{}{}
+	}
+	for _, path := range deduplicateSlice(fileOps.ReadFiles) {
+		if _, modified := modifiedSet[path]; !modified {
+			readFiles = append(readFiles, path)
+		}
+	}
+	return readFiles, modifiedFiles
 }
 
 func deduplicateSlice(s []string) []string {
-	seen := make(map[string]bool)
-	var result []string
+	seen := make(map[string]struct{}, len(s))
+	result := make([]string, 0, len(s))
 	for _, item := range s {
-		if !seen[item] {
-			seen[item] = true
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; !ok {
+			seen[item] = struct{}{}
 			result = append(result, item)
 		}
 	}
+	sort.Strings(result)
 	return result
 }
 
@@ -612,6 +619,35 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix.`
 
+const summaryToolResultMaxChars = 2000
+
+func truncateSummaryText(text string, maxChars int) string {
+	if len(text) <= maxChars {
+		return text
+	}
+	return fmt.Sprintf("%s\n\n[... %d more characters truncated]", text[:maxChars], len(text)-maxChars)
+}
+
+func serializedCompactionContent(msg llm.Message) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	var content strings.Builder
+	for _, part := range msg.Parts {
+		if part.Type == llm.ContentPartImage {
+			content.WriteString("[image")
+			if part.MIMEType != "" {
+				content.WriteByte(' ')
+				content.WriteString(part.MIMEType)
+			}
+			content.WriteByte(']')
+			continue
+		}
+		content.WriteString(part.Text)
+	}
+	return content.String()
+}
+
 func serializeCompactionMessages(messages []session.Message, convert func([]session.Message) []llm.Message) string {
 	if convert == nil {
 		convert = DefaultConvert
@@ -631,22 +667,11 @@ func serializeCompactionMessages(messages []session.Message, convert func([]sess
 			conversation.WriteString("]")
 		}
 		conversation.WriteString(": ")
-		if msg.Content != "" {
-			conversation.WriteString(msg.Content)
-		} else {
-			for _, part := range msg.Parts {
-				if part.Type == llm.ContentPartImage {
-					conversation.WriteString("[image")
-					if part.MIMEType != "" {
-						conversation.WriteByte(' ')
-						conversation.WriteString(part.MIMEType)
-					}
-					conversation.WriteByte(']')
-					continue
-				}
-				conversation.WriteString(part.Text)
-			}
+		content := serializedCompactionContent(msg)
+		if msg.Role == llm.RoleTool {
+			content = truncateSummaryText(content, summaryToolResultMaxChars)
 		}
+		conversation.WriteString(content)
 		if msg.Reasoning != "" {
 			conversation.WriteString("\nReasoning: ")
 			conversation.WriteString(msg.Reasoning)
@@ -1094,9 +1119,11 @@ func Compact(
 		usage = generated.Usage
 	}
 
-	// Append formatted file operations to summary.
+	// Append stable, normalized file operations to the summary.
 	readFiles, modifiedFiles := ComputeFileLists(prep.FileOps)
-	summary += FormatFileOperations(prep.FileOps)
+	summary += FormatFileOperations(&CompactionFileOps{
+		ReadFiles: readFiles, ModifiedFiles: modifiedFiles,
+	})
 
 	// Persist compaction entry.
 	details := CompactionFileOps{

@@ -62,6 +62,81 @@ func TestEstimateTokensCountsCustomMessageContent(t *testing.T) {
 	}
 }
 
+func TestFindCutPointStopsBeforeContextVisibleMetadataBoundary(t *testing.T) {
+	entries := []session.Entry{
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "old"},
+			Message:   session.NewUserText("old", mustTime()),
+		},
+		&session.BranchSummaryEntry{
+			EntryBase: session.EntryBase{ID: "summary"},
+			Summary:   "abandoned branch",
+		},
+		&session.LabelEntry{EntryBase: session.EntryBase{ID: "label"}, Label: "recent work"},
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "recent"},
+			Message:   session.NewUserText("recent", mustTime()),
+		},
+	}
+
+	cut := FindCutPoint(entries, 0, len(entries), 1)
+	if cut.FirstKeptEntryIndex != 2 {
+		t.Fatalf("cut point = %#v, want metadata index 2 before context-visible summary", cut)
+	}
+	if !cut.IsSplitTurn || cut.TurnStartIndex != 1 {
+		t.Fatalf("cut point = %#v, want branch summary turn start at index 1", cut)
+	}
+}
+
+func TestExtractFileOperationsUsesToolCallPaths(t *testing.T) {
+	fileOps := &CompactionFileOps{}
+	ExtractFileOperationsFromMessage(&session.AssistantMessage{
+		Content: []session.Content{
+			&session.ToolCall{Name: "read", Arguments: map[string]any{"path": "z.go"}},
+			&session.ToolCall{Name: "write", Arguments: map[string]any{"path": "same.go"}},
+			&session.ToolCall{Name: "edit", Arguments: map[string]any{"path": "a.go"}},
+		},
+	}, fileOps)
+	readFiles, modifiedFiles := ComputeFileLists(&CompactionFileOps{
+		ReadFiles:     append(fileOps.ReadFiles, "same.go"),
+		ModifiedFiles: append(fileOps.ModifiedFiles, "a.go"),
+	})
+	if strings.Join(readFiles, ",") != "z.go" {
+		t.Fatalf("read files = %#v, want only unmodified z.go", readFiles)
+	}
+	if strings.Join(modifiedFiles, ",") != "a.go,same.go" {
+		t.Fatalf("modified files = %#v, want sorted unique paths", modifiedFiles)
+	}
+}
+
+func TestGenerateSummaryTruncatesToolResults(t *testing.T) {
+	var request llm.Request
+	toolText := strings.Repeat("x", summaryToolResultMaxChars+100)
+	_, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{&session.ToolResultMessage{
+			ToolCallID: "call-1", ToolName: "read",
+			Content: []session.Content{session.TextContent{Text: toolText}},
+		}},
+		"test", 1024, 0, "", nil, nil, "", "", "", nil,
+		func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+			request = *req
+			return &mockStream{chunks: []*llm.Chunk{{Content: "summary", StopReason: "stop"}}}, nil
+		},
+		llm.StreamRetryPolicy{},
+	)
+	if err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	prompt := request.Messages[1].Content
+	if !strings.Contains(prompt, "[... 100 more characters truncated]") {
+		t.Fatalf("summary prompt omitted truncation marker: %q", prompt)
+	}
+	if strings.Contains(prompt, strings.Repeat("x", summaryToolResultMaxChars+1)) {
+		t.Fatal("summary prompt included the complete tool result")
+	}
+}
+
 func TestEstimateContextTokensFallsBackWhenUsageIsEmpty(t *testing.T) {
 	messages := []session.Message{
 		session.NewUserText("before", mustTime()),
