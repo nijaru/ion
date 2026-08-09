@@ -8,7 +8,9 @@ import (
 )
 
 func TestAddMissingReasoningContent(t *testing.T) {
-	body := []byte(`{"model":"deepseek-reasoner","messages":[{"role":"assistant","content":"old"},{"role":"user","content":"next"}]}`)
+	body := []byte(
+		`{"model":"deepseek-reasoner","messages":[{"role":"assistant","content":"old"},{"role":"user","content":"next"}]}`,
+	)
 	repaired, changed := addMissingReasoningContent(body)
 	if !changed {
 		t.Fatal("request was not repaired")
@@ -18,7 +20,9 @@ func TestAddMissingReasoningContent(t *testing.T) {
 		t.Fatalf("repaired request = %s", text)
 	}
 
-	unchanged, changed := addMissingReasoningContent([]byte(`{"messages":[{"role":"assistant","reasoning_content":"kept"}]}`))
+	unchanged, changed := addMissingReasoningContent(
+		[]byte(`{"messages":[{"role":"assistant","reasoning_content":"kept"}]}`),
+	)
 	if changed || string(unchanged) != `{"messages":[{"role":"assistant","reasoning_content":"kept"}]}` {
 		t.Fatalf("existing reasoning field changed: %s (changed=%v)", unchanged, changed)
 	}
