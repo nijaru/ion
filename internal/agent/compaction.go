@@ -849,6 +849,9 @@ func GenerateSummary(
 			usage = *chunk.Usage
 		}
 	}
+	if strings.TrimSpace(summary.String()) == "" {
+		return SummaryResult{}, errors.New("summarization returned an empty summary")
+	}
 
 	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil
 }
@@ -947,6 +950,9 @@ func GenerateTurnPrefixSummary(
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
 		}
+	}
+	if strings.TrimSpace(summary.String()) == "" {
+		return SummaryResult{}, errors.New("turn prefix summarization returned an empty summary")
 	}
 
 	return SummaryResult{Text: summary.String(), Usage: summaryUsage(usage)}, nil

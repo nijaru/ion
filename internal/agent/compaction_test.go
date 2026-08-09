@@ -155,6 +155,36 @@ func TestGenerateSummaryRejectsErrorStopReason(t *testing.T) {
 	}
 }
 
+func TestGenerateSummaryRejectsEmptySuccessfulResponse(t *testing.T) {
+	_, err := GenerateSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "", nil, nil, "", "", "", nil,
+		func(_ context.Context, _ *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{StopReason: llm.StopReasonStop}}}, nil
+		},
+		llm.StreamRetryPolicy{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "empty summary") {
+		t.Fatalf("GenerateSummary error = %v, want empty-summary error", err)
+	}
+}
+
+func TestGenerateTurnPrefixSummaryRejectsEmptySuccessfulResponse(t *testing.T) {
+	_, err := GenerateTurnPrefixSummary(
+		context.Background(),
+		[]session.Message{session.NewUserText("history", time.Now())},
+		"test", 1024, 0, "", nil, nil, "", nil,
+		func(_ context.Context, _ *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{StopReason: llm.StopReasonStop}}}, nil
+		},
+		llm.StreamRetryPolicy{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "empty summary") {
+		t.Fatalf("GenerateTurnPrefixSummary error = %v, want empty-summary error", err)
+	}
+}
+
 func TestGenerateTurnPrefixSummaryRejectsAbortedStopReason(t *testing.T) {
 	_, err := GenerateTurnPrefixSummary(
 		context.Background(),
@@ -170,6 +200,41 @@ func TestGenerateTurnPrefixSummaryRejectsAbortedStopReason(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "summary aborted") {
 		t.Fatalf("GenerateTurnPrefixSummary error = %v, want provider stop error", err)
+	}
+}
+
+func TestCompactEmptySummaryLeavesCommittedContextUnchanged(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	for _, text := range []string{"history", "recent"} {
+		if _, err := sess.AppendMessage(context.Background(), session.NewUserText(text, time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leafBefore := sess.GetLeafID()
+	entriesBefore, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Compact(context.Background(), sess, CompactOptions{
+		Model: "test",
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return &mockStream{chunks: []*llm.Chunk{{StopReason: llm.StopReasonStop}}}, nil
+		},
+	}, CompactionSettings{Enabled: true, ReserveTokens: 1, KeepRecentTokens: 1})
+	if err == nil || !strings.Contains(err.Error(), "empty summary") {
+		t.Fatalf("Compact error = %v, want empty-summary error", err)
+	}
+	if got := sess.GetLeafID(); got != leafBefore {
+		t.Fatalf("leaf after empty compaction = %q, want %q", got, leafBefore)
+	}
+	entriesAfter, err := sess.Entries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Fatalf("entry count after empty compaction = %d, want %d", len(entriesAfter), len(entriesBefore))
 	}
 }
 
