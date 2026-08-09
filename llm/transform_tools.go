@@ -32,6 +32,7 @@ func synthesizeMissingToolResults(req *Request) {
 				Name:    call.name,
 				ToolID:  call.id,
 				Content: missingToolResultContent,
+				IsError: true,
 			})
 		}
 		pending = pending[:0]

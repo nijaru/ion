@@ -32,8 +32,7 @@ const (
 	ActionTreeFork KeybindingAction = "tree.fork"
 
 	// Message
-	ActionQueueFollowUp   KeybindingAction = "message.followUp"
-	ActionDequeueMessages KeybindingAction = "message.dequeue"
+	ActionQueueFollowUp KeybindingAction = "message.followUp"
 
 	// Clipboard
 	ActionPasteImage KeybindingAction = "clipboard.pasteImage"
@@ -48,7 +47,6 @@ var DefaultKeybindings = map[KeybindingAction]string{
 	ActionToggleTools:        "ctrl+o",
 	ActionToggleNamedFilter:  "ctrl+n",
 	ActionQueueFollowUp:      "alt+enter",
-	ActionDequeueMessages:    "alt+up",
 	ActionPasteImage:         "ctrl+v",
 	ActionTreeFork:           "esc esc",
 }

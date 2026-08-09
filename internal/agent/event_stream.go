@@ -61,12 +61,36 @@ func queueMessageTexts(messages []session.Message) []string {
 	for _, message := range messages {
 		if text := strings.TrimSpace(session.MessageText(message)); text != "" {
 			texts = append(texts, text)
+			continue
+		}
+		if messageHasImage(message) {
+			texts = append(texts, "[image attachment]")
 		}
 	}
 	if len(texts) == 0 {
 		return nil
 	}
 	return texts
+}
+
+func messageHasImage(message session.Message) bool {
+	var content []session.Content
+	switch message := message.(type) {
+	case *session.UserMessage:
+		content = message.Content
+	case *session.ToolResultMessage:
+		content = message.Content
+	case *session.CustomMessage:
+		content = message.Content
+	default:
+		return false
+	}
+	for _, block := range content {
+		if _, ok := block.(session.ImageContent); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ActiveToolSnapshot is the bounded, renderable identity of a tool call that

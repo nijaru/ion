@@ -100,7 +100,7 @@ func (m Model) renderQueuedTurns() string {
 	}
 	kind, text := m.firstQueuedInput()
 	preview := compactQueuedText(text)
-	label := fmt.Sprintf("• %s (Alt+Up edit): %s", kind, preview)
+	label := fmt.Sprintf("• %s: %s", kind, preview)
 	if extra := count - 1; extra > 0 {
 		label += fmt.Sprintf(" • +%d more", extra)
 	}

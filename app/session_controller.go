@@ -303,13 +303,14 @@ func (m Model) submitBusyInput(text string, images []session.ImageContent) (Mode
 	}
 }
 
-func (m Model) queueBusyInput(text string) (Model, tea.Cmd) {
+func (m Model) queueBusyInput(text string, images []session.ImageContent) (Model, tea.Cmd) {
+	images = cloneImageAttachments(images)
 	if m.InFlight.Thinking && !m.Progress.Compacting && m.Model.Runner != nil {
 		m.resetComposerDraft()
-		return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "follow-up", text, nil)
+		return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "follow-up", text, images)
 	}
 	m.resetComposerDraft()
-	return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "next-turn", text, nil)
+	return m, busyInputCmd(m.Model.Runner, m.Model.EventGeneration, "next-turn", text, images)
 }
 
 func busyInputCmd(runner agent.Runtime, generation uint64, action, text string, images []session.ImageContent) tea.Cmd {
@@ -371,17 +372,11 @@ func (m Model) handleBusyInputResult(msg busyInputResultMsg) (Model, tea.Cmd) {
 // queueFollowUp queues a follow-up message when Alt+Enter is pressed while the agent is streaming.
 func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	text := strings.TrimSpace(m.Input.Composer.Value())
-	if text == "" {
+	images := cloneImageAttachments(m.Input.Images)
+	if text == "" && len(images) == 0 {
 		return m, nil
 	}
-	return m.queueBusyInput(text)
-}
-
-func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
-	if len(m.InFlight.QueuedSteering) == 0 && len(m.InFlight.QueuedTurns) == 0 {
-		return m, nil
-	}
-	return m, cmdError("queued input is owned by the runtime and cannot be recalled")
+	return m.queueBusyInput(text, images)
 }
 
 func cloneImageAttachments(images []session.ImageContent) []session.ImageContent {

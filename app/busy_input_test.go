@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/session"
 )
 
 func TestRouteBusyInputUsesConfiguredMode(t *testing.T) {
@@ -93,7 +94,7 @@ func TestBusyInputFollowUpSuccessUsesRuntimeCommand(t *testing.T) {
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("continue with tests")
 
-	updated, cmd := model.queueBusyInput("continue with tests")
+	updated, cmd := model.queueBusyInput("continue with tests", nil)
 	model = testModel(t, updated)
 	if cmd == nil {
 		t.Fatal("follow-up should return an asynchronous command")
@@ -106,6 +107,30 @@ func TestBusyInputFollowUpSuccessUsesRuntimeCommand(t *testing.T) {
 	}
 	if len(runner.followUps) != 1 || runner.followUps[0] != "continue with tests" {
 		t.Fatalf("follow-ups = %#v, want one submitted follow-up", runner.followUps)
+	}
+}
+
+func TestBusyInputFollowUpCarriesImageOnlyAttachment(t *testing.T) {
+	runner := &stubRunner{}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.InFlight.Thinking = true
+	model.Input.Images = []session.ImageContent{{Data: []byte("image"), MimeType: "image/png"}}
+
+	updated, cmd := model.queueFollowUp()
+	model = testModel(t, updated)
+	if cmd == nil {
+		t.Fatal("image-only follow-up should return an asynchronous command")
+	}
+	if _, followUpCmd := model.Update(cmd()); followUpCmd != nil {
+		t.Fatal("successful image-only follow-up should not emit an error command")
+	}
+	if len(runner.followUps) != 1 || runner.followUps[0] != "" {
+		t.Fatalf("follow-ups = %#v, want one empty-text follow-up", runner.followUps)
+	}
+	if len(runner.followUpImages) != 1 || len(runner.followUpImages[0]) != 1 ||
+		string(runner.followUpImages[0][0].Data) != "image" {
+		t.Fatalf("follow-up images = %#v, want one image attachment", runner.followUpImages)
 	}
 }
 

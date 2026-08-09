@@ -19,6 +19,27 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 			MultiContent: multiContent,
 			Name:         m.Name,
 		}
+		if m.Role == llm.RoleAssistant {
+			reasoning := m.BlocksReasoning()
+			compat := b.CompatSettings()
+			if compat.RequiresReasoningContentOnAssistantMessages && reasoning != "" {
+				// The upstream SDK omits empty reasoning_content on the wire;
+				// preserve meaningful replayed reasoning without fabricating a
+				// sentinel value for ordinary assistant messages.
+				msg.ReasoningContent = reasoning
+			}
+			if compat.RequiresThinkingAsText && reasoning != "" {
+				thinkingText := thinkingAsText(reasoning)
+				if len(msg.MultiContent) == 0 {
+					msg.Content = appendThinkingText(msg.Content, thinkingText)
+				} else {
+					msg.MultiContent = append([]openai.ChatMessagePart{{
+						Type: openai.ChatMessagePartTypeText,
+						Text: thinkingText,
+					}}, msg.MultiContent...)
+				}
+			}
+		}
 		calls := m.BlocksToolCalls()
 		if len(calls) > 0 {
 			msg.ToolCalls = make([]openai.ToolCall, len(calls))
@@ -241,6 +262,17 @@ func imagePartURL(part llm.ContentPart) string {
 		mimeType = "application/octet-stream"
 	}
 	return "data:" + mimeType + ";base64," + part.Data
+}
+
+func thinkingAsText(reasoning string) string {
+	return "<thinking>\n" + reasoning + "\n</thinking>"
+}
+
+func appendThinkingText(content, thinking string) string {
+	if content == "" {
+		return thinking
+	}
+	return thinking + "\n\n" + content
 }
 
 func reasoningToggleEnabled(value string) bool {

@@ -190,10 +190,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, m.updateComposer(msg)
 
-	case "alt+up":
-		m.clearPendingAction()
-		return m.recallQueuedTurns()
-
 	case "down":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 &&

@@ -599,6 +599,18 @@ func TestDefaultConvertPreservesThinkingMetadata(t *testing.T) {
 	}
 }
 
+func TestDefaultConvertPreservesToolResultError(t *testing.T) {
+	messages := DefaultConvert([]session.Message{&session.ToolResultMessage{
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content:    []session.Content{session.TextContent{Text: "failed"}},
+		IsError:    true,
+	}})
+	if len(messages) != 1 || !messages[0].IsError || messages[0].ToolID != "call-1" {
+		t.Fatalf("converted tool result = %#v, want error result", messages)
+	}
+}
+
 func TestRunLoopIsStateless(t *testing.T) {
 	// Verify RunLoop can be called with no prior state.
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {

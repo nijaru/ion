@@ -203,6 +203,29 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 	}
 }
 
+func TestConvertRequestPreservesToolResultErrors(t *testing.T) {
+	params, err := provider().convertRequest(&llm.Request{
+		Model: "claude-test",
+		Messages: []llm.Message{{
+			Role:    llm.RoleTool,
+			ToolID:  "call-1",
+			Content: "tool failed",
+			IsError: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+	if len(params.Messages) != 1 || len(params.Messages[0].Content) != 1 ||
+		params.Messages[0].Content[0].OfToolResult == nil {
+		t.Fatalf("messages = %+v, want one tool result", params.Messages)
+	}
+	isError := params.Messages[0].Content[0].OfToolResult.IsError
+	if !isError.Valid() || !isError.Value {
+		t.Fatalf("tool result is_error = %#v, want true", isError)
+	}
+}
+
 func TestIsContextOverflowMessage(t *testing.T) {
 	if !isContextOverflowMessage("Prompt is too long: max TOKENS exceeded") {
 		t.Fatal("expected mixed-case prompt/token message to match")

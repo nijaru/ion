@@ -178,7 +178,7 @@ func (p *Provider) convertContentParts(m llm.Message) []sdk.ContentBlockParamUni
 
 func (p *Provider) convertToolResultBlock(m llm.Message) sdk.ContentBlockParamUnion {
 	if !hasImageParts(m.Parts) {
-		return sdk.NewToolResultBlock(m.ToolID, m.TextContent(), false)
+		return sdk.NewToolResultBlock(m.ToolID, m.TextContent(), m.IsError)
 	}
 	content := make([]sdk.ToolResultBlockParamContentUnion, 0, len(m.Parts))
 	sawText := false
@@ -208,13 +208,13 @@ func (p *Provider) convertToolResultBlock(m llm.Message) sdk.ContentBlockParamUn
 		}
 	}
 	if len(content) == 0 {
-		return sdk.NewToolResultBlock(m.ToolID, m.TextContent(), false)
+		return sdk.NewToolResultBlock(m.ToolID, m.TextContent(), m.IsError)
 	}
 	return sdk.ContentBlockParamUnion{
 		OfToolResult: &sdk.ToolResultBlockParam{
 			ToolUseID: m.ToolID,
 			Content:   content,
-			IsError:   sdk.Bool(false),
+			IsError:   sdk.Bool(m.IsError),
 		},
 	}
 }

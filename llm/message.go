@@ -80,6 +80,7 @@ type Message struct {
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitzero"`
 	Name           string          `json:"name,omitzero"` // For tool output or identifying the assistant
 	ToolID         string          `json:"tool_id,omitzero"`
+	IsError        bool            `json:"is_error,omitzero"` // For tool results that represent failed execution
 	Calls          []Call          `json:"tool_calls,omitzero"`
 	CacheControl   *CacheControl   `json:"cache_control,omitzero"`
 	// Blocks holds structured content when available. When empty, the flat

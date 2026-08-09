@@ -76,6 +76,17 @@ func (s *queuedTurnStream) Next() (*llm.Chunk, bool) {
 func (s *queuedTurnStream) Err() error   { return nil }
 func (s *queuedTurnStream) Close() error { return nil }
 
+func TestQueueSnapshotTextsPreserveImageOnlyMessages(t *testing.T) {
+	steer, followUp, nextTurn := (QueueSnapshot{
+		Steer: []session.Message{&session.UserMessage{
+			Content: []session.Content{session.ImageContent{Data: []byte("image"), MimeType: "image/png"}},
+		}},
+	}).Texts()
+	if len(steer) != 1 || steer[0] != "[image attachment]" || followUp != nil || nextTurn != nil {
+		t.Fatalf("queue text projection = %#v/%#v/%#v, want image placeholder", steer, followUp, nextTurn)
+	}
+}
+
 func TestQueueUpdateDoesNotAliasRuntimeMessages(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()

@@ -96,9 +96,10 @@ func convertAssistant(m *session.AssistantMessage) llm.Message {
 
 func convertToolResult(m *session.ToolResultMessage) llm.Message {
 	msg := llm.Message{
-		Role:   llm.RoleTool,
-		ToolID: m.ToolCallID,
-		Name:   m.ToolName,
+		Role:    llm.RoleTool,
+		ToolID:  m.ToolCallID,
+		Name:    m.ToolName,
+		IsError: m.IsError,
 	}
 	for _, c := range m.Content {
 		switch c := c.(type) {

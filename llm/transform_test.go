@@ -32,6 +32,26 @@ func TestPrepareRequestAcceptsStructuredAssistantToolCalls(t *testing.T) {
 	}
 }
 
+func TestPrepareRequestMarksMissingToolResultsAsErrors(t *testing.T) {
+	req := &llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleAssistant, Calls: []llm.Call{{
+			ID: "call-1",
+			Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "read", Arguments: "{}"},
+		}}},
+	}}
+	prepared, err := llm.PrepareRequestForCapabilities(req, llm.DefaultCapabilities())
+	if err != nil {
+		t.Fatalf("PrepareRequestForCapabilities() error = %v", err)
+	}
+	if len(prepared.Messages) != 2 || prepared.Messages[1].Role != llm.RoleTool ||
+		!prepared.Messages[1].IsError || prepared.Messages[1].ToolID != "call-1" {
+		t.Fatalf("prepared messages = %#v, want synthesized error result", prepared.Messages)
+	}
+}
+
 func TestPrepareRequestOmitsToolsForModelWithoutToolSupport(t *testing.T) {
 	req := &llm.Request{
 		Tools:    []*llm.Spec{{Name: "read", Parameters: map[string]any{"type": "object"}}},

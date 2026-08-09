@@ -191,6 +191,39 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 	}
 }
 
+func TestConvertRequestPreservesReasoningForCompatibleReplay(t *testing.T) {
+	b := &Base{
+		Config: llm.ProviderConfig{ID: "deepseek"},
+		Compat: &llm.ProviderCompat{
+			RequiresReasoningContentOnAssistantMessages: true,
+		},
+	}
+	converted := b.ConvertRequest(&llm.Request{
+		Model: "deepseek-chat",
+		Messages: []llm.Message{{
+			Role:      llm.RoleAssistant,
+			Content:   "answer",
+			Reasoning: "think first",
+		}},
+	})
+	if got := converted.Messages[0].ReasoningContent; got != "think first" {
+		t.Fatalf("reasoning_content = %q, want think first", got)
+	}
+
+	b.Compat = &llm.ProviderCompat{RequiresThinkingAsText: true}
+	converted = b.ConvertRequest(&llm.Request{
+		Model: "local-reasoning",
+		Messages: []llm.Message{{
+			Role:      llm.RoleAssistant,
+			Content:   "answer",
+			Reasoning: "think first",
+		}},
+	})
+	if got, want := converted.Messages[0].Content, "<thinking>\nthink first\n</thinking>\n\nanswer"; got != want {
+		t.Fatalf("thinking-as-text content = %q, want %q", got, want)
+	}
+}
+
 func containsAll(s string, needles ...string) bool {
 	for _, needle := range needles {
 		if !strings.Contains(s, needle) {

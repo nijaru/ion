@@ -153,27 +153,30 @@ func (s *stubSession) Close() error {
 // --- stubRunner implements agent.Runtime ---
 
 type stubRunner struct {
-	aborts       int
-	abortErr     error
-	turnToken    uint64
-	abortTokens  []uint64
-	steers       []string
-	followUps    []string
-	steerErr     error
-	followUpErr  error
-	nextTurns    []string
-	nextTurnErr  error
-	compacts     int
-	compactErr   error
-	promptTexts  []string
-	promptImages [][]session.ImageContent
-	promptErr    error
-	navigates    int
-	navigateID   string
-	navigateOpts agent.NavigateOptions
-	navigateErr  error
-	thinking     []session.ThinkingLevel
-	thinkingErr  error
+	aborts         int
+	abortErr       error
+	turnToken      uint64
+	abortTokens    []uint64
+	steers         []string
+	steerImages    [][]session.ImageContent
+	followUps      []string
+	followUpImages [][]session.ImageContent
+	steerErr       error
+	followUpErr    error
+	nextTurns      []string
+	nextTurnImages [][]session.ImageContent
+	nextTurnErr    error
+	compacts       int
+	compactErr     error
+	promptTexts    []string
+	promptImages   [][]session.ImageContent
+	promptErr      error
+	navigates      int
+	navigateID     string
+	navigateOpts   agent.NavigateOptions
+	navigateErr    error
+	thinking       []session.ThinkingLevel
+	thinkingErr    error
 }
 
 func (r *stubRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
@@ -186,18 +189,21 @@ func (r *stubRunner) Prompt(_ context.Context, text string, images ...session.Im
 	return nil, r.promptErr
 }
 
-func (r *stubRunner) Steer(text string, _ ...session.ImageContent) error {
+func (r *stubRunner) Steer(text string, images ...session.ImageContent) error {
 	r.steers = append(r.steers, text)
+	r.steerImages = append(r.steerImages, cloneImageAttachments(images))
 	return r.steerErr
 }
 
-func (r *stubRunner) FollowUp(text string, _ ...session.ImageContent) error {
+func (r *stubRunner) FollowUp(text string, images ...session.ImageContent) error {
 	r.followUps = append(r.followUps, text)
+	r.followUpImages = append(r.followUpImages, cloneImageAttachments(images))
 	return r.followUpErr
 }
 
-func (r *stubRunner) NextTurn(text string, _ ...session.ImageContent) error {
+func (r *stubRunner) NextTurn(text string, images ...session.ImageContent) error {
 	r.nextTurns = append(r.nextTurns, text)
+	r.nextTurnImages = append(r.nextTurnImages, cloneImageAttachments(images))
 	return r.nextTurnErr
 }
 
