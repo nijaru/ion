@@ -511,6 +511,23 @@ func summaryUsage(usage llm.Usage) session.Usage {
 	}
 }
 
+func summaryResponseError(chunks []*llm.Chunk, operation string) error {
+	for _, chunk := range chunks {
+		if chunk == nil {
+			continue
+		}
+		switch chunk.StopReason {
+		case llm.StopReasonError, llm.StopReasonAborted:
+			detail := strings.TrimSpace(chunk.ErrorMessage)
+			if detail == "" {
+				detail = string(chunk.StopReason)
+			}
+			return fmt.Errorf("%s response failed: %s", operation, detail)
+		}
+	}
+	return nil
+}
+
 // CompactionResult holds the result of a compaction operation.
 type CompactionResult struct {
 	Summary          string
@@ -812,6 +829,10 @@ func GenerateSummary(
 		return SummaryResult{}, fmt.Errorf("summarization failed: %w", err)
 	}
 
+	if err := summaryResponseError(chunks, "summarization"); err != nil {
+		return SummaryResult{}, err
+	}
+
 	// Usage is cumulative; retain the latest provider report rather than
 	// summing repeated chunks. Failed replay-safe attempts were discarded by
 	// CollectStreamWithRetry before these chunks became visible here.
@@ -908,6 +929,10 @@ func GenerateTurnPrefixSummary(
 			}
 		}
 		return SummaryResult{}, fmt.Errorf("turn prefix summarization failed: %w", err)
+	}
+
+	if err := summaryResponseError(chunks, "turn prefix summarization"); err != nil {
+		return SummaryResult{}, err
 	}
 
 	var summary strings.Builder
