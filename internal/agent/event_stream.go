@@ -205,6 +205,79 @@ func (c *Controller) observeRuntimeEventLocked(event session.Event, persisted bo
 	}
 }
 
+func cloneMessagesForSnapshot(messages []session.Message) []session.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	cloned := make([]session.Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = cloneMessageForSnapshot(message)
+	}
+	return cloned
+}
+
+func cloneMessageForSnapshot(message session.Message) session.Message {
+	switch message := message.(type) {
+	case *session.UserMessage:
+		if message == nil {
+			return (*session.UserMessage)(nil)
+		}
+		cloned := *message
+		cloned.Content = cloneContentsForSnapshot(message.Content)
+		return &cloned
+	case *session.AssistantMessage:
+		return cloneAssistantForSnapshot(message)
+	case *session.ToolResultMessage:
+		if message == nil {
+			return (*session.ToolResultMessage)(nil)
+		}
+		cloned := *message
+		cloned.Content = cloneContentsForSnapshot(message.Content)
+		cloned.Details = append([]byte(nil), message.Details...)
+		return &cloned
+	case *session.CustomMessage:
+		if message == nil {
+			return (*session.CustomMessage)(nil)
+		}
+		cloned := *message
+		cloned.Content = cloneContentsForSnapshot(message.Content)
+		cloned.Details = append([]byte(nil), message.Details...)
+		return &cloned
+	default:
+		return nil
+	}
+}
+
+func cloneContentsForSnapshot(contents []session.Content) []session.Content {
+	if len(contents) == 0 {
+		return nil
+	}
+	cloned := make([]session.Content, len(contents))
+	for i, content := range contents {
+		switch content := content.(type) {
+		case session.TextContent:
+			cloned[i] = content
+		case session.ThinkingContent:
+			cloned[i] = content
+		case session.ImageContent:
+			image := content
+			image.Data = append([]byte(nil), content.Data...)
+			cloned[i] = image
+		case *session.ToolCall:
+			if content == nil {
+				cloned[i] = (*session.ToolCall)(nil)
+				continue
+			}
+			call := *content
+			call.Arguments = cloneJSONMap(content.Arguments)
+			cloned[i] = &call
+		default:
+			cloned[i] = nil
+		}
+	}
+	return cloned
+}
+
 func cloneAssistantForSnapshot(assistant *session.AssistantMessage) *session.AssistantMessage {
 	if assistant == nil {
 		return nil
@@ -358,9 +431,9 @@ func (h *Controller) subscribeDirect(ctx context.Context, after EventCursor) (*E
 			ActiveTools:      append([]string(nil), h.active...),
 			PendingApprovals: pendingApprovals,
 			Queues: QueueSnapshot{
-				Steer:    append([]session.Message(nil), h.steer...),
-				FollowUp: append([]session.Message(nil), h.followUp...),
-				NextTurn: append([]session.Message(nil), h.nextTurn...),
+				Steer:    cloneMessagesForSnapshot(h.steer),
+				FollowUp: cloneMessagesForSnapshot(h.followUp),
+				NextTurn: cloneMessagesForSnapshot(h.nextTurn),
 			},
 		}
 		leafID := snapshot.LeafID

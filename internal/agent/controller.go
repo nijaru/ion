@@ -1264,15 +1264,9 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 		h.mu.Unlock()
 		return fmt.Errorf("queue next turn: %w", err)
 	}
-	steer := make([]session.Message, len(h.steer))
-	copy(steer, h.steer)
-	followUp := make([]session.Message, len(h.followUp))
-	copy(followUp, h.followUp)
-	nextTurn := make([]session.Message, len(h.nextTurn))
-	copy(nextTurn, h.nextTurn)
 	// Publish while holding h.mu so an exclusive operation cannot publish
 	// RuntimeReady between queue acceptance and this authoritative projection.
-	h.emitLocked(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
+	h.emitLocked(h.queueUpdateLocked())
 	h.mu.Unlock()
 	h.wakeNextTurnStart()
 	return nil
@@ -1343,9 +1337,9 @@ func userMessageImages(user *session.UserMessage) []session.ImageContent {
 // h.mu; publishing under that same lock linearizes queue state with the event.
 func (h *Controller) queueUpdateLocked() session.QueueUpdate {
 	return session.QueueUpdate{
-		Steer:    append([]session.Message(nil), h.steer...),
-		FollowUp: append([]session.Message(nil), h.followUp...),
-		NextTurn: append([]session.Message(nil), h.nextTurn...),
+		Steer:    cloneMessagesForSnapshot(h.steer),
+		FollowUp: cloneMessagesForSnapshot(h.followUp),
+		NextTurn: cloneMessagesForSnapshot(h.nextTurn),
 	}
 }
 

@@ -76,6 +76,54 @@ func (s *queuedTurnStream) Next() (*llm.Chunk, bool) {
 func (s *queuedTurnStream) Err() error   { return nil }
 func (s *queuedTurnStream) Close() error { return nil }
 
+func TestQueueUpdateDoesNotAliasRuntimeMessages(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
+	defer h.Close()
+	h.mu.Lock()
+	h.phase = PhaseStreaming
+	h.mu.Unlock()
+
+	updates := make(chan session.QueueUpdate, 1)
+	unsubscribe := watchEvents(t, h, func(event session.Event) {
+		if update, ok := event.(session.QueueUpdate); ok && len(update.NextTurn) == 1 {
+			updates <- update
+		}
+	})
+	defer unsubscribe()
+
+	if err := h.NextTurn("original"); err != nil {
+		t.Fatalf("NextTurn: %v", err)
+	}
+	select {
+	case update := <-updates:
+		queued, ok := update.NextTurn[0].(*session.UserMessage)
+		if !ok {
+			t.Fatalf("queued update message = %T, want UserMessage", update.NextTurn[0])
+		}
+		queued.Content[0] = session.TextContent{Text: "mutated outside runtime"}
+	case <-time.After(time.Second):
+		t.Fatal("did not observe QueueUpdate")
+	}
+
+	snapshotSub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotSub.Snapshot.Queues.NextTurn) != 1 {
+		snapshotSub.Close()
+		t.Fatalf("snapshot next-turn queue = %#v, want one item", snapshotSub.Snapshot.Queues.NextTurn)
+	}
+	snapshotUser := snapshotSub.Snapshot.Queues.NextTurn[0].(*session.UserMessage)
+	snapshotUser.Content[0] = session.TextContent{Text: "snapshot mutation"}
+	snapshotSub.Close()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if got := session.MessageText(h.nextTurn[0]); got != "original" {
+		t.Fatalf("runtime queue text = %q after event/snapshot mutation, want original", got)
+	}
+}
+
 func TestControllerNextTurnStartsQueuedPromptsAfterSettlement(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
