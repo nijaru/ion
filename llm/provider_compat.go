@@ -48,6 +48,10 @@ type ProviderCompat struct {
 	// SupportsReasoningEffort indicates whether the provider supports reasoning_effort.
 	SupportsReasoningEffort bool
 
+	// SupportsStreamOptions indicates whether streaming requests may include
+	// stream_options, including the optional usage chunk.
+	SupportsStreamOptions bool
+
 	// MaxTokensField is the JSON field name for max tokens.
 	// "max_tokens" or "max_completion_tokens".
 	MaxTokensField string
@@ -79,6 +83,7 @@ func DefaultProviderCompat() ProviderCompat {
 	return ProviderCompat{
 		ThinkingFormat:          ThinkingFormatOpenAI,
 		SupportsReasoningEffort: true,
+		SupportsStreamOptions:   true,
 		MaxTokensField:          "max_completion_tokens",
 		SupportsStore:           true,
 		SupportsDeveloperRole:   true,
@@ -165,6 +170,9 @@ func MergeCompat(detected, override ProviderCompat) ProviderCompat {
 	if override.SupportsReasoningEffort {
 		result.SupportsReasoningEffort = true
 	}
+	if override.SupportsStreamOptions {
+		result.SupportsStreamOptions = true
+	}
 	if override.RequiresToolResultName {
 		result.RequiresToolResultName = true
 	}
@@ -178,5 +186,49 @@ func MergeCompat(detected, override ProviderCompat) ProviderCompat {
 		result.RequiresReasoningContentOnAssistantMessages = true
 	}
 
+	return result
+}
+
+// MergeCompatFlags applies nullable model-level compatibility overrides. Unlike
+// MergeCompat, false is meaningful here: a model can explicitly disable a
+// feature that the provider usually supports.
+func MergeCompatFlags(detected ProviderCompat, flags *CompatFlags) ProviderCompat {
+	if flags == nil {
+		return detected
+	}
+	result := detected
+	if flags.SupportsStore != nil {
+		result.SupportsStore = *flags.SupportsStore
+	}
+	if flags.SupportsDeveloperRole != nil {
+		result.SupportsDeveloperRole = *flags.SupportsDeveloperRole
+	}
+	if flags.SupportsReasoningEffort != nil {
+		result.SupportsReasoningEffort = *flags.SupportsReasoningEffort
+	}
+	if flags.SupportsStreamOptions != nil {
+		result.SupportsStreamOptions = *flags.SupportsStreamOptions
+	}
+	if flags.SupportsStrictMode != nil {
+		result.SupportsStrictMode = *flags.SupportsStrictMode
+	}
+	if flags.RequiresToolResultName != nil {
+		result.RequiresToolResultName = *flags.RequiresToolResultName
+	}
+	if flags.RequiresAssistantAfterToolResult != nil {
+		result.RequiresAssistantAfterToolResult = *flags.RequiresAssistantAfterToolResult
+	}
+	if flags.RequiresThinkingAsText != nil {
+		result.RequiresThinkingAsText = *flags.RequiresThinkingAsText
+	}
+	if flags.RequiresReasoningContentOnAssistantMessages != nil {
+		result.RequiresReasoningContentOnAssistantMessages = *flags.RequiresReasoningContentOnAssistantMessages
+	}
+	if flags.MaxTokensField != "" {
+		result.MaxTokensField = flags.MaxTokensField
+	}
+	if flags.ThinkingFormat != ThinkingFormatNone {
+		result.ThinkingFormat = flags.ThinkingFormat
+	}
 	return result
 }

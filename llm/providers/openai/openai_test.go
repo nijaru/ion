@@ -181,20 +181,24 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 	}
 
 	converted := p.ConvertRequest(req)
-	if len(converted.Messages) != 1 {
-		t.Fatalf("messages = %d, want 1", len(converted.Messages))
+	if len(converted.Messages) != 2 {
+		t.Fatalf("messages = %d, want tool result plus attached image user message", len(converted.Messages))
 	}
-	msg := converted.Messages[0]
-	if msg.Content != "" {
-		t.Fatalf("content = %q, want empty when multi-content is set", msg.Content)
+	toolMsg := converted.Messages[0]
+	if toolMsg.Content != "Read image file [image/png]" {
+		t.Fatalf("tool content = %q, want text-only tool result", toolMsg.Content)
 	}
-	if msg.ToolCallID != "call-1" {
-		t.Fatalf("tool call id = %q, want call-1", msg.ToolCallID)
+	if toolMsg.ToolCallID != "call-1" {
+		t.Fatalf("tool call id = %q, want call-1", toolMsg.ToolCallID)
 	}
-	if len(msg.MultiContent) != 2 {
-		t.Fatalf("multi-content = %+v, want text and image", msg.MultiContent)
+	if len(toolMsg.MultiContent) != 0 {
+		t.Fatalf("tool multi-content = %+v, want no image parts", toolMsg.MultiContent)
 	}
-	if got := msg.MultiContent[0].Text; got != "Read image file [image/png]" {
+	msg := converted.Messages[1]
+	if msg.Role != string(llm.RoleUser) || len(msg.MultiContent) != 2 {
+		t.Fatalf("attached image message = %+v, want user text and image", msg)
+	}
+	if got := msg.MultiContent[0].Text; got != "Attached image(s) from tool result:" {
 		t.Fatalf("text part = %q", got)
 	}
 	image := msg.MultiContent[1].ImageURL
@@ -202,19 +206,93 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 		t.Fatalf("image part = %+v", msg.MultiContent[1])
 	}
 
-	raw, err := json.Marshal(msg)
+	raw, err := json.Marshal(toolMsg)
 	if err != nil {
 		t.Fatalf("marshal message: %v", err)
 	}
 	if got := string(raw); !containsAll(
 		got,
-		`"content":[`,
-		`"image_url"`,
+		`"content":"Read image file [image/png]"`,
 		`"tool_call_id":"call-1"`,
 	) {
-		t.Fatalf("marshaled message = %s", got)
+		t.Fatalf("marshaled tool message = %s", got)
+	}
+
+	raw, err = json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal image message: %v", err)
+	}
+	if !containsAll(string(raw), `"role":"user"`, `"content":[`, `"image_url"`) {
+		t.Fatalf("marshaled image message = %s", raw)
 	}
 }
+
+func TestConvertRequestAppliesModelCompatibilityOverrides(t *testing.T) {
+	falseValue := false
+	p := NewProvider(llm.ProviderConfig{
+		Models: []llm.Model{{
+			ID: "custom-model",
+			Capabilities: &llm.Capabilities{
+				Reasoning: llm.ReasoningCapabilities{
+					Kind:       llm.ReasoningKindEffort,
+					Efforts:    []string{"low", "balanced"},
+					CanDisable: true,
+				},
+			},
+			ThinkingLevelMap: map[string]string{"low": "balanced", "off": "none"},
+			Compat: &llm.CompatFlags{
+				SupportsDeveloperRole:  &falseValue,
+				SupportsStreamOptions:  &falseValue,
+				RequiresToolResultName: boolPointer(true),
+				MaxTokensField:         "max_tokens",
+			},
+		}},
+	})
+	converted := p.ConvertRequest(&llm.Request{
+		Model:           "custom-model",
+		MaxTokens:       123,
+		ReasoningEffort: "low",
+		Messages: []llm.Message{
+			{Role: llm.RoleDeveloper, Content: "instructions"},
+			{Role: llm.RoleTool, ToolID: "call-1", Name: "lookup", Content: "result"},
+		},
+	})
+	if converted.StreamOptions != nil {
+		t.Fatal("stream options present on non-streaming request")
+	}
+	streaming := p.ConvertStreamingRequest(&llm.Request{Model: "custom-model"})
+	if streaming.StreamOptions != nil {
+		t.Fatal("stream options present despite model override")
+	}
+	if converted.MaxTokens != 123 || converted.MaxCompletionTokens != 0 {
+		t.Fatalf(
+			"max token fields = max_tokens:%d max_completion_tokens:%d",
+			converted.MaxTokens,
+			converted.MaxCompletionTokens,
+		)
+	}
+	if got := converted.Messages[0].Role; got != string(llm.RoleSystem) {
+		t.Fatalf("developer role = %q, want system fallback", got)
+	}
+	if got := converted.Messages[1].Name; got != "lookup" {
+		t.Fatalf("tool result name = %q, want lookup", got)
+	}
+	if got := converted.ReasoningEffort; got != "balanced" {
+		t.Fatalf("request reasoning field = %q, want mapped balanced", got)
+	}
+	off := p.ConvertRequest(&llm.Request{Model: "custom-model"})
+	if got := off.ReasoningEffort; got != "none" {
+		t.Fatalf("default reasoning field = %q, want mapped none", got)
+	}
+	if got := converted.ChatTemplateKwargs; got != nil {
+		t.Fatalf("chat template kwargs = %#v, want nil for default OpenAI format", got)
+	}
+	if got := converted.Messages; len(got) != 2 {
+		t.Fatalf("messages = %d, want 2", len(got))
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestConvertRequestPreservesReasoningForCompatibleReplay(t *testing.T) {
 	b := &Base{

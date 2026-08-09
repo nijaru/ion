@@ -89,6 +89,29 @@ func TestDetectCompatMoonshot(t *testing.T) {
 	}
 }
 
+func TestMergeCompatFlagsCanDisableDetectedFeatures(t *testing.T) {
+	detected := DefaultProviderCompat()
+	falseValue := false
+	flags := &CompatFlags{
+		SupportsDeveloperRole:            &falseValue,
+		SupportsStreamOptions:            &falseValue,
+		RequiresToolResultName:           &falseValue,
+		RequiresAssistantAfterToolResult: &falseValue,
+		MaxTokensField:                   "max_tokens",
+		ThinkingFormat:                   ThinkingFormatTogether,
+	}
+	merged := MergeCompatFlags(detected, flags)
+	if merged.SupportsDeveloperRole || merged.SupportsStreamOptions {
+		t.Fatalf("disabled features remained enabled: %+v", merged)
+	}
+	if merged.RequiresToolResultName || merged.RequiresAssistantAfterToolResult {
+		t.Fatalf("disabled requirements remained enabled: %+v", merged)
+	}
+	if merged.MaxTokensField != "max_tokens" || merged.ThinkingFormat != ThinkingFormatTogether {
+		t.Fatalf("model overrides not applied: %+v", merged)
+	}
+}
+
 func TestMergeCompat(t *testing.T) {
 	detected := DefaultProviderCompat()
 	override := ProviderCompat{

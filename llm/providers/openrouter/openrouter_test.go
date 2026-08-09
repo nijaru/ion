@@ -302,6 +302,9 @@ func TestStreamRequestSetsStreamTrue(t *testing.T) {
 	if !ok || stream != true {
 		t.Fatalf("stream = %v (present=%v), want true", stream, ok)
 	}
+	if _, ok := parsed["stream_options"]; !ok {
+		t.Fatal("stream_options missing from streaming request")
+	}
 }
 
 func TestStreamUsageChunkIncludesCalculatedCost(t *testing.T) {
@@ -484,5 +487,8 @@ func TestGenerateRequestDoesNotSetStreamTrue(t *testing.T) {
 	stream, exists := parsed["stream"]
 	if exists && stream == true {
 		t.Fatal("Generate request should not set stream: true")
+	}
+	if _, exists := parsed["stream_options"]; exists {
+		t.Fatal("Generate request should not set stream_options")
 	}
 }

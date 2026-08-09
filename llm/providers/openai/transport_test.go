@@ -46,6 +46,17 @@ func (t *responseTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}, nil
 }
 
+func TestStreamingOptionsAreLimitedToStreamingRequests(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{APIKey: "test", APIEndpoint: "https://example.test/v1"})
+	req := &llm.Request{Model: "test", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}}
+	if got := p.ConvertRequest(req).StreamOptions; got != nil {
+		t.Fatal("non-streaming request includes stream options")
+	}
+	if got := p.ConvertStreamingRequest(req).StreamOptions; got == nil || !got.IncludeUsage {
+		t.Fatalf("streaming options = %#v, want include_usage", got)
+	}
+}
+
 func TestRequestTransportUsedForGenerateAndStream(t *testing.T) {
 	transport := &responseTransport{responses: []string{
 		`{"choices":[{"message":{"content":"generated"}}],"usage":{}}`,

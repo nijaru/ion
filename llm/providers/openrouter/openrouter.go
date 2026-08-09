@@ -252,10 +252,13 @@ type openRouterReasoning struct {
 
 // buildRequest builds an OpenRouter-compatible request struct with nested
 // reasoning format. The caller owns Stream and other provider-agnostic fields.
-func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
+func (p *Provider) buildRequest(req *llm.Request, streaming bool) openRouterRequest {
 	base := p.Base.ConvertRequest(req)
+	if streaming {
+		base = p.Base.ConvertStreamingRequest(req)
+	}
 
-	effort := req.ReasoningEffort
+	effort := p.Base.ReasoningEffortForModel(req.Model, req.ReasoningEffort)
 	caps := llm.CapabilitiesForRequest(req, p.Base.Capabilities(req.Model))
 
 	orReq := openRouterRequest{
@@ -290,12 +293,12 @@ func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 
 // buildAndMarshalRequest builds a non-streaming request and marshals it.
 func (p *Provider) buildAndMarshalRequest(req *llm.Request) ([]byte, error) {
-	return json.Marshal(p.buildRequest(req))
+	return json.Marshal(p.buildRequest(req, false))
 }
 
 // buildAndMarshalRequestStream builds a streaming request and marshals it.
 func (p *Provider) buildAndMarshalRequestStream(req *llm.Request) ([]byte, error) {
-	orReq := p.buildRequest(req)
+	orReq := p.buildRequest(req, true)
 	orReq.Stream = true
 	return json.Marshal(orReq)
 }

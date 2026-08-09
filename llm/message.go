@@ -472,19 +472,26 @@ type Model struct {
 	Capabilities        *Capabilities     `json:"capabilities,omitzero"            toml:"capabilities,omitzero"`
 	// ThinkingLevelMap maps thinking levels to provider-specific values.
 	// Missing keys use provider defaults. Empty map means no thinking support.
-	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero"      toml:"thinking_level_map,omitzero"`
+	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero" toml:"thinking_level_map,omitzero"`
 	// Compat holds compatibility flags for OpenAI-compatible APIs.
-	Compat *CompatFlags `json:"compat,omitzero"                  toml:"compat,omitzero"`
+	Compat *CompatFlags `json:"compat,omitzero" toml:"compat,omitzero"`
 }
 
 // CompatFlags holds compatibility overrides for OpenAI-compatible APIs.
 type CompatFlags struct {
-	SupportsStore           *bool `json:"supports_store,omitzero"            toml:"supports_store,omitzero"`
-	SupportsDeveloperRole   *bool `json:"supports_developer_role,omitzero"   toml:"supports_developer_role,omitzero"`
-	SupportsReasoningEffort *bool `json:"supports_reasoning_effort,omitzero" toml:"supports_reasoning_effort,omitzero"`
-	SupportsStreamOptions   *bool `json:"supports_stream_options,omitzero"   toml:"supports_stream_options,omitzero"`
-	SupportsVision          *bool `json:"supports_vision,omitzero"           toml:"supports_vision,omitzero"`
-	SupportsToolChoice      *bool `json:"supports_tool_choice,omitzero"      toml:"supports_tool_choice,omitzero"`
+	SupportsStore                               *bool          `json:"supports_store,omitzero"                                   toml:"supports_store,omitzero"`
+	SupportsDeveloperRole                       *bool          `json:"supports_developer_role,omitzero"                          toml:"supports_developer_role,omitzero"`
+	SupportsReasoningEffort                     *bool          `json:"supports_reasoning_effort,omitzero"                        toml:"supports_reasoning_effort,omitzero"`
+	SupportsStreamOptions                       *bool          `json:"supports_stream_options,omitzero"                          toml:"supports_stream_options,omitzero"`
+	SupportsVision                              *bool          `json:"supports_vision,omitzero"                                  toml:"supports_vision,omitzero"`
+	SupportsToolChoice                          *bool          `json:"supports_tool_choice,omitzero"                             toml:"supports_tool_choice,omitzero"`
+	SupportsStrictMode                          *bool          `json:"supports_strict_mode,omitzero"                             toml:"supports_strict_mode,omitzero"`
+	RequiresToolResultName                      *bool          `json:"requires_tool_result_name,omitzero"                        toml:"requires_tool_result_name,omitzero"`
+	RequiresAssistantAfterToolResult            *bool          `json:"requires_assistant_after_tool_result,omitzero"             toml:"requires_assistant_after_tool_result,omitzero"`
+	RequiresThinkingAsText                      *bool          `json:"requires_thinking_as_text,omitzero"                        toml:"requires_thinking_as_text,omitzero"`
+	RequiresReasoningContentOnAssistantMessages *bool          `json:"requires_reasoning_content_on_assistant_messages,omitzero" toml:"requires_reasoning_content_on_assistant_messages,omitzero"`
+	MaxTokensField                              string         `json:"max_tokens_field,omitzero"                                 toml:"max_tokens_field,omitzero"`
+	ThinkingFormat                              ThinkingFormat `json:"thinking_format,omitzero"                                  toml:"thinking_format,omitzero"`
 }
 
 // ModelRouting configures OpenRouter provider routing for a specific model.

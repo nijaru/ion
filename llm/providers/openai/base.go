@@ -35,6 +35,38 @@ func (b *Base) CompatSettings() llm.ProviderCompat {
 	return llm.DetectCompat(string(b.Config.ID), b.Config.APIEndpoint)
 }
 
+// CompatSettingsForModel resolves provider compatibility plus nullable model
+// overrides. Model-level false values must be preserved because a model can be
+// stricter than the endpoint it is served through.
+func (b *Base) CompatSettingsForModel(model string) llm.ProviderCompat {
+	compat := b.CompatSettings()
+	for _, configured := range b.Config.Models {
+		if configured.ID == model {
+			return llm.MergeCompatFlags(compat, configured.Compat)
+		}
+	}
+	return compat
+}
+
+// ReasoningEffortForModel maps Ion's user-facing effort to a provider-native
+// value when the model declares a thinking_level_map.
+func (b *Base) ReasoningEffortForModel(model, effort string) string {
+	for _, configured := range b.Config.Models {
+		if configured.ID != model || configured.ThinkingLevelMap == nil {
+			continue
+		}
+		lookup := effort
+		if lookup == "" {
+			lookup = "off"
+		}
+		if mapped, ok := configured.ThinkingLevelMap[lookup]; ok {
+			return mapped
+		}
+		break
+	}
+	return effort
+}
+
 // ID returns the unique identifier for this provider.
 func (b *Base) ID() string {
 	return string(b.Config.ID)
@@ -122,7 +154,7 @@ func (b *Base) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	if prepared.Transport != nil && b.clientFactory != nil {
 		client = b.clientFactory(prepared.Transport)
 	}
-	stream, err := client.CreateChatCompletionStream(ctx, b.ConvertRequest(prepared))
+	stream, err := client.CreateChatCompletionStream(ctx, b.ConvertStreamingRequest(prepared))
 	if err != nil {
 		return nil, err
 	}

@@ -8,12 +8,87 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// ConvertRequest transforms the unified Request into OpenAI's format.
+// ConvertRequest transforms the unified Request into a non-streaming OpenAI
+// request. Stream-only options are added by ConvertStreamingRequest.
 func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
-	compat := b.CompatSettings()
+	return b.convertRequest(req, false)
+}
+
+// ConvertStreamingRequest transforms the unified Request into an OpenAI
+// streaming request, including usage options when the model supports them.
+func (b *Base) ConvertStreamingRequest(req *llm.Request) openai.ChatCompletionRequest {
+	return b.convertRequest(req, true)
+}
+
+func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompletionRequest {
+	compat := b.CompatSettingsForModel(req.Model)
+	caps := llm.CapabilitiesForRequest(req, b.Capabilities(req.Model))
 	messages := make([]openai.ChatCompletionMessage, 0, len(req.Messages))
 	lastRole := ""
-	for _, m := range req.Messages {
+	for i := 0; i < len(req.Messages); i++ {
+		m := req.Messages[i]
+		if m.Role == llm.RoleTool {
+			var imageParts []openai.ChatMessagePart
+			for ; i < len(req.Messages) && req.Messages[i].Role == llm.RoleTool; i++ {
+				tool := req.Messages[i]
+				content := tool.TextContent()
+				if content == "" {
+					if hasImageParts(tool.Parts) {
+						content = "(see attached image)"
+					} else {
+						content = "(no tool output)"
+					}
+				}
+				msg := openai.ChatCompletionMessage{
+					Role:       string(llm.RoleTool),
+					Content:    content,
+					ToolCallID: tool.ToolID,
+				}
+				if compat.RequiresToolResultName {
+					msg.Name = tool.Name
+				}
+				messages = append(messages, msg)
+				if caps.SupportsImages() {
+					for _, part := range tool.Parts {
+						if part.Type != llm.ContentPartImage {
+							continue
+						}
+						if imageURL := imagePartURL(part); imageURL != "" {
+							imageParts = append(imageParts, openai.ChatMessagePart{
+								Type: openai.ChatMessagePartTypeImageURL,
+								ImageURL: &openai.ChatMessageImageURL{
+									URL:    imageURL,
+									Detail: openai.ImageURLDetailAuto,
+								},
+							})
+						}
+					}
+				}
+			}
+			i--
+			if len(imageParts) > 0 {
+				if compat.RequiresAssistantAfterToolResult {
+					messages = append(messages, openai.ChatCompletionMessage{
+						Role:    string(llm.RoleAssistant),
+						Content: "I have processed the tool results.",
+					})
+				}
+				parts := make([]openai.ChatMessagePart, 0, len(imageParts)+1)
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeText,
+					Text: "Attached image(s) from tool result:",
+				})
+				parts = append(parts, imageParts...)
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:         string(llm.RoleUser),
+					MultiContent: parts,
+				})
+				lastRole = string(llm.RoleUser)
+			} else {
+				lastRole = string(llm.RoleTool)
+			}
+			continue
+		}
 		if compat.RequiresAssistantAfterToolResult && lastRole == string(llm.RoleTool) && m.Role == llm.RoleUser {
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role:    string(llm.RoleAssistant),
@@ -66,9 +141,6 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 				}
 			}
 		}
-		if m.Role == llm.RoleTool {
-			msg.ToolCallID = m.ToolID
-		}
 		messages = append(messages, msg)
 		lastRole = role
 	}
@@ -88,12 +160,13 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 		}
 	}
 
-	caps := llm.CapabilitiesForRequest(req, b.Capabilities(req.Model))
 	cr := openai.ChatCompletionRequest{
-		Model:         req.Model,
-		Messages:      messages,
-		Tools:         tools,
-		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+		Model:    req.Model,
+		Messages: messages,
+		Tools:    tools,
+	}
+	if streaming && compat.SupportsStreamOptions {
+		cr.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
 	}
 
 	// Use ProviderCompat to determine max tokens field
@@ -144,11 +217,14 @@ func (b *Base) applyReasoningFormat(
 	caps llm.Capabilities,
 	compat llm.ProviderCompat,
 ) {
+	effort := b.ReasoningEffortForModel(req.Model, req.ReasoningEffort)
+	supportsEffort := caps.SupportsReasoningEffort(req.ReasoningEffort) || caps.SupportsReasoningEffort(effort)
+	supportsToggle := caps.SupportsReasoningToggle(req.ReasoningEffort) || caps.SupportsReasoningToggle(effort)
 	switch compat.ThinkingFormat {
 	case llm.ThinkingFormatZai, llm.ThinkingFormatQwen:
 		if caps.ReasoningCaps().Kind == llm.ReasoningKindBoolean {
 			cr.ChatTemplateKwargs = map[string]any{
-				"enable_thinking":   reasoningToggleEnabled(req.ReasoningEffort),
+				"enable_thinking":   reasoningToggleEnabled(effort),
 				"preserve_thinking": true,
 			}
 		}
@@ -156,7 +232,7 @@ func (b *Base) applyReasoningFormat(
 	case llm.ThinkingFormatQwenChatTemplate:
 		if caps.ReasoningCaps().Kind == llm.ReasoningKindBoolean {
 			cr.ChatTemplateKwargs = map[string]any{
-				"enable_thinking":   reasoningToggleEnabled(req.ReasoningEffort),
+				"enable_thinking":   reasoningToggleEnabled(effort),
 				"preserve_thinking": true,
 			}
 		}
@@ -165,19 +241,19 @@ func (b *Base) applyReasoningFormat(
 		if caps.ReasoningCaps().Kind == llm.ReasoningKindEffort {
 			cr.ChatTemplateKwargs = map[string]any{
 				"thinking": map[string]any{
-					"type": reasoningToggleEnabled(req.ReasoningEffort),
+					"type": reasoningToggleEnabled(effort),
 				},
 			}
-			if req.ReasoningEffort != "" && reasoningToggleEnabled(req.ReasoningEffort) {
-				cr.ReasoningEffort = req.ReasoningEffort
+			if effort != "" && reasoningToggleEnabled(effort) {
+				cr.ReasoningEffort = effort
 			}
 		}
 
 	case llm.ThinkingFormatOpenRouter:
 		// OpenRouter uses nested reasoning object - handled by the OpenRouter provider
 		// For now, we just pass through the reasoning effort
-		if caps.SupportsReasoningEffort(req.ReasoningEffort) {
-			cr.ReasoningEffort = req.ReasoningEffort
+		if supportsEffort {
+			cr.ReasoningEffort = effort
 		}
 
 	case llm.ThinkingFormatTogether:
@@ -185,24 +261,22 @@ func (b *Base) applyReasoningFormat(
 		if caps.ReasoningCaps().Kind == llm.ReasoningKindEffort {
 			cr.ChatTemplateKwargs = map[string]any{
 				"reasoning": map[string]any{
-					"enabled": reasoningToggleEnabled(req.ReasoningEffort),
+					"enabled": reasoningToggleEnabled(effort),
 				},
 			}
-			if req.ReasoningEffort != "" && reasoningToggleEnabled(req.ReasoningEffort) &&
-				compat.SupportsReasoningEffort {
-				cr.ReasoningEffort = req.ReasoningEffort
+			if effort != "" && reasoningToggleEnabled(effort) && compat.SupportsReasoningEffort {
+				cr.ReasoningEffort = effort
 			}
 		}
 
 	default: // ThinkingFormatOpenAI
-		if caps.ReasoningCaps().Kind == llm.ReasoningKindBoolean &&
-			caps.SupportsReasoningToggle(req.ReasoningEffort) {
+		if caps.ReasoningCaps().Kind == llm.ReasoningKindBoolean && supportsToggle {
 			cr.ChatTemplateKwargs = map[string]any{
-				"enable_thinking":   reasoningToggleEnabled(req.ReasoningEffort),
+				"enable_thinking":   reasoningToggleEnabled(effort),
 				"preserve_thinking": true,
 			}
-		} else if caps.SupportsReasoningEffort(req.ReasoningEffort) {
-			cr.ReasoningEffort = req.ReasoningEffort
+		} else if supportsEffort {
+			cr.ReasoningEffort = effort
 		}
 	}
 }
