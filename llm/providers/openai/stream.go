@@ -109,8 +109,10 @@ func (s *OpenAIStream) Err() error {
 }
 
 func (s *OpenAIStream) Close() error {
-	s.stream.Close()
-	return nil
+	if s == nil || s.stream == nil {
+		return nil
+	}
+	return s.stream.Close()
 }
 
 // mapFinishReason maps OpenAI finish reasons to Ion's StopReason type.

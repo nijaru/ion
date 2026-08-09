@@ -166,6 +166,17 @@ func runLoop(
 				}
 			}
 
+			// Providers can finish a clean stream with an error/aborted stop
+			// reason instead of returning a Go error. Treat that terminal response
+			// exactly like the explicit failure path above; in particular, never
+			// execute tool calls that arrived alongside a failed response.
+			if assistantMsg.StopReason == session.StopReasonError ||
+				assistantMsg.StopReason == session.StopReasonAborted {
+				emit(session.TurnEnd{Message: assistantMsg})
+				emit(session.AgentEnd{Messages: newMessages})
+				return loopResult{messages: newMessages}
+			}
+
 			// Check for tool calls in the assistant response.
 			var toolCalls []*session.ToolCall
 			for _, c := range assistantMsg.Content {

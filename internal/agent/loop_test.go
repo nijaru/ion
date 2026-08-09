@@ -363,6 +363,56 @@ func TestRunLoopTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestRunLoopCleanErrorStopReasonIsTerminalBeforeToolExecution(t *testing.T) {
+	var executed bool
+	var agentEndCount int
+	streamFn := func(context.Context, *llm.Request) (llm.Stream, error) {
+		call := llm.Call{ID: "failed-call", Type: "function"}
+		call.Function.Name = "write"
+		call.Function.Arguments = `{}`
+		return &mockStream{chunks: []*llm.Chunk{{
+			Calls:      []llm.Call{call},
+			StopReason: llm.StopReasonError,
+		}}}, nil
+	}
+
+	msgs := RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("hi", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:    llm.Model{ID: "test"},
+			StreamFn: streamFn,
+			Tools: []Tool{
+				{
+					Name: "write",
+					Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						executed = true
+						return session.ToolResultMessage{}, nil
+					},
+				},
+			},
+		},
+		func(event session.Event) {
+			if _, ok := event.(session.AgentEnd); ok {
+				agentEndCount++
+			}
+		},
+		nil,
+	)
+
+	if executed {
+		t.Fatal("executed a tool from a failed provider response")
+	}
+	if agentEndCount != 1 {
+		t.Fatalf("AgentEnd count = %d, want 1", agentEndCount)
+	}
+	assistant, ok := msgs[len(msgs)-1].(*session.AssistantMessage)
+	if !ok || assistant.StopReason != session.StopReasonError {
+		t.Fatalf("last message = %#v, want error assistant", msgs[len(msgs)-1])
+	}
+}
+
 // INVARIANT: signal abort causes terminal AgentEnd.
 func TestRunLoopAbort(t *testing.T) {
 	var agentEndCount int
