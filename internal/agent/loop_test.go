@@ -88,6 +88,48 @@ func TestIsContextOverflowUsesProviderClassifierBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestRunLoopContextTransformObservesRunCancellation(t *testing.T) {
+	parent, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	signal := make(chan struct{})
+	started := make(chan struct{})
+	transformed := make(chan error, 1)
+
+	go func() {
+		<-started
+		close(signal)
+	}()
+
+	runLoop(
+		parent,
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			TransformCtx: func(ctx context.Context, msgs []session.Message) []session.Message {
+				close(started)
+				<-ctx.Done()
+				transformed <- ctx.Err()
+				return msgs
+			},
+			StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+				return nil, ctx.Err()
+			},
+		},
+		func(session.Event) {},
+		signal,
+	)
+
+	select {
+	case err := <-transformed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("transform context error = %v, want canceled", err)
+		}
+	case <-parent.Done():
+		t.Fatalf("transform did not observe run cancellation before parent deadline: %v", parent.Err())
+	}
+}
+
 func TestRunLoopContextOverflowRequiresReplaySafeFrontier(t *testing.T) {
 	overflow := errors.New("provider-specific overflow")
 	result := runLoop(

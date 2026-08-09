@@ -330,7 +330,7 @@ func streamAssistantResponse(
 
 	msgs := snapshot.Messages
 	if cfg.TransformCtx != nil {
-		msgs = cfg.TransformCtx(ctx, msgs)
+		msgs = cfg.TransformCtx(streamCtx, msgs)
 	}
 
 	llmMsgs := convert(msgs)
