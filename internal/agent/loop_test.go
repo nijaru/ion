@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,59 @@ func TestRunLoopTerminalFailure(t *testing.T) {
 	}
 	if am.StopReason != session.StopReasonError {
 		t.Fatalf("expected error stop reason, got %q", am.StopReason)
+	}
+}
+
+func TestRunLoopToolIterationLimitIsTerminalFailure(t *testing.T) {
+	var agentEnd session.AgentEnd
+	calls := 0
+	msgs := RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("keep working", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model:             llm.Model{ID: "test"},
+			MaxToolIterations: 1,
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				calls++
+				call := llm.Call{ID: fmt.Sprintf("call-%d", calls), Type: "function"}
+				call.Function.Name = "continue"
+				call.Function.Arguments = `{}`
+				return &mockStream{
+					chunks: []*llm.Chunk{{Calls: []llm.Call{call}, StopReason: llm.StopReasonToolUse}},
+				}, nil
+			},
+			Tools: []Tool{
+				{
+					Name: "continue",
+					Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						return session.ToolResultMessage{ToolCallID: "tool", ToolName: "continue"}, nil
+					},
+				},
+			},
+		},
+		func(event session.Event) {
+			if end, ok := event.(session.AgentEnd); ok {
+				agentEnd = end
+			}
+		},
+		nil,
+	)
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want one before iteration limit", calls)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("RunLoop returned no messages")
+	}
+	failure, ok := msgs[len(msgs)-1].(*session.AssistantMessage)
+	if !ok || failure.StopReason != session.StopReasonError {
+		t.Fatalf("last message = %#v, want terminal error assistant", msgs[len(msgs)-1])
+	}
+	if !strings.Contains(failure.Error, "max tool iterations (1) exceeded") {
+		t.Fatalf("failure error = %q, want iteration-limit detail", failure.Error)
+	}
+	if len(agentEnd.Messages) == 0 || agentEnd.Messages[len(agentEnd.Messages)-1] != failure {
+		t.Fatalf("AgentEnd messages = %#v, want terminal failure included", agentEnd.Messages)
 	}
 }
 

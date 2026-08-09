@@ -1186,7 +1186,12 @@ func TestHarnessIntegration_ToolFailure(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
+	callNum := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callNum++
+		if callNum > 1 {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Calls: []llm.Call{{
 				ID:   "call_err",
@@ -1572,7 +1577,12 @@ func TestHarnessIntegration_BeforeToolCallBlocks(t *testing.T) {
 	sess := session.NewSession(store, 64)
 
 	executed := false
+	callNum := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callNum++
+		if callNum > 1 {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "blocked", StopReason: "stop"}}}, nil
+		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Calls: []llm.Call{{
 				ID: "tc1",
@@ -1662,7 +1672,12 @@ func TestHarnessIntegration_SequentialPrep_MixedBlockAllow(t *testing.T) {
 	sess := session.NewSession(store, 64)
 
 	var toolARan atomic.Bool
+	callNum := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callNum++
+		if callNum > 1 {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{
 				Calls: []llm.Call{

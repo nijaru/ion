@@ -160,7 +160,12 @@ func TestLifecycle_ToolExecOrder(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)
 
+	callNum := 0
 	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		callNum++
+		if callNum > 1 {
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Calls: []llm.Call{{ID: "tc1", Type: "function", Function: struct {
 				Name      string `json:"name"`

@@ -119,6 +119,7 @@ func runLoop(
 					false,
 					cfg.Thinking,
 				)
+				newMessages = append(newMessages, &msg)
 				emit(session.MessageStart{Message: &msg})
 				emit(session.MessageEnd{Message: &msg})
 				emit(session.TurnEnd{Message: msg})
