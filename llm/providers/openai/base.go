@@ -77,6 +77,24 @@ func (b *Base) Models(ctx context.Context) ([]llm.Model, error) {
 	return b.Config.Models, nil
 }
 
+func (b *Base) clientForRequest(req *llm.Request, caps llm.Capabilities) *openai.Client {
+	compat := b.CompatSettingsForModel(req.Model)
+	needsReasoningField := compat.RequiresReasoningContentOnAssistantMessages &&
+		caps.ReasoningCaps().Kind != llm.ReasoningKindNone
+	if b.clientFactory == nil || (req.Transport == nil && !needsReasoningField) {
+		return b.Client
+	}
+
+	transport := req.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if needsReasoningField {
+		transport = reasoningContentTransport{base: transport}
+	}
+	return b.clientFactory(transport)
+}
+
 // CountTokens estimates tokens using per-message overhead documented by OpenAI:
 // 3 tokens for reply priming, 4 tokens per message for role/delimiter encoding.
 // Content is estimated at 1 token per 4 chars.
@@ -111,10 +129,7 @@ func (b *Base) Generate(ctx context.Context, req *llm.Request) (*llm.Response, e
 		return nil, err
 	}
 
-	client := b.Client
-	if prepared.Transport != nil && b.clientFactory != nil {
-		client = b.clientFactory(prepared.Transport)
-	}
+	client := b.clientForRequest(prepared, caps)
 	resp, err := client.CreateChatCompletion(ctx, b.ConvertRequest(prepared))
 	if err != nil {
 		return nil, err
@@ -150,10 +165,7 @@ func (b *Base) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error)
 		return nil, err
 	}
 
-	client := b.Client
-	if prepared.Transport != nil && b.clientFactory != nil {
-		client = b.clientFactory(prepared.Transport)
-	}
+	client := b.clientForRequest(prepared, caps)
 	stream, err := client.CreateChatCompletionStream(ctx, b.ConvertStreamingRequest(prepared))
 	if err != nil {
 		return nil, err
