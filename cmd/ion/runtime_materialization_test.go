@@ -175,7 +175,12 @@ func TestOpenRuntimePersistsExplicitModelOverrideOnResume(t *testing.T) {
 	}
 	last, ok := branch[len(branch)-1].(*session.ModelChangeEntry)
 	if !ok || last.ParentID() != targetID {
-		t.Fatalf("resumed branch tail = %T parent %q, want model change parent %q", branch[len(branch)-1], branch[len(branch)-1].ParentID(), targetID)
+		t.Fatalf(
+			"resumed branch tail = %T parent %q, want model change parent %q",
+			branch[len(branch)-1],
+			branch[len(branch)-1].ParentID(),
+			targetID,
+		)
 	}
 	replayed, err := sess.BuildContext(context.Background())
 	if err != nil {
