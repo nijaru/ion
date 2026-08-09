@@ -546,6 +546,25 @@ func openRuntime(
 	// type.
 	contextWindow := resolvedContextWindow(&runtimeCfg, info, catalog)
 	caps := provider.Capabilities(runtimeCfg.Model)
+	if catalog != nil {
+		if metadata, ok := catalog.GetCachedMetadata(
+			runtimeCfg.Provider,
+			runtimeCfg.Model,
+		); ok &&
+			len(metadata.Input) > 0 {
+			caps.InputModalities = append([]string(nil), metadata.Input...)
+		}
+	}
+	streamFn := provider.Stream
+	if !caps.SupportsImages() {
+		streamFn = func(streamCtx context.Context, req *llm.Request) (llm.Stream, error) {
+			prepared, err := llm.PrepareRequestForCapabilities(req, caps)
+			if err != nil {
+				return nil, err
+			}
+			return provider.Stream(streamCtx, prepared)
+		}
+	}
 	model := llm.Model{
 		ID:            runtimeCfg.Model,
 		Provider:      provider.ID(),
@@ -680,7 +699,7 @@ func openRuntime(
 		Thinking:            thinkingLevelForRuntime(runtimeCfg.ReasoningEffort),
 		Tools:               agentTools,
 		Active:              activeToolNames,
-		StreamFn:            provider.Stream,
+		StreamFn:            streamFn,
 		ContextOverflow:     provider.IsContextOverflow,
 		PromptTemplates:     promptTemplates,
 		SysPrompt:           sysPrompt,

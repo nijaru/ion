@@ -55,6 +55,9 @@ func TransformRequestForCapabilities(req *Request, caps Capabilities) {
 	if !caps.SupportsThinking() {
 		flattenUnsupportedThinking(req.Messages)
 	}
+	if !caps.SupportsImages() {
+		downgradeUnsupportedImages(req.Messages)
+	}
 	synthesizeMissingToolResults(req)
 }
 
@@ -86,6 +89,30 @@ func rewriteSystemMessages(req *Request, targetRole Role) {
 			Role:         targetRole,
 			Content:      content,
 			CacheControl: m.CacheControl,
+		}
+	}
+}
+
+const unsupportedImagePlaceholder = "[image omitted: model does not accept image input]"
+
+func downgradeUnsupportedImages(messages []Message) {
+	for i := range messages {
+		msg := &messages[i]
+		if len(msg.Parts) == 0 {
+			continue
+		}
+		parts := make([]ContentPart, 0, len(msg.Parts))
+		changed := false
+		for _, part := range msg.Parts {
+			if part.Type != ContentPartImage {
+				parts = append(parts, part)
+				continue
+			}
+			parts = append(parts, TextPart(unsupportedImagePlaceholder))
+			changed = true
+		}
+		if changed {
+			msg.Parts = parts
 		}
 	}
 }

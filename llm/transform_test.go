@@ -72,6 +72,26 @@ func TestPrepareRequestOmitsToolsForModelWithoutToolSupport(t *testing.T) {
 	}
 }
 
+func TestPrepareRequestDowngradesImagesForTextOnlyModels(t *testing.T) {
+	req := &llm.Request{Messages: []llm.Message{{
+		Role:  llm.RoleUser,
+		Parts: []llm.ContentPart{llm.TextPart("look"), llm.ImagePart("image/png", "aW1hZ2U=")},
+	}}}
+	caps := llm.DefaultCapabilities()
+	caps.InputModalities = []string{"text"}
+	prepared, err := llm.PrepareRequestForCapabilities(req, caps)
+	if err != nil {
+		t.Fatalf("PrepareRequestForCapabilities() error = %v", err)
+	}
+	if len(prepared.Messages[0].Parts) != 2 || prepared.Messages[0].Parts[1].Type != llm.ContentPartText ||
+		prepared.Messages[0].Parts[1].Text != "[image omitted: model does not accept image input]" {
+		t.Fatalf("prepared image parts = %#v, want explicit text placeholder", prepared.Messages[0].Parts)
+	}
+	if req.Messages[0].Parts[1].Type != llm.ContentPartImage {
+		t.Fatal("original request image was mutated")
+	}
+}
+
 func TestPrepareRequestMapsEffortToThinkingBudget(t *testing.T) {
 	request := &llm.Request{
 		Model:           "claude-sonnet-4-20250514",

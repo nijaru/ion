@@ -22,6 +22,10 @@ type Capabilities struct {
 	// RoleDeveloper means the model accepts a privileged instruction channel
 	// distinct from the assistant conversation.
 	SystemRole Role
+	// InputModalities lists known input types such as "text" and "image".
+	// An empty list means the provider has not supplied modality metadata and
+	// preserves the historical permissive behavior.
+	InputModalities []string
 	// Reasoning describes typed reasoning controls accepted by the model.
 	Reasoning ReasoningCapabilities
 }
@@ -58,6 +62,21 @@ func DefaultCapabilities() Capabilities {
 		Temperature: false, // Match Pi: temperature is opt-in, not default
 		SystemRole:  RoleSystem,
 	}
+}
+
+// SupportsImages reports whether image parts may be sent to the model.
+// Unknown modality metadata remains permissive so existing providers do not
+// silently lose user input; an explicit text-only list is restrictive.
+func (c Capabilities) SupportsImages() bool {
+	if len(c.InputModalities) == 0 {
+		return true
+	}
+	for _, modality := range c.InputModalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "image") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Capabilities) ReasoningCaps() ReasoningCapabilities {
