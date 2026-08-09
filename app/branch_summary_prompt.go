@@ -174,6 +174,8 @@ func (m Model) startTreeNavigation(opts agent.NavigateOptions) (Model, tea.Cmd) 
 			generation:     generation,
 			requestID:      requestID,
 			leafID:         result.LeafID,
+			editorText:     result.EditorText,
+			restoreEditor:  result.RestoreEditor,
 			activeProvider: result.ActiveProvider,
 			activeModel:    result.ActiveModel,
 			err:            err,

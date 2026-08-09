@@ -511,10 +511,14 @@ type NavigateOptions struct {
 }
 
 // NavigateResult reports the durable leaf selected by navigation and, when
-// requested, the entry created by branch summarization.
+// requested, the entry created by branch summarization. User and custom-message
+// targets select their parent and restore their text into the composer instead
+// of replaying the selected message as a new prompt.
 type NavigateResult struct {
 	LeafID         string
 	SummaryEntryID string
+	EditorText     string
+	RestoreEditor  bool
 	// ActiveProvider and ActiveModel are the selected branch's persisted
 	// runtime model. The host may need to replace the provider runtime before
 	// the next turn when this differs from the current runtime.

@@ -193,7 +193,9 @@ func DecideErrorSettlement(input ErrorSettlementInput) ErrorSettlementDecision {
 // --- Session tree ---
 
 type SessionTree struct {
+	// Current is nil when the selected leaf is the virtual root.
 	Current  session.Entry
+	AtRoot   bool
 	Lineage  []session.Entry
 	Children []session.Entry
 }

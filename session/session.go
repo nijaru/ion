@@ -28,9 +28,10 @@ type Session interface {
 	// GetLeafID returns the current durable leaf pointer.
 	GetLeafID() string
 
-	// MoveTo switches the leaf pointer to the given entry ID.
-	// The entry must exist. Optionally appends a branch summary entry.
-	// Returns the branch summary entry ID if summary was provided, "" otherwise.
+	// MoveTo switches the leaf pointer to the given entry ID. An empty ID
+	// selects the root. Non-empty entries must exist. Optionally appends a
+	// branch summary entry at the selected position. Returns the branch summary
+	// entry ID if summary was provided, "" otherwise.
 	MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error)
 
 	// Typed append methods — each creates the right entry kind.
@@ -112,8 +113,8 @@ type Store interface {
 	SetLeafID(id string) error
 
 	// MoveTo atomically records a navigation, changes the selected leaf, and
-	// optionally appends a branch summary. The operation leaves the current
-	// leaf unchanged if any part fails.
+	// optionally appends a branch summary. An empty entry ID selects the root.
+	// The operation leaves the current leaf unchanged if any part fails.
 	MoveTo(ctx context.Context, entryID string, summary *BranchSummaryData) (string, error)
 
 	// Meta returns session-level metadata.

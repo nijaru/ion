@@ -1836,11 +1836,17 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 		h.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
-	clearedSteer := append([]session.Message(nil), h.steer...)
-	clearedFollowUp := append([]session.Message(nil), h.followUp...)
+	clearedSteer := cloneMessagesForSnapshot(h.steer)
+	clearedFollowUp := cloneMessagesForSnapshot(h.followUp)
 	h.steer = nil
 	h.followUp = nil
 	h.nextTurn = nil
+	if h.activeTurnToken != 0 && h.pendingAbort == nil {
+		h.pendingAbort = &session.Abort{
+			ClearedSteer:    cloneMessagesForSnapshot(clearedSteer),
+			ClearedFollowUp: cloneMessagesForSnapshot(clearedFollowUp),
+		}
+	}
 	h.emitLocked(h.queueUpdateLocked())
 	cancel := h.runCancel
 	h.mu.Unlock()

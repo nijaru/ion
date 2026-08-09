@@ -48,15 +48,57 @@ func (h *Controller) navigateTreeDirect(
 		result.LeafID = oldLeafID
 		return result, nil
 	}
-	if _, err := h.session.GetEntry(navigationCtx, targetID); err != nil {
+	targetEntry, err := h.session.GetEntry(navigationCtx, targetID)
+	if err != nil {
 		return result, fmt.Errorf("navigate tree: target entry %q not found: %w", targetID, err)
+	}
+
+	// A leaf entry is durable navigation evidence, not a semantic conversation
+	// node. Resolve it before applying the same target rules used by the tree
+	// picker so selecting an audit record cannot unexpectedly resurrect the
+	// branch that happened to precede that record.
+	for {
+		leaf, ok := targetEntry.(*session.LeafEntry)
+		if !ok {
+			break
+		}
+		if leaf.TargetID == targetID {
+			return result, fmt.Errorf("navigate tree: leaf entry %q points to itself", targetID)
+		}
+		targetID = leaf.TargetID
+		if targetID == "" {
+			targetEntry = nil
+			break
+		}
+		targetEntry, err = h.session.GetEntry(navigationCtx, targetID)
+		if err != nil {
+			return result, fmt.Errorf("navigate tree: leaf entry target %q not found: %w", targetID, err)
+		}
+	}
+
+	effectiveTargetID := targetID
+	switch entry := targetEntry.(type) {
+	case *session.MessageEntry:
+		if _, ok := entry.Message.(*session.UserMessage); ok {
+			effectiveTargetID = entry.ParentID()
+			result.EditorText = session.MessageText(entry.Message)
+			result.RestoreEditor = true
+		}
+	case *session.CustomMessageEntry:
+		effectiveTargetID = entry.ParentID()
+		result.EditorText = session.MessageText(&session.CustomMessage{Content: entry.Content})
+		result.RestoreEditor = true
+	}
+	if oldLeafID == effectiveTargetID {
+		result.LeafID = oldLeafID
+		return result, nil
 	}
 
 	entries, err := h.collectBranchEntries(navigationCtx, oldLeafID, targetID)
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: collect branch: %w", err)
 	}
-	targetBranch, err := h.session.BranchAt(navigationCtx, targetID)
+	targetBranch, err := h.session.BranchAt(navigationCtx, effectiveTargetID)
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: read target branch: %w", err)
 	}
@@ -66,7 +108,7 @@ func (h *Controller) navigateTreeDirect(
 	}
 
 	var summary *session.BranchSummaryData
-	if opts.Summarize {
+	if opts.Summarize && len(entries) > 0 {
 		summary, err = h.summarizeBranch(
 			navigationCtx,
 			runCancel,
@@ -97,7 +139,7 @@ func (h *Controller) navigateTreeDirect(
 	if summary != nil {
 		summary.FromID = oldLeafID
 	}
-	result.SummaryEntryID, err = h.session.MoveTo(navigationCtx, targetID, summary)
+	result.SummaryEntryID, err = h.session.MoveTo(navigationCtx, effectiveTargetID, summary)
 	if err != nil {
 		return result, fmt.Errorf("navigate tree: move session: %w", err)
 	}

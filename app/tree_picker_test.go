@@ -53,6 +53,66 @@ func TestLoadSessionTreeProjectsPersistedLineageAndChildren(t *testing.T) {
 	}
 }
 
+func TestLoadSessionTreeProjectsVirtualRoot(t *testing.T) {
+	entries := []session.Entry{
+		&session.MessageEntry{
+			EntryBase: session.EntryBase{ID: "root", Timestamp: time.Now()},
+			Message:   session.NewUserText("root prompt", time.Now()),
+		},
+	}
+	tree, err := loadSessionTree(agent.SessionTreeSnapshot{Entries: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tree.AtRoot || tree.Current != nil {
+		t.Fatalf("root tree = %#v, want virtual root with no current entry", tree)
+	}
+	if len(tree.Children) != 1 || tree.Children[0].ID() != "root" {
+		t.Fatalf("root children = %#v, want root prompt", tree.Children)
+	}
+	treePicker := treePickerState{tree: &tree}
+	treePicker.buildEntries()
+	if len(treePicker.entries) != 2 || !treePicker.entries[0].isLeaf || treePicker.entries[0].title != "(root)" {
+		t.Fatalf("root picker entries = %#v, want virtual root plus child", treePicker.entries)
+	}
+}
+
+func TestLoadSessionTreeExcludesLeafAuditEntries(t *testing.T) {
+	store, err := session.NewSQLiteStore(":memory:", "tree-leaf-audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 16)
+	ctx := context.Background()
+
+	rootID, err := sess.AppendMessage(ctx, session.NewUserText("root", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafAudit := &session.LeafEntry{
+		EntryBase: session.EntryBase{ID: "leaf-audit", ParentID: rootID, Timestamp: time.Now()},
+		TargetID:  rootID,
+	}
+	if _, err := store.Append(ctx, leafAudit); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(rootID); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.Entries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := loadSessionTree(agent.SessionTreeSnapshot{LeafID: rootID, Entries: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Children) != 0 {
+		t.Fatalf("tree children = %#v, want leaf audit entry excluded", tree.Children)
+	}
+}
+
 func TestStaleTreePickerResultsCannotMutateNewRuntimeGeneration(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2
@@ -164,6 +224,24 @@ func TestSuccessfulTreeNavigationUpdatesSelectedLeafBeforeReplay(t *testing.T) {
 	}
 	if got, want := next.Model.TreeNavigationRequest, uint64(2); got != want {
 		t.Fatalf("navigation epoch = %d, want %d after completion", got, want)
+	}
+}
+
+func TestSuccessfulTreeNavigationRestoresSelectedUserDraft(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.TreeNavigationRequest = 1
+	model.Input.Composer.SetValue("stale draft")
+
+	next, _ := model.handleTreePickerMove(treePickerMoveMsg{
+		generation:    1,
+		requestID:     1,
+		leafID:        "parent",
+		editorText:    "restore this prompt",
+		restoreEditor: true,
+	})
+	if got := next.Input.Composer.Value(); got != "restore this prompt" {
+		t.Fatalf("composer after user navigation = %q, want restored prompt", got)
 	}
 }
 

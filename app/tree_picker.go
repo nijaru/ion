@@ -43,6 +43,8 @@ type treePickerMoveMsg struct {
 	generation     uint64
 	requestID      uint64
 	leafID         string
+	editorText     string
+	restoreEditor  bool
 	activeProvider string
 	activeModel    string
 	err            error
@@ -84,11 +86,20 @@ func loadSessionTree(snapshot agent.SessionTreeSnapshot) (SessionTree, error) {
 
 	byID := make(map[string]session.Entry, len(entries))
 	for _, entry := range entries {
-		if entry != nil {
+		if entry != nil && !isLeafAuditEntry(entry) {
 			byID[entry.ID()] = entry
 		}
 	}
 	current, ok := byID[leafID]
+	if leafID == "" {
+		children := make([]session.Entry, 0)
+		for _, entry := range entries {
+			if entry != nil && !isLeafAuditEntry(entry) && entry.ParentID() == "" {
+				children = append(children, entry)
+			}
+		}
+		return SessionTree{AtRoot: true, Children: children}, nil
+	}
 	if !ok {
 		return SessionTree{}, fmt.Errorf("session tree leaf %q not found", leafID)
 	}
@@ -115,12 +126,12 @@ func loadSessionTree(snapshot agent.SessionTreeSnapshot) (SessionTree, error) {
 
 	children := make([]session.Entry, 0)
 	for _, entry := range entries {
-		if entry != nil && entry.ParentID() == leafID {
+		if entry != nil && !isLeafAuditEntry(entry) && entry.ParentID() == leafID {
 			children = append(children, entry)
 		}
 	}
 
-	return SessionTree{Current: current, Lineage: lineage, Children: children}, nil
+	return SessionTree{Current: current, Children: children, Lineage: lineage}, nil
 }
 
 func (m Model) closeTreePicker() Model {
@@ -163,15 +174,27 @@ func (t *treePickerState) buildEntries() {
 	}
 	t.entries = t.entries[:0]
 
-	// Add current (leaf) entry.
-	t.entries = append(t.entries, treePickerEntry{
-		indent:  0,
-		id:      t.tree.Current.ID(),
-		title:   entryDisplayTitle(t.tree.Current),
-		isLeaf:  true,
-		kind:    classifyEntry(t.tree.Current),
-		summary: entrySummary(t.tree.Current),
-	})
+	// Add current (leaf) entry, or the virtual root when no durable leaf is
+	// selected. Root is intentionally not navigable; selecting a user message
+	// whose parent is root performs the move and restores that prompt instead.
+	if t.tree.AtRoot {
+		t.entries = append(t.entries, treePickerEntry{
+			indent: 0,
+			id:     "",
+			title:  "(root)",
+			isLeaf: true,
+			kind:   "root",
+		})
+	} else {
+		t.entries = append(t.entries, treePickerEntry{
+			indent:  0,
+			id:      t.tree.Current.ID(),
+			title:   entryDisplayTitle(t.tree.Current),
+			isLeaf:  true,
+			kind:    classifyEntry(t.tree.Current),
+			summary: entrySummary(t.tree.Current),
+		})
+	}
 
 	// Add lineage (root → parent).
 	for _, e := range t.tree.Lineage {
@@ -225,6 +248,11 @@ func entrySummary(e session.Entry) string {
 		return s
 	}
 	return ""
+}
+
+func isLeafAuditEntry(e session.Entry) bool {
+	_, ok := e.(*session.LeafEntry)
+	return ok
 }
 
 func classifyEntry(e session.Entry) string {
@@ -334,8 +362,10 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 	// the epoch after the mutation so snapshots captured during navigation are
 	// also rejected.
 	m = m.closeTreePicker()
-	if msg.leafID != "" {
-		m.Model.LeafID = msg.leafID
+	m.Model.LeafID = msg.leafID
+	var editorCmd tea.Cmd
+	if msg.restoreEditor {
+		editorCmd = m.setComposerDraft(msg.editorText)
 	}
 	m.Model.TreeNavigationRequest++
 	replay := m.replayCurrentBranch(m.Model.TreeNavigationRequest)
@@ -364,9 +394,10 @@ func (m Model) handleTreePickerMove(msg treePickerMoveMsg) (Model, tea.Cmd) {
 			m.currentResumeLeafID(),
 			false,
 		)
-		return switchModel, sequenceCmds(replay, switchCmd)
+		return switchModel, sequenceCmds(editorCmd, replay, switchCmd)
 	}
 	return m, sequenceCmds(
+		editorCmd,
 		replay,
 		m.persistCurrentSessionInfoCmd(),
 		m.retrySessionEventAfterNavigation(),

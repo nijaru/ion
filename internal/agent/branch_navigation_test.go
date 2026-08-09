@@ -101,6 +101,9 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	if result.LeafID != sess.GetLeafID() || result.LeafID != result.SummaryEntryID {
 		t.Fatalf("navigation leaf = %q, want summary leaf %q", result.LeafID, result.SummaryEntryID)
 	}
+	if !result.RestoreEditor || result.EditorText != "A" {
+		t.Fatalf("navigation editor restoration = (%t, %q), want (true, A)", result.RestoreEditor, result.EditorText)
+	}
 	if request.Model != "summary-model" || len(request.Messages) != 2 {
 		t.Fatalf(
 			"summary request = model %q with %d messages, want summary-model with 2",
@@ -116,12 +119,12 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(branch) != 2 {
-		t.Fatalf("branch length = %d, want target plus summary", len(branch))
+	if len(branch) != 1 {
+		t.Fatalf("branch length = %d, want root summary", len(branch))
 	}
-	summary, ok := branch[1].(*session.BranchSummaryEntry)
+	summary, ok := branch[0].(*session.BranchSummaryEntry)
 	if !ok {
-		t.Fatalf("branch entry 1 = %T, want BranchSummaryEntry", branch[1])
+		t.Fatalf("branch entry 0 = %T, want BranchSummaryEntry", branch[0])
 	}
 	if summary.FromID != oldLeafID || !strings.Contains(summary.Summary, "branch work") {
 		t.Fatalf(
@@ -140,9 +143,8 @@ func TestNavigateTreeSummarizesAbandonedBranchAndPersistsFromID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Messages) != 2 || session.MessageText(snapshot.Messages[0]) != "A" ||
-		!strings.Contains(session.MessageText(snapshot.Messages[1]), "branch work") {
-		t.Fatalf("context after navigation = %#v, want A followed by branch summary", snapshot.Messages)
+	if len(snapshot.Messages) != 1 || !strings.Contains(session.MessageText(snapshot.Messages[0]), "branch work") {
+		t.Fatalf("context after navigation = %#v, want root branch summary", snapshot.Messages)
 	}
 
 	if err := store.Close(); err != nil {

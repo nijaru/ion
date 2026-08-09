@@ -109,6 +109,7 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		readyCorrection   bool
 		settledNextTurn   int
 		correctionFailure string
+		abortEvent        *session.Abort
 	)
 	c.mu.Lock()
 	result := PromptResult{Message: completion.message}
@@ -175,6 +176,13 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		c.activeAssistantCommitted = false
 		c.activeTools = nil
 		c.snapshotRevision++
+		if c.pendingAbort != nil {
+			pending := *c.pendingAbort
+			pending.ClearedSteer = cloneMessagesForSnapshot(pending.ClearedSteer)
+			pending.ClearedFollowUp = cloneMessagesForSnapshot(pending.ClearedFollowUp)
+			abortEvent = &pending
+			c.pendingAbort = nil
+		}
 		c.activeTurnID = ""
 		c.activeTurnLeaf = ""
 		c.activeTurnToken = 0
@@ -196,6 +204,9 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		c.emitLocked(session.RuntimeReady{
 			Turn: true, Failed: correctionFailure != "", Error: correctionFailure,
 		})
+	}
+	if abortEvent != nil {
+		c.emitLocked(*abortEvent)
 	}
 	c.mu.Unlock()
 

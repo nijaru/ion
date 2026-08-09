@@ -255,6 +255,80 @@ func TestTerminalFailureClearsSteerAndFollowUpQueues(t *testing.T) {
 	}
 }
 
+func TestAbortPublishesClearedQueuesAfterSettlement(t *testing.T) {
+	h := NewController(ControllerConfig{
+		Session: newTestSession(t),
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	defer h.Close()
+
+	sub, err := h.Subscribe(context.Background(), EventCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	started := make(chan struct{})
+	go func() {
+		for envelope := range sub.Events {
+			if _, ok := envelope.Event.(session.AgentStart); ok {
+				close(started)
+				return
+			}
+		}
+	}()
+	promptDone := make(chan struct{})
+	go func() {
+		defer close(promptDone)
+		_, _ = h.Prompt(context.Background(), "cancel me")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not start")
+	}
+	if err := h.Steer("discard steer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.FollowUp("discard follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-promptDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled prompt did not settle")
+	}
+
+	var abort session.Abort
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case envelope := <-sub.Events:
+			if event, ok := envelope.Event.(session.Abort); ok {
+				abort = event
+				goto found
+			}
+		case <-deadline:
+			t.Fatal("did not observe session.Abort")
+		}
+	}
+
+found:
+	if len(abort.ClearedSteer) != 1 || session.MessageText(abort.ClearedSteer[0]) != "discard steer" {
+		t.Fatalf("cleared steer = %#v, want discard steer", abort.ClearedSteer)
+	}
+	if len(abort.ClearedFollowUp) != 1 || session.MessageText(abort.ClearedFollowUp[0]) != "discard follow-up" {
+		t.Fatalf("cleared follow-up = %#v, want discard follow-up", abort.ClearedFollowUp)
+	}
+}
+
 func TestControllerSealsLateSteerAndFollowUpInput(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t)})
 	defer h.Close()

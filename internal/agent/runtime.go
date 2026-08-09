@@ -150,6 +150,7 @@ type Controller struct {
 	canceledTurnTokens map[uint64]struct{}
 	turnCommitted      bool
 	turnAborted        bool
+	pendingAbort       *session.Abort
 	settledNextTurns   int
 	settledPending     bool
 

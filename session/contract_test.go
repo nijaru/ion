@@ -285,6 +285,47 @@ func TestMoveToAppendsLeafEntry(t *testing.T) {
 	}
 }
 
+func TestMoveToRootClearsLeafAndSupportsRootSummary(t *testing.T) {
+	store, _ := NewSQLiteStore(":memory:", "contract")
+	sess := NewSession(store, 64)
+	ctx := context.Background()
+
+	if _, err := sess.AppendMessage(ctx, NewUserText("first", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.MoveTo(ctx, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.GetLeafID(); got != "" {
+		t.Fatalf("root navigation leaf = %q, want empty root", got)
+	}
+	branch, err := sess.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 0 {
+		t.Fatalf("root branch = %v, want empty", entryIDs(branch))
+	}
+
+	summaryID, err := sess.MoveTo(ctx, "", &BranchSummaryData{Summary: "returned to root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaryID == "" || sess.GetLeafID() != summaryID {
+		t.Fatalf("root summary leaf = %q, want summary %q", sess.GetLeafID(), summaryID)
+	}
+	branch, err = sess.Branch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branch) != 1 {
+		t.Fatalf("root summary branch = %v, want one entry", entryIDs(branch))
+	}
+	if _, ok := branch[0].(*BranchSummaryEntry); !ok {
+		t.Fatalf("root summary branch entry = %T, want BranchSummaryEntry", branch[0])
+	}
+}
+
 func TestBranchSummaryProjectsAtTreePositionAndReplays(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.db")
 	ctx := context.Background()

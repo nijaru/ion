@@ -1089,9 +1089,11 @@ func (s *SQLiteStore) MoveTo(ctx context.Context, entryID string, summary *Branc
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.getVisibleEntryTx(ctx, tx, entryID); err != nil {
-		_ = tx.Rollback()
-		return "", fmt.Errorf("move to %q: %w", entryID, err)
+	if entryID != "" {
+		if _, err := s.getVisibleEntryTx(ctx, tx, entryID); err != nil {
+			_ = tx.Rollback()
+			return "", fmt.Errorf("move to %q: %w", entryID, err)
+		}
 	}
 	oldLeaf := s.leaf
 	leafEntry := &LeafEntry{
