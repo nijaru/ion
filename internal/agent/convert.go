@@ -18,7 +18,18 @@ func DefaultConvert(msgs []session.Message) []llm.Message {
 		case *session.UserMessage:
 			result = append(result, convertUser(m))
 		case *session.AssistantMessage:
-			result = append(result, convertAssistant(m))
+			// Failed assistant records remain useful session evidence, but an
+			// incomplete error/abort response is not a valid provider transcript
+			// item to replay. Partial text or thinking can still be incomplete,
+			// and providers may reject or misinterpret it on the next turn.
+			if m.StopReason == session.StopReasonError || m.StopReason == session.StopReasonAborted {
+				continue
+			}
+			converted := convertAssistant(m)
+			if !converted.HasAssistantPayload() {
+				continue
+			}
+			result = append(result, converted)
 		case *session.ToolResultMessage:
 			result = append(result, convertToolResult(m))
 		case *session.CustomMessage:

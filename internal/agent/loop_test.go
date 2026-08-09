@@ -512,6 +512,24 @@ func TestRunLoopPreCancelledContextSkipsProvider(t *testing.T) {
 // INVARIANT: RunLoop is stateless — no fields, no persistence.
 // This is a compile-time invariant enforced by rg guard, but we verify
 // the function signature takes all inputs as args.
+func TestDefaultConvertOmitsFailedAndEmptyAssistantRecords(t *testing.T) {
+	messages := DefaultConvert([]session.Message{
+		session.NewUserText("prompt", time.Now()),
+		&session.AssistantMessage{
+			Content:    []session.Content{session.TextContent{Text: "partial"}},
+			StopReason: session.StopReasonError,
+		},
+		&session.AssistantMessage{
+			Content:    []session.Content{session.ThinkingContent{Text: "incomplete"}},
+			StopReason: session.StopReasonAborted,
+		},
+		&session.AssistantMessage{StopReason: session.StopReasonEndTurn},
+	})
+	if len(messages) != 1 || messages[0].Role != llm.RoleUser {
+		t.Fatalf("converted messages = %#v, want only the user prompt", messages)
+	}
+}
+
 func TestDefaultConvertPreservesThinkingMetadata(t *testing.T) {
 	messages := DefaultConvert([]session.Message{&session.AssistantMessage{
 		Content: []session.Content{session.ThinkingContent{

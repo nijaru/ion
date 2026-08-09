@@ -378,6 +378,9 @@ func TestHarnessIntegration_ErrorRecovery(t *testing.T) {
 		if callNum == 1 {
 			return nil, injectedErr
 		}
+		if err := llm.ValidateRequest(req); err != nil {
+			return nil, fmt.Errorf("recovery request validation: %w", err)
+		}
 		return &mockStream{chunks: []*llm.Chunk{
 			{Content: "recovered", StopReason: "stop"},
 		}}, nil
