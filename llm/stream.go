@@ -12,9 +12,13 @@ func GenerateFromStream(s Stream) (response *Response, err error) {
 		return nil, errors.New("llm: nil stream")
 	}
 	defer func() {
-		if closeErr := s.Close(); err == nil && closeErr != nil {
+		if closeErr := s.Close(); closeErr != nil {
 			response = nil
-			err = closeErr
+			if err == nil {
+				err = closeErr
+			} else {
+				err = errors.Join(err, closeErr)
+			}
 		}
 	}()
 	var acc StreamAccumulator

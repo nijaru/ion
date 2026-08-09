@@ -142,6 +142,23 @@ func TestGenerateFromStreamReportsCloseFailure(t *testing.T) {
 	}
 }
 
+func TestGenerateFromStreamJoinsStreamAndCloseFailures(t *testing.T) {
+	streamErr := errors.New("response stream failed")
+	closeErr := errors.New("response stream close failed")
+	response, err := llm.GenerateFromStream(&streamCollectorFault{
+		chunk:     &llm.Chunk{Content: "partial"},
+		ok:        true,
+		streamErr: streamErr,
+		closeErr:  closeErr,
+	})
+	if !errors.Is(err, streamErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("GenerateFromStream() error = %v, want stream and close failures", err)
+	}
+	if response != nil {
+		t.Fatalf("GenerateFromStream() response = %#v, want nil on failure", response)
+	}
+}
+
 func TestStreamAccumulatorBlockText(t *testing.T) {
 	var acc llm.StreamAccumulator
 	acc.Add(&llm.Chunk{Block: llm.TextBlock{Text: "hel"}})
