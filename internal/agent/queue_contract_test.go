@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -139,6 +140,70 @@ func TestControllerNextTurnStartsQueuedPromptsAfterSettlement(t *testing.T) {
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("provider calls = %d, want exactly three turns", got)
+	}
+}
+
+func TestTerminalFailureClearsSteerAndFollowUpQueues(t *testing.T) {
+	h := NewController(ControllerConfig{
+		Session: newTestSession(t),
+		Model:   llm.Model{ID: "test"},
+	})
+	defer h.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var stale atomic.Bool
+	providerErr := errors.New("provider failed")
+	h.stream = func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &faultStream{streamErr: providerErr}, nil
+		}
+		for _, message := range req.Messages {
+			if strings.Contains(message.Content, "stale") {
+				stale.Store(true)
+			}
+		}
+		return &mockStream{chunks: []*llm.Chunk{{Content: "recovered", StopReason: llm.StopReasonStop}}}, nil
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := h.Prompt(context.Background(), "first")
+		firstDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first provider call did not start")
+	}
+	if err := h.Steer("stale steer"); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if err := h.FollowUp("stale follow-up"); err != nil {
+		t.Fatalf("FollowUp: %v", err)
+	}
+	close(release)
+	if err := <-firstDone; err == nil || !strings.Contains(err.Error(), providerErr.Error()) {
+		t.Fatalf("first Prompt error = %v, want provider failure", err)
+	}
+
+	h.mu.Lock()
+	if len(h.steer) != 0 || len(h.followUp) != 0 {
+		t.Fatalf("terminal failure left queues: steer=%d follow_up=%d", len(h.steer), len(h.followUp))
+	}
+	h.mu.Unlock()
+	if _, err := h.Prompt(context.Background(), "second"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	if stale.Load() {
+		t.Fatal("failed-turn steer/follow-up leaked into the next provider request")
 	}
 }
 

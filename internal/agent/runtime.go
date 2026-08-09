@@ -570,11 +570,9 @@ func (c *Controller) beginTurn(parent context.Context, requestedToken ...uint64)
 			c.steer = nil
 			c.followUp = nil
 			c.nextTurn = nil
+			c.emitLocked(c.queueUpdateLocked())
 		}
 		c.mu.Unlock()
-		if token != 0 {
-			c.emitQueueUpdate()
-		}
 		return nil, err
 	}
 	if c.phase == PhaseSettled {

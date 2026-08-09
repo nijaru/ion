@@ -784,10 +784,8 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
 			msgs := h.drainQueued(&h.steer, h.steeringMode)
+			h.emitLocked(h.queueUpdateLocked())
 			h.mu.Unlock()
-			// Pi: emitQueueUpdate after draining (agent-harness.js:337).
-			// Must emit outside lock — emit() acquires h.mu for listener snapshot.
-			h.emitQueueUpdate()
 			return msgs
 		},
 		DrainFollowUp: func() []session.Message {
@@ -806,8 +804,8 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 					h.turnInputClosed = true
 				}
 			}
+			h.emitLocked(h.queueUpdateLocked())
 			h.mu.Unlock()
-			h.emitQueueUpdate()
 			return msgs
 		},
 		BeforeToolCall: func(ctx ToolCallContext) *ToolCallDecision {
@@ -1223,15 +1221,8 @@ func (h *Controller) steerDirect(text string, images ...session.ImageContent) er
 		h.mu.Unlock()
 		return fmt.Errorf("queue steer: %w", err)
 	}
-	steer := make([]session.Message, len(h.steer))
-	copy(steer, h.steer)
-	followUp := make([]session.Message, len(h.followUp))
-	copy(followUp, h.followUp)
-	nextTurn := make([]session.Message, len(h.nextTurn))
-	copy(nextTurn, h.nextTurn)
+	h.emitLocked(h.queueUpdateLocked())
 	h.mu.Unlock()
-	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
@@ -1256,15 +1247,8 @@ func (h *Controller) followUpDirect(text string, images ...session.ImageContent)
 		h.mu.Unlock()
 		return fmt.Errorf("queue follow-up: %w", err)
 	}
-	steer := make([]session.Message, len(h.steer))
-	copy(steer, h.steer)
-	followUp := make([]session.Message, len(h.followUp))
-	copy(followUp, h.followUp)
-	nextTurn := make([]session.Message, len(h.nextTurn))
-	copy(nextTurn, h.nextTurn)
+	h.emitLocked(h.queueUpdateLocked())
 	h.mu.Unlock()
-	// emit outside lock — emit() acquires h.mu internally for listener snapshot
-	h.emit(session.QueueUpdate{Steer: steer, FollowUp: followUp, NextTurn: nextTurn})
 	return nil
 }
 
@@ -1312,6 +1296,7 @@ func (h *Controller) startNextTurnIfReady() {
 	}
 	queued := h.nextTurn[0]
 	h.nextTurn = h.nextTurn[1:]
+	h.emitLocked(h.queueUpdateLocked())
 	h.mu.Unlock()
 
 	user, ok := queued.(*session.UserMessage)
@@ -1331,7 +1316,6 @@ func (h *Controller) startNextTurnIfReady() {
 		h.emitQueueUpdate()
 		return
 	}
-	h.emitQueueUpdate()
 	h.startPromptWorker(&PromptCmd{
 		Ctx:    context.Background(),
 		Text:   session.MessageText(user),
@@ -1355,20 +1339,21 @@ func userMessageImages(user *session.UserMessage) []session.ImageContent {
 	return images
 }
 
-// emitQueueUpdate snapshots all queues under h.mu, then publishes the copy
-// without holding the controller lock.
+// queueUpdateLocked returns an immutable queue snapshot. The caller must hold
+// h.mu; publishing under that same lock linearizes queue state with the event.
+func (h *Controller) queueUpdateLocked() session.QueueUpdate {
+	return session.QueueUpdate{
+		Steer:    append([]session.Message(nil), h.steer...),
+		FollowUp: append([]session.Message(nil), h.followUp...),
+		NextTurn: append([]session.Message(nil), h.nextTurn...),
+	}
+}
+
+// emitQueueUpdate snapshots and publishes all queues while holding h.mu.
 func (h *Controller) emitQueueUpdate() {
 	h.mu.Lock()
-	steer := make([]session.Message, len(h.steer))
-	copy(steer, h.steer)
-	followUp := make([]session.Message, len(h.followUp))
-	copy(followUp, h.followUp)
-	nextTurn := make([]session.Message, len(h.nextTurn))
-	copy(nextTurn, h.nextTurn)
+	h.emitLocked(h.queueUpdateLocked())
 	h.mu.Unlock()
-	h.emit(session.QueueUpdate{
-		Steer: steer, FollowUp: followUp, NextTurn: nextTurn,
-	})
 }
 
 // --- buffered writes ---
@@ -1836,8 +1821,8 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 			h.steer = nil
 			h.followUp = nil
 			h.nextTurn = nil
+			h.emitLocked(h.queueUpdateLocked())
 			h.mu.Unlock()
-			h.emitQueueUpdate()
 			return clearedSteer, clearedFollowUp, nil
 		}
 		if _, canceled := h.canceledTurnTokens[expected]; canceled {
@@ -1862,9 +1847,9 @@ func (h *Controller) cancelActiveRun(expectedToken ...uint64) ([]session.Message
 	h.steer = nil
 	h.followUp = nil
 	h.nextTurn = nil
+	h.emitLocked(h.queueUpdateLocked())
 	cancel := h.runCancel
 	h.mu.Unlock()
-	h.emitQueueUpdate()
 
 	if compactionCancel != nil {
 		compactionCancel()

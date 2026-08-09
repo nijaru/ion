@@ -17,11 +17,14 @@ import (
 // injecting one append failure at the storage boundary.
 type failingDurableStore struct {
 	*session.SQLiteStore
-	appendCalls  atomic.Int32
-	failAt       int32
-	blockAt      int32
-	blockStart   chan struct{}
-	blockRelease chan struct{}
+	appendCalls   atomic.Int32
+	failAt        int32
+	blockAt       int32
+	blockStart    chan struct{}
+	blockRelease  chan struct{}
+	commitCalls   atomic.Int32
+	commitStart   chan struct{}
+	commitRelease chan struct{}
 }
 
 func (s *failingDurableStore) AppendTurnEntry(ctx context.Context, turnID string, entry session.Entry) (string, error) {
@@ -40,6 +43,18 @@ func (s *failingDurableStore) AppendTurnEntry(ctx context.Context, turnID string
 		}
 	}
 	return s.SQLiteStore.AppendTurnEntry(ctx, turnID, entry)
+}
+
+func (s *failingDurableStore) CommitTurn(ctx context.Context, turnID string) error {
+	if s.commitStart != nil && s.commitCalls.Add(1) == 1 {
+		close(s.commitStart)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.commitRelease:
+		}
+	}
+	return s.SQLiteStore.CommitTurn(ctx, turnID)
 }
 
 func TestRuntimeDurableMessageEndIsPersistedBeforePublication(t *testing.T) {
@@ -98,6 +113,79 @@ func TestRuntimeDurableMessageEndIsPersistedBeforePublication(t *testing.T) {
 	}
 	if persisted := <-seen; !persisted {
 		t.Fatal("assistant MessageEnd was published before its durable turn entry")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSettledCountsNextTurnAcceptedDuringCommit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-next-turn.db")
+	base, err := session.NewSQLiteStore(path, "runtime-next-turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &failingDurableStore{
+		SQLiteStore:   base,
+		failAt:        -1,
+		commitStart:   make(chan struct{}),
+		commitRelease: make(chan struct{}),
+	}
+	sess := session.NewSession(store, 0)
+	var calls atomic.Int32
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "test"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls.Add(1)
+			return &mockStream{chunks: []*llm.Chunk{{Content: "ok", StopReason: llm.StopReasonStop}}}, nil
+		},
+	})
+
+	settled := make(chan int, 1)
+	watchEvents(t, h, func(event session.Event) {
+		if event, ok := event.(session.Settled); ok {
+			settled <- event.NextTurnCount
+		}
+	})
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := h.Prompt(context.Background(), "first")
+		promptDone <- err
+	}()
+	select {
+	case <-store.commitStart:
+	case <-time.After(time.Second):
+		t.Fatal("first commit did not start")
+	}
+	if err := h.NextTurn("queued"); err != nil {
+		t.Fatalf("NextTurn during commit: %v", err)
+	}
+	close(store.commitRelease)
+	if err := <-promptDone; err != nil {
+		t.Fatalf("first Prompt: %v", err)
+	}
+	select {
+	case count := <-settled:
+		if count != 1 {
+			t.Fatalf("Settled.NextTurnCount = %d, want one queued turn", count)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not observe first Settled event")
+	}
+	deadline := time.After(time.Second)
+	for calls.Load() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("queued turn did not start; provider calls = %d", calls.Load())
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)

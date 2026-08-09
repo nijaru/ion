@@ -122,6 +122,13 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 	}
 	if c.runDone == completion.runDone {
 		if completion.runErr != nil {
+			// Terminal failures do not leave steering or follow-up input for a
+			// later prompt. Those messages belonged to this failed turn and
+			// must be resolved at the same controller boundary as the failure.
+			c.steer = nil
+			c.followUp = nil
+			c.turnInputClosed = true
+			c.emitLocked(c.queueUpdateLocked())
 			// A persistence/setup failure can terminate before the normal
 			// Settled event reaches the hub. Do not expose the previous live
 			// assistant draft from an otherwise idle replacement snapshot.
@@ -148,7 +155,10 @@ func (c *Controller) handleTurnCompletion(completion turnCompletion) {
 		}
 		if c.settledPending {
 			settle = true
-			settledNextTurn = c.settledNextTurns
+			// NextTurn remains accepted through terminal persistence. Read the
+			// authoritative queue at settlement rather than the count captured
+			// when finalization began.
+			settledNextTurn = len(c.nextTurn)
 			c.settledPending = false
 			c.settledNextTurns = 0
 			c.runtimeFailure = turnCompletionFailure(completion)
