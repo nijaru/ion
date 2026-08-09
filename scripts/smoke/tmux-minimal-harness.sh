@@ -380,9 +380,9 @@ send_deterministic_p1_tui_smoke() {
   send_line "exercise explicit queue mode"
   wait_contains "Streaming..." 30
   send_line "queued follow-up from queue mode"
-  wait_contains "Queued (Alt+Up edit): queued follow-up from queue mode" 30
+  wait_contains "Queued: queued follow-up from queue mode" 30
   assert_visible_contains "1 queued"
-  assert_visible_contains "Queued (Alt+Up edit): queued follow-up from queue mode"
+  assert_visible_contains "Queued: queued follow-up from queue mode"
   assert_visible_separator_line_count 2
   trace_pass "queue_mode"
 
