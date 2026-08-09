@@ -183,11 +183,12 @@ scripts/smoke/tmux-minimal-harness.sh
 ```
 
 Live provider smoke tests are gated behind environment variables and are not
-part of the default test run. The optional rich probe can exercise two
-materially different provider adapters when those profiles are available; it
-never accepts or persists API keys. One standards-compliant live provider path
-is sufficient for the core gate, and additional-provider failures are targeted
-compatibility work:
+part of the default test run. The optional rich probe exercises the full
+turn/tool/restart path for two profiles; they may use the same adapter, while
+`ION_LIVE_REQUIRE_DISTINCT=1` enforces a materially different second adapter.
+It never accepts or persists API keys. One standards-compliant live provider
+path is sufficient for the core gate, and additional-provider failures are
+targeted compatibility work:
 
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
@@ -201,7 +202,9 @@ go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -timeout 180s -v
 
 The example uses a local Fedora Qwen endpoint for the second adapter. Run it
 only when that endpoint and its credentials are available; it is separate from
-the low-cost current-model basic smoke below.
+the low-cost current-model basic smoke below. Omit
+`ION_LIVE_REQUIRE_DISTINCT` when exercising two models through one configured
+adapter.
 
 For low-cost current-model verification, the basic smoke checks streamed text,
 settlement, SQLite persistence, and replay. It is sufficient for the core live

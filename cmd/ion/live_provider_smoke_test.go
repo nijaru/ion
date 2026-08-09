@@ -22,14 +22,18 @@ import (
 // The default test suite never makes network requests. When ION_LIVE_SMOKE=1,
 // profile A comes from the stable local config unless explicitly overridden,
 // and profile B must be supplied with ION_LIVE_PROVIDER_B and
-// ION_LIVE_MODEL_B. Provider adapters resolve credentials from their normal
+// ION_LIVE_MODEL_B. Two profiles may use the same adapter; set
+// ION_LIVE_REQUIRE_DISTINCT=1 when a second adapter conformance comparison is
+// intended. Provider adapters resolve credentials from their normal
 // environment variables; this test never accepts, prints, or persists a key.
 func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	if os.Getenv("ION_LIVE_SMOKE") != "1" {
 		t.Skip("set ION_LIVE_SMOKE=1 to run the opt-in live-provider gate")
 	}
 
-	profiles, err := loadLiveProviderProfiles()
+	profiles, err := loadLiveProviderProfilesWithDistinctAdapter(
+		os.Getenv("ION_LIVE_REQUIRE_DISTINCT") == "1",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
