@@ -227,6 +227,32 @@ func TestConvertRequestPreservesImageParts(t *testing.T) {
 	}
 }
 
+func TestConvertRequestNormalizesToolCallIDsForWireLimit(t *testing.T) {
+	longID := strings.Repeat("a", 48)
+	converted := (&Base{Config: llm.ProviderConfig{ID: "openai"}}).ConvertRequest(&llm.Request{
+		Messages: []llm.Message{
+			{
+				Role: llm.RoleAssistant,
+				Calls: []llm.Call{{
+					ID:   longID,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "lookup", Arguments: `{}`},
+				}},
+			},
+			{Role: llm.RoleTool, ToolID: longID, Content: "result"},
+		},
+	})
+	if got := converted.Messages[0].ToolCalls[0].ID; len(got) != 40 {
+		t.Fatalf("assistant tool call id length = %d, want 40", len(got))
+	}
+	if got := converted.Messages[1].ToolCallID; got != converted.Messages[0].ToolCalls[0].ID {
+		t.Fatalf("tool result id = %q, want %q", got, converted.Messages[0].ToolCalls[0].ID)
+	}
+}
+
 func TestConvertRequestAppliesModelCompatibilityOverrides(t *testing.T) {
 	falseValue := false
 	p := NewProvider(llm.ProviderConfig{

@@ -42,7 +42,7 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 				msg := openai.ChatCompletionMessage{
 					Role:       string(llm.RoleTool),
 					Content:    content,
-					ToolCallID: tool.ToolID,
+					ToolCallID: normalizeOpenAIToolCallID(tool.ToolID),
 				}
 				if compat.RequiresToolResultName {
 					msg.Name = tool.Name
@@ -132,7 +132,7 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 			msg.ToolCalls = make([]openai.ToolCall, len(calls))
 			for j, call := range calls {
 				msg.ToolCalls[j] = openai.ToolCall{
-					ID:   call.ID,
+					ID:   normalizeOpenAIToolCallID(call.ID),
 					Type: openai.ToolType(call.Type),
 					Function: openai.FunctionCall{
 						Name:      call.Function.Name,
@@ -334,6 +334,13 @@ func hasImageParts(parts []llm.ContentPart) bool {
 		}
 	}
 	return false
+}
+
+func normalizeOpenAIToolCallID(id string) string {
+	if len(id) <= 40 {
+		return id
+	}
+	return id[:40]
 }
 
 func imagePartURL(part llm.ContentPart) string {
