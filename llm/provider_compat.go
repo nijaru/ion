@@ -107,11 +107,12 @@ func DetectCompat(provider, baseURL string) ProviderCompat {
 	isDeepSeek := provider == "deepseek" || strings.Contains(baseURL, "deepseek.com")
 	isCloudflare := strings.Contains(baseURL, "gateway.ai.cloudflare.com") ||
 		strings.Contains(baseURL, "api.cloudflare.com")
+	isOpencode := provider == "opencode" || strings.Contains(baseURL, "opencode.ai")
 	isOpenRouter := provider == "openrouter" || strings.Contains(baseURL, "openrouter.ai")
 
 	// Non-standard providers that don't support certain OpenAI features
 	isNonStandard := isGrok || isZai || isTogether || isMoonshot || isDeepSeek ||
-		isCloudflare || strings.Contains(baseURL, "cerebras.ai") ||
+		isCloudflare || isOpencode || strings.Contains(baseURL, "cerebras.ai") ||
 		strings.Contains(baseURL, "chutes.ai")
 
 	compat.SupportsStore = !isNonStandard
@@ -119,7 +120,7 @@ func DetectCompat(provider, baseURL string) ProviderCompat {
 	compat.SupportsStrictMode = !isMoonshot && !isTogether && !isCloudflare
 
 	// MaxTokensField: some providers need max_tokens instead of max_completion_tokens
-	useMaxTokens := strings.Contains(baseURL, "chutes.ai") || isMoonshot || isCloudflare || isTogether
+	useMaxTokens := strings.Contains(baseURL, "chutes.ai") || isMoonshot || isCloudflare || isTogether || isZai
 	if useMaxTokens {
 		compat.MaxTokensField = "max_tokens"
 	}

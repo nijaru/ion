@@ -45,6 +45,20 @@ func TestDetectCompatZai(t *testing.T) {
 	if compat.SupportsReasoningEffort {
 		t.Fatal("Z.ai should not support reasoning_effort")
 	}
+	if compat.MaxTokensField != "max_tokens" {
+		t.Fatalf("MaxTokensField = %q, want max_tokens", compat.MaxTokensField)
+	}
+}
+
+func TestDetectCompatOpenCode(t *testing.T) {
+	compat := DetectCompat("opencode", "https://opencode.ai/v1")
+	if compat.SupportsStore || compat.SupportsDeveloperRole {
+		t.Fatalf(
+			"OpenCode standard features = store:%v developer:%v, want false",
+			compat.SupportsStore,
+			compat.SupportsDeveloperRole,
+		)
+	}
 }
 
 func TestDetectCompatOpenAI(t *testing.T) {
