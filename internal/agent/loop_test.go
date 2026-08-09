@@ -411,6 +411,26 @@ func TestRunLoopCleanErrorStopReasonIsTerminalBeforeToolExecution(t *testing.T) 
 	if !ok || assistant.StopReason != session.StopReasonError {
 		t.Fatalf("last message = %#v, want error assistant", msgs[len(msgs)-1])
 	}
+	if assistant.Error == "" {
+		t.Fatal("failed provider response did not retain an error message")
+	}
+}
+
+func TestBuildAssistantMessageNormalizesFailureWithoutProviderDetail(t *testing.T) {
+	for _, stopReason := range []llm.StopReason{llm.StopReasonError, llm.StopReasonAborted} {
+		t.Run(string(stopReason), func(t *testing.T) {
+			var acc llm.StreamAccumulator
+			acc.Add(&llm.Chunk{StopReason: stopReason})
+
+			message, err := buildAssistantMessage(acc, llm.Model{ID: "test"}, session.ThinkingOff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if message.StopReason != session.StopReason(stopReason) || message.Error == "" {
+				t.Fatalf("message = %#v, want failure reason and error", message)
+			}
+		})
+	}
 }
 
 // INVARIANT: signal abort causes terminal AgentEnd.

@@ -2156,14 +2156,24 @@ func buildAssistantMessage(
 	thinking session.ThinkingLevel,
 ) (session.AssistantMessage, error) {
 	resp := acc.Response()
+	stopReason := session.StopReason(resp.StopReason)
+	responseError := resp.ErrorMessage
+	if responseError == "" {
+		switch stopReason {
+		case session.StopReasonError:
+			responseError = "provider response failed"
+		case session.StopReasonAborted:
+			responseError = "response aborted"
+		}
+	}
 	msg := session.AssistantMessage{
 		API:           resp.API,
 		Provider:      resp.Provider,
 		Model:         model.ID,
 		ResponseModel: resp.ResponseModel,
 		ResponseID:    resp.ResponseID,
-		StopReason:    session.StopReason(resp.StopReason),
-		Error:         resp.ErrorMessage,
+		StopReason:    stopReason,
+		Error:         responseError,
 		Usage: session.Usage{
 			Input:       resp.Usage.InputTokens,
 			Output:      resp.Usage.OutputTokens,
