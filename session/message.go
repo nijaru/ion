@@ -244,6 +244,14 @@ func MessageText(msg Message) string {
 			}
 		}
 		return b.String()
+	case *ToolResultMessage:
+		var b strings.Builder
+		for _, c := range m.Content {
+			if tc, ok := c.(TextContent); ok {
+				b.WriteString(tc.Text)
+			}
+		}
+		return b.String()
 	case *CustomMessage:
 		var b strings.Builder
 		for _, c := range m.Content {
