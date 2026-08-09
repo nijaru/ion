@@ -80,6 +80,9 @@ type Controller struct {
 	steer    []session.Message
 	followUp []session.Message
 	nextTurn []session.Message
+	// turnInputClosed seals steer/follow-up acceptance after the loop's final
+	// empty drain. It prevents a late message from leaking into a future turn.
+	turnInputClosed bool
 
 	steeringMode     string
 	followUpMode     string
@@ -595,6 +598,7 @@ func (c *Controller) beginTurn(parent context.Context, requestedToken ...uint64)
 		token = c.nextTurnToken
 	}
 	c.activeTurnToken = token
+	c.turnInputClosed = false
 	c.runtimeFailure = ""
 	c.runCancel = make(chan struct{})
 	c.runCancelOnce = new(sync.Once)

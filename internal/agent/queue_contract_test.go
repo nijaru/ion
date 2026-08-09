@@ -142,6 +142,47 @@ func TestControllerNextTurnStartsQueuedPromptsAfterSettlement(t *testing.T) {
 	}
 }
 
+func TestControllerSealsLateSteerAndFollowUpInput(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
+	defer h.Close()
+
+	h.mu.Lock()
+	h.phase = PhaseStreaming
+	h.turnInputClosed = false
+	h.mu.Unlock()
+	config := h.buildLoopConfig(context.Background(), nil, nil)
+	if got := config.DrainSteer(); got != nil {
+		t.Fatalf("initial steer drain = %#v, want empty", got)
+	}
+	if got := config.DrainFollowUp(); got != nil {
+		t.Fatalf("final follow-up drain = %#v, want empty", got)
+	}
+	if err := h.steerDirect("too late"); !errors.Is(err, ErrPhaseConflict) {
+		t.Fatalf("late steer error = %v, want phase conflict", err)
+	}
+	if err := h.followUpDirect("too late"); !errors.Is(err, ErrPhaseConflict) {
+		t.Fatalf("late follow-up error = %v, want phase conflict", err)
+	}
+}
+
+func TestNextTurnCanQueueDuringTerminalPersistence(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t)})
+	defer h.Close()
+
+	h.mu.Lock()
+	h.phase = PhasePersisting
+	h.activeTurnID = "turn-in-progress"
+	h.mu.Unlock()
+	if err := h.NextTurn("after settlement"); err != nil {
+		t.Fatalf("NextTurn during terminal persistence: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.nextTurn) != 1 {
+		t.Fatalf("next-turn queue length = %d, want one", len(h.nextTurn))
+	}
+}
+
 func TestAbortPendingPromptTokenClearsQueuedNextTurns(t *testing.T) {
 	h := NewController(ControllerConfig{Session: newTestSession(t), QueueCapacity: 2})
 	defer h.Close()

@@ -792,7 +792,20 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 		},
 		DrainFollowUp: func() []session.Message {
 			h.mu.Lock()
-			msgs := h.drainQueued(&h.followUp, h.followUpMode)
+			// The final follow-up poll is also the controller-owned boundary
+			// that seals steer/follow-up acceptance. If a steer arrived after
+			// the preceding empty steer poll, consume it here instead of
+			// leaking it into a later prompt. Only an atomically empty poll
+			// closes the current turn's input window.
+			var msgs []session.Message
+			if len(h.steer) > 0 {
+				msgs = h.drainQueued(&h.steer, h.steeringMode)
+			} else {
+				msgs = h.drainQueued(&h.followUp, h.followUpMode)
+				if len(msgs) == 0 {
+					h.turnInputClosed = true
+				}
+			}
 			h.mu.Unlock()
 			h.emitQueueUpdate()
 			return msgs
@@ -1197,9 +1210,14 @@ func (h *Controller) steerDirect(text string, images ...session.ImageContent) er
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if !h.phase.acceptsTurnInput() {
+	phase := h.phase
+	if !phase.acceptsTurnInput() {
 		h.mu.Unlock()
-		return fmt.Errorf("%w: cannot steer in phase %s", ErrPhaseConflict, h.phase)
+		return fmt.Errorf("%w: cannot steer in phase %s", ErrPhaseConflict, phase)
+	}
+	if h.turnInputClosed {
+		h.mu.Unlock()
+		return fmt.Errorf("%w: turn input is closed", ErrPhaseConflict)
 	}
 	if err := h.appendQueued(&h.steer, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1225,9 +1243,14 @@ func (h *Controller) followUpDirect(text string, images ...session.ImageContent)
 		h.mu.Unlock()
 		return errors.New("harness is closed")
 	}
-	if !h.phase.acceptsTurnInput() {
+	phase := h.phase
+	if !phase.acceptsTurnInput() {
 		h.mu.Unlock()
-		return fmt.Errorf("%w: cannot follow up in phase %s", ErrPhaseConflict, h.phase)
+		return fmt.Errorf("%w: cannot follow up in phase %s", ErrPhaseConflict, phase)
+	}
+	if h.turnInputClosed {
+		h.mu.Unlock()
+		return fmt.Errorf("%w: turn input is closed", ErrPhaseConflict)
 	}
 	if err := h.appendQueued(&h.followUp, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1252,11 +1275,6 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("harness is closed")
-	}
-	if h.phase.activeTurn() && !h.phase.acceptsTurnInput() && h.activeTurnID != "" {
-		phase := h.phase
-		h.mu.Unlock()
-		return fmt.Errorf("%w: phase=%s", ErrPhaseConflict, phase)
 	}
 	if err := h.appendQueued(&h.nextTurn, newUserMessage(text, cloneImageContents(images), time.Now())); err != nil {
 		h.mu.Unlock()
@@ -1337,15 +1355,17 @@ func userMessageImages(user *session.UserMessage) []session.ImageContent {
 	return images
 }
 
-// emitQueueUpdate emits a QueueUpdate event for tests and internal callers
-// that already hold h.mu. Must NOT be called under h.mu — emit() locks.
+// emitQueueUpdate snapshots all queues under h.mu, then publishes the copy
+// without holding the controller lock.
 func (h *Controller) emitQueueUpdate() {
+	h.mu.Lock()
 	steer := make([]session.Message, len(h.steer))
 	copy(steer, h.steer)
 	followUp := make([]session.Message, len(h.followUp))
 	copy(followUp, h.followUp)
 	nextTurn := make([]session.Message, len(h.nextTurn))
 	copy(nextTurn, h.nextTurn)
+	h.mu.Unlock()
 	h.emit(session.QueueUpdate{
 		Steer: steer, FollowUp: followUp, NextTurn: nextTurn,
 	})
