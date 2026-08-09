@@ -10,18 +10,30 @@ import (
 
 // ConvertRequest transforms the unified Request into OpenAI's format.
 func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
-	messages := make([]openai.ChatCompletionMessage, len(req.Messages))
-	for i, m := range req.Messages {
+	compat := b.CompatSettings()
+	messages := make([]openai.ChatCompletionMessage, 0, len(req.Messages))
+	lastRole := ""
+	for _, m := range req.Messages {
+		if compat.RequiresAssistantAfterToolResult && lastRole == string(llm.RoleTool) && m.Role == llm.RoleUser {
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    string(llm.RoleAssistant),
+				Content: "I have processed the tool results.",
+			})
+		}
+
 		content, multiContent := b.convertMessageContent(m)
+		role := string(m.Role)
+		if m.Role == llm.RoleDeveloper && !compat.SupportsDeveloperRole {
+			role = string(llm.RoleSystem)
+		}
 		msg := openai.ChatCompletionMessage{
-			Role:         string(m.Role),
+			Role:         role,
 			Content:      content,
 			MultiContent: multiContent,
 			Name:         m.Name,
 		}
 		if m.Role == llm.RoleAssistant {
 			reasoning := m.BlocksReasoning()
-			compat := b.CompatSettings()
 			if compat.RequiresReasoningContentOnAssistantMessages && reasoning != "" {
 				// The upstream SDK omits empty reasoning_content on the wire;
 				// preserve meaningful replayed reasoning without fabricating a
@@ -57,7 +69,8 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 		if m.Role == llm.RoleTool {
 			msg.ToolCallID = m.ToolID
 		}
-		messages[i] = msg
+		messages = append(messages, msg)
+		lastRole = role
 	}
 
 	var tools []openai.Tool
@@ -76,7 +89,6 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 	}
 
 	caps := llm.CapabilitiesForRequest(req, b.Capabilities(req.Model))
-	compat := b.CompatSettings()
 	cr := openai.ChatCompletionRequest{
 		Model:         req.Model,
 		Messages:      messages,

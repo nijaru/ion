@@ -138,6 +138,31 @@ func TestNewProviderRespectsConfig(t *testing.T) {
 	}
 }
 
+func TestConvertRequestAppliesCompatibilityRoleAndToolBridge(t *testing.T) {
+	b := &Base{
+		Config: llm.ProviderConfig{ID: "compatible"},
+		Compat: &llm.ProviderCompat{
+			SupportsDeveloperRole:            false,
+			RequiresAssistantAfterToolResult: true,
+		},
+	}
+	converted := b.ConvertRequest(&llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleDeveloper, Content: "developer instructions"},
+		{Role: llm.RoleTool, ToolID: "call-1", Content: "tool output"},
+		{Role: llm.RoleUser, Content: "continue"},
+	}})
+	if len(converted.Messages) != 4 {
+		t.Fatalf("messages = %d, want developer fallback plus bridge", len(converted.Messages))
+	}
+	if got := converted.Messages[0].Role; got != string(llm.RoleSystem) {
+		t.Fatalf("developer role = %q, want system fallback", got)
+	}
+	if got := converted.Messages[2].Content; got != "I have processed the tool results." ||
+		converted.Messages[2].Role != string(llm.RoleAssistant) {
+		t.Fatalf("bridge message = %#v, want assistant bridge", converted.Messages[2])
+	}
+}
+
 func TestConvertRequestPreservesImageParts(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{})
 
