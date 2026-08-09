@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,6 +176,51 @@ func startupSessionID(
 		return "", fmt.Errorf("no conversation session to continue in this directory")
 	}
 	return recent.ID(), nil
+}
+
+// runtimeLocationForSession resolves the workspace captured with an explicitly
+// selected session. A resumed session must not silently execute tools and
+// project-local policy in the directory from which the launcher happened to
+// start. Missing catalog metadata is tolerated for direct leaf IDs created
+// before catalog publication; the selected session still resumes on cwd.
+func runtimeLocationForSession(
+	ctx context.Context,
+	store session.Store,
+	sessionID, cwd, branch string,
+) (string, string, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return cwd, branch, nil
+	}
+	catalog, ok := store.(agent.SessionCatalog)
+	if !ok {
+		return cwd, branch, nil
+	}
+	info, err := catalog.GetSessionInfo(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, os.ErrNotExist) {
+			return cwd, branch, nil
+		}
+		return "", "", fmt.Errorf("load session metadata %q: %w", sessionID, err)
+	}
+	resolvedCWD := cwd
+	if storedCWD := strings.TrimSpace(info.Workdir); storedCWD != "" {
+		resolvedCWD, err = filepath.Abs(storedCWD)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve stored workdir %q: %w", storedCWD, err)
+		}
+		stat, statErr := os.Stat(resolvedCWD)
+		if statErr != nil {
+			return "", "", fmt.Errorf("stored workdir %q is unavailable: %w", resolvedCWD, statErr)
+		}
+		if !stat.IsDir() {
+			return "", "", fmt.Errorf("stored workdir %q is not a directory", resolvedCWD)
+		}
+	}
+	resolvedBranch := branch
+	if storedBranch := strings.TrimSpace(info.Branch); storedBranch != "" {
+		resolvedBranch = storedBranch
+	}
+	return resolvedCWD, resolvedBranch, nil
 }
 
 func thinkingLevelForRuntime(value string) session.ThinkingLevel {
@@ -623,7 +669,9 @@ func openRuntime(
 	// Resume only after every fallible runtime-materialization and recovery
 	// check has completed. The store is shared with the current runtime during
 	// TUI replacement, so moving its leaf earlier could leave a rejected target
-	// installed after a failed replacement.
+	// installed after a failed replacement. An unqualified launch explicitly
+	// starts a fresh conversation at the virtual root instead of inheriting the
+	// last selected leaf from the shared workspace store.
 	if sessionID != "" {
 		sqliteStore, ok := store.(*session.SQLiteStore)
 		if !ok {
@@ -632,6 +680,8 @@ func openRuntime(
 		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
 			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
 		}
+	} else if err := store.SetLeafID(""); err != nil {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("start fresh session: %w", err))
 	}
 	if persistResumedSessionModel {
 		if err := harness.SetModel(model); err != nil {

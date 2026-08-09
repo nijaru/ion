@@ -96,6 +96,96 @@ func TestOpenRuntimeReturnsActionableProviderError(t *testing.T) {
 	}
 }
 
+func TestOpenRuntimeStartsFreshWithoutSelectedSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 8)
+	oldID, err := sess.AppendMessage(context.Background(), session.NewUserText("old", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(oldID); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, _, runner, err := openRuntime(
+		context.Background(), store, jobs, t.TempDir(), "main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}), "", false,
+		"", "", "", nil, false,
+	)
+	if err != nil {
+		t.Fatalf("openRuntime: %v", err)
+	}
+	defer func() {
+		if err := closeRuntimeHandles(runner, store); err != nil {
+			t.Fatalf("close runtime: %v", err)
+		}
+	}()
+	if got := store.GetLeafID(); got != "" {
+		t.Fatalf("fresh runtime leaf = %q, want virtual root", got)
+	}
+}
+
+func TestOpenRuntimePersistsExplicitModelOverrideOnResume(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 8)
+	if _, err := sess.AppendModelChange(context.Background(), "ollama", "old-model"); err != nil {
+		t.Fatal(err)
+	}
+	targetID, err := sess.AppendMessage(context.Background(), session.NewUserText("resume", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, _, runner, err := openRuntime(
+		context.Background(), store, jobs, t.TempDir(), "main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}), targetID, true,
+		"", "", "", nil, false,
+	)
+	if err != nil {
+		t.Fatalf("openRuntime: %v", err)
+	}
+	defer func() {
+		if err := closeRuntimeHandles(runner, store); err != nil {
+			t.Fatalf("close runtime: %v", err)
+		}
+	}()
+	resumedLeaf := store.GetLeafID()
+	if resumedLeaf == targetID || resumedLeaf == "" {
+		t.Fatalf("resumed leaf = %q, want model override entry after %q", resumedLeaf, targetID)
+	}
+	branch, err := store.Branch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, ok := branch[len(branch)-1].(*session.ModelChangeEntry)
+	if !ok || last.ParentID() != targetID {
+		t.Fatalf("resumed branch tail = %T parent %q, want model change parent %q", branch[len(branch)-1], branch[len(branch)-1].ParentID(), targetID)
+	}
+	replayed, err := sess.BuildContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.ActiveProvider != "ollama" || replayed.ActiveModel != "llama3" {
+		t.Fatalf("resumed model = %s/%s, want ollama/llama3", replayed.ActiveProvider, replayed.ActiveModel)
+	}
+}
+
 func TestOpenRuntimeDoesNotMoveLeafWhenMaterializationFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store, err := session.NewSQLiteStore(":memory:", "ion")

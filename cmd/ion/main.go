@@ -337,6 +337,35 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		}
 		sessionID = forkedID
 	}
+	resolvedCWD, resolvedBranch, err := runtimeLocationForSession(ctx, store, sessionID, cwd, branch)
+	if err != nil {
+		closeStartupStore(stderr, store)
+		fmt.Fprintf(stderr, "failed to resolve session workspace: %v\n", err)
+		return 1
+	}
+	if resolvedCWD != cwd || resolvedBranch != branch {
+		cwd = resolvedCWD
+		branch = resolvedBranch
+		projectTrustRoot, err = config.TrustedProjectRoot(cwd)
+		if err != nil {
+			closeStartupStore(stderr, store)
+			fmt.Fprintf(stderr, "failed to resolve session project trust: %v\n", err)
+			return 1
+		}
+		if cli.trustProjectRequested() {
+			if err := config.TrustProject(cwd); err != nil {
+				closeStartupStore(stderr, store)
+				fmt.Fprintf(stderr, "failed to trust session project: %v\n", err)
+				return 1
+			}
+			projectTrustRoot, err = config.TrustedProjectRoot(cwd)
+			if err != nil {
+				closeStartupStore(stderr, store)
+				fmt.Fprintf(stderr, "failed to resolve session project trust: %v\n", err)
+				return 1
+			}
+		}
+	}
 	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
 			closeStartupStore(stderr, store)
@@ -366,7 +395,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	persistResumedSessionModel := !(sessionID != "" && explicitRuntimeOverride)
+	persistResumedSessionModel := sessionID != ""
 	b, sess, runner, err := openRuntime(
 		ctx,
 		store,

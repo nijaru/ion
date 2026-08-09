@@ -347,6 +347,40 @@ func TestLoadEffectiveConfigForReloadPreservesProcessOverrides(t *testing.T) {
 	}
 }
 
+func TestRuntimeLocationForSessionUsesStoredWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	store := &testStore{sessions: []session.SessionInfoEntry{
+		{
+			EntryBase: session.EntryBase{ID: "session-1"},
+			Workdir:   workspace,
+			Branch:    "feature/session",
+		},
+	}}
+
+	cwd, branch, err := runtimeLocationForSession(
+		context.Background(), store, "session-1", "/tmp/launcher", "main",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cwd != workspace || branch != "feature/session" {
+		t.Fatalf("resolved location = (%q, %q), want (%q, feature/session)", cwd, branch, workspace)
+	}
+}
+
+func TestRuntimeLocationForSessionKeepsLauncherWorkspaceWithoutMetadata(t *testing.T) {
+	store := &testStore{}
+	cwd, branch, err := runtimeLocationForSession(
+		context.Background(), store, "leaf-without-catalog", "/tmp/launcher", "main",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cwd != "/tmp/launcher" || branch != "main" {
+		t.Fatalf("resolved location = (%q, %q), want launcher location", cwd, branch)
+	}
+}
+
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
 	store := &testStore{sessions: []session.SessionInfoEntry{
 		sessionInfoForTest("empty", ""),
