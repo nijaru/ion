@@ -51,6 +51,24 @@ func TestRequestClonePreservesEmptyJSONCollections(t *testing.T) {
 	}
 }
 
+func TestRequestCloneCopiesCapabilitySnapshot(t *testing.T) {
+	request := &Request{
+		CapabilitySnapshot: &Capabilities{
+			InputModalities: []string{"text"},
+			Reasoning:       ReasoningCapabilities{Efforts: []string{"low"}},
+		},
+	}
+	clone := request.Clone()
+	request.CapabilitySnapshot.InputModalities[0] = "image"
+	request.CapabilitySnapshot.Reasoning.Efforts[0] = "high"
+	if got := clone.CapabilitySnapshot.InputModalities[0]; got != "text" {
+		t.Fatalf("cloned input modalities = %#v, want text", clone.CapabilitySnapshot.InputModalities)
+	}
+	if got := clone.CapabilitySnapshot.Reasoning.Efforts[0]; got != "low" {
+		t.Fatalf("cloned reasoning efforts = %#v, want low", clone.CapabilitySnapshot.Reasoning.Efforts)
+	}
+}
+
 func TestRequestTransportIsNotSerialized(t *testing.T) {
 	req := Request{Model: "test", Transport: http.DefaultTransport}
 	payload, err := json.Marshal(req)

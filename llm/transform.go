@@ -69,7 +69,12 @@ func PrepareRequestForCapabilities(req *Request, caps Capabilities) (*Request, e
 		return nil, err
 	}
 	prepared := req.Clone()
+	if prepared == nil {
+		return nil, nil
+	}
 	TransformRequestForCapabilities(prepared, caps)
+	caps = cloneCapabilities(caps)
+	prepared.CapabilitySnapshot = &caps
 	if err := ValidateRequest(prepared); err != nil {
 		return nil, err
 	}

@@ -219,7 +219,7 @@ func TestConvertRequestPreservesReasoningForCompatibleReplay(t *testing.T) {
 			Reasoning: "think first",
 		}},
 	})
-	if got, want := converted.Messages[0].Content, "<thinking>\nthink first\n</thinking>\n\nanswer"; got != want {
+	if got, want := converted.Messages[0].Content, "think first\n\nanswer"; got != want {
 		t.Fatalf("thinking-as-text content = %q, want %q", got, want)
 	}
 }

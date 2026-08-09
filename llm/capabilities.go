@@ -64,6 +64,22 @@ func DefaultCapabilities() Capabilities {
 	}
 }
 
+// CapabilitiesForRequest returns the host-resolved capability snapshot when
+// one is attached to req, otherwise it falls back to the adapter's static
+// model capability view.
+func CapabilitiesForRequest(req *Request, fallback Capabilities) Capabilities {
+	if req != nil && req.CapabilitySnapshot != nil {
+		return cloneCapabilities(*req.CapabilitySnapshot)
+	}
+	return fallback
+}
+
+func cloneCapabilities(caps Capabilities) Capabilities {
+	caps.InputModalities = append([]string(nil), caps.InputModalities...)
+	caps.Reasoning.Efforts = append([]string(nil), caps.Reasoning.Efforts...)
+	return caps
+}
+
 // SupportsImages reports whether image parts may be sent to the model.
 // Unknown modality metadata remains permissive so existing providers do not
 // silently lose user input; an explicit text-only list is restrictive.

@@ -30,6 +30,9 @@ func TestPrepareRequestAcceptsStructuredAssistantToolCalls(t *testing.T) {
 	if got := req.Messages[1].BlocksToolCalls()[0].ID; got != "call/1" {
 		t.Fatalf("original block call ID = %q, want unchanged", got)
 	}
+	if prepared.CapabilitySnapshot == nil || prepared.CapabilitySnapshot.SystemRole != llm.RoleSystem {
+		t.Fatalf("capability snapshot = %#v, want prepared capabilities", prepared.CapabilitySnapshot)
+	}
 }
 
 func TestPrepareRequestMarksMissingToolResultsAsErrors(t *testing.T) {

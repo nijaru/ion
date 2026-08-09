@@ -12,6 +12,26 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
+func TestApplyModelMetadataCapabilities(t *testing.T) {
+	caps := llm.DefaultCapabilities()
+	applyModelMetadataCapabilities(&caps, llm.ModelMetadata{
+		Input:     []string{"text"},
+		Reasoning: true,
+	})
+	if caps.SupportsImages() {
+		t.Fatal("text-only metadata still accepts images")
+	}
+	if caps.Reasoning.Kind != llm.ReasoningKindEffort || !caps.SupportsReasoningEffort("high") {
+		t.Fatalf("reasoning capabilities = %#v, want effort control", caps.Reasoning)
+	}
+
+	caps.Reasoning.Kind = llm.ReasoningKindBudget
+	applyModelMetadataCapabilities(&caps, llm.ModelMetadata{Reasoning: true})
+	if caps.Reasoning.Kind != llm.ReasoningKindBudget {
+		t.Fatalf("explicit reasoning capability was replaced: %#v", caps.Reasoning)
+	}
+}
+
 func TestResolvedContextWindowPrefersConfigThenCachedMetadata(t *testing.T) {
 	dataDir := t.TempDir()
 	cache := map[string]llm.ModelMetadata{

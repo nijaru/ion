@@ -77,7 +77,8 @@ func NewProvider(cfg llm.ProviderConfig) *Provider {
 }
 
 func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
-	prepared, err := llm.PrepareRequestForCapabilities(req, p.Base.Capabilities(req.Model))
+	caps := llm.CapabilitiesForRequest(req, p.Base.Capabilities(req.Model))
+	prepared, err := llm.PrepareRequestForCapabilities(req, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +146,8 @@ func (p *Provider) Generate(ctx context.Context, req *llm.Request) (*llm.Respons
 }
 
 func (p *Provider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
-	prepared, err := llm.PrepareRequestForCapabilities(req, p.Base.Capabilities(req.Model))
+	caps := llm.CapabilitiesForRequest(req, p.Base.Capabilities(req.Model))
+	prepared, err := llm.PrepareRequestForCapabilities(req, caps)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +256,7 @@ func (p *Provider) buildRequest(req *llm.Request) openRouterRequest {
 	base := p.Base.ConvertRequest(req)
 
 	effort := req.ReasoningEffort
-	caps := p.Base.Capabilities(req.Model)
+	caps := llm.CapabilitiesForRequest(req, p.Base.Capabilities(req.Model))
 
 	orReq := openRouterRequest{
 		ChatCompletionRequest: base,

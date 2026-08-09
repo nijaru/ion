@@ -15,6 +15,26 @@ type responseTransport struct {
 	calls     int
 }
 
+type captureRequestTransport struct {
+	body []byte
+}
+
+func (t *captureRequestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var err error
+	t.body, err = io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+		)),
+		Header:  make(http.Header),
+		Request: req,
+	}, nil
+}
+
 func (t *responseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body := t.responses[t.calls]
 	t.calls++
@@ -72,6 +92,41 @@ func (t closeErrorTransport) RoundTrip(req *http.Request) (*http.Response, error
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
+}
+
+func TestStreamUsesRequestCapabilitySnapshot(t *testing.T) {
+	transport := &captureRequestTransport{}
+	p := NewProvider(llm.ProviderConfig{APIKey: "test", APIEndpoint: "https://example.test/v1"})
+	caps := llm.DefaultCapabilities()
+	caps.InputModalities = []string{"text"}
+	stream, err := p.Stream(t.Context(), &llm.Request{
+		Model: "test",
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Parts: []llm.ContentPart{
+				llm.TextPart("describe this"),
+				llm.ImagePart("image/png", "aW1hZ2U="),
+			},
+		}},
+		CapabilitySnapshot: &caps,
+		Transport:          transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stream.Next(); !ok {
+		t.Fatal("stream ended before response")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body := string(transport.body)
+	if strings.Contains(body, "image_url") {
+		t.Fatalf("request retained image content despite text-only snapshot: %s", body)
+	}
+	if !strings.Contains(body, "image omitted: model does not accept image input") {
+		t.Fatalf("request omitted explicit image downgrade: %s", body)
+	}
 }
 
 func TestStreamCloseReportsBodyFailure(t *testing.T) {

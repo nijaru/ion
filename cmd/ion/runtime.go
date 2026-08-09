@@ -370,6 +370,22 @@ func resolvedContextWindow(cfg *config.Config, info app.RuntimeInfo, catalog *ll
 	return 0
 }
 
+func applyModelMetadataCapabilities(caps *llm.Capabilities, metadata llm.ModelMetadata) {
+	if caps == nil {
+		return
+	}
+	if len(metadata.Input) > 0 {
+		caps.InputModalities = append([]string(nil), metadata.Input...)
+	}
+	if metadata.Reasoning && caps.Reasoning.Kind == llm.ReasoningKindNone {
+		caps.Reasoning = llm.ReasoningCapabilities{
+			Kind:       llm.ReasoningKindEffort,
+			Efforts:    []string{"minimal", "low", "medium", "high", "xhigh"},
+			CanDisable: true,
+		}
+	}
+}
+
 type sessionActivator interface {
 	ActivateSession(context.Context, string, string) error
 	ActivationOwner() uint64
@@ -550,20 +566,16 @@ func openRuntime(
 		if metadata, ok := catalog.GetCachedMetadata(
 			runtimeCfg.Provider,
 			runtimeCfg.Model,
-		); ok &&
-			len(metadata.Input) > 0 {
-			caps.InputModalities = append([]string(nil), metadata.Input...)
+		); ok {
+			applyModelMetadataCapabilities(&caps, metadata)
 		}
 	}
-	streamFn := provider.Stream
-	if !caps.SupportsImages() {
-		streamFn = func(streamCtx context.Context, req *llm.Request) (llm.Stream, error) {
-			prepared, err := llm.PrepareRequestForCapabilities(req, caps)
-			if err != nil {
-				return nil, err
-			}
-			return provider.Stream(streamCtx, prepared)
+	streamFn := func(streamCtx context.Context, req *llm.Request) (llm.Stream, error) {
+		prepared, err := llm.PrepareRequestForCapabilities(req, caps)
+		if err != nil {
+			return nil, err
 		}
+		return provider.Stream(streamCtx, prepared)
 	}
 	model := llm.Model{
 		ID:            runtimeCfg.Model,

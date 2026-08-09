@@ -336,6 +336,11 @@ type Request struct {
 	Transport http.RoundTripper `json:"-"`
 	// SessionID is forwarded to providers for cache-aware backends.
 	SessionID string `json:"session_id,omitzero"`
+	// CapabilitySnapshot is the host-resolved capability view for this request.
+	// It is internal transport state, not provider-visible JSON. A host may
+	// enrich static adapter capabilities with cached model metadata; adapters
+	// must use this snapshot when preparing the request.
+	CapabilitySnapshot *Capabilities `json:"-"`
 }
 
 // Response is the unified response from any provider.

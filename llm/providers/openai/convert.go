@@ -75,7 +75,7 @@ func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
 		}
 	}
 
-	caps := b.Capabilities(req.Model)
+	caps := llm.CapabilitiesForRequest(req, b.Capabilities(req.Model))
 	compat := b.CompatSettings()
 	cr := openai.ChatCompletionRequest{
 		Model:         req.Model,
@@ -265,7 +265,11 @@ func imagePartURL(part llm.ContentPart) string {
 }
 
 func thinkingAsText(reasoning string) string {
-	return "<thinking>\n" + reasoning + "\n</thinking>"
+	// Pi's OpenAI-compatible adapter replays thinking as plain text for
+	// providers that do not accept a native reasoning field. Tags become
+	// prompt content and can encourage a model to reproduce them, so preserve
+	// only the reasoning itself at this wire boundary.
+	return reasoning
 }
 
 func appendThinkingText(content, thinking string) string {

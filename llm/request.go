@@ -9,6 +9,10 @@ func (r *Request) Clone() *Request {
 	}
 	clone := *r
 	clone.Messages = cloneMessages(r.Messages)
+	if r.CapabilitySnapshot != nil {
+		caps := cloneCapabilities(*r.CapabilitySnapshot)
+		clone.CapabilitySnapshot = &caps
+	}
 	if r.Headers != nil {
 		clone.Headers = make(map[string]string, len(r.Headers))
 		for key, value := range r.Headers {
