@@ -109,6 +109,109 @@ func TestPrintModeUsesTheDurableRuntime(t *testing.T) {
 	}
 }
 
+func TestStructuredPrintModeWaitsForTerminalSettlementAfterToolLoop(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "tool-loop-events.db")
+	store, err := session.NewSQLiteStore(path, "tool-loop-events")
+	if err != nil {
+		t.Fatalf("open events store: %v", err)
+	}
+	sess := session.NewSession(store, 64)
+	calls := 0
+	runner := agent.NewController(agent.ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "fake-model", Provider: "fake"},
+		Tools: []agent.Tool{
+			{
+				Name: "echo",
+				Execute: func(_ context.Context, id string, _ json.RawMessage, _ <-chan struct{}, _ func(session.ToolPartial)) (
+					session.ToolResultMessage,
+					error,
+				) {
+					return session.ToolResultMessage{
+						ToolCallID: id,
+						ToolName:   "echo",
+						Content:    []session.Content{session.TextContent{Text: "tool result"}},
+					}, nil
+				},
+			},
+		},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			calls++
+			if calls == 1 {
+				return &printAcceptanceStream{chunks: []*llm.Chunk{{
+					Block:      llm.ToolCallBlock{ID: "call-1", Name: "echo", Arguments: `{}`},
+					StopReason: llm.StopReasonToolUse,
+				}}}, nil
+			}
+			return &printAcceptanceStream{
+				chunks: []*llm.Chunk{{Content: "after tool", StopReason: llm.StopReasonStop}},
+			}, nil
+		},
+	})
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	}()
+
+	var out bytes.Buffer
+	if err := runPrintModeWithWriter(ctx, &out, runner, "use echo", "events"); err != nil {
+		t.Fatalf("run structured tool-loop print mode: %v", err)
+	}
+
+	var events []structuredPrintEvent
+	decoder := json.NewDecoder(&out)
+	for {
+		var event structuredPrintEvent
+		err := decoder.Decode(&event)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode structured output %q: %v", out.String(), err)
+		}
+		events = append(events, event)
+	}
+	if len(events) == 0 || events[len(events)-1].Type != "result" {
+		t.Fatalf("structured tool-loop events = %v, want result last", eventTypes(events))
+	}
+	settledIndex := -1
+	turnEndCount := 0
+	for index, event := range events[:len(events)-1] {
+		switch event.Type {
+		case "turn_end":
+			turnEndCount++
+		case "settled":
+			settledIndex = index
+		}
+	}
+	if turnEndCount != 2 {
+		t.Fatalf("turn_end count = %d, want tool iteration plus final turn", turnEndCount)
+	}
+	if settledIndex < 0 {
+		t.Fatalf("structured tool-loop events omitted settled lifecycle: %v", eventTypes(events))
+	}
+	for index, event := range events[:len(events)-1] {
+		if event.Type == "turn_end" && index > settledIndex {
+			t.Fatalf("turn_end after settled at index %d: %v", index, eventTypes(events))
+		}
+	}
+}
+
+func eventTypes(events []structuredPrintEvent) []string {
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return types
+}
+
 func TestStructuredPrintModeUsesTheDurableRuntime(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "events.db")

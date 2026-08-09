@@ -543,7 +543,7 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 // harness approval broker and persist a recoverable tool error.
 
 func TestPrintModeWritesTextOutput(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 3)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 4)}
 	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "hello"},
 		BlockType: "text",
@@ -553,6 +553,7 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 		BlockType: "text",
 	})
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess.events <- printEnvelope(session.Settled{})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "text"); err != nil {
@@ -564,11 +565,12 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 }
 
 func TestPrintModeStreamsTypedTextDeltaWithoutBlockType(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 2)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 3)}
 	sess.events <- printEnvelope(session.MessageUpdate{
 		Delta: session.TextDelta{Text: "typed"},
 	})
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess.events <- printEnvelope(session.Settled{})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "text"); err != nil {
@@ -580,12 +582,13 @@ func TestPrintModeStreamsTypedTextDeltaWithoutBlockType(t *testing.T) {
 }
 
 func TestPrintModeStreamsTextBeforePromptSettles(t *testing.T) {
-	base := &printSession{events: make(chan agent.EventEnvelope, 2)}
+	base := &printSession{events: make(chan agent.EventEnvelope, 3)}
 	base.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "partial"},
 		BlockType: "text",
 	})
 	base.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	base.events <- printEnvelope(session.Settled{})
 	sess := &gatedPrintSession{printSession: base, release: make(chan struct{})}
 	out := &signalWriter{firstWrite: make(chan struct{})}
 	done := make(chan error, 1)
@@ -611,7 +614,7 @@ func TestPrintModeStreamsTextBeforePromptSettles(t *testing.T) {
 }
 
 func TestPrintModeWritesIonEvents(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 4)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 5)}
 	sess.events <- agent.EventEnvelope{
 		Sequence: 7,
 		Event: session.ToolExecStart{
@@ -634,6 +637,7 @@ func TestPrintModeWritesIonEvents(t *testing.T) {
 			Message: &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "done"}}},
 		},
 	}
+	sess.events <- agent.EventEnvelope{Event: session.Settled{}}
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "events"); err != nil {
@@ -653,10 +657,10 @@ func TestPrintModeWritesIonEvents(t *testing.T) {
 		}
 		events = append(events, event)
 	}
-	if len(events) != 4 {
-		t.Fatalf("event count = %d, want 4: %s", len(events), out.String())
+	if len(events) != 5 {
+		t.Fatalf("event count = %d, want 5: %s", len(events), out.String())
 	}
-	wantTypes := []string{"tool_start", "message_update", "turn_end", "result"}
+	wantTypes := []string{"tool_start", "message_update", "turn_end", "settled", "result"}
 	for i, want := range wantTypes {
 		if events[i].Schema != printEventSchema || events[i].Index != uint64(i+1) || events[i].Type != want {
 			t.Fatalf("event[%d] = %#v, want schema/index/type %q", i, events[i], want)
@@ -671,7 +675,7 @@ func TestPrintModeWritesIonEvents(t *testing.T) {
 		)
 	}
 	var result printResult
-	data, err := json.Marshal(events[3].Data)
+	data, err := json.Marshal(events[4].Data)
 	if err != nil {
 		t.Fatalf("marshal result data: %v", err)
 	}
@@ -684,7 +688,7 @@ func TestPrintModeWritesIonEvents(t *testing.T) {
 }
 
 func TestPrintModeWritesJSONOutput(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 4)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 5)}
 	sess.events <- printEnvelope(session.ToolExecStart{Name: "read"})
 	sess.events <- printEnvelope(session.MessageEnd{
 		Message: &session.AssistantMessage{
@@ -693,6 +697,7 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 		},
 	})
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess.events <- printEnvelope(session.Settled{})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "json"); err != nil {
@@ -711,7 +716,7 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 }
 
 func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 6)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 7)}
 	sess.events <- printEnvelope(session.TurnStart{Timestamp: time.Now()})
 	sess.events <- printEnvelope(session.ToolExecStart{Name: "bash"})
 	sess.events <- printEnvelope(session.MessageUpdate{
@@ -728,6 +733,7 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 		BlockType: "text",
 	})
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess.events <- printEnvelope(session.Settled{})
 
 	var out bytes.Buffer
 	if err := runPrintModeWithWriter(context.Background(), &out, sess, "run smoke", "json"); err != nil {
@@ -870,8 +876,9 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 }
 
 func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 2)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow()})
+	sess.events <- printEnvelope(session.Settled{})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "turn finished without assistant response") {

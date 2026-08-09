@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -52,6 +53,7 @@ type printTurnObserver struct {
 	textWriter          io.Writer
 	structured          *structuredPrintWriter
 	messageTextStreamed bool
+	turnFinished        bool
 	wroteText           bool
 }
 
@@ -71,7 +73,7 @@ func newPrintTurnObserver(runner agent.Runtime, output string, w io.Writer) (*pr
 }
 
 func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) {
-	turnFinished := false
+	turnFinished := o.turnFinished
 	var turnErr error
 
 	switch msg := envelope.Event.(type) {
@@ -174,7 +176,6 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.TurnEnd:
-		turnFinished = true
 		if msg.Message != nil {
 			if text := session.MessageText(msg.Message); text != "" {
 				o.text.Reset()
@@ -229,10 +230,19 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 			return false, err
 		}
 	case session.Settled:
+		o.turnFinished = true
+		turnFinished = true
 		if err := o.emit(envelope, "settled", map[string]any{"next_turn_count": msg.NextTurnCount}); err != nil {
 			return false, err
 		}
 	case session.RuntimeReady:
+		if msg.Turn {
+			o.turnFinished = true
+			turnFinished = true
+			if msg.Failed && msg.Error != "" {
+				turnErr = errors.New(msg.Error)
+			}
+		}
 		if err := o.emit(envelope, "runtime_ready", map[string]any{
 			"turn":   msg.Turn,
 			"failed": msg.Failed,
