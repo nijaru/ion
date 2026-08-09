@@ -163,6 +163,19 @@ func TestConvertRequestAppliesCompatibilityRoleAndToolBridge(t *testing.T) {
 	}
 }
 
+func TestOpenRouterModelCompatibilityAllowsDeveloperRoleForNativeModels(t *testing.T) {
+	b := &Base{Config: llm.ProviderConfig{
+		ID:          "openrouter",
+		APIEndpoint: "https://openrouter.ai/api/v1",
+	}}
+	if compat := b.CompatSettingsForModel("openai/gpt-5"); !compat.SupportsDeveloperRole {
+		t.Fatal("OpenRouter OpenAI model should support developer role")
+	}
+	if compat := b.CompatSettingsForModel("meta/llama-4"); compat.SupportsDeveloperRole {
+		t.Fatal("unclassified OpenRouter model should retain conservative role fallback")
+	}
+}
+
 func TestConvertRequestPreservesImageParts(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{})
 

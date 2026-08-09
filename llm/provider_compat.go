@@ -107,6 +107,7 @@ func DetectCompat(provider, baseURL string) ProviderCompat {
 	isDeepSeek := provider == "deepseek" || strings.Contains(baseURL, "deepseek.com")
 	isCloudflare := strings.Contains(baseURL, "gateway.ai.cloudflare.com") ||
 		strings.Contains(baseURL, "api.cloudflare.com")
+	isOpenRouter := provider == "openrouter" || strings.Contains(baseURL, "openrouter.ai")
 
 	// Non-standard providers that don't support certain OpenAI features
 	isNonStandard := isGrok || isZai || isTogether || isMoonshot || isDeepSeek ||
@@ -114,7 +115,7 @@ func DetectCompat(provider, baseURL string) ProviderCompat {
 		strings.Contains(baseURL, "chutes.ai")
 
 	compat.SupportsStore = !isNonStandard
-	compat.SupportsDeveloperRole = !isNonStandard
+	compat.SupportsDeveloperRole = !isNonStandard && !isOpenRouter
 	compat.SupportsStrictMode = !isMoonshot && !isTogether && !isCloudflare
 
 	// MaxTokensField: some providers need max_tokens instead of max_completion_tokens
@@ -135,7 +136,7 @@ func DetectCompat(provider, baseURL string) ProviderCompat {
 		compat.ThinkingFormat = ThinkingFormatZai
 	case isTogether:
 		compat.ThinkingFormat = ThinkingFormatTogether
-	case provider == "openrouter" || strings.Contains(baseURL, "openrouter.ai"):
+	case isOpenRouter:
 		compat.ThinkingFormat = ThinkingFormatOpenRouter
 	default:
 		compat.ThinkingFormat = ThinkingFormatOpenAI

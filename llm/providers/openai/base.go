@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/sashabaranov/go-openai"
@@ -40,6 +41,12 @@ func (b *Base) CompatSettings() llm.ProviderCompat {
 // stricter than the endpoint it is served through.
 func (b *Base) CompatSettingsForModel(model string) llm.ProviderCompat {
 	compat := b.CompatSettings()
+	if compat.ThinkingFormat == llm.ThinkingFormatOpenRouter {
+		modelID := strings.ToLower(strings.TrimSpace(model))
+		if strings.HasPrefix(modelID, "anthropic/") || strings.HasPrefix(modelID, "openai/") {
+			compat.SupportsDeveloperRole = true
+		}
+	}
 	for _, configured := range b.Config.Models {
 		if configured.ID == model {
 			return llm.MergeCompatFlags(compat, configured.Compat)
