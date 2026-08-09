@@ -357,6 +357,12 @@ func newID() string {
 // alternate persistence identity scheme.
 func NewEntryID() string { return newID() }
 
+// NewSessionID returns an opaque identity for a logical conversation catalog
+// record. It deliberately uses the same domain-owned generator as entries but
+// remains a distinct API so callers do not reuse mutable leaf checkpoints as
+// session identities.
+func NewSessionID() string { return newID() }
+
 func (s *sessionImpl) Append(ctx context.Context, entry Entry) (string, error) {
 	_, err := s.store.Append(ctx, entry)
 	if err != nil {

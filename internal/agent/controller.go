@@ -100,6 +100,9 @@ type ControllerConfig struct {
 	// CloseResources are host-created services such as external tool clients.
 	// The host invokes Controller.CloseResources after Runtime.Close.
 	CloseResources []func() error
+	// Activation is a host-owned session selection staged until this runtime is
+	// accepted. Close rolls it back if the replacement is rejected.
+	Activation *ActivationLease
 }
 
 // NewController creates a new Controller from the given configuration.
@@ -194,6 +197,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		)
 	}
 	h.closeResources = append([]func() error(nil), cfg.CloseResources...)
+	h.activation = cfg.Activation
 	go h.run()
 	return h
 }

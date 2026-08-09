@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,19 +23,20 @@ import (
 // discriminated by type; message payload as JSON content blocks.
 // Tree structure via parent_id; leaf pointer via session_meta table.
 type SQLiteStore struct {
-	db        *sql.DB
-	mu        sync.RWMutex
-	meta      Metadata
-	leaf      string
-	closed    bool
-	closeErr  error
-	closeOnce sync.Once
-	lockFile  *os.File
+	db              *sql.DB
+	mu              sync.RWMutex
+	meta            Metadata
+	leaf            string
+	activationOwner uint64
+	closed          bool
+	closeErr        error
+	closeOnce       sync.Once
+	lockFile        *os.File
 }
 
 var _ Store = (*SQLiteStore)(nil)
 
-const currentSchemaVersion = 10
+const currentSchemaVersion = 11
 
 const sessionLockWait = 500 * time.Millisecond
 
@@ -47,6 +49,41 @@ var (
 	ErrTurnState         = errors.New("invalid turn state")
 	ErrTurnEntryConflict = errors.New("turn entry conflict")
 )
+
+const sessionCatalogLookupSQL = `WITH RECURSIVE
+	input_ancestors(id) AS (
+		SELECT ?
+		UNION
+		SELECT e.parent_id
+		FROM entries e
+		JOIN input_ancestors ON e.id = input_ancestors.id
+		WHERE input_ancestors.id <> '' AND e.parent_id <> ''
+	),
+	session_ancestors(session_id, id) AS (
+		SELECT s.session_id, s.leaf_id
+		FROM sessions s
+		UNION
+		SELECT session_ancestors.session_id, e.parent_id
+		FROM entries e
+		JOIN session_ancestors ON e.id = session_ancestors.id
+		WHERE session_ancestors.id <> '' AND e.parent_id <> ''
+	),
+	matches(session_id) AS (
+		SELECT DISTINCT session_ancestors.session_id
+		FROM input_ancestors
+		JOIN session_ancestors ON session_ancestors.id = input_ancestors.id
+	)
+	SELECT sessions.session_id, sessions.leaf_id, sessions.workdir, sessions.model,
+		sessions.branch, sessions.name, sessions.summary, sessions.last_preview, sessions.updated_at
+	FROM sessions
+	LEFT JOIN matches ON matches.session_id = sessions.session_id
+	WHERE sessions.session_id = ? OR matches.session_id IS NOT NULL
+	ORDER BY
+		CASE WHEN sessions.session_id = ? THEN 0
+		     WHEN sessions.leaf_id = ? THEN 1
+		     ELSE 2 END,
+		sessions.updated_at DESC
+	LIMIT 1`
 
 // Schema holds the SQL for creating the tables.
 const Schema = `
@@ -135,6 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_input_workdir ON input_history(workdir, timestamp
 
 CREATE TABLE IF NOT EXISTS sessions (
 	session_id   TEXT PRIMARY KEY,
+	leaf_id      TEXT NOT NULL DEFAULT '',
 	workdir      TEXT NOT NULL,
 	model        TEXT NOT NULL DEFAULT '',
 	branch       TEXT NOT NULL DEFAULT '',
@@ -144,6 +182,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 	updated_at   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_workdir ON sessions(workdir, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_leaf ON sessions(leaf_id);
 `
 
 // NewSQLiteStore opens or creates the complete Ion SQLite store. If path names
@@ -301,6 +340,9 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 	if err := ensureColumn(ctx, tx, "actions", "turn_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return rollback(err)
 	}
+	if err := ensureColumn(ctx, tx, "sessions", "leaf_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return rollback(err)
+	}
 	if err := ensureColumn(ctx, tx, "actions", "metadata", "BLOB NOT NULL DEFAULT '{}'"); err != nil {
 		return rollback(err)
 	}
@@ -319,11 +361,20 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 		CREATE INDEX IF NOT EXISTS idx_actions_state ON actions(state, prepared_at);
 		CREATE INDEX IF NOT EXISTS idx_actions_fingerprint ON actions(fingerprint);
 		CREATE INDEX IF NOT EXISTS idx_action_transitions_action ON action_transitions(action_id, id);
+		CREATE INDEX IF NOT EXISTS idx_sessions_leaf ON sessions(leaf_id);
 	`); err != nil {
 		return rollback(fmt.Errorf("create session indexes: %w", err))
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE entries SET sequence = rowid WHERE sequence = 0"); err != nil {
 		return rollback(fmt.Errorf("backfill entry sequence: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE sessions SET leaf_id = session_id WHERE leaf_id = ''"); err != nil {
+		return rollback(fmt.Errorf("backfill session catalog leaves: %w", err))
+	}
+	if version < currentSchemaVersion {
+		if err := consolidateLegacySessionCatalog(ctx, tx); err != nil {
+			return rollback(err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion)); err != nil {
 		return rollback(fmt.Errorf("write schema version: %w", err))
@@ -337,6 +388,144 @@ func migrateSchema(ctx context.Context, db *sql.DB, path string) error {
 // ensureActionProcessIdentity performs the one intentional rename from the
 // pre-identity action schema. The stored value is opaque; preserving it keeps
 // interrupted actions recoverable while removing the misleading domain name.
+type legacySessionCatalogRow struct {
+	id        string
+	leafID    string
+	updatedAt int64
+	sequence  int64
+	timestamp int64
+}
+
+// consolidateLegacySessionCatalog collapses the pre-v11 catalog, which used
+// every mutable leaf as a session key, into one row per tree root. The
+// active leaf wins when available; otherwise the highest durable entry
+// sequence supplies the selected leaf and metadata. Each migrated row gets a
+// fresh identity so historical leaf IDs remain unambiguous lookup keys.
+func consolidateLegacySessionCatalog(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT session_id, leaf_id, updated_at FROM sessions")
+	if err != nil {
+		return fmt.Errorf("read legacy session catalog: %w", err)
+	}
+	defer rows.Close()
+	var catalogRows []legacySessionCatalogRow
+	for rows.Next() {
+		var row legacySessionCatalogRow
+		if err := rows.Scan(&row.id, &row.leafID, &row.updatedAt); err != nil {
+			return fmt.Errorf("scan legacy session catalog: %w", err)
+		}
+		if row.leafID == "" {
+			row.leafID = row.id
+		}
+		catalogRows = append(catalogRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read legacy session catalog rows: %w", err)
+	}
+	if len(catalogRows) == 0 {
+		return nil
+	}
+
+	parents := make(map[string]string)
+	entryMetadata := make(map[string]struct {
+		sequence  int64
+		timestamp int64
+	})
+	entryRows, err := tx.QueryContext(ctx, "SELECT id, parent_id, sequence, timestamp FROM entries")
+	if err != nil {
+		return fmt.Errorf("read session entry ancestry: %w", err)
+	}
+	for entryRows.Next() {
+		var id, parentID string
+		var sequence, timestamp int64
+		if err := entryRows.Scan(&id, &parentID, &sequence, &timestamp); err != nil {
+			entryRows.Close()
+			return fmt.Errorf("scan session entry ancestry: %w", err)
+		}
+		parents[id] = parentID
+		entryMetadata[id] = struct {
+			sequence  int64
+			timestamp int64
+		}{sequence: sequence, timestamp: timestamp}
+	}
+	if err := entryRows.Err(); err != nil {
+		entryRows.Close()
+		return fmt.Errorf("read session entry ancestry rows: %w", err)
+	}
+	if err := entryRows.Close(); err != nil {
+		return fmt.Errorf("close session entry ancestry: %w", err)
+	}
+	var activeLeaf sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT value FROM session_meta WHERE key = 'leaf_id'").
+		Scan(&activeLeaf); err != nil &&
+		err != sql.ErrNoRows {
+		return fmt.Errorf("read active session leaf: %w", err)
+	}
+	for i := range catalogRows {
+		if metadata, ok := entryMetadata[catalogRows[i].leafID]; ok {
+			catalogRows[i].sequence = metadata.sequence
+			catalogRows[i].timestamp = metadata.timestamp
+		}
+	}
+
+	rootFor := func(leafID string) string {
+		seen := make(map[string]struct{})
+		current := leafID
+		for current != "" {
+			if _, exists := seen[current]; exists {
+				return leafID
+			}
+			seen[current] = struct{}{}
+			parentID, exists := parents[current]
+			if !exists || parentID == "" {
+				return current
+			}
+			current = parentID
+		}
+		return leafID
+	}
+
+	groups := make(map[string][]legacySessionCatalogRow)
+	for _, row := range catalogRows {
+		rootID := rootFor(row.leafID)
+		groups[rootID] = append(groups[rootID], row)
+	}
+	for _, group := range groups {
+		sort.SliceStable(group, func(i, j int) bool {
+			iActive := activeLeaf.Valid && group[i].leafID == activeLeaf.String
+			jActive := activeLeaf.Valid && group[j].leafID == activeLeaf.String
+			if iActive != jActive {
+				return iActive
+			}
+			if group[i].sequence != group[j].sequence {
+				return group[i].sequence > group[j].sequence
+			}
+			if group[i].updatedAt != group[j].updatedAt {
+				return group[i].updatedAt > group[j].updatedAt
+			}
+			if group[i].timestamp != group[j].timestamp {
+				return group[i].timestamp > group[j].timestamp
+			}
+			return group[i].id > group[j].id
+		})
+		winner := group[0]
+		for _, row := range group[1:] {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE session_id = ?", row.id); err != nil {
+				return fmt.Errorf("remove superseded session catalog row %q: %w", row.id, err)
+			}
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			"UPDATE sessions SET session_id = ?, leaf_id = ? WHERE session_id = ?",
+			newID(),
+			winner.leafID,
+			winner.id,
+		); err != nil {
+			return fmt.Errorf("assign migrated session catalog identity for leaf %q: %w", winner.leafID, err)
+		}
+	}
+	return nil
+}
+
 func ensureActionProcessIdentity(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(actions)")
 	if err != nil {
@@ -511,6 +700,7 @@ func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			session_id TEXT PRIMARY KEY,
+			leaf_id TEXT NOT NULL DEFAULT '',
 			workdir TEXT NOT NULL,
 			model TEXT NOT NULL DEFAULT '',
 			branch TEXT NOT NULL DEFAULT '',
@@ -735,6 +925,23 @@ func (s *SQLiteStore) Meta() Metadata {
 	return s.meta
 }
 
+// ActivationOwner identifies the latest host-owned provisional or committed
+// selection in this store process. It is an in-memory CAS token for runtime
+// replacement rollback; durable session identity and leaf remain in SQLite.
+func (s *SQLiteStore) ActivationOwner() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activationOwner
+}
+
+func (s *SQLiteStore) nextActivationOwnerLocked() uint64 {
+	s.activationOwner++
+	if s.activationOwner == 0 {
+		s.activationOwner++
+	}
+	return s.activationOwner
+}
+
 func (s *SQLiteStore) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -773,6 +980,95 @@ func (s *SQLiteStore) SetLeafID(id string) error {
 	return nil
 }
 
+// ActivateSession atomically selects a logical catalog identity and leaf.
+// An empty leaf selects the virtual root. The identity and leaf are committed
+// together so a failed resume cannot leave either half of the runtime
+// selection installed.
+func (s *SQLiteStore) ActivateSession(ctx context.Context, identity, leafID string) error {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return errors.New("session identity is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	if leafID != "" {
+		if _, err := s.getVisibleEntryTx(ctx, tx, leafID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("activate leaf %q: %w", leafID, err)
+		}
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO session_meta(key,value) VALUES('session_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		identity,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("persist session identity: %w", err)
+	}
+	if err := setLeafTx(ctx, tx, leafID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit session activation", err)
+	}
+	s.meta.ID = identity
+	s.leaf = leafID
+	s.nextActivationOwnerLocked()
+	return nil
+}
+
+// RestoreSessionIfOwner restores the selection captured before a provisional
+// activation, but only while that activation still owns the store. A newer
+// replacement therefore cannot be overwritten by a stale close path.
+func (s *SQLiteStore) RestoreSessionIfOwner(
+	ctx context.Context,
+	owner uint64,
+	identity, leafID string,
+) error {
+	if owner == 0 || strings.TrimSpace(identity) == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	if s.activationOwner != owner {
+		return nil
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO session_meta(key,value) VALUES('session_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		identity,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("restore session identity: %w", err)
+	}
+	if err := setLeafTx(ctx, tx, leafID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit session restoration", err)
+	}
+	s.meta.ID = identity
+	s.leaf = leafID
+	s.nextActivationOwnerLocked()
+	return nil
+}
+
 // ResumeSession validates an existing entry and makes it the current leaf.
 func (s *SQLiteStore) ResumeSession(ctx context.Context, entryID string) error {
 	s.mu.Lock()
@@ -784,18 +1080,58 @@ func (s *SQLiteStore) ResumeSession(ctx context.Context, entryID string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.getVisibleEntryTx(ctx, tx, entryID); err != nil {
+	resolvedLeaf := entryID
+	resolvedIdentity := entryID
+	var catalogLeaf, catalogIdentity string
+	lookupErr := tx.QueryRowContext(
+		ctx,
+		`SELECT session_id, leaf_id FROM (`+sessionCatalogLookupSQL+`)`,
+		entryID,
+		entryID,
+		entryID,
+		entryID,
+	).Scan(&catalogIdentity, &catalogLeaf)
+	if lookupErr == nil {
+		resolvedIdentity = catalogIdentity
+		if entryID == catalogIdentity && catalogLeaf != "" {
+			resolvedLeaf = catalogLeaf
+		}
+	} else if lookupErr != sql.ErrNoRows {
+		_ = tx.Rollback()
+		return fmt.Errorf("look up session resume %q: %w", entryID, lookupErr)
+	} else {
+		if entryID == s.meta.ID && s.leaf != "" {
+			// A stable runtime identity can be resumed before its first catalog
+			// publication; the store's durable leaf is its checkpoint.
+			resolvedLeaf = s.leaf
+		} else {
+			// A visible leaf created before catalog publication starts a new
+			// logical session identity; the requested checkpoint remains exact.
+			resolvedIdentity = newID()
+		}
+	}
+	if _, err := s.getVisibleEntryTx(ctx, tx, resolvedLeaf); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := setLeafTx(ctx, tx, entryID); err != nil {
+	if err := setLeafTx(ctx, tx, resolvedLeaf); err != nil {
 		_ = tx.Rollback()
 		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO session_meta(key,value) VALUES('session_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		resolvedIdentity,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("persist resumed session identity: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return classifySQLiteError("commit session resume", err)
 	}
-	s.leaf = entryID
+	s.meta.ID = resolvedIdentity
+	s.leaf = resolvedLeaf
+	s.nextActivationOwnerLocked()
 	return nil
 }
 
@@ -856,7 +1192,7 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
+		"SELECT session_id, leaf_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE workdir = ? ORDER BY updated_at DESC",
 		workdir,
 	)
 	if err != nil {
@@ -865,13 +1201,17 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, workdir string) ([]Sessi
 	defer rows.Close()
 	var sessions []SessionInfoEntry
 	for rows.Next() {
-		var sid, wd, model, branch, name, summary, preview string
+		var sid, leafID, wd, model, branch, name, summary, preview string
 		var updatedAt int64
-		if err := rows.Scan(&sid, &wd, &model, &branch, &name, &summary, &preview, &updatedAt); err != nil {
+		if err := rows.Scan(&sid, &leafID, &wd, &model, &branch, &name, &summary, &preview, &updatedAt); err != nil {
 			return nil, err
+		}
+		if leafID == "" {
+			leafID = sid
 		}
 		sessions = append(sessions, SessionInfoEntry{
 			EntryBase:   EntryBase{ID: sid, Timestamp: time.Unix(updatedAt, 0)},
+			LeafID:      leafID,
 			Workdir:     wd,
 			Model:       model,
 			Branch:      branch,
@@ -904,9 +1244,10 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	if _, err := tx.ExecContext(
 		ctx,
 		`
-		INSERT INTO sessions (session_id, workdir, model, branch, name, summary, last_preview, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sessions (session_id, leaf_id, workdir, model, branch, name, summary, last_preview, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
+			leaf_id = CASE WHEN excluded.leaf_id <> '' THEN excluded.leaf_id ELSE sessions.leaf_id END,
 			workdir = excluded.workdir,
 			model = excluded.model,
 			branch = excluded.branch,
@@ -915,6 +1256,7 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 			last_preview = excluded.last_preview,
 			updated_at = excluded.updated_at`,
 		info.ID(),
+		info.LeafID,
 		info.Workdir,
 		info.Model,
 		info.Branch,
@@ -931,9 +1273,9 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, info SessionInfoEntry) 
 	return nil
 }
 
-// GetSessionInfo returns one catalog record by its session/leaf ID. The
-// concrete store supplies the optional SessionCatalog capability; Store itself
-// remains focused on the active tree.
+// GetSessionInfo returns one catalog record by stable session identity or its
+// selected leaf checkpoint. The latter lookup keeps runtime replacement and
+// direct leaf-oriented commands independent from catalog identity details.
 func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInfoEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -944,10 +1286,14 @@ func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInf
 	var updatedAt int64
 	err := s.db.QueryRowContext(
 		ctx,
-		"SELECT session_id, workdir, model, branch, name, summary, last_preview, updated_at FROM sessions WHERE session_id = ?",
+		sessionCatalogLookupSQL,
+		id,
+		id,
+		id,
 		id,
 	).Scan(
 		&info.EntryBase.ID,
+		&info.LeafID,
 		&info.Workdir,
 		&info.Model,
 		&info.Branch,
@@ -958,6 +1304,9 @@ func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInf
 	)
 	if err != nil {
 		return SessionInfoEntry{}, err
+	}
+	if info.LeafID == "" {
+		info.LeafID = info.ID()
 	}
 	info.EntryBase.Timestamp = time.Unix(updatedAt, 0)
 	info.UpdatedAt = info.EntryBase.Timestamp
@@ -1075,6 +1424,73 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, entries []Entry) ([]strin
 		return nil, classifySQLiteError("commit entry batch", err)
 	}
 	return ids, nil
+}
+
+// PersistImportedSession atomically stores imported entries and their catalog
+// metadata without changing the active session selection. Runtime replacement
+// owns activation, so a failed import or fork cannot move the current runtime.
+func (s *SQLiteStore) PersistImportedSession(
+	ctx context.Context,
+	entries []Entry,
+	info SessionInfoEntry,
+) error {
+	if info.ID() == "" {
+		return errors.New("imported session identity is required")
+	}
+	if info.LeafID == "" {
+		return errors.New("imported session leaf is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, entry := range entries {
+		if _, err := s.appendTx(ctx, tx, "", entry); err != nil {
+			return fmt.Errorf("persist imported entry: %w", err)
+		}
+	}
+	if _, err := s.getVisibleEntryTx(ctx, tx, info.LeafID); err != nil {
+		return fmt.Errorf("validate imported leaf %q: %w", info.LeafID, err)
+	}
+	updatedAt := info.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO sessions (session_id, leaf_id, workdir, model, branch, name, summary, last_preview, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(session_id) DO UPDATE SET
+				leaf_id = excluded.leaf_id,
+				workdir = excluded.workdir,
+				model = excluded.model,
+				branch = excluded.branch,
+				name = excluded.name,
+				summary = excluded.summary,
+				last_preview = excluded.last_preview,
+				updated_at = excluded.updated_at`,
+		info.ID(),
+		info.LeafID,
+		info.Workdir,
+		info.Model,
+		info.Branch,
+		info.Name,
+		info.Summary,
+		info.LastPreview,
+		updatedAt.Unix(),
+	); err != nil {
+		return classifySQLiteError("persist imported session", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit imported session", err)
+	}
+	return nil
 }
 
 // MoveTo records navigation, changes the selected leaf, and optionally adds a

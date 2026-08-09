@@ -133,6 +133,127 @@ func TestOpenRuntimeStartsFreshWithoutSelectedSession(t *testing.T) {
 	}
 }
 
+func TestOpenRuntimeUncommittedActivationRollsBackOnClose(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 8)
+	oldID, err := sess.AppendMessage(context.Background(), session.NewUserText("old", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(oldID); err != nil {
+		t.Fatal(err)
+	}
+	previousIdentity := store.Meta().ID
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, _, runner, err := openRuntime(
+		context.Background(), store, jobs, t.TempDir(), "main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}), "", false,
+		"", "", "", nil, false,
+	)
+	if err != nil {
+		t.Fatalf("openRuntime: %v", err)
+	}
+	if got := store.GetLeafID(); got != "" {
+		t.Fatalf("staged fresh leaf = %q, want virtual root", got)
+	}
+	if err := runner.Close(); err != nil {
+		t.Fatalf("close uncommitted runtime: %v", err)
+	}
+	if got := store.GetLeafID(); got != oldID {
+		t.Fatalf("rolled-back leaf = %q, want %q", got, oldID)
+	}
+	if got := store.Meta().ID; got != previousIdentity {
+		t.Fatalf("rolled-back identity = %q, want %q", got, previousIdentity)
+	}
+}
+
+func TestOpenRuntimeResumesStableIdentityBeforeCatalogPublication(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 8)
+	leafID, err := sess.AppendMessage(context.Background(), session.NewUserText("durable", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(leafID); err != nil {
+		t.Fatal(err)
+	}
+	stableID := store.Meta().ID
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, _, runner, err := openRuntime(
+		context.Background(), store, jobs, t.TempDir(), "main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}), stableID, false,
+		"", "", "", nil, false,
+	)
+	if err != nil {
+		t.Fatalf("openRuntime: %v", err)
+	}
+	commitSessionActivation(runner)
+	defer func() {
+		if err := closeRuntimeHandles(runner, store); err != nil {
+			t.Fatalf("close runtime: %v", err)
+		}
+	}()
+	if got := store.GetLeafID(); got != leafID {
+		t.Fatalf("pre-catalog stable resume leaf = %q, want %q", got, leafID)
+	}
+	if got := runtimeSessionID(runner); got != stableID {
+		t.Fatalf("pre-catalog stable resume ID = %q, want %q", got, stableID)
+	}
+}
+
+func TestOpenRuntimeCommittedActivationSurvivesClose(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := session.NewSQLiteStore(":memory:", "ion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess := session.NewSession(store, 8)
+	targetID, err := sess.AppendMessage(context.Background(), session.NewUserText("target", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousIdentity := store.Meta().ID
+
+	jobs := tool.NewJobManager()
+	defer jobs.Close()
+	_, _, runner, err := openRuntime(
+		context.Background(), store, jobs, t.TempDir(), "main",
+		&config.Config{Provider: "ollama", Model: "llama3"},
+		llm.NewEndpointResolver(llm.EndpointResolverOptions{}), targetID, false,
+		"", "", "", nil, false,
+	)
+	if err != nil {
+		t.Fatalf("openRuntime: %v", err)
+	}
+	commitSessionActivation(runner)
+	if err := runner.Close(); err != nil {
+		t.Fatalf("close committed runtime: %v", err)
+	}
+	if got := store.GetLeafID(); got != targetID {
+		t.Fatalf("committed leaf = %q, want %q", got, targetID)
+	}
+	if got := store.Meta().ID; got == previousIdentity {
+		t.Fatalf("committed identity = %q, want a new selected identity", got)
+	}
+}
+
 func TestOpenRuntimePersistsExplicitModelOverrideOnResume(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store, err := session.NewSQLiteStore(":memory:", "ion")

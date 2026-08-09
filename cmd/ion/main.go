@@ -430,6 +430,9 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		// switch; the original error is shown in the bootstrap status.
 		fmt.Fprintf(stderr, "runtime setup required: %v\n", err)
 	}
+	if runner != nil {
+		commitSessionActivation(runner)
+	}
 	// Print mode: run a single turn and exit
 	if printRequested {
 		if runner == nil {
@@ -708,6 +711,7 @@ func runtimeLeafID(ctx context.Context, runner agent.Runtime) (string, error) {
 
 type printResult struct {
 	SessionID    string   `json:"session_id,omitempty"`
+	LeafID       string   `json:"leaf_id,omitempty"`
 	Response     string   `json:"response"`
 	InputTokens  int      `json:"input_tokens,omitempty"`
 	OutputTokens int      `json:"output_tokens,omitempty"`
@@ -765,12 +769,19 @@ func updatePrintSessionInfo(
 	if runner == nil || cfg == nil {
 		return nil
 	}
-	id, err := runtimeLeafID(ctx, runner)
+	leafID, err := runtimeLeafID(ctx, runner)
 	if err != nil {
 		return err
 	}
-	if id == "" {
+	if leafID == "" {
 		return nil
+	}
+	sessionID := ""
+	if reader, ok := runner.(agent.SessionReader); ok {
+		sessionID = strings.TrimSpace(reader.SessionID())
+	}
+	if sessionID == "" {
+		sessionID = leafID
 	}
 	preview := strings.TrimSpace(prompt)
 	if preview == "" {
@@ -782,7 +793,8 @@ func updatePrintSessionInfo(
 	}
 	now := time.Now()
 	return catalog.UpdateSession(ctx, session.SessionInfoEntry{
-		EntryBase:   session.EntryBase{ID: id, Timestamp: now},
+		EntryBase:   session.EntryBase{ID: sessionID, Timestamp: now},
+		LeafID:      leafID,
 		Workdir:     cwd,
 		Model:       sessionModelName(cfg.Provider, cfg.Model),
 		Branch:      branch,

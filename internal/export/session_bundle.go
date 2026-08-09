@@ -46,8 +46,8 @@ type catalogFinder interface {
 	GetSessionInfo(context.Context, string) (session.SessionInfoEntry, error)
 }
 
-type catalogWriter interface {
-	UpdateSession(context.Context, session.SessionInfoEntry) error
+type importedSessionWriter interface {
+	PersistImportedSession(context.Context, []session.Entry, session.SessionInfoEntry) error
 }
 
 // ExportSessionBundle exports the branch ending at leafID. It does not move
@@ -60,20 +60,23 @@ func ExportSessionBundle(ctx context.Context, store session.Store, leafID string
 	if leafID == "" {
 		return SessionBundle{}, errors.New("session leaf ID is required")
 	}
-	entries, err := branchAt(ctx, store, leafID)
-	if err != nil {
-		return SessionBundle{}, fmt.Errorf("export session %s: %w", leafID, err)
-	}
 
 	info := SessionBundleInfo{ID: leafID, UpdatedAt: time.Now()}
 	if finder, ok := store.(catalogFinder); ok {
-		catalog, err := finder.GetSessionInfo(ctx, leafID)
+		requestedID := leafID
+		catalog, err := finder.GetSessionInfo(ctx, requestedID)
 		if err == nil {
+			if catalog.ID() == requestedID && catalog.LeafID != "" {
+				leafID = catalog.LeafID
+			}
 			info = sessionBundleInfo(catalog)
-			info.ID = leafID
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return SessionBundle{}, fmt.Errorf("read session %s metadata: %w", leafID, err)
 		}
+	}
+	entries, err := branchAt(ctx, store, leafID)
+	if err != nil {
+		return SessionBundle{}, fmt.Errorf("export session %s: %w", leafID, err)
 	}
 	meta := store.Meta()
 	if info.Workdir == "" {
@@ -103,8 +106,9 @@ func ExportSessionBundle(ctx context.Context, store session.Store, leafID string
 }
 
 // ForkSession copies one branch into a fresh disconnected tree in the same
-// store and makes the new leaf active. The source entries and source leaf are
-// never modified.
+// store and returns its new stable catalog identity. The source entries and
+// active leaf are never modified; the host activates the returned session only
+// after runtime replacement is accepted.
 func ForkSession(ctx context.Context, store session.Store, leafID string) (string, error) {
 	bundle, err := ExportSessionBundle(ctx, store, leafID)
 	if err != nil {
@@ -114,8 +118,8 @@ func ForkSession(ctx context.Context, store session.Store, leafID string) (strin
 	return ImportSessionBundle(ctx, store, bundle)
 }
 
-// ImportSessionBundle imports one session record and returns its new leaf ID.
-// A blank RootSessionID means remap all entry IDs, which is the safe default
+// ImportSessionBundle imports one session record and returns its new stable
+// session ID without changing the active session selection. A blank RootSessionID means remap all entry IDs, which is the safe default
 // for user imports and forks. A non-blank root permits an exact import only
 // when none of the source IDs already exist in the destination store.
 func ImportSessionBundle(ctx context.Context, store session.Store, bundle SessionBundle) (string, error) {
@@ -207,22 +211,20 @@ func ImportSessionBundle(ctx context.Context, store session.Store, bundle Sessio
 	}
 
 	newLeafID := remap[sourceLeaf]
-	if _, err := store.AppendBatch(ctx, imported); err != nil {
+	info := record.Info
+	newSessionID := session.NewSessionID()
+	info.ID = newSessionID
+	info.UpdatedAt = time.Now()
+	catalogInfo := sessionInfoEntry(info)
+	catalogInfo.LeafID = newLeafID
+	writer, ok := store.(importedSessionWriter)
+	if !ok {
+		return "", errors.New("session store does not support atomic session import")
+	}
+	if err := writer.PersistImportedSession(ctx, imported, catalogInfo); err != nil {
 		return "", fmt.Errorf("persist imported session: %w", err)
 	}
-	if err := store.SetLeafID(newLeafID); err != nil {
-		return "", fmt.Errorf("activate imported session: %w", err)
-	}
-
-	info := record.Info
-	info.ID = newLeafID
-	info.UpdatedAt = time.Now()
-	if writer, ok := store.(catalogWriter); ok {
-		if err := writer.UpdateSession(ctx, sessionInfoEntry(info)); err != nil {
-			return "", fmt.Errorf("persist imported session metadata: %w", err)
-		}
-	}
-	return newLeafID, nil
+	return newSessionID, nil
 }
 
 func validateImportedEntries(byID map[string]session.Entry) error {

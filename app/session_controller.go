@@ -1075,22 +1075,25 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 	modelName := m.currentSessionModelName()
 	return func() tea.Msg {
 		var (
-			id      string
-			entries []session.Entry
-			err     error
+			sessionID string
+			leafID    string
+			entries   []session.Entry
+			err       error
 		)
 		if hasProjection {
 			var projection agent.SessionProjection
 			projection, err = projectionReader.SessionProjection(ctx)
 			if err == nil {
-				id = strings.TrimSpace(projection.LeafID)
+				sessionID = strings.TrimSpace(projection.ID)
+				leafID = strings.TrimSpace(projection.LeafID)
 				entries = projection.Branch
 			}
 		} else {
 			var tree agent.SessionTreeSnapshot
 			tree, err = reader.SessionTree(ctx)
 			if err == nil {
-				id = strings.TrimSpace(tree.LeafID)
+				sessionID = strings.TrimSpace(reader.SessionID())
+				leafID = strings.TrimSpace(tree.LeafID)
 				entries, err = reader.SessionBranch(ctx)
 			}
 		}
@@ -1101,7 +1104,7 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 				err:                   fmt.Errorf("load session projection for catalog: %w", err),
 			}
 		}
-		if id == "" {
+		if leafID == "" {
 			return runtimeLeafSnapshotMsg{
 				generation:            generation,
 				treeNavigationRequest: treeNavigationRequest,
@@ -1110,7 +1113,7 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		var info *session.SessionInfoEntry
 		if catalog != nil {
 			candidate, ok := sessionInfoFromBranch(
-				id, workdir, branch, modelName, entries, time.Now(),
+				sessionID, leafID, workdir, branch, modelName, entries, time.Now(),
 			)
 			if ok {
 				info = &candidate
@@ -1119,7 +1122,7 @@ func (m Model) persistCurrentSessionInfoCmd() tea.Cmd {
 		return runtimeLeafSnapshotMsg{
 			generation:            generation,
 			treeNavigationRequest: treeNavigationRequest,
-			leafID:                id,
+			leafID:                leafID,
 			info:                  info,
 		}
 	}
@@ -1145,7 +1148,7 @@ func (m Model) persistSessionCatalogInfoCmd(
 }
 
 func sessionInfoFromBranch(
-	id, workdir, branch, modelName string,
+	sessionID, leafID, workdir, branch, modelName string,
 	entries []session.Entry,
 	now time.Time,
 ) (session.SessionInfoEntry, bool) {
@@ -1173,7 +1176,8 @@ func sessionInfoFromBranch(
 	}
 
 	return session.SessionInfoEntry{
-		EntryBase:   session.EntryBase{ID: id, Timestamp: now},
+		EntryBase:   session.EntryBase{ID: sessionID, Timestamp: now},
+		LeafID:      leafID,
 		Workdir:     workdir,
 		Model:       modelName,
 		Branch:      branch,

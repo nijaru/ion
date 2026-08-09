@@ -71,6 +71,10 @@ type SessionInfoEntry struct {
 	Branch    string
 	Workdir   string
 	UpdatedAt time.Time
+	// LeafID is the selected conversation checkpoint for catalog metadata.
+	// EntryBase.ID remains the stable catalog/session identity; tree entries
+	// use EntryBase.ID as their own durable entry identity.
+	LeafID string
 	EntryBase
 	Name        string
 	Summary     string

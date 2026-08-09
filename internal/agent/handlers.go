@@ -681,6 +681,17 @@ func (c *Controller) handleSessionBranchAt(cmd *SessionBranchAtCmd) {
 			sendResult(cmd.Reply, SessionBranchResult{Err: errors.New("session leaf is required")})
 			return
 		}
+		if catalog, ok := c.store.(interface {
+			GetSessionInfo(context.Context, string) (session.SessionInfoEntry, error)
+		}); ok {
+			if info, err := catalog.GetSessionInfo(
+				ctx,
+				leafID,
+			); err == nil && info.ID() == leafID &&
+				info.LeafID != "" {
+				leafID = info.LeafID
+			}
+		}
 		entries, err := c.session.BranchAt(ctx, leafID)
 		sendResult(cmd.Reply, SessionBranchResult{Entries: entries, Err: err})
 	})

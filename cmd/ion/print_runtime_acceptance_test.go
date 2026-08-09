@@ -74,12 +74,13 @@ func TestPrintModeUsesTheDurableRuntime(t *testing.T) {
 	); err != nil {
 		t.Fatalf("persist print session catalog: %v", err)
 	}
-	info, err := store.GetSessionInfo(ctx, leafID)
+	sessionID := runner.SessionID()
+	info, err := store.GetSessionInfo(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("load print session catalog by leaf: %v", err)
+		t.Fatalf("load print session catalog by stable ID: %v", err)
 	}
-	if info.ID() != leafID || info.LastPreview != "say hello" {
-		t.Fatalf("print session catalog = %#v, want leaf %q and prompt preview", info, leafID)
+	if info.ID() != sessionID || info.LeafID != leafID || info.LastPreview != "say hello" {
+		t.Fatalf("print session catalog = %#v, want stable ID %q, leaf %q, and prompt preview", info, sessionID, leafID)
 	}
 
 	if err := runner.Close(); err != nil {
@@ -358,11 +359,15 @@ func TestStructuredPrintModeUsesTheDurableRuntime(t *testing.T) {
 	if leafID == "" {
 		t.Fatal("structured print turn did not materialize a session leaf")
 	}
-	if result.Response != "structured" || result.SessionID != leafID {
-		t.Fatalf("structured result = %#v, want resumable leaf %q", result, leafID)
+	stableID := runner.SessionID()
+	if result.Response != "structured" || result.SessionID != stableID || result.LeafID != leafID {
+		t.Fatalf("structured result = %#v, want stable ID %q and resumable leaf %q", result, stableID, leafID)
 	}
 	if err := store.ResumeSession(ctx, result.SessionID); err != nil {
 		t.Fatalf("structured result session_id is not resumable: %v", err)
+	}
+	if got := store.GetLeafID(); got != leafID {
+		t.Fatalf("resumed stable result leaf = %q, want %q", got, leafID)
 	}
 }
 

@@ -370,6 +370,65 @@ func resolvedContextWindow(cfg *config.Config, info app.RuntimeInfo, catalog *ll
 	return 0
 }
 
+type sessionActivator interface {
+	ActivateSession(context.Context, string, string) error
+	ActivationOwner() uint64
+	RestoreSessionIfOwner(context.Context, uint64, string, string) error
+}
+
+type sessionActivationCommitter interface {
+	CommitSessionActivation()
+}
+
+func commitSessionActivation(runner agent.Runtime) {
+	if committer, ok := runner.(sessionActivationCommitter); ok {
+		committer.CommitSessionActivation()
+	}
+}
+
+func resolveSessionActivation(
+	ctx context.Context,
+	store session.Store,
+	selectedID string,
+) (identity, leafID string, err error) {
+	selectedID = strings.TrimSpace(selectedID)
+	if selectedID == "" {
+		return session.NewSessionID(), "", nil
+	}
+	identity = selectedID
+	leafID = selectedID
+	catalog, ok := store.(agent.SessionCatalog)
+	if !ok {
+		if selectedID == store.Meta().ID && store.GetLeafID() != "" {
+			return selectedID, store.GetLeafID(), nil
+		}
+		if _, entryErr := store.GetEntry(ctx, selectedID); entryErr == nil {
+			return session.NewSessionID(), selectedID, nil
+		}
+		return identity, leafID, nil
+	}
+	info, lookupErr := catalog.GetSessionInfo(ctx, selectedID)
+	if lookupErr != nil {
+		if errors.Is(lookupErr, sql.ErrNoRows) || errors.Is(lookupErr, os.ErrNotExist) {
+			if selectedID == store.Meta().ID && store.GetLeafID() != "" {
+				return selectedID, store.GetLeafID(), nil
+			}
+			if _, entryErr := store.GetEntry(ctx, selectedID); entryErr == nil {
+				return session.NewSessionID(), selectedID, nil
+			} else if !errors.Is(entryErr, sql.ErrNoRows) && !errors.Is(entryErr, os.ErrNotExist) {
+				return "", "", fmt.Errorf("load selected leaf %q: %w", selectedID, entryErr)
+			}
+			return identity, leafID, nil
+		}
+		return "", "", fmt.Errorf("load selected session %q: %w", selectedID, lookupErr)
+	}
+	identity = info.ID()
+	if selectedID == identity && info.LeafID != "" {
+		leafID = info.LeafID
+	}
+	return identity, leafID, nil
+}
+
 func openRuntime(
 	ctx context.Context,
 	store session.Store,
@@ -404,6 +463,26 @@ func openRuntime(
 		return app.NewSetupRuntime(&runtimeCfg, "session store does not support durable action journaling"), nil, nil,
 			fmt.Errorf("session store does not support durable action journaling")
 	}
+	activator, ok := store.(sessionActivator)
+	if !ok {
+		return app.NewSetupRuntime(&runtimeCfg, "session store does not support atomic session activation"), nil, nil,
+			fmt.Errorf("session store does not support atomic session activation")
+	}
+	identity, leafID, activationErr := resolveSessionActivation(ctx, store, sessionID)
+	if activationErr != nil {
+		return nil, nil, nil, activationErr
+	}
+	previousMeta := store.Meta()
+	previousLeafID := store.GetLeafID()
+	var activationOwner uint64
+	activation := agent.NewActivationLease(func() error {
+		if activationOwner == 0 {
+			return nil
+		}
+		return activator.RestoreSessionIfOwner(
+			context.Background(), activationOwner, previousMeta.ID, previousLeafID,
+		)
+	})
 	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg)
 	if err != nil {
 		return nil, nil, nil, err
@@ -611,6 +690,7 @@ func openRuntime(
 		Workdir:             cwd,
 		ProcessReconciler:   tool.NewProcessReconciler(),
 		CloseResources:      []func() error{closeRuntimeResources},
+		Activation:          activation,
 		Logger:              log,
 		Compaction:          agent.DefaultCompactionSettings(),
 		SummaryRetry: llm.StreamRetryPolicy{
@@ -666,23 +746,16 @@ func openRuntime(
 			len(interruptedTurns),
 		))
 	}
-	// Resume only after every fallible runtime-materialization and recovery
-	// check has completed. The store is shared with the current runtime during
-	// TUI replacement, so moving its leaf earlier could leave a rejected target
-	// installed after a failed replacement. An unqualified launch explicitly
-	// starts a fresh conversation at the virtual root instead of inheriting the
-	// last selected leaf from the shared workspace store.
-	if sessionID != "" {
-		sqliteStore, ok := store.(*session.SQLiteStore)
-		if !ok {
-			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("session store does not support concrete resume"))
-		}
-		if err := sqliteStore.ResumeSession(ctx, sessionID); err != nil {
-			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("failed to resume session %s: %w", sessionID, err))
-		}
-	} else if err := store.SetLeafID(""); err != nil {
-		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("start fresh session: %w", err))
+	// Activate only after every fallible runtime-materialization and recovery
+	// check has completed. The selection remains provisional until the host
+	// accepts this runtime; Controller.Close restores the previous identity and
+	// leaf if validation, persistence, or subscription rejects it. An
+	// unqualified launch explicitly starts a fresh conversation at the virtual
+	// root instead of inheriting the last selected leaf from the shared store.
+	if err := activator.ActivateSession(ctx, identity, leafID); err != nil {
+		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("activate session %s: %w", identity, err))
 	}
+	activationOwner = activator.ActivationOwner()
 	if persistResumedSessionModel {
 		if err := harness.SetModel(model); err != nil {
 			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("persist runtime model: %w", err))

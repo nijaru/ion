@@ -230,9 +230,16 @@ func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 		t.Fatalf("fork: %v", err)
 	}
 	if forkID == assistantID || forkID == userID {
-		t.Fatalf("fork leaf %q reused source ID", forkID)
+		t.Fatalf("fork stable ID %q reused an entry ID", forkID)
 	}
-	forkBranch, err := store.Branch(ctx)
+	if got := store.GetLeafID(); got != assistantID {
+		t.Fatalf("fork changed active leaf to %q, want source leaf %q", got, assistantID)
+	}
+	info, err := store.GetSessionInfo(ctx, forkID)
+	if err != nil {
+		t.Fatalf("fork catalog info: %v", err)
+	}
+	forkBranch, err := store.BranchAt(ctx, info.LeafID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,10 +250,6 @@ func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 	if forkBranch[0].ID() == userID || forkBranch[1].ID() == assistantID {
 		t.Fatal("fork branch retained source entry IDs")
 	}
-	info, err := store.GetSessionInfo(ctx, forkID)
-	if err != nil {
-		t.Fatalf("fork catalog info: %v", err)
-	}
 	if info.Model != "openrouter/test-model" || info.Name != "source session" {
 		t.Fatalf("fork catalog info = %+v, want copied metadata", info)
 	}
@@ -256,9 +259,16 @@ func TestSessionBundleForkIsIndependentAndReopenable(t *testing.T) {
 		t.Fatalf("import: %v", err)
 	}
 	if importedID == assistantID || importedID == forkID {
-		t.Fatalf("import leaf %q reused an existing session", importedID)
+		t.Fatalf("import stable ID %q reused an existing session", importedID)
 	}
-	importedBranch, err := store.Branch(ctx)
+	if got := store.GetLeafID(); got != assistantID {
+		t.Fatalf("import changed active leaf to %q, want source leaf %q", got, assistantID)
+	}
+	importedInfo, err := store.GetSessionInfo(ctx, importedID)
+	if err != nil {
+		t.Fatalf("import catalog info: %v", err)
+	}
+	importedBranch, err := store.BranchAt(ctx, importedInfo.LeafID)
 	if err != nil {
 		t.Fatal(err)
 	}

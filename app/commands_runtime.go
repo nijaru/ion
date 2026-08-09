@@ -677,6 +677,12 @@ func (m Model) resumeRuntimeCommand(
 	}
 }
 
+func commitSessionActivation(runner agent.Runtime) {
+	if committer, ok := runner.(interface{ CommitSessionActivation() }); ok {
+		committer.CommitSessionActivation()
+	}
+}
+
 // selectedRuntimeProjection captures the accepted runtime's authoritative
 // projection before the TUI installs it. The asynchronous event subscription
 // will refresh this projection, but runtime replacement must not expose a
@@ -691,7 +697,10 @@ func selectedRuntimeProjection(ctx context.Context, runner agent.Runtime) (agent
 		if err != nil {
 			return agent.SessionProjection{}, err
 		}
-		return agent.SessionProjection{LeafID: strings.TrimSpace(tree.LeafID)}, nil
+		return agent.SessionProjection{
+			ID:     strings.TrimSpace(reader.SessionID()),
+			LeafID: strings.TrimSpace(tree.LeafID),
+		}, nil
 	}
 	return agent.SessionProjection{}, nil
 }
@@ -707,6 +716,7 @@ func persistAcceptedSessionCatalog(
 		return nil
 	}
 	info, ok := sessionInfoFromBranch(
+		projection.ID,
 		projection.LeafID,
 		workdir,
 		branch,
@@ -745,6 +755,7 @@ func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	commitSessionActivation(msg.runtime.Handles.Runner)
 
 	closeErr := m.applyRuntimeSwitched(msg)
 	cmds := m.runtimeSwitchedCommands(msg)

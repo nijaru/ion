@@ -809,7 +809,7 @@ func waitForAcceptanceSessionInfoAfter(
 			continue
 		}
 		info, err := catalog.GetSessionInfo(context.Background(), leafID)
-		if err == nil && info.ID() == leafID {
+		if err == nil && (info.LeafID == leafID || (info.LeafID == "" && info.ID() == leafID)) {
 			return leafID
 		}
 		time.Sleep(10 * time.Millisecond)

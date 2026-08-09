@@ -393,6 +393,7 @@ func TestSQLiteCatalogRoundTrip(t *testing.T) {
 	}
 	if err := s.UpdateSession(ctx, SessionInfoEntry{
 		EntryBase: EntryBase{ID: "session-1"},
+		LeafID:    "leaf-1",
 		Workdir:   "/repo",
 		Model:     "openrouter/test",
 		Name:      "catalog test",
@@ -419,8 +420,32 @@ func TestSQLiteCatalogRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].ID() != "session-1" || sessions[0].Model != "openrouter/test" {
-		t.Fatalf("sessions = %#v, want persisted catalog row", sessions)
+	if len(sessions) != 1 || sessions[0].ID() != "session-1" || sessions[0].LeafID != "leaf-1" ||
+		sessions[0].Model != "openrouter/test" {
+		t.Fatalf("sessions = %#v, want stable catalog ID with leaf checkpoint", sessions)
+	}
+	if err := s.UpdateSession(ctx, SessionInfoEntry{
+		EntryBase: EntryBase{ID: "session-1"},
+		LeafID:    "leaf-2",
+		Workdir:   "/repo",
+		Model:     "openrouter/test",
+		Name:      "catalog test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.GetSessionInfo(ctx, "leaf-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID() != "session-1" || updated.LeafID != "leaf-2" {
+		t.Fatalf("catalog lookup by leaf = %#v, want stable ID/session leaf", updated)
+	}
+	sessions, err = s.ListSessions(ctx, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("catalog rows after leaf update = %d, want one stable session", len(sessions))
 	}
 }
 
@@ -499,6 +524,116 @@ func TestSQLiteMigratesUnversionedStoreTransactionally(t *testing.T) {
 	}
 	if len(branch) != 2 || branch[0].ID() != "legacy-entry" {
 		t.Fatalf("migrated branch = %v, want legacy entry plus new entry", entryIDs(branch))
+	}
+}
+
+func TestSQLiteMigratesSessionCatalogLeafIdentity(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-catalog.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		CREATE TABLE entries (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			timestamp INTEGER NOT NULL,
+			payload BLOB NOT NULL DEFAULT '{}'
+		);
+		INSERT INTO entries(id, parent_id, type, timestamp) VALUES
+			('legacy-root', '', 'message', 1),
+			('legacy-child', 'legacy-root', 'message', 2);
+		CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			workdir TEXT NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			last_preview TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO sessions(session_id, workdir, model, name, last_preview, updated_at) VALUES
+			('legacy-root', '/repo', 'openrouter/test', 'root', 'root prompt', 42),
+			('legacy-child', '/repo', 'openrouter/test', 'child', 'child prompt', 42);
+		PRAGMA user_version = 10;`); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(path, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	info, err := store.GetSessionInfo(ctx, "legacy-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID() == "legacy-root" || info.ID() == "legacy-child" || info.LeafID != "legacy-child" ||
+		info.Name != "child" {
+		t.Fatalf("migrated catalog info = %#v, want fresh identity and newest leaf metadata", info)
+	}
+	rows, err := store.ListSessions(ctx, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID() != info.ID() || rows[0].LeafID != "legacy-child" {
+		t.Fatalf("migrated catalog rows = %#v, want one stable row", rows)
+	}
+	oldLeafInfo, err := store.GetSessionInfo(ctx, "legacy-child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldLeafInfo.ID() != info.ID() || oldLeafInfo.LeafID != "legacy-child" {
+		t.Fatalf("migrated leaf lookup = %#v, want stable identity", oldLeafInfo)
+	}
+}
+
+func TestSQLiteMigratesSingletonSessionCatalogIdentity(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "singleton-catalog.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			workdir TEXT NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			last_preview TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO sessions(session_id, workdir, name, updated_at)
+		VALUES('legacy-only-leaf', '/repo', 'legacy', 42);
+		PRAGMA user_version = 10;`); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(path, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	info, err := store.GetSessionInfo(ctx, "legacy-only-leaf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID() == "legacy-only-leaf" || info.LeafID != "legacy-only-leaf" {
+		t.Fatalf("singleton migration info = %#v, want fresh identity and legacy leaf", info)
 	}
 }
 
@@ -722,6 +857,79 @@ func TestSQLiteResumeSession(t *testing.T) {
 	}
 	if got := s.GetLeafID(); got != "resume-entry" {
 		t.Fatalf("leaf changed after failed resume: %q", got)
+	}
+}
+
+func TestSQLiteActivationOwnerRejectsStaleRestoration(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := NewSession(store, 0)
+	leafID, err := sess.AppendMessage(ctx, NewUserText("old", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLeafID(leafID); err != nil {
+		t.Fatal(err)
+	}
+	previousIdentity := store.Meta().ID
+	if err := store.ActivateSession(ctx, "replacement-a", leafID); err != nil {
+		t.Fatal(err)
+	}
+	ownerA := store.ActivationOwner()
+	if err := store.ActivateSession(ctx, "replacement-b", leafID); err != nil {
+		t.Fatal(err)
+	}
+	ownerB := store.ActivationOwner()
+	if ownerA == ownerB {
+		t.Fatal("activation owners did not advance")
+	}
+	if err := store.RestoreSessionIfOwner(ctx, ownerA, previousIdentity, leafID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Meta().ID; got != "replacement-b" {
+		t.Fatalf("stale restoration changed identity to %q", got)
+	}
+	if err := store.RestoreSessionIfOwner(ctx, ownerB, "replacement-a", leafID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Meta().ID; got != "replacement-a" {
+		t.Fatalf("current restoration identity = %q, want replacement-a", got)
+	}
+}
+
+func TestSQLiteResumeSessionPreservesHistoricalLeafAndStableIdentity(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sess := NewSession(store, 0)
+	rootID, err := sess.AppendMessage(ctx, NewUserText("root", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID, err := sess.AppendMessage(ctx, NewUserText("child", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSession(ctx, SessionInfoEntry{
+		EntryBase: EntryBase{ID: "stable-session"},
+		LeafID:    childID,
+		Workdir:   "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResumeSession(ctx, rootID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.GetLeafID(); got != rootID {
+		t.Fatalf("historical resume leaf = %q, want %q", got, rootID)
+	}
+	if got := store.Meta().ID; got != "stable-session" {
+		t.Fatalf("historical resume identity = %q, want stable-session", got)
+	}
+	if err := store.ResumeSession(ctx, "stable-session"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.GetLeafID(); got != childID {
+		t.Fatalf("stable resume leaf = %q, want %q", got, childID)
 	}
 }
 

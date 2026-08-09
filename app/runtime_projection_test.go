@@ -92,6 +92,48 @@ func TestStaleRuntimeSwitchCannotReplaceNewGeneration(t *testing.T) {
 	}
 }
 
+type activationTestRunner struct {
+	*stubRunner
+	lease *agent.ActivationLease
+}
+
+func (r *activationTestRunner) CommitSessionActivation() {
+	r.lease.Commit()
+}
+
+func (r *activationTestRunner) Close() error {
+	return errors.Join(r.stubRunner.Close(), r.lease.Rollback())
+}
+
+func TestStaleRuntimeSwitchRollsBackUncommittedActivation(t *testing.T) {
+	identity, leaf := "new-session", "new-leaf"
+	lease := agent.NewActivationLease(func() error {
+		identity = "old-session"
+		leaf = "old-leaf"
+		return nil
+	})
+	model := readyModel(t)
+	model.Model.EventGeneration = 2
+	model.Model.RuntimeSwitchRequest = 1
+	model.Model.Runner = &stubRunner{}
+	newRunner := &activationTestRunner{stubRunner: &stubRunner{}, lease: lease}
+
+	next, cmd := model.handleRuntimeSwitched(runtimeSwitchedMsg{
+		generation: 1,
+		switchID:   1,
+		runtime:    Accepted{Handles: Handles{Runner: newRunner}},
+	})
+	if cmd != nil {
+		t.Fatal("stale runtime switch returned a command")
+	}
+	if next.Model.Runner == newRunner {
+		t.Fatal("stale runtime switch installed replacement runner")
+	}
+	if identity != "old-session" || leaf != "old-leaf" {
+		t.Fatalf("stale activation = %q/%q, want old-session/old-leaf", identity, leaf)
+	}
+}
+
 func TestStaleRuntimeSwitchErrorCannotClearNewGeneration(t *testing.T) {
 	model := readyModel(t)
 	model.Model.EventGeneration = 2

@@ -19,6 +19,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -75,6 +76,7 @@ type Controller struct {
 	closeResources  []func() error
 	resourcesOnce   sync.Once
 	resourcesErr    error
+	activation      *ActivationLease
 
 	// --- Queues (Pi PendingMessageQueue x3) ---
 	steer    []session.Message
@@ -920,6 +922,16 @@ func (c *Controller) ActivateTools(ctx context.Context, names []string) error {
 	return <-reply
 }
 
+// CommitSessionActivation accepts a host-staged session selection. Runtime
+// replacement calls this only after validation, subscription, state, and
+// catalog persistence have succeeded. Initial host startup commits it before
+// exposing the runtime to the frontend.
+func (c *Controller) CommitSessionActivation() {
+	if c.activation != nil {
+		c.activation.Commit()
+	}
+}
+
 // Close initiates shutdown. This is a direct operation (not through the
 // command queue) because it needs to stop the command loop itself. It:
 //  1. Sets the closed flag
@@ -995,11 +1007,16 @@ func (c *Controller) Close() error {
 		c.eventHub.close()
 	}
 
+	activationErr := error(nil)
+	if c.activation != nil {
+		activationErr = c.activation.Rollback()
+	}
+
 	c.mu.Lock()
-	c.closeErr = approvalErr
+	c.closeErr = errors.Join(approvalErr, activationErr)
 	if c.closeDone != nil {
 		close(c.closeDone)
 	}
 	c.mu.Unlock()
-	return approvalErr
+	return errors.Join(approvalErr, activationErr)
 }
