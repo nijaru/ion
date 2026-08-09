@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nijaru/ion/ctxerr"
 	"github.com/nijaru/ion/internal/agent"
@@ -53,6 +54,7 @@ type printTurnObserver struct {
 	textWriter          io.Writer
 	structured          *structuredPrintWriter
 	messageTextStreamed bool
+	terminalErr         error
 	turnFinished        bool
 	wroteText           bool
 }
@@ -74,7 +76,6 @@ func newPrintTurnObserver(runner agent.Runtime, output string, w io.Writer) (*pr
 
 func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) {
 	turnFinished := o.turnFinished
-	var turnErr error
 
 	switch msg := envelope.Event.(type) {
 	case session.AgentStart:
@@ -182,8 +183,8 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 				o.text.WriteString(text)
 			}
 		}
-		if msg.Error != nil {
-			turnErr = msg.Error
+		if msg.Error != nil && o.terminalErr == nil {
+			o.terminalErr = msg.Error
 		}
 		if err := o.emit(envelope, "turn_end", map[string]any{
 			"ok":         msg.Error == nil,
@@ -239,8 +240,8 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 		if msg.Turn {
 			o.turnFinished = true
 			turnFinished = true
-			if msg.Failed && msg.Error != "" {
-				turnErr = errors.New(msg.Error)
+			if msg.Failed && msg.Error != "" && o.terminalErr == nil {
+				o.terminalErr = errors.New(msg.Error)
 			}
 		}
 		if err := o.emit(envelope, "runtime_ready", map[string]any{
@@ -281,9 +282,6 @@ func (o *printTurnObserver) observe(envelope agent.EventEnvelope) (bool, error) 
 		return false, fmt.Errorf("runtime emitted nil event")
 	default:
 		return false, fmt.Errorf("unsupported runtime event %T", envelope.Event)
-	}
-	if turnErr != nil {
-		return turnFinished, fmt.Errorf("session error: %w", turnErr)
 	}
 	return turnFinished, nil
 }
@@ -368,14 +366,19 @@ func runPromptTurnObserved(
 		msg session.Message
 		err error
 	}
+	var promptAccepted atomic.Bool
+	promptCtx := agent.WithTurnAcceptanceSink(ctx, func() {
+		promptAccepted.Store(true)
+	})
 	outcomeCh := make(chan promptOutcome, 1)
 	go func() {
-		msg, err := runner.Prompt(ctx, prompt)
+		msg, err := runner.Prompt(promptCtx, prompt)
 		outcomeCh <- promptOutcome{msg: msg, err: err}
 	}()
 
 	var (
 		promptDone   bool
+		promptErr    error
 		promptMsg    session.Message
 		turnFinished bool
 	)
@@ -401,15 +404,26 @@ func runPromptTurnObserved(
 		case outcome := <-outcomeCh:
 			promptDone = true
 			promptMsg = outcome.msg
-			if outcome.err != nil {
-				_ = observer.emitError("submit", outcome.err)
-				return printResult{}, fmt.Errorf("submit turn: %w", outcome.err)
+			promptErr = outcome.err
+			if promptErr != nil && !promptAccepted.Load() && !turnFinished {
+				_ = observer.emitError("submit", promptErr)
+				return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
 			}
 		case <-ctx.Done():
 			_, _, _ = runner.Abort()
 			_ = observer.emitError("context", ctx.Err())
 			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
 		}
+	}
+
+	if promptErr != nil {
+		_ = observer.emitError("submit", promptErr)
+		return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
+	}
+	if observer.terminalErr != nil {
+		_, _, _ = runner.Abort()
+		_ = observer.emitError("session", observer.terminalErr)
+		return printResult{}, fmt.Errorf("session error: %w", observer.terminalErr)
 	}
 
 	result := observer.result

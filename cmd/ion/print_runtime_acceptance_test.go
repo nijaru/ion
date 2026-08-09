@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/config"
@@ -210,6 +212,72 @@ func eventTypes(events []structuredPrintEvent) []string {
 		types = append(types, event.Type)
 	}
 	return types
+}
+
+func TestStructuredPrintModeWaitsForTerminalSettlementOnAcceptedFailure(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "failed-events.db")
+	store, err := session.NewSQLiteStore(path, "failed-events")
+	if err != nil {
+		t.Fatalf("open events store: %v", err)
+	}
+	sess := session.NewSession(store, 64)
+	runner := agent.NewController(agent.ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "fake-model", Provider: "fake"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	})
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	}()
+
+	var out bytes.Buffer
+	err = runPrintModeWithWriter(ctx, &out, runner, "fail", "events")
+	if err == nil || !strings.Contains(err.Error(), "submit turn") {
+		t.Fatalf("failed structured print error = %v, want submit failure", err)
+	}
+
+	var events []structuredPrintEvent
+	decoder := json.NewDecoder(&out)
+	for {
+		var event structuredPrintEvent
+		err := decoder.Decode(&event)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode failed structured output %q: %v", out.String(), err)
+		}
+		events = append(events, event)
+	}
+	if len(events) == 0 || events[len(events)-1].Type != "error" {
+		t.Fatalf("failed structured events = %v, want final error", eventTypes(events))
+	}
+	settledIndex := -1
+	agentEndIndex := -1
+	for index, event := range events[:len(events)-1] {
+		switch event.Type {
+		case "settled":
+			settledIndex = index
+		case "agent_end":
+			agentEndIndex = index
+		}
+	}
+	if agentEndIndex < 0 || settledIndex < 0 || agentEndIndex > settledIndex {
+		t.Fatalf(
+			"failed structured terminal order = %v, want agent_end before settled",
+			eventTypes(events),
+		)
+	}
 }
 
 func TestStructuredPrintModeUsesTheDurableRuntime(t *testing.T) {

@@ -806,8 +806,9 @@ func TestPrintModeReturnsSubmitError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionError(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 2)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("rate limited")})
+	sess.events <- printEnvelope(session.Settled{})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
@@ -819,8 +820,9 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 }
 
 func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
+	sess := &printSession{events: make(chan agent.EventEnvelope, 2)}
 	sess.events <- printEnvelope(session.TurnEnd{Base: session.BaseNow(), Error: errors.New("session error")})
+	sess.events <- printEnvelope(session.Settled{})
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error") {
