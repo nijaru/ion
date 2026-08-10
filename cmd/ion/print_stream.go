@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -371,12 +372,19 @@ func runPromptTurnObserved(
 		promptAccepted        atomic.Bool
 		promptToken           atomic.Uint64
 		cancellationRequested atomic.Bool
+		abortOnce             sync.Once
+		abortErr              error
 	)
 	promptRunCtx, cancelPrompt := context.WithCancel(ctx)
 	defer cancelPrompt()
 	abortToken := func(token uint64) error {
-		_, _, err := runner.AbortTurn(token)
-		return err
+		if token == 0 {
+			return nil
+		}
+		abortOnce.Do(func() {
+			_, _, abortErr = runner.AbortTurn(token)
+		})
+		return abortErr
 	}
 	promptCtx := agent.WithTurnTokenSink(promptRunCtx, func(token uint64) {
 		promptToken.Store(token)

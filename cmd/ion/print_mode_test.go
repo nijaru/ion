@@ -98,17 +98,19 @@ type signalWriter struct {
 }
 
 func (w *signalWriter) Write(p []byte) (int, error) {
-	w.once.Do(func() { close(w.firstWrite) })
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buffer.Write(p)
+	n, err := w.buffer.Write(p)
+	w.mu.Unlock()
+	w.once.Do(func() { close(w.firstWrite) })
+	return n, err
 }
 
 func (w *signalWriter) WriteString(s string) (int, error) {
-	w.once.Do(func() { close(w.firstWrite) })
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buffer.WriteString(s)
+	n, err := w.buffer.WriteString(s)
+	w.mu.Unlock()
+	w.once.Do(func() { close(w.firstWrite) })
+	return n, err
 }
 
 func (w *signalWriter) String() string {
