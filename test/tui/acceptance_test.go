@@ -18,6 +18,7 @@ import (
 	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	iontool "github.com/nijaru/ion/tool"
 )
 
 // TestDeterministicTUIAcceptance exercises the real Controller behind the TUI.
@@ -253,6 +254,52 @@ func TestDeterministicTUIAcceptanceCancelAndError(t *testing.T) {
 		}
 		closeAcceptanceHarness(t, harness, store)
 	})
+}
+
+func TestDeterministicTUIAcceptanceSubagent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := t.TempDir() + "/subagent.db"
+	provider := newAcceptanceProvider(acceptanceSubagent)
+	store, sess, harness, _ := newSubagentAcceptanceHarness(t, path, provider)
+	program, output, result := startAcceptanceProgram(t, store, sess, harness)
+
+	program.Send(tea.KeyPressMsg{Text: "delegate the bounded task"})
+	program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitForAcceptanceOutput(t, output, "child-live-output", "live child progress")
+	waitForAcceptanceOutput(t, output, "parent-output", "parent completion")
+	waitForAcceptanceIdle(t, harness)
+
+	entries, err := sess.Entries(t.Context())
+	if err != nil {
+		t.Fatalf("load subagent entries: %v", err)
+	}
+	var persisted *session.ToolResultMessage
+	for _, entry := range entries {
+		messageEntry, ok := entry.(*session.MessageEntry)
+		if !ok {
+			continue
+		}
+		result, ok := messageEntry.Message.(*session.ToolResultMessage)
+		if ok && result.ToolName == iontool.SubagentToolName {
+			persisted = result
+			break
+		}
+	}
+	if persisted == nil || persisted.IsError {
+		t.Fatalf("persisted subagent result = %#v, want successful result", persisted)
+	}
+	var details iontool.SubagentResult
+	if err := json.Unmarshal(persisted.Details, &details); err != nil {
+		t.Fatalf("decode persisted subagent details: %v", err)
+	}
+	if details.Status != "completed" || details.Output != "child-live-output" || details.ChildID == "" {
+		t.Fatalf("persisted subagent details = %#v", details)
+	}
+
+	program.Quit()
+	_ = waitAcceptanceProgram(t, result)
+	closeAcceptanceHarness(t, harness, store)
 }
 
 func TestDeterministicTUIAcceptanceFailureRecovery(t *testing.T) {
@@ -990,6 +1037,85 @@ func newAcceptanceHarness(
 	return store, sess, harness
 }
 
+func newSubagentAcceptanceHarness(
+	t *testing.T,
+	path string,
+	provider *acceptanceProvider,
+) (*session.SQLiteStore, session.Session, *agent.Controller, *iontool.SubagentTool) {
+	t.Helper()
+	store, err := session.NewSQLiteStore(path, "subagent-acceptance")
+	if err != nil {
+		t.Fatalf("open subagent acceptance store: %v", err)
+	}
+	sess := session.NewSession(store, 128)
+	subagent := iontool.NewSubagentTool()
+	subagentSpec := subagent.Spec()
+	parentTool := agent.Tool{
+		Name:           iontool.SubagentToolName,
+		Description:    subagentSpec.Description,
+		Parameters:     subagentSpec.Parameters,
+		RequiresAction: true,
+		ApprovalRequirement: func(args json.RawMessage) (agent.ApprovalRequirement, bool, error) {
+			requirement, required, err := subagent.ApprovalRequirement(string(args))
+			if err != nil {
+				return agent.ApprovalRequirement{}, false, err
+			}
+			return agent.ApprovalRequirement{
+				Category:  requirement.Category,
+				Operation: requirement.Operation,
+				Resource:  requirement.Resource,
+				Metadata:  requirement.Metadata,
+			}, required, nil
+		},
+		Execute: func(
+			ctx context.Context,
+			id string,
+			args json.RawMessage,
+			_ <-chan struct{},
+			progress func(session.ToolPartial),
+		) (session.ToolResultMessage, error) {
+			content, details, runErr := subagent.ExecuteDetailedWithProgress(
+				ctx,
+				string(args),
+				func(update iontool.StreamUpdate) {
+					if progress != nil && update.Text != "" {
+						progress(update.Text)
+					}
+				},
+			)
+			result := session.ToolResultMessage{
+				ToolCallID: id,
+				ToolName:   iontool.SubagentToolName,
+				Timestamp:  time.Now(),
+			}
+			if content != "" {
+				result.Content = append(result.Content, session.TextContent{Text: content})
+			}
+			if details != nil {
+				result.Details, _ = json.Marshal(details)
+			}
+			if runErr != nil {
+				result.IsError = true
+				result.Content = append(result.Content, session.TextContent{Text: runErr.Error()})
+			}
+			return result, nil
+		},
+	}
+	harness := agent.NewController(agent.ControllerConfig{
+		Session:       sess,
+		Store:         store,
+		Durable:       store,
+		ActionJournal: store,
+		ApprovalMode:  agent.ApprovalTrusted,
+		Workdir:       t.TempDir(),
+		Model:         acceptanceModel(),
+		Tools:         []agent.Tool{parentTool},
+		StreamFn:      provider.stream,
+	})
+	subagent.SetRunner(harness)
+	return store, sess, harness, subagent
+}
+
 func closeAcceptanceHarness(t *testing.T, harness *agent.Controller, store *session.SQLiteStore) {
 	t.Helper()
 	if err := harness.Close(); err != nil {
@@ -1065,6 +1191,7 @@ const (
 	acceptanceCancelThenComplete acceptanceMode = "cancel_then_complete"
 	acceptanceErrorThenComplete  acceptanceMode = "error_then_complete"
 	acceptanceApproval           acceptanceMode = "approval"
+	acceptanceSubagent           acceptanceMode = "subagent"
 )
 
 type acceptanceProvider struct {
@@ -1148,6 +1275,24 @@ func (p *acceptanceProvider) stream(ctx context.Context, req *llm.Request) (llm.
 			}}}, nil
 		}
 		return &acceptanceStream{chunks: []*llm.Chunk{{Content: "approved-output", StopReason: "stop"}}}, nil
+	case acceptanceSubagent:
+		switch call {
+		case 1:
+			var function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			function.Name = iontool.SubagentToolName
+			function.Arguments = `{"task":"return child evidence"}`
+			return &acceptanceStream{chunks: []*llm.Chunk{{
+				Calls:      []llm.Call{{ID: "subagent-call-1", Type: "function", Function: function}},
+				StopReason: "toolUse",
+			}}}, nil
+		case 2:
+			return &acceptanceStream{chunks: []*llm.Chunk{{Content: "child-live-output", StopReason: "stop"}}}, nil
+		default:
+			return &acceptanceStream{chunks: []*llm.Chunk{{Content: "parent-output", StopReason: "stop"}}}, nil
+		}
 	default:
 		return nil, fmt.Errorf("unknown acceptance mode %q", p.mode)
 	}
