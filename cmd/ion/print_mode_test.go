@@ -32,9 +32,11 @@ func printEnvelope(event session.Event) agent.EventEnvelope {
 
 type abortReleasingPrintSession struct {
 	*printSession
-	unblock     chan struct{}
-	abortCalled chan struct{}
-	once        sync.Once
+	unblock           chan struct{}
+	abortCalled       chan struct{}
+	globalAbortCalled chan struct{}
+	once              sync.Once
+	globalAbortOnce   sync.Once
 }
 
 type gatedPrintSession struct {
@@ -128,6 +130,15 @@ func (s *abortReleasingPrintSession) Prompt(
 }
 
 func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Message, error) {
+	s.globalAbortOnce.Do(func() {
+		if s.globalAbortCalled != nil {
+			close(s.globalAbortCalled)
+		}
+	})
+	return nil, nil, errors.New("global abort must not be used")
+}
+
+func (s *abortReleasingPrintSession) AbortTurn(uint64) ([]session.Message, []session.Message, error) {
 	s.once.Do(func() {
 		s.cancelled++
 		close(s.unblock)
@@ -136,10 +147,6 @@ func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Messa
 		}
 	})
 	return nil, nil, nil
-}
-
-func (s *abortReleasingPrintSession) AbortTurn(uint64) ([]session.Message, []session.Message, error) {
-	return s.Abort()
 }
 
 func (s *printSession) ID() string                                  { return "print-test" }
@@ -939,9 +946,10 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	})
 	close(base.events)
 	sess := &abortReleasingPrintSession{
-		printSession: base,
-		unblock:      make(chan struct{}),
-		abortCalled:  make(chan struct{}),
+		printSession:      base,
+		unblock:           make(chan struct{}),
+		abortCalled:       make(chan struct{}),
+		globalAbortCalled: make(chan struct{}),
 	}
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
@@ -953,6 +961,11 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("canceled prompt did not receive scoped abort")
 	}
+	select {
+	case <-sess.globalAbortCalled:
+		t.Fatal("print mode used global Abort before prompt reservation")
+	default:
+	}
 	if base.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", base.cancelled)
 	}
@@ -961,9 +974,10 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) {
 	base := &printSession{events: make(chan agent.EventEnvelope)}
 	sess := &abortReleasingPrintSession{
-		printSession: base,
-		unblock:      make(chan struct{}),
-		abortCalled:  make(chan struct{}),
+		printSession:      base,
+		unblock:           make(chan struct{}),
+		abortCalled:       make(chan struct{}),
+		globalAbortCalled: make(chan struct{}),
 	}
 	close(base.events)
 
@@ -985,6 +999,11 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 	case <-sess.abortCalled:
 	case <-time.After(time.Second):
 		t.Fatal("canceled prompt did not receive scoped abort")
+	}
+	select {
+	case <-sess.globalAbortCalled:
+		t.Fatal("print mode used global Abort before prompt reservation")
+	default:
 	}
 	if base.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", base.cancelled)
