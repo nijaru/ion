@@ -516,6 +516,42 @@ func TestCloseCancelsIdleModelPersistence(t *testing.T) {
 	}
 }
 
+func TestShutdownCancelsIdleModelPersistenceBeforeClosing(t *testing.T) {
+	blocking := &blockingModelChangeSession{
+		Session: newTestSession(t),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := NewController(ControllerConfig{
+		Session: blocking,
+		Model:   llm.Model{Provider: "old-provider", ID: "old-model"},
+	})
+
+	setModelDone := make(chan error, 1)
+	go func() {
+		setModelDone <- h.SetModel(llm.Model{Provider: "new-provider", ID: "new-model"})
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("model persistence did not start")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case err := <-setModelDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SetModel error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SetModel did not settle after Shutdown")
+	}
+}
+
 func (s *blockingBranchSession) BranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
 	close(s.started)
 	select {

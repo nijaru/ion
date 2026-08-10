@@ -985,7 +985,20 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	c.logf(slog.LevelInfo, "shutdown start")
-	if _, _, err := c.cancelActiveRun(); err != nil {
+	c.mu.Lock()
+	runtimeCancel := c.runtimeCancel
+	exclusive := c.activeTurnID == "" &&
+		(c.phase == PhasePersisting || c.phase == PhaseRecovering)
+	c.mu.Unlock()
+	// Idle administration writes and recovery operations use the runtime
+	// lifetime context rather than the turn signal. Cancel that context before
+	// waiting so Shutdown can join a blocked exclusive operation instead of
+	// returning a phase conflict and abandoning it.
+	if exclusive && runtimeCancel != nil {
+		runtimeCancel()
+	}
+	if _, _, err := c.cancelActiveRun(); err != nil &&
+		!(exclusive && errors.Is(err, ErrPhaseConflict)) {
 		return err
 	}
 	c.emitQueueUpdate()

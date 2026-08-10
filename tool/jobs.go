@@ -274,13 +274,22 @@ func (m *JobManager) Stop(id string) error {
 // Close cancels every live job and waits for all process groups to be reaped.
 // It is safe to call more than once.
 func (m *JobManager) Close() error {
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return nil
+	return m.CloseContext(context.Background())
+}
+
+// CloseContext cancels every live job and waits for their finalizers until ctx
+// expires. A later Close or CloseContext call can still join jobs that outlive
+// the deadline; closing the manager does not abandon ownership of their
+// records or lifecycle callbacks.
+func (m *JobManager) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	m.closed = true
-	m.cancel()
+	m.mu.Lock()
+	if !m.closed {
+		m.closed = true
+		m.cancel()
+	}
 	records := make([]*jobRecord, 0, len(m.jobs))
 	for _, record := range m.jobs {
 		records = append(records, record)
@@ -288,7 +297,11 @@ func (m *JobManager) Close() error {
 	m.mu.Unlock()
 
 	for _, record := range records {
-		<-record.done
+		select {
+		case <-record.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }

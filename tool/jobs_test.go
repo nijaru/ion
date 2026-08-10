@@ -63,6 +63,45 @@ func TestJobManagerCloseCancelsRunningJobs(t *testing.T) {
 	}
 }
 
+func TestJobManagerCloseContextBoundsNonCooperativeFinalizer(t *testing.T) {
+	manager := NewJobManager()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	jobID, err := manager.start(
+		context.Background(),
+		"non-cooperative",
+		func(_ context.Context, signal func(int), _ func(localOutputUpdate) error) (string, error) {
+			signal(123)
+			close(started)
+			<-release
+			return "released", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err = manager.CloseContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CloseContext error = %v, want deadline exceeded", err)
+	}
+
+	close(release)
+	if err := manager.Close(); err != nil {
+		t.Fatalf("Close after release: %v", err)
+	}
+	job, err := manager.Get(jobID)
+	if err != nil {
+		t.Fatalf("get released job: %v", err)
+	}
+	if job.Status != JobCompleted {
+		t.Fatalf("released job status = %s, want completed", job.Status)
+	}
+}
+
 func TestJobManagerBoundsConcurrentOutput(t *testing.T) {
 	manager := NewJobManager()
 	defer manager.Close()

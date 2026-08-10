@@ -462,9 +462,11 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		if runErr == nil {
 			runErr = updatePrintSessionInfo(ctx, runner, cwd, branch, runtimeCfg, prompt)
 		}
-		closeErr := jobs.Close()
 		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, runtimeShutdownTimeout)
-		closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, runner, store))
+		closeErr := jobs.CloseContext(shutdownCtx)
+		if closeErr == nil {
+			closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, runner, store))
+		}
 		shutdownCancel()
 		if runErr != nil {
 			if closeErr != nil {
@@ -579,9 +581,11 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	finalModel, runErr := p.Run()
 	closeAppModel(finalModel)
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
-	closeErr := jobs.Close()
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, runtimeShutdownTimeout)
-	closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, agentToClose, store))
+	closeErr := jobs.CloseContext(shutdownCtx)
+	if closeErr == nil {
+		closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, agentToClose, store))
+	}
 	shutdownCancel()
 	if runErr != nil {
 		if closeErr != nil {
