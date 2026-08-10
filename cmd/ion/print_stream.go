@@ -368,22 +368,32 @@ func runPromptTurnObserved(
 		err error
 	}
 	var (
-		promptAccepted atomic.Bool
-		promptToken    atomic.Uint64
+		promptAccepted        atomic.Bool
+		promptToken           atomic.Uint64
+		cancellationRequested atomic.Bool
 	)
-	promptCtx := agent.WithTurnTokenSink(ctx, func(token uint64) {
+	promptRunCtx, cancelPrompt := context.WithCancel(ctx)
+	defer cancelPrompt()
+	abortToken := func(token uint64) error {
+		_, _, err := runner.AbortTurn(token)
+		return err
+	}
+	promptCtx := agent.WithTurnTokenSink(promptRunCtx, func(token uint64) {
 		promptToken.Store(token)
+		if cancellationRequested.Load() {
+			_ = abortToken(token)
+		}
 	})
 	promptCtx = agent.WithTurnAcceptanceSink(promptCtx, func() {
 		promptAccepted.Store(true)
 	})
 	abortTurn := func() error {
+		cancellationRequested.Store(true)
+		cancelPrompt()
 		if token := promptToken.Load(); token != 0 {
-			_, _, err := runner.AbortTurn(token)
-			return err
+			return abortToken(token)
 		}
-		_, _, err := runner.Abort()
-		return err
+		return nil
 	}
 	outcomeCh := make(chan promptOutcome, 1)
 	go func() {

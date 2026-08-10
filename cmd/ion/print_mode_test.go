@@ -32,8 +32,9 @@ func printEnvelope(event session.Event) agent.EventEnvelope {
 
 type abortReleasingPrintSession struct {
 	*printSession
-	unblock chan struct{}
-	once    sync.Once
+	unblock     chan struct{}
+	abortCalled chan struct{}
+	once        sync.Once
 }
 
 type gatedPrintSession struct {
@@ -55,6 +56,9 @@ func (s *lateAcceptancePrintSession) Prompt(
 	_ ...session.ImageContent,
 ) (session.Message, error) {
 	close(s.promptStarted)
+	if sink := agent.TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(1)
+	}
 	<-s.acceptanceRelease
 	if sink := agent.TurnAcceptanceSinkFromContext(ctx); sink != nil {
 		sink()
@@ -76,7 +80,10 @@ func (s *lateAcceptancePrintSession) AbortTurn(uint64) ([]session.Message, []ses
 	return s.Abort()
 }
 
-func (s *gatedPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
+func (s *gatedPrintSession) Prompt(ctx context.Context, _ string, _ ...session.ImageContent) (session.Message, error) {
+	if sink := agent.TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(1)
+	}
 	<-s.release
 	return &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "done"}}}, nil
 }
@@ -108,15 +115,31 @@ func (w *signalWriter) String() string {
 	return w.buffer.String()
 }
 
-func (s *abortReleasingPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
+func (s *abortReleasingPrintSession) Prompt(
+	ctx context.Context,
+	_ string,
+	_ ...session.ImageContent,
+) (session.Message, error) {
+	if sink := agent.TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(1)
+	}
 	<-s.unblock
 	return nil, errors.New("prompt aborted")
 }
 
 func (s *abortReleasingPrintSession) Abort() ([]session.Message, []session.Message, error) {
-	s.once.Do(func() { close(s.unblock) })
-	s.cancelled++
+	s.once.Do(func() {
+		s.cancelled++
+		close(s.unblock)
+		if s.abortCalled != nil {
+			close(s.abortCalled)
+		}
+	})
 	return nil, nil, nil
+}
+
+func (s *abortReleasingPrintSession) AbortTurn(uint64) ([]session.Message, []session.Message, error) {
+	return s.Abort()
 }
 
 func (s *printSession) ID() string                                  { return "print-test" }
@@ -226,7 +249,10 @@ func (s *printSession) Close() error {
 
 // --- agent.Runtime implementation ---
 
-func (s *printSession) Prompt(_ context.Context, _ string, _ ...session.ImageContent) (session.Message, error) {
+func (s *printSession) Prompt(ctx context.Context, _ string, _ ...session.ImageContent) (session.Message, error) {
+	if sink := agent.TurnTokenSinkFromContext(ctx); sink != nil {
+		sink(1)
+	}
 	if s.submitErr != nil {
 		return nil, s.submitErr
 	}
@@ -906,19 +932,29 @@ func TestPrintModeReturnsSessionErrorFallback(t *testing.T) {
 }
 
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
-	sess := &printSession{events: make(chan agent.EventEnvelope, 1)}
-	sess.events <- printEnvelope(session.MessageUpdate{
+	base := &printSession{events: make(chan agent.EventEnvelope, 1)}
+	base.events <- printEnvelope(session.MessageUpdate{
 		Delta:     session.TextDelta{Text: "partial"},
 		BlockType: "text",
 	})
-	close(sess.events)
+	close(base.events)
+	sess := &abortReleasingPrintSession{
+		printSession: base,
+		unblock:      make(chan struct{}),
+		abortCalled:  make(chan struct{}),
+	}
 
 	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
 		t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
 	}
-	if sess.cancelled != 1 {
-		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	select {
+	case <-sess.abortCalled:
+	case <-time.After(time.Second):
+		t.Fatal("canceled prompt did not receive scoped abort")
+	}
+	if base.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", base.cancelled)
 	}
 }
 
@@ -927,6 +963,7 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 	sess := &abortReleasingPrintSession{
 		printSession: base,
 		unblock:      make(chan struct{}),
+		abortCalled:  make(chan struct{}),
 	}
 	close(base.events)
 
@@ -943,6 +980,11 @@ func TestPrintModeAbortsBeforeWaitingForPromptOnClosedEventStream(t *testing.T) 
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runPromptTurn waited for Prompt before aborting the runner")
+	}
+	select {
+	case <-sess.abortCalled:
+	case <-time.After(time.Second):
+		t.Fatal("canceled prompt did not receive scoped abort")
 	}
 	if base.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", base.cancelled)
