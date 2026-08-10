@@ -75,8 +75,8 @@ type Config struct {
 	MemoryTools            string            `toml:"memory_tools,omitempty"`
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
-	Models                 []ModelDef        `toml:"models,omitempty"                   json:"models,omitempty"`
-	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty"             json:"scoped_model,omitempty"`
+	Models                 []ModelDef        `toml:"models,omitempty"                json:"models,omitempty"`
+	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty"          json:"scoped_model,omitempty"`
 }
 
 type ScopedModel struct {
