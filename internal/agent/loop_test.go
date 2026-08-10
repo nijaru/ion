@@ -130,6 +130,48 @@ func TestRunLoopContextTransformObservesRunCancellation(t *testing.T) {
 	}
 }
 
+func TestRunLoopPrepareNextTurnObservesRunCancellation(t *testing.T) {
+	parent, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	signal := make(chan struct{})
+	started := make(chan struct{})
+	prepared := make(chan error, 1)
+
+	go func() {
+		<-started
+		close(signal)
+	}()
+
+	runLoop(
+		parent,
+		[]session.Message{session.NewUserText("prompt", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			PrepareNextTurn: func(ctx context.Context, _ []session.ToolResultMessage) *NextTurnSnapshot {
+				close(started)
+				<-ctx.Done()
+				prepared <- ctx.Err()
+				return nil
+			},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				return &mockStream{chunks: []*llm.Chunk{{Content: "done"}}}, nil
+			},
+		},
+		func(session.Event) {},
+		signal,
+	)
+
+	select {
+	case err := <-prepared:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("prepare-next-turn context error = %v, want canceled", err)
+		}
+	case <-parent.Done():
+		t.Fatalf("prepare-next-turn did not observe run cancellation before parent deadline: %v", parent.Err())
+	}
+}
+
 func TestRunLoopContextOverflowRequiresReplaySafeFrontier(t *testing.T) {
 	overflow := errors.New("provider-specific overflow")
 	result := runLoop(

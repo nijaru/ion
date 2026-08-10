@@ -76,6 +76,9 @@ func runLoop(
 		convert = DefaultConvert
 	}
 
+	runCtx, cancelRun := contextWithSignal(ctx, signal)
+	defer cancelRun()
+
 	newMessages := make([]session.Message, 0, len(prompts))
 	currentCtx := TurnContext{
 		SystemPrompt: snapshot.SystemPrompt,
@@ -141,7 +144,7 @@ func runLoop(
 			pending = nil
 
 			// Stream assistant response.
-			response := streamAssistantResponse(ctx, currentCtx, cfg, convert, emit, signal)
+			response := streamAssistantResponse(runCtx, currentCtx, cfg, convert, emit, signal)
 			assistantMsg, aborted := response.message, response.aborted
 			if response.providerProgress || !response.aborted {
 				// Any completed assistant response establishes a visible
@@ -213,7 +216,7 @@ func runLoop(
 						newMessages = append(newMessages, &res)
 					}
 				} else {
-					results, terminate := executeToolCalls(ctx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
+					results, terminate := executeToolCalls(runCtx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
 					toolResults = results
 					hasMoreToolCalls = !terminate
 
@@ -233,7 +236,7 @@ func runLoop(
 
 			// Prepare next turn (harness flushes writes, rebuilds context).
 			if cfg.PrepareNextTurn != nil {
-				snap := cfg.PrepareNextTurn(ctx, toolResults)
+				snap := cfg.PrepareNextTurn(runCtx, toolResults)
 				if snap != nil {
 					if snap.Context.Messages != nil {
 						currentCtx = snap.Context
