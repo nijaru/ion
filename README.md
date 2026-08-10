@@ -3,11 +3,14 @@
 > [!NOTE]
 > Ion is a native Go coding agent. The core submit/stream/tool/cancel/persist/
 > resume path has deterministic, race, approved live OpenRouter, and current
-> release-verification coverage; advanced integrations remain in progress.
+> release-verification coverage. Built-in bounded web research and bounded
+> subagent delegation are present; the expanded TUI/CLI release journey and
+> final release gates remain in progress.
 
 Ion is a terminal coding agent for working on codebases from your shell. It
-opens an interactive chat UI, gives the model a small set of coding tools, and
-keeps sessions available so you can resume work later.
+opens an interactive chat UI, gives the model coding, bounded web research,
+and bounded delegation tools, and keeps sessions available so you can resume
+work later.
 
 ## Install
 

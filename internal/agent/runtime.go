@@ -176,6 +176,14 @@ type Controller struct {
 	actionsEnabled    bool
 	requireDurable    bool
 	processReconciler tool.ProcessReconciler
+
+	// --- Built-in child runs ---
+	childConfig         ChildRunConfig
+	childDepth          int
+	childSlots          chan struct{}
+	origin              session.SessionOrigin
+	approvalMode        ApprovalMode
+	approvalInteractive bool
 }
 
 // Compile-time interface assertions.

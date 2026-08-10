@@ -3,13 +3,13 @@
 Ion registers a small native tool universe:
 
 ```text
-bash, edit, find, grep, ls, read, write
+bash, edit, find, grep, ls, read, subagent, web_fetch, web_search, write
 ```
 
 Normal coding mode exposes the default active subset to the provider:
 
 ```text
-bash, edit, read, write
+bash, edit, read, subagent, web_fetch, web_search, write
 ```
 
 The read-only discovery tools `find`, `grep`, and `ls` are registered but not
@@ -20,8 +20,9 @@ when the model needs it.
 
 Memory tools are opt-in through `memory_tools = "on"`; they are hidden from the
 default model-visible surface otherwise. The host `/memory` command is always
-explicit and operates outside session persistence. Subagent tools and
-model-visible compaction remain deferred or hidden. `/rewind` is an explicit
+explicit and operates outside session persistence. The built-in `subagent`
+tool delegates one bounded task with runtime-owned isolation and live tool
+progress; see [docs/subagents.md](subagents.md). `/rewind` is an explicit
 host-only checkpoint recovery command described below.
 MCP is an explicit runtime-only external-tool capability described below.
 `/compact` remains a host command because context survival is reliability work.
@@ -31,6 +32,23 @@ tools are opt-in stdlib surfaces rather than default coding tools:
 remains deferred behind a later write-management design. The host-side
 `/skills [query]` command can list installed local skill metadata without
 injecting those skills into the model prompt.
+
+## Built-in web research
+
+`web_search` is active in the normal coding surface. It performs one bounded
+public-web search and returns source URLs, titles, snippets, retrieval time,
+and truncation metadata. `web_fetch` accepts one public HTTP(S) URL and returns
+bounded readable text plus the final URL, status, content type, byte count, and
+truncation metadata. Both tools mark retrieved material as untrusted data.
+
+The runtime action boundary records network intent and applies the selected
+trust/confirmation policy. Requests have bounded redirects, response bytes,
+result count, output characters, timeout, and retry behavior. Local/private
+addresses, unsupported schemes, malformed URLs, policy failures, upstream
+errors, and cancellation fail visibly. Web content cannot grant project trust,
+change tool policy, or inject system instructions. Browser automation,
+arbitrary crawling, and provider-specific search APIs are out of scope for the
+initial built-in surface.
 
 Use:
 

@@ -178,7 +178,7 @@ func TestSubagentSeamPresent(t *testing.T) {
 	if start.Origin.SessionID != "root" {
 		t.Fatal("AgentStart must carry SessionOrigin")
 	}
-	// ChildID is the seam for future subagents; empty for root today.
+	// ChildID is empty for root runs and populated for bounded child runs.
 	if start.Origin.ChildID != "" {
 		t.Fatal("root events must have empty ChildID")
 	}

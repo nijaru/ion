@@ -35,6 +35,27 @@ func (runtimeContentTool) ExecuteContent(context.Context, string) ([]llm.Content
 	}, nil
 }
 
+type runtimeProgressDetailedTool struct{}
+
+func (runtimeProgressDetailedTool) Spec() llm.Spec { return llm.Spec{Name: "progress"} }
+
+func (runtimeProgressDetailedTool) Execute(context.Context, string) (string, error) {
+	return "final", nil
+}
+
+func (runtimeProgressDetailedTool) ExecuteDetailed(ctx context.Context, args string) (string, any, error) {
+	return "final", map[string]string{"kind": "details"}, nil
+}
+
+func (runtimeProgressDetailedTool) ExecuteDetailedWithProgress(
+	_ context.Context,
+	_ string,
+	progress func(tool.StreamUpdate),
+) (string, any, error) {
+	progress(tool.StreamUpdate{Text: "live"})
+	return "final", map[string]string{"kind": "details"}, nil
+}
+
 type runtimeStreamingTool struct{}
 
 func (runtimeStreamingTool) Spec() llm.Spec                                  { return llm.Spec{Name: "stream"} }
@@ -82,6 +103,23 @@ func TestExecuteRegisteredToolPreservesContentParts(t *testing.T) {
 	}
 	if _, ok := result.Content[1].(session.ImageContent); !ok {
 		t.Fatalf("content[1] = %T, want ImageContent", result.Content[1])
+	}
+}
+
+func TestExecuteRegisteredToolForwardsDetailedProgress(t *testing.T) {
+	var updates []string
+	result := executeRegisteredTool(
+		context.Background(),
+		runtimeEntry(runtimeProgressDetailedTool{}),
+		"call-progress",
+		nil,
+		func(partial session.ToolPartial) { updates = append(updates, partial.(string)) },
+	)
+	if session.EntryText(&session.MessageEntry{Message: &result}) != "final" {
+		t.Fatalf("progress result = %#v, want final content", result)
+	}
+	if len(updates) != 1 || updates[0] != "live" {
+		t.Fatalf("updates = %#v, want live progress", updates)
 	}
 }
 

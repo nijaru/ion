@@ -29,6 +29,7 @@ type TurnContext struct {
 type LoopConfig struct {
 	Model    llm.Model
 	Thinking session.ThinkingLevel
+	Origin   session.SessionOrigin
 	// SessionID is the stable session identity for provider-side caching/routing.
 	// It is distinct from the changing session-tree leaf ID.
 	SessionID string

@@ -4,12 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/config"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/tool"
+	toolweb "github.com/nijaru/ion/tool/web"
 )
 
 func TestSkillDirsForRuntimeGatesProjectSkills(t *testing.T) {
@@ -233,5 +235,24 @@ func TestActiveToolNamesForModeWithSkillsKeepsSkillDeferredWhenDisabled(t *testi
 		if name == "read_skill" {
 			t.Fatalf("disabled skill tool was active: %#v", active)
 		}
+	}
+}
+
+func TestActiveToolNamesExposeBuiltInWebResearchInCodingMode(t *testing.T) {
+	registry := tool.NewRegistry()
+	client := toolweb.NewClient(toolweb.Config{AllowPrivateHosts: true})
+	registry.Register(toolweb.NewSearchTool(client))
+	registry.Register(toolweb.NewFetchTool(client))
+	registry.Register(tool.NewSubagentTool())
+
+	coding := activeToolNamesForMode(registry, "coding")
+	if !slices.Contains(coding, "web_search") || !slices.Contains(coding, "web_fetch") ||
+		!slices.Contains(coding, tool.SubagentToolName) {
+		t.Fatalf("coding active tools = %#v", coding)
+	}
+	read := activeToolNamesForMode(registry, "read")
+	if slices.Contains(read, "web_search") || slices.Contains(read, "web_fetch") ||
+		slices.Contains(read, tool.SubagentToolName) {
+		t.Fatalf("read mode exposed network tools = %#v", read)
 	}
 }

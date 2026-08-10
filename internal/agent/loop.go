@@ -85,7 +85,7 @@ func runLoop(
 		Messages:     append([]session.Message{}, snapshot.Messages...),
 	}
 
-	emit(session.AgentStart{Origin: session.SessionOrigin{}})
+	emit(session.AgentStart{Origin: cfg.Origin})
 	emit(session.TurnStart{})
 
 	// Emit prompt messages (Pi: message_start + message_end for each prompt).
@@ -216,7 +216,15 @@ func runLoop(
 						newMessages = append(newMessages, &res)
 					}
 				} else {
-					results, terminate := executeToolCalls(runCtx, currentCtx, *assistantMsg, toolCalls, cfg, emit, signal)
+					results, terminate := executeToolCalls(
+						runCtx,
+						currentCtx,
+						*assistantMsg,
+						toolCalls,
+						cfg,
+						emit,
+						signal,
+					)
 					toolResults = results
 					hasMoreToolCalls = !terminate
 

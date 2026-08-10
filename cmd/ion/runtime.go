@@ -24,6 +24,7 @@ import (
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 	ionmcp "github.com/nijaru/ion/tool/mcp"
+	toolweb "github.com/nijaru/ion/tool/web"
 )
 
 func closeRuntimeHandles(
@@ -297,7 +298,9 @@ func activeToolNamesForModeWithSkills(
 	case "read":
 		preferred = []string{"find", "grep", "ls", "read", tool.SearchToolName}
 	default:
-		preferred = []string{"bash", "edit", "read", tool.SearchToolName, "write"}
+		preferred = []string{
+			"bash", "edit", "read", tool.SearchToolName, "subagent", "web_search", "web_fetch", "write",
+		}
 	}
 	if skillsEnabled {
 		preferred = append(preferred, "read_skill")
@@ -649,6 +652,11 @@ func openRuntime(
 	if err := tool.RegisterCodingTools(toolRegistry, codingToolsConfig); err != nil {
 		return setupFailure(fmt.Errorf("register coding tools: %w", err))
 	}
+	webClient := toolweb.NewClient(toolweb.Config{})
+	toolRegistry.Register(toolweb.NewSearchTool(webClient))
+	toolRegistry.Register(toolweb.NewFetchTool(webClient))
+	subagentTool := tool.NewSubagentTool()
+	toolRegistry.Register(subagentTool)
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
 			return setupFailure(err)
@@ -783,6 +791,7 @@ func openRuntime(
 		},
 		ContextWindow: contextWindow,
 	})
+	subagentTool.SetRunner(harness)
 	closeUnusableRuntime := func(openErr error) error {
 		closeErr := errors.Join(harness.Close(), closeRuntimeResources())
 		if closeErr != nil {

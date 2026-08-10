@@ -23,6 +23,18 @@ type DetailedTool interface {
 	ExecuteDetailed(ctx context.Context, args string) (content string, details any, err error)
 }
 
+// ProgressAwareDetailedTool is a detailed tool that can publish bounded live
+// output while it runs. The final content and details remain the durable tool
+// result; progress is a runtime/TUI projection only.
+type ProgressAwareDetailedTool interface {
+	DetailedTool
+	ExecuteDetailedWithProgress(
+		ctx context.Context,
+		args string,
+		progress func(StreamUpdate),
+	) (content string, details any, err error)
+}
+
 type StreamingTool interface {
 	Tool
 	// ExecuteStreaming runs the tool and returns an iterator that yields

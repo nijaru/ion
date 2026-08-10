@@ -20,7 +20,7 @@ type Event interface {
 
 // --- Core events. ---
 
-// AgentStart opens a run. Origin tags root vs child for the future subagent seam.
+// AgentStart opens a run. Origin tags root vs bounded child runs.
 type AgentStart struct {
 	Origin SessionOrigin
 }
@@ -147,8 +147,8 @@ func (ToolCallDelta) isDelta() {}
 
 // --- Metadata. ---
 
-// SessionOrigin identifies which session an event belongs to.
-// The subagent seam — present now, unused until subagents ship.
+// SessionOrigin identifies which session an event belongs to, including a
+// bounded child run projected through the parent runtime.
 type SessionOrigin struct {
 	SessionID string
 	ChildID   string

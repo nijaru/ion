@@ -80,6 +80,30 @@ func executeRegisteredTool(
 		return result
 	}
 
+	if detailed, ok := entry.Tool.(tool.ProgressAwareDetailedTool); ok {
+		content, details, err := detailed.ExecuteDetailedWithProgress(ctx, argText, func(update tool.StreamUpdate) {
+			if progress != nil && update.Text != "" {
+				progress(update.Text)
+			}
+		})
+		if content != "" {
+			result.Content = append(result.Content, session.TextContent{Text: content})
+		}
+		if details != nil {
+			if raw, ok := details.(json.RawMessage); ok {
+				result.Details = append([]byte(nil), raw...)
+			} else if data, marshalErr := json.Marshal(details); marshalErr == nil {
+				result.Details = data
+			} else {
+				appendToolError(&result, fmt.Errorf("marshal tool details: %w", marshalErr))
+			}
+		}
+		if err != nil {
+			appendToolError(&result, err)
+		}
+		return result
+	}
+
 	if detailed, ok := entry.Tool.(tool.DetailedTool); ok {
 		content, details, err := detailed.ExecuteDetailed(ctx, argText)
 		if content != "" {

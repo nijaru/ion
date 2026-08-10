@@ -86,6 +86,11 @@ type ControllerConfig struct {
 	// requests immediately (the print-mode fail-closed behavior).
 	ApprovalMode        ApprovalMode
 	ApprovalInteractive bool
+	// Child controls bounded built-in child runs. Zero values use the runtime
+	// defaults; child controllers inherit the normalized snapshot.
+	Child      ChildRunConfig
+	ChildDepth int
+	Origin     session.SessionOrigin
 	// ActionJournal is required by the production host for tools that can have
 	// external effects. Without it, a configured action boundary cannot issue
 	// execution authority.
@@ -125,45 +130,50 @@ func NewController(cfg ControllerConfig) *Controller {
 	}
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	h := &Controller{
-		session:            cfg.Session,
-		store:              cfg.Store,
-		durable:            cfg.Durable,
-		requireDurable:     cfg.RequireDurable,
-		tools:              toolMap,
-		active:             active,
-		model:              cfg.Model,
-		thinking:           clampThinkingLevel(cfg.Model, cfg.Thinking),
-		sysprompt:          cfg.SysPrompt,
-		log:                cfg.Logger,
-		metrics:            cfg.Metrics,
-		promptTemplates:    cfg.PromptTemplates,
-		stream:             cfg.StreamFn,
-		auth:               cfg.Auth,
-		contextOverflow:    cfg.ContextOverflow,
-		transport:          cfg.Transport,
-		timeout:            cfg.Timeout,
-		phase:              PhaseReady,
-		commands:           make(chan Command, controllerCommandCapacity),
-		commandStop:        make(chan struct{}),
-		nextTurnWake:       make(chan struct{}, 1),
-		completions:        make(chan turnCompletion, 1),
-		runtimeRequests:    make(chan runtimeRequest, runtimeOperationCapacity),
-		runtimeResults:     make(chan runtimeCompletion, 1),
-		runtimeContext:     runtimeContext,
-		runtimeCancel:      runtimeCancel,
-		eventHub:           newEventHub(),
-		done:               make(chan struct{}),
-		closeDone:          make(chan struct{}),
-		compaction:         cfg.Compaction,
-		summaryRetry:       cfg.SummaryRetry,
-		contextWindow:      cfg.ContextWindow,
-		steeringMode:       cfg.SteeringMode,
-		followUpMode:       cfg.FollowUpMode,
-		queueCapacity:      cfg.QueueCapacity,
-		maxParallelTools:   cfg.MaxParallelTools,
-		reservedTurnTokens: make(map[uint64]struct{}),
-		canceledTurnTokens: make(map[uint64]struct{}),
-		processReconciler:  cfg.ProcessReconciler,
+		session:             cfg.Session,
+		store:               cfg.Store,
+		durable:             cfg.Durable,
+		requireDurable:      cfg.RequireDurable,
+		tools:               toolMap,
+		active:              active,
+		model:               cfg.Model,
+		thinking:            clampThinkingLevel(cfg.Model, cfg.Thinking),
+		sysprompt:           cfg.SysPrompt,
+		log:                 cfg.Logger,
+		metrics:             cfg.Metrics,
+		promptTemplates:     cfg.PromptTemplates,
+		stream:              cfg.StreamFn,
+		auth:                cfg.Auth,
+		contextOverflow:     cfg.ContextOverflow,
+		transport:           cfg.Transport,
+		timeout:             cfg.Timeout,
+		phase:               PhaseReady,
+		commands:            make(chan Command, controllerCommandCapacity),
+		commandStop:         make(chan struct{}),
+		nextTurnWake:        make(chan struct{}, 1),
+		completions:         make(chan turnCompletion, 1),
+		runtimeRequests:     make(chan runtimeRequest, runtimeOperationCapacity),
+		runtimeResults:      make(chan runtimeCompletion, 1),
+		runtimeContext:      runtimeContext,
+		runtimeCancel:       runtimeCancel,
+		eventHub:            newEventHub(),
+		done:                make(chan struct{}),
+		closeDone:           make(chan struct{}),
+		compaction:          cfg.Compaction,
+		summaryRetry:        cfg.SummaryRetry,
+		contextWindow:       cfg.ContextWindow,
+		steeringMode:        cfg.SteeringMode,
+		followUpMode:        cfg.FollowUpMode,
+		queueCapacity:       cfg.QueueCapacity,
+		maxParallelTools:    cfg.MaxParallelTools,
+		reservedTurnTokens:  make(map[uint64]struct{}),
+		canceledTurnTokens:  make(map[uint64]struct{}),
+		processReconciler:   cfg.ProcessReconciler,
+		childConfig:         normalizeChildRunConfig(cfg.Child),
+		childDepth:          cfg.ChildDepth,
+		origin:              cfg.Origin,
+		approvalMode:        cfg.ApprovalMode,
+		approvalInteractive: cfg.ApprovalInteractive,
 	}
 	if h.steeringMode == "" {
 		h.steeringMode = "one-at-a-time"
@@ -176,6 +186,12 @@ func NewController(cfg ControllerConfig) *Controller {
 	}
 	if h.maxParallelTools <= 0 {
 		h.maxParallelTools = 8
+	}
+	if h.childSlots == nil {
+		h.childSlots = make(chan struct{}, h.childConfig.MaxConcurrent)
+	}
+	if h.origin.SessionID == "" && h.session != nil {
+		h.origin.SessionID = h.session.Meta().ID
 	}
 	if h.hooks == nil {
 		h.hooks = make(map[string][]hookRegistration)
@@ -776,6 +792,7 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 	return LoopConfig{
 		Model:            model,
 		Thinking:         thinking,
+		Origin:           h.origin,
 		SessionID:        h.session.Meta().ID,
 		TurnID:           turnID,
 		Tools:            tools,
