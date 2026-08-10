@@ -218,11 +218,12 @@ specific provider compatibility needs investigation:
 ```sh
 ION_LIVE_PROVIDER_A=openrouter \
 ION_LIVE_MODEL_A=poolside/laguna-s-2.1:free \
-ION_LIVE_PROVIDER_B=openrouter \
-ION_LIVE_MODEL_B=deepseek/deepseek-v4-flash-0731 \
 ION_LIVE_BASIC=1 \
 go test ./cmd/ion -run TestLiveBasicTurn -count=1 -timeout 120s -v
 ```
+
+One configured profile is sufficient. Set the optional provider B and model B
+variables only when comparing a second model through the same adapter.
 
 Set `ION_PHASE1_LIVE=1` with the same four profile variables to include the
 live TUI/tmux pass in `scripts/smoke/phase1-acceptance.sh`.
