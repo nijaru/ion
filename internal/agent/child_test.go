@@ -112,6 +112,25 @@ func TestControllerRunSubagentCancellationStopsProvider(t *testing.T) {
 	}
 }
 
+func TestControllerRunSubagentProviderFailureIsVisible(t *testing.T) {
+	wantErr := errors.New("child provider failed")
+	h := newChildTestController(
+		t,
+		ChildRunConfig{MaxDuration: time.Second},
+		func(context.Context, *llm.Request) (llm.Stream, error) {
+			return nil, wantErr
+		},
+	)
+
+	result, err := h.RunSubagent(context.Background(), tool.SubagentRequest{Task: "fail visibly"})
+	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("RunSubagent() error = %v, want provider failure", err)
+	}
+	if result.Status != "failed" || !strings.Contains(result.Error, wantErr.Error()) {
+		t.Fatalf("result = %#v, want visible failed outcome", result)
+	}
+}
+
 func TestControllerRunSubagentBoundsConcurrency(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
