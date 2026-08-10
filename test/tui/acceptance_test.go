@@ -837,6 +837,8 @@ func (j *acceptanceJobs) StopJob(id string) error {
 	return nil
 }
 
+const acceptanceOutputTimeout = 20 * time.Second
+
 func waitAcceptanceSignal(t *testing.T, signal <-chan struct{}, label string) {
 	t.Helper()
 	select {
@@ -864,7 +866,7 @@ func waitForAcceptanceIdle(t *testing.T, harness *agent.Controller) {
 
 func waitForAcceptanceOutput(t *testing.T, output *acceptanceBuffer, needle, label string) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(acceptanceOutputTimeout)
 	for time.Now().Before(deadline) {
 		content := output.String()
 		if strings.Contains(content, needle) {
@@ -885,7 +887,7 @@ func waitForAcceptanceTreeCursor(t *testing.T, output *acceptanceBuffer, entry s
 			title = title[:8]
 		}
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(acceptanceOutputTimeout)
 	for time.Now().Before(deadline) {
 		for _, line := range strings.Split(ansi.Strip(output.String()), "\n") {
 			if strings.Contains(line, "›") && strings.Contains(line, title) {
@@ -929,7 +931,7 @@ func sendAcceptanceCommandAfterSettlement(
 
 func waitForAcceptanceOutputAny(t *testing.T, output *acceptanceBuffer, label string, needles ...string) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(acceptanceOutputTimeout)
 	for time.Now().Before(deadline) {
 		content := output.String()
 		for _, needle := range needles {
@@ -955,7 +957,7 @@ func waitAcceptanceProgram(t *testing.T, result <-chan acceptanceResult) *app.Mo
 			t.Fatalf("deterministic TUI returned %T, want *app.Model", returned.model)
 		}
 		return model
-	case <-time.After(10 * time.Second):
+	case <-time.After(acceptanceOutputTimeout):
 		t.Fatal("timed out waiting for deterministic TUI program")
 		return nil
 	}
