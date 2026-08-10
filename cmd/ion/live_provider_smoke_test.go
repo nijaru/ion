@@ -46,10 +46,10 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 }
 
 // TestLiveBasicTurn is the low-cost provider smoke used while onboarding a
-// model or endpoint. It deliberately permits two profiles from the same
-// adapter so a paid/free endpoint comparison can exercise text streaming,
-// settlement, persistence, and replay without claiming full provider
-// conformance.
+// model or endpoint. One authorized profile is sufficient for the release
+// gate. A second profile from the same adapter is optional, so paid/free
+// endpoint comparisons can still exercise text streaming, settlement,
+// persistence, and replay without claiming full provider conformance.
 func TestLiveBasicTurn(t *testing.T) {
 	if os.Getenv("ION_LIVE_BASIC") != "1" {
 		t.Skip("set ION_LIVE_BASIC=1 to run the opt-in basic live-provider smoke")
@@ -78,14 +78,18 @@ type liveProviderProfile struct {
 }
 
 func loadLiveProviderProfiles() ([]liveProviderProfile, error) {
-	return loadLiveProviderProfilesWithDistinctAdapter(true)
+	return loadLiveProviderProfilesWithOptions(true, true)
 }
 
 func loadLiveProviderProfilesAllowSameAdapter() ([]liveProviderProfile, error) {
-	return loadLiveProviderProfilesWithDistinctAdapter(false)
+	return loadLiveProviderProfilesWithOptions(false, false)
 }
 
 func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([]liveProviderProfile, error) {
+	return loadLiveProviderProfilesWithOptions(requireDistinctAdapter, true)
+}
+
+func loadLiveProviderProfilesWithOptions(requireDistinctAdapter, requireProfileB bool) ([]liveProviderProfile, error) {
 	stable, err := config.LoadStable()
 	if err != nil {
 		return nil, fmt.Errorf("load stable config for live provider A: %w", err)
@@ -106,10 +110,13 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 			"live provider A needs ION_LIVE_PROVIDER_A and ION_LIVE_MODEL_A, or a configured provider/model",
 		)
 	}
-	if providerB == "" || modelB == "" {
+	if requireProfileB && (providerB == "" || modelB == "") {
 		return nil, fmt.Errorf(
 			"live provider B needs ION_LIVE_PROVIDER_B and ION_LIVE_MODEL_B; two explicit provider profiles are required",
 		)
+	}
+	if (providerB == "") != (modelB == "") {
+		return nil, fmt.Errorf("live provider B needs both ION_LIVE_PROVIDER_B and ION_LIVE_MODEL_B")
 	}
 	if requireDistinctAdapter && llm.ResolveID(providerA) == llm.ResolveID(providerB) {
 		return nil, fmt.Errorf(
@@ -119,7 +126,9 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 		)
 	}
 	providerA = llm.ResolveID(providerA)
-	providerB = llm.ResolveID(providerB)
+	if providerB != "" {
+		providerB = llm.ResolveID(providerB)
+	}
 
 	contextWindow := stable.ContextLimit
 	if contextWindow <= 0 {
@@ -145,7 +154,7 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 		Endpoint:     strings.TrimSpace(os.Getenv("ION_LIVE_ENDPOINT_B")),
 		ContextLimit: contextWindow,
 	}
-	return []liveProviderProfile{
+	profiles := []liveProviderProfile{
 		{
 			name:           "a-" + llm.ResolveID(providerA),
 			provider:       providerA,
@@ -155,7 +164,9 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 			thinking:       thinkingA,
 			providerConfig: configA,
 		},
-		{
+	}
+	if providerB != "" {
+		profiles = append(profiles, liveProviderProfile{
 			name:           "b-" + llm.ResolveID(providerB),
 			provider:       providerB,
 			model:          modelB,
@@ -163,8 +174,9 @@ func loadLiveProviderProfilesWithDistinctAdapter(requireDistinctAdapter bool) ([
 			contextWindow:  contextWindow,
 			thinking:       liveThinkingLevel("ION_LIVE_THINKING_B", "auto"),
 			providerConfig: configB,
-		},
-	}, nil
+		})
+	}
+	return profiles, nil
 }
 
 func liveThinkingLevel(envName, fallback string) session.ThinkingLevel {

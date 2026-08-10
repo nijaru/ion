@@ -64,6 +64,32 @@ func TestLoadLiveProviderProfilesAllowsSameAdapterForBasicSmoke(t *testing.T) {
 	}
 }
 
+func TestLoadLiveProviderProfilesAllowsSingleProfileForBasicSmoke(t *testing.T) {
+	clearLiveProfileEnv(t)
+	t.Setenv("ION_LIVE_PROVIDER_A", "openrouter")
+	t.Setenv("ION_LIVE_MODEL_A", "deepseek/deepseek-v4-pro")
+
+	profiles, err := loadLiveProviderProfilesAllowSameAdapter()
+	if err != nil {
+		t.Fatalf("load single basic profile: %v", err)
+	}
+	if len(profiles) != 1 || profiles[0].provider != "openrouter" || profiles[0].model != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("profiles = %#v, want one OpenRouter profile", profiles)
+	}
+}
+
+func TestLoadLiveProviderProfilesRejectsPartialOptionalBasicProfile(t *testing.T) {
+	clearLiveProfileEnv(t)
+	t.Setenv("ION_LIVE_PROVIDER_A", "openrouter")
+	t.Setenv("ION_LIVE_MODEL_A", "deepseek/deepseek-v4-pro")
+	t.Setenv("ION_LIVE_PROVIDER_B", "openrouter")
+
+	_, err := loadLiveProviderProfilesAllowSameAdapter()
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("error = %v, want partial provider B failure", err)
+	}
+}
+
 func TestLoadLiveProviderProfilesCanonicalizesThinkingAndEndpoints(t *testing.T) {
 	clearLiveProfileEnv(t)
 	t.Setenv("ION_LIVE_PROVIDER_A", "openai")
