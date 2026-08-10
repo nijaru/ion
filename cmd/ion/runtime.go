@@ -370,6 +370,20 @@ func resolvedContextWindow(cfg *config.Config, info app.RuntimeInfo, catalog *ll
 	return 0
 }
 
+func runtimeCapabilitiesForModel(
+	provider llm.Provider,
+	catalog *llm.ModelCatalog,
+	providerName, modelName string,
+) llm.Capabilities {
+	caps := provider.Capabilities(modelName)
+	if catalog != nil {
+		if metadata, ok := catalog.GetCachedMetadata(providerName, modelName); ok {
+			applyModelMetadataCapabilities(&caps, metadata)
+		}
+	}
+	return caps
+}
+
 func applyModelMetadataCapabilities(caps *llm.Capabilities, metadata llm.ModelMetadata) {
 	if caps == nil {
 		return
@@ -561,17 +575,14 @@ func openRuntime(
 	// provider exposes its actual wire family; a provider slug is not an API
 	// type.
 	contextWindow := resolvedContextWindow(&runtimeCfg, info, catalog)
-	caps := provider.Capabilities(runtimeCfg.Model)
-	if catalog != nil {
-		if metadata, ok := catalog.GetCachedMetadata(
-			runtimeCfg.Provider,
-			runtimeCfg.Model,
-		); ok {
-			applyModelMetadataCapabilities(&caps, metadata)
-		}
-	}
+	caps := runtimeCapabilitiesForModel(provider, catalog, runtimeCfg.Provider, runtimeCfg.Model)
 	streamFn := func(streamCtx context.Context, req *llm.Request) (llm.Stream, error) {
-		prepared, err := llm.PrepareRequestForCapabilities(req, caps)
+		modelID := runtimeCfg.Model
+		if req != nil && strings.TrimSpace(req.Model) != "" {
+			modelID = req.Model
+		}
+		requestCaps := runtimeCapabilitiesForModel(provider, catalog, runtimeCfg.Provider, modelID)
+		prepared, err := llm.PrepareRequestForCapabilities(req, requestCaps)
 		if err != nil {
 			return nil, err
 		}

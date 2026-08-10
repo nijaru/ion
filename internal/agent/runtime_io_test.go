@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -323,6 +324,70 @@ func TestRuntimeAbortedTurnCarriesPendingMutationForward(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeActiveSetterPersistsDurableMutationOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-staged-once.db")
+	store, err := session.NewSQLiteStore(path, "runtime-staged-once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := session.NewSession(store, 0)
+	streamStarted := make(chan struct{})
+	streamRelease := make(chan struct{})
+	var streamStartOnce sync.Once
+	h := NewController(ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{Provider: "test", ID: "initial"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			streamStartOnce.Do(func() { close(streamStarted) })
+			select {
+			case <-streamRelease:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &mockStream{chunks: []*llm.Chunk{{Content: "done", StopReason: "stop"}}}, nil
+		},
+	})
+	defer func() {
+		if err := h.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	}()
+
+	promptDone := make(chan error, 1)
+	go func() {
+		_, promptErr := h.Prompt(context.Background(), "staged setter")
+		promptDone <- promptErr
+	}()
+	<-streamStarted
+	if err := h.SetModel(llm.Model{Provider: "test", ID: "next"}); err != nil {
+		t.Fatalf("set active model: %v", err)
+	}
+	close(streamRelease)
+	if err := <-promptDone; err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+
+	entries, err := sess.Branch(context.Background())
+	if err != nil {
+		t.Fatalf("load branch: %v", err)
+	}
+	modelChanges := 0
+	for _, entry := range entries {
+		change, ok := entry.(*session.ModelChangeEntry)
+		if ok && change.ModelID == "next" {
+			modelChanges++
+		}
+	}
+	if modelChanges != 1 {
+		t.Fatalf("active model change entries = %d, want one", modelChanges)
 	}
 }
 

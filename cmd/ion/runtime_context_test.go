@@ -12,6 +12,41 @@ import (
 	"github.com/nijaru/ion/llm"
 )
 
+type capabilityProviderStub struct {
+	llm.Provider
+	caps map[string]llm.Capabilities
+}
+
+func (p capabilityProviderStub) Capabilities(model string) llm.Capabilities {
+	return p.caps[model]
+}
+
+func TestRuntimeCapabilitiesResolveRequestedModel(t *testing.T) {
+	provider := capabilityProviderStub{caps: map[string]llm.Capabilities{
+		"text-model": {
+			Streaming: true,
+			Tools:     false,
+			InputModalities: []string{
+				"text",
+			},
+		},
+		"vision-model": {
+			Streaming:       true,
+			Tools:           true,
+			InputModalities: []string{"text", "image"},
+		},
+	}}
+
+	textCaps := runtimeCapabilitiesForModel(provider, nil, "test", "text-model")
+	if textCaps.Tools || textCaps.SupportsImages() {
+		t.Fatalf("text-model capabilities = %#v, want no tools or images", textCaps)
+	}
+	visionCaps := runtimeCapabilitiesForModel(provider, nil, "test", "vision-model")
+	if !visionCaps.Tools || !visionCaps.SupportsImages() {
+		t.Fatalf("vision-model capabilities = %#v, want tools and images", visionCaps)
+	}
+}
+
 func TestApplyModelMetadataCapabilities(t *testing.T) {
 	caps := llm.DefaultCapabilities()
 	applyModelMetadataCapabilities(&caps, llm.ModelMetadata{
