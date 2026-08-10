@@ -41,6 +41,41 @@ type gatedPrintSession struct {
 	release chan struct{}
 }
 
+type lateAcceptancePrintSession struct {
+	*printSession
+	promptStarted     chan struct{}
+	acceptanceRelease chan struct{}
+	settledPublished  chan struct{}
+	releaseOnce       sync.Once
+}
+
+func (s *lateAcceptancePrintSession) Prompt(
+	ctx context.Context,
+	_ string,
+	_ ...session.ImageContent,
+) (session.Message, error) {
+	close(s.promptStarted)
+	<-s.acceptanceRelease
+	if sink := agent.TurnAcceptanceSinkFromContext(ctx); sink != nil {
+		sink()
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(s.settledPublished)
+		s.events <- printEnvelope(session.Settled{})
+	}()
+	return nil, context.Canceled
+}
+
+func (s *lateAcceptancePrintSession) Abort() ([]session.Message, []session.Message, error) {
+	s.releaseOnce.Do(func() { close(s.acceptanceRelease) })
+	return nil, nil, nil
+}
+
+func (s *lateAcceptancePrintSession) AbortTurn(uint64) ([]session.Message, []session.Message, error) {
+	return s.Abort()
+}
+
 func (s *gatedPrintSession) Prompt(context.Context, string, ...session.ImageContent) (session.Message, error) {
 	<-s.release
 	return &session.AssistantMessage{Content: []session.Content{session.TextContent{Text: "done"}}}, nil
@@ -765,6 +800,43 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
+func TestPrintModeWaitsForAcceptanceRaceSettlement(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess := &lateAcceptancePrintSession{
+		printSession:      &printSession{events: make(chan agent.EventEnvelope, 1)},
+		promptStarted:     make(chan struct{}),
+		acceptanceRelease: make(chan struct{}),
+		settledPublished:  make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runPromptTurn(ctx, sess, "hello")
+		done <- err
+	}()
+
+	select {
+	case <-sess.promptStarted:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("runPromptTurn error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runPromptTurn did not settle")
+	}
+	select {
+	case <-sess.settledPublished:
+	default:
+		t.Fatal("runPromptTurn returned before accepted turn settlement")
 	}
 }
 

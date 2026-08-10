@@ -367,10 +367,24 @@ func runPromptTurnObserved(
 		msg session.Message
 		err error
 	}
-	var promptAccepted atomic.Bool
-	promptCtx := agent.WithTurnAcceptanceSink(ctx, func() {
+	var (
+		promptAccepted atomic.Bool
+		promptToken    atomic.Uint64
+	)
+	promptCtx := agent.WithTurnTokenSink(ctx, func(token uint64) {
+		promptToken.Store(token)
+	})
+	promptCtx = agent.WithTurnAcceptanceSink(promptCtx, func() {
 		promptAccepted.Store(true)
 	})
+	abortTurn := func() error {
+		if token := promptToken.Load(); token != 0 {
+			_, _, err := runner.AbortTurn(token)
+			return err
+		}
+		_, _, err := runner.Abort()
+		return err
+	}
 	outcomeCh := make(chan promptOutcome, 1)
 	go func() {
 		msg, err := runner.Prompt(promptCtx, prompt)
@@ -392,11 +406,18 @@ func runPromptTurnObserved(
 			settleTimer.Stop()
 		}
 	}()
+	startSettlementTimer := func() {
+		if settleTimer != nil {
+			return
+		}
+		settleTimer = time.NewTimer(30 * time.Second)
+		settlement = settleTimer.C
+	}
 	for !promptDone || !turnFinished {
 		select {
 		case envelope, ok := <-subscription.Events:
 			if !ok {
-				if _, _, abortErr := runner.Abort(); abortErr != nil {
+				if abortErr := abortTurn(); abortErr != nil {
 					return printResult{}, fmt.Errorf(
 						"event stream closed before turn finished: abort turn: %w",
 						abortErr,
@@ -408,31 +429,38 @@ func runPromptTurnObserved(
 			finished, observeErr := observer.observe(envelope)
 			turnFinished = turnFinished || finished
 			if observeErr != nil {
-				_, _, _ = runner.Abort()
+				_ = abortTurn()
 				return printResult{}, observeErr
 			}
 		case outcome := <-outcomeCh:
 			promptDone = true
 			promptMsg = outcome.msg
 			promptErr = outcome.err
-			if promptErr != nil && !promptAccepted.Load() && !turnFinished {
+			if cancelErr != nil {
+				if promptAccepted.Load() {
+					startSettlementTimer()
+				} else {
+					turnFinished = true
+				}
+			} else if promptErr != nil && !promptAccepted.Load() && !turnFinished {
 				_ = observer.emitError("submit", promptErr)
 				return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
 			}
 		case <-ctxDone:
 			cancelErr = ctx.Err()
 			ctxDone = nil
-			_, _, abortErr := runner.Abort()
+			abortErr := abortTurn()
 			if abortErr != nil && !errors.Is(abortErr, context.Canceled) {
 				cancelErr = errors.Join(cancelErr, abortErr)
 			}
-			if !promptAccepted.Load() {
-				// No turn was accepted, so there is no terminal lifecycle event
-				// to wait for after the prompt goroutine reports its rejection.
-				turnFinished = true
-			} else {
-				settleTimer = time.NewTimer(30 * time.Second)
-				settlement = settleTimer.C
+			if promptDone {
+				if promptAccepted.Load() {
+					startSettlementTimer()
+				} else {
+					// No turn was accepted, so there is no terminal lifecycle event
+					// to wait for after the prompt goroutine reports its rejection.
+					turnFinished = true
+				}
 			}
 		case <-settlement:
 			_ = observer.emitError("context", cancelErr)
@@ -449,7 +477,7 @@ func runPromptTurnObserved(
 		return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
 	}
 	if observer.terminalErr != nil {
-		_, _, _ = runner.Abort()
+		_ = abortTurn()
 		_ = observer.emitError("session", observer.terminalErr)
 		return printResult{}, fmt.Errorf("session error: %w", observer.terminalErr)
 	}
