@@ -92,6 +92,28 @@ func TestBuildRequestJSON_NestedReasoningFormat(t *testing.T) {
 	}
 }
 
+func TestBuildRequestJSON_PreservesThinkingSignature(t *testing.T) {
+	p := NewProvider(llm.ProviderConfig{APIKey: "test-key"})
+	req := &llm.Request{
+		Model: "openai/gpt-oss",
+		Messages: []llm.Message{{
+			Role: llm.RoleAssistant,
+			Blocks: llm.ContentBlocks{
+				llm.ThinkingBlock{Thinking: "think first", Signature: "reasoning_content"},
+				llm.TextBlock{Text: "answer"},
+			},
+		}},
+	}
+
+	body, err := p.buildAndMarshalRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequestJSON: %v", err)
+	}
+	if !strings.Contains(string(body), `"reasoning_content":"think first"`) {
+		t.Fatalf("request body = %s", body)
+	}
+}
+
 func TestBuildRequestJSON_NoReasoningWhenNotSpecified(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{APIKey: "test-key"})
 

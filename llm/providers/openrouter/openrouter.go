@@ -293,14 +293,22 @@ func (p *Provider) buildRequest(req *llm.Request, streaming bool) openRouterRequ
 
 // buildAndMarshalRequest builds a non-streaming request and marshals it.
 func (p *Provider) buildAndMarshalRequest(req *llm.Request) ([]byte, error) {
-	return json.Marshal(p.buildRequest(req, false))
+	body, err := json.Marshal(p.buildRequest(req, false))
+	if err != nil {
+		return nil, err
+	}
+	return p.Base.ApplyThinkingSignatures(body, req), nil
 }
 
 // buildAndMarshalRequestStream builds a streaming request and marshals it.
 func (p *Provider) buildAndMarshalRequestStream(req *llm.Request) ([]byte, error) {
 	orReq := p.buildRequest(req, true)
 	orReq.Stream = true
-	return json.Marshal(orReq)
+	body, err := json.Marshal(orReq)
+	if err != nil {
+		return nil, err
+	}
+	return p.Base.ApplyThinkingSignatures(body, req), nil
 }
 
 // IsReasoningOff returns true if the effort value represents disabled reasoning.

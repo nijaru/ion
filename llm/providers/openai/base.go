@@ -84,17 +84,37 @@ func (b *Base) Models(ctx context.Context) ([]llm.Model, error) {
 	return b.Config.Models, nil
 }
 
-func (b *Base) clientForRequest(req *llm.Request, caps llm.Capabilities) *openai.Client {
+// ApplyThinkingSignatures adds provider-specific reasoning fields to an already
+// marshaled OpenAI-compatible request. Adapters that add their own top-level
+// request fields, such as OpenRouter, can use this after marshaling the shared
+// message structure.
+func (b *Base) ApplyThinkingSignatures(body []byte, req *llm.Request) []byte {
+	_, fields := b.convertRequest(req, false)
+	repaired, _ := addThinkingSignatures(body, fields)
+	return repaired
+}
+
+func (b *Base) clientForRequest(
+	req *llm.Request,
+	caps llm.Capabilities,
+	reasoningFields []assistantReasoningField,
+) *openai.Client {
 	compat := b.CompatSettingsForModel(req.Model)
 	needsReasoningField := compat.RequiresReasoningContentOnAssistantMessages &&
 		caps.ReasoningCaps().Kind != llm.ReasoningKindNone
-	if b.clientFactory == nil || (req.Transport == nil && !needsReasoningField) {
+	if b.clientFactory == nil {
+		return b.Client
+	}
+	if req.Transport == nil && !needsReasoningField && !hasReasoningFields(reasoningFields) {
 		return b.Client
 	}
 
 	transport := req.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
+	}
+	if hasReasoningFields(reasoningFields) {
+		transport = thinkingSignatureTransport{base: transport, fields: reasoningFields}
 	}
 	if needsReasoningField {
 		transport = reasoningContentTransport{base: transport}
@@ -136,8 +156,9 @@ func (b *Base) Generate(ctx context.Context, req *llm.Request) (*llm.Response, e
 		return nil, err
 	}
 
-	client := b.clientForRequest(prepared, caps)
-	resp, err := client.CreateChatCompletion(ctx, b.ConvertRequest(prepared))
+	converted, reasoningFields := b.convertRequest(prepared, false)
+	client := b.clientForRequest(prepared, caps, reasoningFields)
+	resp, err := client.CreateChatCompletion(ctx, converted)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +193,9 @@ func (b *Base) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error)
 		return nil, err
 	}
 
-	client := b.clientForRequest(prepared, caps)
-	stream, err := client.CreateChatCompletionStream(ctx, b.ConvertStreamingRequest(prepared))
+	converted, reasoningFields := b.convertRequest(prepared, true)
+	client := b.clientForRequest(prepared, caps, reasoningFields)
+	stream, err := client.CreateChatCompletionStream(ctx, converted)
 	if err != nil {
 		return nil, err
 	}

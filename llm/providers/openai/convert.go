@@ -11,19 +11,25 @@ import (
 // ConvertRequest transforms the unified Request into a non-streaming OpenAI
 // request. Stream-only options are added by ConvertStreamingRequest.
 func (b *Base) ConvertRequest(req *llm.Request) openai.ChatCompletionRequest {
-	return b.convertRequest(req, false)
+	converted, _ := b.convertRequest(req, false)
+	return converted
 }
 
 // ConvertStreamingRequest transforms the unified Request into an OpenAI
 // streaming request, including usage options when the model supports them.
 func (b *Base) ConvertStreamingRequest(req *llm.Request) openai.ChatCompletionRequest {
-	return b.convertRequest(req, true)
+	converted, _ := b.convertRequest(req, true)
+	return converted
 }
 
-func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompletionRequest {
+func (b *Base) convertRequest(
+	req *llm.Request,
+	streaming bool,
+) (openai.ChatCompletionRequest, []assistantReasoningField) {
 	compat := b.CompatSettingsForModel(req.Model)
 	caps := llm.CapabilitiesForRequest(req, b.Capabilities(req.Model))
 	messages := make([]openai.ChatCompletionMessage, 0, len(req.Messages))
+	reasoningFields := make([]assistantReasoningField, 0, len(req.Messages))
 	lastRole := ""
 	for i := 0; i < len(req.Messages); i++ {
 		m := req.Messages[i]
@@ -72,6 +78,7 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 						Role:    string(llm.RoleAssistant),
 						Content: "I have processed the tool results.",
 					})
+					reasoningFields = append(reasoningFields, assistantReasoningField{})
 				}
 				parts := make([]openai.ChatMessagePart, 0, len(imageParts)+1)
 				parts = append(parts, openai.ChatMessagePart{
@@ -94,6 +101,7 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 				Role:    string(llm.RoleAssistant),
 				Content: "I have processed the tool results.",
 			})
+			reasoningFields = append(reasoningFields, assistantReasoningField{})
 		}
 
 		content, multiContent := b.convertMessageContent(m)
@@ -142,6 +150,9 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 			}
 		}
 		messages = append(messages, msg)
+		if m.Role == llm.RoleAssistant {
+			reasoningFields = append(reasoningFields, b.assistantReasoningField(m, compat))
+		}
 		lastRole = role
 	}
 
@@ -207,7 +218,7 @@ func (b *Base) convertRequest(req *llm.Request, streaming bool) openai.ChatCompl
 			}
 		}
 	}
-	return cr
+	return cr, reasoningFields
 }
 
 // applyReasoningFormat applies the appropriate reasoning format based on ProviderCompat.
@@ -279,6 +290,45 @@ func (b *Base) applyReasoningFormat(
 			cr.ReasoningEffort = effort
 		}
 	}
+}
+
+func (b *Base) assistantReasoningField(m llm.Message, compat llm.ProviderCompat) assistantReasoningField {
+	if compat.RequiresThinkingAsText {
+		return assistantReasoningField{}
+	}
+
+	var field string
+	var reasoning []string
+	for _, block := range m.GetContentBlocks() {
+		thinking, ok := block.(llm.ThinkingBlock)
+		if !ok || strings.TrimSpace(thinking.Thinking) == "" {
+			continue
+		}
+		if field == "" {
+			field = thinking.Signature
+		}
+		reasoning = append(reasoning, thinking.Thinking)
+	}
+	if field == "reasoning" && (b.Config.ID == "opencode" || b.Config.ID == "opencode-go") {
+		field = "reasoning_content"
+	}
+	if !validReasoningField(field) || len(reasoning) == 0 {
+		return assistantReasoningField{}
+	}
+	return assistantReasoningField{Field: field, Value: strings.Join(reasoning, "\n")}
+}
+
+func validReasoningField(field string) bool {
+	if len(field) == 0 || len(field) > 64 {
+		return false
+	}
+	for i, r := range field {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (b *Base) convertMessageContent(m llm.Message) (string, []openai.ChatMessagePart) {
