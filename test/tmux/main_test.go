@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -182,6 +185,77 @@ func TestTUIInteractive(t *testing.T) {
 		t.Fatalf("expected committed Earth response in terminal output")
 	}
 
+	tt.sendKeys("C-c")
+	time.Sleep(1 * time.Second)
+}
+
+// TestBuiltBinaryInteractiveLocalProvider proves the compiled executable can
+// load configuration, start the TUI, stream a provider response, and shut down
+// through a real tmux PTY without requiring external credentials.
+func TestBuiltBinaryInteractiveLocalProvider(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"data":[]}`)
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+			return
+		}
+		if request.Model != "fake-model" || r.Header.Get("Authorization") != "Bearer fake-key" {
+			http.Error(w, "unexpected provider request", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = fmt.Fprint(
+			w,
+			"data: {\"id\":\"built-tui-test\",\"object\":\"chat.completion.chunk\",\"model\":\"fake-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"built-\"}}]}\n\n",
+			"data: {\"id\":\"built-tui-test\",\"object\":\"chat.completion.chunk\",\"model\":\"fake-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tui-ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+			"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf(
+		"provider = 'openai-compatible'\nmodel = 'fake-model'\nendpoint = '%s/v1'\nauth_env_var = 'ION_TMUX_TEST_KEY'\n",
+		server.URL,
+	)
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("ION_PROVIDER", "")
+	t.Setenv("ION_MODEL", "")
+	t.Setenv("ION_REASONING_EFFORT", "")
+	t.Setenv("ION_TMUX_TEST_KEY", "fake-key")
+
+	tt := newTmuxTest(t)
+	tt.typeText(tt.binary + " --trust --no-session")
+	tt.enter()
+	tt.waitFor("Type a message", 15*time.Second)
+	tt.send("return the built TUI marker")
+	content := tt.waitFor("built-tui-ok", 30*time.Second)
+	if !strings.Contains(content, "built-tui-ok") {
+		t.Fatalf("built Ion TUI output = %q, want streamed marker", content)
+	}
 	tt.sendKeys("C-c")
 	time.Sleep(1 * time.Second)
 }
