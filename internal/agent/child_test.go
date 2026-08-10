@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -215,7 +216,11 @@ func TestControllerRunSubagentDeniesChildExternalEffectsWithoutApproval(t *testi
 }
 
 func TestControllerSubagentToolPersistsChildOutcomeInParentTurn(t *testing.T) {
-	store := newTestStore(t)
+	path := filepath.Join(t.TempDir(), "parent.db")
+	store, err := session.NewSQLiteStore(path, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
 	sess := session.NewSession(store, 64)
 	subagentTool := tool.NewSubagentTool()
 	callCount := atomic.Int32{}
@@ -238,6 +243,15 @@ func TestControllerSubagentToolPersistsChildOutcomeInParentTurn(t *testing.T) {
 	}
 
 	var parent *Controller
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			if parent != nil {
+				_ = parent.Close()
+			}
+			_ = store.Close()
+		}
+	})
 	parentTool := Tool{
 		Name:           tool.SubagentToolName,
 		Description:    subagentTool.Spec().Description,
@@ -279,7 +293,6 @@ func TestControllerSubagentToolPersistsChildOutcomeInParentTurn(t *testing.T) {
 		StreamFn:       stream,
 	})
 	subagentTool.SetRunner(parent)
-	t.Cleanup(func() { _ = parent.Close() })
 
 	if _, err := parent.Prompt(context.Background(), "delegate"); err != nil {
 		t.Fatalf("parent Prompt() error = %v", err)
@@ -307,6 +320,42 @@ func TestControllerSubagentToolPersistsChildOutcomeInParentTurn(t *testing.T) {
 	}
 	if details.Status != "completed" || details.Output != "child evidence" || details.ChildID == "" {
 		t.Fatalf("persisted child details = %#v", details)
+	}
+
+	if err := parent.Close(); err != nil {
+		t.Fatalf("close parent runtime: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close parent store: %v", err)
+	}
+	closed = true
+
+	reopened, err := session.NewSQLiteStore(path, "parent")
+	if err != nil {
+		t.Fatalf("reopen parent store: %v", err)
+	}
+	defer reopened.Close()
+	replayed, err := session.NewSession(reopened, 64).BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("replay parent context: %v", err)
+	}
+	var replayedResult *session.ToolResultMessage
+	for _, message := range replayed.Messages {
+		if result, ok := message.(*session.ToolResultMessage); ok && result.ToolName == tool.SubagentToolName {
+			replayedResult = result
+			break
+		}
+	}
+	if replayedResult == nil || session.MessageText(replayedResult) != "child evidence" {
+		t.Fatalf("replayed child result = %#v, want persisted evidence", replayedResult)
+	}
+	var replayedDetails tool.SubagentResult
+	if err := json.Unmarshal(replayedResult.Details, &replayedDetails); err != nil {
+		t.Fatalf("decode replayed child details: %v", err)
+	}
+	if replayedDetails.Status != "completed" || replayedDetails.Output != "child evidence" ||
+		replayedDetails.ChildID != details.ChildID {
+		t.Fatalf("replayed child details = %#v, want original result", replayedDetails)
 	}
 }
 
