@@ -56,6 +56,19 @@ func (runtimeProgressDetailedTool) ExecuteDetailedWithProgress(
 	return "final", map[string]string{"kind": "details"}, nil
 }
 
+type runtimeSubagentRunner struct{}
+
+func (runtimeSubagentRunner) RunSubagent(_ context.Context, request tool.SubagentRequest) (tool.SubagentResult, error) {
+	if request.Progress != nil {
+		request.Progress("child live")
+	}
+	return tool.SubagentResult{
+		ChildID: "child-1",
+		Status:  "completed",
+		Output:  "child final",
+	}, nil
+}
+
 type runtimeStreamingTool struct{}
 
 func (runtimeStreamingTool) Spec() llm.Spec                                  { return llm.Spec{Name: "stream"} }
@@ -120,6 +133,32 @@ func TestExecuteRegisteredToolForwardsDetailedProgress(t *testing.T) {
 	}
 	if len(updates) != 1 || updates[0] != "live" {
 		t.Fatalf("updates = %#v, want live progress", updates)
+	}
+}
+
+func TestExecuteRegisteredSubagentToolPreservesProgressAndDetails(t *testing.T) {
+	subagent := tool.NewSubagentTool()
+	subagent.SetRunner(runtimeSubagentRunner{})
+	var updates []string
+	result := executeRegisteredTool(
+		context.Background(),
+		runtimeEntry(subagent),
+		"call-subagent",
+		json.RawMessage(`{"task":"inspect"}`),
+		func(partial session.ToolPartial) { updates = append(updates, partial.(string)) },
+	)
+	if session.EntryText(&session.MessageEntry{Message: &result}) != "child final" || result.IsError {
+		t.Fatalf("subagent result = %#v, want successful child output", result)
+	}
+	if len(updates) != 1 || updates[0] != "child live" {
+		t.Fatalf("subagent updates = %#v, want child live", updates)
+	}
+	var details tool.SubagentResult
+	if err := json.Unmarshal(result.Details, &details); err != nil {
+		t.Fatalf("decode subagent details: %v", err)
+	}
+	if details.ChildID != "child-1" || details.Status != "completed" {
+		t.Fatalf("subagent details = %#v", details)
 	}
 }
 
