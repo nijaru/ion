@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/internal/agent"
@@ -20,6 +21,63 @@ import (
 // TestPrintModeUsesTheDurableRuntime proves that the host print path observes
 // the same Controller and SQLite lifecycle as the TUI: streamed output is
 // rendered before Prompt returns, and the settled turn survives a reopen.
+func TestPrintModeTimeoutWaitsForRuntimeSettlement(t *testing.T) {
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "timeout.db"), "timeout")
+	if err != nil {
+		t.Fatalf("open timeout store: %v", err)
+	}
+	sess := session.NewSession(store, 64)
+	runner := agent.NewController(agent.ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "fake-model", Provider: "fake"},
+		StreamFn: func(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+			return &timeoutPrintStream{ctx: ctx}, nil
+		},
+	})
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Errorf("close timeout runtime: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("close timeout store: %v", err)
+		}
+	}()
+
+	var out bytes.Buffer
+	err = runPrintModeWithTimeout(
+		context.Background(), &out, runner, "timeout", 20*time.Millisecond, "text",
+	)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error = %v, want context deadline", err)
+	}
+
+	sub, err := runner.Subscribe(context.Background(), agent.EventCursor{})
+	if err != nil {
+		t.Fatalf("subscribe after timeout: %v", err)
+	}
+	defer sub.Close()
+	if sub.Snapshot.ActiveTurnToken != 0 {
+		t.Fatalf("active turn token = %d after timeout settlement, want zero", sub.Snapshot.ActiveTurnToken)
+	}
+	if sub.Snapshot.Phase != agent.PhaseReady && sub.Snapshot.Phase != agent.PhaseSettled {
+		t.Fatalf("runtime phase = %s after timeout settlement, want ready or settled", sub.Snapshot.Phase)
+	}
+}
+
+type timeoutPrintStream struct {
+	ctx context.Context
+}
+
+func (s *timeoutPrintStream) Next() (*llm.Chunk, bool) {
+	<-s.ctx.Done()
+	return nil, false
+}
+
+func (s *timeoutPrintStream) Err() error   { return nil }
+func (s *timeoutPrintStream) Close() error { return nil }
+
 func TestPrintModeUsesTheDurableRuntime(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "print.db")

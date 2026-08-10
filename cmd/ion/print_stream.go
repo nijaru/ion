@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/nijaru/ion/ctxerr"
 	"github.com/nijaru/ion/internal/agent"
@@ -381,7 +382,16 @@ func runPromptTurnObserved(
 		promptErr    error
 		promptMsg    session.Message
 		turnFinished bool
+		cancelErr    error
+		ctxDone      <-chan struct{} = ctx.Done()
+		settlement   <-chan time.Time
+		settleTimer  *time.Timer
 	)
+	defer func() {
+		if settleTimer != nil {
+			settleTimer.Stop()
+		}
+	}()
 	for !promptDone || !turnFinished {
 		select {
 		case envelope, ok := <-subscription.Events:
@@ -409,13 +419,31 @@ func runPromptTurnObserved(
 				_ = observer.emitError("submit", promptErr)
 				return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
 			}
-		case <-ctx.Done():
-			_, _, _ = runner.Abort()
-			_ = observer.emitError("context", ctx.Err())
-			return printResult{}, ctxerr.WrapContext("print turn", ctx.Err())
+		case <-ctxDone:
+			cancelErr = ctx.Err()
+			ctxDone = nil
+			_, _, abortErr := runner.Abort()
+			if abortErr != nil && !errors.Is(abortErr, context.Canceled) {
+				cancelErr = errors.Join(cancelErr, abortErr)
+			}
+			if !promptAccepted.Load() {
+				// No turn was accepted, so there is no terminal lifecycle event
+				// to wait for after the prompt goroutine reports its rejection.
+				turnFinished = true
+			} else {
+				settleTimer = time.NewTimer(30 * time.Second)
+				settlement = settleTimer.C
+			}
+		case <-settlement:
+			_ = observer.emitError("context", cancelErr)
+			return printResult{}, ctxerr.WrapContext("print turn", cancelErr)
 		}
 	}
 
+	if cancelErr != nil {
+		_ = observer.emitError("context", cancelErr)
+		return printResult{}, ctxerr.WrapContext("print turn", cancelErr)
+	}
 	if promptErr != nil {
 		_ = observer.emitError("submit", promptErr)
 		return printResult{}, fmt.Errorf("submit turn: %w", promptErr)
