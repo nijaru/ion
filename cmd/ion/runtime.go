@@ -43,6 +43,48 @@ func closeRuntimeHandles(
 	return errors.Join(errs...)
 }
 
+// closeRuntimeHandlesWithContext keeps the host teardown boundary bounded when
+// a provider or another runtime worker does not honor cancellation. A runtime
+// that exposes Shutdown owns the controller join and may leave itself open
+// after a deadline; in that case dependent resources and the store must not be
+// closed underneath it. The process owner may then exit, leaving OS cleanup to
+// process termination and preserving the runtime's durable recovery evidence.
+func closeRuntimeHandlesWithContext(
+	ctx context.Context,
+	runner agent.Runtime,
+	store session.Store,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var errs []error
+	if runner != nil {
+		if shutdowner, ok := runner.(agent.RuntimeShutdown); ok {
+			if err := shutdowner.Shutdown(ctx); err != nil {
+				return fmt.Errorf("shutdown runtime: %w", err)
+			}
+		} else {
+			done := make(chan error, 1)
+			go func() { done <- runner.Close() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				return fmt.Errorf("shutdown runtime: %w", ctx.Err())
+			}
+		}
+		if resources, ok := runner.(agent.ResourceOwner); ok {
+			errs = append(errs, resources.CloseResources())
+		}
+	}
+	if store != nil {
+		errs = append(errs, store.Close())
+	}
+	return errors.Join(errs...)
+}
+
 func closeRuntimeResourcesAfterError(openErr error, closeResources func() error) error {
 	if closeErr := closeResources(); closeErr != nil {
 		return errors.Join(openErr, fmt.Errorf("close runtime resources after failed setup: %w", closeErr))

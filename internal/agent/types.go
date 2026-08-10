@@ -378,6 +378,13 @@ type Runtime interface {
 	Close() error
 }
 
+// RuntimeShutdown is an optional host capability for context-bounded teardown.
+// A deadline may leave the controller open; callers must not close dependent
+// stores or resources until Shutdown returns nil.
+type RuntimeShutdown interface {
+	Shutdown(context.Context) error
+}
+
 // ActionRecovery is an optional runtime capability for presenting and
 // reconciling externally observable actions whose outcome was not proven.
 // It is separate from Runtime's turn surface so the TUI/CLI can opt into

@@ -1032,6 +1032,34 @@ func TestCloseRuntimeHandlesClosesPrintAgent(t *testing.T) {
 	}
 }
 
+type nonCooperativeShutdownRuntime struct {
+	*printSession
+}
+
+func (r *nonCooperativeShutdownRuntime) Shutdown(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (r *nonCooperativeShutdownRuntime) Close() error {
+	r.closed++
+	return nil
+}
+
+func TestCloseRuntimeHandlesWithContextDoesNotCloseDependenciesAfterTimeout(t *testing.T) {
+	runtime := &nonCooperativeShutdownRuntime{printSession: &printSession{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := closeRuntimeHandlesWithContext(ctx, runtime, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("closeRuntimeHandlesWithContext error = %v, want deadline exceeded", err)
+	}
+	if runtime.closed != 0 {
+		t.Fatalf("runtime Close calls = %d, want 0 after bounded shutdown", runtime.closed)
+	}
+}
+
 func TestPrintModeRejectsUnknownOutput(t *testing.T) {
 	err := writePrintResult(&bytes.Buffer{}, printResult{Response: "x"}, "xml")
 	if err == nil || !strings.Contains(err.Error(), "unsupported print output") {

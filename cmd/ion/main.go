@@ -30,6 +30,8 @@ import (
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
 var version = "v0.0.0"
 
+const runtimeShutdownTimeout = 5 * time.Second
+
 func main() {
 	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -461,8 +463,13 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			runErr = updatePrintSessionInfo(ctx, runner, cwd, branch, runtimeCfg, prompt)
 		}
 		closeErr := jobs.Close()
-		closeErr = errors.Join(closeErr, closeRuntimeHandles(runner, store))
+		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, runtimeShutdownTimeout)
+		closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, runner, store))
+		shutdownCancel()
 		if runErr != nil {
+			if closeErr != nil {
+				fmt.Fprintf(stderr, "print mode cleanup error: %v\n", closeErr)
+			}
 			fmt.Fprintf(stderr, "print mode error: %v\n", runErr)
 			return 1
 		}
@@ -573,7 +580,9 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	closeAppModel(finalModel)
 	agentToClose := runtimeHandlesForClose(finalModel, runner)
 	closeErr := jobs.Close()
-	closeErr = errors.Join(closeErr, closeRuntimeHandles(agentToClose, store))
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, runtimeShutdownTimeout)
+	closeErr = errors.Join(closeErr, closeRuntimeHandlesWithContext(shutdownCtx, agentToClose, store))
+	shutdownCancel()
 	if runErr != nil {
 		if closeErr != nil {
 			fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)

@@ -78,6 +78,68 @@ func (s *timeoutPrintStream) Next() (*llm.Chunk, bool) {
 func (s *timeoutPrintStream) Err() error   { return nil }
 func (s *timeoutPrintStream) Close() error { return nil }
 
+func TestPrintRuntimeCleanupBoundsNonCooperativeProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "non-cooperative.db")
+	store, err := session.NewSQLiteStore(path, "non-cooperative")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	sess := session.NewSession(store, 64)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	runner := agent.NewController(agent.ControllerConfig{
+		Session: sess,
+		Store:   store,
+		Durable: store,
+		Model:   llm.Model{ID: "non-cooperative", Provider: "fake"},
+		StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+			close(started)
+			<-release
+			return nil, errors.New("provider released")
+		},
+	})
+	promptDone := make(chan error, 1)
+	go func() {
+		_, promptErr := runner.Prompt(context.Background(), "hang")
+		promptDone <- promptErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("non-cooperative provider did not start")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err = closeRuntimeHandlesWithContext(shutdownCtx, runner, store)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bounded runtime cleanup error = %v, want deadline exceeded", err)
+	}
+	if _, err := store.LatestTurn(context.Background()); err != nil {
+		t.Fatalf("store was closed under active runtime: %v", err)
+	}
+
+	close(release)
+	select {
+	case <-promptDone:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not finish after provider release")
+	}
+	if err := runner.Close(); err != nil {
+		t.Fatalf("close released runtime: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+}
+
 func TestPrintModeUsesTheDurableRuntime(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "print.db")
