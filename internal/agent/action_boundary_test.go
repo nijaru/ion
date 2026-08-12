@@ -315,6 +315,145 @@ func TestJournalActionBoundaryCancellationAfterStartIsIndeterminate(t *testing.T
 	}
 }
 
+func TestJournalActionBoundaryCancelsWhenStartContextIsCanceled(t *testing.T) {
+	store := newTestStore(t)
+	boundary := newJournalActionBoundary(
+		store, NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, t.TempDir(),
+	)
+	token, err := boundary.PrepareAndAuthorize(t.Context(), ActionRequest{
+		ToolName: "bash", InvocationID: "call-cancel-before-start", SessionID: "session-1", TurnID: "turn-1",
+		Arguments:   []byte(`{"command":"true"}`),
+		Requirement: ApprovalRequirement{Category: "execute", Operation: "bash", Resource: "true"}, Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	invoked := false
+	result, err := boundary.Execute(
+		ctx,
+		token,
+		func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			invoked = true
+			return session.ToolResultMessage{}, nil
+		},
+		nil,
+		nil,
+	)
+	if !errors.Is(err, context.Canceled) || !result.IsError || invoked {
+		t.Fatalf("result = %#v, err = %v, invoked = %v; want canceled pre-start action", result, err, invoked)
+	}
+	record, err := store.GetAction(t.Context(), token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionCancelled {
+		t.Fatalf("action state = %s, want cancelled", record.State)
+	}
+	transitions, err := store.ActionTransitions(t.Context(), token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range transitions {
+		if transition.To == session.ActionStarted {
+			t.Fatalf("canceled pre-start action crossed start boundary: %#v", transitions)
+		}
+	}
+}
+
+func TestControllerCancelsWhenStartIsRejectedBeforeCommandAcceptance(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	h := NewController(ControllerConfig{
+		Session:             sess,
+		Store:               store,
+		Durable:             store,
+		ActionJournal:       store,
+		ApprovalMode:        ApprovalTrusted,
+		ApprovalInteractive: false,
+		Workdir:             t.TempDir(),
+	})
+	t.Cleanup(func() { _ = h.Close() })
+
+	coordinator, err := h.actionCoordinator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := coordinator.PrepareAndAuthorize(t.Context(), ActionRequest{
+		ToolName: "bash", InvocationID: "call-controller-cancel-before-start", SessionID: sess.Meta().ID,
+		TurnID: "turn-controller", Arguments: []byte(`{"command":"true"}`),
+		Requirement: ApprovalRequirement{Category: "execute", Operation: "bash", Resource: "true"}, Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	result, err := coordinator.Execute(
+		ctx,
+		token,
+		func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			return session.ToolResultMessage{}, errors.New("executor should not run")
+		},
+		nil,
+		nil,
+	)
+	if !errors.Is(err, context.Canceled) || !result.IsError {
+		t.Fatalf("result = %#v, err = %v; want canceled pre-start action", result, err)
+	}
+	record, err := store.GetAction(t.Context(), token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionCancelled {
+		t.Fatalf("controller action state = %s, want cancelled", record.State)
+	}
+}
+
+func TestJournalActionBoundaryMarksAmbiguousStartAsIndeterminate(t *testing.T) {
+	store := newTestStore(t)
+	boundary := newJournalActionBoundary(
+		&startErrorAfterCommitJournal{ActionJournal: store},
+		NewApprovalBroker(ApprovalTrusted, false, nil), ApprovalTrusted, false, t.TempDir(),
+	)
+	token, err := boundary.PrepareAndAuthorize(t.Context(), ActionRequest{
+		ToolName:     "bash",
+		InvocationID: "call-ambiguous-start",
+		SessionID:    "session-1",
+		TurnID:       "turn-1",
+		Arguments:    []byte(`{"command":"possibly-mutating"}`),
+		Requirement: ApprovalRequirement{
+			Category:  "execute",
+			Operation: "bash",
+			Resource:  "possibly-mutating",
+		},
+		Required: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := boundary.Execute(
+		t.Context(),
+		token,
+		func(context.Context, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+			return session.ToolResultMessage{}, errors.New("executor should not run")
+		},
+		nil,
+		nil,
+	)
+	if err == nil || !result.IsError || !strings.Contains(err.Error(), "ambiguous start") {
+		t.Fatalf("result = %#v, err = %v; want ambiguous start failure", result, err)
+	}
+	record, err := store.GetAction(t.Context(), token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != session.ActionIndeterminate {
+		t.Fatalf("action state = %s, want indeterminate", record.State)
+	}
+}
+
 func TestPrepareToolCallUsesInvocationDescriptorForDynamicEffects(t *testing.T) {
 	actionBoundary := &actionBoundaryStub{}
 	tool := Tool{
@@ -609,6 +748,21 @@ func TestJournalActionBoundarySurfacesBackgroundFinalizeFailure(t *testing.T) {
 type finishFailingActionJournal struct {
 	session.ActionJournal
 	err error
+}
+
+type startErrorAfterCommitJournal struct {
+	session.ActionJournal
+}
+
+func (j *startErrorAfterCommitJournal) StartAction(
+	ctx context.Context,
+	actionID, processIdentity string,
+) (session.ActionRecord, error) {
+	record, err := j.ActionJournal.StartAction(ctx, actionID, processIdentity)
+	if err != nil {
+		return record, err
+	}
+	return record, errors.New("ambiguous start commit")
 }
 
 func (j *finishFailingActionJournal) FinishAction(

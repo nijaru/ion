@@ -224,12 +224,16 @@ func (b *journalActionBoundary) Execute(
 		return result, boundaryErr
 	}
 	if err := b.start(ctx, token, ""); err != nil {
-		return session.ToolResultMessage{
+		result := session.ToolResultMessage{
 			ToolCallID: token.Record.InvocationID,
 			ToolName:   token.Record.Tool,
 			Content:    []session.Content{session.TextContent{Text: err.Error()}},
 			IsError:    true,
-		}, err
+		}
+		if finishErr := b.settlePreStartFailure(ctx, token, err); finishErr != nil {
+			return result, errors.Join(err, finishErr)
+		}
+		return result, err
 	}
 	effectCtx := tool.WithActionPathGuard(ctx, token.Record.Paths)
 	var processRecordErr error
@@ -411,6 +415,48 @@ func (b *journalActionBoundary) finishDirect(ctx context.Context, token *ActionT
 		return fmt.Errorf("finish action: %w", err)
 	}
 	return nil
+}
+
+// settlePreStartFailure closes an action when StartAction definitely did not
+// cross the effect boundary. If the storage call had an ambiguous outcome,
+// cancellation is attempted first and an actually-started record is then
+// conservatively finalized as indeterminate.
+func (b *journalActionBoundary) settlePreStartFailure(
+	ctx context.Context,
+	token *ActionToken,
+	startErr error,
+) error {
+	if token == nil {
+		return nil
+	}
+	durableCtx := b.durableContext(withoutCancellation(ctx))
+	cancelReason := fmt.Sprintf("action did not cross the start boundary: %v", startErr)
+	cancelErr := b.finish(durableCtx, token, ActionResult{
+		State: session.ActionCancelled,
+		Error: cancelReason,
+	})
+	if cancelErr == nil {
+		return nil
+	}
+	indeterminateErr := b.finish(durableCtx, token, ActionResult{
+		State:          session.ActionIndeterminate,
+		Error:          fmt.Sprintf("action start outcome is indeterminate: %v", startErr),
+		CleanupOutcome: "verify whether the start boundary was durably committed before retry",
+	})
+	if indeterminateErr == nil {
+		return nil
+	}
+	return errors.Join(
+		fmt.Errorf("cancel pre-start action: %w", cancelErr),
+		fmt.Errorf("record indeterminate start outcome: %w", indeterminateErr),
+	)
+}
+
+func withoutCancellation(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 func (b *journalActionBoundary) durableContext(fallback context.Context) context.Context {

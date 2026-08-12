@@ -182,7 +182,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		h.followUpMode = "one-at-a-time"
 	}
 	if h.queueCapacity <= 0 {
-		h.queueCapacity = 64
+		h.queueCapacity = 32
 	}
 	if h.maxParallelTools <= 0 {
 		h.maxParallelTools = 8

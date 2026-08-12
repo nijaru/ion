@@ -33,7 +33,7 @@ import (
 
 // controllerCommandCapacity bounds the typed command queue. A full queue
 // returns ErrQueueFull so callers fail closed instead of blocking.
-const controllerCommandCapacity = 128
+const controllerCommandCapacity = 64
 
 // runtimeOperationCapacity bounds persistence/compaction requests waiting
 // behind the single ordered runtime I/O operation. Callers fail explicitly
