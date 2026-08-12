@@ -81,7 +81,8 @@ func TestBuiltBinaryPrintsThroughOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command := exec.Command(binaryPath,
+	command := exec.Command(
+		binaryPath,
 		"--no-session",
 		"--print",
 		"--timeout",
@@ -172,7 +173,8 @@ func TestBuiltBinaryRunsBoundedSubagent(t *testing.T) {
 	home := t.TempDir()
 	writeBinaryConfig(t, home, server.URL, "ION_BINARY_SUBAGENT_KEY")
 
-	command := exec.Command(binaryPath,
+	command := exec.Command(
+		binaryPath,
 		"--no-session",
 		"--print",
 		"--timeout",
