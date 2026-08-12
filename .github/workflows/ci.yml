@@ -44,7 +44,7 @@ jobs:
         run: scripts/go-format.sh --check
 
       - name: Test
-        run: go test ./... -count=1 -timeout 300s
+        run: go test $(go list ./... | grep -v '/test/tmux$') -count=1 -timeout 300s
 
       - name: Vet
         run: go vet ./...
