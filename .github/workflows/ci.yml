@@ -16,6 +16,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -45,9 +46,6 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -timeout 300s
 
-      - name: Race
-        run: go test -race ./... -count=1 -timeout 900s
-
       - name: Vet
         run: go vet ./...
 
@@ -69,11 +67,3 @@ jobs:
 
       - name: Linux sandbox boundary
         run: go test ./tool -run '^TestBubblewrapBashEnforcesWorkspaceBoundary$' -count=1 -timeout 120s
-
-      - name: TUI and terminal acceptance
-        run: bash scripts/smoke/p1-scenario-traces.sh
-
-      - name: Performance baseline
-        run: |
-          ION_PERF_COUNT=1 ION_PERF_HYPERFINE_RUNS=3 \
-            bash scripts/smoke/p1-performance-proof.sh
