@@ -33,6 +33,9 @@ var (
 	ErrInvalidURL     = errors.New("web URL is invalid")
 	ErrPrivateURL     = errors.New("web URL targets a private or local address")
 	ErrResponseTooBig = errors.New("web response exceeds the byte limit")
+	// ErrUnsafeHTTPClient means a custom transport cannot be wrapped with the
+	// private-host policy that protects the built-in web tools.
+	ErrUnsafeHTTPClient = errors.New("web client transport cannot enforce private-host policy")
 )
 
 // Config controls one web client. AllowPrivateHosts is for deterministic
@@ -61,6 +64,7 @@ type Client struct {
 	allowPrivateHosts bool
 	resolveIP         func(string) ([]net.IP, error)
 	now               func() time.Time
+	configurationErr  error
 }
 
 func NewClient(cfg Config) *Client {
@@ -107,6 +111,9 @@ func NewClient(cfg Config) *Client {
 	if c.now == nil {
 		c.now = time.Now
 	}
+	if !c.allowPrivateHosts {
+		c.configurationErr = c.installPrivateHostPolicy()
+	}
 
 	previousRedirect := c.httpClient.CheckRedirect
 	c.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -122,6 +129,99 @@ func NewClient(cfg Config) *Client {
 		return nil
 	}
 	return c
+}
+
+// privateHostTransport resolves each request once and dials one of the
+// approved addresses from that same resolution. The standard transport would
+// resolve a hostname again inside net.Dialer, leaving a DNS-rebinding window
+// between URL validation and the actual connection.
+type privateHostTransport struct {
+	base       *http.Transport
+	approvedIP func(*url.URL) ([]net.IP, error)
+	dial       func(context.Context, string, string) (net.Conn, error)
+}
+
+type approvedDestinationKey struct{}
+
+type approvedDestination struct {
+	ips []net.IP
+}
+
+func (c *Client) installPrivateHostPolicy() error {
+	base := c.httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return fmt.Errorf("%w: got %T, want *http.Transport", ErrUnsafeHTTPClient, base)
+	}
+	clone := transport.Clone()
+	// The built-in web policy is direct-address policy. A proxy would move the
+	// network connection outside this transport's approved-address boundary.
+	clone.Proxy = nil
+	//lint:ignore SA1019 Clear the legacy hook so it cannot bypass DialContext.
+	clone.Dial = nil
+	//lint:ignore SA1019 Clear the legacy TLS hook so HTTPS also uses DialContext.
+	clone.DialTLS = nil
+	clone.DialTLSContext = nil
+	policy := &privateHostTransport{
+		base:       clone,
+		approvedIP: c.approvedIPsForURL,
+		dial:       (&net.Dialer{}).DialContext,
+	}
+	clone.DialContext = policy.dialContext
+	c.httpClient.Transport = policy
+	return nil
+}
+
+func (t *privateHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, ErrInvalidURL
+	}
+	ips, err := t.approvedIP(req.URL)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.WithValue(req.Context(), approvedDestinationKey{}, approvedDestination{ips: cloneIPs(ips)})
+	return t.base.RoundTrip(req.WithContext(ctx))
+}
+
+func (t *privateHostTransport) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	destination, ok := ctx.Value(approvedDestinationKey{}).(approvedDestination)
+	if !ok || len(destination.ips) == 0 {
+		return nil, fmt.Errorf("%w: approved destination is missing", ErrInvalidURL)
+	}
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid dial address %q: %v", ErrInvalidURL, address, err)
+	}
+	var lastErr error
+	for _, ip := range destination.ips {
+		if network == "tcp4" && ip.To4() == nil {
+			continue
+		}
+		if network == "tcp6" && ip.To4() != nil {
+			continue
+		}
+		conn, dialErr := t.dial(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		return nil, fmt.Errorf("no approved address supports network %q", network)
+	}
+	return nil, fmt.Errorf("dial approved web address for %q: %w", address, lastErr)
+}
+
+func cloneIPs(ips []net.IP) []net.IP {
+	cloned := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		cloned = append(cloned, append(net.IP(nil), ip...))
+	}
+	return cloned
 }
 
 type searchRequest struct {
@@ -280,6 +380,9 @@ func (c *Client) get(ctx context.Context, rawURL string) (*http.Response, []byte
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if c.configurationErr != nil {
+		return nil, nil, time.Time{}, c.configurationErr
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, time.Time{}, err
@@ -355,6 +458,19 @@ func (c *Client) validateURL(raw string) (*url.URL, error) {
 	if c.allowPrivateHosts {
 		return u, nil
 	}
+	if _, err := c.approvedIPsForURL(u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func (c *Client) approvedIPsForURL(u *url.URL) ([]net.IP, error) {
+	if u == nil || len(u.String()) > MaxURLLength || u.Scheme == "" || u.Hostname() == "" || u.User != nil {
+		return nil, ErrInvalidURL
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%w: only http and https are supported", ErrInvalidURL)
+	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 		return nil, ErrPrivateURL
@@ -363,18 +479,24 @@ func (c *Client) validateURL(raw string) (*url.URL, error) {
 		if privateIP(ip) {
 			return nil, ErrPrivateURL
 		}
-		return u, nil
+		return []net.IP{ip}, nil
 	}
 	ips, err := c.resolveIP(host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %q: %w", host, err)
 	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("resolve %q: no addresses returned", host)
+	}
 	for _, ip := range ips {
+		if ip == nil || ip.To16() == nil {
+			return nil, fmt.Errorf("resolve %q: invalid address", host)
+		}
 		if privateIP(ip) {
 			return nil, ErrPrivateURL
 		}
 	}
-	return u, nil
+	return cloneIPs(ips), nil
 }
 
 func privateIP(ip net.IP) bool {

@@ -104,6 +104,80 @@ func TestClientRejectsPrivateURLByDefault(t *testing.T) {
 	}
 }
 
+func TestClientRejectsDNSRebindingBeforeDial(t *testing.T) {
+	var resolutions atomic.Int32
+	client := NewClient(Config{
+		SearchURL: "http://rebind.test/search",
+		ResolveIP: func(string) ([]net.IP, error) {
+			if resolutions.Add(1) == 1 {
+				return []net.IP{net.ParseIP("203.0.113.10")}, nil
+			}
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		},
+	})
+
+	_, _, err := client.search(context.Background(), searchRequest{Query: "rebinding"})
+	if !errors.Is(err, ErrPrivateURL) {
+		t.Fatalf("error = %v, want private URL error after rebinding", err)
+	}
+	if resolutions.Load() < 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial-time policy checks", resolutions.Load())
+	}
+}
+
+func TestPrivateHostTransportDialsApprovedAddress(t *testing.T) {
+	client := NewClient(Config{
+		SearchURL: "http://example.test/search",
+		ResolveIP: func(string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("203.0.113.10")}, nil
+		},
+	})
+	transport, ok := client.httpClient.Transport.(*privateHostTransport)
+	if !ok {
+		t.Fatalf("transport type = %T, want privateHostTransport", client.httpClient.Transport)
+	}
+	var dialed string
+	transport.dial = func(_ context.Context, _, address string) (net.Conn, error) {
+		dialed = address
+		return nil, errors.New("stop test dial")
+	}
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.test/search", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = transport.RoundTrip(request)
+	if err == nil {
+		t.Fatal("request unexpectedly succeeded")
+	}
+	if dialed != "203.0.113.10:80" {
+		t.Fatalf("dial address = %q, want approved IP", dialed)
+	}
+}
+
+func TestClientFailsClosedForUnsafeCustomTransport(t *testing.T) {
+	client := NewClient(Config{
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("custom transport should not run")
+		})},
+		SearchURL: "http://example.test/search",
+		ResolveIP: func(string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("203.0.113.10")}, nil
+		},
+	})
+
+	_, _, err := client.search(context.Background(), searchRequest{Query: "unsafe transport"})
+	if !errors.Is(err, ErrUnsafeHTTPClient) {
+		t.Fatalf("error = %v, want unsafe transport error", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestClientRetriesTransientResponse(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
