@@ -472,9 +472,9 @@ type Model struct {
 	Capabilities        *Capabilities     `json:"capabilities,omitzero"            toml:"capabilities,omitzero"`
 	// ThinkingLevelMap maps thinking levels to provider-specific values.
 	// Missing keys use provider defaults. Empty map means no thinking support.
-	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero"      toml:"thinking_level_map,omitzero"`
+	ThinkingLevelMap map[string]string `json:"thinking_level_map,omitzero" toml:"thinking_level_map,omitzero"`
 	// Compat holds compatibility flags for OpenAI-compatible APIs.
-	Compat *CompatFlags `json:"compat,omitzero"                  toml:"compat,omitzero"`
+	Compat *CompatFlags `json:"compat,omitzero" toml:"compat,omitzero"`
 }
 
 // CompatFlags holds compatibility overrides for OpenAI-compatible APIs.
