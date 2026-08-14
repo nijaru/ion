@@ -490,7 +490,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		startupLines = append(startupLines, keyboardLine)
 	}
 	var startupEntries []session.Entry
-	if sess != nil {
+	if sess != nil && sessionID != "" {
 		entries, err := sess.Entries(ctx)
 		if err != nil {
 			fmt.Fprintf(stderr, "failed to load startup history: %v\n", err)

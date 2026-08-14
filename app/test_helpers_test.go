@@ -282,6 +282,40 @@ func (r *stubRunner) ImportSessionBundle(context.Context, ionexport.SessionBundl
 	return "", nil
 }
 
+func (r *stubRunner) RecallQueuedInput(_ context.Context) (agent.QueuedInputRecallResult, error) {
+	if len(r.nextTurns) > 0 {
+		last := r.nextTurns[len(r.nextTurns)-1]
+		r.nextTurns = r.nextTurns[:len(r.nextTurns)-1]
+		var images []session.ImageContent
+		if len(r.nextTurnImages) > 0 {
+			images = r.nextTurnImages[len(r.nextTurnImages)-1]
+			r.nextTurnImages = r.nextTurnImages[:len(r.nextTurnImages)-1]
+		}
+		return agent.QueuedInputRecallResult{Text: last, Images: images, OK: true}, nil
+	}
+	if len(r.followUps) > 0 {
+		last := r.followUps[len(r.followUps)-1]
+		r.followUps = r.followUps[:len(r.followUps)-1]
+		var images []session.ImageContent
+		if len(r.followUpImages) > 0 {
+			images = r.followUpImages[len(r.followUpImages)-1]
+			r.followUpImages = r.followUpImages[:len(r.followUpImages)-1]
+		}
+		return agent.QueuedInputRecallResult{Text: last, Images: images, OK: true}, nil
+	}
+	if len(r.steers) > 0 {
+		last := r.steers[len(r.steers)-1]
+		r.steers = r.steers[:len(r.steers)-1]
+		var images []session.ImageContent
+		if len(r.steerImages) > 0 {
+			images = r.steerImages[len(r.steerImages)-1]
+			r.steerImages = r.steerImages[:len(r.steerImages)-1]
+		}
+		return agent.QueuedInputRecallResult{Text: last, Images: images, OK: true}, nil
+	}
+	return agent.QueuedInputRecallResult{OK: false}, nil
+}
+
 func (r *stubRunner) NavigateTree(
 	_ context.Context,
 	targetID string,

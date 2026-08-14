@@ -379,6 +379,23 @@ func (m Model) queueFollowUp() (Model, tea.Cmd) {
 	return m.queueBusyInput(text, images)
 }
 
+// recallQueuedInputToComposer pops the most recent queued input from the runtime
+// controller and restores it into the composer draft.
+func (m Model) recallQueuedInputToComposer() (Model, tea.Cmd, bool) {
+	recaller, ok := m.Model.Runner.(agent.QueuedInputRecaller)
+	if !ok || recaller == nil {
+		return m, nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	res, err := recaller.RecallQueuedInput(ctx)
+	if err != nil || !res.OK {
+		return m, nil, false
+	}
+	m.Input.Images = cloneImageAttachments(res.Images)
+	return m, m.setComposerDraft(res.Text), true
+}
+
 func cloneImageAttachments(images []session.ImageContent) []session.ImageContent {
 	if len(images) == 0 {
 		return nil

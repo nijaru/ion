@@ -179,6 +179,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// When idle, insert newline
 		return m, m.insertComposerText("\n")
 
+	case "alt+up":
+		m.clearPendingAction()
+		if next, cmd, ok := m.recallQueuedInputToComposer(); ok {
+			return next, cmd
+		}
+		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
+			if draft, ok := m.inputReducer().previousHistoryDraft(
+				m.Input.Composer.Value(),
+			); ok {
+				return m, m.setComposerDraft(draft)
+			}
+		}
+		return m, m.updateComposer(msg)
+
 	case "up":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {

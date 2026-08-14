@@ -480,7 +480,7 @@ func resolveSessionActivation(
 		if _, entryErr := store.GetEntry(ctx, selectedID); entryErr == nil {
 			return session.NewSessionID(), selectedID, nil
 		}
-		return identity, leafID, nil
+		return identity, "", nil
 	}
 	info, lookupErr := catalog.GetSessionInfo(ctx, selectedID)
 	if lookupErr != nil {
@@ -493,7 +493,7 @@ func resolveSessionActivation(
 			} else if !errors.Is(entryErr, sql.ErrNoRows) && !errors.Is(entryErr, os.ErrNotExist) {
 				return "", "", fmt.Errorf("load selected leaf %q: %w", selectedID, entryErr)
 			}
-			return identity, leafID, nil
+			return identity, "", nil
 		}
 		return "", "", fmt.Errorf("load selected session %q: %w", selectedID, lookupErr)
 	}
@@ -523,7 +523,6 @@ func openRuntime(
 	if len(approvalInteractive) > 0 {
 		interactive = approvalInteractive[0]
 	}
-	sess := session.NewSession(store, 64)
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(ctx, &runtimeCfg, endpointResolver); err != nil {
 		return app.NewSetupRuntime(&runtimeCfg, err.Error()), nil, nil, nil
@@ -558,6 +557,11 @@ func openRuntime(
 			context.Background(), activationOwner, previousMeta.ID, previousLeafID,
 		)
 	})
+	if err := activator.ActivateSession(ctx, identity, leafID); err != nil {
+		return nil, nil, nil, fmt.Errorf("activate session %s: %w", identity, err)
+	}
+	activationOwner = activator.ActivationOwner()
+	sess := session.NewSession(store, 64)
 	info, err := runtimeInfoForProvider(runtimeCfg.Provider, &runtimeCfg)
 	if err != nil {
 		return nil, nil, nil, err
@@ -596,7 +600,8 @@ func openRuntime(
 		return errors.Join(closeErrs...)
 	}
 	cleanupOpenError := func(openErr error) error {
-		return closeRuntimeResourcesAfterError(openErr, closeRuntimeResources)
+		rollbackErr := activation.Rollback()
+		return errors.Join(closeRuntimeResourcesAfterError(openErr, closeRuntimeResources), rollbackErr)
 	}
 	setupFailure := func(openErr error) (app.RuntimeInfo, session.Session, agent.Runtime, error) {
 		openErr = cleanupOpenError(openErr)
@@ -847,16 +852,6 @@ func openRuntime(
 			len(interruptedTurns),
 		))
 	}
-	// Activate only after every fallible runtime-materialization and recovery
-	// check has completed. The selection remains provisional until the host
-	// accepts this runtime; Controller.Close restores the previous identity and
-	// leaf if validation, persistence, or subscription rejects it. An
-	// unqualified launch explicitly starts a fresh conversation at the virtual
-	// root instead of inheriting the last selected leaf from the shared store.
-	if err := activator.ActivateSession(ctx, identity, leafID); err != nil {
-		return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("activate session %s: %w", identity, err))
-	}
-	activationOwner = activator.ActivationOwner()
 	if persistResumedSessionModel {
 		if err := harness.SetModel(model); err != nil {
 			return nil, nil, nil, closeUnusableRuntime(fmt.Errorf("persist runtime model: %w", err))

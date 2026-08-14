@@ -181,3 +181,54 @@ func TestBusyInputQueueFailureRestoresDraft(t *testing.T) {
 		t.Fatalf("queue error messages = %#v, want visible queue failure", messages)
 	}
 }
+
+func TestAltUpRecallsQueuedInputIntoComposer(t *testing.T) {
+	runner := &stubRunner{
+		followUps:      []string{"first follow up", "second follow up"},
+		followUpImages: [][]session.ImageContent{nil, {{Data: []byte("img"), MimeType: "image/png"}}},
+	}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.InFlight.Thinking = true
+
+	// Press Alt+Up
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModAlt, Text: "alt+up"})
+	model = testModel(t, next)
+	if cmd != nil {
+		runCommandTree(t, cmd)
+	}
+
+	if got := model.Input.Composer.Value(); got != "second follow up" {
+		t.Fatalf("composer value after alt+up = %q, want %q", got, "second follow up")
+	}
+	if len(model.Input.Images) != 1 || string(model.Input.Images[0].Data) != "img" {
+		t.Fatalf("composer images = %#v, want 1 image attachment", model.Input.Images)
+	}
+
+	// Press Alt+Up again to recall the first follow-up
+	next, cmd = model.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModAlt, Text: "alt+up"})
+	model = testModel(t, next)
+	if cmd != nil {
+		runCommandTree(t, cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "first follow up" {
+		t.Fatalf("composer value after 2nd alt+up = %q, want %q", got, "first follow up")
+	}
+}
+
+func TestAltUpFallsBackToHistoryWhenQueueEmpty(t *testing.T) {
+	runner := &stubRunner{}
+	model := readyModel(t)
+	model.Model.Runner = runner
+	model.Input.History = []string{"historical prompt"}
+
+	// Press Alt+Up when queue is empty -> should retrieve historical prompt
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModAlt, Text: "alt+up"})
+	model = testModel(t, next)
+	if cmd != nil {
+		runCommandTree(t, cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "historical prompt" {
+		t.Fatalf("composer value after alt+up with empty queue = %q, want %q", got, "historical prompt")
+	}
+}
