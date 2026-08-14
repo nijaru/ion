@@ -414,3 +414,39 @@ func TestAbortClearsRuntimeOwnedNextTurns(t *testing.T) {
 		t.Fatalf("next-turn queue = %#v, want empty after abort", h.nextTurn)
 	}
 }
+
+func TestRecallQueuedInputContract(t *testing.T) {
+	h := NewController(ControllerConfig{Session: newTestSession(t), QueueCapacity: 4})
+	defer h.Close()
+	ctx := context.Background()
+
+	// Empty queue recall returns OK=false
+	res, err := h.RecallQueuedInput(ctx)
+	if err != nil || res.OK {
+		t.Fatalf("expected empty recall OK=false, got res=%+v err=%v", res, err)
+	}
+
+	// Queue next turn and recall it
+	h.phase = PhaseStreaming
+	if err := h.NextTurn("turn 1"); err != nil {
+		t.Fatalf("NextTurn failed: %v", err)
+	}
+	if err := h.NextTurn("turn 2"); err != nil {
+		t.Fatalf("NextTurn failed: %v", err)
+	}
+
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || !res.OK || res.Text != "turn 2" {
+		t.Fatalf("expected recall 'turn 2', got %+v err=%v", res, err)
+	}
+
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || !res.OK || res.Text != "turn 1" {
+		t.Fatalf("expected recall 'turn 1', got %+v err=%v", res, err)
+	}
+
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || res.OK {
+		t.Fatalf("expected empty queue, got %+v", res)
+	}
+}

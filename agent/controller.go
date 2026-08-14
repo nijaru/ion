@@ -1294,6 +1294,42 @@ func (h *Controller) nextTurnDirect(text string, images ...session.ImageContent)
 	return nil
 }
 
+// RecallQueuedInput atomically pops the most recently enqueued input from
+// NextTurn, FollowUp, or Steer (in that priority order) and emits a queue update.
+func (h *Controller) RecallQueuedInput(_ context.Context) (QueuedInputRecallResult, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return QueuedInputRecallResult{}, errors.New("harness is closed")
+	}
+
+	var popped session.Message
+	if len(h.nextTurn) > 0 {
+		popped = h.nextTurn[len(h.nextTurn)-1]
+		h.nextTurn = h.nextTurn[:len(h.nextTurn)-1]
+	} else if len(h.followUp) > 0 {
+		popped = h.followUp[len(h.followUp)-1]
+		h.followUp = h.followUp[:len(h.followUp)-1]
+	} else if len(h.steer) > 0 {
+		popped = h.steer[len(h.steer)-1]
+		h.steer = h.steer[:len(h.steer)-1]
+	} else {
+		return QueuedInputRecallResult{OK: false}, nil
+	}
+
+	h.emitLocked(h.queueUpdateLocked())
+
+	user, ok := popped.(*session.UserMessage)
+	if !ok {
+		return QueuedInputRecallResult{OK: true}, nil
+	}
+	return QueuedInputRecallResult{
+		Text:   session.MessageText(user),
+		Images: userMessageImages(user),
+		OK:     true,
+	}, nil
+}
+
 func (h *Controller) wakeNextTurnStart() {
 	select {
 	case h.nextTurnWake <- struct{}{}:

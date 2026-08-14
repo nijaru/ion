@@ -83,3 +83,30 @@ func TestSQLiteFTSFullTextSearch(t *testing.T) {
 		t.Fatalf("expected 0 results, got %d", len(results4))
 	}
 }
+
+func BenchmarkSQLiteFTSSearch256(b *testing.B) {
+	tempDir := b.TempDir()
+	dbPath := filepath.Join(tempDir, "fts-bench.db")
+	store, err := NewSQLiteStore(dbPath, "fts-bench-session")
+	if err != nil {
+		b.Fatalf("NewSQLiteStore failed: %v", err)
+	}
+	defer store.Close()
+
+	sess := NewSession(store, 16)
+	ctx := context.Background()
+	now := time.Now()
+
+	for i := 0; i < 256; i++ {
+		_, _ = sess.AppendMessage(ctx, NewUserText("How do I configure Postgres database connection pooling and SQLite WAL in Go?", now.Add(time.Duration(i)*time.Second)))
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		res, err := sess.SearchEntries(ctx, "Postgres connection", 10)
+		if err != nil || len(res) == 0 {
+			b.Fatalf("search failed: %v", err)
+		}
+	}
+}

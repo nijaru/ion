@@ -453,6 +453,18 @@ type SessionSearcher interface {
 	SearchEntries(ctx context.Context, query string, limit int) ([]session.SearchResult, error)
 }
 
+// QueuedInputRecallResult contains the recalled input text and attachments.
+type QueuedInputRecallResult struct {
+	Text   string
+	Images []session.ImageContent
+	OK     bool
+}
+
+// QueuedInputRecaller allows frontends to atomically pop the most recent queued input.
+type QueuedInputRecaller interface {
+	RecallQueuedInput(ctx context.Context) (QueuedInputRecallResult, error)
+}
+
 // SessionProjection is the immutable active-session view used by frontends
 // for semantic reads. Branch contains the selected branch and includes staged
 // entries while a durable turn is active; Usage is computed from that same
