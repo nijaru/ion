@@ -25,6 +25,7 @@ import (
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // CompactionSettings controls when and how compaction runs.
@@ -1348,3 +1349,53 @@ func microCompactToolResult(trm *session.ToolResultMessage, maxChars int) *sessi
 	cloned.Content = newContent
 	return &cloned
 }
+
+// CompactSession implements tool.CompactRunner for model-directed compaction.
+func (c *Controller) CompactSession(ctx context.Context, customInstructions string) (string, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return "", errors.New("runtime is closed")
+	}
+	sess := c.session
+	model := c.model
+	thinking := c.thinking
+	auth := c.auth
+	stream := c.stream
+	summaryRetry := c.summaryRetry
+	compactionSettings := c.compaction
+	contextWindow := c.contextWindow
+	c.mu.Unlock()
+
+	if sess == nil {
+		return "", errors.New("session is unavailable")
+	}
+
+	var apiKey string
+	var headers map[string]string
+	if auth != nil {
+		apiKey, headers = auth(model)
+	}
+
+	res, err := Compact(ctx, sess, CompactOptions{
+		Model:              model.ID,
+		ModelMaxTokens:     model.MaxTokens,
+		APIKey:             apiKey,
+		Headers:            headers,
+		ThinkingLevel:      thinking,
+		CustomInstructions: customInstructions,
+		Convert:            DefaultConvert,
+		StreamFn:           stream,
+		SummaryRetry:       summaryRetry,
+		ContextWindow:      contextWindow,
+	}, compactionSettings)
+	if err != nil {
+		return "", err
+	}
+	if res == nil || res.Summary == "" {
+		return "Conversation history does not yet exceed compaction thresholds.", nil
+	}
+	return res.Summary, nil
+}
+
+var _ tool.CompactRunner = (*Controller)(nil)

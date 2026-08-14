@@ -657,6 +657,11 @@ func openRuntime(
 	toolRegistry.Register(toolweb.NewFetchTool(webClient))
 	subagentTool := tool.NewSubagentTool()
 	toolRegistry.Register(subagentTool)
+	var compactTool *tool.CompactTool
+	if runtimeCfg.CompactionTool != "off" {
+		compactTool = tool.NewCompactTool()
+		toolRegistry.Register(compactTool)
+	}
 	if memoryStore != nil {
 		if err := tool.RegisterMemoryTools(toolRegistry, memoryStore, cwd); err != nil {
 			return setupFailure(err)
@@ -792,6 +797,9 @@ func openRuntime(
 		ContextWindow: contextWindow,
 	})
 	subagentTool.SetRunner(harness)
+	if compactTool != nil {
+		compactTool.SetRunner(harness)
+	}
 	closeUnusableRuntime := func(openErr error) error {
 		closeErr := errors.Join(harness.Close(), closeRuntimeResources())
 		if closeErr != nil {

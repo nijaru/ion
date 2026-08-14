@@ -2,14 +2,17 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -276,6 +279,24 @@ func (c *Client) search(ctx context.Context, req searchRequest) (string, SearchD
 		return "", SearchDetails{}, fmt.Errorf("web search max_results exceeds %d", MaxResultsLimit)
 	}
 
+	retrievedAt := time.Now().UTC()
+	if c.now != nil {
+		retrievedAt = c.now()
+	}
+
+	if c.searchURL == DefaultSearchURL {
+		if apiKey := os.Getenv("EXA_API_KEY"); apiKey != "" {
+			if sources, exaErr := c.searchExa(ctx, apiKey, query, limit); exaErr == nil && len(sources) > 0 {
+				return c.formatSearchResults(query, sources, "exa.ai", limit, retrievedAt)
+			}
+		}
+		if apiKey := os.Getenv("BRAVE_API_KEY"); apiKey != "" {
+			if sources, braveErr := c.searchBrave(ctx, apiKey, query, limit); braveErr == nil && len(sources) > 0 {
+				return c.formatSearchResults(query, sources, "search.brave.com", limit, retrievedAt)
+			}
+		}
+	}
+
 	endpoint, err := c.validateURL(c.searchURL)
 	if err != nil {
 		return "", SearchDetails{}, fmt.Errorf("search endpoint: %w", err)
@@ -283,22 +304,133 @@ func (c *Client) search(ctx context.Context, req searchRequest) (string, SearchD
 	values := endpoint.Query()
 	values.Set("q", query)
 	endpoint.RawQuery = values.Encode()
-	response, body, retrievedAt, err := c.get(ctx, endpoint.String())
+	response, body, retrievedAtResp, err := c.get(ctx, endpoint.String())
 	if err != nil {
 		return "", SearchDetails{}, fmt.Errorf("web search: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return "", SearchDetails{}, httpStatusError("web search", response.StatusCode)
 	}
-	sources, truncated, err := parseSearchResults(endpoint, body, limit, c)
+	sources, _, err := parseSearchResults(endpoint, body, limit, c)
 	if err != nil {
 		return "", SearchDetails{}, fmt.Errorf("parse web search results: %w", err)
+	}
+	return c.formatSearchResults(query, sources, endpoint.Hostname(), limit, retrievedAtResp)
+}
+
+func (c *Client) searchExa(ctx context.Context, apiKey string, query string, limit int) ([]Source, error) {
+	reqBody, err := json.Marshal(map[string]any{
+		"query":         query,
+		"numResults":    limit,
+		"useAutoprompt": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.exa.ai/search", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, httpStatusError("exa search", resp.StatusCode)
+	}
+
+	var data struct {
+		Results []struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+			Text  string `json:"text"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	sources := make([]Source, 0, len(data.Results))
+	for _, item := range data.Results {
+		if item.URL != "" && item.Title != "" {
+			snippet := strings.TrimSpace(item.Text)
+			if len([]rune(snippet)) > 300 {
+				snippet = string([]rune(snippet)[:300]) + "..."
+			}
+			sources = append(sources, Source{
+				Title:   item.Title,
+				URL:     item.URL,
+				Snippet: snippet,
+			})
+		}
+	}
+	return sources, nil
+}
+
+func (c *Client) searchBrave(ctx context.Context, apiKey string, query string, limit int) ([]Source, error) {
+	reqURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d", url.QueryEscape(query), limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Subscription-Token", apiKey)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, httpStatusError("brave search", resp.StatusCode)
+	}
+
+	var data struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	sources := make([]Source, 0, len(data.Web.Results))
+	for _, item := range data.Web.Results {
+		if item.URL != "" && item.Title != "" {
+			sources = append(sources, Source{
+				Title:   item.Title,
+				URL:     item.URL,
+				Snippet: item.Description,
+			})
+		}
+	}
+	return sources, nil
+}
+
+func (c *Client) formatSearchResults(
+	query string,
+	sources []Source,
+	provider string,
+	limit int,
+	retrievedAt time.Time,
+) (string, SearchDetails, error) {
+	truncated := len(sources) > limit
+	if truncated {
+		sources = sources[:limit]
 	}
 	details := SearchDetails{
 		Query:       query,
 		Sources:     sources,
 		RetrievedAt: retrievedAt,
-		Provider:    endpoint.Hostname(),
+		Provider:    provider,
 		Truncated:   truncated,
 		ResultLimit: limit,
 	}
@@ -520,29 +652,91 @@ func extractText(contentType string, body []byte) (string, string) {
 			return
 		}
 		if node.Type == html.ElementNode {
-			switch strings.ToLower(node.Data) {
-			case "head", "script", "style", "noscript", "template", "svg":
+			tag := strings.ToLower(node.Data)
+			switch tag {
+			case "head", "script", "style", "noscript", "template", "svg", "iframe":
 				skip = true
+			case "title":
+				title = strings.TrimSpace(nodeText(node))
+				return
+			case "h1":
+				text.WriteString("\n\n# ")
+			case "h2":
+				text.WriteString("\n\n## ")
+			case "h3":
+				text.WriteString("\n\n### ")
+			case "h4":
+				text.WriteString("\n\n#### ")
+			case "h5", "h6":
+				text.WriteString("\n\n##### ")
+			case "p", "div", "section", "article":
+				text.WriteString("\n\n")
+			case "br":
+				text.WriteString("\n")
+			case "li":
+				text.WriteString("\n- ")
+			case "pre":
+				text.WriteString("\n\n```\n")
+			case "code":
+				if node.Parent == nil || strings.ToLower(node.Parent.Data) != "pre" {
+					text.WriteString("`")
+				}
+			case "blockquote":
+				text.WriteString("\n\n> ")
 			}
 		}
-		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "title") {
-			title = strings.TrimSpace(nodeText(node))
-		}
 		if node.Type == html.TextNode && !skip {
-			value := strings.Join(strings.Fields(node.Data), " ")
-			if value != "" {
-				if text.Len() > 0 {
-					text.WriteByte(' ')
+			content := node.Data
+			if node.Parent != nil && strings.ToLower(node.Parent.Data) == "pre" {
+				text.WriteString(content)
+			} else {
+				value := strings.Join(strings.Fields(content), " ")
+				if value != "" {
+					if text.Len() > 0 {
+						last := text.String()[text.Len()-1]
+						if last != '\n' && last != ' ' && last != '#' && last != '>' && last != '`' {
+							text.WriteByte(' ')
+						}
+					}
+					text.WriteString(value)
 				}
-				text.WriteString(value)
 			}
 		}
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			walk(child, skip)
 		}
+		if node.Type == html.ElementNode && !skip {
+			tag := strings.ToLower(node.Data)
+			switch tag {
+			case "h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote":
+				text.WriteString("\n\n")
+			case "pre":
+				text.WriteString("\n```\n\n")
+			case "code":
+				if node.Parent == nil || strings.ToLower(node.Parent.Data) != "pre" {
+					text.WriteString("`")
+				}
+			}
+		}
 	}
 	walk(doc, false)
-	return text.String(), title
+	raw := text.String()
+	lines := strings.Split(raw, "\n")
+	var cleaned []string
+	blankCount := 0
+	for _, l := range lines {
+		trimmed := strings.TrimRight(l, " \t\r")
+		if strings.TrimSpace(trimmed) == "" {
+			blankCount++
+			if blankCount <= 2 {
+				cleaned = append(cleaned, "")
+			}
+		} else {
+			blankCount = 0
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n")), title
 }
 
 func nodeText(node *html.Node) string {
