@@ -124,6 +124,16 @@ func (c *Controller) RunSubagent(
 		actionJournal = journal
 	}
 	model, thinking, sysPrompt, auth, stream, transport, timeout, overflow, workdir, mode := c.childSnapshot()
+	if request.Model != "" {
+		model.ID = request.Model
+	}
+	parentID := childID
+	c.mu.Lock()
+	if c.session != nil && c.session.Meta().ID != "" {
+		parentID = c.session.Meta().ID
+	}
+	c.mu.Unlock()
+
 	child := NewController(ControllerConfig{
 		Session:        childSession,
 		Store:          childStore,
@@ -148,7 +158,7 @@ func (c *Controller) RunSubagent(
 		Workdir:             workdir,
 		Child:               childConfig,
 		ChildDepth:          depth + 1,
-		Origin:              session.SessionOrigin{SessionID: childID, ChildID: childID},
+		Origin:              session.SessionOrigin{SessionID: parentID, ChildID: childID},
 	})
 
 	runCtx, cancel := context.WithTimeout(ctx, childConfig.MaxDuration)

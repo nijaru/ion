@@ -396,3 +396,25 @@ func newChildTestController(
 	t.Cleanup(func() { _ = h.Close() })
 	return h
 }
+
+func TestControllerRunSubagentModelOverride(t *testing.T) {
+	var seenModel string
+	h := newChildTestController(t, ChildRunConfig{}, func(_ context.Context, req *llm.Request) (llm.Stream, error) {
+		seenModel = req.Model
+		return &mockStream{chunks: []*llm.Chunk{{Content: "fast result", StopReason: "stop"}}}, nil
+	})
+
+	result, err := h.RunSubagent(context.Background(), tool.SubagentRequest{
+		Task:  "quick check",
+		Model: "anthropic/claude-3-5-haiku",
+	})
+	if err != nil {
+		t.Fatalf("RunSubagent() error = %v", err)
+	}
+	if result.Status != "completed" || result.Output != "fast result" {
+		t.Fatalf("result = %#v, want completed", result)
+	}
+	if seenModel != "anthropic/claude-3-5-haiku" {
+		t.Fatalf("seenModel = %q, want anthropic/claude-3-5-haiku", seenModel)
+	}
+}

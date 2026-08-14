@@ -21,6 +21,7 @@ const (
 type SubagentRequest struct {
 	Task              string
 	MaxToolIterations int
+	Model             string
 	Progress          func(string)
 }
 
@@ -81,6 +82,10 @@ func (t *SubagentTool) Spec() llm.Spec {
 					"minimum":     0,
 					"maximum":     MaxSubagentToolIterations,
 					"description": "Maximum child tool iterations, default is runtime policy.",
+				},
+				"model": map[string]any{
+					"type":        "string",
+					"description": "Optional model override for the child agent, e.g. a faster or specialized model.",
 				},
 			},
 			"required": []string{"task"},
@@ -154,6 +159,7 @@ func decodeSubagentInput(args string) (SubagentRequest, error) {
 	var input struct {
 		Task              string `json:"task"`
 		MaxToolIterations int    `json:"max_tool_iterations"`
+		Model             string `json:"model"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return SubagentRequest{}, fmt.Errorf("decode subagent arguments: %w", err)
@@ -171,7 +177,11 @@ func decodeSubagentInput(args string) (SubagentRequest, error) {
 			MaxSubagentToolIterations,
 		)
 	}
-	return SubagentRequest{Task: input.Task, MaxToolIterations: input.MaxToolIterations}, nil
+	return SubagentRequest{
+		Task:              input.Task,
+		MaxToolIterations: input.MaxToolIterations,
+		Model:             strings.TrimSpace(input.Model),
+	}, nil
 }
 
 var (

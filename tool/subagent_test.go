@@ -76,6 +76,23 @@ func TestSubagentToolDelegatesAndReturnsDetails(t *testing.T) {
 	}
 }
 
+func TestSubagentToolDecodesModel(t *testing.T) {
+	runner := &fakeSubagentRunner{result: SubagentResult{Status: "completed", Output: "done"}}
+	tool := NewSubagentTool()
+	tool.SetRunner(runner)
+
+	_, _, err := tool.ExecuteDetailed(
+		context.Background(),
+		`{"task":"inspect","model":"google/gemini-2.5-flash"}`,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteDetailed() error = %v", err)
+	}
+	if runner.request.Model != "google/gemini-2.5-flash" {
+		t.Fatalf("runner request model = %q, want google/gemini-2.5-flash", runner.request.Model)
+	}
+}
+
 func TestSubagentToolRejectsInvalidInput(t *testing.T) {
 	tool := NewSubagentTool()
 	tool.SetRunner(&fakeSubagentRunner{})
