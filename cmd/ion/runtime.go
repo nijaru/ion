@@ -658,7 +658,7 @@ func openRuntime(
 	subagentTool := tool.NewSubagentTool()
 	toolRegistry.Register(subagentTool)
 	var compactTool *tool.CompactTool
-	if runtimeCfg.CompactionTool != "off" {
+	if runtimeCfg.CompactionTool == "on" || runtimeCfg.CompactionTool == "true" {
 		compactTool = tool.NewCompactTool()
 		toolRegistry.Register(compactTool)
 	}
