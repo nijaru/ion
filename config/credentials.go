@@ -10,7 +10,12 @@ import (
 )
 
 type CredentialProvider struct {
-	APIKey string `toml:"api_key,omitempty"`
+	APIKey       string `toml:"api_key,omitempty"`
+	AccessToken  string `toml:"access_token,omitempty"`
+	RefreshToken string `toml:"refresh_token,omitempty"`
+	TokenType    string `toml:"token_type,omitempty"`
+	ExpiresAt    int64  `toml:"expires_at,omitempty"`
+	AuthKind     string `toml:"auth_kind,omitempty"`
 }
 
 type CredentialsFile struct {
@@ -34,8 +39,54 @@ func LookupAPIKey(provider string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// Check APIKey first, then AccessToken if OAuth is active
 	key := strings.TrimSpace(credential.APIKey)
-	return key, key != ""
+	if key != "" {
+		return key, true
+	}
+	token := strings.TrimSpace(credential.AccessToken)
+	return token, token != ""
+}
+
+// LookupOAuthTokens retrieves the stored OAuth credentials for a provider.
+func LookupOAuthTokens(provider string) (CredentialProvider, bool) {
+	file, err := LoadCredentials()
+	if err != nil {
+		return CredentialProvider{}, false
+	}
+	credential, ok := file.Providers[normalizeCredentialProvider(provider)]
+	if !ok || strings.TrimSpace(credential.AccessToken) == "" {
+		return CredentialProvider{}, false
+	}
+	return credential, true
+}
+
+// SaveOAuthCredentials saves the exchanged OAuth tokens.
+func SaveOAuthCredentials(provider string, tokens *OAuthTokens) error {
+	provider = normalizeCredentialProvider(provider)
+	if provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if tokens == nil {
+		return fmt.Errorf("tokens cannot be nil")
+	}
+
+	file, err := LoadCredentials()
+	if err != nil {
+		return err
+	}
+	if file.Providers == nil {
+		file.Providers = map[string]CredentialProvider{}
+	}
+
+	file.Providers[provider] = CredentialProvider{
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		TokenType:    tokens.TokenType,
+		ExpiresAt:    tokens.ExpiresAt,
+		AuthKind:     "oauth",
+	}
+	return SaveCredentials(file)
 }
 
 // HasAPIKey returns true if the provider has a configured API key.

@@ -911,6 +911,13 @@ func runTopLevelCommand(args []string, stdout, stderr io.Writer) (bool, int) {
 		}
 		return true, 0
 	}
+	if args[0] == "auth" {
+		if err := runAuthCommand(context.Background(), args[1:], stdout); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return true, 1
+		}
+		return true, 0
+	}
 	if args[0] == "inspect" {
 		if err := runInspectCommand(args[1:], stdout); err != nil {
 			fmt.Fprintf(stderr, "%v\n", err)
