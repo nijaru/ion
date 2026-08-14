@@ -56,6 +56,8 @@ type Session interface {
 	Usage(ctx context.Context) (Usage, error)
 	AppendLabel(ctx context.Context, targetID string, label string) (string, error)
 	GetLabel(ctx context.Context, targetID string) (string, error)
+	// SearchEntries searches conversation entry text using full-text search.
+	SearchEntries(ctx context.Context, query string, limit int) ([]SearchResult, error)
 }
 
 // ContextSnapshot is the result of BuildContext — what the loop needs to run a turn.
@@ -130,6 +132,9 @@ type Store interface {
 
 	// Meta returns session-level metadata.
 	Meta() Metadata
+
+	// SearchEntries searches conversation entry text using full-text search.
+	SearchEntries(ctx context.Context, query string, limit int) ([]SearchResult, error)
 
 	// Close releases resources.
 	Close() error

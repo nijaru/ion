@@ -259,6 +259,10 @@ func (s *printSession) Usage(context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
 
+func (s *printSession) SearchEntries(context.Context, string, int) ([]session.SearchResult, error) {
+	return nil, nil
+}
+
 func (s *printSession) Close() error {
 	s.closed++
 	return nil

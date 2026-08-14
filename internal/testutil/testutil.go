@@ -165,6 +165,10 @@ func (s *MockSession) Usage(_ context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
 
+func (s *MockSession) SearchEntries(_ context.Context, _ string, _ int) ([]session.SearchResult, error) {
+	return nil, nil
+}
+
 func (s *MockSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -294,6 +298,10 @@ func (s *MockStore) MoveTo(_ context.Context, _ string, _ *session.BranchSummary
 	return "", nil
 }
 func (s *MockStore) Meta() session.Metadata { return session.Metadata{} }
+
+func (s *MockStore) SearchEntries(_ context.Context, _ string, _ int) ([]session.SearchResult, error) {
+	return nil, nil
+}
 
 func (s *MockStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil

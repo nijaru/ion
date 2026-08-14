@@ -172,6 +172,10 @@ func (s *stubSession) Usage(_ context.Context) (session.Usage, error) {
 	return session.Usage{}, nil
 }
 
+func (s *stubSession) SearchEntries(_ context.Context, _ string, _ int) ([]session.SearchResult, error) {
+	return nil, nil
+}
+
 func (s *stubSession) Close() error {
 	s.closed = true
 	if s.events != nil {

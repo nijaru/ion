@@ -71,6 +71,13 @@ CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
 CREATE INDEX IF NOT EXISTS idx_entries_sequence ON entries(sequence);
 CREATE INDEX IF NOT EXISTS idx_entries_turn ON entries(turn_id);
 
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+	entry_id UNINDEXED,
+	role,
+	content,
+	tokenize = 'porter unicode61'
+);
+
 CREATE TABLE IF NOT EXISTS session_meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL

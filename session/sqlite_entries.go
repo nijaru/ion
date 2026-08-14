@@ -58,6 +58,7 @@ func (s *SQLiteStore) appendTx(ctx context.Context, tx *sql.Tx, turnID string, e
 	if err != nil {
 		return "", classifySQLiteError("insert entry", err)
 	}
+	_ = s.indexEntryFTS(ctx, tx, entry)
 	return id, nil
 }
 

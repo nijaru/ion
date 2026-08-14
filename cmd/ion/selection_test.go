@@ -102,6 +102,10 @@ func (s *testStore) MoveTo(context.Context, string, *session.BranchSummaryData) 
 	return "", nil
 }
 func (s *testStore) Meta() session.Metadata { return s.meta }
+func (s *testStore) SearchEntries(_ context.Context, _ string, _ int) ([]session.SearchResult, error) {
+	return nil, nil
+}
+
 func (s *testStore) GetInputs(_ context.Context, _ string, _ int) ([]string, error) {
 	return nil, nil
 }

@@ -472,6 +472,12 @@ func ensureBaseSchema(ctx context.Context, tx *sql.Tx) error {
 			last_preview TEXT NOT NULL DEFAULT '',
 			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+			entry_id UNINDEXED,
+			role,
+			content,
+			tokenize = 'porter unicode61'
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
