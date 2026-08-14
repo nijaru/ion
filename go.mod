@@ -16,6 +16,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d
+	github.com/nijaru/ripgo v0.0.0-20260814203852-7e9218adcb92
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/yuin/goldmark v1.8.2
@@ -33,8 +34,10 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect

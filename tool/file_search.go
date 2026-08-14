@@ -3,35 +3,20 @@ package tool
 import (
 	"bufio"
 	"context"
-	stdjson "encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ripgo"
+	"github.com/nijaru/ripgo/ignore"
+	"github.com/nijaru/ripgo/search"
+	"github.com/nijaru/ripgo/walk"
 )
-
-// checkRgInstalled checks if rg (ripgrep) is available in PATH.
-// Returns an error with installation instructions if not found.
-func checkRgInstalled() error {
-	_, err := exec.LookPath("rg")
-	if err != nil {
-		return fmt.Errorf("ripgrep (rg) is not installed. Install it with:\n" +
-			"  brew install ripgrep (macOS)\n" +
-			"  apt install ripgrep (Debian/Ubuntu)\n" +
-			"  dnf install ripgrep (Fedora)\n" +
-			"  cargo install ripgrep (any platform)")
-	}
-	return nil
-}
 
 const (
 	defaultGrepLimit = 100
@@ -140,28 +125,9 @@ func validateGlobPattern(pattern string) error {
 	return nil
 }
 
-// Grep tool
+// Grep tool searches file contents natively using ripgo.
 type Grep struct {
 	fileSearchBase
-}
-
-type rgJSONEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Path *struct {
-			Text string `json:"text"`
-		} `json:"path"`
-		LineNumber int `json:"line_number"`
-		Lines      *struct {
-			Text string `json:"text"`
-		} `json:"lines"`
-	} `json:"data"`
-}
-
-type grepMatch struct {
-	filePath   string
-	lineNumber int
-	lineText   string
 }
 
 func (g *Grep) Spec() llm.Spec {
@@ -173,9 +139,6 @@ func (g *Grep) Spec() llm.Spec {
 }
 
 func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
-	if err := checkRgInstalled(); err != nil {
-		return "", err
-	}
 	input, err := decodeToolArgs[grepInput]("grep", args)
 	if err != nil {
 		return "", err
@@ -208,106 +171,117 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	}
 	isDirectory := info.IsDir()
 
-	cmdArgs := []string{
-		"--json",
-		"--line-number",
-		"--color=never",
-		"--hidden",
-		"--no-require-git",
-		"--glob", "!.git/**",
+	opts := []ripgo.Option{
+		ripgo.WithHidden(true),
+		ripgo.WithGlobExcludes(".git", ".git/**", "**/.git", "**/.git/**"),
 	}
 	if input.IgnoreCase {
-		cmdArgs = append(cmdArgs, "--ignore-case")
+		opts = append(opts, ripgo.WithIgnoreCase(true))
 	}
 	if input.Literal {
-		cmdArgs = append(cmdArgs, "--fixed-strings")
+		opts = append(opts, ripgo.WithFixedStrings(true))
+	}
+	if input.Context > 0 {
+		opts = append(opts, ripgo.WithContext(input.Context, input.Context))
 	}
 	if strings.TrimSpace(input.Glob) != "" {
-		cmdArgs = append(cmdArgs, "--glob", input.Glob)
-	}
-	cmdArgs = append(cmdArgs, "--", input.Pattern)
-	if searchArg != "" {
-		cmdArgs = append(cmdArgs, searchArg)
-	}
-	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
-	cmd.Dir = g.cwd
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("rg stdout: %w", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("rg stderr: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("rg search failed: %w", err)
+		opts = append(opts, ripgo.WithGlobIncludes(input.Glob))
 	}
 
-	var stderr strings.Builder
-	var stderrWG sync.WaitGroup
-	stderrWG.Add(1)
-	go func() {
-		defer stderrWG.Done()
-		_, _ = io.Copy(&stderr, stderrPipe)
-	}()
+	type matchLine struct {
+		filePath   string
+		lineNumber int
+		lineText   string
+		isContext  bool
+	}
 
-	reader := bufio.NewReader(stdout)
-	matches := make([]grepMatch, 0, min(limit, defaultGrepLimit))
+	var matchLines []matchLine
+	matchCount := 0
 	matchLimitReached := false
-	killedDueToLimit := false
-	for {
-		line, readErr := reader.ReadString('\n')
-		if strings.TrimSpace(line) != "" && len(matches) < limit {
-			var event rgJSONEvent
-			if err := stdjson.Unmarshal([]byte(line), &event); err == nil && event.Type == "match" &&
-				event.Data.Path != nil &&
-				event.Data.LineNumber > 0 {
-				match := grepMatch{
-					filePath:   event.Data.Path.Text,
-					lineNumber: event.Data.LineNumber,
-				}
-				if event.Data.Lines != nil {
-					match.lineText = event.Data.Lines.Text
-				}
-				matches = append(matches, match)
-				if len(matches) >= limit {
-					matchLimitReached = true
-					killedDueToLimit = true
-					if cmd.Process != nil {
-						_ = cmd.Process.Kill()
+
+	var fileResults []search.Result
+	for res, searchErr := range ripgo.Search(ctx, input.Pattern, []string{searchPath}, opts...) {
+		if ctx.Err() != nil {
+			return "", toolContextErr("search", ctx.Err())
+		}
+		if searchErr != nil {
+			continue
+		}
+		if len(res.Matches) > 0 || len(res.Entries) > 0 {
+			fileResults = append(fileResults, res)
+		}
+	}
+
+	slices.SortFunc(fileResults, func(a, b search.Result) int {
+		return strings.Compare(a.Path, b.Path)
+	})
+
+	for _, res := range fileResults {
+		if input.Context > 0 && len(res.Entries) > 0 {
+			for _, entry := range res.Entries {
+				isCtx := entry.Kind == search.EntryContext
+				if !isCtx {
+					if matchCount >= limit {
+						matchLimitReached = true
+						break
 					}
+					matchCount++
+					if matchCount >= limit {
+						matchLimitReached = true
+					}
+				}
+				matchLines = append(matchLines, matchLine{
+					filePath:   res.Path,
+					lineNumber: entry.Line,
+					lineText:   string(entry.LineBytes),
+					isContext:  isCtx,
+				})
+			}
+		} else {
+			for _, m := range res.Matches {
+				if matchCount >= limit {
+					matchLimitReached = true
+					break
+				}
+				matchCount++
+				if matchCount >= limit {
+					matchLimitReached = true
+				}
+				matchLines = append(matchLines, matchLine{
+					filePath:   res.Path,
+					lineNumber: m.Line,
+					lineText:   string(m.LineBytes),
+					isContext:  false,
+				})
+				if matchCount >= limit {
+					break
 				}
 			}
 		}
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				_ = cmd.Wait()
-				stderrWG.Wait()
-				return "", fmt.Errorf("read rg output: %w", readErr)
-			}
+		if matchLimitReached && (input.Context == 0 || matchCount > limit) {
 			break
 		}
 	}
-	waitErr := cmd.Wait()
-	stderrWG.Wait()
-	if err := ctx.Err(); err != nil {
-		return "", toolContextErr("search", err)
-	}
-	if waitErr != nil && !killedDueToLimit {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "No matches found", nil
-		}
-		errorMsg := strings.TrimSpace(stderr.String())
-		if errorMsg == "" {
-			errorMsg = waitErr.Error()
-		}
-		return "", fmt.Errorf("rg search failed: %s", errorMsg)
-	}
-	if len(matches) == 0 {
+
+	if len(matchLines) == 0 {
 		return "No matches found", nil
 	}
 
-	output, linesTruncated := g.formatGrepMatches(matches, searchPath, isDirectory, input.Context)
+	var outputLines []string
+	linesTruncated := false
+	for _, ml := range matchLines {
+		displayPath := g.grepDisplayPath(ml.filePath, searchPath, isDirectory)
+		lineText := strings.TrimSuffix(strings.ReplaceAll(ml.lineText, "\r", ""), "\n")
+		truncated, ok := truncateGrepLine(lineText)
+		linesTruncated = linesTruncated || ok
+		if ml.isContext {
+			outputLines = append(outputLines, fmt.Sprintf("%s-%d- %s", displayPath, ml.lineNumber, truncated))
+		} else {
+			outputLines = append(outputLines, fmt.Sprintf("%s:%d: %s", displayPath, ml.lineNumber, truncated))
+		}
+	}
+
+	output := strings.Join(outputLines, "\n")
 	output, byteTruncated := truncateToolOutputHead(output, MaxToolOutputSize)
 	var notices []string
 	if matchLimitReached {
@@ -341,64 +315,6 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	return output, nil
 }
 
-func (g *Grep) formatGrepMatches(
-	matches []grepMatch,
-	searchPath string,
-	isDirectory bool,
-	contextLines int,
-) (string, bool) {
-	fileCache := map[string][]string{}
-	var output []string
-	linesTruncated := false
-	for _, match := range matches {
-		path := g.grepDisplayPath(match.filePath, searchPath, isDirectory)
-		if contextLines <= 0 && match.lineText != "" {
-			lineText := strings.TrimSuffix(strings.ReplaceAll(match.lineText, "\r", ""), "\n")
-			truncated, ok := truncateGrepLine(lineText)
-			linesTruncated = linesTruncated || ok
-			output = append(output, fmt.Sprintf("%s:%d: %s", path, match.lineNumber, truncated))
-			continue
-		}
-		filePath := g.grepAbsolutePath(match.filePath)
-		lines, ok := fileCache[filePath]
-		if !ok {
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				output = append(
-					output,
-					fmt.Sprintf("%s:%d: (unable to read file)", path, match.lineNumber),
-				)
-				continue
-			}
-			lines = strings.Split(
-				strings.ReplaceAll(strings.ReplaceAll(string(content), "\r\n", "\n"), "\r", "\n"),
-				"\n",
-			)
-			fileCache[filePath] = lines
-		}
-		start := match.lineNumber
-		end := match.lineNumber
-		if contextLines > 0 {
-			start = max(1, match.lineNumber-contextLines)
-			end = min(len(lines), match.lineNumber+contextLines)
-		}
-		for lineNumber := start; lineNumber <= end; lineNumber++ {
-			lineText := ""
-			if lineNumber-1 >= 0 && lineNumber-1 < len(lines) {
-				lineText = lines[lineNumber-1]
-			}
-			truncated, ok := truncateGrepLine(lineText)
-			linesTruncated = linesTruncated || ok
-			if lineNumber == match.lineNumber {
-				output = append(output, fmt.Sprintf("%s:%d: %s", path, lineNumber, truncated))
-			} else {
-				output = append(output, fmt.Sprintf("%s-%d- %s", path, lineNumber, truncated))
-			}
-		}
-	}
-	return strings.Join(output, "\n"), linesTruncated
-}
-
 func (g *Grep) grepDisplayPath(filePath, searchPath string, isDirectory bool) string {
 	absPath := g.grepAbsolutePath(filePath)
 	if isDirectory {
@@ -424,7 +340,7 @@ func truncateGrepLine(line string) (string, bool) {
 	return string(runes[:grepMaxLineChars]) + "... [truncated]", true
 }
 
-// Find tool
+// Find tool searches files by glob pattern natively using ripgo.
 type Find struct {
 	fileSearchBase
 }
@@ -438,9 +354,6 @@ func (f *Find) Spec() llm.Spec {
 }
 
 func (f *Find) Execute(ctx context.Context, args string) (string, error) {
-	if err := checkRgInstalled(); err != nil {
-		return "", err
-	}
 	input, err := decodeToolArgs[findInput]("find", args)
 	if err != nil {
 		return "", err
@@ -472,28 +385,40 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("not a directory: %s", searchPath)
 	}
 
-	cmdArgs := []string{
-		"--files",
-		"--hidden",
-		"--no-require-git",
-		"--glob", "!.git/**",
-	}
-	if searchArg != "" {
-		cmdArgs = append(cmdArgs, searchArg)
-	}
-	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
-	cmd.Dir = f.cwd
-	output, err := cmd.Output()
+	engine, err := ignore.NewEngineFS(nil, ignore.Config{
+		Hidden:       true,
+		GlobExcludes: []string{".git", ".git/**", "**/.git", "**/.git/**"},
+	})
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "No files found matching pattern", nil
+		return "", fmt.Errorf("create ignore engine: %w", err)
+	}
+
+	w := walk.NewWalker(nil, walk.Config{}, engine)
+	fileCh := make(chan walk.Entry, 1024)
+	go w.Run(ctx, []string{searchPath}, fileCh)
+
+	var files []string
+	for entry := range fileCh {
+		if ctx.Err() != nil {
+			return "", toolContextErr("find", ctx.Err())
 		}
-		if strings.TrimSpace(string(output)) == "" {
-			return "", fmt.Errorf("rg file listing failed: %w", err)
+		rawPath := entry.File.DisplayPath()
+		if rel, err := filepath.Rel(f.cwd, rawPath); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+			files = append(files, filepath.ToSlash(rel))
+		} else {
+			files = append(files, filepath.ToSlash(rawPath))
 		}
 	}
 
-	matches, err := globMatches(pattern, string(output), searchArg)
+	slices.Sort(files)
+
+	var rawListing strings.Builder
+	for _, file := range files {
+		rawListing.WriteString(file)
+		rawListing.WriteByte('\n')
+	}
+
+	matches, err := globMatches(pattern, rawListing.String(), searchArg)
 	if err != nil {
 		return "", fmt.Errorf("find failed: %w", err)
 	}
