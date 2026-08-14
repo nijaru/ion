@@ -904,6 +904,20 @@ func runTopLevelCommand(args []string, stdout, stderr io.Writer) (bool, int) {
 		}
 		return true, 1
 	}
+	if args[0] == "config" {
+		if err := runConfigCommand(args[1:], stdout); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return true, 1
+		}
+		return true, 0
+	}
+	if args[0] == "inspect" {
+		if err := runInspectCommand(args[1:], stdout); err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return true, 1
+		}
+		return true, 0
+	}
 	if args[0] != "skill" {
 		return false, 0
 	}
