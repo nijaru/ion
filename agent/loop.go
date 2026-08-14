@@ -340,6 +340,15 @@ func streamAssistantResponse(
 	if cfg.TransformCtx != nil {
 		msgs = cfg.TransformCtx(streamCtx, msgs)
 	}
+	if cfg.ContextUsageTracker != nil && cfg.ContextWindow > 0 {
+		tokens := 0
+		for _, m := range msgs {
+			tokens += EstimateTokens(m)
+		}
+		if hint, ok := cfg.ContextUsageTracker.MaybeInjectHint(tokens, cfg.ContextWindow); ok && hint != "" {
+			msgs = append(msgs, session.NewUserText(hint, time.Now()))
+		}
+	}
 
 	llmMsgs := convert(msgs)
 

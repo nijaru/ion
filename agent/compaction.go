@@ -20,8 +20,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -1350,8 +1352,115 @@ func microCompactToolResult(trm *session.ToolResultMessage, maxChars int) *sessi
 	return &cloned
 }
 
+const (
+	ResumeMessageAfterCompaction = "Resume only unfinished work; if none remains, give the final response and stop."
+)
+
+// HintPercent returns the minimum context percentage that triggers the first hint.
+// ≤128k: 50% (hardware-constrained windows)
+// >128k: 128k tokens (quality degradation zone)
+func HintPercent(window int) int {
+	if window <= 0 {
+		return 50
+	}
+	if window <= 128_000 {
+		return 50
+	}
+	pct := int(math.Round(128_000.0 / float64(window) * 100))
+	if pct < 1 {
+		return 1
+	}
+	return pct
+}
+
+// FormatTokens formats token integers into readable k/m strings.
+func FormatTokens(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%dk", n/1_000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// FormatContextHint formats a compact informational token usage indicator like [ctx 128k/1m] or [ctx 64k/128k].
+func FormatContextHint(tokens, window int) string {
+	if window <= 0 {
+		return ""
+	}
+	marker := ""
+	if tokens >= 200_000 {
+		marker = " [>200k]"
+	}
+	return fmt.Sprintf("[ctx %s/%s]%s", FormatTokens(tokens), FormatTokens(window), marker)
+}
+
+// ShouldInjectContextHint determines if a context hint should be injected into the prompt.
+func ShouldInjectContextHint(tokens, window, lastTokens, lastPercent int) bool {
+	if window <= 0 || tokens <= 0 {
+		return false
+	}
+	minTokens := window / 2
+	if window > 128_000 {
+		minTokens = 128_000
+	}
+	if tokens < minTokens {
+		return false
+	}
+	percent := int(float64(tokens) / float64(window) * 100)
+	if lastTokens == 0 && lastPercent == 0 {
+		return true
+	}
+	if tokens < lastTokens || percent < lastPercent {
+		return true
+	}
+	percentDelta := 5
+	tokenDelta := max(10000, int(float64(window)*0.025))
+	return (percent-lastPercent >= percentDelta) || (tokens-lastTokens >= tokenDelta)
+}
+
+// ContextUsageTracker tracks token usage and hint throttling across turns.
+type ContextUsageTracker struct {
+	mu            sync.Mutex
+	LastTokens    int
+	LastPercent   int
+	ContextWindow int
+}
+
+func (t *ContextUsageTracker) Reset() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.LastTokens = 0
+	t.LastPercent = 0
+	t.ContextWindow = 0
+}
+
+func (t *ContextUsageTracker) MaybeInjectHint(tokens, window int) (string, bool) {
+	if t == nil || window <= 0 || tokens <= 0 {
+		return "", false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ContextWindow != 0 && t.ContextWindow != window {
+		t.LastTokens = 0
+		t.LastPercent = 0
+	}
+	t.ContextWindow = window
+	if !ShouldInjectContextHint(tokens, window, t.LastTokens, t.LastPercent) {
+		return "", false
+	}
+	percent := int(float64(tokens) / float64(window) * 100)
+	t.LastTokens = tokens
+	t.LastPercent = percent
+	return FormatContextHint(tokens, window), true
+}
+
 // CompactSession implements tool.CompactRunner for model-directed compaction.
-func (c *Controller) CompactSession(ctx context.Context, customInstructions string) (string, error) {
+func (c *Controller) CompactSession(ctx context.Context, instructions string, continueAfter bool) (string, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1383,7 +1492,7 @@ func (c *Controller) CompactSession(ctx context.Context, customInstructions stri
 		APIKey:             apiKey,
 		Headers:            headers,
 		ThinkingLevel:      thinking,
-		CustomInstructions: customInstructions,
+		CustomInstructions: instructions,
 		Convert:            DefaultConvert,
 		StreamFn:           stream,
 		SummaryRetry:       summaryRetry,
@@ -1392,10 +1501,17 @@ func (c *Controller) CompactSession(ctx context.Context, customInstructions stri
 	if err != nil {
 		return "", err
 	}
-	if res == nil || res.Summary == "" {
-		return "Conversation history does not yet exceed compaction thresholds.", nil
+	if c.contextTracker != nil {
+		c.contextTracker.Reset()
 	}
-	return res.Summary, nil
+	summary := ""
+	if res != nil {
+		summary = res.Summary
+	}
+	if continueAfter {
+		_ = c.FollowUp(ResumeMessageAfterCompaction)
+	}
+	return summary, nil
 }
 
 var _ tool.CompactRunner = (*Controller)(nil)

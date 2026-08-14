@@ -947,3 +947,56 @@ func (*compactionTransientStream) Close() error { return nil }
 func mustTime() time.Time {
 	return time.Time{}
 }
+
+func TestContextUsageTrackerPolicy(t *testing.T) {
+	// 128k window: hint triggers at 50% (64k)
+	if pct := HintPercent(128_000); pct != 50 {
+		t.Fatalf("HintPercent(128k) = %d, want 50", pct)
+	}
+	// 1m window: hint triggers at 128k (~13%)
+	if pct := HintPercent(1_000_000); pct != 13 {
+		t.Fatalf("HintPercent(1m) = %d, want 13", pct)
+	}
+
+	// Token formatters
+	if got := FormatTokens(64_000); got != "64k" {
+		t.Fatalf("FormatTokens(64000) = %q, want 64k", got)
+	}
+	if got := FormatTokens(1_000_000); got != "1.0m" {
+		t.Fatalf("FormatTokens(1000000) = %q, want 1.0m", got)
+	}
+	if got := FormatContextHint(128_000, 1_000_000); got != "[ctx 128k/1.0m]" {
+		t.Fatalf("FormatContextHint = %q, want [ctx 128k/1.0m]", got)
+	}
+	if got := FormatContextHint(250_000, 1_000_000); got != "[ctx 250k/1.0m] [>200k]" {
+		t.Fatalf("FormatContextHint = %q, want [ctx 250k/1.0m] [>200k]", got)
+	}
+
+	tracker := &ContextUsageTracker{}
+
+	// Below threshold (30k < 64k for 128k window): no hint
+	if hint, ok := tracker.MaybeInjectHint(30_000, 128_000); ok || hint != "" {
+		t.Fatalf("expected no hint below threshold, got %q", hint)
+	}
+
+	// At threshold (64k >= 64k): first hint fires
+	if hint, ok := tracker.MaybeInjectHint(64_000, 128_000); !ok || hint != "[ctx 64k/128k]" {
+		t.Fatalf("expected first hint, got ok=%v hint=%q", ok, hint)
+	}
+
+	// Throttled: +2k tokens (not enough delta): skipped
+	if hint, ok := tracker.MaybeInjectHint(66_000, 128_000); ok || hint != "" {
+		t.Fatalf("expected throttled hint, got %q", hint)
+	}
+
+	// +11k tokens (crosses tokenDelta >= 10k): second hint fires
+	if hint, ok := tracker.MaybeInjectHint(75_000, 128_000); !ok || hint != "[ctx 75k/128k]" {
+		t.Fatalf("expected second hint, got ok=%v hint=%q", ok, hint)
+	}
+
+	// Reset clears state
+	tracker.Reset()
+	if tracker.LastTokens != 0 || tracker.LastPercent != 0 {
+		t.Fatalf("Reset did not zero tracker state: %+v", tracker)
+	}
+}

@@ -40,6 +40,12 @@ type LoopConfig struct {
 	// Compaction controls context compaction settings including tier-1 micro-compaction.
 	Compaction CompactionSettings
 
+	// ContextWindow is the active model context window size in tokens.
+	ContextWindow int
+
+	// ContextUsageTracker tracks token usage and hint throttling across turns.
+	ContextUsageTracker *ContextUsageTracker
+
 	// ActionBoundary is the runtime-owned effect gate. When configured, every
 	// tool marked RequiresAction must pass durable prepare/authorize/start and
 	// terminal recording before and after its Execute function.

@@ -162,6 +162,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		compaction:          cfg.Compaction,
 		summaryRetry:        cfg.SummaryRetry,
 		contextWindow:       cfg.ContextWindow,
+		contextTracker:      &ContextUsageTracker{},
 		steeringMode:        cfg.SteeringMode,
 		followUpMode:        cfg.FollowUpMode,
 		queueCapacity:       cfg.QueueCapacity,
@@ -790,19 +791,21 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 	h.mu.Unlock()
 
 	return LoopConfig{
-		Model:            model,
-		Thinking:         thinking,
-		Origin:           h.origin,
-		SessionID:        h.session.Meta().ID,
-		TurnID:           turnID,
-		Tools:            tools,
-		Compaction:       h.compaction,
-		ActionBoundary:   h.actionBoundary,
-		MaxParallelTools: h.maxParallelTools,
-		StreamFn:         h.wrapStreamFn(),
-		ContextOverflow:  h.contextOverflow,
-		Convert:          DefaultConvert,
-		Auth:             h.auth,
+		Model:               model,
+		Thinking:            thinking,
+		Origin:              h.origin,
+		SessionID:           h.session.Meta().ID,
+		TurnID:              turnID,
+		Tools:               tools,
+		Compaction:          h.compaction,
+		ContextWindow:       h.contextWindow,
+		ContextUsageTracker: h.contextTracker,
+		ActionBoundary:      h.actionBoundary,
+		MaxParallelTools:    h.maxParallelTools,
+		StreamFn:            h.wrapStreamFn(),
+		ContextOverflow:     h.contextOverflow,
+		Convert:             DefaultConvert,
+		Auth:                h.auth,
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
 			msgs := h.drainQueued(&h.steer, h.steeringMode)
