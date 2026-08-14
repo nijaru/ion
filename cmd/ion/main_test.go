@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/app"
-	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 

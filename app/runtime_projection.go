@@ -1,6 +1,6 @@
 package app
 
-import "github.com/nijaru/ion/internal/agent"
+import "github.com/nijaru/ion/agent"
 
 // applyAgentRuntimeSnapshot replaces the TUI's ephemeral runtime projection
 // from one authoritative runtime snapshot. It must be complete: resync is a

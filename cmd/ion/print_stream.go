@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/ctxerr"
-	"github.com/nijaru/ion/internal/agent"
 	"github.com/nijaru/ion/session"
 )
 

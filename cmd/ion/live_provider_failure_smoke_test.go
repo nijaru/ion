@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
 	"github.com/nijaru/ion/session"

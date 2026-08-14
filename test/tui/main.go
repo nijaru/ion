@@ -12,9 +12,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"

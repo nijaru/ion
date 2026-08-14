@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 )
 
 func TestReloadMaterializesRuntimeAndKeybindingsTogether(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"github.com/nijaru/ion/config"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/agent"
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/session"

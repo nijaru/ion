@@ -14,10 +14,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/ctxerr"
-	"github.com/nijaru/ion/internal/agent"
 	ionexport "github.com/nijaru/ion/internal/export"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/timing"

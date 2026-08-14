@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/internal/agent"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/internal/instructions"
 	ionskills "github.com/nijaru/ion/internal/skills"

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nijaru/ion/internal/agent"
+	"github.com/nijaru/ion/agent"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
