@@ -49,7 +49,43 @@ func (r *Read) ExecuteContent(ctx context.Context, args string) ([]llm.ContentPa
 		return nil, fmt.Errorf("limit must be non-negative")
 	}
 
-	absPath, err := r.readPath(input.Path)
+	if len(input.Paths) > 0 {
+		var parts []llm.ContentPart
+		var combinedText strings.Builder
+		for i, p := range input.Paths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			fileParts, err := r.executeSingle(ctx, p, input.Offset, input.Limit)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read %s: %w", p, err)
+			}
+			if i > 0 {
+				combinedText.WriteString("\n\n")
+			}
+			combinedText.WriteString(fmt.Sprintf("=== %s ===\n", p))
+			for _, part := range fileParts {
+				if part.Type == llm.ContentPartImage {
+					parts = append(parts, part)
+				} else {
+					combinedText.WriteString(part.Text)
+				}
+			}
+		}
+		result := []llm.ContentPart{llm.TextPart(combinedText.String())}
+		result = append(result, parts...)
+		return result, nil
+	}
+
+	if strings.TrimSpace(input.Path) == "" {
+		return nil, fmt.Errorf("read requires 'path' or 'paths'")
+	}
+	return r.executeSingle(ctx, input.Path, input.Offset, input.Limit)
+}
+
+func (r *Read) executeSingle(ctx context.Context, path string, offset, limit int) ([]llm.ContentPart, error) {
+	absPath, err := r.readPath(path)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +101,7 @@ func (r *Read) ExecuteContent(ctx context.Context, args string) ([]llm.ContentPa
 		return imageReadParts(mimeType, content), nil
 	}
 
-	output, err := numberedReadOutput(string(content), input.Offset, input.Limit)
+	output, err := numberedReadOutput(string(content), offset, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -138,6 +138,21 @@ func TestFileTools(t *testing.T) {
 			t.Fatalf("curly path read = %q, want curly ok", res)
 		}
 
+		// Multi-file read
+		multiArgs, _ := json.Marshal(map[string]any{
+			"paths": []string{filePath, spacePath},
+		})
+		res, err = r.Execute(context.Background(), string(multiArgs))
+		if err != nil {
+			t.Fatalf("multi-file read failed: %v", err)
+		}
+		if !strings.Contains(res, "=== test.txt ===") || !strings.Contains(res, "=== space name.txt ===") {
+			t.Fatalf("multi-file read output missing file headers: %q", res)
+		}
+		if !strings.Contains(res, "line 1") || !strings.Contains(res, "space ok") {
+			t.Fatalf("multi-file read output missing content: %q", res)
+		}
+
 		fileURLReadArgs, _ := json.Marshal(map[string]any{
 			"path": "file://" + filepath.ToSlash(filepath.Join(tmpDir, filePath)),
 		})

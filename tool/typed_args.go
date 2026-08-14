@@ -7,9 +7,10 @@ import (
 )
 
 type readInput struct {
-	Path   string `json:"path"`
-	Offset int    `json:"offset"`
-	Limit  int    `json:"limit"`
+	Path   string   `json:"path,omitempty"`
+	Paths  []string `json:"paths,omitempty"`
+	Offset int      `json:"offset,omitempty"`
+	Limit  int      `json:"limit,omitempty"`
 }
 
 type writeInput struct {
@@ -52,13 +53,18 @@ func decodeToolArgs[A any](name, args string) (A, error) {
 }
 
 func readParameters() map[string]any {
-	schema := typedParameters[readInput]([]string{"path"})
+	schema := typedParameters[readInput](nil)
 	describeProperty(
 		schema,
 		"path",
-		"File to read, relative to the current directory or absolute.",
+		"Single file to read, relative to the current directory or absolute.",
 	)
-	describeProperty(schema, "offset", "Line number to start reading from (1-indexed).")
+	describeProperty(
+		schema,
+		"paths",
+		"Multiple files to read in a single tool call.",
+	)
+	describeProperty(schema, "offset", "Line number to start reading from (1-indexed, for single file read).")
 	describeProperty(schema, "limit", "Maximum number of lines to read.")
 	return schema
 }
