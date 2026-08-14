@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -18,9 +19,18 @@ type markdownTableRow struct {
 	cells []string
 }
 
-var markdownRenderer = goldmark.New(
-	goldmark.WithExtensions(extension.GFM),
-	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
+type markdownCacheKey struct {
+	content string
+	width   int
+}
+
+var (
+	markdownRenderer = goldmark.New(
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
+	)
+	markdownCacheMu sync.RWMutex
+	markdownCache   = make(map[markdownCacheKey]string, 256)
 )
 
 func (m Model) renderMarkdownContent(content string) string {
@@ -28,10 +38,31 @@ func (m Model) renderMarkdownContent(content string) string {
 		return ""
 	}
 
+	key := markdownCacheKey{
+		content: content,
+		width:   m.shellWidth(),
+	}
+
+	markdownCacheMu.RLock()
+	cached, ok := markdownCache[key]
+	markdownCacheMu.RUnlock()
+	if ok {
+		return cached
+	}
+
 	doc := markdownRenderer.Parser().Parse(text.NewReader([]byte(content)))
 	lines := m.renderMarkdownNode(doc, []byte(content), 0)
 	lines = normalizeMarkdownLines(lines)
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+
+	markdownCacheMu.Lock()
+	if len(markdownCache) >= 512 {
+		clear(markdownCache)
+	}
+	markdownCache[key] = result
+	markdownCacheMu.Unlock()
+
+	return result
 }
 
 func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []string {
