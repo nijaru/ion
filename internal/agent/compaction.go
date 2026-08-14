@@ -32,14 +32,22 @@ type CompactionSettings struct {
 	Enabled          bool
 	ReserveTokens    int // Tokens reserved for output (default: 16384)
 	KeepRecentTokens int // Tokens to keep from recent messages (default: 20000)
+
+	// Micro-compaction (tier-1 historical tool output pruning)
+	MicroEnabled         bool // When true, trims historical tool outputs on older turns
+	MicroKeepRecentTurns int  // Number of recent turns kept at full fidelity (default: 3)
+	MicroMaxToolChars    int  // Max character length for historical tool outputs (default: 2000)
 }
 
 // DefaultCompactionSettings returns sensible defaults.
 func DefaultCompactionSettings() CompactionSettings {
 	return CompactionSettings{
-		Enabled:          true,
-		ReserveTokens:    16384,
-		KeepRecentTokens: 20000,
+		Enabled:              true,
+		ReserveTokens:        16384,
+		KeepRecentTokens:     20000,
+		MicroEnabled:         false,
+		MicroKeepRecentTurns: DefaultMicroCompactKeepTurns,
+		MicroMaxToolChars:    DefaultMicroCompactMaxToolChars,
 	}
 }
 
@@ -50,6 +58,12 @@ func normalizeCompactionSettings(settings CompactionSettings, contextWindow int)
 	}
 	if settings.KeepRecentTokens <= 0 {
 		settings.KeepRecentTokens = defaults.KeepRecentTokens
+	}
+	if settings.MicroKeepRecentTurns <= 0 {
+		settings.MicroKeepRecentTurns = defaults.MicroKeepRecentTurns
+	}
+	if settings.MicroMaxToolChars <= 0 {
+		settings.MicroMaxToolChars = defaults.MicroMaxToolChars
 	}
 	if contextWindow > 0 {
 		// Keep both the summary response and recent conversation inside the

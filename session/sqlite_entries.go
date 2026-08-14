@@ -276,16 +276,20 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	return s.branchAtLocked(ctx, s.leaf)
 }
 
-// BranchSeq yields entries from root to current leaf as an iterator.
+// BranchSeq yields entries from root to current leaf as a zero-allocation iterator.
 func (s *SQLiteStore) BranchSeq(ctx context.Context) iter.Seq2[Entry, error] {
 	return func(yield func(Entry, error) bool) {
-		entries, err := s.Branch(ctx)
-		if err != nil {
-			yield(nil, err)
+		s.mu.RLock()
+		if s.closed || s.db == nil {
+			s.mu.RUnlock()
+			yield(nil, ErrSessionClosed)
 			return
 		}
-		for _, e := range entries {
-			if !yield(e, nil) {
+		leaf := s.leaf
+		s.mu.RUnlock()
+
+		for e, err := range s.BranchAtSeq(ctx, leaf) {
+			if !yield(e, err) {
 				return
 			}
 		}
@@ -304,18 +308,81 @@ func (s *SQLiteStore) BranchAt(ctx context.Context, leafID string) ([]Entry, err
 	return s.branchAtLocked(ctx, leafID)
 }
 
-// BranchAtSeq yields entries on the selected leaf path as an iterator.
+// BranchAtSeq yields entries on the selected leaf path directly from SQLite rows.
 func (s *SQLiteStore) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[Entry, error] {
 	return func(yield func(Entry, error) bool) {
-		entries, err := s.BranchAt(ctx, leafID)
+		if leafID == "" {
+			return
+		}
+		s.mu.RLock()
+		if s.closed || s.db == nil {
+			s.mu.RUnlock()
+			yield(nil, ErrSessionClosed)
+			return
+		}
+		db := s.db
+		s.mu.RUnlock()
+
+		rows, err := db.QueryContext(ctx, `
+			WITH RECURSIVE branch(id, parent_id, depth, path) AS (
+				SELECT e.id, e.parent_id, 0, '/' || hex(e.id) || '/'
+				FROM entries e
+				WHERE e.id = ?
+				  AND (e.turn_id IS NULL OR EXISTS (
+					SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+				  ))
+				UNION ALL
+				SELECT e.id, e.parent_id, branch.depth + 1, branch.path || hex(e.id) || '/'
+				FROM entries e
+				JOIN branch ON e.id = branch.parent_id
+				WHERE (e.turn_id IS NULL OR EXISTS (
+					SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+				))
+				  AND instr(branch.path, '/' || hex(e.id) || '/') = 0
+			)
+			SELECT e.id, e.parent_id, e.type, e.timestamp, e.payload
+			FROM branch
+			JOIN entries e ON e.id = branch.id
+			ORDER BY branch.depth DESC
+		`, leafID)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
-		for _, e := range entries {
-			if !yield(e, nil) {
+		defer rows.Close()
+
+		first := true
+		count := 0
+		for rows.Next() {
+			entry, err := scanEntry(rows)
+			if err != nil {
+				yield(nil, err)
 				return
 			}
+			if first {
+				if parentID := entry.ParentID(); parentID != "" {
+					yield(nil, fmt.Errorf(
+						"%w: branch leaf %q stops at entry %q with missing or cyclic parent %q",
+						ErrCorruptSession,
+						leafID,
+						entry.ID(),
+						parentID,
+					))
+					return
+				}
+				first = false
+			}
+			count++
+			if !yield(entry, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
+		if count == 0 {
+			yield(nil, sql.ErrNoRows)
 		}
 	}
 }
@@ -420,18 +487,43 @@ func (s *SQLiteStore) Entries(ctx context.Context) ([]Entry, error) {
 	return entries, rows.Err()
 }
 
-// EntriesSeq yields all entries in the session as an iterator.
+// EntriesSeq yields all entries in the session directly from SQLite rows.
 func (s *SQLiteStore) EntriesSeq(ctx context.Context) iter.Seq2[Entry, error] {
 	return func(yield func(Entry, error) bool) {
-		entries, err := s.Entries(ctx)
+		s.mu.RLock()
+		if s.closed || s.db == nil {
+			s.mu.RUnlock()
+			yield(nil, ErrSessionClosed)
+			return
+		}
+		db := s.db
+		s.mu.RUnlock()
+
+		rows, err := db.QueryContext(ctx, `
+			SELECT e.id,e.parent_id,e.type,e.timestamp,e.payload
+			FROM entries e
+			WHERE e.turn_id IS NULL OR EXISTS (
+				SELECT 1 FROM turns t WHERE t.turn_id = e.turn_id AND t.state = 'committed'
+			)
+			ORDER BY e.sequence ASC, e.rowid ASC`)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
-		for _, e := range entries {
+		defer rows.Close()
+
+		for rows.Next() {
+			e, err := scanEntry(rows)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
 			if !yield(e, nil) {
 				return
 			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(nil, err)
 		}
 	}
 }

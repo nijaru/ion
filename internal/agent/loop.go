@@ -333,8 +333,10 @@ func streamAssistantResponse(
 	defer cancelStream()
 
 	msgs := snapshot.Messages
-	// Tier-1 Micro-compaction: prune verbose tool output on older turns before prompt generation.
-	msgs = MicroCompactMessages(msgs, DefaultMicroCompactKeepTurns, DefaultMicroCompactMaxToolChars)
+	// Tier-1 Micro-compaction: prune verbose tool output on older turns when configured.
+	if cfg.Compaction.MicroEnabled {
+		msgs = MicroCompactMessages(msgs, cfg.Compaction.MicroKeepRecentTurns, cfg.Compaction.MicroMaxToolChars)
+	}
 	if cfg.TransformCtx != nil {
 		msgs = cfg.TransformCtx(streamCtx, msgs)
 	}

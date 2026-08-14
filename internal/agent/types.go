@@ -37,6 +37,9 @@ type LoopConfig struct {
 	TurnID string
 	Tools  []Tool
 
+	// Compaction controls context compaction settings including tier-1 micro-compaction.
+	Compaction CompactionSettings
+
 	// ActionBoundary is the runtime-owned effect gate. When configured, every
 	// tool marked RequiresAction must pass durable prepare/authorize/start and
 	// terminal recording before and after its Execute function.

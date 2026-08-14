@@ -387,6 +387,9 @@ func fuzzyFindIndentationTolerant(content, oldString string) (matchIndex int, ma
 	if !strings.Contains(oldString, "\n") {
 		return -1, 0, false
 	}
+	content = normalizeToLF(content)
+	oldString = normalizeToLF(oldString)
+
 	contentLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldString, "\n")
 	if len(oldLines) > len(contentLines) {

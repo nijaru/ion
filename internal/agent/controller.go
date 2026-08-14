@@ -796,6 +796,7 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 		SessionID:        h.session.Meta().ID,
 		TurnID:           turnID,
 		Tools:            tools,
+		Compaction:       h.compaction,
 		ActionBoundary:   h.actionBoundary,
 		MaxParallelTools: h.maxParallelTools,
 		StreamFn:         h.wrapStreamFn(),

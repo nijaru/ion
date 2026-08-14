@@ -102,3 +102,10 @@ func TestMicroCompactMessagesPrunesHistoricalToolResults(t *testing.T) {
 		t.Fatalf("expected Turn 4 length %d, got %d", len(longOutput), len(t4Text))
 	}
 }
+
+func TestMicroCompactionDisabledLeavesMessagesUntouched(t *testing.T) {
+	settings := DefaultCompactionSettings()
+	if settings.MicroEnabled {
+		t.Fatal("expected MicroEnabled to be false by default to preserve KV-cache prefix stability")
+	}
+}

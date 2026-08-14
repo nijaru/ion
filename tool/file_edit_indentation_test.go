@@ -55,3 +55,28 @@ func compute() int {
 		t.Fatalf("result = %q, want %q", result, expected)
 	}
 }
+
+func TestIndentationTolerantFuzzyMatchCRLF(t *testing.T) {
+	crlfContent := "package main\r\n\r\nfunc run() {\r\n    x := 1\r\n    y := 2\r\n}\r\n"
+	oldString := "func run() {\n  x := 1\n  y := 2\n}"
+	newString := "func run() {\n    x := 10\n    y := 20\n}"
+
+	edits := []editReplacement{
+		{
+			OldString: oldString,
+			NewString: newString,
+		},
+	}
+
+	result, count, err := applyEditReplacements("main.go", crlfContent, edits)
+	if err != nil {
+		t.Fatalf("applyEditReplacements failed on CRLF: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 replacement, got %d", count)
+	}
+	expected := "package main\r\n\r\nfunc run() {\r\n    x := 10\r\n    y := 20\r\n}\r\n"
+	if result != expected {
+		t.Fatalf("result = %q, want %q", result, expected)
+	}
+}

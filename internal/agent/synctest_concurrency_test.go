@@ -3,10 +3,10 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -142,6 +142,12 @@ func TestControllerVirtualClockSteerAndFollowUp(t *testing.T) {
 
 		ctx := context.Background()
 
+		events := make(chan session.Event, 64)
+		unsub := watchEvents(t, ctrl, func(event session.Event) {
+			events <- event
+		})
+		defer unsub()
+
 		// Start prompt in concurrent goroutine
 		go func() {
 			_, _ = ctrl.Prompt(ctx, "First turn")
@@ -165,8 +171,13 @@ func TestControllerVirtualClockSteerAndFollowUp(t *testing.T) {
 		// Release turn block
 		close(turnBlock)
 
-		// Wait briefly in virtual time for queue processing
-		time.Sleep(10 * time.Millisecond)
+		// Wait for turn completion
+		for {
+			event := <-events
+			if _, ok := event.(session.AgentEnd); ok {
+				break
+			}
+		}
 	})
 }
 
@@ -230,4 +241,55 @@ func TestControllerVirtualClockAbortCascade(t *testing.T) {
 			t.Fatalf("ctrl.currentPhase = %v, want PhaseReady", phase)
 		}
 	})
+}
+
+// TestControllerConcurrentRaceExecution tests multi-threaded OS concurrency
+// and mutex lock contention under the real Go race detector.
+func TestControllerConcurrentRaceExecution(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(tempDir, "race.db"), "race-session")
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	defer store.Close()
+
+	sess := session.NewSession(store, 16)
+	durable, _ := any(store).(session.DurableStore)
+
+	streamFn := func(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+		return &mockStream{
+			chunks: []*llm.Chunk{
+				{Content: "Race test response chunk"},
+				{StopReason: "stop"},
+			},
+		}, nil
+	}
+
+	ctrl := NewController(ControllerConfig{
+		Session:       sess,
+		Store:         store,
+		Durable:       durable,
+		StreamFn:      streamFn,
+		Model:         llm.Model{ID: "race-model"},
+		ApprovalMode:  ApprovalTrusted,
+		QueueCapacity: 64,
+	})
+	defer ctrl.Close()
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+
+	// Launch multiple concurrent goroutines exercising prompt, steer, follow-up, and abort
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_, _ = ctrl.Prompt(ctx, "Prompt message")
+			_ = ctrl.Steer("Concurrent steer")
+			_ = ctrl.FollowUp("Concurrent follow up")
+			_, _, _ = ctrl.Abort()
+		}(i)
+	}
+
+	wg.Wait()
 }

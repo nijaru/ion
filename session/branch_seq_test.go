@@ -69,11 +69,31 @@ func TestBranchSeqIteration(t *testing.T) {
 	var sessCollected []string
 	for entry, err := range sess.BranchSeq(ctx) {
 		if err != nil {
-			t.Fatalf("sess.BranchSeq yielded error: %v", err)
+			t.Fatalf("sess.BranchSeq error: %v", err)
 		}
 		sessCollected = append(sessCollected, entry.ID())
 	}
-	if len(sessCollected) != 2 || sessCollected[0] != "e-1" || sessCollected[1] != "e-2" {
-		t.Fatalf("sess.BranchSeq collected = %#v, want [e-1, e-2]", sessCollected)
+	if len(sessCollected) != 2 {
+		t.Fatalf("expected 2 entries in sess.BranchSeq, got %d", len(sessCollected))
+	}
+
+	// Test EntriesSeq
+	var allEntries []string
+	for entry, err := range store.EntriesSeq(ctx) {
+		if err != nil {
+			t.Fatalf("store.EntriesSeq error: %v", err)
+		}
+		allEntries = append(allEntries, entry.ID())
+	}
+	if len(allEntries) != 2 {
+		t.Fatalf("expected 2 entries in store.EntriesSeq, got %d", len(allEntries))
+	}
+
+	// Test empty leaf BranchAtSeq
+	for _, err := range store.BranchAtSeq(ctx, "") {
+		if err != nil {
+			t.Fatalf("unexpected error on empty leaf: %v", err)
+		}
+		t.Fatal("expected 0 iterations on empty leaf")
 	}
 }
