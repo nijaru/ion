@@ -59,7 +59,10 @@ func (m Model) handleSessionSearchResults(msg sessionSearchResultsMsg) (Model, t
 	}
 	lines = append(lines, fmt.Sprintf("Search results for %q (%d match%s):", msg.query, len(msg.results), suffix))
 	for i, res := range msg.results {
-		lines = append(lines, fmt.Sprintf("  %d. [%s] %s (%s)", i+1, res.Role, res.Snippet, res.Timestamp.Format("15:04:05")))
+		lines = append(
+			lines,
+			fmt.Sprintf("  %d. [%s] %s (%s)", i+1, res.Role, res.Snippet, res.Timestamp.Format("15:04:05")),
+		)
 	}
 	return m, m.terminalCommit().Entries(systemEntry(strings.Join(lines, "\n")))
 }

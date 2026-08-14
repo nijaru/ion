@@ -449,4 +449,45 @@ func TestRecallQueuedInputContract(t *testing.T) {
 	if err != nil || res.OK {
 		t.Fatalf("expected empty queue, got %+v", res)
 	}
+
+	// Test multi-queue priority: NextTurn -> FollowUp -> Steer
+	if err := h.Steer("steer msg"); err != nil {
+		t.Fatalf("Steer failed: %v", err)
+	}
+	if err := h.FollowUp("follow-up msg"); err != nil {
+		t.Fatalf("FollowUp failed: %v", err)
+	}
+	imgData := []byte{0x89, 0x50, 0x4E, 0x47}
+	if err := h.nextTurnDirect(
+		"next-turn with image",
+		session.ImageContent{Data: imgData, MimeType: "image/png"},
+	); err != nil {
+		t.Fatalf("nextTurnDirect failed: %v", err)
+	}
+
+	// 1. Pop NextTurn first
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || !res.OK || res.Text != "next-turn with image" || len(res.Images) != 1 ||
+		res.Images[0].MimeType != "image/png" {
+		t.Fatalf("expected next-turn with image, got %+v err=%v", res, err)
+	}
+
+	// 2. Pop FollowUp second
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || !res.OK || res.Text != "follow-up msg" {
+		t.Fatalf("expected follow-up, got %+v err=%v", res, err)
+	}
+
+	// 3. Pop Steer third
+	res, err = h.RecallQueuedInput(ctx)
+	if err != nil || !res.OK || res.Text != "steer msg" {
+		t.Fatalf("expected steer, got %+v err=%v", res, err)
+	}
+
+	// 4. Closed controller returns error
+	h.Close()
+	_, err = h.RecallQueuedInput(ctx)
+	if err == nil {
+		t.Fatal("expected error calling RecallQueuedInput on closed controller")
+	}
 }
