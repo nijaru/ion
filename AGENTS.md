@@ -51,6 +51,13 @@ idiomatic Go implementation. A reference feature is not automatically an Ion
 requirement; a missing reference feature is not automatically a reason to add
 one.
 
+Ion is a developer-first terminal agent harness, not an over-prescriptive web
+assistant or sandbox toy. Do not impose artificial role boundaries, read-only
+handicaps, or bureaucratic gating on subagents and tools (such as stripping
+`bash` from exploration/diagnostic child runs or blocking compiler/git
+inspection). In trusted workspaces, subagents inherit the user's host
+capabilities to reproduce failures, run tests, and diagnose systems freely.
+
 ## Required order of work
 
 For any substantial product or structural change:
