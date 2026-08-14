@@ -97,6 +97,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.exportSessionHTML()
 	case "/import":
 		return m.handleImportCommand(fields)
+	case "/search":
+		return m.handleSearchCommand(fields)
 	case "/name":
 		return m.handleNameCommand(fields)
 	case "/label":

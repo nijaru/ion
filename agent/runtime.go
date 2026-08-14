@@ -306,6 +306,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleSessionBranchAt(cmd)
 	case *SessionTreeCmd:
 		c.handleSessionTree(cmd)
+	case *SessionSearchCmd:
+		c.handleSessionSearch(cmd)
 	case *SessionCatalogListCmd:
 		c.handleSessionCatalogList(cmd)
 	case *SessionCatalogLookupCmd:
@@ -384,6 +386,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 		sendResult(cmd.Reply, SessionBranchResult{Err: ErrRuntimeClosed})
 	case *SessionTreeCmd:
 		sendResult(cmd.Reply, SessionTreeResult{Err: ErrRuntimeClosed})
+	case *SessionSearchCmd:
+		sendResult(cmd.Reply, SessionSearchResult{Err: ErrRuntimeClosed})
 	case *SessionCatalogListCmd:
 		sendResult(cmd.Reply, SessionCatalogListResult{Err: ErrRuntimeClosed})
 	case *SessionCatalogLookupCmd:

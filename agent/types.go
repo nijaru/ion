@@ -448,6 +448,11 @@ type SessionBranchAtReader interface {
 	SessionBranchAt(ctx context.Context, leafID string) ([]session.Entry, error)
 }
 
+// SessionSearcher exposes full-text search across active conversation entries.
+type SessionSearcher interface {
+	SearchEntries(ctx context.Context, query string, limit int) ([]session.SearchResult, error)
+}
+
 // SessionProjection is the immutable active-session view used by frontends
 // for semantic reads. Branch contains the selected branch and includes staged
 // entries while a durable turn is active; Usage is computed from that same

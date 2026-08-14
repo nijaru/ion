@@ -732,6 +732,17 @@ func (c *Controller) handleSessionTree(cmd *SessionTreeCmd) {
 	})
 }
 
+func (c *Controller) handleSessionSearch(cmd *SessionSearchCmd) {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		if c.session == nil {
+			sendResult(cmd.Reply, SessionSearchResult{Err: errors.New("session is unavailable")})
+			return
+		}
+		results, err := c.session.SearchEntries(ctx, cmd.Query, cmd.Limit)
+		sendResult(cmd.Reply, SessionSearchResult{Results: results, Err: err})
+	})
+}
+
 func (c *Controller) handleSessionCatalogList(cmd *SessionCatalogListCmd) {
 	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		catalog, ok := c.store.(SessionCatalog)
@@ -883,6 +894,20 @@ func (c *Controller) SessionTree(ctx context.Context) (SessionTreeSnapshot, erro
 		return SessionTreeSnapshot{}, err
 	}
 	return result.Tree, result.Err
+}
+
+// SearchEntries searches active conversation entries through the controller command queue.
+func (c *Controller) SearchEntries(ctx context.Context, query string, limit int) ([]session.SearchResult, error) {
+	ctx = commandContext(ctx)
+	reply := make(chan SessionSearchResult, 1)
+	if err := c.enqueue(ctx, &SessionSearchCmd{Ctx: ctx, Query: query, Limit: limit, Reply: reply}); err != nil {
+		return nil, err
+	}
+	result, err := waitCommandReply(ctx, reply)
+	if err != nil {
+		return nil, err
+	}
+	return result.Results, result.Err
 }
 
 // ListSessions reads the session catalog through the controller command queue.

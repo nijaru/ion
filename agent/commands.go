@@ -447,6 +447,21 @@ type SessionTreeResult struct {
 	Err  error
 }
 
+// SessionSearchCmd executes full-text search across active conversation entries.
+type SessionSearchCmd struct {
+	Ctx   context.Context
+	Query string
+	Limit int
+	Reply chan<- SessionSearchResult
+}
+
+func (SessionSearchCmd) command() {}
+
+type SessionSearchResult struct {
+	Results []session.SearchResult
+	Err     error
+}
+
 // SessionCatalogListCmd lists sessions for a workdir.
 type SessionCatalogListCmd struct {
 	Ctx     context.Context
