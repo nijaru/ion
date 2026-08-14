@@ -15,16 +15,16 @@ import (
 )
 
 const (
-	defaultChildMaxConcurrent     = 2
-	defaultChildMaxToolIterations = 8
-	defaultChildMaxTokens         = 4096
-	defaultChildMaxOutputChars    = 12000
-	defaultChildMaxDuration       = 2 * time.Minute
-	maxChildMaxConcurrent         = 4
-	maxChildMaxToolIterations     = 16
-	maxChildMaxTokens             = 16384
-	maxChildMaxOutputChars        = 20000
-	maxChildMaxDuration           = 10 * time.Minute
+	defaultChildMaxConcurrent     = 4
+	defaultChildMaxToolIterations = 0 // 0 = unlimited / normal loop cap
+	defaultChildMaxTokens         = 0 // 0 = unlimited
+	defaultChildMaxOutputChars    = 50000
+	defaultChildMaxDuration       = 30 * time.Minute
+	maxChildMaxConcurrent         = 8
+	maxChildMaxToolIterations     = 100
+	maxChildMaxTokens             = 128000
+	maxChildMaxOutputChars        = 100000
+	maxChildMaxDuration           = 60 * time.Minute
 )
 
 // ChildRunConfig is the runtime-owned budget and scheduling policy for
@@ -42,10 +42,10 @@ func normalizeChildRunConfig(cfg ChildRunConfig) ChildRunConfig {
 	if cfg.MaxConcurrent <= 0 || cfg.MaxConcurrent > maxChildMaxConcurrent {
 		cfg.MaxConcurrent = defaultChildMaxConcurrent
 	}
-	if cfg.MaxToolIterations <= 0 || cfg.MaxToolIterations > maxChildMaxToolIterations {
+	if cfg.MaxToolIterations < 0 || cfg.MaxToolIterations > maxChildMaxToolIterations {
 		cfg.MaxToolIterations = defaultChildMaxToolIterations
 	}
-	if cfg.MaxTokens <= 0 || cfg.MaxTokens > maxChildMaxTokens {
+	if cfg.MaxTokens < 0 || cfg.MaxTokens > maxChildMaxTokens {
 		cfg.MaxTokens = defaultChildMaxTokens
 	}
 	if cfg.MaxOutputChars <= 0 || cfg.MaxOutputChars > maxChildMaxOutputChars {
@@ -303,7 +303,7 @@ func boundedChildStream(
 		if request == nil {
 			return nil, errors.New("child provider request is nil")
 		}
-		if request.MaxTokens == 0 || request.MaxTokens > maxTokens {
+		if maxTokens > 0 && (request.MaxTokens == 0 || request.MaxTokens > maxTokens) {
 			request.MaxTokens = maxTokens
 		}
 		return base(ctx, request)

@@ -4,22 +4,47 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
 type fakeSubagentRunner struct {
-	request SubagentRequest
-	result  SubagentResult
-	err     error
-	emit    bool
+	mu       sync.Mutex
+	requests []SubagentRequest
+	result   SubagentResult
+	err      error
+	emit     bool
 }
 
 func (r *fakeSubagentRunner) RunSubagent(_ context.Context, request SubagentRequest) (SubagentResult, error) {
-	r.request = request
+	r.mu.Lock()
+	r.requests = append(r.requests, request)
+	r.mu.Unlock()
+
 	if r.emit && request.Progress != nil {
 		request.Progress("live child output")
 	}
-	return r.result, r.err
+	res := r.result
+	if res.Output == "" && res.Status == "" {
+		res.Status = "completed"
+		res.Output = "result for " + request.Task
+	}
+	return res, r.err
+}
+
+func (r *fakeSubagentRunner) lastRequest() SubagentRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.requests) == 0 {
+		return SubagentRequest{}
+	}
+	return r.requests[len(r.requests)-1]
+}
+
+func (r *fakeSubagentRunner) allRequests() []SubagentRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]SubagentRequest(nil), r.requests...)
 }
 
 func TestSubagentToolRequiresRuntimeRunner(t *testing.T) {
@@ -71,8 +96,9 @@ func TestSubagentToolDelegatesAndReturnsDetails(t *testing.T) {
 	if got, ok := details.(SubagentResult); !ok || got.ChildID != "child-1" {
 		t.Fatalf("details = %#v, want child result", details)
 	}
-	if runner.request.Task != "inspect" || runner.request.MaxToolIterations != 3 {
-		t.Fatalf("runner request = %#v", runner.request)
+	last := runner.lastRequest()
+	if last.Task != "inspect" || last.MaxToolIterations != 3 {
+		t.Fatalf("runner request = %#v", last)
 	}
 }
 
@@ -88,8 +114,72 @@ func TestSubagentToolDecodesModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteDetailed() error = %v", err)
 	}
-	if runner.request.Model != "google/gemini-2.5-flash" {
-		t.Fatalf("runner request model = %q, want google/gemini-2.5-flash", runner.request.Model)
+	last := runner.lastRequest()
+	if last.Model != "google/gemini-2.5-flash" {
+		t.Fatalf("runner request model = %q, want google/gemini-2.5-flash", last.Model)
+	}
+}
+
+func TestSubagentToolParallelExecution(t *testing.T) {
+	runner := &fakeSubagentRunner{}
+	tool := NewSubagentTool()
+	tool.SetRunner(runner)
+
+	input := `{"tasks":[
+		{"task":"review auth"},
+		{"task":"review performance","model":"deepseek/deepseek-v4-pro"}
+	]}`
+
+	content, details, err := tool.ExecuteDetailed(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ExecuteDetailed(parallel) error = %v", err)
+	}
+	if !strings.Contains(content, "### Task 1: review auth") ||
+		!strings.Contains(content, "### Task 2: review performance") {
+		t.Fatalf("unexpected content = %q", content)
+	}
+	batch, ok := details.(SubagentBatchResult)
+	if !ok || batch.Mode != "parallel" || len(batch.Results) != 2 {
+		t.Fatalf("details = %#v, want parallel batch result with 2 items", details)
+	}
+
+	reqs := runner.allRequests()
+	if len(reqs) != 2 {
+		t.Fatalf("runner received %d requests, want 2", len(reqs))
+	}
+}
+
+func TestSubagentToolChainExecutionWithInterpolation(t *testing.T) {
+	runner := &fakeSubagentRunner{}
+	tool := NewSubagentTool()
+	tool.SetRunner(runner)
+
+	input := `{"chain":[
+		{"task":"explore codebase"},
+		{"task":"apply fix based on: {previous}"}
+	]}`
+
+	content, details, err := tool.ExecuteDetailed(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ExecuteDetailed(chain) error = %v", err)
+	}
+	if !strings.Contains(content, "### Step 1:") || !strings.Contains(content, "### Step 2:") {
+		t.Fatalf("unexpected content = %q", content)
+	}
+	batch, ok := details.(SubagentBatchResult)
+	if !ok || batch.Mode != "chain" || len(batch.Results) != 2 {
+		t.Fatalf("details = %#v, want chain batch result with 2 items", details)
+	}
+
+	reqs := runner.allRequests()
+	if len(reqs) != 2 {
+		t.Fatalf("runner received %d requests, want 2", len(reqs))
+	}
+	if reqs[0].Task != "explore codebase" {
+		t.Fatalf("step 1 task = %q", reqs[0].Task)
+	}
+	if !strings.Contains(reqs[1].Task, "result for explore codebase") {
+		t.Fatalf("step 2 task = %q, expected interpolation of previous output", reqs[1].Task)
 	}
 }
 
@@ -99,7 +189,10 @@ func TestSubagentToolRejectsInvalidInput(t *testing.T) {
 	for _, input := range []string{
 		`{}`,
 		`{"task":"inspect","max_tool_iterations":-1}`,
-		`{"task":"inspect","max_tool_iterations":17}`,
+		`{"task":"inspect","max_tool_iterations":101}`,
+		`{"task":"inspect","tasks":[{"task":"sub"}]}`,
+		`{"tasks":[]}`,
+		`{"chain":[]}`,
 	} {
 		if _, err := tool.Execute(context.Background(), input); err == nil {
 			t.Fatalf("Execute(%s) succeeded, want validation error", input)
@@ -128,5 +221,14 @@ func TestSubagentToolApprovalRequirementDisablesRecursion(t *testing.T) {
 	}
 	if req.Operation != "run_subagent" || req.Metadata["recursion"] != "disabled" {
 		t.Fatalf("approval requirement = %#v", req)
+	}
+
+	// Test parallel mode requirement
+	reqParallel, ok, err := tool.ApprovalRequirement(`{"tasks":[{"task":"a"},{"task":"b"}]}`)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalRequirement(parallel) = %#v, %t, %v", reqParallel, ok, err)
+	}
+	if reqParallel.Resource != "2 parallel tasks" {
+		t.Fatalf("resource = %q, want '2 parallel tasks'", reqParallel.Resource)
 	}
 }
