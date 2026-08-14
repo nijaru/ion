@@ -363,6 +363,14 @@ func streamAssistantResponse(
 			Parameters:  t.Parameters,
 		}
 	}
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = &llm.CacheControl{Type: "ephemeral"}
+	} else if len(llmMsgs) > 0 && llmMsgs[0].Role == llm.RoleSystem {
+		llmMsgs[0].CacheControl = &llm.CacheControl{Type: "ephemeral"}
+	}
+	if len(llmMsgs) >= 3 {
+		llmMsgs[len(llmMsgs)-2].CacheControl = &llm.CacheControl{Type: "ephemeral"}
+	}
 
 	req := &llm.Request{
 		Model:               cfg.Model.ID,
