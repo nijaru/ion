@@ -257,12 +257,28 @@ func (m Model) handleLoginCommand(fields []string) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
 	provider := cfg.Provider
+	useKey := false
 	if len(fields) >= 2 {
-		provider = fields[1]
+		if fields[1] == "--key" || fields[1] == "-key" {
+			useKey = true
+		} else {
+			provider = fields[1]
+		}
+	}
+	if len(fields) >= 3 && (fields[2] == "--key" || fields[2] == "-key") {
+		useKey = true
 	}
 	if strings.TrimSpace(provider) == "" {
 		return m.openProviderSetupPicker()
 	}
+
+	knownOAuth := config.KnownOAuthProviders()
+	if !useKey {
+		if _, ok := knownOAuth[strings.ToLower(strings.TrimSpace(provider))]; ok {
+			return m.startBrowserOAuthLogin(provider)
+		}
+	}
+
 	return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, m.activePreset())
 }
 

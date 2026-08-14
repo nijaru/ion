@@ -71,9 +71,17 @@ func runAuthLogin(ctx context.Context, w io.Writer, provider string) error {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
-	fmt.Fprintf(w, "\nAuthentication successful! %s OAuth credentials saved to ~/.ion/credentials.toml.\n", strings.ToUpper(provider))
+	fmt.Fprintf(
+		w,
+		"\nAuthentication successful! %s OAuth credentials saved to ~/.ion/credentials.toml.\n",
+		strings.ToUpper(provider),
+	)
 	if tokens.ExpiresIn > 0 {
-		fmt.Fprintf(w, "Access token valid for %d minutes (automatic background refresh enabled).\n", tokens.ExpiresIn/60)
+		fmt.Fprintf(
+			w,
+			"Access token valid for %d minutes (automatic background refresh enabled).\n",
+			tokens.ExpiresIn/60,
+		)
 	}
 	return nil
 }

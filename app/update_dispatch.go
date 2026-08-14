@@ -344,6 +344,10 @@ func (m Model) dispatchPickerControllerMessage(msg tea.Msg) (Model, tea.Cmd, boo
 	case labelShowMsg:
 		next, cmd := m.handleLabelShow(msg)
 		return next, cmd, true
+
+	case oauthLoginFinishedMsg:
+		next, cmd := m.handleOAuthLoginFinished(msg)
+		return next, cmd, true
 	}
 
 	return m, nil, false
