@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"iter"
 	"os"
 	"os/exec"
 	"slices"
@@ -43,12 +44,57 @@ func (s *testStore) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
 
+func (s *testStore) BranchSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *testStore) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
 	return s.entries, nil
 }
 
+func (s *testStore) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *testStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
+}
+
+func (s *testStore) EntriesSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Entries(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 func (s *testStore) GetLeafID() string         { return s.leafID }
 func (s *testStore) SetLeafID(id string) error { s.leafID = id; return nil }

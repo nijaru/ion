@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"iter"
 )
 
 // Session is the live session projection used by the current harness.
@@ -19,10 +20,14 @@ type Session interface {
 
 	// Branch returns entries on the current leaf path.
 	Branch(ctx context.Context) ([]Entry, error)
+	// BranchSeq yields entries from root to current leaf as a zero-allocation iterator.
+	BranchSeq(ctx context.Context) iter.Seq2[Entry, error]
 	// BranchAt returns entries on the explicitly selected leaf path. The leaf
 	// is captured by the caller, so the result cannot silently follow a later
 	// navigation while a runtime snapshot is being assembled.
 	BranchAt(ctx context.Context, leafID string) ([]Entry, error)
+	// BranchAtSeq yields entries on the selected leaf path as an iterator.
+	BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[Entry, error]
 	// GetEntry returns one persisted tree entry by ID.
 	GetEntry(ctx context.Context, id string) (Entry, error)
 	// GetLeafID returns the current durable leaf pointer.
@@ -100,11 +105,17 @@ type Store interface {
 	// Branch returns all entries on the path from root to the current leaf,
 	// in order. This is what buildContext projects into []Message.
 	Branch(ctx context.Context) ([]Entry, error)
+	// BranchSeq yields entries from root to current leaf as an iterator.
+	BranchSeq(ctx context.Context) iter.Seq2[Entry, error]
 	// BranchAt reads the branch rooted at an explicit immutable leaf ID.
 	BranchAt(ctx context.Context, leafID string) ([]Entry, error)
+	// BranchAtSeq yields entries on the selected leaf path as an iterator.
+	BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[Entry, error]
 
 	// Entries returns all entries in the session (for export/query).
 	Entries(ctx context.Context) ([]Entry, error)
+	// EntriesSeq yields all entries in the session as an iterator.
+	EntriesSeq(ctx context.Context) iter.Seq2[Entry, error]
 
 	// GetLeafID returns the current leaf entry ID.
 	GetLeafID() string

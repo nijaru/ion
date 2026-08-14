@@ -333,12 +333,15 @@ func streamAssistantResponse(
 	defer cancelStream()
 
 	msgs := snapshot.Messages
+	// Tier-1 Micro-compaction: prune verbose tool output on older turns before prompt generation.
+	msgs = MicroCompactMessages(msgs, DefaultMicroCompactKeepTurns, DefaultMicroCompactMaxToolChars)
 	if cfg.TransformCtx != nil {
 		msgs = cfg.TransformCtx(streamCtx, msgs)
 	}
 
 	llmMsgs := convert(msgs)
 
+	cachePrefix := 0
 	// Prepend system prompt as a system message if present.
 	// Pi stores systemPrompt in the context object; the model resolver layer
 	// injects it. Ion builds requests directly, so prepend here.
@@ -348,6 +351,7 @@ func streamAssistantResponse(
 			Content: snapshot.SystemPrompt,
 		}
 		llmMsgs = append([]llm.Message{sysMsg}, llmMsgs...)
+		cachePrefix = 1
 	}
 	tools := make([]*llm.Spec, len(cfg.Tools))
 	for i, t := range cfg.Tools {
@@ -359,11 +363,12 @@ func streamAssistantResponse(
 	}
 
 	req := &llm.Request{
-		Model:           cfg.Model.ID,
-		Messages:        llmMsgs,
-		Tools:           tools,
-		ReasoningEffort: providerReasoningEffort(cfg.Thinking),
-		SessionID:       cfg.SessionID,
+		Model:               cfg.Model.ID,
+		Messages:            llmMsgs,
+		Tools:               tools,
+		CachePrefixMessages: cachePrefix,
+		ReasoningEffort:     providerReasoningEffort(cfg.Thinking),
+		SessionID:           cfg.SessionID,
 	}
 
 	if cfg.Auth != nil {

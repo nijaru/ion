@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 )
 
@@ -275,6 +276,22 @@ func (s *SQLiteStore) Branch(ctx context.Context) ([]Entry, error) {
 	return s.branchAtLocked(ctx, s.leaf)
 }
 
+// BranchSeq yields entries from root to current leaf as an iterator.
+func (s *SQLiteStore) BranchSeq(ctx context.Context) iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 // BranchAt returns entries from root to the explicitly supplied leaf. The
 // caller owns the leaf identity; this method never consults the mutable store
 // leaf after entry, which makes it safe for snapshot construction.
@@ -285,6 +302,22 @@ func (s *SQLiteStore) BranchAt(ctx context.Context, leafID string) ([]Entry, err
 		return nil, ErrSessionClosed
 	}
 	return s.branchAtLocked(ctx, leafID)
+}
+
+// BranchAtSeq yields entries on the selected leaf path as an iterator.
+func (s *SQLiteStore) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (s *SQLiteStore) branchAtLocked(ctx context.Context, leafID string) ([]Entry, error) {
@@ -385,6 +418,22 @@ func (s *SQLiteStore) Entries(ctx context.Context) ([]Entry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// EntriesSeq yields all entries in the session as an iterator.
+func (s *SQLiteStore) EntriesSeq(ctx context.Context) iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		entries, err := s.Entries(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 // --- encoding/decoding ---

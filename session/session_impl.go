@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"iter"
 	"time"
 )
 
@@ -26,8 +27,16 @@ func (s *sessionImpl) Branch(ctx context.Context) ([]Entry, error) {
 	return s.store.Branch(ctx)
 }
 
+func (s *sessionImpl) BranchSeq(ctx context.Context) iter.Seq2[Entry, error] {
+	return s.store.BranchSeq(ctx)
+}
+
 func (s *sessionImpl) BranchAt(ctx context.Context, leafID string) ([]Entry, error) {
 	return s.store.BranchAt(ctx, leafID)
+}
+
+func (s *sessionImpl) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[Entry, error] {
+	return s.store.BranchAtSeq(ctx, leafID)
 }
 
 func (s *sessionImpl) GetEntry(ctx context.Context, id string) (Entry, error) {

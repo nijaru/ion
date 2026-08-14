@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"iter"
 	"slices"
 	"strings"
 	"sync"
@@ -158,13 +159,20 @@ func (s *printSession) SessionName(context.Context) (string, error) { return "",
 func (s *printSession) BuildContext(context.Context) (session.ContextSnapshot, error) {
 	return session.ContextSnapshot{}, nil
 }
-func (s *printSession) Branch(context.Context) ([]session.Entry, error)        { return nil, nil }
+func (s *printSession) Branch(context.Context) ([]session.Entry, error) { return nil, nil }
+func (s *printSession) BranchSeq(context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {}
+}
 func (s *printSession) SessionBranch(context.Context) ([]session.Entry, error) { return nil, nil }
 func (s *printSession) SessionTree(context.Context) (agent.SessionTreeSnapshot, error) {
 	return agent.SessionTreeSnapshot{}, nil
 }
 
 func (s *printSession) BranchAt(context.Context, string) ([]session.Entry, error) { return nil, nil }
+
+func (s *printSession) BranchAtSeq(context.Context, string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {}
+}
 
 func (s *printSession) AppendMessage(context.Context, session.Message) (string, error) {
 	return "", nil

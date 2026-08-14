@@ -1246,3 +1246,91 @@ func IsContextOverflowError(err error) bool {
 		strings.Contains(errStr, "maximum context length") ||
 		strings.Contains(errStr, "too many tokens")
 }
+
+// DefaultMicroCompactKeepTurns is the number of recent turns kept at full fidelity.
+const DefaultMicroCompactKeepTurns = 3
+
+// DefaultMicroCompactMaxToolChars is the maximum character length for historical tool outputs.
+const DefaultMicroCompactMaxToolChars = 2000
+
+// MicroCompactMessages performs tier-1 micro-compaction on conversation messages.
+// It keeps recent turns (default 3) untouched while trimming verbose historical
+// tool results to prevent token bloating before full macro-compaction is triggered.
+func MicroCompactMessages(messages []session.Message, keepRecentTurns int, maxToolChars int) []session.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	if keepRecentTurns <= 0 {
+		keepRecentTurns = DefaultMicroCompactKeepTurns
+	}
+	if maxToolChars <= 0 {
+		maxToolChars = DefaultMicroCompactMaxToolChars
+	}
+
+	// Identify turn boundary indices (UserMessage positions).
+	var userIndices []int
+	for i, msg := range messages {
+		if _, ok := msg.(*session.UserMessage); ok {
+			userIndices = append(userIndices, i)
+		}
+	}
+
+	// If fewer turns than keepRecentTurns, no pruning needed.
+	if len(userIndices) <= keepRecentTurns {
+		return messages
+	}
+
+	// Cutoff index is the user message index that starts the kept recent turns.
+	cutoffIdx := userIndices[len(userIndices)-keepRecentTurns]
+
+	compacted := make([]session.Message, len(messages))
+	copy(compacted, messages)
+
+	for i := 0; i < cutoffIdx; i++ {
+		if trm, ok := compacted[i].(*session.ToolResultMessage); ok {
+			compacted[i] = microCompactToolResult(trm, maxToolChars)
+		}
+	}
+
+	return compacted
+}
+
+func microCompactToolResult(trm *session.ToolResultMessage, maxChars int) *session.ToolResultMessage {
+	if trm == nil || len(trm.Content) == 0 {
+		return trm
+	}
+
+	hasLargeContent := false
+	for _, c := range trm.Content {
+		if tc, ok := c.(session.TextContent); ok && len(tc.Text) > maxChars {
+			hasLargeContent = true
+			break
+		}
+	}
+	if !hasLargeContent {
+		return trm
+	}
+
+	newContent := make([]session.Content, len(trm.Content))
+	for j, c := range trm.Content {
+		if tc, ok := c.(session.TextContent); ok && len(tc.Text) > maxChars {
+			head := tc.Text[:500]
+			tail := tc.Text[len(tc.Text)-200:]
+			truncatedCount := len(tc.Text) - 700
+			newContent[j] = session.TextContent{
+				Text: fmt.Sprintf(
+					"%s\n\n... [%d characters trimmed by micro-compaction] ...\n\n%s",
+					head,
+					truncatedCount,
+					tail,
+				),
+			}
+		} else {
+			newContent[j] = c
+		}
+	}
+
+	cloned := *trm
+	cloned.Content = newContent
+	return &cloned
+}

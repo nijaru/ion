@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"iter"
 	"os"
 	"reflect"
 	"strings"
@@ -51,8 +52,38 @@ func (s *stubSession) Branch(_ context.Context) ([]session.Entry, error) {
 	return s.entries, nil
 }
 
+func (s *stubSession) BranchSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *stubSession) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
 	return s.entries, nil
+}
+
+func (s *stubSession) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (s *stubSession) AppendMessage(_ context.Context, msg session.Message) (string, error) {
@@ -471,12 +502,57 @@ func (s *resumeOnlyStore) Branch(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
 
+func (s *resumeOnlyStore) BranchSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *resumeOnlyStore) BranchAt(ctx context.Context, leafID string) ([]session.Entry, error) {
 	return nil, nil
 }
 
+func (s *resumeOnlyStore) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *resumeOnlyStore) Entries(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
+}
+
+func (s *resumeOnlyStore) EntriesSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Entries(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 func (s *resumeOnlyStore) GetLeafID() string         { return "" }
 func (s *resumeOnlyStore) SetLeafID(id string) error { return nil }

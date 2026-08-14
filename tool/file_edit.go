@@ -364,6 +364,16 @@ func fuzzyFindText(content, oldString string) fuzzyMatchResult {
 			contentForReplacement: fuzzyContent,
 		}
 	}
+	// Multi-line indentation-tolerant match
+	if start, matchLen, ok := fuzzyFindIndentationTolerant(content, oldString); ok {
+		return fuzzyMatchResult{
+			found:                 true,
+			index:                 start,
+			matchLength:           matchLen,
+			usedFuzzyMatch:        true,
+			contentForReplacement: content,
+		}
+	}
 	return fuzzyMatchResult{
 		found:                 false,
 		index:                 -1,
@@ -373,13 +383,68 @@ func fuzzyFindText(content, oldString string) fuzzyMatchResult {
 	}
 }
 
+func fuzzyFindIndentationTolerant(content, oldString string) (matchIndex int, matchLength int, ok bool) {
+	if !strings.Contains(oldString, "\n") {
+		return -1, 0, false
+	}
+	contentLines := strings.Split(content, "\n")
+	oldLines := strings.Split(oldString, "\n")
+	if len(oldLines) > len(contentLines) {
+		return -1, 0, false
+	}
+
+	lineOffsets := make([]int, len(contentLines))
+	offset := 0
+	for i, l := range contentLines {
+		lineOffsets[i] = offset
+		offset += len(l) + 1
+	}
+
+	trimmedOld := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		trimmedOld[i] = strings.TrimSpace(l)
+	}
+
+	var matchStarts []int
+	var matchEnds []int
+
+	for i := 0; i <= len(contentLines)-len(oldLines); i++ {
+		matched := true
+		for j := 0; j < len(oldLines); j++ {
+			if strings.TrimSpace(contentLines[i+j]) != trimmedOld[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			start := lineOffsets[i]
+			endIdx := i + len(oldLines) - 1
+			end := lineOffsets[endIdx] + len(contentLines[endIdx])
+			matchStarts = append(matchStarts, start)
+			matchEnds = append(matchEnds, end)
+		}
+	}
+
+	if len(matchStarts) == 1 {
+		return matchStarts[0], matchEnds[0] - matchStarts[0], true
+	}
+	return -1, 0, false
+}
+
 func countOccurrences(content, oldString string) int {
 	fuzzyContent := normalizeForFuzzyMatch(content)
 	fuzzyOldString := normalizeForFuzzyMatch(oldString)
 	if fuzzyOldString == "" {
 		return 0
 	}
-	return strings.Count(fuzzyContent, fuzzyOldString)
+	count := strings.Count(fuzzyContent, fuzzyOldString)
+	if count > 0 {
+		return count
+	}
+	if _, _, ok := fuzzyFindIndentationTolerant(content, oldString); ok {
+		return 1
+	}
+	return 0
 }
 
 func occurrenceLineSummary(content, needle string) string {

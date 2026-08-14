@@ -49,7 +49,11 @@ func TestInspectTrajectoryCommand(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	handled, code = runTopLevelCommand([]string{"inspect", "trajectory", "--session-dir", tempDir, "--json"}, &stdout, &stderr)
+	handled, code = runTopLevelCommand(
+		[]string{"inspect", "trajectory", "--session-dir", tempDir, "--json"},
+		&stdout,
+		&stderr,
+	)
 	if !handled || code != 0 {
 		t.Fatalf("inspect trajectory --json failed: handled=%v, code=%d, stderr=%s", handled, code, stderr.String())
 	}

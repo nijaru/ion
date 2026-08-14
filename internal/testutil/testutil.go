@@ -3,6 +3,7 @@ package testutil
 
 import (
 	"context"
+	"iter"
 	"sync"
 	"time"
 
@@ -49,6 +50,44 @@ func (s *MockSession) Branch(_ context.Context) ([]session.Entry, error) {
 	out := make([]session.Entry, len(s.entries))
 	copy(out, s.entries)
 	return out, nil
+}
+
+func (s *MockSession) BranchSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (s *MockSession) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]session.Entry, len(s.entries))
+	copy(out, s.entries)
+	return out, nil
+}
+
+func (s *MockSession) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (s *MockSession) AppendMessage(_ context.Context, msg session.Message) (string, error) {
@@ -196,8 +235,57 @@ func (s *MockStore) Branch(_ context.Context) ([]session.Entry, error) {
 	return nil, nil
 }
 
+func (s *MockStore) BranchSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Branch(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (s *MockStore) BranchAt(_ context.Context, _ string) ([]session.Entry, error) {
+	return nil, nil
+}
+
+func (s *MockStore) BranchAtSeq(ctx context.Context, leafID string) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.BranchAt(ctx, leafID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (s *MockStore) Entries(_ context.Context) ([]session.Entry, error) {
 	return nil, nil
+}
+
+func (s *MockStore) EntriesSeq(ctx context.Context) iter.Seq2[session.Entry, error] {
+	return func(yield func(session.Entry, error) bool) {
+		entries, err := s.Entries(ctx)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (s *MockStore) GetLeafID() string        { return "" }
