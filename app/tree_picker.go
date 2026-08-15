@@ -12,6 +12,28 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+type treeFilterMode int
+
+const (
+	treeFilterAll treeFilterMode = iota
+	treeFilterNoTools
+	treeFilterUserOnly
+	treeFilterLabeledOnly
+)
+
+func (f treeFilterMode) String() string {
+	switch f {
+	case treeFilterNoTools:
+		return "no-tools"
+	case treeFilterUserOnly:
+		return "user-only"
+	case treeFilterLabeledOnly:
+		return "labeled-only"
+	default:
+		return "all"
+	}
+}
+
 // treePickerState holds the interactive session tree navigator state.
 type treePickerState struct {
 	tree    *SessionTree
@@ -19,6 +41,7 @@ type treePickerState struct {
 	entries []treePickerEntry
 	loading bool
 	err     string
+	filter  treeFilterMode
 }
 
 type treePickerEntry struct {
@@ -185,7 +208,7 @@ func (t *treePickerState) buildEntries() {
 			isLeaf: true,
 			kind:   "root",
 		})
-	} else {
+	} else if entryMatchesFilter(t.tree.Current, t.filter) || t.filter == treeFilterAll {
 		t.entries = append(t.entries, treePickerEntry{
 			indent:  0,
 			id:      t.tree.Current.ID(),
@@ -198,26 +221,56 @@ func (t *treePickerState) buildEntries() {
 
 	// Add lineage (root → parent).
 	for _, e := range t.tree.Lineage {
-		t.entries = append(t.entries, treePickerEntry{
-			indent:  1,
-			id:      e.ID(),
-			title:   entryDisplayTitle(e),
-			isLeaf:  false,
-			kind:    classifyEntry(e),
-			summary: entrySummary(e),
-		})
+		if entryMatchesFilter(e, t.filter) {
+			t.entries = append(t.entries, treePickerEntry{
+				indent:  1,
+				id:      e.ID(),
+				title:   entryDisplayTitle(e),
+				isLeaf:  false,
+				kind:    classifyEntry(e),
+				summary: entrySummary(e),
+			})
+		}
 	}
 
 	// Add children.
 	for _, e := range t.tree.Children {
-		t.entries = append(t.entries, treePickerEntry{
-			indent:  1,
-			id:      e.ID(),
-			title:   entryDisplayTitle(e),
-			isLeaf:  false,
-			kind:    classifyEntry(e),
-			summary: entrySummary(e),
-		})
+		if entryMatchesFilter(e, t.filter) {
+			t.entries = append(t.entries, treePickerEntry{
+				indent:  1,
+				id:      e.ID(),
+				title:   entryDisplayTitle(e),
+				isLeaf:  false,
+				kind:    classifyEntry(e),
+				summary: entrySummary(e),
+			})
+		}
+	}
+}
+
+func entryMatchesFilter(e session.Entry, filter treeFilterMode) bool {
+	if e == nil {
+		return false
+	}
+	switch filter {
+	case treeFilterUserOnly:
+		return session.EntryRole(e) == session.RoleUser
+	case treeFilterNoTools:
+		role := session.EntryRole(e)
+		return role != session.RoleTool && role != "tool"
+	case treeFilterLabeledOnly:
+		if _, ok := e.(*session.BranchSummaryEntry); ok {
+			return true
+		}
+		if _, ok := e.(*session.SessionInfoEntry); ok {
+			return true
+		}
+		if _, ok := e.(*session.LabelEntry); ok {
+			return true
+		}
+		return false
+	default:
+		return true
 	}
 }
 
@@ -287,12 +340,20 @@ func (m Model) handleTreePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc", "ctrl+c", "ctrl+d":
 		return m.closeTreePicker(), nil
 
-	case "up":
+	case "tab", "f":
+		t.filter = (t.filter + 1) % 4
+		t.buildEntries()
+		if t.cursor >= len(t.entries) {
+			t.cursor = max(0, len(t.entries)-1)
+		}
+		return m, nil
+
+	case "up", "k":
 		if t.cursor > 0 {
 			t.cursor--
 		}
 
-	case "down":
+	case "down", "j":
 		if t.cursor < len(t.entries)-1 {
 			t.cursor++
 		}
@@ -478,7 +539,11 @@ func (m Model) renderTreePicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.cardTopBorder("Session Tree"))
+	title := "Session Tree"
+	if t.filter != treeFilterAll {
+		title = fmt.Sprintf("Session Tree [%s (Tab/f)]", t.filter.String())
+	}
+	b.WriteString(m.cardTopBorder(title))
 	b.WriteString("\n")
 
 	if t.err != "" {

@@ -52,23 +52,33 @@ func (m Model) handleLogoutProviderSaved(msg logoutProviderSavedMsg) (Model, tea
 	return m, m.terminalCommit().Entries(systemEntry("Logged out from " + msg.provider))
 }
 
+type externalEditorFinishedMsg struct {
+	content string
+	err     error
+}
+
+var (
+	writeExternalEditorBufferFile = writeExternalEditorBuffer
+	externalEditorName            = externalEditor
+)
+
 func (m Model) openExternalEditor() (Model, tea.Cmd) {
 	if m.localCommandBusy() {
 		return m, m.terminalCommit().Entries(
 			systemEntry(m.localCommandBusyMessage("opening the external editor")),
 		)
 	}
-	return m, openExternalEditorCmd(m.expandMarkers(m.Input.Composer.Value()))
+	editor := m.externalEditorName()
+	return m, openExternalEditorCmd(m.expandMarkers(m.Input.Composer.Value()), editor)
 }
 
-func openExternalEditorCmd(content string) tea.Cmd {
+func openExternalEditorCmd(content, editor string) tea.Cmd {
 	return func() tea.Msg {
 		path, err := writeExternalEditorBufferFile(content)
 		if err != nil {
 			return externalEditorFinishedMsg{err: err}
 		}
 
-		editor := externalEditorName()
 		cmd := externalEditorCommand(editor, path)
 		return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
 			defer os.Remove(path)
@@ -96,6 +106,13 @@ func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Mode
 	m.resetHistoryCursor()
 	m.clearPasteMarkers()
 	return m, cmd
+}
+
+func (m Model) externalEditorName() string {
+	if m.Model.Config != nil && strings.TrimSpace(m.Model.Config.ExternalEditor) != "" {
+		return strings.TrimSpace(m.Model.Config.ExternalEditor)
+	}
+	return externalEditorName()
 }
 
 func externalEditor() string {

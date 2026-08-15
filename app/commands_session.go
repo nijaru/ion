@@ -100,6 +100,73 @@ func (m Model) handleSessionExported(msg sessionExportedMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(systemEntry("Exported session to " + msg.filename))
 }
 
+func (m Model) handleShareCommand() (Model, tea.Cmd) {
+	exporter, ok := m.Model.Runner.(sessionBundleExporter)
+	if !ok {
+		return m, cmdError("active runtime does not support export")
+	}
+	sessionID := m.currentResumeLeafID()
+	if sessionID == "" {
+		return m, cmdError("no active session")
+	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
+	return m, func() tea.Msg {
+		bundle, err := exporter.ExportSessionBundle(ctx, sessionID)
+		if err != nil {
+			return sessionSharedMsg{generation: generation, err: err}
+		}
+		htmlContent, err := ionexport.BundleToHTML(bundle)
+		if err != nil {
+			return sessionSharedMsg{generation: generation, err: err}
+		}
+
+		tmpFile, err := os.CreateTemp("", "ion-share-*.html")
+		if err != nil {
+			return sessionSharedMsg{generation: generation, err: fmt.Errorf("create temp share file: %w", err)}
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		if _, err := tmpFile.WriteString(htmlContent); err != nil {
+			_ = tmpFile.Close()
+			return sessionSharedMsg{generation: generation, err: fmt.Errorf("write temp share file: %w", err)}
+		}
+		_ = tmpFile.Close()
+
+		cmd := exec.Command("gh", "gist", "create", "--public=false", tmpPath)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return sessionSharedMsg{
+				generation: generation,
+				err:        fmt.Errorf("gh gist create: %w (%s)", err, strings.TrimSpace(string(out))),
+			}
+		}
+		gistURL := strings.TrimSpace(string(out))
+		if gistURL != "" {
+			_ = ionclipboard.WriteClipboardText(gistURL)
+		}
+		return sessionSharedMsg{generation: generation, gistURL: gistURL}
+	}
+}
+
+type sessionSharedMsg struct {
+	generation uint64
+	gistURL    string
+	err        error
+}
+
+func (m Model) handleSessionShared(msg sessionSharedMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.handleLocalError(msg.err)
+	}
+	return m, m.terminalCommit().
+		Entries(systemEntry("Session shared as secret gist (copied to clipboard):\n" + msg.gistURL))
+}
+
 func (m Model) importSession(filename string) (Model, tea.Cmd) {
 	if m.Model.Runner == nil {
 		return m, cmdError("active runtime does not support import")
@@ -604,16 +671,6 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	}
 	return counts
 }
-
-type externalEditorFinishedMsg struct {
-	content string
-	err     error
-}
-
-var (
-	externalEditorName            = externalEditor
-	writeExternalEditorBufferFile = writeExternalEditorBuffer
-)
 
 func (m Model) handleNewSessionCommand(fields []string, command string) (Model, tea.Cmd) {
 	cfg, err := m.commandConfig()

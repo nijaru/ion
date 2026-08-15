@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/session"
 )
@@ -286,4 +287,78 @@ func TestTreeNavigationFailuresReturnTerminalCommands(t *testing.T) {
 		err:        errors.New("navigation failed"),
 	})
 	requireTerminalCommitContains(t, cmd, "tree navigation failed: navigation failed")
+}
+
+func TestTreePickerFilterCycling(t *testing.T) {
+	now := time.Now()
+	userMsg := session.NewUserText("hello agent", now)
+	e1 := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "msg-1", ParentID: "root", Timestamp: now},
+		Message:   userMsg,
+	}
+	toolResultMsg := &session.ToolResultMessage{
+		ToolCallID: "t-1",
+		ToolName:   "tool_read",
+		Content:    []session.Content{session.TextContent{Text: "file contents"}},
+		Timestamp:  now.Add(time.Second),
+	}
+	e2 := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "tool-1", ParentID: "msg-1", Timestamp: now.Add(time.Second)},
+		Message:   toolResultMsg,
+	}
+	summaryEntry := &session.BranchSummaryEntry{
+		EntryBase: session.EntryBase{ID: "sum-1", ParentID: "tool-1", Timestamp: now.Add(2 * time.Second)},
+		Summary:   "Fixed critical bug",
+	}
+
+	model := readyModel(t)
+	model.Picker.Tree = &treePickerState{
+		tree: &SessionTree{
+			Current: summaryEntry,
+			Lineage: []session.Entry{e1, e2},
+		},
+		filter: treeFilterAll,
+	}
+	model.Picker.Tree.buildEntries()
+
+	// Initial: All entries (current summary + e1 + e2 = 3)
+	if len(model.Picker.Tree.entries) != 3 {
+		t.Fatalf("filter all len = %d, want 3", len(model.Picker.Tree.entries))
+	}
+
+	// Press Tab -> cycles to no-tools (e2 omitted -> 2 entries)
+	model, _ = model.handleTreePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if model.Picker.Tree.filter != treeFilterNoTools {
+		t.Fatalf("filter = %v, want treeFilterNoTools", model.Picker.Tree.filter)
+	}
+	if len(model.Picker.Tree.entries) != 2 {
+		t.Fatalf("filter no-tools len = %d, want 2", len(model.Picker.Tree.entries))
+	}
+
+	// Press Tab -> cycles to user-only (only e1 -> 1 entry)
+	model, _ = model.handleTreePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if model.Picker.Tree.filter != treeFilterUserOnly {
+		t.Fatalf("filter = %v, want treeFilterUserOnly", model.Picker.Tree.filter)
+	}
+	if len(model.Picker.Tree.entries) != 1 {
+		t.Fatalf("filter user-only len = %d, want 1", len(model.Picker.Tree.entries))
+	}
+
+	// Press Tab -> cycles to labeled-only (only summaryEntry -> 1 entry)
+	model, _ = model.handleTreePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if model.Picker.Tree.filter != treeFilterLabeledOnly {
+		t.Fatalf("filter = %v, want treeFilterLabeledOnly", model.Picker.Tree.filter)
+	}
+	if len(model.Picker.Tree.entries) != 1 {
+		t.Fatalf("filter labeled-only len = %d, want 1", len(model.Picker.Tree.entries))
+	}
+
+	// Press Tab -> cycles back to all (3 entries)
+	model, _ = model.handleTreePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if model.Picker.Tree.filter != treeFilterAll {
+		t.Fatalf("filter = %v, want treeFilterAll", model.Picker.Tree.filter)
+	}
+	if len(model.Picker.Tree.entries) != 3 {
+		t.Fatalf("filter all len = %d, want 3", len(model.Picker.Tree.entries))
+	}
 }

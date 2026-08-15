@@ -79,6 +79,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 	{Name: "/diff", Description: "Show uncommitted git diff in workspace", Args: "[args...]", Idle: -1},
 	{Name: "/export", Description: "Export session as JSON", Idle: -1},
 	{Name: "/export-html", Description: "Export session as HTML", Idle: -1},
+	{Name: "/share", Description: "Share session as a secret GitHub gist", Idle: -1},
 	{Name: "/import", Description: "Import session from JSON"},
 	{
 		Name:        "/search",

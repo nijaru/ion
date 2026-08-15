@@ -264,13 +264,20 @@ func anthropicImageParam(part llm.ContentPart) (sdk.ImageBlockParam, bool) {
 
 func (p *Provider) convertTools(tools []*llm.Spec) []sdk.ToolUnionParam {
 	var converted []sdk.ToolUnionParam
+	hasExplicitCache := false
 	for _, t := range tools {
+		if t.CacheControl != nil {
+			hasExplicitCache = true
+			break
+		}
+	}
+	for i, t := range tools {
 		schema := p.convertSchema(t.Parameters)
 		tool := sdk.ToolUnionParamOfTool(schema, t.Name)
 		if t.Description != "" {
 			tool.OfTool.Description = sdk.String(t.Description)
 		}
-		if t.CacheControl != nil {
+		if t.CacheControl != nil || (!hasExplicitCache && i == len(tools)-1) {
 			tool.OfTool.CacheControl = sdk.NewCacheControlEphemeralParam()
 		}
 		converted = append(converted, tool)

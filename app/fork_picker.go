@@ -175,7 +175,9 @@ func (m Model) renderUserMessageForkPicker() string {
 	boldStyle := lipgloss.NewStyle().Bold(true)
 
 	b.WriteString(boldStyle.Render("Fork from Message") + "\n")
-	b.WriteString(mutedStyle.Render("Select a user message to go back in conversation and fork into a new branch") + "\n")
+	b.WriteString(
+		mutedStyle.Render("Select a user message to go back in conversation and fork into a new branch") + "\n",
+	)
 	b.WriteString(borderStyle.Render(strings.Repeat("─", min(width, 78))) + "\n")
 
 	if p.loading {

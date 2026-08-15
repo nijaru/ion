@@ -505,3 +505,31 @@ func TestDiffCommand(t *testing.T) {
 	}
 	_ = next
 }
+
+func TestShareCommand(t *testing.T) {
+	model := readyModel(t)
+	model.Model.EventGeneration = 1
+	model.Model.LeafID = "leaf-1"
+
+	runner := &sessionNamingTestRunner{}
+	model.Model.Runner = runner
+
+	updated, cmd := model.handleShareCommand()
+	if cmd == nil {
+		t.Fatal("share command returned nil cmd")
+	}
+
+	// Dispatch shared msg
+	sharedMsg := sessionSharedMsg{
+		generation: 1,
+		gistURL:    "https://gist.github.com/secret123",
+	}
+	next, followUp, handled := updated.dispatchPickerControllerMessage(sharedMsg)
+	if !handled {
+		t.Fatal("sessionSharedMsg not handled")
+	}
+	if followUp == nil {
+		t.Fatal("handleSessionShared returned nil followUp cmd")
+	}
+	_ = next
+}

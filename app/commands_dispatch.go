@@ -101,6 +101,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.exportSession()
 	case "/export-html":
 		return m.exportSessionHTML()
+	case "/share":
+		return m.handleShareCommand()
 	case "/import":
 		return m.handleImportCommand(fields)
 	case "/search":
