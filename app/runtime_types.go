@@ -747,7 +747,8 @@ func (t TurnReducer) FinishPendingAssistant() (session.Entry, bool, bool) {
 			}
 		}
 	}
-	print := !t.inFlight.SuppressAssistantPrint
+	print := !t.inFlight.SuppressAssistantPrint &&
+		(strings.TrimSpace(session.EntryContent(entry)) != "" || strings.TrimSpace(session.EntryReasoning(entry)) != "")
 	t.inFlight.Pending = nil
 	t.inFlight.CommittedAssistant = nil
 	t.inFlight.SuppressAssistantPrint = false

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
+	"github.com/nijaru/ion/tool"
 )
 
 // --- helpers ---
@@ -498,6 +499,57 @@ func TestRunLoopToolIterationLimitIsTerminalFailure(t *testing.T) {
 	}
 	if len(agentEnd.Messages) == 0 || agentEnd.Messages[len(agentEnd.Messages)-1] != failure {
 		t.Fatalf("AgentEnd messages = %#v, want terminal failure included", agentEnd.Messages)
+	}
+}
+
+func TestRunLoopStopsRepeatedToolFailures(t *testing.T) {
+	calls := 0
+	toolStarts := 0
+	msgs := RunLoop(
+		context.Background(),
+		[]session.Message{session.NewUserText("run the command", time.Now())},
+		TurnContext{},
+		LoopConfig{
+			Model: llm.Model{ID: "test"},
+			StreamFn: func(context.Context, *llm.Request) (llm.Stream, error) {
+				calls++
+				call := llm.Call{ID: fmt.Sprintf("call-%d", calls), Type: "function"}
+				call.Function.Name = "bash"
+				call.Function.Arguments = `{"job_id":"job-1","tail_lines":50}`
+				return &mockStream{
+					chunks: []*llm.Chunk{{Calls: []llm.Call{call}, StopReason: llm.StopReasonToolUse}},
+				}, nil
+			},
+			Tools: []Tool{
+				{
+					Name:       "bash",
+					Parameters: tool.NewBash(".").Spec().Parameters,
+					Execute: func(context.Context, string, json.RawMessage, <-chan struct{}, func(session.ToolPartial)) (session.ToolResultMessage, error) {
+						t.Fatalf("invalid Bash arguments reached execution")
+						return session.ToolResultMessage{}, nil
+					},
+				},
+			},
+		},
+		func(event session.Event) {
+			if _, ok := event.(session.ToolExecStart); ok {
+				toolStarts++
+			}
+		},
+		nil,
+	)
+	if calls != repeatedToolFailureLimit {
+		t.Fatalf("provider calls = %d, want %d", calls, repeatedToolFailureLimit)
+	}
+	if toolStarts != repeatedToolFailureLimit {
+		t.Fatalf("tool starts = %d, want %d", toolStarts, repeatedToolFailureLimit)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("RunLoop returned no messages")
+	}
+	last, ok := msgs[len(msgs)-1].(*session.ToolResultMessage)
+	if !ok || !last.Terminate || !last.IsError {
+		t.Fatalf("last message = %#v, want terminal tool error", msgs[len(msgs)-1])
 	}
 }
 

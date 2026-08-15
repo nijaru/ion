@@ -13,6 +13,24 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestToolOnlyAssistantDoesNotRenderDuplicateOrBareBlock(t *testing.T) {
+	model := readyModel(t)
+	entry := &session.MessageEntry{
+		Message: &session.AssistantMessage{Content: []session.Content{
+			&session.ToolCall{ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "go test ./..."}},
+		}},
+	}
+	if got := ansi.Strip(model.renderPendingEntry(entry)); got != "" {
+		t.Fatalf("pending tool-only assistant = %q, want empty", got)
+	}
+	if got := ansi.Strip(model.renderEntry(entry)); got != "" {
+		t.Fatalf("committed tool-only assistant = %q, want empty", got)
+	}
+	if got := model.RenderEntries(entry); len(got) != 0 {
+		t.Fatalf("tool-only assistant RenderEntries = %#v, want no lines", got)
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := testToolEntry("custom_tool", "line 1\nline 2\n", false)
@@ -632,6 +650,3 @@ func TestRenderEntriesConsecutiveToolsStayAdjacent(t *testing.T) {
 		t.Fatalf("consecutive tools render:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
-
-
-

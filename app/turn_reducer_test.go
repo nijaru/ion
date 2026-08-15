@@ -102,6 +102,23 @@ func TestTurnReducerFinishesPendingAssistantFromStream(t *testing.T) {
 	}
 }
 
+func TestTurnReducerSuppressesToolOnlyAssistantPrint(t *testing.T) {
+	model := readyModel(t)
+	pending := &session.MessageEntry{
+		Message: &session.AssistantMessage{Content: []session.Content{
+			&session.ToolCall{ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "pwd"}},
+		}},
+	}
+	var entry session.Entry = pending
+	model.InFlight.Pending = &entry
+	model.InFlight.AgentCommitted = true
+
+	_, completed, print := model.turnReducer().FinishPendingAssistant()
+	if !completed || print {
+		t.Fatalf("tool-only assistant finish = completed=%t print=%t, want completed and suppressed", completed, print)
+	}
+}
+
 func TestTurnReducerFinishModeClearsStaleStateOnEmptyAssistant(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = StateWorking

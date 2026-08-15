@@ -43,6 +43,20 @@ func TestBashSpecIncludesManagedJobOperations(t *testing.T) {
 	}
 }
 
+func TestBashSpecUsesClosedActionBranches(t *testing.T) {
+	params := bashSpecParameters(t, tool.NewBash("."))
+	branches, ok := params["oneOf"].([]any)
+	if !ok || len(branches) != 4 {
+		t.Fatalf("bash oneOf branches = %#v, want four action branches", params["oneOf"])
+	}
+	for i, branch := range branches {
+		object, ok := branch.(map[string]any)
+		if !ok || object["additionalProperties"] != false {
+			t.Fatalf("branch %d = %#v, want closed object", i, branch)
+		}
+	}
+}
+
 func TestBashRejectsBackgroundWithoutRuntimeManager(t *testing.T) {
 	b := tool.NewBash(t.TempDir())
 	_, err := b.Execute(t.Context(), `{"command":"sleep 10","background":true}`)

@@ -67,10 +67,6 @@ func (b *Bash) Spec() llm.Spec {
 			"enum":        []string{"run", "list", "output", "stop"},
 			"description": "Job operation. Omit or use run for a command; use list, output, or stop for managed background jobs.",
 		},
-		"background": map[string]any{
-			"type":        "boolean",
-			"description": "For action=run, start the command as a managed background job and return its job_id.",
-		},
 		"job_id": map[string]any{
 			"type":        "string",
 			"description": "Managed job ID for action=output or action=stop.",
@@ -80,14 +76,73 @@ func (b *Bash) Spec() llm.Spec {
 			"minimum":     1,
 			"description": "Maximum output lines to return for action=output; defaults to 50.",
 		},
+		"background": map[string]any{
+			"type":        "boolean",
+			"description": "For action=run, start the command as a managed background job and return its job_id.",
+		},
 	}
 
 	return llm.Spec{
 		Name:        "bash",
 		Description: "Run a shell command in the current working directory, or manage an explicitly requested background job. Always prefer non-interactive commands (e.g. use --yes flags) to prevent hanging the TUI.",
 		Parameters: map[string]any{
-			"type":       "object",
-			"properties": properties,
+			"type":                 "object",
+			"properties":           properties,
+			"additionalProperties": false,
+			// Keep each action as a closed branch. A flat optional schema lets
+			// providers emit job_id/tail_lines with the default run action; the
+			// parser then rejects the call after it has already reached the loop.
+			"oneOf": []any{
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"command": map[string]any{
+							"type":        "string",
+							"description": "The command to execute for action=run (e.g. 'ls -la', 'go test ./...', 'git status').",
+						},
+						"timeout": map[string]any{
+							"type":        "number",
+							"description": "Timeout in seconds (optional, no default timeout).",
+						},
+						"action": map[string]any{
+							"type":        "string",
+							"enum":        []string{"run"},
+							"description": "Use run for a command; it may be omitted.",
+						},
+						"background": map[string]any{
+							"type":        "boolean",
+							"description": "For action=run, start the command as a managed background job and return its job_id.",
+						},
+					},
+					"required":             []string{"command"},
+					"additionalProperties": false,
+				},
+				map[string]any{
+					"type":                 "object",
+					"properties":           map[string]any{"action": map[string]any{"type": "string", "const": "list"}},
+					"required":             []string{"action"},
+					"additionalProperties": false,
+				},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action":     map[string]any{"type": "string", "const": "output"},
+						"job_id":     properties["job_id"],
+						"tail_lines": properties["tail_lines"],
+					},
+					"required":             []string{"action", "job_id"},
+					"additionalProperties": false,
+				},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{"type": "string", "const": "stop"},
+						"job_id": properties["job_id"],
+					},
+					"required":             []string{"action", "job_id"},
+					"additionalProperties": false,
+				},
+			},
 		},
 	}
 }

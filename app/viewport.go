@@ -38,11 +38,13 @@ func (m Model) renderPlaneB() string {
 
 	if hasPendingAgent {
 		entry := *m.InFlight.Pending
-		if content := m.agentStreamContent(); content != "" {
-			// content already set on entry
+		// Tool-call-only assistant messages are represented by the active tool
+		// entries below. Rendering the assistant shell as well duplicates labels
+		// and leaves a bare bullet when the tool loop finishes.
+		if rendered := m.renderPendingEntry(entry); rendered != "" {
+			b.WriteString(rendered)
+			b.WriteString("\n")
 		}
-		b.WriteString(m.renderPendingEntry(entry))
-		b.WriteString("\n")
 	}
 
 	// Active in-flight tools. Sort by ID for deterministic rendering.
@@ -87,17 +89,8 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	switch session.EntryRole(e) {
 	case session.RoleAgent:
 		if session.EntryContent(e) == "" {
-			if calls := pendingToolCalls(e); len(calls) > 0 {
-				var b strings.Builder
-				for _, call := range calls {
-					label := m.normalizeToolTitle(call.Name)
-					if label == "" {
-						label = "tool"
-					}
-					b.WriteString(m.renderToolLabel(label, false))
-					b.WriteString("\n")
-				}
-				return strings.TrimSuffix(b.String(), "\n")
+			if len(pendingToolCalls(e)) > 0 {
+				return ""
 			}
 			return m.planeBLine(m.st.dim, 2, "• ...")
 		}
@@ -322,6 +315,9 @@ func (m Model) renderEntry(e session.Entry) string {
 		return text
 
 	case session.RoleAgent:
+		if strings.TrimSpace(session.EntryContent(e)) == "" && strings.TrimSpace(session.EntryReasoning(e)) == "" {
+			return ""
+		}
 		var b strings.Builder
 		if session.EntryReasoning(e) != "" {
 			b.WriteString(m.st.system.Render("• Thinking..."))

@@ -97,6 +97,8 @@ func runLoop(
 
 	maxIter := cfg.MaxToolIterations
 	innerIter := 0
+	lastToolFailureFingerprint := ""
+	repeatedToolFailureCount := 0
 
 	// Outer loop: continues when follow-up messages arrive after agent would stop.
 	for {
@@ -217,6 +219,23 @@ func runLoop(
 					)
 					toolResults = results
 					hasMoreToolCalls = !terminate
+					if fingerprint := repeatedToolFailureFingerprint(toolCalls, toolResults); fingerprint != "" {
+						if fingerprint == lastToolFailureFingerprint {
+							repeatedToolFailureCount++
+						} else {
+							lastToolFailureFingerprint = fingerprint
+							repeatedToolFailureCount = 1
+						}
+						if repeatedToolFailureCount >= repeatedToolFailureLimit {
+							for i := range toolResults {
+								toolResults[i].Terminate = true
+							}
+							hasMoreToolCalls = false
+						}
+					} else {
+						lastToolFailureFingerprint = ""
+						repeatedToolFailureCount = 0
+					}
 
 					// Pi: emit message_start + message_end for each tool result message.
 					// Reference: Pi agent-loop.js emitToolResultMessage (line 514).
@@ -1173,6 +1192,46 @@ func executePreparedToolCall(
 	}
 	emit(session.ToolExecEnd{ToolCallID: tc.ID, Result: result})
 	return result
+}
+
+const repeatedToolFailureLimit = 3
+
+func repeatedToolFailureFingerprint(
+	calls []*session.ToolCall,
+	results []session.ToolResultMessage,
+) string {
+	if len(calls) == 0 || len(calls) != len(results) {
+		return ""
+	}
+	byID := make(map[string]*session.ToolCall, len(calls))
+	for _, call := range calls {
+		if call == nil {
+			return ""
+		}
+		byID[call.ID] = call
+	}
+	var payload strings.Builder
+	for _, result := range results {
+		if !result.IsError {
+			return ""
+		}
+		call := byID[result.ToolCallID]
+		if call == nil {
+			return ""
+		}
+		args, err := json.Marshal(call.Arguments)
+		if err != nil {
+			return ""
+		}
+		payload.WriteString(call.Name)
+		payload.WriteByte(0)
+		payload.Write(args)
+		payload.WriteByte(0)
+		payload.WriteString(session.MessageText(&result))
+		payload.WriteByte(0)
+	}
+	digest := sha256.Sum256([]byte(payload.String()))
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func toolResultIdentity(result session.ToolResultMessage) string {
