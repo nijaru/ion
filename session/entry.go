@@ -222,3 +222,28 @@ func EntryReasoning(e Entry) string {
 	}
 	return ""
 }
+
+// EntryImages returns any image blocks attached to the entry.
+func EntryImages(e Entry) []ImageContent {
+	if me, ok := e.(*MessageEntry); ok && me.Message != nil {
+		switch m := me.Message.(type) {
+		case *UserMessage:
+			var images []ImageContent
+			for _, c := range m.Content {
+				if ic, ok := c.(ImageContent); ok {
+					images = append(images, ic)
+				}
+			}
+			return images
+		case *ToolResultMessage:
+			var images []ImageContent
+			for _, c := range m.Content {
+				if ic, ok := c.(ImageContent); ok {
+					images = append(images, ic)
+				}
+			}
+			return images
+		}
+	}
+	return nil
+}

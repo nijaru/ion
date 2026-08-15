@@ -288,7 +288,18 @@ func (m Model) renderEntry(e session.Entry) string {
 
 	switch session.EntryRole(e) {
 	case session.RoleUser:
-		return m.renderUserEntry(session.EntryContent(e))
+		text := m.renderUserEntry(session.EntryContent(e))
+		if images := session.EntryImages(e); len(images) > 0 {
+			var b strings.Builder
+			b.WriteString(text)
+			for _, img := range images {
+				b.WriteString("\n")
+				inlineImg := terminal.RenderInlineImage(img.MimeType, img.Data, max(20, min(80, m.shellWidth()-4)))
+				b.WriteString(m.st.dim.PaddingLeft(2).Render(inlineImg))
+			}
+			return b.String()
+		}
+		return text
 
 	case session.RoleAgent:
 		var b strings.Builder
@@ -328,14 +339,28 @@ func (m Model) renderEntry(e session.Entry) string {
 			return labelStr
 		}
 		// When expanded (Ctrl+O), show full output regardless of verbosity
+		images := session.EntryImages(e)
 		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
-			if isWriteTool(session.EntryTitle(e)) {
+			if len(images) == 0 {
+				if isWriteTool(session.EntryTitle(e)) {
+					return labelStr
+				}
+				if summary := toolOutputSummary(e); summary != "" {
+					return labelStr + m.st.dim.Render(" · "+summary)
+				}
 				return labelStr
 			}
+			var b strings.Builder
+			b.WriteString(labelStr)
 			if summary := toolOutputSummary(e); summary != "" {
-				return labelStr + m.st.dim.Render(" · "+summary)
+				b.WriteString(m.st.dim.Render(" · " + summary))
 			}
-			return labelStr
+			for _, img := range images {
+				b.WriteString("\n")
+				inlineImg := terminal.RenderInlineImage(img.MimeType, img.Data, max(20, min(80, m.shellWidth()-4)))
+				b.WriteString(m.st.dim.PaddingLeft(2).Render(inlineImg))
+			}
+			return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 		}
 		content := session.EntryContent(e)
 		if m.shouldRenderWriteDiff(e) {
@@ -361,6 +386,16 @@ func (m Model) renderEntry(e session.Entry) string {
 				b.WriteString(m.st.dim.Render(
 					fmt.Sprintf("  ... (%d more lines)", len(lines)-10),
 				))
+				b.WriteString("\n")
+			}
+		}
+		if images := session.EntryImages(e); len(images) > 0 {
+			for _, img := range images {
+				inlineImg := terminal.RenderInlineImage(img.MimeType, img.Data, max(20, min(80, m.shellWidth()-4)))
+				if inlineImg != "" {
+					b.WriteString(m.st.dim.PaddingLeft(2).Render(inlineImg))
+					b.WriteString("\n")
+				}
 			}
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
