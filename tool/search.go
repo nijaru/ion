@@ -92,19 +92,25 @@ func (s *SearchTool) Execute(ctx context.Context, args string) (string, error) {
 }
 
 func searchMatches(entry ToolEntry, query string) bool {
-	if strings.Contains(strings.ToLower(entry.Name), query) {
-		return true
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return false
 	}
-	if strings.Contains(strings.ToLower(entry.Spec.Description), query) {
-		return true
-	}
-	if strings.Contains(strings.ToLower(entry.Metadata.Category), query) {
-		return true
-	}
+	target := strings.ToLower(entry.Name + " " + entry.Spec.Description + " " + entry.Metadata.Category)
 	for _, example := range entry.Metadata.Examples {
-		if strings.Contains(strings.ToLower(example.Description), query) {
-			return true
+		target += " " + strings.ToLower(example.Description)
+	}
+	if strings.Contains(target, q) {
+		return true
+	}
+	tokens := strings.Fields(q)
+	if len(tokens) <= 1 {
+		return false
+	}
+	for _, tok := range tokens {
+		if !strings.Contains(target, tok) {
+			return false
 		}
 	}
-	return false
+	return true
 }

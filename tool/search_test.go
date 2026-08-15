@@ -53,3 +53,25 @@ func TestSearchTool_UsesMetadataInMatching(t *testing.T) {
 		t.Fatalf("expected workspace category match, got %s", got)
 	}
 }
+
+func TestSearchTool_MultiTokenMatching(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(FuncWithMetadata(
+		"sqlite_query",
+		"Execute read-only SQL queries against SQLite database files",
+		map[string]any{"type": "object"},
+		Metadata{
+			Category: "database",
+		},
+		func(context.Context, string) (string, error) { return "", nil },
+	))
+
+	// Search with non-adjacent multi-token query
+	got, err := NewSearchTool(reg).Execute(t.Context(), `{"query":"sqlite read-only database"}`)
+	if err != nil {
+		t.Fatalf("execute search tool: %v", err)
+	}
+	if got == "[]" {
+		t.Fatal("expected multi-token match for sqlite_query, got empty")
+	}
+}
