@@ -1000,3 +1000,58 @@ func TestContextUsageTrackerPolicy(t *testing.T) {
 		t.Fatalf("Reset did not zero tracker state: %+v", tracker)
 	}
 }
+
+type mockServerCompactor struct {
+	called bool
+	req    *llm.ServerCompactRequest
+}
+
+func (m *mockServerCompactor) ServerCompact(
+	_ context.Context,
+	req *llm.ServerCompactRequest,
+) (*llm.ServerCompactResult, error) {
+	m.called = true
+	m.req = req
+	return &llm.ServerCompactResult{
+		Summary: "Server-delegated summary of session context",
+		Usage: llm.Usage{
+			InputTokens:  100,
+			OutputTokens: 20,
+			Cost:         0.005,
+		},
+	}, nil
+}
+
+func TestCompactServerCompactor(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("msg1", mustTime())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), &session.AssistantMessage{
+		Content: []session.Content{session.TextContent{Text: "resp1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendMessage(context.Background(), session.NewUserText("msg2", mustTime())); err != nil {
+		t.Fatal(err)
+	}
+
+	compactor := &mockServerCompactor{}
+	result, err := Compact(context.Background(), sess, CompactOptions{
+		Model:           "claude-3-7-sonnet",
+		ServerCompactor: compactor,
+	}, CompactionSettings{Enabled: true, ReserveTokens: 10, KeepRecentTokens: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if !compactor.called {
+		t.Fatal("expected ServerCompactor to be called")
+	}
+	if result == nil || !strings.Contains(result.Summary, "Server-delegated summary") {
+		t.Fatalf("unexpected summary: %v", result)
+	}
+	if result.Usage.Input != 100 || result.Usage.Output != 20 {
+		t.Fatalf("unexpected usage: %#v", result.Usage)
+	}
+}

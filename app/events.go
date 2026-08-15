@@ -114,6 +114,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "esc":
+		if m.Input.Completion != nil && len(m.Input.Completion.items) > 0 {
+			m.clearPendingAction()
+			m.inputReducer().clearCompletion()
+			return m, nil
+		}
 		if m.Progress.Compacting {
 			m.clearPendingAction()
 			if m.Model.compactionCancel != nil {
@@ -150,6 +155,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.openThinkingPicker()
 
 	case "tab":
+		if m.Input.Completion != nil && len(m.Input.Completion.items) > 0 {
+			if next, cmd, ok := m.applyActiveCompletion(); ok {
+				return next, cmd
+			}
+		}
 		if next, cmd, ok := m.completeSlashCommand(); ok {
 			return next, cmd
 		}
@@ -199,6 +209,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "up":
 		m.clearPendingAction()
+		if m.Input.Completion != nil && len(m.Input.Completion.items) > 1 {
+			m.inputReducer().moveCompletionUp()
+			return m, nil
+		}
 		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
 			if draft, ok := m.inputReducer().previousHistoryDraft(
 				m.Input.Composer.Value(),
@@ -210,6 +224,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "down":
 		m.clearPendingAction()
+		if m.Input.Completion != nil && len(m.Input.Completion.items) > 1 {
+			m.inputReducer().moveCompletionDown()
+			return m, nil
+		}
 		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 &&
 			m.inputReducer().browsingHistory() {
 			if draft, ok := m.inputReducer().nextHistoryDraft(); ok {
@@ -224,6 +242,31 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
 	return m, m.updateComposer(msg)
+}
+
+func (m Model) applyActiveCompletion() (Model, tea.Cmd, bool) {
+	item, ok := m.inputReducer().selectedCompletionItem()
+	if !ok {
+		return m, nil, false
+	}
+	text := m.Input.Composer.Value()
+	if strings.HasPrefix(text, "/") && !strings.ContainsAny(text, " \t\r\n") {
+		m.inputReducer().clearCompletion()
+		return m, m.setComposerDraft(item.Label + " "), true
+	}
+	if start, _, ok := fileReferenceCompletionToken(text); ok {
+		replacement := item.Label
+		if !strings.HasSuffix(replacement, "/") {
+			replacement += " "
+		}
+		m.inputReducer().clearCompletion()
+		return m, m.setComposerDraft(text[:start] + replacement), true
+	}
+	if strings.HasPrefix(text, "//") {
+		m.inputReducer().clearCompletion()
+		return m, m.setComposerDraft(item.Label + " "), true
+	}
+	return m, nil, false
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {

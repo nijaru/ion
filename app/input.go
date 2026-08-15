@@ -81,7 +81,40 @@ func (r inputReducer) setCompletionItems(items []completionItem) {
 		r.clearCompletion()
 		return
 	}
-	r.input.Completion = &completionState{items: items}
+	prevIndex := 0
+	if r.input.Completion != nil && r.input.Completion.index >= 0 && r.input.Completion.index < len(items) {
+		prevIndex = r.input.Completion.index
+	}
+	r.input.Completion = &completionState{items: items, index: prevIndex}
+}
+
+func (r inputReducer) moveCompletionUp() bool {
+	if r.input.Completion == nil || len(r.input.Completion.items) <= 1 {
+		return false
+	}
+	n := len(r.input.Completion.items)
+	r.input.Completion.index = (r.input.Completion.index - 1 + n) % n
+	return true
+}
+
+func (r inputReducer) moveCompletionDown() bool {
+	if r.input.Completion == nil || len(r.input.Completion.items) <= 1 {
+		return false
+	}
+	n := len(r.input.Completion.items)
+	r.input.Completion.index = (r.input.Completion.index + 1) % n
+	return true
+}
+
+func (r inputReducer) selectedCompletionItem() (completionItem, bool) {
+	if r.input.Completion == nil || len(r.input.Completion.items) == 0 {
+		return completionItem{}, false
+	}
+	idx := r.input.Completion.index
+	if idx < 0 || idx >= len(r.input.Completion.items) {
+		idx = 0
+	}
+	return r.input.Completion.items[idx], true
 }
 
 func (r inputReducer) clearCompletion() {

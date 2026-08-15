@@ -190,3 +190,55 @@ func TestCtrlROpensHistoryPickerAndSelectsItem(t *testing.T) {
 		t.Fatalf("composer value = %q, want %q", got, "add new feature")
 	}
 }
+
+func TestCompletionNavigationUpDownAndTab(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("check @")
+	model.inputReducer().setCompletionItems([]completionItem{
+		{Label: "@app/events.go", Detail: ""},
+		{Label: "@app/model.go", Detail: ""},
+		{Label: "@app/input.go", Detail: ""},
+	})
+
+	if model.Input.Completion.index != 0 {
+		t.Fatalf("initial index = %d, want 0", model.Input.Completion.index)
+	}
+
+	// Press Down Arrow
+	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = testModel(t, next)
+	if model.Input.Completion.index != 1 {
+		t.Fatalf("index after down = %d, want 1", model.Input.Completion.index)
+	}
+
+	// Press Down Arrow again
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = testModel(t, next)
+	if model.Input.Completion.index != 2 {
+		t.Fatalf("index after down = %d, want 2", model.Input.Completion.index)
+	}
+
+	// Press Down Arrow again to wrap around
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = testModel(t, next)
+	if model.Input.Completion.index != 0 {
+		t.Fatalf("index after down wrap = %d, want 0", model.Input.Completion.index)
+	}
+
+	// Press Up Arrow to wrap backward to last item
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	model = testModel(t, next)
+	if model.Input.Completion.index != 2 {
+		t.Fatalf("index after up = %d, want 2", model.Input.Completion.index)
+	}
+
+	// Press Tab to insert the selected item (@app/input.go)
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = testModel(t, next)
+	if model.Input.Completion != nil {
+		t.Fatal("expected completion to close after tab insertion")
+	}
+	if got := model.Input.Composer.Value(); got != "check @app/input.go " {
+		t.Fatalf("composer value = %q, want %q", got, "check @app/input.go ")
+	}
+}

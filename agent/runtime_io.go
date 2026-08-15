@@ -49,26 +49,27 @@ type runtimeRequest struct {
 
 	// The command loop captures these fields before starting external work. They
 	// are immutable operation inputs, not a second copy of controller state.
-	turnID         string
-	parentID       string
-	runCancel      <-chan struct{}
-	sess           session.Session
-	store          session.Store
-	durable        session.DurableStore
-	requireDurable bool
-	pending        []pendingWrite
-	staged         []pendingWrite
-	nextTurns      int
-	hadPending     bool
-	autoCompact    bool
-	compaction     CompactionSettings
-	summaryRetry   llm.StreamRetryPolicy
-	contextWindow  int
-	model          llm.Model
-	thinking       session.ThinkingLevel
-	auth           func(llm.Model) (string, map[string]string)
-	stream         func(context.Context, *llm.Request) (llm.Stream, error)
-	release        func()
+	turnID          string
+	parentID        string
+	runCancel       <-chan struct{}
+	sess            session.Session
+	store           session.Store
+	durable         session.DurableStore
+	requireDurable  bool
+	pending         []pendingWrite
+	staged          []pendingWrite
+	nextTurns       int
+	hadPending      bool
+	autoCompact     bool
+	compaction      CompactionSettings
+	summaryRetry    llm.StreamRetryPolicy
+	contextWindow   int
+	model           llm.Model
+	thinking        session.ThinkingLevel
+	auth            func(llm.Model) (string, map[string]string)
+	stream          func(context.Context, *llm.Request) (llm.Stream, error)
+	serverCompactor llm.ServerCompactor
+	release         func()
 }
 
 type runtimeResult struct {
@@ -272,6 +273,7 @@ func (c *Controller) prepareRuntimeRequestLocked(request runtimeRequest) (runtim
 		request.thinking = c.thinking
 		request.auth = c.auth
 		request.stream = c.wrapStreamFn()
+		request.serverCompactor = c.serverCompactor
 	}
 	if request.kind == runtimeAbortTurn && request.turnID == "" {
 		return runtimeRequest{}, ErrNoActiveTurn
@@ -707,15 +709,16 @@ func runCompaction(ctx context.Context, request runtimeRequest) (*CompactionResu
 		apiKey, headers = request.auth(request.model)
 	}
 	return Compact(ctx, request.sess, CompactOptions{
-		Model:          request.model.ID,
-		ModelMaxTokens: request.model.MaxTokens,
-		APIKey:         apiKey,
-		Headers:        headers,
-		ThinkingLevel:  request.thinking,
-		Convert:        DefaultConvert,
-		StreamFn:       request.stream,
-		SummaryRetry:   request.summaryRetry,
-		ContextWindow:  request.contextWindow,
+		Model:           request.model.ID,
+		ModelMaxTokens:  request.model.MaxTokens,
+		APIKey:          apiKey,
+		Headers:         headers,
+		ThinkingLevel:   request.thinking,
+		Convert:         DefaultConvert,
+		StreamFn:        request.stream,
+		SummaryRetry:    request.summaryRetry,
+		ContextWindow:   request.contextWindow,
+		ServerCompactor: request.serverCompactor,
 	}, request.compaction)
 }
 

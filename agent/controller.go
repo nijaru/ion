@@ -57,6 +57,8 @@ type ControllerConfig struct {
 	// ContextOverflow classifies provider errors that mean the model window was
 	// exceeded. The fallback matcher remains in the stateless loop.
 	ContextOverflow func(error) bool
+	// ServerCompactor is an optional provider capability for server-delegated compaction.
+	ServerCompactor llm.ServerCompactor
 
 	// Logger is used for structured logging throughout the harness lifecycle.
 	// When nil, logging is silent.
@@ -145,6 +147,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		stream:              cfg.StreamFn,
 		auth:                cfg.Auth,
 		contextOverflow:     cfg.ContextOverflow,
+		serverCompactor:     cfg.ServerCompactor,
 		transport:           cfg.Transport,
 		timeout:             cfg.Timeout,
 		phase:               PhaseReady,

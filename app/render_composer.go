@@ -47,13 +47,23 @@ func (m Model) renderComposerCompletions() string {
 	}
 
 	lines := make([]string, 0, len(m.Input.Completion.items))
-	for _, item := range m.Input.Completion.items {
-		line := item.Label
+	for i, item := range m.Input.Completion.items {
+		prefix := "  "
+		style := m.st.dim
+		if i == m.Input.Completion.index {
+			prefix = "› "
+			style = m.st.cyan.Bold(true)
+		}
+		line := prefix + item.Label
 		if item.Detail != "" {
 			line += strings.Repeat(" ", max(2, labelWidth-lipgloss.Width(item.Label)+2))
-			line += item.Detail
+			if i == m.Input.Completion.index {
+				line += m.st.dim.Render(item.Detail)
+			} else {
+				line += item.Detail
+			}
 		}
-		lines = append(lines, m.shellPaddedLine(m.st.dim, line))
+		lines = append(lines, m.shellPaddedLine(style, line))
 	}
 	return strings.Join(lines, "\n")
 }

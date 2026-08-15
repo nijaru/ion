@@ -68,6 +68,7 @@ type Controller struct {
 	stream          func(ctx context.Context, req *llm.Request) (llm.Stream, error)
 	auth            func(model llm.Model) (apiKey string, headers map[string]string)
 	contextOverflow func(error) bool
+	serverCompactor llm.ServerCompactor
 	transport       http.RoundTripper
 	timeout         time.Duration
 

@@ -1113,6 +1113,8 @@ type CompactOptions struct {
 	// output is discarded until completion, unlike visible assistant streams.
 	SummaryRetry  llm.StreamRetryPolicy
 	ContextWindow int // 0 = unknown; used to bound compaction settings
+	// ServerCompactor is an optional provider interface for server-managed compaction.
+	ServerCompactor llm.ServerCompactor
 }
 
 // Compact performs compaction on the session.
@@ -1138,57 +1140,91 @@ func Compact(
 	// leak on successful compaction or panic when cancellation races return.
 	signal := ctx.Done()
 
-	var summary string
-	var usage session.Usage
-	if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
-		// Split-turn summaries share the runtime provider-hook boundary. Keep
-		// preparation and hook execution ordered so stateful hook handlers see
-		// deterministic request order; summary retry remains explicitly
-		// discardable inside each request.
-		var historySummary SummaryResult
-		if len(prep.MessagesToSummarize) > 0 {
-			var err error
-			historySummary, err = GenerateSummary(ctx, prep.MessagesToSummarize,
+	// If the provider supports native server-side compaction and the turn is not split,
+	// attempt provider-delegated compaction first.
+	var (
+		summary                string
+		usage                  session.Usage
+		serverCompactSucceeded bool
+	)
+	if opts.ServerCompactor != nil && !prep.IsSplitTurn && len(prep.MessagesToSummarize) > 0 {
+		convert := opts.Convert
+		if convert == nil {
+			convert = DefaultConvert
+		}
+		providerMsgs := convert(prep.MessagesToSummarize)
+		serverResult, err := opts.ServerCompactor.ServerCompact(ctx, &llm.ServerCompactRequest{
+			Model:              opts.Model,
+			Messages:           providerMsgs,
+			Hint:               prep.PreviousSummary,
+			CustomInstructions: opts.CustomInstructions,
+			ReserveTokens:      settings.ReserveTokens,
+		})
+		if err == nil && serverResult != nil && serverResult.Summary != "" {
+			summary = serverResult.Summary
+			usage = session.Usage{
+				Input:     serverResult.Usage.InputTokens,
+				Output:    serverResult.Usage.OutputTokens,
+				CacheRead: serverResult.Usage.CacheReadTokens,
+				Cost: session.Cost{
+					Total: serverResult.Usage.Cost,
+				},
+			}
+			serverCompactSucceeded = true
+		}
+	}
+
+	if !serverCompactSucceeded {
+		if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
+			// Split-turn summaries share the runtime provider-hook boundary. Keep
+			// preparation and hook execution ordered so stateful hook handlers see
+			// deterministic request order; summary retry remains explicitly
+			// discardable inside each request.
+			var historySummary SummaryResult
+			if len(prep.MessagesToSummarize) > 0 {
+				var err error
+				historySummary, err = GenerateSummary(ctx, prep.MessagesToSummarize,
+					opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
+					opts.APIKey, opts.Headers, signal,
+					opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
+					opts.Convert, opts.StreamFn, opts.SummaryRetry)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				historySummary.Text = "No prior history."
+			}
+
+			prefixSummary, err := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
+				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
+				opts.APIKey, opts.Headers, signal,
+				opts.ThinkingLevel, opts.Convert, opts.StreamFn, opts.SummaryRetry)
+			if err != nil {
+				return nil, err
+			}
+
+			historyResult := historySummary
+			prefixResult := prefixSummary
+
+			summary = fmt.Sprintf(
+				"%s\n\n---\n\n**Turn Context (split turn):**\n\n%s",
+				historyResult.Text,
+				prefixResult.Text,
+			)
+			usage = session.AddUsage(historyResult.Usage, prefixResult.Usage)
+		} else {
+			// Normal compaction: summarize history messages.
+			generated, summaryErr := GenerateSummary(ctx, prep.MessagesToSummarize,
 				opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
 				opts.APIKey, opts.Headers, signal,
 				opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
 				opts.Convert, opts.StreamFn, opts.SummaryRetry)
-			if err != nil {
-				return nil, err
+			if summaryErr != nil {
+				return nil, summaryErr
 			}
-		} else {
-			historySummary.Text = "No prior history."
+			summary = generated.Text
+			usage = generated.Usage
 		}
-
-		prefixSummary, err := GenerateTurnPrefixSummary(ctx, prep.TurnPrefixMessages,
-			opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
-			opts.APIKey, opts.Headers, signal,
-			opts.ThinkingLevel, opts.Convert, opts.StreamFn, opts.SummaryRetry)
-		if err != nil {
-			return nil, err
-		}
-
-		historyResult := historySummary
-		prefixResult := prefixSummary
-
-		summary = fmt.Sprintf(
-			"%s\n\n---\n\n**Turn Context (split turn):**\n\n%s",
-			historyResult.Text,
-			prefixResult.Text,
-		)
-		usage = session.AddUsage(historyResult.Usage, prefixResult.Usage)
-	} else {
-		// Normal compaction: summarize history messages.
-		generated, summaryErr := GenerateSummary(ctx, prep.MessagesToSummarize,
-			opts.Model, settings.ReserveTokens, opts.ModelMaxTokens,
-			opts.APIKey, opts.Headers, signal,
-			opts.CustomInstructions, prep.PreviousSummary, opts.ThinkingLevel,
-			opts.Convert, opts.StreamFn, opts.SummaryRetry)
-		if summaryErr != nil {
-			return nil, summaryErr
-		}
-		summary = generated.Text
-		usage = generated.Usage
 	}
 
 	// Append stable, normalized file operations to the summary.

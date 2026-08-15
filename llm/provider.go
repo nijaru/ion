@@ -37,3 +37,26 @@ type Provider interface {
 	// overflow message).
 	IsContextOverflow(err error) bool
 }
+
+// ServerCompactor is an optional capability for providers that support native
+// server-side context pruning or compaction.
+type ServerCompactor interface {
+	// ServerCompact delegates context compaction to the provider backend.
+	ServerCompact(ctx context.Context, req *ServerCompactRequest) (*ServerCompactResult, error)
+}
+
+// ServerCompactRequest carries context and hints for provider-delegated compaction.
+type ServerCompactRequest struct {
+	Model              string
+	Messages           []Message
+	System             string
+	Hint               string
+	CustomInstructions string
+	ReserveTokens      int
+}
+
+// ServerCompactResult carries the server-compacted summary and observed usage.
+type ServerCompactResult struct {
+	Summary string
+	Usage   Usage
+}

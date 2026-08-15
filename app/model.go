@@ -411,6 +411,7 @@ type pickerOverlayState struct {
 
 type completionState struct {
 	items []completionItem
+	index int
 }
 
 type completionItem struct {
