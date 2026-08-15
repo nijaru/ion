@@ -164,6 +164,10 @@ func isBashLikeTool(title string) bool {
 	}
 }
 
+func isSubagentTool(title string) bool {
+	return toolTitleVerb(title) == "subagent"
+}
+
 func toolOutputSummary(e session.Entry) string {
 	trimmed := strings.TrimSpace(session.EntryContent(e))
 	if trimmed == "" {

@@ -600,3 +600,19 @@ func TestRenderToolLabelShortensLongWorkspacePath(t *testing.T) {
 		t.Fatalf("tool label = %q, want shortened file suffix", stripped)
 	}
 }
+
+func TestRenderSubagentToolUsesSubagentPrefix(t *testing.T) {
+	model := readyModel(t)
+	entry := testToolEntry("subagent(task: search codebase)", "found 3 matching files", false)
+
+	pending := model.renderPendingEntry(entry)
+	if !strings.Contains(ansi.Strip(pending), "↳ subagent(task: search codebase)") {
+		t.Fatalf("pending subagent tool output missing subagent prefix: %q", pending)
+	}
+
+	committed := model.renderEntry(entry)
+	if !strings.Contains(ansi.Strip(committed), "↳ subagent(task: search codebase)") {
+		t.Fatalf("committed subagent tool output missing subagent prefix: %q", committed)
+	}
+}
+

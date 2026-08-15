@@ -107,6 +107,26 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		if label == "" {
 			label = "tool"
 		}
+		if isSubagentTool(session.EntryTitle(e)) {
+			var b strings.Builder
+			b.WriteString(m.st.subagent.Render("↳ " + label))
+			if session.EntryContent(e) != "" {
+				b.WriteString("\n")
+				lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
+				const maxLines = 10
+				shown := lines
+				if !m.ToolOutputExpanded && len(lines) > maxLines {
+					shown = lines[len(lines)-maxLines:]
+					b.WriteString(m.planeBLine(m.st.dim, 4, fmt.Sprintf("... (%d lines total)", len(lines))))
+					b.WriteString("\n")
+				}
+				for _, l := range shown {
+					b.WriteString(m.planeBLine(m.st.dim, 4, l))
+					b.WriteString("\n")
+				}
+			}
+			return b.String()
+		}
 		var b strings.Builder
 		b.WriteString(m.renderToolLabel(label, session.EntryIsError(e)))
 		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
@@ -335,6 +355,9 @@ func (m Model) renderEntry(e session.Entry) string {
 			label = "tool"
 		}
 		labelStr := m.renderToolLabel(label, session.EntryIsError(e))
+		if isSubagentTool(session.EntryTitle(e)) {
+			labelStr = m.st.subagent.Render("↳ " + label)
+		}
 		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return labelStr
 		}
