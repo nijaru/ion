@@ -18,40 +18,39 @@ type SessionData struct {
 
 // EntryToHTML converts a single session entry to HTML.
 func EntryToHTML(entry session.Entry) string {
-	me, ok := entry.(*session.MessageEntry)
-	if !ok {
-		return "" // skip non-message entries
+	if entry == nil {
+		return ""
 	}
 
-	msg := me.Message
-	switch m := msg.(type) {
-	case *session.UserMessage:
-		content := extractText(m.Content)
+	role := session.EntryRole(entry)
+	content := session.EntryContent(entry)
+	title := session.EntryTitle(entry)
+	reasoning := session.EntryReasoning(entry)
+
+	switch role {
+	case session.RoleUser:
 		return fmt.Sprintf(`<div class="entry user">
   <div class="role">You</div>
   <div class="content">%s</div>
 </div>`, html.EscapeString(content))
 
-	case *session.AssistantMessage:
+	case session.RoleAgent:
 		var b strings.Builder
 		b.WriteString(`<div class="entry assistant">`)
 		b.WriteString("\n  <div class=\"role\">Assistant</div>")
-		reasoning := extractThinking(m.Content)
 		if reasoning != "" {
 			b.WriteString("\n  <details class=\"thinking\"><summary>Thinking...</summary>")
 			b.WriteString("\n  <pre>")
 			b.WriteString(html.EscapeString(reasoning))
 			b.WriteString("</pre>\n  </details>")
 		}
-		content := extractText(m.Content)
 		b.WriteString("\n  <div class=\"content\">")
 		b.WriteString(html.EscapeString(content))
 		b.WriteString("</div>\n</div>")
 		return b.String()
 
-	case *session.ToolResultMessage:
-		content := extractText(m.Content)
-		label := m.ToolName
+	case session.RoleTool:
+		label := title
 		if label == "" {
 			label = "tool"
 		}
@@ -60,7 +59,28 @@ func EntryToHTML(entry session.Entry) string {
   <div class="content"><pre>%s</pre></div>
 </div>`, html.EscapeString(label), html.EscapeString(content))
 
+	case session.RoleSubagent:
+		label := title
+		if label == "" {
+			label = "subagent"
+		}
+		return fmt.Sprintf(`<div class="entry subagent">
+  <div class="role">↳ %s</div>
+  <div class="content"><pre>%s</pre></div>
+</div>`, html.EscapeString(label), html.EscapeString(content))
+
+	case session.RoleSystem:
+		return fmt.Sprintf(`<div class="entry system">
+  <div class="role">System</div>
+  <div class="content">%s</div>
+</div>`, html.EscapeString(content))
+
 	default:
+		if content != "" {
+			return fmt.Sprintf(`<div class="entry">
+  <div class="content">%s</div>
+</div>`, html.EscapeString(content))
+		}
 		return ""
 	}
 }
@@ -200,28 +220,6 @@ func GenerateHTML(data SessionData) string {
 </html>`)
 
 	return b.String()
-}
-
-// --- helpers ---
-
-func extractText(content []session.Content) string {
-	var sb strings.Builder
-	for _, c := range content {
-		switch c := c.(type) {
-		case session.TextContent:
-			sb.WriteString(c.Text)
-		}
-	}
-	return sb.String()
-}
-
-func extractThinking(content []session.Content) string {
-	for _, c := range content {
-		if tc, ok := c.(session.ThinkingContent); ok {
-			return tc.Text
-		}
-	}
-	return ""
 }
 
 // BundleToHTML converts a SessionBundle to HTML string.
