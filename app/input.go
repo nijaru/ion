@@ -339,7 +339,11 @@ func (m Model) statusLine() string {
 		model = m.st.dim.Render(m.statusModelLabel(model))
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
-	dir := m.st.dim.Render(statusWorkdirLabel(m.App.Workdir))
+	dirLabel := statusWorkdirLabel(m.App.Workdir)
+	if m.App.SessionName != "" {
+		dirLabel += " • " + m.App.SessionName
+	}
+	dir := m.st.dim.Render(dirLabel)
 	branch := ""
 	if m.App.Branch != "" {
 		branch = m.st.dim.Render(m.App.Branch)
@@ -347,6 +351,28 @@ func (m Model) statusLine() string {
 	gitDiff := ""
 	if value := strings.TrimSpace(m.App.GitDiff); value != "" {
 		gitDiff = m.st.dim.Render(value)
+	}
+
+	var tokenStats []string
+	if m.Progress.TokensSent > 0 {
+		tokenStats = append(tokenStats, fmt.Sprintf("↑%s", compactCount(m.Progress.TokensSent)))
+	}
+	if m.Progress.TokensReceived > 0 {
+		tokenStats = append(tokenStats, fmt.Sprintf("↓%s", compactCount(m.Progress.TokensReceived)))
+	}
+	if m.Progress.CacheReadTokens > 0 {
+		tokenStats = append(tokenStats, fmt.Sprintf("R%s", compactCount(m.Progress.CacheReadTokens)))
+	}
+	if m.Progress.CacheWriteTokens > 0 {
+		tokenStats = append(tokenStats, fmt.Sprintf("W%s", compactCount(m.Progress.CacheWriteTokens)))
+	}
+	if (m.Progress.CacheReadTokens > 0 || m.Progress.CacheWriteTokens > 0) && (m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens > 0) {
+		hitRate := float64(m.Progress.CacheReadTokens) / float64(m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens) * 100.0
+		tokenStats = append(tokenStats, fmt.Sprintf("CH%.1f%%", hitRate))
+	}
+	tokens := ""
+	if len(tokenStats) > 0 {
+		tokens = m.st.dim.Render(strings.Join(tokenStats, " "))
 	}
 
 	usage := m.renderContextUsage(m.Progress.ContextTokens, limit)
@@ -361,14 +387,20 @@ func (m Model) statusLine() string {
 			provider,
 			model,
 			thinking,
+			tokens,
 			usage,
 			cost,
 			dir,
 			branch,
 			gitDiff,
 		},
+		{provider, model, thinking, tokens, usage, cost, dir, branch},
+		{provider, model, thinking, tokens, usage, cost, gitDiff},
+		{provider, model, thinking, tokens, usage, cost},
+		{provider, model, thinking, usage, cost, dir, branch},
 		{provider, model, thinking, usage, cost, gitDiff},
 		{provider, model, thinking, usage, cost},
+		{model, thinking, tokens, usage, cost},
 		{model, thinking, usage, cost},
 		{thinking, usage, cost},
 	}

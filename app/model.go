@@ -271,6 +271,8 @@ type sessionUsageLoadedMsg struct {
 	treeNavigationRequest uint64
 	input                 int
 	output                int
+	cacheRead             int
+	cacheWrite            int
 	cost                  float64
 	err                   error
 }
@@ -456,6 +458,7 @@ type AppState struct {
 	Branch            string
 	GitDiff           string
 	Version           string
+	SessionName       string
 	ActivePreset      Preset
 	PrintedTranscript bool
 }
@@ -705,7 +708,7 @@ func New(
 
 	if storage != nil {
 		if usage, err := storage.Usage(context.Background()); err == nil {
-			m.progressReducer().applySessionUsage(usage.Input, usage.Output, usage.Cost.Total)
+			m.progressReducer().applySessionUsage(usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite, usage.Cost.Total)
 		}
 	}
 	if history, ok := catalog.(agent.InputHistory); ok {

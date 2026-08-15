@@ -108,6 +108,8 @@ func slashArgumentCompletionItems(text string) []completionItem {
 				values = []string{"on", "off"}
 			case "tool":
 				values = []string{"auto", "full", "collapsed", "hidden"}
+			case "tool_mode":
+				values = []string{"coding", "read", "all"}
 			case "read":
 				values = []string{"full", "summary", "hidden"}
 			case "write":
@@ -116,6 +118,8 @@ func slashArgumentCompletionItems(text string) []completionItem {
 				values = []string{"full", "summary", "hidden"}
 			case "thinking":
 				values = []string{"full", "collapsed", "hidden"}
+			case "reasoning":
+				values = []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"}
 			case "busy":
 				values = []string{"queue", "steer"}
 			}

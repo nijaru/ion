@@ -289,6 +289,7 @@ func (m Model) handleSessionNamed(msg sessionNamedMsg) (Model, tea.Cmd) {
 	if msg.leafID != "" {
 		m.Model.LeafID = msg.leafID
 	}
+	m.App.SessionName = msg.name
 	return m, m.terminalCommit().Entries(systemEntry("Session named: " + msg.name))
 }
 
@@ -513,6 +514,8 @@ func loadSessionUsageCmd(
 			treeNavigationRequest: treeNavigationRequest,
 			input:                 projection.Usage.Input,
 			output:                projection.Usage.Output,
+			cacheRead:             projection.Usage.CacheRead,
+			cacheWrite:            projection.Usage.CacheWrite,
 			cost:                  projection.Usage.Cost.Total,
 			err:                   err,
 		}
@@ -524,7 +527,7 @@ func (m Model) handleSessionUsageLoaded(msg sessionUsageLoadedMsg) (Model, tea.C
 		msg.treeNavigationRequest != m.Model.TreeNavigationRequest || msg.err != nil {
 		return m, nil
 	}
-	m.progressReducer().applySessionUsage(msg.input, msg.output, msg.cost)
+	m.progressReducer().applySessionUsage(msg.input, msg.output, msg.cacheRead, msg.cacheWrite, msg.cost)
 	return m, nil
 }
 

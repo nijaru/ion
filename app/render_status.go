@@ -64,14 +64,18 @@ func (r progressReducer) markRuntimeReady() {
 func (r progressReducer) resetSessionUsage() {
 	r.progress.TokensSent = 0
 	r.progress.TokensReceived = 0
+	r.progress.CacheReadTokens = 0
+	r.progress.CacheWriteTokens = 0
 	r.progress.ContextTokens = 0
 	r.progress.TotalCost = 0
 	r.progress.BudgetStopReason = ""
 }
 
-func (r progressReducer) applySessionUsage(input, output int, cost float64) {
+func (r progressReducer) applySessionUsage(input, output, cacheRead, cacheWrite int, cost float64) {
 	r.progress.TokensSent = input
 	r.progress.TokensReceived = output
+	r.progress.CacheReadTokens = cacheRead
+	r.progress.CacheWriteTokens = cacheWrite
 	r.progress.TotalCost = cost
 }
 

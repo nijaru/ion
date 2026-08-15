@@ -539,17 +539,21 @@ func matchingValues(prefix string, values []string) []string {
 }
 
 func thinkingCompletionValues() []string {
-	return []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh"}
+	return []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"}
 }
 
 func settingsCompletionKeys() []string {
-	return []string{"retry", "tool", "read", "write", "bash", "thinking", "busy"}
+	return []string{"retry", "tool", "tool_mode", "read", "write", "bash", "thinking", "reasoning", "busy"}
 }
 
 func normalizeSettingsCompletionKey(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "tools":
 		return "tool"
+	case "toolmode", "active_tools":
+		return "tool_mode"
+	case "thinking_level", "reasoning_effort":
+		return "reasoning"
 	case "busy_input":
 		return "busy"
 	default:
