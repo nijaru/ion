@@ -499,6 +499,15 @@ type SessionCatalogUpdateCmd struct {
 
 func (SessionCatalogUpdateCmd) command() {}
 
+// SessionCatalogDeleteCmd removes one session catalog entry.
+type SessionCatalogDeleteCmd struct {
+	Ctx       context.Context
+	SessionID string
+	Reply     chan<- error
+}
+
+func (SessionCatalogDeleteCmd) command() {}
+
 // InputHistoryGetCmd reads bounded composer history.
 type InputHistoryGetCmd struct {
 	Ctx     context.Context

@@ -100,6 +100,22 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.forkSessionFromPicker(selected.ID())
+	case "ctrl+x":
+		selected, ok := m.pickerReducer().selectedSession()
+		if !ok {
+			return m, nil
+		}
+		if m.Model.SessionCatalog != nil {
+			_ = m.Model.SessionCatalog.DeleteSession(m.runtimeOperationContext(), selected.ID())
+			requestID := m.pickerReducer().beginSessionLoad()
+			return m, loadSessionPickerItems(
+				requestID,
+				m.Model.SessionCatalog,
+				m.App.Workdir,
+				m.runtimeOperationContext(),
+			)
+		}
+		return m, nil
 	default:
 		if text, ok := keyTextInput(msg); ok {
 			m.pickerReducer().appendSessionQuery(text, m.App.Workdir)
@@ -207,7 +223,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(
 		m.cardPaddedLine(
 			m.st.dim,
-			"  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Ctrl+N named • Ctrl+S sort • Esc cancel",
+			"  Type to search • PgUp/PgDn page • Enter select • Ctrl+F fork • Ctrl+X delete • Ctrl+N named • Ctrl+S sort • Esc cancel",
 		),
 	)
 	b.WriteString("\n")

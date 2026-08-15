@@ -88,6 +88,7 @@ var slashCommandDefs = []SlashCommandDefinition{
 		Idle:        -1,
 	},
 	{Name: "/name", Description: "Name the current session"},
+	{Name: "/rename", Description: "Rename the current session", Args: "[name]"},
 	{Name: "/label", Description: "Show or set label on current branch", Args: "[text]", Idle: SlashCommandIdleAlways},
 	{Name: "/clone", Description: "Clone current session"},
 	{Name: "/copy", Description: "Copy last response", Idle: -1},

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
@@ -48,6 +49,10 @@ func (c *recordingSessionCatalog) UpdateSession(_ context.Context, info session.
 	return nil
 }
 
+func (c *recordingSessionCatalog) DeleteSession(context.Context, string) error {
+	return nil
+}
+
 func (c *cancelAwareSessionCatalog) ListSessions(ctx context.Context, _ string) ([]session.SessionInfoEntry, error) {
 	c.listContext = ctx
 	if c.listStarted == nil {
@@ -66,6 +71,10 @@ func (c *cancelAwareSessionCatalog) UpdateSession(ctx context.Context, _ session
 	close(c.started)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (c *cancelAwareSessionCatalog) DeleteSession(context.Context, string) error {
+	return nil
 }
 
 func TestStaleRuntimeSwitchCannotReplaceNewGeneration(t *testing.T) {
@@ -1487,4 +1496,26 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestSessionPickerDeleteKeyRemovesSession(t *testing.T) {
+	model := readyModel(t)
+	catalog := &recordingSessionCatalog{}
+	model.Model.SessionCatalog = catalog
+	model.Picker.Session = &sessionPickerState{
+		items: []sessionPickerItem{
+			{info: session.SessionInfoEntry{EntryBase: session.EntryBase{ID: "session-to-delete"}}},
+		},
+		filtered: []sessionPickerItem{
+			{info: session.SessionInfoEntry{EntryBase: session.EntryBase{ID: "session-to-delete"}}},
+		},
+	}
+	keyMsg := tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl, Text: "ctrl+x"}
+	updated, cmd := model.handleSessionPickerKey(keyMsg)
+	if cmd == nil {
+		t.Fatal("ctrl+x in session picker returned no reload command")
+	}
+	if !updated.Picker.Session.loading {
+		t.Fatal("session picker should enter loading state after delete")
+	}
 }

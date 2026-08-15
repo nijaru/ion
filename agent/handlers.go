@@ -784,6 +784,17 @@ func (c *Controller) handleSessionCatalogUpdate(cmd *SessionCatalogUpdateCmd) {
 	})
 }
 
+func (c *Controller) handleSessionCatalogDelete(cmd *SessionCatalogDeleteCmd) {
+	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
+		catalog, ok := c.store.(SessionCatalog)
+		if !ok {
+			sendResult(cmd.Reply, errors.New("session store does not support session catalog"))
+			return
+		}
+		sendResult(cmd.Reply, catalog.DeleteSession(ctx, cmd.SessionID))
+	})
+}
+
 func (c *Controller) handleInputHistoryGet(cmd *InputHistoryGetCmd) {
 	c.startContextOperation(cmd.Ctx, func(ctx context.Context) {
 		history, ok := c.store.(InputHistory)
@@ -943,6 +954,13 @@ func (c *Controller) UpdateSession(ctx context.Context, info session.SessionInfo
 	ctx = commandContext(ctx)
 	reply := make(chan error, 1)
 	return c.enqueueSync(ctx, &SessionCatalogUpdateCmd{Ctx: ctx, Info: info, Reply: reply}, reply)
+}
+
+// DeleteSession removes catalog metadata through the controller.
+func (c *Controller) DeleteSession(ctx context.Context, sessionID string) error {
+	ctx = commandContext(ctx)
+	reply := make(chan error, 1)
+	return c.enqueueSync(ctx, &SessionCatalogDeleteCmd{Ctx: ctx, SessionID: sessionID, Reply: reply}, reply)
 }
 
 // GetInputs reads bounded composer history through the controller.

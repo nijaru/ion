@@ -500,6 +500,7 @@ type SessionCatalog interface {
 	ListSessions(ctx context.Context, workdir string) ([]session.SessionInfoEntry, error)
 	GetSessionInfo(ctx context.Context, sessionID string) (session.SessionInfoEntry, error)
 	UpdateSession(ctx context.Context, info session.SessionInfoEntry) error
+	DeleteSession(ctx context.Context, sessionID string) error
 }
 
 // InputHistory is the narrow capability for workspace-scoped composer history.

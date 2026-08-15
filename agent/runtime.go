@@ -316,6 +316,8 @@ func (c *Controller) dispatch(cmd Command) {
 		c.handleSessionCatalogLookup(cmd)
 	case *SessionCatalogUpdateCmd:
 		c.handleSessionCatalogUpdate(cmd)
+	case *SessionCatalogDeleteCmd:
+		c.handleSessionCatalogDelete(cmd)
 	case *InputHistoryGetCmd:
 		c.handleInputHistoryGet(cmd)
 	case *InputHistoryAddCmd:
@@ -395,6 +397,8 @@ func (c *Controller) rejectCommand(cmd Command) {
 	case *SessionCatalogLookupCmd:
 		sendResult(cmd.Reply, SessionCatalogLookupResult{Err: ErrRuntimeClosed})
 	case *SessionCatalogUpdateCmd:
+		sendResult(cmd.Reply, ErrRuntimeClosed)
+	case *SessionCatalogDeleteCmd:
 		sendResult(cmd.Reply, ErrRuntimeClosed)
 	case *InputHistoryGetCmd:
 		sendResult(cmd.Reply, InputHistoryGetResult{Err: ErrRuntimeClosed})

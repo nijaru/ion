@@ -184,3 +184,27 @@ func (s *SQLiteStore) GetSessionInfo(ctx context.Context, id string) (SessionInf
 	info.UpdatedAt = info.EntryBase.Timestamp
 	return info, nil
 }
+
+// DeleteSession removes a session record from the catalog.
+func (s *SQLiteStore) DeleteSession(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked(); err != nil {
+		return err
+	}
+	tx, err := s.beginWriteLocked(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE session_id = ?", id); err != nil {
+		return classifySQLiteError("delete session", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return classifySQLiteError("commit delete session", err)
+	}
+	return nil
+}

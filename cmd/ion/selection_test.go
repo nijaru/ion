@@ -129,6 +129,7 @@ func (s *testStore) GetSessionInfo(_ context.Context, id string) (session.Sessio
 func (s *testStore) UpdateSession(_ context.Context, _ session.SessionInfoEntry) error {
 	return nil
 }
+func (s *testStore) DeleteSession(_ context.Context, _ string) error      { return nil }
 func (s *testStore) AddInput(_ context.Context, _ string, _ string) error { return nil }
 func (s *testStore) Close() error                                         { return nil }
 

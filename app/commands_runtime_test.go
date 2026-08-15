@@ -418,6 +418,10 @@ func (s *lookupSessionStore) GetSessionInfo(context.Context, string) (session.Se
 	return s.info, nil
 }
 
+func (s *lookupSessionStore) DeleteSession(context.Context, string) error {
+	return nil
+}
+
 func TestStoredSessionConfigUsesDirectCatalogLookupForForeignWorkdir(t *testing.T) {
 	model := readyModel(t)
 	store := &lookupSessionStore{

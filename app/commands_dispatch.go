@@ -107,7 +107,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleImportCommand(fields)
 	case "/search":
 		return m.handleSearchCommand(fields)
-	case "/name":
+	case "/name", "/rename":
 		return m.handleNameCommand(fields)
 	case "/label":
 		return m.handleLabelCommand(fields)

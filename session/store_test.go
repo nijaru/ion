@@ -447,6 +447,16 @@ func TestSQLiteCatalogRoundTrip(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("catalog rows after leaf update = %d, want one stable session", len(sessions))
 	}
+	if err := s.DeleteSession(ctx, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = s.ListSessions(ctx, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("catalog rows after delete = %d, want 0", len(sessions))
+	}
 }
 
 func TestSQLiteMigratesUnversionedStoreTransactionally(t *testing.T) {
