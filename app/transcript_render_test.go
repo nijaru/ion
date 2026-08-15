@@ -616,3 +616,22 @@ func TestRenderSubagentToolUsesSubagentPrefix(t *testing.T) {
 	}
 }
 
+func TestRenderEntriesConsecutiveToolsStayAdjacent(t *testing.T) {
+	model := readyModel(t)
+	entries := []session.Entry{
+		testUserEntry("find files"),
+		testToolEntry("read a.go", "", false),
+		testToolEntry("read b.go", "", false),
+		testToolEntry("read c.go", "", false),
+		testAgentEntry("done searching", ""),
+	}
+
+	got := ansi.Strip(strings.Join(model.RenderEntries(entries...), "\n"))
+	want := "› find files\n\n• Read(a.go)\n• Read(b.go)\n• Read(c.go)\n\n• done searching"
+	if got != want {
+		t.Fatalf("consecutive tools render:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+
+

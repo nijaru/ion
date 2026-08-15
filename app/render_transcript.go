@@ -314,11 +314,54 @@ func (m Model) toolTitleOptions() tool.Options {
 
 func (m Model) RenderEntries(entries ...session.Entry) []string {
 	lines := make([]string, 0, len(entries)*2)
+	var prev session.Entry
+	var prevRendered string
+
 	for _, entry := range entries {
-		if len(lines) > 0 {
+		if entry == nil {
+			continue
+		}
+		rendered := m.renderEntry(entry)
+		if rendered == "" {
+			continue
+		}
+		if prev != nil && shouldSeparateEntries(prev, entry, prevRendered, rendered) {
 			lines = append(lines, "")
 		}
-		lines = append(lines, m.renderEntry(entry))
+		lines = append(lines, rendered)
+		prev = entry
+		prevRendered = rendered
 	}
 	return lines
+}
+
+func shouldSeparateEntries(prev, curr session.Entry, prevRendered, currRendered string) bool {
+	prevRole := session.EntryRole(prev)
+	currRole := session.EntryRole(curr)
+
+	// User messages are always separated by empty lines before and after.
+	if prevRole == session.RoleUser || currRole == session.RoleUser {
+		return true
+	}
+
+	// Assistant messages containing substantive text narrative are separated.
+	if prevRole == session.RoleAgent && hasSubstantiveContent(prev) {
+		return true
+	}
+	if currRole == session.RoleAgent && hasSubstantiveContent(curr) {
+		return true
+	}
+
+	// If the previous entry rendered multiple lines (e.g. expanded diff or tool output), separate it.
+	if strings.Contains(prevRendered, "\n") {
+		return true
+	}
+
+	// Consecutive compact single-line entries (tools, thinking, system notices) stay adjacent.
+	return false
+}
+
+func hasSubstantiveContent(e session.Entry) bool {
+	content := strings.TrimSpace(session.EntryContent(e))
+	return content != ""
 }
