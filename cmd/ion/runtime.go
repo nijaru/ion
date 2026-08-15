@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nijaru/ion/agent"
@@ -282,7 +283,7 @@ func defaultActiveToolNames(registry *tool.Registry) []string {
 }
 
 func activeToolNamesForMode(registry *tool.Registry, mode string) []string {
-	return activeToolNamesForModeWithSkills(registry, mode, false)
+	return activeToolNamesForConfig(registry, nil, mode, false)
 }
 
 func activeToolNamesForModeWithSkills(
@@ -290,36 +291,62 @@ func activeToolNamesForModeWithSkills(
 	mode string,
 	skillsEnabled bool,
 ) []string {
+	return activeToolNamesForConfig(registry, nil, mode, skillsEnabled)
+}
+
+func activeToolNamesForConfig(
+	registry *tool.Registry,
+	cfg *config.Config,
+	mode string,
+	skillsEnabled bool,
+) []string {
+	if cfg != nil && cfg.DefaultTools != nil && len(cfg.DefaultTools) == 0 {
+		return nil
+	}
 	var preferred []string
-	normalizedMode := config.NormalizeToolMode(mode)
-	switch normalizedMode {
-	case "all":
-		return registry.Names()
-	case "read":
-		preferred = []string{"find", "grep", "ls", "read", tool.SearchToolName}
-	default:
-		preferred = []string{
-			"bash", "edit", "read", tool.SearchToolName, "subagent", "web_search", "web_fetch", "write",
+	if cfg != nil && len(cfg.DefaultTools) > 0 {
+		preferred = append([]string(nil), cfg.DefaultTools...)
+	} else {
+		normalizedMode := config.NormalizeToolMode(mode)
+		switch normalizedMode {
+		case "all":
+			preferred = registry.Names()
+		case "read":
+			preferred = []string{"find", "grep", "ls", "read", tool.SearchToolName}
+		default:
+			preferred = []string{
+				"bash", "edit", "read", tool.SearchToolName, "subagent", "web_search", "web_fetch", "write",
+			}
 		}
 	}
-	if skillsEnabled {
+	if skillsEnabled && !slices.Contains(preferred, "read_skill") {
 		preferred = append(preferred, "read_skill")
 	}
-	// Configured external tools are explicit user additions, so expose them in
-	// every normal mode. The model can still discover the complete registry via
-	// search_tools when a session's persisted ActiveTools narrows the surface.
 	for _, entry := range registry.Entries() {
 		switch entry.Metadata.Category {
 		case "mcp":
-			preferred = append(preferred, entry.Spec.Name)
-		case "memory":
-			if config.NormalizeToolMode(mode) != "read" || entry.Metadata.ReadOnly {
+			if !slices.Contains(preferred, entry.Spec.Name) {
 				preferred = append(preferred, entry.Spec.Name)
 			}
+		case "memory":
+			if config.NormalizeToolMode(mode) != "read" || entry.Metadata.ReadOnly {
+				if !slices.Contains(preferred, entry.Spec.Name) {
+					preferred = append(preferred, entry.Spec.Name)
+				}
+			}
+		}
+	}
+	excluded := make(map[string]bool)
+	if cfg != nil {
+		for _, name := range cfg.ExcludedTools {
+			excluded[name] = true
 		}
 	}
 	active := make([]string, 0, len(preferred))
 	for _, name := range preferred {
+		if excluded[name] {
+			continue
+		}
 		if _, ok := registry.Get(name); ok {
 			active = append(active, name)
 		}
@@ -718,8 +745,9 @@ func openRuntime(
 			ExecutionMode: executionMode,
 		})
 	}
-	activeToolNames := activeToolNamesForModeWithSkills(
+	activeToolNames := activeToolNamesForConfig(
 		toolRegistry,
+		&runtimeCfg,
 		runtimeCfg.ActiveToolMode(),
 		runtimeCfg.SkillToolMode() == "read",
 	)

@@ -576,3 +576,42 @@ func TestBackendForProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIToolAndNameFlagAccessors(t *testing.T) {
+	tools := "read,bash,edit"
+	exclude := "web_search,web_fetch"
+	name := "my-session"
+	models := "anthropic/*,openai/gpt-4o"
+	noTools := true
+
+	emptyStr := ""
+	falseBool := false
+
+	flags := cliFlags{
+		toolsFlag:             &tools,
+		toolsShortFlag:        &emptyStr,
+		excludeToolsFlag:      &exclude,
+		excludeToolsShortFlag: &emptyStr,
+		nameFlag:              &name,
+		nameShortFlag:         &emptyStr,
+		modelsFlag:            &models,
+		noToolsFlag:           &noTools,
+		noToolsShortFlag:      &falseBool,
+	}
+
+	if got := flags.toolsOverride(); len(got) != 3 || got[0] != "read" || got[1] != "bash" || got[2] != "edit" {
+		t.Fatalf("toolsOverride = %v, want [read, bash, edit]", got)
+	}
+	if got := flags.excludeToolsOverride(); len(got) != 2 || got[0] != "web_search" || got[1] != "web_fetch" {
+		t.Fatalf("excludeToolsOverride = %v, want [web_search, web_fetch]", got)
+	}
+	if got := flags.sessionNameOverride(); got != "my-session" {
+		t.Fatalf("sessionNameOverride = %q, want my-session", got)
+	}
+	if got := flags.modelsOverride(); len(got) != 2 || got[0] != "anthropic/*" || got[1] != "openai/gpt-4o" {
+		t.Fatalf("modelsOverride = %v, want [anthropic/*, openai/gpt-4o]", got)
+	}
+	if !flags.noToolsRequested() {
+		t.Fatal("noToolsRequested = false, want true")
+	}
+}

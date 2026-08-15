@@ -57,13 +57,29 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m.openExternalEditor()
 
-	case "ctrl+l":
+	case "ctrl+l", "ctrl+p":
 		m.clearPendingAction()
 		return m.cycleScopedModelCommand(true)
 
-	case "ctrl+shift+l":
+	case "ctrl+shift+l", "ctrl+shift+p":
 		m.clearPendingAction()
 		return m.cycleScopedModelCommand(false)
+
+	case "ctrl+x":
+		m.clearPendingAction()
+		return m.copyLastResponse()
+
+	case "ctrl+t":
+		m.clearPendingAction()
+		if m.Model.Config != nil && m.Model.Config.ThinkingVerbosity == "expanded" {
+			m.Model.Config.ThinkingVerbosity = "collapsed"
+			return m, m.terminalCommit().Entries(systemEntry("Thinking blocks: collapsed"))
+		}
+		if m.Model.Config != nil {
+			m.Model.Config.ThinkingVerbosity = "expanded"
+			return m, m.terminalCommit().Entries(systemEntry("Thinking blocks: expanded"))
+		}
+		return m, nil
 
 	case "ctrl+o":
 		m.clearPendingAction()

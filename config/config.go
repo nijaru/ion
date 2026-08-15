@@ -78,6 +78,9 @@ type Config struct {
 	CompactionTool         string            `toml:"compaction_tool,omitempty"`
 	DoubleEscapeAction     string            `toml:"double_escape_action,omitempty"`
 	ExternalEditor         string            `toml:"external_editor,omitempty"`
+	DefaultTools           []string          `toml:"default_tools,omitempty"`
+	ExcludedTools          []string          `toml:"excluded_tools,omitempty"`
+	SessionName            string            `toml:"session_name,omitempty"`
 	Models                 []ModelDef        `toml:"models,omitempty"                json:"models,omitempty"`
 	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty"          json:"scoped_model,omitempty"`
 }

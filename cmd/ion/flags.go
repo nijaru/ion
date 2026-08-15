@@ -26,6 +26,15 @@ type cliFlags struct {
 	listModelsFlag         *bool
 	systemPromptFlag       *string
 	appendSystemPromptFlag *string
+	toolsFlag              *string
+	toolsShortFlag         *string
+	excludeToolsFlag       *string
+	excludeToolsShortFlag  *string
+	noToolsFlag            *bool
+	noToolsShortFlag       *bool
+	nameFlag               *string
+	nameShortFlag          *string
+	modelsFlag             *string
 	printFlag              *bool
 	promptFlag             *string
 	printShortFlag         *bool
@@ -109,6 +118,51 @@ func registerCLIFlags(fs *flag.FlagSet) cliFlags {
 			"",
 			"Append to the system prompt",
 		),
+		toolsFlag: fs.String(
+			"tools",
+			"",
+			"Comma-separated allowlist of tool names to enable",
+		),
+		toolsShortFlag: fs.String(
+			"t",
+			"",
+			"Comma-separated allowlist of tool names to enable (alias for --tools)",
+		),
+		excludeToolsFlag: fs.String(
+			"exclude-tools",
+			"",
+			"Comma-separated denylist of tool names to disable",
+		),
+		excludeToolsShortFlag: fs.String(
+			"xt",
+			"",
+			"Comma-separated denylist of tool names to disable (alias for --exclude-tools)",
+		),
+		noToolsFlag: fs.Bool(
+			"no-tools",
+			false,
+			"Disable all tools",
+		),
+		noToolsShortFlag: fs.Bool(
+			"nt",
+			false,
+			"Disable all tools (alias for --no-tools)",
+		),
+		nameFlag: fs.String(
+			"name",
+			"",
+			"Set session display name",
+		),
+		nameShortFlag: fs.String(
+			"n",
+			"",
+			"Set session display name (alias for --name)",
+		),
+		modelsFlag: fs.String(
+			"models",
+			"",
+			"Comma-separated model patterns for cycling",
+		),
 		printFlag: fs.Bool(
 			"print",
 			false,
@@ -191,6 +245,55 @@ func (f cliFlags) sessionDirOverride() string {
 
 func (f cliFlags) listModelsRequested() bool {
 	return *f.listModelsFlag
+}
+
+func (f cliFlags) toolsOverride() []string {
+	val := firstNonEmpty(*f.toolsFlag, *f.toolsShortFlag)
+	if val == "" {
+		return nil
+	}
+	var tools []string
+	for _, t := range strings.Split(val, ",") {
+		if trimmed := strings.TrimSpace(t); trimmed != "" {
+			tools = append(tools, trimmed)
+		}
+	}
+	return tools
+}
+
+func (f cliFlags) excludeToolsOverride() []string {
+	val := firstNonEmpty(*f.excludeToolsFlag, *f.excludeToolsShortFlag)
+	if val == "" {
+		return nil
+	}
+	var tools []string
+	for _, t := range strings.Split(val, ",") {
+		if trimmed := strings.TrimSpace(t); trimmed != "" {
+			tools = append(tools, trimmed)
+		}
+	}
+	return tools
+}
+
+func (f cliFlags) noToolsRequested() bool {
+	return *f.noToolsFlag || *f.noToolsShortFlag
+}
+
+func (f cliFlags) sessionNameOverride() string {
+	return strings.TrimSpace(firstNonEmpty(*f.nameFlag, *f.nameShortFlag))
+}
+
+func (f cliFlags) modelsOverride() []string {
+	if f.modelsFlag == nil || strings.TrimSpace(*f.modelsFlag) == "" {
+		return nil
+	}
+	var models []string
+	for _, m := range strings.Split(*f.modelsFlag, ",") {
+		if trimmed := strings.TrimSpace(m); trimmed != "" {
+			models = append(models, trimmed)
+		}
+	}
+	return models
 }
 
 func (f cliFlags) versionRequested() bool {

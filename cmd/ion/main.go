@@ -92,6 +92,24 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
 	applyCLITrustModeOverride(cfg, cli.trustModeOverride())
+	if cli.noToolsRequested() {
+		cfg.DefaultTools = []string{}
+	} else if tools := cli.toolsOverride(); len(tools) > 0 {
+		cfg.DefaultTools = tools
+	}
+	if excludeTools := cli.excludeToolsOverride(); len(excludeTools) > 0 {
+		cfg.ExcludedTools = excludeTools
+	}
+	if name := cli.sessionNameOverride(); name != "" {
+		cfg.SessionName = name
+	}
+	if models := cli.modelsOverride(); len(models) > 0 {
+		var scoped []config.ScopedModel
+		for _, m := range models {
+			scoped = append(scoped, config.ScopedModel{Pattern: m})
+		}
+		cfg.ScopedModels = scoped
+	}
 	cfg.APIKeyOverride = cli.apiKeyOverride()
 	cfg.APIKeyOverrideProvider = llm.ResolveID(cfg.Provider)
 	endpointResolver := llm.NewEndpointResolver(llm.EndpointResolverOptions{})
