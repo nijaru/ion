@@ -98,7 +98,23 @@ var slashCommandDefs = []SlashCommandDefinition{
 }
 
 func HelpText() string                       { return "Type /help for commands" }
-func HotkeysText() string                    { return "Ctrl+C: cancel, Ctrl+D: exit" }
+func HotkeysText() string {
+	return `Keyboard Shortcuts:
+  Ctrl+P / Ctrl+L       Cycle / select model
+  Shift+Ctrl+P          Cycle to previous model
+  Shift+Tab             Cycle thinking budget
+  Ctrl+T                Toggle thinking blocks (expanded/collapsed)
+  Ctrl+O                Toggle tool output expansion
+  Ctrl+G / Alt+E        Open external editor ($VISUAL / $EDITOR)
+  Ctrl+- / Ctrl+_       Undo last turn & restore prompt
+  Ctrl+X                Copy last assistant response
+  Ctrl+R                Search prompt input history
+  Ctrl+V                Paste image from clipboard
+  Ctrl+Z                Suspend to background (resume with fg)
+  Ctrl+C                Clear composer draft / abort
+  Ctrl+D                Exit ion (when prompt is empty)
+  Esc                   Cancel in-flight generation / dismiss overlay`
+}
 func DeferredFeatureMessage(f string) string { return "Feature not yet available: " + f }
 
 func SlashCommands() []string {

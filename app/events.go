@@ -86,6 +86,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.ToolOutputExpanded = !m.ToolOutputExpanded
 		return m, nil
 
+	case "ctrl+-", "ctrl+_", "ctrl+minus":
+		m.clearPendingAction()
+		return m.handleUndoCommand()
+
 	case "ctrl+r":
 		m.clearPendingAction()
 		return m.openHistoryPicker(), nil

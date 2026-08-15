@@ -533,3 +533,21 @@ func TestShareCommand(t *testing.T) {
 	}
 	_ = next
 }
+
+func TestUndoHotkeyTrigger(t *testing.T) {
+	model := readyModel(t)
+	runner := &stubRunner{}
+	model.Model.Runner = runner
+
+	for _, msg := range []tea.KeyPressMsg{
+		{Text: "ctrl+-"},
+		{Text: "ctrl+_"},
+		{Text: "ctrl+minus"},
+	} {
+		_, cmd := model.handleKey(msg)
+		if cmd == nil {
+			t.Fatalf("key msg %+v returned nil cmd for undo", msg)
+		}
+	}
+}
+

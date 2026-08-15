@@ -37,8 +37,9 @@ const (
 	// Clipboard
 	ActionPasteImage KeybindingAction = "clipboard.pasteImage"
 
-	// History
+	// History / Undo
 	ActionSearchHistory KeybindingAction = "history.search"
+	ActionUndo          KeybindingAction = "session.undo"
 )
 
 // DefaultKeybindings maps actions to their default key combos.
@@ -53,6 +54,7 @@ var DefaultKeybindings = map[KeybindingAction]string{
 	ActionPasteImage:         "ctrl+v",
 	ActionTreeFork:           "esc esc",
 	ActionSearchHistory:      "ctrl+r",
+	ActionUndo:               "ctrl+-",
 }
 
 // KeybindingsManager manages keybindings with user overrides.
