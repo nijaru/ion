@@ -65,3 +65,22 @@ func TestGitDiffStatsMessageIgnoresStaleRuntime(t *testing.T) {
 		t.Fatalf("stale git diff stats = %q, want unchanged", model.App.GitDiff)
 	}
 }
+
+func TestRenderDiffIntraLineHighlight(t *testing.T) {
+	model := readyModel(t)
+	diffInput := "--- a/file.go\n+++ b/file.go\n@@ -1,2 +1,2 @@\n-func hello(name string) error\n+func hello(name, title string) error"
+
+	rendered := model.renderDiff(diffInput)
+	stripped := ansi.Strip(rendered)
+
+	if !strings.Contains(stripped, "-func hello(name string) error") {
+		t.Fatalf("stripped diff missing removed line: %q", stripped)
+	}
+	if !strings.Contains(stripped, "+func hello(name, title string) error") {
+		t.Fatalf("stripped diff missing added line: %q", stripped)
+	}
+	// Verify raw rendered output contains ANSI formatting
+	if rendered == stripped {
+		t.Fatal("expected rendered diff to contain ANSI escape sequences")
+	}
+}

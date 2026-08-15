@@ -22,29 +22,33 @@ type styles struct {
 	warn     lipgloss.Style
 	caution  lipgloss.Style
 	sep      lipgloss.Style
-	added    lipgloss.Style
-	removed  lipgloss.Style
-	modeRead lipgloss.Style
-	modeEdit lipgloss.Style
-	modeYolo lipgloss.Style
+	added            lipgloss.Style
+	removed          lipgloss.Style
+	addedHighlight   lipgloss.Style
+	removedHighlight lipgloss.Style
+	modeRead         lipgloss.Style
+	modeEdit         lipgloss.Style
+	modeYolo         lipgloss.Style
 }
 
 func newStyles() styles {
 	return styles{
-		user:     lipgloss.NewStyle().Faint(true),
-		agent:    lipgloss.NewStyle(),
-		system:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
-		tool:     lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
-		subagent: lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
-		success:  lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		dim:      lipgloss.NewStyle().Faint(true),
-		cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		warn:     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		caution:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
-		sep:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
-		added:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		removed:  lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		modeRead: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
+		user:             lipgloss.NewStyle().Faint(true),
+		agent:            lipgloss.NewStyle(),
+		system:           lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
+		tool:             lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
+		subagent:         lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+		success:          lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		dim:              lipgloss.NewStyle().Faint(true),
+		cyan:             lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		warn:             lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		caution:          lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		sep:              lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
+		added:            lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		removed:          lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		addedHighlight:   lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("22")).Bold(true),
+		removedHighlight: lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("52")).Bold(true),
+		modeRead:         lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
 		modeEdit: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("2")).
 			Bold(true),

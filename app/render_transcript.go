@@ -8,6 +8,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/diff"
 	"github.com/nijaru/ion/session"
 	"github.com/nijaru/ion/tool"
 )
@@ -192,8 +193,7 @@ func toolOutputSummary(e session.Entry) string {
 	}
 }
 
-// renderDiff colorizes diff-format output.
-// Uses plain output if the content doesn't look like a unified diff.
+// renderDiff colorizes diff-format output with intra-line word highlighting on single-line replacements.
 func (m Model) renderDiff(content string) string {
 	lines := strings.Split(content, "\n")
 	hasDiffMarkers := false
@@ -209,7 +209,43 @@ func (m Model) renderDiff(content string) string {
 	}
 
 	var b strings.Builder
-	for _, l := range lines {
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		if diff.IsSingleLineReplacement(lines, i) {
+			removedLine := l
+			addedLine := lines[i+1]
+
+			_, removedContent := diff.StripLinePrefix(removedLine)
+			_, addedContent := diff.StripLinePrefix(addedLine)
+
+			oldParts, newParts := diff.ComputeIntraLineDiff(removedContent, addedContent)
+
+			// Render removed line with highlighted diff
+			b.WriteString(m.st.removed.Render("-"))
+			for _, part := range oldParts {
+				if part.Removed {
+					b.WriteString(m.st.removedHighlight.Render(part.Text))
+				} else {
+					b.WriteString(m.st.removed.Render(part.Text))
+				}
+			}
+			b.WriteString("\n")
+
+			// Render added line with highlighted diff
+			b.WriteString(m.st.added.Render("+"))
+			for _, part := range newParts {
+				if part.Added {
+					b.WriteString(m.st.addedHighlight.Render(part.Text))
+				} else {
+					b.WriteString(m.st.added.Render(part.Text))
+				}
+			}
+			b.WriteString("\n")
+
+			i++ // skip addition line since both were rendered
+			continue
+		}
+
 		switch {
 		case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
 			b.WriteString(m.st.added.Render(l))
