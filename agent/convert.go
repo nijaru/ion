@@ -8,6 +8,11 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+// ConvertWithMicroCompaction prunes bulky historical tool results before converting domain messages to LLM wire messages.
+func ConvertWithMicroCompaction(msgs []session.Message, opts MicroCompactionOptions) []llm.Message {
+	return DefaultConvert(PruneHistoricalToolOutputs(msgs, opts))
+}
+
 // DefaultConvert transforms domain Messages to provider Messages at the boundary.
 // This is the default for LoopConfig.Convert when nil.
 // Filters to user/assistant/tool_result roles.

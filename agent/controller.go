@@ -79,9 +79,10 @@ type ControllerConfig struct {
 	Metrics *Metrics
 
 	// Compaction settings.
-	Compaction    CompactionSettings
-	SummaryRetry  llm.StreamRetryPolicy
-	ContextWindow int // model context window size in tokens
+	Compaction      CompactionSettings
+	MicroCompaction MicroCompactionOptions
+	SummaryRetry    llm.StreamRetryPolicy
+	ContextWindow   int // model context window size in tokens
 
 	// ApprovalMode controls requirement-bearing tool calls. Confirm is
 	// interactive only when ApprovalInteractive is true; otherwise it denies
@@ -163,6 +164,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		done:                make(chan struct{}),
 		closeDone:           make(chan struct{}),
 		compaction:          cfg.Compaction,
+		microCompaction:     normalizeMicroCompaction(cfg.MicroCompaction),
 		summaryRetry:        cfg.SummaryRetry,
 		contextWindow:       cfg.ContextWindow,
 		contextTracker:      &ContextUsageTracker{},
@@ -807,8 +809,10 @@ func (h *Controller) buildLoopConfig(ctx context.Context, tools []Tool, onPersis
 		MaxParallelTools:    h.maxParallelTools,
 		StreamFn:            h.wrapStreamFn(),
 		ContextOverflow:     h.contextOverflow,
-		Convert:             DefaultConvert,
-		Auth:                h.auth,
+		Convert: func(msgs []session.Message) []llm.Message {
+			return ConvertWithMicroCompaction(msgs, h.microCompaction)
+		},
+		Auth: h.auth,
 		DrainSteer: func() []session.Message {
 			h.mu.Lock()
 			msgs := h.drainQueued(&h.steer, h.steeringMode)

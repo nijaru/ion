@@ -165,6 +165,7 @@ type Controller struct {
 
 	// --- Compaction ---
 	compaction                CompactionSettings
+	microCompaction           MicroCompactionOptions
 	summaryRetry              llm.StreamRetryPolicy
 	contextWindow             int
 	contextTracker            *ContextUsageTracker
