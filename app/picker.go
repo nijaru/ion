@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -10,9 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/nijaru/ion/config"
-	"github.com/nijaru/ion/session"
-
 	"github.com/nijaru/ion/llm"
+	"github.com/nijaru/ion/session"
 )
 
 // ModelCatalog is the narrow model-discovery capability used by the TUI.
@@ -403,29 +403,129 @@ func pickerSearchFields(item pickerItem) []pickerSearchField {
 	return fields
 }
 
+type pickerSearchToken struct {
+	value    string
+	isPhrase bool
+}
+
 type pickerSearchQuery struct {
 	value  string
-	tokens []string
+	tokens []pickerSearchToken
+	regex  *regexp.Regexp
+	regErr error
 }
 
 func preparePickerSearchQuery(query string) pickerSearchQuery {
-	q := normalizeSearchQuery(query)
-	if q == "" {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
 		return pickerSearchQuery{}
 	}
-	tokens := strings.Fields(q)
-	if len(tokens) <= 1 {
-		tokens = nil
+
+	// Regex mode: re:<pattern>
+	if strings.HasPrefix(trimmed, "re:") {
+		pattern := strings.TrimSpace(trimmed[3:])
+		if pattern == "" {
+			return pickerSearchQuery{value: trimmed, regErr: fmt.Errorf("empty regex")}
+		}
+		re, err := regexp.Compile("(?i)" + pattern)
+		return pickerSearchQuery{value: trimmed, regex: re, regErr: err}
 	}
-	return pickerSearchQuery{value: q, tokens: tokens}
+
+	// Tokenize with quoted phrase support
+	var tokens []pickerSearchToken
+	var buf strings.Builder
+	inQuote := false
+	hadUnclosedQuote := false
+
+	flush := func(isPhrase bool) {
+		v := normalizeSearchQuery(buf.String())
+		buf.Reset()
+		if v != "" {
+			tokens = append(tokens, pickerSearchToken{value: v, isPhrase: isPhrase})
+		}
+	}
+
+	for _, ch := range trimmed {
+		if ch == '"' {
+			if inQuote {
+				flush(true)
+				inQuote = false
+			} else {
+				flush(false)
+				inQuote = true
+			}
+			continue
+		}
+		if !inQuote && unicode.IsSpace(ch) {
+			flush(false)
+			continue
+		}
+		buf.WriteRune(ch)
+	}
+
+	if inQuote {
+		hadUnclosedQuote = true
+	}
+	flush(inQuote)
+
+	if hadUnclosedQuote || len(tokens) == 0 {
+		q := normalizeSearchQuery(trimmed)
+		fields := strings.Fields(q)
+		var plainTokens []pickerSearchToken
+		for _, f := range fields {
+			plainTokens = append(plainTokens, pickerSearchToken{value: f, isPhrase: false})
+		}
+		return pickerSearchQuery{value: q, tokens: plainTokens}
+	}
+
+	return pickerSearchQuery{value: normalizeSearchQuery(trimmed), tokens: tokens}
 }
 
 func pickerSearchScorePrepared(query pickerSearchQuery, fields []pickerSearchField) (int, bool) {
 	if query.value == "" {
 		return 0, true
 	}
+	if query.regErr != nil {
+		return 0, false
+	}
+	if query.regex != nil {
+		best := int(^uint(0) >> 1)
+		matched := false
+		for _, field := range fields {
+			loc := query.regex.FindStringIndex(field.value)
+			if loc == nil {
+				continue
+			}
+			score := loc[0]*2 + len(field.value) + field.weight
+			if score < best {
+				best = score
+				matched = true
+			}
+		}
+		return best, matched
+	}
+
 	if len(query.tokens) > 1 {
 		return multiTokenPickerSearchScore(query.tokens, fields)
+	}
+	if len(query.tokens) == 1 {
+		tok := query.tokens[0]
+		if tok.isPhrase {
+			best := int(^uint(0) >> 1)
+			matched := false
+			for _, field := range fields {
+				idx := strings.Index(field.value, tok.value)
+				if idx < 0 {
+					continue
+				}
+				score := idx*2 + len(field.value) - len(tok.value) + field.weight
+				if score < best {
+					best = score
+					matched = true
+				}
+			}
+			return best, matched
+		}
 	}
 
 	best := int(^uint(0) >> 1)
@@ -444,13 +544,23 @@ func pickerSearchScorePrepared(query pickerSearchQuery, fields []pickerSearchFie
 	return best, matched
 }
 
-func multiTokenPickerSearchScore(tokens []string, fields []pickerSearchField) (int, bool) {
+func multiTokenPickerSearchScore(tokens []pickerSearchToken, fields []pickerSearchField) (int, bool) {
 	total := 0
 	for _, token := range tokens {
 		best := int(^uint(0) >> 1)
 		matched := false
 		for _, field := range fields {
-			score, ok := searchFieldScore(token, field.value)
+			var score int
+			var ok bool
+			if token.isPhrase {
+				idx := strings.Index(field.value, token.value)
+				if idx >= 0 {
+					score = idx*2 + len(field.value) - len(token.value)
+					ok = true
+				}
+			} else {
+				score, ok = searchFieldScore(token.value, field.value)
+			}
 			if !ok {
 				continue
 			}
