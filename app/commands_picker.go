@@ -207,12 +207,13 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 	}
 	items := []pickerItem{
 		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
-		{Label: "Off", Value: "off"},
-		{Label: "Minimal", Value: "minimal"},
-		{Label: "Low", Value: "low"},
-		{Label: "Medium", Value: "medium"},
-		{Label: "High", Value: "high"},
-		{Label: "XHigh", Value: "xhigh"},
+		{Label: "Off", Value: "off", Detail: "No reasoning"},
+		{Label: "Minimal", Value: "minimal", Detail: "Very brief reasoning (~1k tokens)"},
+		{Label: "Low", Value: "low", Detail: "Light reasoning (~2k tokens)"},
+		{Label: "Medium", Value: "medium", Detail: "Moderate reasoning (~8k tokens)"},
+		{Label: "High", Value: "high", Detail: "Deep reasoning (~16k tokens)"},
+		{Label: "XHigh", Value: "xhigh", Detail: "Extra-high reasoning (~32k tokens)"},
+		{Label: "Max", Value: "max", Detail: "Maximum reasoning"},
 	}
 	currentIndex := pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort))
 	for i := range items {

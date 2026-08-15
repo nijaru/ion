@@ -270,7 +270,7 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			"Thinking level",
 			"reasoning",
 			reasoning,
-			nextSettingValue(reasoning, []string{"auto", "off", "low", "medium", "high"}),
+			nextSettingValue(reasoning, []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"}),
 			"Turn behavior",
 			"Reasoning depth for thinking models",
 		),
