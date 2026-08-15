@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/nijaru/ion/config"
-
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/prompts"
 	"github.com/nijaru/ion/llm"
 )
 
@@ -206,8 +209,25 @@ func slashCommandCatalog() []SlashCommandInfo { return SlashCommandCatalog() }
 
 // slashCommandItems stays in app/ because it uses pickerItem (TUI type).
 func slashCommandItems() []pickerItem {
+	return slashCommandItemsWithPrompts("")
+}
+
+func promptTemplateDirs(workdir string) []string {
+	var dirs []string
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		dirs = append(dirs, filepath.Join(home, ".ion", "prompts"))
+		dirs = append(dirs, filepath.Join(home, ".config", "ion", "prompts"))
+	}
+	if workdir != "" {
+		dirs = append(dirs, filepath.Join(workdir, ".ion", "prompts"))
+	}
+	return dirs
+}
+
+func slashCommandItemsWithPrompts(workdir string) []pickerItem {
 	commands := slashCommandCatalog()
-	items := make([]pickerItem, 0, len(commands))
+	items := make([]pickerItem, 0, len(commands)+4)
 	for _, command := range commands {
 		search := pickerSearchIndex(
 			command.Name,
@@ -223,6 +243,30 @@ func slashCommandItems() []pickerItem {
 			Group:  "Commands",
 			Search: search,
 		})
+	}
+	dirs := promptTemplateDirs(workdir)
+	templates, err := prompts.DiscoverPrompts(context.Background(), dirs...)
+	if err == nil {
+		for _, tmpl := range templates {
+			detail := tmpl.Description
+			if tmpl.ArgumentHint != "" {
+				detail = tmpl.ArgumentHint + " — " + detail
+			}
+			search := pickerSearchIndex(
+				"/"+tmpl.Name,
+				tmpl.Name,
+				detail,
+				"Prompts",
+				nil,
+			)
+			items = append(items, pickerItem{
+				Label:  "/" + tmpl.Name,
+				Value:  "/" + tmpl.Name,
+				Detail: detail,
+				Group:  "Prompts",
+				Search: search,
+			})
+		}
 	}
 	return items
 }

@@ -47,7 +47,7 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 			false,
 		)
 	}
-	if items := slashComposerCompletionItems(text); len(items) > 0 {
+	if items := slashComposerCompletionItems(text, m.App.Workdir); len(items) > 0 {
 		m.inputReducer().invalidateFileCompletionRequest()
 		return limitCompletionItems(items), nil
 	}
@@ -68,7 +68,7 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 	)
 }
 
-func slashComposerCompletionItems(text string) []completionItem {
+func slashComposerCompletionItems(text, workdir string) []completionItem {
 	if !strings.HasPrefix(text, "/") || strings.HasPrefix(text, "//") || strings.ContainsAny(text, "\r\n") {
 		return nil
 	}
@@ -77,7 +77,7 @@ func slashComposerCompletionItems(text string) []completionItem {
 	}
 
 	query := strings.TrimPrefix(strings.TrimSpace(text), "/")
-	items := rankedPickerItems(slashCommandItems(), query)
+	items := rankedPickerItems(slashCommandItemsWithPrompts(workdir), query)
 	if len(items) == 1 && strings.EqualFold(items[0].Value, strings.TrimSpace(text)) {
 		return nil
 	}

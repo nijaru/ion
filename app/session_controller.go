@@ -13,6 +13,7 @@ import (
 
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/prompts"
 	"github.com/nijaru/ion/session"
 )
 
@@ -172,14 +173,18 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 	}
 
 	if strings.HasPrefix(text, "/") {
-		historyText, historyChanged := m.appendInputHistory(text)
-		var historyCmd tea.Cmd
-		if historyChanged {
-			historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
+		if expanded, ok := m.expandPromptTemplate(text); ok {
+			text = expanded
+		} else {
+			historyText, historyChanged := m.appendInputHistory(text)
+			var historyCmd tea.Cmd
+			if historyChanged {
+				historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
+			}
+			m.resetComposerDraft()
+			m, cmd := m.handleCommand(text)
+			return m, sequenceCmds(cmd, historyCmd)
 		}
-		m.resetComposerDraft()
-		m, cmd := m.handleCommand(text)
-		return m, sequenceCmds(cmd, historyCmd)
 	}
 
 	m.turnReducer().StartSubmit()
@@ -232,6 +237,25 @@ func submitTurnCmd(
 			err:        errors.New("turn execution requires a configured provider and model"),
 		}
 	}
+}
+
+func (m Model) expandPromptTemplate(text string) (string, bool) {
+	if strings.HasPrefix(text, "//") {
+		return text, false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return text, false
+	}
+	if _, ok := resolveSlashCommand(fields[0]); ok {
+		return text, false
+	}
+	dirs := promptTemplateDirs(m.App.Workdir)
+	templates, err := prompts.DiscoverPrompts(m.runtimeOperationContext(), dirs...)
+	if err != nil || len(templates) == 0 {
+		return text, false
+	}
+	return prompts.ExpandPromptTemplate(text, templates)
 }
 
 func isTurnCancellationError(err error) bool {
