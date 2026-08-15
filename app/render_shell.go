@@ -87,6 +87,10 @@ func (m Model) View() tea.View {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
 		hasShellLeadIn = true
+	} else if m.Picker.UserMessage != nil {
+		b.WriteString(m.renderUserMessageForkPicker())
+		b.WriteString("\n")
+		hasShellLeadIn = true
 	} else if m.Picker.Tree != nil {
 		if m.Picker.BranchSummary != nil {
 			b.WriteString(m.renderBranchSummaryPrompt())

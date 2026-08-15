@@ -556,6 +556,7 @@ type PickerState struct {
 	BranchSummary      *branchSummaryPromptState
 	Approval           *approvalPromptState
 	Tree               *treePickerState
+	UserMessage        *userMessageForkPickerState
 	LastEscAt          time.Time
 	ModelLoadRequest   uint64
 	SessionLoadRequest uint64

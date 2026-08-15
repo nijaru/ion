@@ -772,7 +772,7 @@ func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
 
 func (m Model) handleForkCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) <= 1 {
-		return m.openTreePicker()
+		return m.openUserMessageForkPicker()
 	}
 	leafID := m.currentResumeLeafID()
 	if leafID == "" {

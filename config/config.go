@@ -76,6 +76,7 @@ type Config struct {
 	ToolMode               string            `toml:"tool_mode,omitempty"`
 	ToolEnv                string            `toml:"tool_env,omitempty"`
 	CompactionTool         string            `toml:"compaction_tool,omitempty"`
+	DoubleEscapeAction     string            `toml:"double_escape_action,omitempty"`
 	Models                 []ModelDef        `toml:"models,omitempty"                json:"models,omitempty"`
 	ScopedModels           []ScopedModel     `toml:"scoped_model,omitempty"          json:"scoped_model,omitempty"`
 }

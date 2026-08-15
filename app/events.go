@@ -36,6 +36,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Picker.Session != nil {
 		return m.handleSessionPickerKey(msg)
 	}
+	if m.Picker.UserMessage != nil {
+		return m.handleUserMessageForkPickerKey(msg)
+	}
 	if m.Picker.Setup != nil {
 		return m.handleSetupPromptKey(msg)
 	}
@@ -127,12 +130,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Double Escape opens tree/fork when idle.
+		// Double Escape opens tree or user message fork selector when idle (matching Pi).
 		if !m.InFlight.Thinking && !m.InFlight.AwaitingSettlement &&
 			m.Input.Pending == pendingActionNone {
 			now := time.Now()
 			if !m.Picker.LastEscAt.IsZero() && now.Sub(m.Picker.LastEscAt) < 500*time.Millisecond {
 				m.Picker.LastEscAt = time.Time{}
+				if m.Model.Config != nil && m.Model.Config.DoubleEscapeAction == "fork" {
+					return m.openUserMessageForkPicker()
+				}
 				return m.openTreePicker()
 			}
 			m.Picker.LastEscAt = now
