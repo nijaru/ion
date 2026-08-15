@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestStaleFileCompletionCannotApplyAfterRuntimeReplacement(t *testing.T) {
@@ -149,5 +151,42 @@ func TestCompleteCustomCommandRouting(t *testing.T) {
 	}
 	if len(model.Picker.Overlay.items) != 2 {
 		t.Fatalf("expected 2 items in custom command picker, got %d", len(model.Picker.Overlay.items))
+	}
+}
+
+func TestCtrlROpensHistoryPickerAndSelectsItem(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"fix compiler errors", "run test suite", "add new feature"}
+
+	// Press Ctrl+R
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl, Text: "ctrl+r"})
+	model = testModel(t, next)
+	if cmd != nil {
+		runCommandTree(t, cmd)
+	}
+
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeHistory {
+		t.Fatal("expected history picker overlay to open on ctrl+r")
+	}
+	if len(model.Picker.Overlay.items) != 3 {
+		t.Fatalf("expected 3 items in history picker, got %d", len(model.Picker.Overlay.items))
+	}
+	// Verify most recent is first
+	if model.Picker.Overlay.items[0].Value != "add new feature" {
+		t.Fatalf("item 0 = %q, want %q", model.Picker.Overlay.items[0].Value, "add new feature")
+	}
+
+	// Press Enter to select the top item
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = testModel(t, next)
+	if cmd != nil {
+		runCommandTree(t, cmd)
+	}
+
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected picker overlay to close after selection")
+	}
+	if got := model.Input.Composer.Value(); got != "add new feature" {
+		t.Fatalf("composer value = %q, want %q", got, "add new feature")
 	}
 }

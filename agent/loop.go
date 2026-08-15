@@ -96,9 +96,6 @@ func runLoop(
 	pending := drain(cfg.DrainSteer)
 
 	maxIter := cfg.MaxToolIterations
-	if maxIter <= 0 {
-		maxIter = 25 // safety default
-	}
 	innerIter := 0
 
 	// Outer loop: continues when follow-up messages arrive after agent would stop.
@@ -108,7 +105,7 @@ func runLoop(
 		// Inner loop: process tool calls and steering messages.
 		for hasMoreToolCalls || len(pending) > 0 {
 			innerIter++
-			if innerIter > maxIter {
+			if maxIter > 0 && innerIter > maxIter {
 				msg := newFailureMessage(
 					cfg.Model,
 					fmt.Errorf("max tool iterations (%d) exceeded", maxIter),

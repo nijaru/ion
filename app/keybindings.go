@@ -36,6 +36,9 @@ const (
 
 	// Clipboard
 	ActionPasteImage KeybindingAction = "clipboard.pasteImage"
+
+	// History
+	ActionSearchHistory KeybindingAction = "history.search"
 )
 
 // DefaultKeybindings maps actions to their default key combos.
@@ -49,6 +52,7 @@ var DefaultKeybindings = map[KeybindingAction]string{
 	ActionQueueFollowUp:      "alt+enter",
 	ActionPasteImage:         "ctrl+v",
 	ActionTreeFork:           "esc esc",
+	ActionSearchHistory:      "ctrl+r",
 }
 
 // KeybindingsManager manages keybindings with user overrides.

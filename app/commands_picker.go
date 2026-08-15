@@ -877,6 +877,10 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		cmd := m.setComposerDraft(selected.Value + " ")
 		m.pickerReducer().closeOverlay()
 		return m, cmd
+	case pickerPurposeHistory:
+		cmd := m.setComposerDraft(selected.Value)
+		m.pickerReducer().closeOverlay()
+		return m, cmd
 	default:
 		m.pickerReducer().closeOverlay()
 		return m, nil

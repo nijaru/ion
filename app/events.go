@@ -67,6 +67,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.ToolOutputExpanded = !m.ToolOutputExpanded
 		return m, nil
 
+	case "ctrl+r":
+		m.clearPendingAction()
+		return m.openHistoryPicker(), nil
+
 	case "ctrl+z":
 		m.clearPendingAction()
 		return m, tea.Suspend
@@ -516,6 +520,56 @@ func (m Model) openCommandPicker(prefix string) Model {
 		purpose:  pickerPurposeCommand,
 	})
 	refreshPickerFilter(&m)
+	return m
+}
+
+func (m Model) openHistoryPicker() Model {
+	var items []pickerItem
+	seen := make(map[string]bool)
+	for i := len(m.Input.History) - 1; i >= 0; i-- {
+		text := strings.TrimSpace(m.Input.History[i])
+		if text == "" || seen[text] {
+			continue
+		}
+		seen[text] = true
+		preview := text
+		if len(preview) > 80 {
+			preview = preview[:77] + "..."
+		}
+		items = append(items, pickerItem{
+			Label: preview,
+			Value: text,
+		})
+	}
+	if m.Model.InputHistory != nil {
+		if persistent, err := m.Model.InputHistory.GetInputs(context.Background(), m.App.Workdir, 100); err == nil {
+			for _, text := range persistent {
+				text = strings.TrimSpace(text)
+				if text == "" || seen[text] {
+					continue
+				}
+				seen[text] = true
+				preview := text
+				if len(preview) > 80 {
+					preview = preview[:77] + "..."
+				}
+				items = append(items, pickerItem{
+					Label: preview,
+					Value: text,
+				})
+			}
+		}
+	}
+	if len(items) == 0 {
+		return m
+	}
+	m.pickerReducer().openOverlay(pickerOverlayState{
+		title:    "Search prompt history",
+		items:    items,
+		filtered: clonePickerItems(items),
+		index:    0,
+		purpose:  pickerPurposeHistory,
+	})
 	return m
 }
 

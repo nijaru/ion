@@ -355,6 +355,7 @@ const (
 	pickerPurposeCommand
 	pickerPurposeSettings
 	pickerPurposeProviderSetup // Tab-accessible provider setup (login/endpoint)
+	pickerPurposeHistory
 )
 
 type pickerItem struct {
