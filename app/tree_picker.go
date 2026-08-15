@@ -635,6 +635,16 @@ func (m Model) renderTreePicker() string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(m.cardDivider())
+	b.WriteString("\n")
+	b.WriteString(
+		m.cardPaddedLine(
+			m.st.dim,
+			"  ↑/↓: navigate • Tab/f: cycle filter • Enter: branch/switch • Esc: close",
+		),
+	)
+	b.WriteString("\n")
+
 	b.WriteString(m.cardBottomBorder())
 	return b.String()
 }
