@@ -47,6 +47,7 @@ func TestDeterministicTUIAcceptance(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	close(provider.release)
 
+	waitForAcceptanceOutput(t, output, "› run the deterministic tool", "submitted user prompt")
 	waitForAcceptanceOutput(t, output, "tool-output", "persisted tool output")
 	waitForAcceptanceOutput(t, output, "final-output", "final assistant output")
 	if !provider.requestContains("steer-now") {

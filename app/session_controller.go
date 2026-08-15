@@ -702,9 +702,21 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleTurnStarted(msg)
 
 	case session.MessageStart:
-		// Keep the assistant's partial message in Plane B so streaming text is
-		// visible before MessageEnd commits it to the transcript.
-		m.turnReducer().StartAssistantMessage(msg.Message)
+		switch message := msg.Message.(type) {
+		case *session.UserMessage:
+			// Inline mode keeps completed conversation entries in terminal
+			// scrollback. Commit the prompt before the composer is redrawn so a
+			// submitted message cannot disappear behind the live shell frame.
+			entry := &session.MessageEntry{
+				EntryBase: session.EntryBase{Timestamp: message.Timestamp},
+				Message:   message,
+			}
+			return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+		case *session.AssistantMessage:
+			// Keep the assistant's partial message in Plane B so streaming text is
+			// visible before MessageEnd commits it to the transcript.
+			m.turnReducer().StartAssistantMessage(message)
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnEnd:

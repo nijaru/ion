@@ -200,6 +200,29 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	}
 }
 
+func TestSessionUserMessageStartCommitsPromptToScrollback(t *testing.T) {
+	model := readyModel(t)
+	now := time.Now()
+	message := &session.UserMessage{
+		Content:   []session.Content{session.TextContent{Text: "submitted prompt"}},
+		Timestamp: now,
+	}
+
+	next, cmd := model.handleSessionEvent(session.MessageStart{Message: message})
+	if cmd == nil {
+		t.Fatal("user message start returned no event-wait command")
+	}
+	if !next.App.PrintedTranscript {
+		t.Fatal("user message start did not mark transcript as printed")
+	}
+	if got := ansi.Strip(strings.Join(next.RenderEntries(&session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: now},
+		Message:   message,
+	}), "\n")); !strings.Contains(got, "submitted prompt") {
+		t.Fatalf("rendered prompt = %q, want submitted prompt", got)
+	}
+}
+
 func TestSessionAssistantStreamUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 	now := time.Now()
