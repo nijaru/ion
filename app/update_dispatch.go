@@ -103,6 +103,9 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		}
 		return m, m.pollGitBranch(), true
 
+	case directShellResultMsg:
+		return m, m.terminalCommit().Entries(systemEntry(msg.content)), true
+
 	case externalEditorFinishedMsg:
 		next, cmd := m.handleExternalEditorFinished(msg)
 		return next, cmd, true

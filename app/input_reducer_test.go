@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,5 +223,33 @@ func TestInputReducerPendingActionAndDeferredEnterState(t *testing.T) {
 	model.inputReducer().finishDeferredEnter()
 	if model.Input.DeferredEnter || model.Input.PrintHoldDelay != 0 {
 		t.Fatalf("deferred state = %#v, want finished", model.Input)
+	}
+}
+
+func TestDirectShellExecution(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("!echo 'hello ion'")
+
+	submitted, cmd := model.submitComposer()
+	if cmd == nil {
+		t.Fatal("expected non-nil command for direct shell execution")
+	}
+	if submitted.Input.Composer.Value() != "" {
+		t.Fatalf("composer draft = %q, want reset", submitted.Input.Composer.Value())
+	}
+	if len(submitted.Input.History) == 0 ||
+		submitted.Input.History[len(submitted.Input.History)-1] != "!echo 'hello ion'" {
+		t.Fatalf("history = %#v, want !echo in history", submitted.Input.History)
+	}
+
+	// Execute cmd
+	res := cmd()
+	msg, ok := res.(directShellResultMsg)
+	if !ok {
+		// sequenceCmds may return multiple messages, check type
+		t.Fatalf("msg = %T, want directShellResultMsg", res)
+	}
+	if !strings.Contains(msg.content, "hello ion") {
+		t.Fatalf("content = %q, want 'hello ion'", msg.content)
 	}
 }

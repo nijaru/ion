@@ -287,6 +287,10 @@ type terminalCommitLinesMsg struct {
 	lines      []string
 }
 
+type directShellResultMsg struct {
+	content string
+}
+
 type gitDiffStatsMsg struct {
 	generation uint64
 	workdir    string

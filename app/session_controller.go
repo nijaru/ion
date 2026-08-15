@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -131,6 +132,22 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 			return m, cmdError("image attachments cannot be used with slash commands")
 		}
 		return m.submitText(text)
+	}
+	if strings.HasPrefix(text, "!") {
+		if len(images) > 0 {
+			return m, cmdError("image attachments cannot be used with shell commands")
+		}
+		historyText, historyChanged := m.appendInputHistory(text)
+		var historyCmd tea.Cmd
+		if historyChanged {
+			historyCmd = m.persistInputHistory(m.runtimeOperationContext(), historyText)
+		}
+		m.resetComposerDraft()
+		cmdText := strings.TrimSpace(strings.TrimPrefix(text, "!"))
+		if cmdText == "" {
+			return m, cmdError("empty shell command")
+		}
+		return m, sequenceCmds(m.executeDirectShellCommand(cmdText), historyCmd)
 	}
 	if m.localCommandBusy() {
 		return m.submitBusyInput(text, images)
@@ -394,6 +411,29 @@ func (m Model) recallQueuedInputToComposer() (Model, tea.Cmd, bool) {
 	}
 	m.Input.Images = cloneImageAttachments(res.Images)
 	return m, m.setComposerDraft(res.Text), true
+}
+
+func (m Model) executeDirectShellCommand(command string) tea.Cmd {
+	workdir := m.App.Workdir
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = workdir
+		out, err := cmd.CombinedOutput()
+		result := strings.TrimRight(string(out), "\r\n")
+		header := fmt.Sprintf("$ %s", command)
+		if err != nil {
+			if result != "" {
+				return directShellResultMsg{content: fmt.Sprintf("%s\n%s\n(exit: %v)", header, result, err)}
+			}
+			return directShellResultMsg{content: fmt.Sprintf("%s\n(exit: %v)", header, err)}
+		}
+		if result == "" {
+			return directShellResultMsg{content: header}
+		}
+		return directShellResultMsg{content: fmt.Sprintf("%s\n%s", header, result)}
+	}
 }
 
 func cloneImageAttachments(images []session.ImageContent) []session.ImageContent {
