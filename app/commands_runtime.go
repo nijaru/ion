@@ -240,11 +240,11 @@ func (m Model) cycleScopedModelResolved(
 		return m, cmdError(fmt.Sprintf("failed to resolve scoped model: %v", err))
 	}
 	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
-	notice := systemEntry("Switched to " + label)
 	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	m.progressReducer().setStatus("Switched to " + label)
 	return m.switchRuntimeCommand(
 		transition,
-		notice,
+		nil,
 		m.currentResumeLeafID(),
 		false,
 	)
@@ -308,11 +308,11 @@ func (m Model) cyclePresetFallback(
 		return m, cmdError(fmt.Sprintf("failed to resolve model: %v", err))
 	}
 	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
-	notice := systemEntry("Switched to " + label)
 	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	m.progressReducer().setStatus("Switched to " + label)
 	return m.switchRuntimeCommand(
 		transition,
-		notice,
+		nil,
 		m.currentResumeLeafID(),
 		false,
 	)
