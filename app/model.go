@@ -1263,7 +1263,7 @@ func providerSetupPrompt(
 	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" {
 		return 0, nil
 	}
-	def, ok := llm.Lookup(cfg.Provider)
+	def, ok := llm.LookupConfig(cfg, cfg.Provider)
 	if !ok {
 		return 0, fmt.Errorf("unsupported provider %q", strings.TrimSpace(cfg.Provider))
 	}

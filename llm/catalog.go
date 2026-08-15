@@ -79,8 +79,74 @@ func Lookup(id string) (Definition, bool) {
 	return Definition{}, false
 }
 
+func LookupConfig(cfg *config.Config, id string) (Definition, bool) {
+	if def, ok := Lookup(id); ok {
+		return def, true
+	}
+	needle := normalize(id)
+	if needle == "" {
+		return Definition{}, false
+	}
+	if cfg != nil {
+		if cfg.Providers != nil {
+			for name, ps := range cfg.Providers {
+				if normalize(name) == needle {
+					family := FamilyOpenAI
+					if strings.EqualFold(ps.Family, "anthropic") {
+						family = FamilyAnthropic
+					}
+					displayName := ps.DisplayName
+					if displayName == "" {
+						displayName = name
+					}
+					authKind := AuthOptional
+					if strings.TrimSpace(ps.APIKey) != "" || strings.TrimSpace(ps.AuthEnvVar) != "" {
+						authKind = AuthAPIKey
+					}
+					return Definition{
+						ID:                     normalize(name),
+						DisplayName:            displayName,
+						Kind:                   KindCustom,
+						Family:                 family,
+						AuthKind:               authKind,
+						DefaultEnvVar:          ps.AuthEnvVar,
+						DefaultEndpoint:        ps.Endpoint,
+						SupportsModelListing:   true,
+						SupportsCustomEndpoint: true,
+					}, true
+				}
+			}
+		}
+		if (normalize(cfg.Provider) == needle || cfg.Endpoint != "") && strings.TrimSpace(cfg.Endpoint) != "" {
+			displayName := id
+			if normalize(cfg.Provider) == needle && strings.TrimSpace(cfg.Provider) != "" {
+				displayName = cfg.Provider
+			}
+			return Definition{
+				ID:                     needle,
+				DisplayName:            displayName,
+				Kind:                   KindCustom,
+				Family:                 FamilyOpenAI,
+				AuthKind:               AuthOptional,
+				DefaultEnvVar:          cfg.AuthEnvVar,
+				DefaultEndpoint:        cfg.Endpoint,
+				SupportsModelListing:   true,
+				SupportsCustomEndpoint: true,
+			}, true
+		}
+	}
+	return Definition{}, false
+}
+
 func ResolveID(id string) string {
 	if def, ok := Lookup(id); ok {
+		return def.ID
+	}
+	return normalize(id)
+}
+
+func ResolveIDConfig(cfg *config.Config, id string) string {
+	if def, ok := LookupConfig(cfg, id); ok {
 		return def.ID
 	}
 	return normalize(id)
@@ -93,15 +159,30 @@ func DisplayName(id string) string {
 	return id
 }
 
+func DisplayNameConfig(cfg *config.Config, id string) string {
+	if def, ok := LookupConfig(cfg, id); ok {
+		return def.DisplayName
+	}
+	return id
+}
+
 func IsOpenAICompatible(id string) bool {
 	return ResolveID(id) == OpenAICompatibleID
+}
+
+func IsOpenAICompatibleConfig(cfg *config.Config, id string) bool {
+	def, ok := LookupConfig(cfg, id)
+	if !ok {
+		return false
+	}
+	return def.ID == OpenAICompatibleID || (def.Kind == KindCustom && def.Family == FamilyOpenAI)
 }
 
 func ResolvedAuthEnvVar(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	def, ok := Lookup(cfg.Provider)
+	def, ok := LookupConfig(cfg, cfg.Provider)
 	if !ok {
 		return ""
 	}
@@ -121,6 +202,11 @@ func CredentialEnvVars(cfg *config.Config) []string {
 	}
 	if cfg != nil {
 		add(cfg.AuthEnvVar)
+		if cfg.Providers != nil {
+			for _, ps := range cfg.Providers {
+				add(ps.AuthEnvVar)
+			}
+		}
 	}
 	for _, def := range definitions {
 		add(def.DefaultEnvVar)
@@ -142,8 +228,13 @@ func ResolvedAuthToken(cfg *config.Config, def Definition) string {
 	}
 	if cfg != nil {
 		if override := strings.TrimSpace(cfg.APIKeyOverride); override != "" &&
-			ResolveID(cfg.Provider) == ResolveID(cfg.APIKeyOverrideProvider) {
+			ResolveIDConfig(cfg, cfg.Provider) == ResolveIDConfig(cfg, cfg.APIKeyOverrideProvider) {
 			return override
+		}
+		if cfg.Providers != nil {
+			if ps, ok := cfg.Providers[def.ID]; ok && strings.TrimSpace(ps.APIKey) != "" {
+				return strings.TrimSpace(ps.APIKey)
+			}
 		}
 	}
 	for _, envVar := range authEnvVars(cfg, def) {
@@ -187,7 +278,7 @@ func ResolvedHeaders(cfg *config.Config) map[string]string {
 	if cfg == nil {
 		return nil
 	}
-	def, ok := Lookup(cfg.Provider)
+	def, ok := LookupConfig(cfg, cfg.Provider)
 	if !ok {
 		return cloneHeaders(cfg.ExtraHeaders)
 	}
@@ -214,10 +305,20 @@ func CredentialStateContext(
 	def Definition,
 	resolver *EndpointResolver,
 ) (string, bool) {
-	if def.ID == OpenAICompatibleID {
+	if def.ID == OpenAICompatibleID || (def.Kind == KindCustom && def.Family == FamilyOpenAI) {
 		configuredEndpoint := ""
 		if cfg != nil {
-			configuredEndpoint = strings.TrimSpace(cfg.Endpoint)
+			if cfg.Providers != nil {
+				if ps, ok := cfg.Providers[def.ID]; ok && strings.TrimSpace(ps.Endpoint) != "" {
+					configuredEndpoint = strings.TrimSpace(ps.Endpoint)
+				}
+			}
+			if configuredEndpoint == "" {
+				configuredEndpoint = strings.TrimSpace(cfg.Endpoint)
+			}
+		}
+		if configuredEndpoint == "" {
+			configuredEndpoint = strings.TrimSpace(def.DefaultEndpoint)
 		}
 		if RequiresAuth(cfg, def) && ResolvedAuthToken(cfg, def) == "" {
 			return fmt.Sprintf("Set %s", MissingAuthDetail(cfg, def)), false
@@ -237,7 +338,14 @@ func CredentialStateContext(
 	}
 	endpoint := ""
 	if cfg != nil {
-		endpoint = cfg.Endpoint
+		if cfg.Providers != nil {
+			if ps, ok := cfg.Providers[def.ID]; ok && strings.TrimSpace(ps.Endpoint) != "" {
+				endpoint = strings.TrimSpace(ps.Endpoint)
+			}
+		}
+		if endpoint == "" {
+			endpoint = cfg.Endpoint
+		}
 	}
 	if def.Kind == KindCustom && def.DefaultEndpoint == "" &&
 		strings.TrimSpace(endpoint) == "" {

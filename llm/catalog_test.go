@@ -437,3 +437,32 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 		t.Fatalf("direct credential state = (%q, %v), want Set OPENAI_API_KEY false", detail, ready)
 	}
 }
+
+func TestCustomNamedProviderLookupAndResolution(t *testing.T) {
+	cfg := &config.Config{
+		Provider: "fedora",
+		Model:    "qwen3.8:27b",
+		Providers: map[string]config.ProviderSettings{
+			"fedora": {
+				Endpoint: "http://fedora:8080/v1",
+			},
+		},
+	}
+	def, ok := LookupConfig(cfg, "fedora")
+	if !ok {
+		t.Fatal("expected LookupConfig to find custom provider 'fedora'")
+	}
+	if def.ID != "fedora" {
+		t.Fatalf("def.ID = %q, want fedora", def.ID)
+	}
+	if def.Kind != KindCustom || def.Family != FamilyOpenAI {
+		t.Fatalf("def.Kind/Family = %s/%s, want custom/openai", def.Kind, def.Family)
+	}
+	if got := ResolveIDConfig(cfg, "fedora"); got != "fedora" {
+		t.Fatalf("ResolveIDConfig = %q, want fedora", got)
+	}
+	resolver := newTestEndpointResolver()
+	if got := resolver.Resolve(context.Background(), cfg); got != "http://fedora:8080/v1" {
+		t.Fatalf("resolved endpoint = %q, want http://fedora:8080/v1", got)
+	}
+}

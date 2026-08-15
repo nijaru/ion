@@ -227,7 +227,7 @@ func resolveStartupConfig(ctx context.Context, cfg *config.Config, endpointResol
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cfg.Provider = llm.ResolveID(cfg.Provider)
+	cfg.Provider = llm.ResolveIDConfig(cfg, cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
@@ -235,7 +235,7 @@ func resolveStartupConfig(ctx context.Context, cfg *config.Config, endpointResol
 	if cfg.Provider == "" {
 		return errNoProviderConfigured
 	}
-	def, ok := llm.Lookup(cfg.Provider)
+	def, ok := llm.LookupConfig(cfg, cfg.Provider)
 	if !ok {
 		return fmt.Errorf("unsupported provider %q", cfg.Provider)
 	}
@@ -266,8 +266,8 @@ func applyCLIConfigOverrides(
 		return
 	}
 	if strings.TrimSpace(providerOverride) != "" {
-		provider := llm.ResolveID(providerOverride)
-		if provider != llm.ResolveID(cfg.Provider) {
+		provider := llm.ResolveIDConfig(cfg, providerOverride)
+		if provider != llm.ResolveIDConfig(cfg, cfg.Provider) {
 			if strings.TrimSpace(modelOverride) == "" {
 				cfg.Model = ""
 			}
@@ -278,8 +278,8 @@ func applyCLIConfigOverrides(
 	if model := strings.TrimSpace(modelOverride); model != "" {
 		if cfg.Provider == "" {
 			if provider, rest, ok := strings.Cut(model, "/"); ok {
-				resolved := llm.ResolveID(provider)
-				if _, exists := llm.Lookup(resolved); exists {
+				resolved := llm.ResolveIDConfig(cfg, provider)
+				if _, exists := llm.LookupConfig(cfg, resolved); exists {
 					cfg.Provider = resolved
 					cfg.Model = strings.TrimSpace(rest)
 					model = ""
@@ -401,11 +401,11 @@ func applySessionConfigFromMetadata(
 }
 
 func runtimeInfoForProvider(provider string, cfg *config.Config) (app.RuntimeInfo, error) {
-	provider = llm.ResolveID(provider)
+	provider = llm.ResolveIDConfig(cfg, provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
 	}
-	def, ok := llm.Lookup(provider)
+	def, ok := llm.LookupConfig(cfg, provider)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}

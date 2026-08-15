@@ -133,11 +133,12 @@ func (m Model) commandConfigWithActiveProvider(cfg *config.Config) *config.Confi
 		return cfg
 	}
 
-	def, ok := llm.Lookup(provider)
+	def, ok := llm.LookupConfig(cfg, provider)
 	if !ok {
 		return cfg
 	}
-	if def.ID == llm.OpenAICompatibleID && strings.TrimSpace(cfg.Endpoint) == "" {
+	if (def.ID == llm.OpenAICompatibleID || def.Kind == llm.KindCustom) && strings.TrimSpace(cfg.Endpoint) == "" &&
+		strings.TrimSpace(def.DefaultEndpoint) == "" {
 		return cfg
 	}
 

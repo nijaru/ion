@@ -987,14 +987,14 @@ func updateProviderSelection(
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	resolved := llm.ResolveID(provider)
-	def, ok := llm.Lookup(resolved)
+	resolved := llm.ResolveIDConfig(cfg, provider)
+	def, ok := llm.LookupConfig(cfg, resolved)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", strings.TrimSpace(provider))
 	}
 	updated := *cfg
 	updated.Provider = def.ID
-	if llm.ResolveID(cfg.Provider) == def.ID {
+	if llm.ResolveIDConfig(cfg, cfg.Provider) == def.ID {
 		return &updated, nil
 	}
 	updated.Model = ""

@@ -25,6 +25,11 @@ type ModelRouting struct {
 
 // ProviderSettings holds per-provider overrides.
 type ProviderSettings struct {
+	DisplayName  string                  `toml:"display_name,omitempty"`
+	Endpoint     string                  `toml:"endpoint,omitempty"`
+	AuthEnvVar   string                  `toml:"auth_env_var,omitempty"`
+	APIKey       string                  `toml:"api_key,omitempty"`
+	Family       string                  `toml:"family,omitempty"`
 	ModelRouting map[string]ModelRouting `toml:"model_routing,omitempty"`
 }
 

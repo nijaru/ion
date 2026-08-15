@@ -56,18 +56,22 @@ func (r *EndpointResolver) Resolve(ctx context.Context, cfg *config.Config) stri
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	def, ok := Lookup(cfg.Provider)
+	def, ok := LookupConfig(cfg, cfg.Provider)
 	if !ok {
 		return ""
+	}
+	if cfg.Providers != nil {
+		if ps, ok := cfg.Providers[cfg.Provider]; ok && strings.TrimSpace(ps.Endpoint) != "" {
+			return strings.TrimSpace(ps.Endpoint)
+		}
 	}
 	if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" && def.SupportsCustomEndpoint {
 		return endpoint
 	}
-	if def.ID == OpenAICompatibleID {
+	if def.ID == OpenAICompatibleID || (def.Kind == KindCustom && def.Family == FamilyOpenAI) {
 		if endpoint, ok := r.Probe(ctx, cfg); ok {
 			return endpoint
 		}
-		return ""
 	}
 	return strings.TrimSpace(def.DefaultEndpoint)
 }

@@ -245,7 +245,7 @@ func openAICompatibleProviderDetail(
 }
 
 func providerSortRank(cfg *config.Config, provider string, resolver *llm.EndpointResolver) int {
-	def, ok := llm.Lookup(provider)
+	def, ok := llm.LookupConfig(cfg, provider)
 	if !ok {
 		return 99
 	}

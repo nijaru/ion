@@ -23,7 +23,7 @@ func (m Model) openAPIKeyPrompt(
 	provider string,
 	preset Preset,
 ) (Model, tea.Cmd) {
-	def, ok := llm.Lookup(provider)
+	def, ok := llm.LookupConfig(cfg, provider)
 	if !ok {
 		return m, cmdError(fmt.Sprintf("unsupported provider %q", strings.TrimSpace(provider)))
 	}

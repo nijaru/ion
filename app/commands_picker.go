@@ -494,7 +494,7 @@ func (m Model) handleModelPickerSetupResolved(
 
 func (m Model) openModelSelectionForPreset(cfg *config.Config, preset Preset) (Model, tea.Cmd) {
 	if cfg != nil {
-		if def, ok := llm.Lookup(cfg.Provider); ok && !def.SupportsModelListing {
+		if def, ok := llm.LookupConfig(cfg, cfg.Provider); ok && !def.SupportsModelListing {
 			return m.openModelIDPrompt(cfg, preset)
 		}
 	}
@@ -1030,7 +1030,7 @@ func (m Model) openProviderSelection(
 	// Provider setup has already been resolved above. Catalog discovery is
 	// optional and asynchronous; a listing failure must not be misreported as
 	// missing credentials.
-	def, _ := llm.Lookup(cfg.Provider)
+	def, _ := llm.LookupConfig(cfg, cfg.Provider)
 
 	// Provider ready — open a manual model prompt when the provider does not
 	// expose discovery; otherwise use the catalog-backed picker.

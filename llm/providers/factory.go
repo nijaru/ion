@@ -40,7 +40,7 @@ func NewProviderFromConfig(
 		return nil, fmt.Errorf("provider not specified")
 	}
 
-	def, ok := llm.Lookup(providerName)
+	def, ok := llm.LookupConfig(cfg, providerName)
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider %q", providerName)
 	}
