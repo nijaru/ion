@@ -289,6 +289,10 @@ func entryDisplayTitle(e session.Entry) string {
 
 func entrySummary(e session.Entry) string {
 	switch e := e.(type) {
+	case *session.LabelEntry:
+		if e.Label != "" {
+			return "🏷 " + e.Label
+		}
 	case *session.BranchSummaryEntry:
 		s := e.Summary
 		// Use first line of summary.

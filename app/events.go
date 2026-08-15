@@ -53,7 +53,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "ctrl+g":
+	case "ctrl+g", "alt+e", "meta+e":
 		m.clearPendingAction()
 		return m.openExternalEditor()
 
