@@ -159,15 +159,12 @@ func buildProviderItem(cfg *config.Config, def llm.Definition, resolver *llm.End
 		group = "Needs setup"
 	}
 	return pickerItem{
-		Label:       label,
-		Value:       def.ID,
-		Detail:      detail,
-		Group:       group,
-		Tone:        tone,
-		SettingName: label,
-		CurrentVal:  detail,
-		Desc:        group,
-		Search:      pickerSearchIndex(label, def.ID, detail+" "+def.DisplayName, group, nil),
+		Label:  label,
+		Value:  def.ID,
+		Detail: detail,
+		Group:  group,
+		Tone:   tone,
+		Search: pickerSearchIndex(label, def.ID, detail+" "+def.DisplayName, group, nil),
 	}
 }
 
