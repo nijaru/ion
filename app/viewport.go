@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/terminal"
 	"github.com/nijaru/ion/session"
 )
 
@@ -302,20 +303,20 @@ func (m Model) renderEntry(e session.Entry) string {
 		rendered := strings.TrimRightFunc(m.renderMarkdownContent(session.EntryContent(e)), unicode.IsSpace)
 		if rendered == "" {
 			if b.Len() > 0 {
-				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+				return terminal.WrapTurnOutput(strings.TrimRightFunc(b.String(), unicode.IsSpace), false)
 			}
 			if session.EntryReasoning(e) != "" {
 				b.WriteString(m.st.system.Render("• Thinking..."))
-				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+				return terminal.WrapTurnOutput(strings.TrimRightFunc(b.String(), unicode.IsSpace), false)
 			}
 			b.WriteString(m.st.agent.Render("• "))
-			return b.String()
+			return terminal.WrapTurnOutput(b.String(), false)
 		}
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
 		b.WriteString(m.renderCompletedAgentContent(rendered))
-		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+		return terminal.WrapTurnOutput(strings.TrimRightFunc(b.String(), unicode.IsSpace), false)
 
 	case session.RoleTool:
 		label := m.normalizeToolTitle(session.EntryTitle(e))
@@ -391,7 +392,7 @@ func (m Model) renderEntry(e session.Entry) string {
 func (m Model) renderUserEntry(content string) string {
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
-		return m.st.user.Render("› ")
+		return terminal.WrapUserPrompt(m.st.user.Render("› "))
 	}
 	rows := strings.Split(content, "\n")
 	for i, row := range rows {
@@ -401,5 +402,5 @@ func (m Model) renderUserEntry(content string) string {
 		}
 		rows[i] = m.st.user.Render(prefix + row)
 	}
-	return strings.Join(rows, "\n")
+	return terminal.WrapUserPrompt(strings.Join(rows, "\n"))
 }

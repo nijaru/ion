@@ -1,11 +1,13 @@
 package app
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-
 	"charm.land/lipgloss/v2"
+	"github.com/nijaru/ion/internal/terminal"
 )
 
 type styles struct {
@@ -119,7 +121,34 @@ func (m Model) View() tea.View {
 	}
 
 	b.WriteString(m.renderShell())
-	return tea.NewView(b.String())
+	oscHeader := terminal.SetWindowTitle(m.terminalTitle()) +
+		terminal.ProgressSequence(m.terminalIsBusy(), m.Progress.Mode == StateError)
+	return tea.NewView(oscHeader + b.String())
+}
+
+func (m Model) terminalTitle() string {
+	name := m.App.SessionName
+	if name == "" {
+		if m.App.Workdir != "" {
+			name = filepath.Base(m.App.Workdir)
+		} else {
+			name = "ion"
+		}
+	}
+	if m.terminalIsBusy() {
+		return fmt.Sprintf("ion [busy] • %s", name)
+	}
+	return fmt.Sprintf("ion • %s", name)
+}
+
+func (m Model) terminalIsBusy() bool {
+	return m.InFlight.ReasonBuf != "" ||
+		m.InFlight.Pending != nil ||
+		len(m.InFlight.PendingTools) > 0 ||
+		m.Progress.Mode == StateIonizing ||
+		m.Progress.Mode == StateStreaming ||
+		m.Progress.Mode == StateWorking ||
+		m.Progress.Compacting
 }
 
 func (m Model) renderShell() string {
