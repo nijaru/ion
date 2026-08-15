@@ -91,6 +91,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleCompactCommand()
 	case "/tree":
 		return m.openTreePicker()
+	case "/fork":
+		return m.handleForkCommand(fields)
+	case "/undo":
+		return m.handleUndoCommand()
+	case "/diff":
+		return m.handleDiffCommand(fields)
 	case "/export":
 		return m.exportSession()
 	case "/export-html":

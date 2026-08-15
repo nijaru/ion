@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	ionexport "github.com/nijaru/ion/internal/export"
+	"github.com/nijaru/ion/session"
 )
 
 type sessionNamingTestRunner struct {
@@ -428,4 +430,78 @@ func TestCompactionFailureClearsBusyState(t *testing.T) {
 	if next.Progress.Compacting {
 		t.Fatal("compaction failure left compacting state active")
 	}
+}
+
+func TestUndoCommand(t *testing.T) {
+	model := readyModel(t)
+	now := time.Now()
+	userMsg := session.NewUserText("write a web server in go", now)
+	userEntry := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "entry-user", ParentID: "entry-root", Timestamp: now},
+		Message:   userMsg,
+	}
+	assistantMsg := &session.AssistantMessage{
+		Content: []session.Content{session.TextContent{Text: "here is the server"}},
+	}
+	assistantEntry := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "entry-assistant", ParentID: "entry-user", Timestamp: now},
+		Message:   assistantMsg,
+	}
+
+	runner := &stubRunner{
+		branchEntries: []session.Entry{userEntry, assistantEntry},
+	}
+	model.Model.Runner = runner
+	model.Model.LeafID = "entry-assistant"
+
+	updated, cmd := model.handleUndoCommand()
+	if cmd == nil {
+		t.Fatal("undo command returned nil cmd")
+	}
+	msg := cmd()
+	undoMsg, ok := msg.(undoResultMsg)
+	if !ok {
+		t.Fatalf("undo result msg = %T, want undoResultMsg", msg)
+	}
+	if undoMsg.err != nil {
+		t.Fatalf("undo error: %v", undoMsg.err)
+	}
+	if undoMsg.targetLeafID != "entry-root" {
+		t.Fatalf("undo targetLeafID = %q, want entry-root", undoMsg.targetLeafID)
+	}
+	if undoMsg.promptText != "write a web server in go" {
+		t.Fatalf("undo promptText = %q, want 'write a web server in go'", undoMsg.promptText)
+	}
+
+	next, followUp := updated.handleUndoResult(undoMsg)
+	if followUp == nil {
+		t.Fatal("handleUndoResult returned nil followUp cmd")
+	}
+	if next.Model.LeafID != "entry-root" {
+		t.Fatalf("model leaf after undo = %q, want entry-root", next.Model.LeafID)
+	}
+	if got := next.Input.Composer.Value(); got != "write a web server in go" {
+		t.Fatalf("composer value after undo = %q, want 'write a web server in go'", got)
+	}
+}
+
+func TestDiffCommand(t *testing.T) {
+	model := readyModel(t)
+	model.App.Workdir = t.TempDir()
+
+	updated, cmd := model.handleDiffCommand([]string{"/diff"})
+	if cmd == nil {
+		t.Fatal("diff command returned nil cmd")
+	}
+	msg := cmd()
+	diffMsg, ok := msg.(diffResultMsg)
+	if !ok {
+		t.Fatalf("diff result msg = %T, want diffResultMsg", msg)
+	}
+	// In an empty temp dir (not a git repo), diffMsg returns error, handled gracefully
+	next, followUp := updated.handleDiffResult(diffMsg)
+	if followUp == nil {
+		t.Fatal("handleDiffResult returned nil followUp cmd")
+	}
+	_ = next
 }

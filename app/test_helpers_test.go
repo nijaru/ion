@@ -212,6 +212,8 @@ type stubRunner struct {
 	navigateErr    error
 	thinking       []session.ThinkingLevel
 	thinkingErr    error
+	branchEntries  []session.Entry
+	branchErr      error
 }
 
 func (r *stubRunner) Subscribe(context.Context, agent.EventCursor) (*agent.EventSubscription, error) {
@@ -324,7 +326,7 @@ func (r *stubRunner) NavigateTree(
 	r.navigates++
 	r.navigateID = targetID
 	r.navigateOpts = opts
-	return agent.NavigateResult{}, r.navigateErr
+	return agent.NavigateResult{LeafID: targetID}, r.navigateErr
 }
 
 func (r *stubRunner) AppendLabel(context.Context, string, string, string) (string, error) {
@@ -335,6 +337,18 @@ func (r *stubRunner) GetBranchLabel(context.Context, string) (string, error) { r
 func (r *stubRunner) Compact(_ context.Context) error {
 	r.compacts++
 	return r.compactErr
+}
+
+func (r *stubRunner) SessionID() string {
+	return "test-session"
+}
+
+func (r *stubRunner) SessionBranch(context.Context) ([]session.Entry, error) {
+	return r.branchEntries, r.branchErr
+}
+
+func (r *stubRunner) SessionTree(context.Context) (agent.SessionTreeSnapshot, error) {
+	return agent.SessionTreeSnapshot{}, nil
 }
 
 // --- stubBackend implements RuntimeInfo ---

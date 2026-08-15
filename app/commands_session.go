@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/nijaru/ion/config"
@@ -767,4 +768,135 @@ func (m Model) handleLabelShow(msg labelShowMsg) (Model, tea.Cmd) {
 		return m, m.terminalCommit().Entries(systemEntry("ℹ no label set on current branch"))
 	}
 	return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("🏷 label: %s", msg.label)))
+}
+
+func (m Model) handleForkCommand(fields []string) (Model, tea.Cmd) {
+	if len(fields) <= 1 {
+		return m.openTreePicker()
+	}
+	leafID := m.currentResumeLeafID()
+	if leafID == "" {
+		return m, cmdError("no active session to fork")
+	}
+	return m.openBranchSummaryPrompt(leafID)
+}
+
+func (m Model) handleUndoCommand() (Model, tea.Cmd) {
+	if m.Model.Runner == nil {
+		return m, cmdError("no active session")
+	}
+	reader, ok := m.Model.Runner.(agent.SessionReader)
+	if !ok {
+		return m, cmdError("session reader unavailable")
+	}
+	navigator, ok := m.Model.Runner.(agent.SessionNavigator)
+	if !ok {
+		return m, cmdError("session navigation unavailable")
+	}
+	generation := m.Model.EventGeneration
+	ctx := m.runtimeOperationContext()
+	return m, func() tea.Msg {
+		entries, err := reader.SessionBranch(ctx)
+		if err != nil {
+			return undoResultMsg{generation: generation, err: err}
+		}
+		var (
+			targetLeafID   string
+			lastUserPrompt string
+			found          bool
+		)
+		for i := len(entries) - 1; i >= 0; i-- {
+			e := entries[i]
+			if session.EntryRole(e) == session.RoleUser {
+				targetLeafID = e.ParentID()
+				lastUserPrompt = session.EntryText(e)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return undoResultMsg{generation: generation, err: errors.New("no user turns to undo on current branch")}
+		}
+		result, err := navigator.NavigateTree(ctx, targetLeafID, agent.NavigateOptions{})
+		if err != nil {
+			return undoResultMsg{generation: generation, err: err}
+		}
+		return undoResultMsg{
+			generation:   generation,
+			targetLeafID: result.LeafID,
+			promptText:   lastUserPrompt,
+		}
+	}
+}
+
+type undoResultMsg struct {
+	generation   uint64
+	targetLeafID string
+	promptText   string
+	err          error
+}
+
+func (m Model) handleUndoResult(msg undoResultMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ undo: %v", msg.err)))
+	}
+	if msg.targetLeafID != "" {
+		m.Model.LeafID = msg.targetLeafID
+	}
+	var cmds []tea.Cmd
+	if msg.promptText != "" {
+		cmds = append(cmds, m.setComposerDraft(msg.promptText))
+	}
+	cmds = append(cmds, m.terminalCommit().Entries(systemEntry("⎌ Undid last turn and restored prompt to composer.")))
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) handleDiffCommand(fields []string) (Model, tea.Cmd) {
+	workdir := m.App.Workdir
+	if workdir == "" {
+		workdir = "."
+	}
+	args := []string{"diff"}
+	if len(fields) > 1 {
+		args = append(args, fields[1:]...)
+	}
+	generation := m.Model.EventGeneration
+	return m, func() tea.Msg {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workdir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return diffResultMsg{
+				generation: generation,
+				err:        fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out))),
+			}
+		}
+		return diffResultMsg{
+			generation: generation,
+			diffText:   string(out),
+		}
+	}
+}
+
+type diffResultMsg struct {
+	generation uint64
+	diffText   string
+	err        error
+}
+
+func (m Model) handleDiffResult(msg diffResultMsg) (Model, tea.Cmd) {
+	if msg.generation != m.Model.EventGeneration {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m, m.terminalCommit().Entries(systemEntry(fmt.Sprintf("⚠ %v", msg.err)))
+	}
+	if strings.TrimSpace(msg.diffText) == "" {
+		return m, m.terminalCommit().Entries(systemEntry("No uncommitted changes in workspace."))
+	}
+	highlighted := highlightSyntax(msg.diffText, "diff")
+	return m, m.terminalCommit().deferredLinesCmd(strings.Split(highlighted, "\n")...)
 }
