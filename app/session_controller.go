@@ -188,6 +188,7 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 	}
 
 	m.turnReducer().StartSubmit()
+	m.InFlight.Submitted = pendingUserEntry(text, images)
 	m.Model.TurnSubmitRequest++
 	requestID := m.Model.TurnSubmitRequest
 	turnState, turnContext := newTurnCancellationState(m.runtimeOperationContext())
@@ -203,6 +204,26 @@ func (m Model) submitTextWithImages(text string, images []session.ImageContent) 
 		draft,
 		images,
 	)
+}
+
+func pendingUserEntry(text string, images []session.ImageContent) *session.Entry {
+	content := make([]session.Content, 0, 1+len(images))
+	if text != "" {
+		content = append(content, session.TextContent{Text: text})
+	}
+	for _, image := range images {
+		content = append(content, session.ImageContent{
+			Data:     append([]byte(nil), image.Data...),
+			MimeType: image.MimeType,
+		})
+	}
+	now := time.Now()
+	message := &session.UserMessage{Content: content, Timestamp: now}
+	var entry session.Entry = &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: now},
+		Message:   message,
+	}
+	return &entry
 }
 
 func submitTurnCmd(
@@ -281,6 +302,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		state := m.Model.turnCancellation
 		if state != nil && state.wasPreCancelled() && !state.isAccepted() {
 			m.clearTurnCancellation()
+			m.InFlight.Submitted = nil
 			m.turnReducer().RejectSubmit("")
 		}
 		return m, nil
@@ -305,6 +327,7 @@ func (m Model) handleTurnSubmitResult(msg turnSubmitResultMsg) (Model, tea.Cmd) 
 		return m, nil
 	}
 	m.clearTurnCancellation()
+	m.InFlight.Submitted = nil
 	m.turnReducer().RejectSubmit("")
 	var draftCmd tea.Cmd
 	if strings.TrimSpace(m.Input.Composer.Value()) == "" {
@@ -702,14 +725,23 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.MessageStart:
 		switch message := msg.Message.(type) {
 		case *session.UserMessage:
-			// Inline mode keeps completed conversation entries in terminal
-			// scrollback. Commit the prompt before the composer is redrawn so a
-			// submitted message cannot disappear behind the live shell frame.
+			// Keep the authoritative user entry in the retained plane until its
+			// permanent scrollback copy has actually been printed. This prevents
+			// the prompt from disappearing during the inline renderer handoff.
 			entry := &session.MessageEntry{
 				EntryBase: session.EntryBase{Timestamp: message.Timestamp},
 				Message:   message,
 			}
-			return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+			var submitted session.Entry = entry
+			m.InFlight.Submitted = &submitted
+			commit := m.terminalCommit().Entries(entry)
+			if commit == nil {
+				// The authoritative entry may already be in scrollback after a
+				// replay/resubscription. In that case there is no print handoff to
+				// retain, so release the ephemeral projection immediately.
+				m.InFlight.Submitted = nil
+			}
+			return m, tea.Sequence(commit, m.awaitSessionEvent())
 		case *session.AssistantMessage:
 			// Keep the assistant's partial message in Plane B so streaming text is
 			// visible before MessageEnd commits it to the transcript.

@@ -78,6 +78,45 @@ func TestCompletedToolRemainsGroupedInLivePlane(t *testing.T) {
 	}
 }
 
+func TestSubmittedUserRemainsInLivePlaneUntilPrintCompletion(t *testing.T) {
+	model := readyModel(t)
+	entry := testUserEntryWithTS("submitted prompt", time.Unix(123, 0))
+	model.InFlight.Submitted = &entry
+
+	live := ansi.Strip(model.renderPlaneB())
+	if !strings.Contains(live, "› submitted prompt") {
+		t.Fatalf("live plane = %q, want submitted prompt", live)
+	}
+
+	commit := model.terminalCommit().Entries(entry)
+	if commit == nil {
+		t.Fatal("submitted prompt commit returned nil")
+	}
+	msg, ok := commit().(terminalCommitLinesMsg)
+	if !ok {
+		t.Fatalf("submitted prompt commit = %T, want terminalCommitLinesMsg", commit())
+	}
+	next, flush, handled := model.dispatchAppControlMessage(msg)
+	if !handled || flush == nil {
+		t.Fatalf("terminal commit = handled=%t flush=%v, want handled with flush", handled, flush)
+	}
+	if next.InFlight.Submitted == nil {
+		t.Fatal("submitted prompt cleared before Bubble Tea print completion")
+	}
+
+	next, _, handled = next.dispatchAppControlMessage(terminalCommitPrintedMsg{
+		generation: msg.generation,
+		epoch:      msg.epoch,
+		entryKeys:  msg.entryKeys,
+	})
+	if !handled {
+		t.Fatal("terminal print completion was not handled")
+	}
+	if next.InFlight.Submitted != nil {
+		t.Fatal("submitted prompt remained after Bubble Tea print completion")
+	}
+}
+
 func TestLiveTranscriptNodesUseStableLifecycleKeys(t *testing.T) {
 	model := readyModel(t)
 	completed := testToolEntry("bash echo done", "done\n", false)

@@ -29,7 +29,14 @@ type liveTranscriptNode struct {
 }
 
 func (m Model) liveTranscriptNodes() []liveTranscriptNode {
-	nodes := make([]liveTranscriptNode, 0, len(m.InFlight.PendingTools)+len(m.InFlight.CompletedTools)+2)
+	nodes := make([]liveTranscriptNode, 0, len(m.InFlight.PendingTools)+len(m.InFlight.CompletedTools)+3)
+	if m.InFlight.Submitted != nil {
+		nodes = append(nodes, liveTranscriptNode{
+			key:   "user",
+			kind:  liveTranscriptEntry,
+			entry: *m.InFlight.Submitted,
+		})
+	}
 	if m.InFlight.ReasonBuf != "" {
 		nodes = append(nodes, liveTranscriptNode{
 			key:  "thinking",
@@ -140,6 +147,8 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			return ""
 		}
 		return m.renderLiveAgentContent(session.EntryContent(e))
+	case session.RoleUser:
+		return m.renderUserEntry(session.EntryContent(e))
 	case session.RoleTool:
 		label := m.normalizeToolTitle(session.EntryTitle(e))
 		if label == "" {

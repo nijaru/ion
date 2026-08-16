@@ -36,6 +36,10 @@ type TurnSummary struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
+	// Submitted is the authoritative user entry while its scrollback commit is
+	// in flight. It keeps the prompt in the retained view until Bubble Tea has
+	// printed the permanent copy.
+	Submitted          *session.Entry
 	Pending            *session.Entry
 	PendingTools       map[string]session.Entry
 	CompletedTools     []session.Entry
@@ -487,6 +491,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	}
 	t.inFlight.Thinking = false
 	t.inFlight.AwaitingSettlement = false
+	t.inFlight.Submitted = nil
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
 	t.inFlight.CompletedTools = nil

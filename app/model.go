@@ -286,6 +286,12 @@ type terminalCommitLinesMsg struct {
 	entryKeys  []string
 }
 
+type terminalCommitPrintedMsg struct {
+	generation uint64
+	epoch      uint64
+	entryKeys  []string
+}
+
 type directShellResultMsg struct {
 	content string
 }
@@ -1008,6 +1014,19 @@ func (m *Model) acceptPrintedEntries(keys []string) {
 		}
 	}
 	m.releasePendingEntryKeys(keys)
+}
+
+func (m *Model) clearPrintedSubmittedEntry(keys []string) {
+	if m.InFlight.Submitted == nil {
+		return
+	}
+	key := entryPrintKey(*m.InFlight.Submitted)
+	for _, printed := range keys {
+		if key != "" && printed == key {
+			m.InFlight.Submitted = nil
+			return
+		}
+	}
 }
 
 func (m *Model) releasePendingEntryKeys(keys []string) {

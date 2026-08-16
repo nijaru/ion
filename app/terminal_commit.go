@@ -117,12 +117,15 @@ func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
 	return m, m.terminalCommit().Entries(msg.entries...)
 }
 
-func terminalCommitFlushCmd(lines ...string) tea.Cmd {
+func terminalCommitFlushAndSignalCmd(lines []string, signal terminalCommitPrintedMsg) tea.Cmd {
 	body := formatPrintLines(lines...)
 	if body == "" {
 		return nil
 	}
-	return tea.Printf("%s", body)
+	return tea.Sequence(
+		tea.Printf("%s", body),
+		func() tea.Msg { return signal },
+	)
 }
 
 func (c terminalCommitController) deferredLinesCmd(lines ...string) tea.Cmd {

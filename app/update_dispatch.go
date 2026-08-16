@@ -218,7 +218,18 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		m.acceptPrintedEntries(msg.entryKeys)
-		return m, terminalCommitFlushCmd(msg.lines...), true
+		return m, terminalCommitFlushAndSignalCmd(msg.lines, terminalCommitPrintedMsg{
+			generation: msg.generation,
+			epoch:      msg.epoch,
+			entryKeys:  append([]string(nil), msg.entryKeys...),
+		}), true
+
+	case terminalCommitPrintedMsg:
+		if msg.generation != m.Model.EventGeneration || msg.epoch != m.Model.terminalCommitEpoch {
+			return m, nil, true
+		}
+		m.clearPrintedSubmittedEntry(msg.entryKeys)
+		return m, nil, true
 
 	case tea.ResumeMsg:
 		// Resume from suspend - no special handling needed
