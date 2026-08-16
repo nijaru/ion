@@ -37,8 +37,7 @@ func ensureProviderReadyForSelection(ctx context.Context, cfg *config.Config, re
 	return errors.New("set an endpoint or start a local OpenAI-compatible server")
 }
 
-// openModelPicker opens the unified model picker showing models from all
-// configured providers grouped by provider name.
+// openModelPicker opens the model picker for the currently selected provider.
 func (m Model) openModelPicker() (Model, tea.Cmd) {
 	cfg, err := m.commandConfig()
 	if err != nil {
@@ -60,6 +59,9 @@ func (m Model) openModelPickerForPreset(
 	}
 	if cfg == nil {
 		cfg = &config.Config{}
+	}
+	if strings.TrimSpace(cfg.Provider) == "" {
+		return m, cmdError("choose a provider before choosing a model")
 	}
 	loadContext, loadCancel := context.WithCancel(context.Background())
 
@@ -83,13 +85,13 @@ func (m Model) openModelPickerForPreset(
 		loadContext: loadContext,
 		loadCancel:  loadCancel,
 	})
-	return m, loadAllModelPickerItems(requestID, cfg, preset, loadContext, m.Model.Catalog)
+	return m, loadModelPickerItems(requestID, cfg, preset, loadContext, m.Model.Catalog)
 }
 
-// loadAllModelPickerItems loads the configured provider catalog. Provider
-// fan-out and cache/error handling belong to llm; the TUI only projects the
-// typed result into picker items.
-func loadAllModelPickerItems(
+// loadModelPickerItems loads only the currently selected provider catalog.
+// Provider discovery and cache/error handling belong to llm; the TUI only
+// projects the typed result into picker items.
+func loadModelPickerItems(
 	requestID uint64,
 	cfg *config.Config,
 	preset Preset,
@@ -105,58 +107,43 @@ func loadAllModelPickerItems(
 	}
 	return func() tea.Msg {
 		if catalog == nil {
-			return allModelsLoadedMsg{
+			return modelPickerLoadedMsg{
 				requestID: requestID,
+				cfg:       cfgCopy,
+				preset:    preset,
 				err:       fmt.Errorf("model catalog is not configured"),
 			}
 		}
+		provider := llm.ResolveIDConfig(&cfgCopy, cfgCopy.Provider)
+		if provider == "" {
+			return modelPickerLoadedMsg{
+				requestID: requestID,
+				cfg:       cfgCopy,
+				preset:    preset,
+				err:       fmt.Errorf("provider is not configured"),
+			}
+		}
 		result, err := catalog.QueryAvailableModels(loadContext, llm.ModelCatalogQuery{
-			Config:       &cfgCopy,
-			IncludeLocal: true,
+			Config:    &cfgCopy,
+			Providers: []string{provider},
 		})
-		return allModelsLoadedMsg{
+		models := make([]llm.ModelMetadata, 0, len(result.Models))
+		for _, model := range result.Models {
+			if model.Provider != "" && !strings.EqualFold(llm.ResolveID(model.Provider), provider) {
+				continue
+			}
+			model.Provider = provider
+			models = append(models, model)
+		}
+		return modelPickerLoadedMsg{
 			requestID: requestID,
-			items:     modelItemsFromMetadata(result.Models),
+			cfg:       cfgCopy,
+			preset:    preset,
+			items:     modelItemsFromMetadata(models),
 			catalog:   result,
 			err:       err,
 		}
 	}
-}
-
-func (m Model) handleAllModelsLoaded(msg allModelsLoadedMsg) (Model, tea.Cmd) {
-	if !m.pickerReducer().modelLoadRequestMatches(msg.requestID) {
-		return m, nil
-	}
-	if msg.err != nil {
-		m.pickerReducer().failModelLoad(
-			msg.requestID,
-			fmt.Sprintf("Failed to load models: %v", msg.err),
-		)
-		return m, nil
-	}
-
-	cfg := m.Picker.Overlay.cfg
-	preset := m.Picker.Overlay.Preset()
-
-	// Merge loaded items with favorites
-	favorites := m.modelPickerFavoriteItems(cfg, msg.items)
-	combined := m.modelPickerItemsForCatalog(cfg, favorites, msg.items)
-
-	if len(combined) == 0 {
-		m.pickerReducer().failModelLoad(
-			msg.requestID,
-			"No models available. Use /login <provider> to set up API keys.",
-		)
-		return m, nil
-	}
-
-	m.pickerReducer().completeModelLoad(
-		msg.requestID,
-		combined,
-		configuredModelForPreset(cfg, preset),
-		modelCatalogWarning(msg.catalog),
-	)
-	return m, nil
 }
 
 func modelCatalogWarning(catalog llm.ModelCatalogResult) string {
@@ -316,7 +303,17 @@ func (m Model) modelPickerItemsForCatalog(cfg *config.Config, favorites, all []p
 	if cfg != nil && strings.TrimSpace(cfg.Provider) != "" {
 		favorites = append(favorites, manualModelPickerItem())
 	}
-	catalog := m.modelPickerCatalogItems(all, favorites)
+	provider := ""
+	if cfg != nil {
+		provider = llm.ResolveID(cfg.Provider)
+	}
+	providerItems := make([]pickerItem, 0, len(all))
+	for _, item := range all {
+		if provider == "" || strings.EqualFold(llm.ResolveID(item.Provider), provider) {
+			providerItems = append(providerItems, item)
+		}
+	}
+	catalog := m.modelPickerCatalogItems(providerItems, favorites)
 	return append(favorites, catalog...)
 }
 
@@ -398,7 +395,7 @@ func (m Model) startupPickerCmd() tea.Cmd {
 				m.Model.EndpointResolver,
 			)
 		}
-		return loadAllModelPickerItems(
+		return loadModelPickerItems(
 			overlay.request,
 			overlay.cfg,
 			overlay.Preset(),
@@ -522,7 +519,6 @@ func (m Model) openModelSelectionForPreset(cfg *config.Config, preset Preset) (M
 }
 
 func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd) {
-	// This handles single-provider model loads (used by setup flow)
 	if !m.pickerReducer().modelLoadRequestMatches(msg.requestID) {
 		return m, nil
 	}
@@ -548,7 +544,7 @@ func (m Model) handleModelPickerLoaded(msg modelPickerLoadedMsg) (Model, tea.Cmd
 		msg.requestID,
 		combined,
 		configuredModelForPreset(cfg, msg.preset),
-		"",
+		modelCatalogWarning(msg.catalog),
 	)
 	return m, nil
 }
@@ -859,7 +855,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if selected.ManualModel {
 			return m.openModelIDPrompt(&cfg, m.Picker.Overlay.Preset())
 		}
-		return m.commitUnifiedModelSelection(&cfg, selected)
+		return m.commitModelSelection(&cfg, selected)
 
 	case pickerPurposeProviderSetup:
 		// Route every provider through the same setup decision so local and
@@ -902,49 +898,26 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 }
 
-// commitUnifiedModelSelection handles model selection from the unified picker.
-// Sets both provider and model in one action.
-func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerItem) (Model, tea.Cmd) {
+// commitModelSelection commits a model for the provider that owns the picker.
+// Provider changes go through the provider picker, so this action never
+// silently changes provider identity.
+func (m Model) commitModelSelection(cfg *config.Config, selected pickerItem) (Model, tea.Cmd) {
 	preset := m.Picker.Overlay.Preset()
-
-	// If the selected item needs setup, redirect to login
+	provider := llm.ResolveID(cfg.Provider)
+	if selected.Provider != "" && !strings.EqualFold(llm.ResolveID(selected.Provider), provider) {
+		return m, cmdError("model does not belong to the selected provider")
+	}
 	if selected.NeedsSetup {
 		m.pickerReducer().closeOverlay()
-		return m.openAPIKeyPrompt(
-			cfgForProvider(cfg, selected.Provider),
-			selected.Provider,
-			preset,
-		)
+		return m.openAPIKeyPrompt(cfgForProvider(cfg, provider), provider, preset)
 	}
 
-	// Determine the provider to use
-	provider := selected.Provider
-	if provider == "" {
-		provider = cfg.Provider // fallback to current
-	}
-
-	// Check if we need to switch providers
-	needProviderChange := !strings.EqualFold(llm.ResolveID(cfg.Provider), llm.ResolveID(provider))
-
-	// Build updated config with both provider and model
 	updated := *cfg
-	if needProviderChange {
-		updated.Provider = provider
-		// Clear model fields when switching providers
-		updated.Model = ""
-		updated.FastModel = ""
-		updated.FastReasoningEffort = ""
-		updated.SummaryModel = ""
-		updated.SummaryReasoningEffort = ""
-	}
-
-	// Check if model is already selected (no-op)
 	currentCfg, err := m.runtimeConfigForPreset(&updated, preset)
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 	}
-	if !needProviderChange &&
-		preset == m.activePreset() &&
+	if preset == m.activePreset() &&
 		currentCfg.Provider != "" &&
 		strings.EqualFold(
 			strings.TrimSpace(currentCfg.Model),
@@ -954,19 +927,14 @@ func (m Model) commitUnifiedModelSelection(cfg *config.Config, selected pickerIt
 		return m, nil
 	}
 
-	// Apply model selection
 	transition, _, err := m.modelSelectionTransition(&updated, preset, selected.Value)
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 	}
 	m.pickerReducer().closeOverlay()
-	notice := systemEntry("Model set to " + selected.Value)
-	if needProviderChange {
-		notice = systemEntry("Switched to " + providerDisplayName(provider) + " — " + selected.Value)
-	}
 	return m.switchRuntimeCommand(
 		transition,
-		notice,
+		systemEntry("Model set to "+selected.Value),
 		m.currentResumeLeafID(),
 		false,
 	)

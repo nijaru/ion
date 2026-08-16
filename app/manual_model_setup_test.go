@@ -85,7 +85,7 @@ func TestModelItemsFromMetadataPreservesProviderGroups(t *testing.T) {
 	}
 }
 
-func TestModelPickerKeepsDuplicateIDsBoundToTheirProvider(t *testing.T) {
+func TestModelPickerKeepsModelsBoundToSelectedProvider(t *testing.T) {
 	model := readyModel(t)
 	cfg := &config.Config{
 		Provider: "openai",
@@ -100,14 +100,53 @@ func TestModelPickerKeepsDuplicateIDsBoundToTheirProvider(t *testing.T) {
 		t.Fatalf("favorites = %#v, want current openai model", favorites)
 	}
 	combined := model.modelPickerItemsForCatalog(cfg, favorites, all)
-	providers := make(map[string]bool)
 	for _, item := range combined {
-		if item.Value == "shared-model" {
-			providers[item.Provider] = true
+		if item.Value != "" && item.Provider != "openai" {
+			t.Fatalf("model picker item = %#v, want only openai models", item)
 		}
 	}
-	if len(providers) != 2 || !providers["openai"] || !providers["openrouter"] {
-		t.Fatalf("duplicate model providers = %#v, want both providers", providers)
+	if len(combined) != 2 {
+		t.Fatalf("picker items = %#v, want current model and one manual entry", combined)
+	}
+}
+
+func TestModelPickerQueriesOnlySelectedProvider(t *testing.T) {
+	var observed llm.ModelCatalogQuery
+	catalog := modelCatalogStub{
+		query: func(_ context.Context, query llm.ModelCatalogQuery) (llm.ModelCatalogResult, error) {
+			observed = query
+			return llm.ModelCatalogResult{
+				Models: []llm.ModelMetadata{
+					{ID: "openai-model", Provider: "openai"},
+					{ID: "router-model", Provider: "openrouter"},
+					{ID: "local-model", Provider: "ollama"},
+				},
+			}, nil
+		},
+	}
+	model := readyModel(t).
+		WithModelCatalog(catalog).
+		WithConfig(&config.Config{Provider: "openai", Model: "openai-model"})
+	opened, cmd := model.openModelPickerForPreset(model.Model.Config, PresetPrimary)
+	message := cmd()
+	loaded, ok := message.(modelPickerLoadedMsg)
+	if !ok {
+		t.Fatalf("load result = %T, want modelPickerLoadedMsg", message)
+	}
+	if len(observed.Providers) != 1 || observed.Providers[0] != "openai" {
+		t.Fatalf("providers = %#v, want [openai]", observed.Providers)
+	}
+	if observed.IncludeLocal {
+		t.Fatal("provider-scoped model picker enabled default local discovery")
+	}
+	if len(loaded.items) != 1 || loaded.items[0].Provider != "openai" {
+		t.Fatalf("loaded items = %#v, want only the selected provider", loaded.items)
+	}
+	updated, _ := opened.handleModelPickerLoaded(loaded)
+	for _, item := range updated.Picker.Overlay.items {
+		if item.Value != "" && item.Provider != "openai" {
+			t.Fatalf("picker item = %#v, want only openai models", item)
+		}
 	}
 }
 
@@ -132,13 +171,13 @@ func TestModelPickerLoadHonorsOverlayCancellation(t *testing.T) {
 	loadCfg := *model.Picker.Overlay.cfg
 	done := make(chan any, 1)
 	go func() {
-		done <- loadAllModelPickerItems(1, &loadCfg, PresetPrimary, ctx, model.Model.Catalog)()
+		done <- loadModelPickerItems(1, &loadCfg, PresetPrimary, ctx, model.Model.Catalog)()
 	}()
 
 	model.pickerReducer().closeOverlay()
 	select {
 	case msg := <-done:
-		loaded, ok := msg.(allModelsLoadedMsg)
+		loaded, ok := msg.(modelPickerLoadedMsg)
 		if !ok || !errors.Is(loaded.err, context.Canceled) {
 			t.Fatalf("load result = %#v, want canceled model load", msg)
 		}

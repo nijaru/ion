@@ -170,18 +170,12 @@ type scopedModelsListedMsg struct {
 	err        error
 }
 
-type allModelsLoadedMsg struct {
-	requestID uint64
-	items     []pickerItem // All models from all providers, with Provider field set
-	catalog   llm.ModelCatalogResult
-	err       error
-}
-
 type modelPickerLoadedMsg struct {
 	requestID uint64
 	cfg       config.Config
 	preset    Preset
 	items     []pickerItem
+	catalog   llm.ModelCatalogResult
 	err       error
 }
 
@@ -371,7 +365,7 @@ type pickerItem struct {
 	Value       string
 	Detail      string
 	Group       string
-	Provider    string // Provider ID for unified model picker (e.g. "anthropic", "openai")
+	Provider    string // Provider ID owning this model entry (e.g. "anthropic", "openai")
 	NeedsSetup  bool   // True if provider needs auth/endpoint setup
 	ManualModel bool   // Opens the native model-ID prompt instead of selecting a catalog item.
 	Tone        pickerTone
