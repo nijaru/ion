@@ -15,6 +15,7 @@ import (
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/app"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/prompts"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
@@ -420,6 +421,7 @@ type runtimeInfo struct {
 	surface          app.ToolSurface
 	recovery         []session.ActionRecord
 	interruptedTurns []session.TurnRecord
+	promptTemplates  []prompts.PromptTemplate
 }
 
 func (b *runtimeInfo) Name() string { return "ion" }
@@ -456,6 +458,7 @@ func (b *runtimeInfo) Bootstrap() app.Bootstrap {
 		Status:           status,
 		Recovery:         append([]session.ActionRecord(nil), b.recovery...),
 		InterruptedTurns: append([]session.TurnRecord(nil), b.interruptedTurns...),
+		PromptTemplates:  append([]prompts.PromptTemplate(nil), b.promptTemplates...),
 	}
 }
 

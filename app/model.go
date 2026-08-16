@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/prompts"
 	"github.com/nijaru/ion/llm"
 
 	ionclipboard "github.com/nijaru/ion/internal/clipboard"
@@ -478,8 +479,11 @@ type ModelState struct {
 	Catalog          ModelCatalog
 	EndpointResolver *llm.EndpointResolver
 	Config           *config.Config
-	Runtime          Snapshot
-	EventGeneration  uint64
+	// PromptTemplates is a host-approved resource snapshot used by command
+	// completion and expansion. The app never discovers project files itself.
+	PromptTemplates []prompts.PromptTemplate
+	Runtime         Snapshot
+	EventGeneration uint64
 	// TurnSubmitRequest fences asynchronous Prompt results within one runtime
 	// generation. EventGeneration alone only fences runtime replacement.
 	TurnSubmitRequest uint64
@@ -672,6 +676,7 @@ func New(
 			SessionCatalog:         catalog,
 			Recovery:               append([]session.ActionRecord(nil), boot.Recovery...),
 			InterruptedTurns:       append([]session.TurnRecord(nil), boot.InterruptedTurns...),
+			PromptTemplates:        append([]prompts.PromptTemplate(nil), boot.PromptTemplates...),
 			Switcher:               switcher,
 			EndpointResolver:       llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 			EventSubscriptionState: &eventSubscriptionState{},
@@ -1051,6 +1056,13 @@ func (m Model) WithConfigForRuntimePreset(
 
 func (m Model) WithActivePreset(value string) Model {
 	m.App.ActivePreset = PresetFromString(value)
+	return m
+}
+
+// WithPromptTemplates installs the host-approved prompt resource snapshot used
+// by command completion and expansion.
+func (m Model) WithPromptTemplates(templates []prompts.PromptTemplate) Model {
+	m.Model.PromptTemplates = append([]prompts.PromptTemplate(nil), templates...)
 	return m
 }
 

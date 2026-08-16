@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/nijaru/ion/internal/prompts"
 	"github.com/nijaru/ion/session"
 )
 
@@ -10,6 +11,9 @@ type Bootstrap struct {
 	Status           string
 	Recovery         []session.ActionRecord
 	InterruptedTurns []session.TurnRecord
+	// PromptTemplates is the host-approved prompt resource snapshot. The TUI
+	// consumes this projection and never discovers project files itself.
+	PromptTemplates []prompts.PromptTemplate
 }
 
 // RuntimeInfo describes the configured runtime for host and TUI presentation.

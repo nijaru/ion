@@ -5,28 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nijaru/ion/internal/prompts"
 )
 
 func TestPromptTemplateExpansionOnSubmit(t *testing.T) {
-	tempDir := t.TempDir()
-	promptsDir := filepath.Join(tempDir, ".ion", "prompts")
-	if err := os.MkdirAll(promptsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	promptFile := filepath.Join(promptsDir, "review.md")
-	content := `---
-description: Review file
-argument-hint: [file]
----
-Please review $1 with focus on concurrency and data races.`
-
-	if err := os.WriteFile(promptFile, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	model := readyModel(t)
-	model.App.Workdir = tempDir
+	model := readyModel(t).WithPromptTemplates([]prompts.PromptTemplate{{
+		Name:         "review",
+		Description:  "Review file",
+		ArgumentHint: "[file]",
+		Content:      "Please review $1 with focus on concurrency and data races.",
+	}})
 
 	expanded, ok := model.expandPromptTemplate("/review main.go")
 	if !ok {
@@ -45,24 +34,12 @@ Please review $1 with focus on concurrency and data races.`
 }
 
 func TestPromptTemplateAutocomplete(t *testing.T) {
-	tempDir := t.TempDir()
-	promptsDir := filepath.Join(tempDir, ".ion", "prompts")
-	if err := os.MkdirAll(promptsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	promptFile := filepath.Join(promptsDir, "fix-bug.md")
-	content := `---
-description: Fix a reported bug
-argument-hint: [issue-description]
----
-Investigate and fix: $@`
-
-	if err := os.WriteFile(promptFile, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	items := slashComposerCompletionItems("/fix", tempDir)
+	items := slashComposerCompletionItems("/fix", []prompts.PromptTemplate{{
+		Name:         "fix-bug",
+		Description:  "Fix a reported bug",
+		ArgumentHint: "[issue-description]",
+		Content:      "Investigate and fix: $@",
+	}})
 	if len(items) == 0 {
 		t.Fatal("expected completion items for /fix")
 	}
@@ -76,5 +53,23 @@ Investigate and fix: $@`
 	}
 	if !found {
 		t.Fatalf("did not find /fix-bug in completions: %v", items)
+	}
+}
+
+func TestPromptTemplateExpansionDoesNotReadWorkspaceFiles(t *testing.T) {
+	workdir := t.TempDir()
+	promptDir := filepath.Join(workdir, ".ion", "prompts")
+	if err := os.MkdirAll(promptDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "workspace-only.md"), []byte("untrusted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	model := readyModel(t)
+	model.App.Workdir = workdir
+
+	if expanded, ok := model.expandPromptTemplate("/workspace-only"); ok || expanded != "/workspace-only" {
+		t.Fatalf("workspace prompt unexpectedly expanded: %q, %v", expanded, ok)
 	}
 }

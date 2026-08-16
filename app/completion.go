@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/internal/prompts"
 
 	tea "charm.land/bubbletea/v2"
 	ionskills "github.com/nijaru/ion/internal/skills"
@@ -47,7 +48,7 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 			false,
 		)
 	}
-	if items := slashComposerCompletionItems(text, m.App.Workdir); len(items) > 0 {
+	if items := slashComposerCompletionItems(text, m.Model.PromptTemplates); len(items) > 0 {
 		m.inputReducer().invalidateFileCompletionRequest()
 		return limitCompletionItems(items), nil
 	}
@@ -68,7 +69,7 @@ func (m *Model) composerCompletionItems() ([]completionItem, tea.Cmd) {
 	)
 }
 
-func slashComposerCompletionItems(text, workdir string) []completionItem {
+func slashComposerCompletionItems(text string, templates []prompts.PromptTemplate) []completionItem {
 	if !strings.HasPrefix(text, "/") || strings.HasPrefix(text, "//") || strings.ContainsAny(text, "\r\n") {
 		return nil
 	}
@@ -77,7 +78,7 @@ func slashComposerCompletionItems(text, workdir string) []completionItem {
 	}
 
 	query := strings.TrimPrefix(strings.TrimSpace(text), "/")
-	items := rankedPickerItems(slashCommandItemsWithPrompts(workdir), query)
+	items := rankedPickerItems(slashCommandItemsWithPrompts(templates), query)
 	if len(items) == 1 && strings.EqualFold(items[0].Value, strings.TrimSpace(text)) {
 		return nil
 	}

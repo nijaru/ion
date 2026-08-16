@@ -18,6 +18,7 @@ import (
 	"github.com/nijaru/ion/config"
 	ionexport "github.com/nijaru/ion/internal/export"
 	"github.com/nijaru/ion/internal/instructions"
+	"github.com/nijaru/ion/internal/prompts"
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/llm/providers"
@@ -94,50 +95,83 @@ func closeRuntimeResourcesAfterError(openErr error, closeResources func() error)
 	return openErr
 }
 
-// loadPromptTemplates reads trusted global and optional project-local .md prompt
-// templates. Global templates retain precedence on name collisions.
-func loadPromptTemplates(projectTrustRoot string) (map[string]string, error) {
+// loadPromptResources reads the host-approved global and optional
+// project-local prompt snapshot. Global templates retain precedence on name
+// collisions. The typed entries are shared with the TUI; the content map is
+// the controller's execution projection.
+type promptResources struct {
+	entries []prompts.PromptTemplate
+	content map[string]string
+}
+
+func loadPromptResources(projectTrustRoot string) (promptResources, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
+		return promptResources{}, fmt.Errorf("resolve home directory: %w", err)
 	}
 	dirs := []string{filepath.Join(home, ".ion", "prompts")}
 	if projectTrustRoot != "" {
 		dirs = append(dirs, filepath.Join(projectTrustRoot, ".ion", "prompts"))
 	}
-	return loadPromptTemplatesFromDirs(dirs)
+	return loadPromptResourcesFromDirs(dirs)
 }
 
-func loadPromptTemplatesFromDirs(dirs []string) (map[string]string, error) {
-	var templates map[string]string
+func loadPromptResourcesFromDirs(dirs []string) (promptResources, error) {
+	byName := make(map[string]prompts.PromptTemplate)
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read prompt directory %q: %w", dir, err)
-		}
-		if templates == nil {
-			templates = make(map[string]string)
+			return promptResources{}, fmt.Errorf("read prompt directory %q: %w", dir, err)
 		}
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 				continue
 			}
-			name := strings.TrimSuffix(e.Name(), ".md")
-			if _, exists := templates[name]; exists {
+			name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+			if _, exists := byName[name]; exists {
 				continue
 			}
 			path := filepath.Join(dir, e.Name())
-			data, err := os.ReadFile(path)
+			template, err := prompts.LoadTemplateFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("read prompt template %q: %w", path, err)
+				return promptResources{}, fmt.Errorf("read prompt template %q: %w", path, err)
 			}
-			templates[name] = string(data)
+			byName[name] = template
 		}
 	}
-	return templates, nil
+
+	entries := make([]prompts.PromptTemplate, 0, len(byName))
+	content := make(map[string]string, len(byName))
+	for name, template := range byName {
+		entries = append(entries, template)
+		content[name] = template.Content
+	}
+	slices.SortFunc(entries, func(a, b prompts.PromptTemplate) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	if len(content) == 0 {
+		content = nil
+	}
+	return promptResources{entries: entries, content: content}, nil
+}
+
+func loadPromptTemplates(projectTrustRoot string) (map[string]string, error) {
+	resources, err := loadPromptResources(projectTrustRoot)
+	if err != nil {
+		return nil, err
+	}
+	return resources.content, nil
+}
+
+func loadPromptTemplatesFromDirs(dirs []string) (map[string]string, error) {
+	resources, err := loadPromptResourcesFromDirs(dirs)
+	if err != nil {
+		return nil, err
+	}
+	return resources.content, nil
 }
 
 func recentSessionForContinue(
@@ -779,10 +813,14 @@ func openRuntime(
 		break
 	}
 
-	// Load global and project-local prompt templates; global names win collisions.
-	promptTemplates, err := loadPromptTemplates(projectTrustRoot)
+	// Load global and trusted project-local prompt templates once. The host
+	// passes the typed snapshot to both the controller and the TUI projection.
+	promptResources, err := loadPromptResources(projectTrustRoot)
 	if err != nil {
 		return setupFailure(fmt.Errorf("load prompt templates: %w", err))
+	}
+	if runtimeInfo, ok := info.(*runtimeInfo); ok {
+		runtimeInfo.promptTemplates = append([]prompts.PromptTemplate(nil), promptResources.entries...)
 	}
 
 	log := runtimeLogger(interactive, os.Stderr)
@@ -812,7 +850,7 @@ func openRuntime(
 		Active:              activeToolNames,
 		StreamFn:            streamFn,
 		ContextOverflow:     provider.IsContextOverflow,
-		PromptTemplates:     promptTemplates,
+		PromptTemplates:     promptResources.content,
 		SysPrompt:           sysPrompt,
 		ApprovalMode:        agent.ApprovalMode(runtimeCfg.ToolTrustMode()),
 		ApprovalInteractive: interactive,

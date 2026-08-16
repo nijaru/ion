@@ -308,7 +308,7 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 		return m.completeSlashArgument(text)
 	}
 
-	matches := matchingSlashCommands(text)
+	matches := matchingSlashCommands(text, m.slashCommandItems())
 	switch len(matches) {
 	case 0:
 		return m, nil, true
@@ -479,7 +479,7 @@ func pathInsideWorkspace(workdir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func matchingSlashCommands(query string) []string {
+func matchingSlashCommands(query string, items []pickerItem) []string {
 	query = strings.TrimPrefix(strings.TrimSpace(query), "/")
 	if query == "" {
 		return slashCommands()
@@ -487,7 +487,7 @@ func matchingSlashCommands(query string) []string {
 
 	search := preparePickerSearchQuery(query)
 	var ranked []rankedPickerItem
-	for i, item := range slashCommandItems() {
+	for i, item := range items {
 		fields := []pickerSearchField{
 			{value: normalizeSearchQuery(item.Label), weight: 0},
 			{value: normalizeSearchQuery(strings.TrimPrefix(item.Value, "/")), weight: 5},
@@ -583,7 +583,7 @@ func commonPrefix(values []string) string {
 }
 
 func (m Model) openCommandPicker(prefix string) Model {
-	items := slashCommandItems()
+	items := m.slashCommandItems()
 	query := strings.TrimPrefix(strings.TrimSpace(prefix), "/")
 	m.pickerReducer().openOverlay(pickerOverlayState{
 		title:    "Pick a command",

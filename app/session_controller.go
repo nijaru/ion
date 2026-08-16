@@ -250,12 +250,10 @@ func (m Model) expandPromptTemplate(text string) (string, bool) {
 	if _, ok := resolveSlashCommand(fields[0]); ok {
 		return text, false
 	}
-	dirs := promptTemplateDirs(m.App.Workdir)
-	templates, err := prompts.DiscoverPrompts(m.runtimeOperationContext(), dirs...)
-	if err != nil || len(templates) == 0 {
+	if len(m.Model.PromptTemplates) == 0 {
 		return text, false
 	}
-	return prompts.ExpandPromptTemplate(text, templates)
+	return prompts.ExpandPromptTemplate(text, m.Model.PromptTemplates)
 }
 
 func isTurnCancellationError(err error) bool {
