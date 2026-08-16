@@ -88,11 +88,11 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 
 	switch session.EntryRole(e) {
 	case session.RoleAgent:
-		if session.EntryContent(e) == "" {
-			if len(pendingToolCalls(e)) > 0 {
-				return ""
-			}
-			return m.planeBLine(m.st.dim, 2, "• ...")
+		// An assistant shell can legitimately contain only tool calls or be
+		// waiting for its first text delta. Keep that shell retained in state,
+		// but do not project an orphan bullet into the transcript.
+		if strings.TrimSpace(session.EntryContent(e)) == "" || len(pendingToolCalls(e)) > 0 {
+			return ""
 		}
 		return m.renderLiveAgentContent(session.EntryContent(e))
 	case session.RoleTool:

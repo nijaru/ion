@@ -13,7 +13,6 @@ const (
 	printSubmitHoldBase      = 150 * time.Millisecond
 	printSubmitHoldPerLine   = 15 * time.Millisecond
 	printSubmitHoldMax       = 1 * time.Second
-	printFrameSettleDelay    = 16 * time.Millisecond
 )
 
 type terminalCommitController struct {
@@ -135,9 +134,9 @@ func (c terminalCommitController) deferredLinesCmdWithEntries(lines, entryKeys [
 	keys := append([]string(nil), entryKeys...)
 	generation := c.model.Model.EventGeneration
 	epoch := c.model.Model.terminalCommitEpoch
-	return tea.Tick(printFrameSettleDelay, func(time.Time) tea.Msg {
+	return func() tea.Msg {
 		return terminalCommitLinesMsg{generation: generation, epoch: epoch, lines: copied, entryKeys: keys}
-	})
+	}
 }
 
 func formatPrintLines(lines ...string) string {

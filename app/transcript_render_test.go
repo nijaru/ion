@@ -31,6 +31,19 @@ func TestToolOnlyAssistantDoesNotRenderDuplicateOrBareBlock(t *testing.T) {
 	}
 }
 
+func TestEmptyAssistantShellDoesNotRenderOrphanBullet(t *testing.T) {
+	model := readyModel(t)
+	entry := testAgentEntry("", "")
+	model.InFlight.Pending = &entry
+
+	if got := ansi.Strip(model.renderPendingEntry(entry)); got != "" {
+		t.Fatalf("empty pending assistant = %q, want empty", got)
+	}
+	if got := ansi.Strip(model.renderPlaneB()); got != "" {
+		t.Fatalf("empty assistant plane = %q, want empty", got)
+	}
+}
+
 func TestLiveAndCommittedAssistantUseOneMarkdownProjection(t *testing.T) {
 	model := readyModel(t)
 	content := "# Result\n\n- first\n- second\n\n```go\nfmt.Println(\"ok\")\n```"
