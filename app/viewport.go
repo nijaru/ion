@@ -160,8 +160,6 @@ func (m Model) agentStreamContent() string {
 
 // renderPendingEntry renders an in-flight entry for Plane B.
 func (m Model) renderPendingEntry(e session.Entry) string {
-	toolVerbosity := m.verbosity("tool")
-
 	switch session.EntryRole(e) {
 	case session.RoleAgent:
 		// An assistant shell can legitimately contain only tool calls or be
@@ -175,64 +173,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	case session.RoleUser:
 		return m.renderUserEntry(session.EntryContent(e))
 	case session.RoleTool:
-		label := m.normalizeToolTitle(session.EntryTitle(e))
-		if label == "" {
-			label = "tool"
-		}
-		if isSubagentTool(session.EntryTitle(e)) {
-			var b strings.Builder
-			b.WriteString(m.st.subagent.Render("↳ " + label))
-			if session.EntryContent(e) != "" {
-				b.WriteString("\n")
-				lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
-				const maxLines = 10
-				shown := lines
-				if !m.ToolOutputExpanded && len(lines) > maxLines {
-					shown = lines[len(lines)-maxLines:]
-					b.WriteString(m.planeBLine(m.st.dim, 4, fmt.Sprintf("... (%d lines total)", len(lines))))
-					b.WriteString("\n")
-				}
-				for _, l := range shown {
-					b.WriteString(m.planeBLine(m.st.dim, 4, l))
-					b.WriteString("\n")
-				}
-			}
-			return b.String()
-		}
-		var b strings.Builder
-		b.WriteString(m.renderToolLabel(label, session.EntryIsError(e)))
-		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
-			return b.String()
-		}
-		// When expanded (Ctrl+O), show full output regardless of verbosity
-		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
-			if isWriteTool(session.EntryTitle(e)) {
-				return b.String()
-			}
-			if summary := toolOutputSummary(e); summary != "" {
-				b.WriteString(m.st.dim.Render(" · " + summary))
-			}
-			return m.planeBFitLine(b.String())
-		}
-		b.WriteString("\n")
-		if !m.ToolOutputExpanded && toolVerbosity == "collapsed" {
-			b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
-			b.WriteString("\n")
-		} else {
-			lines := strings.Split(strings.TrimRight(session.EntryContent(e), "\n"), "\n")
-			const maxLines = 10
-			shown := lines
-			if !m.ToolOutputExpanded && len(lines) > maxLines {
-				shown = lines[len(lines)-maxLines:]
-				b.WriteString(m.planeBLine(m.st.dim, 4, fmt.Sprintf("... (%d lines total)", len(lines))))
-				b.WriteString("\n")
-			}
-			for _, l := range shown {
-				b.WriteString(m.planeBLine(m.st.dim, 4, l))
-				b.WriteString("\n")
-			}
-		}
-		return b.String()
+		return m.renderToolEntry(e)
 	case session.RoleSubagent:
 		label := session.EntryTitle(e)
 		if label == "" {
@@ -248,6 +189,99 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	default:
 		return m.planeBFitLine(session.EntryContent(e))
 	}
+}
+
+func (m Model) renderToolEntry(e session.Entry) string {
+	label := m.normalizeToolTitle(session.EntryTitle(e))
+	if label == "" {
+		label = "tool"
+	}
+	if isSubagentTool(session.EntryTitle(e)) {
+		var b strings.Builder
+		b.WriteString(m.st.subagent.Render("↳ " + label))
+		if content := strings.TrimRight(session.EntryContent(e), "\n"); content != "" {
+			lines := strings.Split(content, "\n")
+			shown := lines
+			if !m.ToolOutputExpanded && len(lines) > 10 {
+				shown = lines[:10]
+			}
+			b.WriteString("\n")
+			for _, line := range shown {
+				b.WriteString(m.planeBLine(m.st.dim, 2, line))
+				b.WriteString("\n")
+			}
+			if !m.ToolOutputExpanded && len(lines) > len(shown) {
+				b.WriteString(m.planeBLine(m.st.dim, 2,
+					fmt.Sprintf("... (%d more lines)", len(lines)-len(shown))))
+			}
+		}
+		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+	}
+
+	labelLine := m.renderToolLabel(label, session.EntryIsError(e))
+	content := session.EntryContent(e)
+	images := session.EntryImages(e)
+	if m.verbosity("tool") == "hidden" || m.toolOutputHidden(e) {
+		return labelLine
+	}
+	if content == "" {
+		return m.appendToolImages(labelLine, images)
+	}
+	if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
+		if isWriteTool(session.EntryTitle(e)) {
+			return labelLine
+		}
+		var b strings.Builder
+		b.WriteString(labelLine)
+		if summary := toolOutputSummary(e); summary != "" {
+			b.WriteString(m.st.dim.Render(" · " + summary))
+		}
+		return m.appendToolImages(m.planeBFitLine(b.String()), images)
+	}
+	if m.shouldRenderWriteDiff(e) {
+		content = m.renderDiff(content)
+	}
+
+	var b strings.Builder
+	b.WriteString(labelLine)
+	b.WriteString("\n")
+	if !m.ToolOutputExpanded && m.verbosity("tool") == "collapsed" {
+		b.WriteString(m.planeBLine(m.st.dim, 2, "..."))
+		b.WriteString("\n")
+	} else {
+		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+		shown := lines
+		if !m.ToolOutputExpanded && len(lines) > 10 {
+			shown = lines[:10]
+		}
+		for _, line := range shown {
+			b.WriteString(m.planeBLine(m.st.dim, 2, line))
+			b.WriteString("\n")
+		}
+		if !m.ToolOutputExpanded && len(lines) > len(shown) {
+			b.WriteString(m.planeBLine(m.st.dim, 2,
+				fmt.Sprintf("... (%d more lines)", len(lines)-len(shown))))
+			b.WriteString("\n")
+		}
+	}
+	return m.appendToolImages(strings.TrimRightFunc(b.String(), unicode.IsSpace), images)
+}
+
+func (m Model) appendToolImages(base string, images []session.ImageContent) string {
+	if len(images) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	for _, image := range images {
+		inline := terminal.RenderInlineImage(image.MimeType, image.Data, max(20, min(80, m.shellWidth()-4)))
+		if inline == "" {
+			continue
+		}
+		b.WriteString("\n")
+		b.WriteString(m.st.dim.PaddingLeft(2).Render(inline))
+	}
+	return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 }
 
 func (m Model) planeBFitLine(line string) string {
@@ -359,7 +393,6 @@ func (m Model) verbosity(kind string) string {
 // renderEntry formats a completed entry for the terminal commit boundary.
 func (m Model) renderEntry(e session.Entry) string {
 	thinkingVerbosity := m.verbosity("thinking")
-	toolVerbosity := m.verbosity("tool")
 
 	switch session.EntryRole(e) {
 	case session.RoleUser:
@@ -408,78 +441,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		return terminal.WrapTurnOutput(strings.TrimRightFunc(b.String(), unicode.IsSpace), false)
 
 	case session.RoleTool:
-		label := m.normalizeToolTitle(session.EntryTitle(e))
-		if label == "" {
-			label = "tool"
-		}
-		labelStr := m.renderToolLabel(label, session.EntryIsError(e))
-		if isSubagentTool(session.EntryTitle(e)) {
-			labelStr = m.st.subagent.Render("↳ " + label)
-		}
-		if session.EntryContent(e) == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
-			return labelStr
-		}
-		// When expanded (Ctrl+O), show full output regardless of verbosity
-		images := session.EntryImages(e)
-		if !m.ToolOutputExpanded && m.shouldSummarizeToolOutput(e) {
-			if len(images) == 0 {
-				if isWriteTool(session.EntryTitle(e)) {
-					return labelStr
-				}
-				if summary := toolOutputSummary(e); summary != "" {
-					return labelStr + m.st.dim.Render(" · "+summary)
-				}
-				return labelStr
-			}
-			var b strings.Builder
-			b.WriteString(labelStr)
-			if summary := toolOutputSummary(e); summary != "" {
-				b.WriteString(m.st.dim.Render(" · " + summary))
-			}
-			for _, img := range images {
-				b.WriteString("\n")
-				inlineImg := terminal.RenderInlineImage(img.MimeType, img.Data, max(20, min(80, m.shellWidth()-4)))
-				b.WriteString(m.st.dim.PaddingLeft(2).Render(inlineImg))
-			}
-			return strings.TrimRightFunc(b.String(), unicode.IsSpace)
-		}
-		content := session.EntryContent(e)
-		if m.shouldRenderWriteDiff(e) {
-			content = m.renderDiff(content)
-		}
-		var b strings.Builder
-		b.WriteString(labelStr)
-		b.WriteString("\n")
-		if !m.ToolOutputExpanded && toolVerbosity == "collapsed" {
-			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
-			b.WriteString("\n")
-		} else {
-			lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-			shown := lines
-			if !m.ToolOutputExpanded && len(lines) > 10 {
-				shown = lines[:10]
-			}
-			for _, l := range shown {
-				b.WriteString(m.st.dim.Render("  " + l))
-				b.WriteString("\n")
-			}
-			if !m.ToolOutputExpanded && len(lines) > 10 {
-				b.WriteString(m.st.dim.Render(
-					fmt.Sprintf("  ... (%d more lines)", len(lines)-10),
-				))
-				b.WriteString("\n")
-			}
-		}
-		if images := session.EntryImages(e); len(images) > 0 {
-			for _, img := range images {
-				inlineImg := terminal.RenderInlineImage(img.MimeType, img.Data, max(20, min(80, m.shellWidth()-4)))
-				if inlineImg != "" {
-					b.WriteString(m.st.dim.PaddingLeft(2).Render(inlineImg))
-					b.WriteString("\n")
-				}
-			}
-		}
-		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+		return m.renderToolEntry(e)
 
 	case session.RoleSubagent:
 		label := session.EntryTitle(e)

@@ -175,6 +175,21 @@ func TestLiveTranscriptNodesKeepAssistantNarrativeBeforeToolBatch(t *testing.T) 
 	}
 }
 
+func TestLiveAndCommittedToolUseOneProjection(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ReadOutput: "full"}
+	entry := testToolEntry("read", strings.Join([]string{
+		"line 1", "line 2", "line 3", "line 4", "line 5", "line 6",
+		"line 7", "line 8", "line 9", "line 10", "line 11", "line 12",
+	}, "\n"), false)
+
+	live := ansi.Strip(model.renderPendingEntry(entry))
+	committed := ansi.Strip(model.renderEntry(entry))
+	if live != committed {
+		t.Fatalf("live tool render differs from committed render:\nlive:\n%s\ncommitted:\n%s", live, committed)
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := testToolEntry("custom_tool", "line 1\nline 2\n", false)
