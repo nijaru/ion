@@ -29,14 +29,16 @@ func (c terminalCommitController) MarkPrinted() {
 }
 
 func (c terminalCommitController) Entries(entries ...session.Entry) tea.Cmd {
+	entries = c.model.unseenEntries(entries)
 	if len(entries) == 0 {
 		return nil
 	}
 	lines := make([]string, 0, len(entries))
 	c.MarkPrinted()
+	entryKeys := c.model.reservePrintedEntries(entries)
 	lines = append(lines, c.model.RenderEntries(entries...)...)
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return c.deferredLinesCmd(lines...)
+	return c.deferredLinesCmdWithEntries(lines, entryKeys)
 }
 
 func (c terminalCommitController) Help(content string) tea.Cmd {
@@ -77,6 +79,8 @@ func (c terminalCommitController) SwitchReplay(
 	if len(printLines) > 0 {
 		lines = append(lines, printLines...)
 	}
+	entries = c.model.unseenEntries(entries)
+	entryKeys := c.model.reservePrintedEntries(entries)
 	if len(entries) > 0 {
 		if len(lines) > 0 {
 			lines = append(lines, "")
@@ -96,10 +100,11 @@ func (c terminalCommitController) SwitchReplay(
 		lines = append(lines, c.model.renderEntry(systemEntry(status)))
 	}
 	if len(lines) == 0 {
+		c.model.releasePendingEntryKeys(entryKeys)
 		return nil
 	}
 	c.model.holdEnterForLargePrint(physicalLineCount(lines))
-	return c.deferredLinesCmd(lines...)
+	return c.deferredLinesCmdWithEntries(lines, entryKeys)
 }
 
 func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
@@ -122,10 +127,16 @@ func terminalCommitFlushCmd(lines ...string) tea.Cmd {
 }
 
 func (c terminalCommitController) deferredLinesCmd(lines ...string) tea.Cmd {
+	return c.deferredLinesCmdWithEntries(lines, nil)
+}
+
+func (c terminalCommitController) deferredLinesCmdWithEntries(lines, entryKeys []string) tea.Cmd {
 	copied := append([]string(nil), lines...)
+	keys := append([]string(nil), entryKeys...)
 	generation := c.model.Model.EventGeneration
+	epoch := c.model.Model.terminalCommitEpoch
 	return tea.Tick(printFrameSettleDelay, func(time.Time) tea.Msg {
-		return terminalCommitLinesMsg{generation: generation, lines: copied}
+		return terminalCommitLinesMsg{generation: generation, epoch: epoch, lines: copied, entryKeys: keys}
 	})
 }
 

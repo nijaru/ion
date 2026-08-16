@@ -198,31 +198,14 @@ func (m Model) renderLiveAgentContent(content string) string {
 		return m.st.dim.PaddingLeft(2).Render("• ...")
 	}
 
-	width := m.shellWidth()
-	if width <= 0 {
-		return m.st.agent.Render("• " + content)
+	// Use the same Markdown projection for the mutable stream and the terminal
+	// commit. Promotion must not change headings, lists, code blocks, or
+	// paragraph spacing when the final assistant message arrives.
+	rendered := strings.TrimRightFunc(m.renderMarkdownContent(content), unicode.IsSpace)
+	if rendered == "" {
+		return m.st.dim.PaddingLeft(2).Render("• ...")
 	}
-
-	prefix := "• "
-	bodyWidth := max(1, width-ansi.StringWidth(prefix))
-	var b strings.Builder
-	for i, line := range strings.Split(content, "\n") {
-		wrapped := ansi.Wordwrap(line, bodyWidth, " \t-")
-		if wrapped == "" {
-			wrapped = line
-		}
-		for j, part := range strings.Split(wrapped, "\n") {
-			if i > 0 || j > 0 {
-				b.WriteString("\n")
-			}
-			if i == 0 && j == 0 {
-				b.WriteString(m.st.agent.Render(prefix + part))
-			} else {
-				b.WriteString(m.st.agent.Render("  " + part))
-			}
-		}
-	}
-	return b.String()
+	return m.renderCompletedAgentContent(rendered)
 }
 
 func (m Model) renderCompletedAgentContent(rendered string) string {

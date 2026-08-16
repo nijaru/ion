@@ -602,7 +602,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			sessionID != "",
 			model.RenderEntries(startupEntries...),
 		)
-		model = model.WithPrintedTranscript(len(startupEntries) > 0)
+		model = model.WithPrintedTranscript(len(startupEntries) > 0).WithPrintedEntries(startupEntries)
 	}
 	timing.Record("tui-init")
 	timing.Print()

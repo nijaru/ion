@@ -286,7 +286,9 @@ type localEntriesMsg struct {
 
 type terminalCommitLinesMsg struct {
 	generation uint64
+	epoch      uint64
 	lines      []string
+	entryKeys  []string
 }
 
 type directShellResultMsg struct {
@@ -524,6 +526,12 @@ type ModelState struct {
 	// originalPrimaryModel stores the primary model name before cycling.
 	// Used by buildAvailableModels to always have the full list.
 	originalPrimaryModel string
+	// printedEntryKeys tracks logical entries already promoted to terminal
+	// scrollback. It spans ephemeral lifecycle entries and their later durable
+	// branch records so recovery cannot replay the same content.
+	printedEntryKeys    map[string]struct{}
+	pendingEntryKeys    map[string]struct{}
+	terminalCommitEpoch uint64
 	// Runner is the agent runner (Controller). When set, the TUI uses it as the
 	// single turn and event owner.
 	Runner agent.Runtime
@@ -673,6 +681,8 @@ func New(
 			Switcher:               switcher,
 			EndpointResolver:       llm.NewEndpointResolver(llm.EndpointResolverOptions{}),
 			EventSubscriptionState: &eventSubscriptionState{},
+			printedEntryKeys:       make(map[string]struct{}),
+			pendingEntryKeys:       make(map[string]struct{}),
 			runtimeContext:         runtimeContext,
 			runtimeCancel:          runtimeCancel,
 		},
@@ -897,6 +907,120 @@ func (m *Model) turnReducer() TurnReducer {
 func (m Model) WithPrintedTranscript(v bool) Model {
 	m.App.PrintedTranscript = v
 	return m
+}
+
+func (m Model) WithPrintedEntries(entries []session.Entry) Model {
+	m.markPrintedEntries(entries)
+	return m
+}
+
+func (m *Model) markPrintedEntries(entries []session.Entry) {
+	if m.Model.printedEntryKeys == nil {
+		m.Model.printedEntryKeys = make(map[string]struct{})
+	}
+	for _, entry := range entries {
+		if key := entryPrintKey(entry); key != "" {
+			m.Model.printedEntryKeys[key] = struct{}{}
+		}
+	}
+}
+
+func entryPrintKey(entry session.Entry) string {
+	if entry == nil {
+		return ""
+	}
+	when := entry.When().UnixNano()
+	switch message := entry.(type) {
+	case *session.MessageEntry:
+		switch value := message.Message.(type) {
+		case *session.UserMessage:
+			return fmt.Sprintf("user:%d:%s", value.Timestamp.UnixNano(), session.MessageText(value))
+		case *session.AssistantMessage:
+			if value.ResponseID != "" {
+				return "assistant-response:" + value.ResponseID
+			}
+			return fmt.Sprintf(
+				"assistant:%d:%s:%s",
+				value.Timestamp.UnixNano(),
+				session.MessageText(value),
+				session.EntryReasoning(entry),
+			)
+		case *session.ToolResultMessage:
+			if value.ToolCallID != "" {
+				return "tool-call:" + value.ToolCallID
+			}
+			return fmt.Sprintf("tool:%d:%s:%s", when, session.EntryTitle(entry), session.EntryContent(entry))
+		}
+	}
+	if entry.ID() != "" {
+		return "entry:" + entry.ID()
+	}
+	return ""
+}
+
+func (m Model) unseenEntries(entries []session.Entry) []session.Entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	unseen := make([]session.Entry, 0, len(entries))
+	for _, entry := range entries {
+		key := entryPrintKey(entry)
+		if key == "" {
+			unseen = append(unseen, entry)
+			continue
+		}
+		if _, printed := m.Model.printedEntryKeys[key]; printed {
+			continue
+		}
+		if _, pending := m.Model.pendingEntryKeys[key]; pending {
+			continue
+		}
+		unseen = append(unseen, entry)
+	}
+	return unseen
+}
+
+func (m *Model) reservePrintedEntries(entries []session.Entry) []string {
+	if m.Model.pendingEntryKeys == nil {
+		m.Model.pendingEntryKeys = make(map[string]struct{})
+	}
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		key := entryPrintKey(entry)
+		if key == "" {
+			continue
+		}
+		if _, printed := m.Model.printedEntryKeys[key]; printed {
+			continue
+		}
+		m.Model.pendingEntryKeys[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func (m *Model) acceptPrintedEntries(keys []string) {
+	if m.Model.printedEntryKeys == nil {
+		m.Model.printedEntryKeys = make(map[string]struct{})
+	}
+	for _, key := range keys {
+		if key != "" {
+			m.Model.printedEntryKeys[key] = struct{}{}
+		}
+	}
+	m.releasePendingEntryKeys(keys)
+}
+
+func (m *Model) releasePendingEntryKeys(keys []string) {
+	for _, key := range keys {
+		delete(m.Model.pendingEntryKeys, key)
+	}
+}
+
+func (m *Model) clearPrintedEntries() {
+	m.Model.terminalCommitEpoch++
+	m.Model.printedEntryKeys = make(map[string]struct{})
+	m.Model.pendingEntryKeys = make(map[string]struct{})
 }
 
 func (m Model) WithSize(width, height int) Model {

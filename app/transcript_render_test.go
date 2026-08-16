@@ -31,6 +31,29 @@ func TestToolOnlyAssistantDoesNotRenderDuplicateOrBareBlock(t *testing.T) {
 	}
 }
 
+func TestLiveAndCommittedAssistantUseOneMarkdownProjection(t *testing.T) {
+	model := readyModel(t)
+	content := "# Result\n\n- first\n- second\n\n```go\nfmt.Println(\"ok\")\n```"
+	pending := testAgentEntry(content, "")
+	live := ansi.Strip(model.renderPendingEntry(pending))
+	committed := ansi.Strip(model.renderEntry(pending))
+	for _, rendered := range []struct {
+		name string
+		text string
+	}{
+		{name: "live", text: live},
+		{name: "committed", text: committed},
+	} {
+		if strings.Contains(rendered.text, "# Result") || strings.Contains(rendered.text, "```") {
+			t.Fatalf("%s assistant retained raw Markdown: %q", rendered.name, rendered.text)
+		}
+		if !strings.Contains(rendered.text, "Result") || !strings.Contains(rendered.text, "first") ||
+			!strings.Contains(rendered.text, "fmt.Println") {
+			t.Fatalf("%s assistant lost Markdown content: %q", rendered.name, rendered.text)
+		}
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := testToolEntry("custom_tool", "line 1\nline 2\n", false)

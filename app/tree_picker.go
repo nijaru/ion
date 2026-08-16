@@ -523,15 +523,13 @@ func (m Model) handleReplayBranch(msg replayBranchMsg) (Model, tea.Cmd) {
 	if len(msg.entries) > 0 {
 		m.Model.LeafID = msg.entries[len(msg.entries)-1].ID()
 	}
-	var lines []string
-	lines = append(lines, "--- moved to branch ---")
-	if len(msg.entries) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, m.RenderEntries(msg.entries...)...)
-	}
-	commit := m.terminalCommit()
-	commit.MarkPrinted()
-	return m, commit.deferredLinesCmd(lines...)
+	m.clearPrintedEntries()
+	return m, m.terminalCommit().SwitchReplay(
+		[]string{"--- moved to branch ---"},
+		msg.entries,
+		"",
+		"",
+	)
 }
 
 // renderTreePicker renders the interactive tree selector.

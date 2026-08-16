@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/spinner"
@@ -18,6 +19,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	*m = next
 	return m, cmd
+}
+
+func syntheticAssistantEntry(snapshot agent.RuntimeSnapshot) session.Entry {
+	assistant := snapshot.ActiveTurn.Assistant
+	id := fmt.Sprintf(
+		"synthetic-assistant:%d:%s:%d",
+		snapshot.ActiveTurnToken,
+		assistant.ResponseID,
+		assistant.Timestamp.UnixNano(),
+	)
+	return &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: id},
+		Message:   assistant,
+	}
 }
 
 func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
@@ -199,9 +214,10 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case terminalCommitLinesMsg:
-		if msg.generation != m.Model.EventGeneration {
+		if msg.generation != m.Model.EventGeneration || msg.epoch != m.Model.terminalCommitEpoch {
 			return m, nil, true
 		}
+		m.acceptPrintedEntries(msg.entryKeys)
 		return m, terminalCommitFlushCmd(msg.lines...), true
 
 	case tea.ResumeMsg:
@@ -437,9 +453,7 @@ func (m Model) dispatchTurnControllerMessage(msg tea.Msg) (Model, tea.Cmd, bool)
 		syntheticAssistant := snapshot.Resynced && snapshot.ActiveTurn.Assistant != nil &&
 			snapshot.ActiveTurn.AssistantCommitted && !snapshot.ActiveTurn.AssistantInBranch
 		if syntheticAssistant {
-			replayBranch = append(append([]session.Entry(nil), replayBranch...), &session.MessageEntry{
-				Message: snapshot.ActiveTurn.Assistant,
-			})
+			replayBranch = append(append([]session.Entry(nil), replayBranch...), syntheticAssistantEntry(snapshot))
 		}
 		m.applyAgentRuntimeSnapshot(snapshot)
 		if syntheticAssistant && snapshot.ActiveTurn.AssistantCommitted {

@@ -6,8 +6,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nijaru/ion/session"
 )
 
 func TestTerminalCommitOwnsBubbleTeaPrintBoundary(t *testing.T) {
@@ -60,6 +62,77 @@ func TestStaleTerminalCommitCannotFlushAfterRuntimeReplacement(t *testing.T) {
 	}
 	if next.App.PrintedTranscript {
 		t.Fatal("stale terminal commit changed transcript state")
+	}
+}
+
+func TestTerminalCommitPromotesDurableEntryOnlyOnce(t *testing.T) {
+	model := readyModel(t)
+	entry := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "entry-1"},
+		Message:   &session.UserMessage{Content: []session.Content{session.TextContent{Text: "hello"}}},
+	}
+	if cmd := model.terminalCommit().Entries(entry); cmd == nil {
+		t.Fatal("first entry commit returned nil")
+	}
+	if cmd := model.terminalCommit().Entries(entry); cmd != nil {
+		t.Fatal("duplicate entry commit returned a flush command")
+	}
+}
+
+func TestTerminalCommitCorrelatesEphemeralAndDurableMessage(t *testing.T) {
+	model := readyModel(t)
+	ts := time.Unix(123, 0)
+	live := &session.MessageEntry{
+		EntryBase: session.EntryBase{Timestamp: ts},
+		Message:   &session.UserMessage{Timestamp: ts, Content: []session.Content{session.TextContent{Text: "hello"}}},
+	}
+	durable := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "durable-1", Timestamp: ts},
+		Message:   &session.UserMessage{Timestamp: ts, Content: []session.Content{session.TextContent{Text: "hello"}}},
+	}
+	msg, ok := model.terminalCommit().Entries(live)().(terminalCommitLinesMsg)
+	if !ok {
+		t.Fatal("live commit did not produce deferred message")
+	}
+	model, _, _ = model.dispatchAppControlMessage(msg)
+	if cmd := model.terminalCommit().Entries(durable); cmd != nil {
+		t.Fatal("durable replay of live message returned a flush command")
+	}
+}
+
+func TestTerminalReplaySkipsPrintedDurableEntries(t *testing.T) {
+	model := readyModel(t)
+	entry := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "entry-1"},
+		Message:   &session.UserMessage{Content: []session.Content{session.TextContent{Text: "hello"}}},
+	}
+	model = model.WithPrintedEntries([]session.Entry{entry})
+	if cmd := model.terminalCommit().SwitchReplay(nil, []session.Entry{entry}, "", ""); cmd != nil {
+		t.Fatal("replay of printed entry returned a flush command")
+	}
+}
+
+func TestStaleTerminalCommitDoesNotCrossProjectionEpoch(t *testing.T) {
+	model := readyModel(t)
+	entry := &session.MessageEntry{
+		EntryBase: session.EntryBase{ID: "entry-epoch"},
+		Message:   &session.UserMessage{Content: []session.Content{session.TextContent{Text: "old"}}},
+	}
+	commit := model.terminalCommit().Entries(entry)
+	stale, ok := commit().(terminalCommitLinesMsg)
+	if !ok {
+		t.Fatalf("deferred commit = %T, want terminalCommitLinesMsg", commit())
+	}
+	model.clearPrintedEntries()
+	next, flush, handled := model.dispatchAppControlMessage(stale)
+	if !handled || flush != nil {
+		t.Fatalf("stale commit = handled=%t flush=%v, want handled without flush", handled, flush)
+	}
+	if next.Model.terminalCommitEpoch == stale.epoch {
+		t.Fatal("projection epoch did not advance")
+	}
+	if cmd := next.terminalCommit().Entries(entry); cmd == nil {
+		t.Fatal("stale commit consumed the entry reservation")
 	}
 }
 
