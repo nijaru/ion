@@ -341,7 +341,7 @@ func startupRuntimeConfig(
 	explicitRuntimeOverride bool,
 ) (*config.Config, string, error) {
 	preset := "primary"
-	if !explicitRuntimeOverride && strings.TrimSpace(sessionID) == "" {
+	if cfg.StartupModelMode() != "configured" && !explicitRuntimeOverride && strings.TrimSpace(sessionID) == "" {
 		if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
 			preset = config.NormalizeActivePreset(*state.ActivePreset)
 		}

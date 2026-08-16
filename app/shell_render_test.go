@@ -768,6 +768,21 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	}
 }
 
+func TestStatusLineUsesEffectiveThinkingLevel(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ReasoningEffort: "high"}
+	model.Model.Runtime = Snapshot{Materialized: true, Reasoning: "off"}
+	model.Progress.ReasoningEffort = "off"
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, " • off • ") {
+		t.Fatalf("status line = %q, want effective off level", line)
+	}
+	if strings.Contains(line, " • high • ") {
+		t.Fatalf("status line used requested high level: %q", line)
+	}
+}
+
 func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 	model := New(
 		stubBackend{

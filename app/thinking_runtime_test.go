@@ -507,7 +507,49 @@ func TestThinkingFailureRestoresAbsentReasoningOverride(t *testing.T) {
 	}
 }
 
-func TestShiftTabThinkingPickerCommitsSelectedLevel(t *testing.T) {
+func TestThinkingPickerUsesEffectiveRuntimeAndCapabilities(t *testing.T) {
+	model := readyModel(t)
+	caps := llm.DefaultCapabilities()
+	model.Model.Config = &config.Config{Provider: "openai", Model: "chat", ReasoningEffort: "high"}
+	model.Model.Runtime = Snapshot{
+		Materialized: true,
+		Reasoning:    "off",
+		Capabilities: &caps,
+	}
+	model.Progress.ReasoningEffort = "off"
+
+	updated, cmd := model.openThinkingPicker()
+	if cmd != nil {
+		t.Fatal("opening thinking picker returned command")
+	}
+	if updated.Picker.Overlay == nil {
+		t.Fatal("thinking picker did not open")
+	}
+	items := updated.Picker.Overlay.items
+	if len(items) != 2 || items[0].Value != "auto" || items[1].Value != "off" {
+		t.Fatalf("thinking picker items = %#v, want auto/off for chat capabilities", items)
+	}
+	if updated.Picker.Overlay.index != 1 {
+		t.Fatalf("thinking picker index = %d, want effective off", updated.Picker.Overlay.index)
+	}
+}
+
+func TestThinkingPickerHidesUnsupportedOffLevel(t *testing.T) {
+	caps := llm.DefaultCapabilities()
+	caps.Reasoning = llm.ReasoningCapabilities{
+		Kind:       llm.ReasoningKindEffort,
+		Efforts:    []string{"low", "high"},
+		CanDisable: false,
+	}
+	items := thinkingPickerItems(&caps)
+	for _, item := range items {
+		if item.Value == "off" {
+			t.Fatal("thinking picker exposed off for a non-disableable reasoning model")
+		}
+	}
+}
+
+func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
 	runner := &stubRunner{}
 	model.Model.Runner = runner
@@ -519,31 +561,23 @@ func TestShiftTabThinkingPickerCommitsSelectedLevel(t *testing.T) {
 	model.Progress.ReasoningEffort = "low"
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if cmd != nil {
-		t.Fatal("shift+tab unexpectedly returned a command while opening picker")
+	if cmd == nil {
+		t.Fatal("shift+tab returned no thinking cycle command")
 	}
 	model = testModel(t, updated)
-	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeThinking {
-		t.Fatalf("shift+tab overlay = %#v, want thinking picker", model.Picker.Overlay)
-	}
-	model.Picker.Overlay.index = 5 // High.
-	model, cmd = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("thinking picker returned no persistence command")
-	}
 	msg := cmd()
 	committed, ok := msg.(TransitionCommittedMsg)
 	if !ok {
-		t.Fatalf("thinking picker message = %T, want TransitionCommittedMsg", msg)
+		t.Fatalf("thinking cycle message = %T, want TransitionCommittedMsg", msg)
 	}
 	if committed.err != nil {
-		t.Fatalf("thinking picker persistence failed: %v", committed.err)
+		t.Fatalf("thinking cycle persistence failed: %v", committed.err)
 	}
 	model = applyThinkingTransition(t, model, committed)
-	if len(runner.thinking) != 1 || runner.thinking[0] != session.ThinkingHigh {
-		t.Fatalf("live thinking updates = %#v, want high", runner.thinking)
+	if len(runner.thinking) != 1 || runner.thinking[0] != session.ThinkingMedium {
+		t.Fatalf("live thinking updates = %#v, want medium", runner.thinking)
 	}
-	if got := model.Progress.ReasoningEffort; got != "high" {
-		t.Fatalf("visible reasoning effort = %q, want high", got)
+	if got := model.Progress.ReasoningEffort; got != "medium" {
+		t.Fatalf("visible reasoning effort = %q, want medium", got)
 	}
 }

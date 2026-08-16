@@ -140,11 +140,12 @@ func TestBuildRequestJSON_NoReasoningWhenNotSpecified(t *testing.T) {
 	}
 }
 
-func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
+func TestBuildRequestJSON_AutoLeavesReasoningToProvider(t *testing.T) {
 	p := NewProvider(llm.ProviderConfig{
 		APIKey: "test-key",
 		Models: []llm.Model{{
-			ID: "xiaomi/mimo-v2.5-pro",
+			ID:               "xiaomi/mimo-v2.5-pro",
+			ThinkingLevelMap: map[string]string{"off": "none"},
 			Capabilities: &llm.Capabilities{
 				Streaming:   true,
 				Tools:       true,
@@ -159,8 +160,8 @@ func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
 		}},
 	})
 
-	// No reasoning effort specified for a reasoning model: should default to "none"
-	// to avoid unwanted reasoning charges.
+	// An empty request effort represents Ion's Auto/provider-default mode.
+	// Leave the nested control absent instead of silently forcing reasoning off.
 	req := &llm.Request{
 		Model:    "xiaomi/mimo-v2.5-pro",
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
@@ -176,16 +177,8 @@ func TestBuildRequestJSON_ReasoningOffForReasoningModel(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	reasoningRaw, ok := raw["reasoning"]
-	if !ok {
-		t.Fatal("reasoning object missing from request for reasoning model")
-	}
-	reasoning, ok := reasoningRaw.(map[string]any)
-	if !ok {
-		t.Fatalf("reasoning is %T, want object", reasoningRaw)
-	}
-	if got, want := reasoning["effort"], "none"; got != want {
-		t.Fatalf("reasoning.effort = %v, want %v", got, want)
+	if _, ok := raw["reasoning"]; ok {
+		t.Fatalf("auto reasoning should be omitted, got %#v", raw["reasoning"])
 	}
 }
 

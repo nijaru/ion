@@ -50,6 +50,7 @@ type MCPServerConfig struct {
 type Config struct {
 	Provider               string                      `toml:"provider,omitempty"`
 	Model                  string                      `toml:"model,omitempty"`
+	StartupModelPolicy     string                      `toml:"startup_model,omitempty"`
 	ReasoningEffort        string                      `toml:"reasoning_effort,omitempty"`
 	FastModel              string                      `toml:"fast_model,omitempty"`
 	FastReasoningEffort    string                      `toml:"fast_reasoning_effort,omitempty"`
@@ -306,6 +307,7 @@ func applyEnvOverrides(cfg *Config) {
 func normalizeConfig(cfg *Config) {
 	cfg.Provider = normalizeProviderID(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.StartupModelPolicy = normalizeStartupModelPolicy(cfg.StartupModelPolicy)
 	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
 	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
 	cfg.FastReasoningEffort = normalizeOptionalReasoningEffort(cfg.FastReasoningEffort)
@@ -554,30 +556,34 @@ func applyState(cfg *Config, state *State) {
 	if cfg == nil || state == nil {
 		return
 	}
-	if state.Provider != nil {
-		provider := normalizeProviderID(*state.Provider)
-		if provider != normalizeProviderID(cfg.Provider) {
-			clearProviderScopedPresets(cfg)
+	if cfg.StartupModelPolicy != "configured" {
+		if state.Provider != nil {
+			provider := normalizeProviderID(*state.Provider)
+			if provider != normalizeProviderID(cfg.Provider) {
+				clearProviderScopedPresets(cfg)
+			}
+			cfg.Provider = provider
 		}
-		cfg.Provider = provider
-	}
-	if state.Model != nil {
-		cfg.Model = strings.TrimSpace(*state.Model)
+		if state.Model != nil {
+			cfg.Model = strings.TrimSpace(*state.Model)
+		}
 	}
 	if state.ReasoningEffort != nil {
 		cfg.ReasoningEffort = normalizeReasoningEffort(*state.ReasoningEffort)
 	}
-	if state.FastModel != nil {
-		cfg.FastModel = strings.TrimSpace(*state.FastModel)
-	}
-	if state.FastReasoningEffort != nil {
-		cfg.FastReasoningEffort = normalizeOptionalReasoningEffort(*state.FastReasoningEffort)
-	}
-	if state.SummaryModel != nil {
-		cfg.SummaryModel = strings.TrimSpace(*state.SummaryModel)
-	}
-	if state.SummaryReasoningEffort != nil {
-		cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(*state.SummaryReasoningEffort)
+	if cfg.StartupModelPolicy != "configured" {
+		if state.FastModel != nil {
+			cfg.FastModel = strings.TrimSpace(*state.FastModel)
+		}
+		if state.FastReasoningEffort != nil {
+			cfg.FastReasoningEffort = normalizeOptionalReasoningEffort(*state.FastReasoningEffort)
+		}
+		if state.SummaryModel != nil {
+			cfg.SummaryModel = strings.TrimSpace(*state.SummaryModel)
+		}
+		if state.SummaryReasoningEffort != nil {
+			cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(*state.SummaryReasoningEffort)
+		}
 	}
 }
 
@@ -625,6 +631,26 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func NormalizeStartupModelPolicy(value string) string {
+	return normalizeStartupModelPolicy(value)
+}
+
+func (c *Config) StartupModelMode() string {
+	if c == nil {
+		return "last-used"
+	}
+	return normalizeStartupModelPolicy(c.StartupModelPolicy)
+}
+
+func normalizeStartupModelPolicy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "configured", "config", "fixed":
+		return "configured"
+	default:
+		return "last-used"
+	}
 }
 
 func NormalizeActivePreset(value string) string {

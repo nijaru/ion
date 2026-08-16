@@ -201,30 +201,13 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
-	runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	items := thinkingPickerItems(m.Model.Runtime.Capabilities)
+	current := m.effectiveThinkingLevel()
+	currentIndex := pickerIndex(items, current)
+	if currentIndex < 0 {
+		currentIndex = 0
 	}
-	items := []pickerItem{
-		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
-		{Label: "Off", Value: "off", Detail: "No reasoning"},
-		{Label: "Minimal", Value: "minimal", Detail: "Very brief reasoning (~1k tokens)"},
-		{Label: "Low", Value: "low", Detail: "Light reasoning (~2k tokens)"},
-		{Label: "Medium", Value: "medium", Detail: "Moderate reasoning (~8k tokens)"},
-		{Label: "High", Value: "high", Detail: "Deep reasoning (~16k tokens)"},
-		{Label: "XHigh", Value: "xhigh", Detail: "Extra-high reasoning (~32k tokens)"},
-		{Label: "Max", Value: "max", Detail: "Maximum reasoning"},
-	}
-	currentIndex := pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort))
 	for i := range items {
-		isActive := i == currentIndex
-		currentVal := ""
-		if isActive {
-			currentVal = "active"
-		}
-		items[i].SettingName = items[i].Label
-		items[i].CurrentVal = currentVal
-		items[i].Desc = items[i].Detail
 		items[i].Search = pickerSearchIndex(
 			items[i].Label,
 			items[i].Value,
@@ -242,6 +225,42 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 		cfg:      cfg,
 	})
 	return m, nil
+}
+
+func thinkingPickerItems(caps *llm.Capabilities) []pickerItem {
+	choices := []pickerItem{
+		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
+		{Label: "Off", Value: "off", Detail: "No reasoning"},
+		{Label: "Minimal", Value: "minimal", Detail: "Very brief reasoning (~1k tokens)"},
+		{Label: "Low", Value: "low", Detail: "Light reasoning (~2k tokens)"},
+		{Label: "Medium", Value: "medium", Detail: "Moderate reasoning (~8k tokens)"},
+		{Label: "High", Value: "high", Detail: "Deep reasoning (~16k tokens)"},
+		{Label: "XHigh", Value: "xhigh", Detail: "Extra-high reasoning (~32k tokens)"},
+		{Label: "Max", Value: "max", Detail: "Maximum reasoning"},
+	}
+	if caps == nil {
+		return choices
+	}
+	filtered := make([]pickerItem, 0, len(choices))
+	for _, choice := range choices {
+		if choice.Value == "off" && caps.ReasoningCaps().Kind != llm.ReasoningKindNone &&
+			!caps.SupportsReasoningControl(choice.Value) {
+			continue
+		}
+		if choice.Value != config.DefaultReasoningEffort && choice.Value != "off" &&
+			!caps.SupportsReasoningControl(choice.Value) {
+			continue
+		}
+		filtered = append(filtered, choice)
+	}
+	return filtered
+}
+
+func (m Model) effectiveThinkingLevel() string {
+	if m.Model.Runtime.Materialized {
+		return normalizeThinkingValue(m.Model.Runtime.Reasoning)
+	}
+	return normalizeThinkingValue(m.Progress.ReasoningEffort)
 }
 
 func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []pickerItem {
@@ -849,12 +868,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
-		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-		}
-		if currentCfg.Provider != "" &&
-			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
+		if m.effectiveThinkingLevel() == level {
 			m.pickerReducer().closeOverlay()
 			return m, nil
 		}

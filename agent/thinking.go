@@ -12,6 +12,12 @@ func clampThinkingLevel(model llm.Model, level session.ThinkingLevel) session.Th
 	if model.Capabilities.SupportsReasoningControl(string(level)) {
 		return level
 	}
+	// A provider that exposes reasoning but cannot disable it must keep its
+	// default behavior visible as Auto. Falling back to Off would claim that
+	// reasoning is disabled even when the adapter cannot enforce that request.
+	if model.Capabilities.ReasoningCaps().Kind != llm.ReasoningKindNone {
+		return session.ThinkingAuto
+	}
 	return session.ThinkingOff
 }
 

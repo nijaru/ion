@@ -217,6 +217,37 @@ func (m Model) handleModelCommand(fields []string) (Model, tea.Cmd) {
 	)
 }
 
+func (m Model) cycleThinkingCommand() (Model, tea.Cmd) {
+	if m.Model.Runner == nil {
+		return m, nil
+	}
+	if m.localCommandBusy() {
+		return m, cmdError(m.localCommandBusyMessage("changing thinking level"))
+	}
+	levels := thinkingPickerItems(m.Model.Runtime.Capabilities)
+	if len(levels) == 0 {
+		return m, cmdError("no thinking levels are available for this model")
+	}
+	current := m.effectiveThinkingLevel()
+	index := pickerIndex(levels, current)
+	next := levels[0]
+	if index >= 0 {
+		next = levels[(index+1)%len(levels)]
+	}
+	cfg, err := m.commandConfig()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	transition, _, err := m.thinkingSelectionTransition(cfg, m.activePreset(), next.Value)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	return m.beginRuntimeTransitionCommit(
+		transition,
+		systemEntry("Thinking set to "+next.Label),
+	)
+}
+
 func (m Model) handleThinkingCommand(fields []string) (Model, tea.Cmd) {
 	if len(fields) < 2 {
 		return m.openThinkingPicker()
@@ -226,12 +257,7 @@ func (m Model) handleThinkingCommand(fields []string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
-	currentCfg, err := m.runtimeConfigForActivePreset(cfg)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-	}
-	if currentCfg.Provider != "" &&
-		normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
+	if m.effectiveThinkingLevel() == level {
 		return m, nil
 	}
 	transition, _, err := m.thinkingSelectionTransition(cfg, m.activePreset(), level)

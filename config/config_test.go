@@ -189,6 +189,37 @@ func TestLoadAppliesMutableState(t *testing.T) {
 	}
 }
 
+func TestLoadConfiguredStartupModelIgnoresLastUsedState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(
+		"provider = \"openrouter\"\nmodel = \"configured/model\"\nstartup_model = \"configured\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "state.toml"), []byte(
+		"provider = \"local-api\"\nmodel = \"last/model\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.StartupModelMode() != "configured" {
+		t.Fatalf("startup model mode = %q, want configured", cfg.StartupModelMode())
+	}
+	if cfg.Provider != "openrouter" || cfg.Model != "configured/model" {
+		t.Fatalf("provider/model = %s/%s, want configured selection", cfg.Provider, cfg.Model)
+	}
+}
+
 func TestLoadStateProviderOverrideClearsProviderScopedPresets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

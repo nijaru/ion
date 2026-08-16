@@ -9,6 +9,7 @@ import (
 
 	"github.com/nijaru/ion/agent"
 	"github.com/nijaru/ion/config"
+	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ion/session"
 )
 
@@ -104,6 +105,7 @@ type Snapshot struct {
 	Preset        Preset
 	Status        string
 	Reasoning     string
+	Capabilities  *llm.Capabilities
 	Provider      string
 	Model         string
 	SessionID     string

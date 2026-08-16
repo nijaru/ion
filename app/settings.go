@@ -14,14 +14,26 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
-			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|tool_mode coding|read|all|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking on|off|busy queue|steer]",
+			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|tool_mode coding|read|all|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking on|off|reasoning auto|off|high|startup_model configured|last-used|busy queue|steer]",
 		)
 	}
 
 	key := strings.ToLower(strings.TrimSpace(fields[1]))
 	value := strings.ToLower(strings.TrimSpace(fields[2]))
+	if key == "model_startup" || key == "model_policy" {
+		key = "startup_model"
+	}
 	if _, _, err := settingsConfigUpdate(&config.Config{}, key, value); err != nil {
 		return m, cmdError(err.Error())
+	}
+	// Thinking level is a live runtime control. Route it through the same
+	// durable SetThinking transaction as /thinking instead of changing only
+	// the stable config file.
+	if key == "reasoning" || key == "reasoning_effort" || key == "thinking_level" {
+		if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
+			m.pickerReducer().closeOverlay()
+		}
+		return m.handleThinkingCommand([]string{"/thinking", value})
 	}
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return m, cmdError(m.localCommandBusyMessage("changing settings"))
@@ -46,10 +58,22 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		if err != nil {
 			return settingsCommandMsg{requestID: requestID, err: err}
 		}
+		if key == "startup_model" && updated.StartupModelMode() == "configured" && activeCfg != nil {
+			updated.Provider = activeCfg.Provider
+			updated.Model = activeCfg.Model
+		}
 		if err := saveConfigFile(&updated); err != nil {
 			return settingsCommandMsg{
 				requestID: requestID,
 				err:       fmt.Errorf("failed to save config: %w", err),
+			}
+		}
+		if key == "startup_model" && updated.StartupModelMode() == "last-used" && activeCfg != nil {
+			if err := config.SaveState(activeCfg); err != nil {
+				return settingsCommandMsg{
+					requestID: requestID,
+					err:       fmt.Errorf("failed to save current model as last-used: %w", err),
+				}
 			}
 		}
 		runtimeCfg, err := loadConfigFile()
@@ -95,6 +119,7 @@ func (m Model) handleSettingsCommandResult(msg settingsCommandMsg) (Model, tea.C
 	}
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeSettings {
 		items := settingsPickerItems(m.Model.Config)
+		m.applyEffectiveThinkingSetting(items)
 		m.Picker.Overlay.items = items
 		m.Picker.Overlay.cfg = m.Model.Config
 		m.pickerReducer().refreshOverlayFilter()
@@ -194,6 +219,14 @@ func settingsConfigUpdate(
 		}
 		updated.ReasoningEffort = level
 		notice = "Thinking level: " + level
+	case "startup_model", "model_startup", "model_policy":
+		policy := config.NormalizeStartupModelPolicy(value)
+		if policy != "configured" && strings.TrimSpace(value) != "last-used" &&
+			strings.TrimSpace(value) != "last_used" {
+			return config.Config{}, "", fmt.Errorf("usage: /settings startup_model configured|last-used")
+		}
+		updated.StartupModelPolicy = policy
+		notice = "Startup model: " + policy
 	case "busy", "busy_input":
 		mode := config.NormalizeBusyInput(value)
 		if mode == "" {
@@ -207,7 +240,7 @@ func settingsConfigUpdate(
 		notice = "Busy input: " + mode
 	default:
 		return config.Config{}, "", fmt.Errorf(
-			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|busy|reasoning]",
+			"usage: /settings [retry|tool|tool_mode|read|write|bash|thinking|reasoning|startup_model|busy]",
 		)
 	}
 	return updated, notice, nil
@@ -226,6 +259,7 @@ func (m Model) openSettingsPicker() (Model, tea.Cmd) {
 		cfg = &clone
 	}
 	items := settingsPickerItems(cfg)
+	m.applyEffectiveThinkingSetting(items)
 	m.clearProgressError()
 	m.pickerReducer().openOverlay(pickerOverlayState{
 		title:    "Settings",
@@ -236,6 +270,29 @@ func (m Model) openSettingsPicker() (Model, tea.Cmd) {
 		cfg:      cfg,
 	})
 	return m, nil
+}
+
+func (m Model) applyEffectiveThinkingSetting(items []pickerItem) {
+	current := m.effectiveThinkingLevel()
+	levels := thinkingPickerItems(m.Model.Runtime.Capabilities)
+	values := make([]string, 0, len(levels))
+	for _, level := range levels {
+		values = append(values, level.Value)
+	}
+	if len(values) == 0 {
+		return
+	}
+	for i := range items {
+		if !strings.HasPrefix(items[i].Value, "reasoning ") {
+			continue
+		}
+		next := nextSettingValue(current, values)
+		items[i].Label = "Thinking level: " + current
+		items[i].Value = "reasoning " + next
+		items[i].Detail = "Enter: " + current + " -> " + next + " • Reasoning depth for thinking models"
+		items[i].CurrentVal = current
+		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, items[i].Detail, items[i].Group, nil)
+	}
 }
 
 func settingsPickerItems(cfg *config.Config) []pickerItem {
@@ -273,6 +330,14 @@ func settingsPickerItems(cfg *config.Config) []pickerItem {
 			nextSettingValue(reasoning, []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"}),
 			"Turn behavior",
 			"Reasoning depth for thinking models",
+		),
+		settingsPickerItem(
+			"Startup model",
+			"startup_model",
+			cfg.StartupModelMode(),
+			nextSettingValue(cfg.StartupModelMode(), []string{"last-used", "configured"}),
+			"Turn behavior",
+			"Open new sessions with the fixed config or last-used model",
 		),
 		settingsPickerItem(
 			"Tool permission",

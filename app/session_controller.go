@@ -772,7 +772,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.AgentEnd:
 		return m, m.awaitSessionEvent()
 
-	case session.ModelUpdate, session.ThinkingUpdate, session.ToolsUpdate:
+	case session.ThinkingUpdate:
+		// The controller may clamp a requested level to the provider's effective
+		// level. Keep the footer and pickers on that authoritative event rather
+		// than the requested config transition.
+		m.Model.Runtime.Reasoning = normalizeThinkingValue(string(msg.Level))
+		m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
+		return m, m.awaitSessionEvent()
+
+	case session.ModelUpdate, session.ToolsUpdate:
 		// Runtime setters already update the app's accepted snapshot. These
 		// events are lifecycle notifications for subscribers, not a second
 		// source of TUI state.

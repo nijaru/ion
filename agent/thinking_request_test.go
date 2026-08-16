@@ -61,6 +61,28 @@ func TestHarnessClampsThinkingToModelCapabilities(t *testing.T) {
 	}
 }
 
+func TestHarnessDoesNotClaimOffWhenProviderCannotDisableReasoning(t *testing.T) {
+	store := newTestStore(t)
+	sess := session.NewSession(store, 64)
+	caps := llm.DefaultCapabilities()
+	caps.Reasoning = llm.ReasoningCapabilities{
+		Kind:       llm.ReasoningKindEffort,
+		Efforts:    []string{"low", "high"},
+		CanDisable: false,
+	}
+	h := NewController(ControllerConfig{
+		Session:  sess,
+		Store:    store,
+		Model:    llm.Model{ID: "reasoning", Capabilities: &caps},
+		Thinking: session.ThinkingOff,
+	})
+	defer h.Close()
+
+	if got := h.GetThinkingLevel(); got != session.ThinkingAuto {
+		t.Fatalf("thinking level = %q, want auto when off is unsupported", got)
+	}
+}
+
 func TestHarnessThinkingChangeIsDurableBeforeNextPrompt(t *testing.T) {
 	store := newTestStore(t)
 	sess := session.NewSession(store, 64)

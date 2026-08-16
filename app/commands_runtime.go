@@ -240,7 +240,7 @@ func (m Model) cycleScopedModelResolved(
 		return m, cmdError(fmt.Sprintf("failed to resolve scoped model: %v", err))
 	}
 	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
-	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "").WithStatePersistence()
 	m.progressReducer().setStatus("Switched to " + label)
 	return m.switchRuntimeCommand(
 		transition,
@@ -308,7 +308,7 @@ func (m Model) cyclePresetFallback(
 		return m, cmdError(fmt.Sprintf("failed to resolve model: %v", err))
 	}
 	label := fmt.Sprintf("%s/%s", next.Provider, next.Model)
-	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "")
+	transition := newRuntimeTransition(&updated, runtimeUpdated, preset, "").WithStatePersistence()
 	m.progressReducer().setStatus("Switched to " + label)
 	return m.switchRuntimeCommand(
 		transition,
@@ -848,6 +848,12 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	if msg.subscription != nil {
 		m.Model.EventSubscription = msg.subscription
 		m.Model.EventCursor = msg.subscription.Snapshot.Cursor
+		// The transition contains requested config; the subscription snapshot
+		// contains the controller's effective model/thinking/capability state.
+		// Apply both so a switch cannot resurrect a clamped or stale footer.
+		if msg.subscription.Snapshot.Model.ID != "" || msg.subscription.Snapshot.Model.Provider != "" {
+			m.applyAgentRuntimeSnapshot(msg.subscription.Snapshot)
+		}
 	}
 	return closeErr
 }

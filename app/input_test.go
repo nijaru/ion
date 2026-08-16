@@ -1026,6 +1026,9 @@ func TestCtrlLCyclesScopedModelsForward(t *testing.T) {
 		t.Fatal("expected ctrl+l to switch to next scoped model")
 	}
 	model, switched := applyScopedModelCycle(t, model, cmd)
+	if !switched.runtime.Transition.PersistState {
+		t.Fatal("scoped model cycle transition did not persist last-used model")
+	}
 	next, _ := model.Update(switched)
 	model = testModel(t, next)
 	if got, want := model.Model.Info.Model(), "claude-sonnet-4-5"; got != want {

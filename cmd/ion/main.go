@@ -85,11 +85,12 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 
 	providerOverride := cli.providerOverride()
 	modelOverride := cli.modelOverride()
-	explicitRuntimeOverride := providerOverride != "" ||
+	explicitModelOverride := providerOverride != "" ||
 		strings.TrimSpace(modelOverride) != "" ||
-		cli.trustModeOverride() != "" ||
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
+	explicitThinkingOverride := strings.TrimSpace(cli.thinkingOverride()) != "" ||
+		strings.TrimSpace(os.Getenv("ION_REASONING_EFFORT")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
 	applyCLITrustModeOverride(cfg, cli.trustModeOverride())
 	if cli.noToolsRequested() {
@@ -386,7 +387,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
-	if sessionID != "" && !explicitRuntimeOverride {
+	if sessionID != "" && !explicitModelOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
 			closeStartupStore(stderr, store)
 			fmt.Fprintf(stderr, "%v\n", err)
@@ -407,7 +408,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		ctx,
 		cfg,
 		sessionID,
-		explicitRuntimeOverride,
+		explicitModelOverride,
 	)
 	if err != nil {
 		closeStartupStore(stderr, store)
@@ -449,6 +450,16 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		// The setup runtime has no runner and cannot be accepted by a runtime
 		// switch; the original error is shown in the bootstrap status.
 		fmt.Fprintf(stderr, "runtime setup required: %v\n", err)
+	}
+	if runner != nil && sessionID != "" && explicitThinkingOverride {
+		if _, err := runner.SetThinking(ctx, thinkingLevelForRuntime(cfg.ReasoningEffort)); err != nil {
+			closeErr := errors.Join(jobs.Close(), closeRuntimeHandles(runner, store))
+			if closeErr != nil {
+				fmt.Fprintf(stderr, "failed to close runtime: %v\n", closeErr)
+			}
+			fmt.Fprintf(stderr, "failed to apply explicit thinking level: %v\n", err)
+			return 1
+		}
 	}
 	if runner != nil {
 		commitSessionActivation(runner)

@@ -258,7 +258,10 @@ func (p *Provider) buildRequest(req *llm.Request, streaming bool) openRouterRequ
 		base = p.Base.ConvertStreamingRequest(req)
 	}
 
-	effort := p.Base.ReasoningEffortForModel(req.Model, req.ReasoningEffort)
+	effort := req.ReasoningEffort
+	if effort != "" {
+		effort = p.Base.ReasoningEffortForModel(req.Model, effort)
+	}
 	caps := llm.CapabilitiesForRequest(req, p.Base.Capabilities(req.Model))
 
 	orReq := openRouterRequest{
@@ -284,8 +287,6 @@ func (p *Provider) buildRequest(req *llm.Request, streaming bool) openRouterRequ
 		} else {
 			orReq.Reasoning = &openRouterReasoning{Effort: effort}
 		}
-	} else if caps.ReasoningCaps().Kind != "" && caps.ReasoningCaps().CanDisable {
-		orReq.Reasoning = &openRouterReasoning{Effort: "none"}
 	}
 
 	return orReq

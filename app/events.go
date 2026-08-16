@@ -176,9 +176,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+tab":
-		// Shift+Tab opens the thinking-level picker.
+		// Match Pi: cycle the effective thinking level; /thinking opens the
+		// searchable picker when an explicit choice is needed.
 		m.clearPendingAction()
-		return m.openThinkingPicker()
+		return m.cycleThinkingCommand()
 
 	case "tab":
 		if m.Input.Completion != nil && len(m.Input.Completion.items) > 0 {

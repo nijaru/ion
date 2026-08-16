@@ -701,6 +701,9 @@ func New(
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
 		m.Model.originalPrimaryModel = cfg.Model
+		if cfg.StartupModelMode() == "configured" {
+			m.App.ActivePreset = PresetPrimary
+		}
 		m.progressReducer().setReasoningEffort(normalizeThinkingValue(cfg.ReasoningEffort))
 	} else {
 		m.progressReducer().setReasoningEffort(config.DefaultReasoningEffort)
@@ -708,7 +711,8 @@ func New(
 
 	if storage != nil {
 		if usage, err := storage.Usage(context.Background()); err == nil {
-			m.progressReducer().applySessionUsage(usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite, usage.Cost.Total)
+			m.progressReducer().
+				applySessionUsage(usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite, usage.Cost.Total)
 		}
 	}
 	if history, ok := catalog.(agent.InputHistory); ok {
@@ -1240,6 +1244,9 @@ func (m Model) applyCommittedTransition(
 	thinkingLeafID string,
 	notice session.Entry,
 ) (Model, tea.Cmd) {
+	if transition.Snapshot.Capabilities == nil {
+		transition.Snapshot.Capabilities = m.Model.Runtime.Capabilities
+	}
 	m.applyRuntimeSnapshot(transition.Snapshot)
 	if thinkingLeafID != "" {
 		m.Model.LeafID = thinkingLeafID

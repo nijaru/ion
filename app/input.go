@@ -338,7 +338,7 @@ func (m Model) statusLine() string {
 	if model != "" {
 		model = m.st.dim.Render(m.statusModelLabel(model))
 	}
-	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
+	thinking := m.st.dim.Render(m.effectiveThinkingLevel())
 	dirLabel := statusWorkdirLabel(m.App.Workdir)
 	if m.App.SessionName != "" {
 		dirLabel += " • " + m.App.SessionName
@@ -366,8 +366,13 @@ func (m Model) statusLine() string {
 	if m.Progress.CacheWriteTokens > 0 {
 		tokenStats = append(tokenStats, fmt.Sprintf("W%s", compactCount(m.Progress.CacheWriteTokens)))
 	}
-	if (m.Progress.CacheReadTokens > 0 || m.Progress.CacheWriteTokens > 0) && (m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens > 0) {
-		hitRate := float64(m.Progress.CacheReadTokens) / float64(m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens) * 100.0
+	if (m.Progress.CacheReadTokens > 0 || m.Progress.CacheWriteTokens > 0) &&
+		(m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens > 0) {
+		hitRate := float64(
+			m.Progress.CacheReadTokens,
+		) / float64(
+			m.Progress.TokensSent+m.Progress.CacheReadTokens+m.Progress.CacheWriteTokens,
+		) * 100.0
 		tokenStats = append(tokenStats, fmt.Sprintf("CH%.1f%%", hitRate))
 	}
 	tokens := ""

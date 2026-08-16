@@ -16,6 +16,7 @@ func (m *Model) applyAgentRuntimeSnapshot(snapshot agent.RuntimeSnapshot) {
 	m.Model.Runtime.Provider = snapshot.Model.Provider
 	m.Model.Runtime.Model = snapshot.Model.ID
 	m.Model.Runtime.Reasoning = normalizeThinkingValue(string(snapshot.Thinking))
+	m.Model.Runtime.Capabilities = snapshot.Model.Capabilities
 	m.Progress.ReasoningEffort = m.Model.Runtime.Reasoning
 	m.Model.ActiveTools = append(m.Model.ActiveTools[:0], snapshot.ActiveTools...)
 	m.Model.ActiveToolsSet = true
