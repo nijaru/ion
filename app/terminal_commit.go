@@ -135,6 +135,7 @@ func (c terminalCommitController) deferredLinesCmd(lines ...string) tea.Cmd {
 func (c terminalCommitController) deferredLinesCmdWithEntries(lines, entryKeys []string) tea.Cmd {
 	copied := append([]string(nil), lines...)
 	keys := append([]string(nil), entryKeys...)
+	c.model.Model.pendingTerminalCommits++
 	generation := c.model.Model.EventGeneration
 	epoch := c.model.Model.terminalCommitEpoch
 	return func() tea.Msg {

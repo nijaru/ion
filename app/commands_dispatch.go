@@ -152,6 +152,7 @@ func (m Model) localCommandBusy() bool {
 		m.InFlight.AwaitingSettlement ||
 		m.Progress.Compacting ||
 		m.Model.RuntimeSwitchRequest != 0 ||
+		(m.InFlight.Submitted != nil && m.Model.pendingTerminalCommits > 0) ||
 		m.Picker.SetupSaveRequest != 0 ||
 		m.Model.SettingsRequest != 0 ||
 		m.Model.RecoveryRequest != 0 ||
@@ -159,6 +160,9 @@ func (m Model) localCommandBusy() bool {
 }
 
 func (m Model) localCommandBusyMessage(action string) string {
+	if m.InFlight.Submitted != nil && m.Model.pendingTerminalCommits > 0 {
+		return "Wait for terminal output to finish before " + action + "."
+	}
 	if m.Model.RuntimeSwitchRequest != 0 {
 		return "Wait for the runtime switch to finish before " + action + "."
 	}

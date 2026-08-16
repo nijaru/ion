@@ -228,6 +228,9 @@ func (m Model) dispatchAppControlMessage(msg tea.Msg) (Model, tea.Cmd, bool) {
 		if msg.generation != m.Model.EventGeneration || msg.epoch != m.Model.terminalCommitEpoch {
 			return m, nil, true
 		}
+		if m.Model.pendingTerminalCommits > 0 {
+			m.Model.pendingTerminalCommits--
+		}
 		m.clearPrintedSubmittedEntry(msg.entryKeys)
 		return m, nil, true
 

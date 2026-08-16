@@ -113,8 +113,8 @@ func TestSubmittedUserRemainsInLivePlaneUntilPrintCompletion(t *testing.T) {
 	if !handled || flush == nil {
 		t.Fatalf("terminal commit = handled=%t flush=%v, want handled with flush", handled, flush)
 	}
-	if next.InFlight.Submitted == nil {
-		t.Fatal("submitted prompt cleared before Bubble Tea print completion")
+	if next.InFlight.Submitted == nil || next.Model.pendingTerminalCommits != 1 {
+		t.Fatalf("print handoff state = submitted=%v pending=%d, want retained with one barrier", next.InFlight.Submitted != nil, next.Model.pendingTerminalCommits)
 	}
 	settled, _ := next.handleSettled(session.Settled{})
 	if settled.InFlight.Submitted == nil {
@@ -130,8 +130,8 @@ func TestSubmittedUserRemainsInLivePlaneUntilPrintCompletion(t *testing.T) {
 	if !handled {
 		t.Fatal("terminal print completion was not handled")
 	}
-	if next.InFlight.Submitted != nil {
-		t.Fatal("submitted prompt remained after Bubble Tea print completion")
+	if next.InFlight.Submitted != nil || next.Model.pendingTerminalCommits != 0 {
+		t.Fatalf("print handoff remained after completion: submitted=%v pending=%d", next.InFlight.Submitted != nil, next.Model.pendingTerminalCommits)
 	}
 }
 

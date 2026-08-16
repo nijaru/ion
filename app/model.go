@@ -533,9 +533,10 @@ type ModelState struct {
 	// printedEntryKeys tracks logical entries already promoted to terminal
 	// scrollback. It spans ephemeral lifecycle entries and their later durable
 	// branch records so recovery cannot replay the same content.
-	printedEntryKeys    map[string]struct{}
-	pendingEntryKeys    map[string]struct{}
-	terminalCommitEpoch uint64
+	printedEntryKeys       map[string]struct{}
+	pendingEntryKeys       map[string]struct{}
+	pendingTerminalCommits int
+	terminalCommitEpoch    uint64
 	// Runner is the agent runner (Controller). When set, the TUI uses it as the
 	// single turn and event owner.
 	Runner agent.Runtime
@@ -1039,6 +1040,7 @@ func (m *Model) clearPrintedEntries() {
 	// Runtime replacement and replay invalidate any in-flight scrollback
 	// handoff along with the printed-entry projection.
 	m.InFlight.Submitted = nil
+	m.Model.pendingTerminalCommits = 0
 	m.Model.terminalCommitEpoch++
 	m.Model.printedEntryKeys = make(map[string]struct{})
 	m.Model.pendingEntryKeys = make(map[string]struct{})
