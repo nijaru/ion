@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -10,12 +9,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/nijaru/ion/llm"
 	"github.com/nijaru/ripgo"
-	"github.com/nijaru/ripgo/ignore"
+	findpkg "github.com/nijaru/ripgo/find"
 	"github.com/nijaru/ripgo/search"
-	"github.com/nijaru/ripgo/walk"
 )
 
 const (
@@ -340,7 +337,7 @@ func truncateGrepLine(line string) (string, bool) {
 	return string(runes[:grepMaxLineChars]) + "... [truncated]", true
 }
 
-// Find tool searches files by glob pattern natively using ripgo.
+// Find tool searches files by glob pattern using ripgo's in-process finder.
 type Find struct {
 	fileSearchBase
 }
@@ -348,7 +345,7 @@ type Find struct {
 func (f *Find) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "find",
-		Description: "Find files matching a glob pattern using ripgrep's ignored-file list. Respects ignore files, includes hidden files, excludes .git internals, and supports ** for recursive search.",
+		Description: "Find files matching a glob pattern with ripgo. Respects ignore files, includes hidden files, excludes .git internals, and supports ** for recursive search.",
 		Parameters:  findParameters(),
 	}
 }
@@ -385,24 +382,24 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("not a directory: %s", searchPath)
 	}
 
-	engine, err := ignore.NewEngineFS(nil, ignore.Config{
-		Hidden:       true,
-		GlobExcludes: []string{".git", ".git/**", "**/.git", "**/.git/**"},
-	})
-	if err != nil {
-		return "", fmt.Errorf("create ignore engine: %w", err)
+	findPattern := findPatternForRoot(pattern, searchArg)
+	findOpts := []ripgo.FindOption{
+		ripgo.WithFindGlob(true),
+		ripgo.WithFindFullPath(strings.Contains(findPattern, "/")),
+		ripgo.WithFindType(findpkg.TypeFile),
+		ripgo.WithFindHidden(true),
+		ripgo.WithFindGlobExcludes(".git", ".git/**", "**/.git", "**/.git/**"),
 	}
 
-	w := walk.NewWalker(nil, walk.Config{}, engine)
-	fileCh := make(chan walk.Entry, 1024)
-	go w.Run(ctx, []string{searchPath}, fileCh)
-
 	var files []string
-	for entry := range fileCh {
+	for result, findErr := range ripgo.Find(ctx, findPattern, []string{searchPath}, findOpts...) {
 		if ctx.Err() != nil {
 			return "", toolContextErr("find", ctx.Err())
 		}
-		rawPath := entry.File.DisplayPath()
+		if findErr != nil {
+			return "", fmt.Errorf("find failed: %w", findErr)
+		}
+		rawPath := result.Path
 		if rel, err := filepath.Rel(f.cwd, rawPath); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 			files = append(files, filepath.ToSlash(rel))
 		} else {
@@ -410,67 +407,31 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	slices.Sort(files)
-
-	var rawListing strings.Builder
+	var matches []string
 	for _, file := range files {
-		rawListing.WriteString(file)
-		rawListing.WriteByte('\n')
+		matches = append(matches, searchRelativePath(file, searchArg))
 	}
-
-	matches, err := globMatches(pattern, rawListing.String(), searchArg)
-	if err != nil {
-		return "", fmt.Errorf("find failed: %w", err)
-	}
+	slices.Sort(matches)
 
 	if len(matches) == 0 {
 		return "No files found matching pattern", nil
 	}
-
-	slices.Sort(matches)
 	return formatLimitedFindMatches(matches, limit), nil
 }
 
-func globMatches(pattern, output, searchArg string) ([]string, error) {
-	matchPattern := effectiveGlobPattern(pattern)
-	var matches []string
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		path := filepath.ToSlash(strings.TrimSpace(scanner.Text()))
-		if path == "" {
-			continue
-		}
-		path = strings.TrimPrefix(path, "./")
-		displayPath := searchRelativePath(path, searchArg)
-		var matched bool
-		var err error
-		if !strings.Contains(pattern, "/") {
-			matched, err = doublestar.Match(pattern, filepath.Base(displayPath))
-		} else {
-			matched, err = doublestar.Match(matchPattern, displayPath)
-			if err != nil {
-				return nil, err
-			}
-			if !matched {
-				matched, err = doublestar.Match(matchPattern, path)
+func findPatternForRoot(pattern, searchArg string) string {
+	pattern = filepath.ToSlash(strings.TrimPrefix(pattern, "./"))
+	root := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(searchArg)), "./")
+	root = strings.TrimSuffix(root, "/")
+	if root != "" && root != "." && strings.Contains(pattern, "/") {
+		for _, prefix := range []string{root + "/", "**/" + root + "/"} {
+			if strings.HasPrefix(pattern, prefix) {
+				pattern = strings.TrimPrefix(pattern, prefix)
+				break
 			}
 		}
-		if err != nil {
-			return nil, err
-		}
-		if matched {
-			matches = append(matches, displayPath)
-		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return matches, nil
-}
-
-func effectiveGlobPattern(pattern string) string {
 	if strings.Contains(pattern, "/") &&
-		!strings.HasPrefix(pattern, "/") &&
 		!strings.HasPrefix(pattern, "**/") &&
 		pattern != "**" {
 		return "**/" + pattern

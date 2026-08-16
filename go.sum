@@ -88,8 +88,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d h1:zf4g9wK8q+c8wRLj5fvbIVSHw45t9A30LAdrv5tOvFk=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d/go.mod h1:+a9vDBa2salNkUtRNdC9qKMjlDuX6JZABlfsk0f9TvE=
-github.com/nijaru/ripgo v0.0.0-20260814203852-7e9218adcb92 h1:XV2ttIrYRqxS1K/OGg1AVNzDsEYq4sSxQCnhxH0w9do=
-github.com/nijaru/ripgo v0.0.0-20260814203852-7e9218adcb92/go.mod h1:U27mt1e0YwexGAVxRsx/tupmEFNCSzsWarsZ0+D/Y1c=
+github.com/nijaru/ripgo v0.0.0-20260816040321-f7ede04153fe h1:YJFDIful3Y4wppMw5QYpYKYlzepy2OMc8OW8lJ9zM0g=
+github.com/nijaru/ripgo v0.0.0-20260816040321-f7ede04153fe/go.mod h1:U27mt1e0YwexGAVxRsx/tupmEFNCSzsWarsZ0+D/Y1c=
 github.com/pelletier/go-toml/v2 v2.3.1 h1:MYEvvGnQjeNkRF1qUuGolNtNExTDwct51yp7olPtrEc=
 github.com/pelletier/go-toml/v2 v2.3.1/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=

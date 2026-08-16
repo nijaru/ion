@@ -216,11 +216,11 @@ path is missing: screenshot AM/PM narrow spaces, NFD Unicode filenames, and
 straight apostrophes typed for curly apostrophes.
 
 Native `grep` and `find` remain dedicated read-only tools instead of being
-collapsed into `bash`. They use ripgrep (`rg`) semantics for ignore handling:
+collapsed into `bash`. They use ripgrep-like ignore handling through ripgo:
 ignore files are respected, hidden files are included when useful for coding
-work, and `.git` internals are excluded. Ion does not auto-download `rg`; a
-future in-process engine such as ripgo should be evaluated with benchmarks
-before replacing the battle-tested ripgrep baseline.
+work, and `.git` internals are excluded. Ion does not invoke external `rg` or
+`fd` processes for these tools; Ion retains ownership of workspace validation,
+output shaping, limits, and truncation while ripgo owns traversal and matching.
 
 `grep` uses compact result shaping: `limit` counts matches, not rendered context
 lines; `context` is formatted by Ion as compact before/after blocks;

@@ -16,7 +16,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d
-	github.com/nijaru/ripgo v0.0.0-20260814203852-7e9218adcb92
+	github.com/nijaru/ripgo v0.0.0-20260816040321-f7ede04153fe
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/yuin/goldmark v1.8.2
