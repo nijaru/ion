@@ -78,6 +78,22 @@ func TestCompletedToolRemainsGroupedInLivePlane(t *testing.T) {
 	}
 }
 
+func TestLiveTranscriptNodesUseStableLifecycleKeys(t *testing.T) {
+	model := readyModel(t)
+	completed := testToolEntry("bash echo done", "done\n", false)
+	pending := testToolEntry("read file.txt", "", false)
+	model.InFlight.CompletedTools = []session.Entry{completed}
+	model.InFlight.PendingTools = map[string]session.Entry{"call-2": pending}
+
+	nodes := model.liveTranscriptNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %#v, want completed and pending tools", nodes)
+	}
+	if nodes[0].key == "" || nodes[1].key != "tool:call-2" {
+		t.Fatalf("node keys = %#v, want stable tool lifecycle keys", nodes)
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := testToolEntry("custom_tool", "line 1\nline 2\n", false)

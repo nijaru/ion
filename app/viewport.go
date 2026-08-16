@@ -11,64 +11,97 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
-// renderPlaneB renders all ephemeral in-flight content.
-// Returns empty string when there is nothing active.
+type liveTranscriptNodeKind uint8
+
+const (
+	liveTranscriptThinking liveTranscriptNodeKind = iota
+	liveTranscriptEntry
+)
+
+// liveTranscriptNode is the retained render projection for one ephemeral turn
+// component. Its key is stable across view redraws, while the entry payload is
+// replaced by the runtime event reducer as content arrives.
+type liveTranscriptNode struct {
+	key   string
+	kind  liveTranscriptNodeKind
+	text  string
+	entry session.Entry
+}
+
+func (m Model) liveTranscriptNodes() []liveTranscriptNode {
+	nodes := make([]liveTranscriptNode, 0, len(m.InFlight.PendingTools)+len(m.InFlight.CompletedTools)+2)
+	if m.InFlight.ReasonBuf != "" {
+		nodes = append(nodes, liveTranscriptNode{
+			key:  "thinking",
+			kind: liveTranscriptThinking,
+			text: m.InFlight.ReasonBuf,
+		})
+	}
+
+	for index, entry := range m.InFlight.CompletedTools {
+		key := entryPrintKey(entry)
+		if key == "" {
+			key = fmt.Sprintf("completed-tool:%d", index)
+		}
+		nodes = append(nodes, liveTranscriptNode{key: key, kind: liveTranscriptEntry, entry: entry})
+	}
+
+	if m.InFlight.Pending != nil {
+		entry := *m.InFlight.Pending
+		if session.EntryRole(entry) == session.RoleAgent && m.renderPendingEntry(entry) != "" {
+			nodes = append(nodes, liveTranscriptNode{
+				key:   "assistant",
+				kind:  liveTranscriptEntry,
+				entry: entry,
+			})
+		}
+	}
+
+	for _, id := range sortedKeys(m.InFlight.PendingTools) {
+		nodes = append(nodes, liveTranscriptNode{
+			key:   "tool:" + id,
+			kind:  liveTranscriptEntry,
+			entry: m.InFlight.PendingTools[id],
+		})
+	}
+	if m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleTool &&
+		len(m.InFlight.PendingTools) == 0 && m.renderPendingEntry(*m.InFlight.Pending) != "" {
+		nodes = append(nodes, liveTranscriptNode{
+			key:   "tool:pending",
+			kind:  liveTranscriptEntry,
+			entry: *m.InFlight.Pending,
+		})
+	}
+	return nodes
+}
+
+// renderPlaneB renders the retained ephemeral turn projection. Completed
+// scrollback is owned by terminalCommit; this view contains only the current
+// node set and can therefore be redrawn without rewriting history.
 func (m Model) renderPlaneB() string {
-	hasPendingTool := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleTool
-	hasPendingAgent := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleAgent
-	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
-		len(m.InFlight.CompletedTools) == 0 &&
-		!hasPendingAgent &&
-		m.InFlight.ReasonBuf == "" {
+	nodes := m.liveTranscriptNodes()
+	if len(nodes) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
-
-	// Thinking/reasoning (dimmed, shown while generating)
-	if m.InFlight.ReasonBuf != "" {
-		b.WriteString(m.planeBLine(m.st.dim, 0, "• Thinking..."))
-		b.WriteString("\n")
-		if m.verbosity("thinking") == "full" {
-			for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
-				b.WriteString(m.planeBLine(m.st.dim, 4, line))
-				b.WriteString("\n")
+	for _, node := range nodes {
+		if node.kind == liveTranscriptThinking {
+			b.WriteString(m.planeBLine(m.st.dim, 0, "• Thinking..."))
+			b.WriteString("\n")
+			if m.verbosity("thinking") == "full" {
+				for _, line := range strings.Split(node.text, "\n") {
+					b.WriteString(m.planeBLine(m.st.dim, 4, line))
+					b.WriteString("\n")
+				}
 			}
+			continue
 		}
-	}
-
-	// Completed tool results remain in the retained live turn until the model
-	// iteration reaches its terminal boundary. This keeps the label and output
-	// grouped with the following assistant response instead of printing a
-	// permanent scrollback line while the turn is still changing.
-	for _, entry := range m.InFlight.CompletedTools {
-		if rendered := m.renderPendingEntry(entry); rendered != "" {
+		if rendered := m.renderPendingEntry(node.entry); rendered != "" {
 			b.WriteString(rendered)
 			b.WriteString("\n")
 		}
 	}
-
-	if hasPendingAgent {
-		entry := *m.InFlight.Pending
-		// Tool-call-only assistant messages are represented by the active tool
-		// entries below. Rendering the assistant shell as well duplicates labels
-		// and leaves a bare bullet when the tool loop finishes.
-		if rendered := m.renderPendingEntry(entry); rendered != "" {
-			b.WriteString(rendered)
-			b.WriteString("\n")
-		}
-	}
-
-	// Active in-flight tools. Sort by ID for deterministic rendering.
-	for _, id := range sortedKeys(m.InFlight.PendingTools) {
-		b.WriteString(m.renderPendingEntry(m.InFlight.PendingTools[id]))
-		b.WriteString("\n")
-	}
-	if hasPendingTool && len(m.InFlight.PendingTools) == 0 {
-		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
-		b.WriteString("\n")
-	}
-
 	return b.String()
 }
 
