@@ -849,6 +849,7 @@ func (m Model) handleQueueUpdate(msg session.QueueUpdate) (Model, tea.Cmd) {
 
 // handleSettled marks the harness as idle — enables submit button and clears in-flight state.
 func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
+	completedTools := m.turnReducer().TakeCompletedTools()
 	m.clearTurnCancellation()
 	m.turnReducer().ClearActiveState(false)
 	m.InFlight.AgentCommitted = false
@@ -858,11 +859,16 @@ func (m Model) handleSettled(msg session.Settled) (Model, tea.Cmd) {
 	m.Progress.Compacting = false
 	m.Progress.Mode = StateReady
 	m.Progress.Status = ""
+	cmds := make([]tea.Cmd, 0, 3)
+	if len(completedTools) > 0 {
+		cmds = append(cmds, m.terminalCommit().Entries(completedTools...))
+	}
 	if msg.NextTurnCount > 0 {
 		entry, _ := session.EntrySystem(fmt.Sprintf("ℹ️  %d queued turn(s) remaining", msg.NextTurnCount), time.Now())
-		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
+		cmds = append(cmds, m.terminalCommit().Entries(entry))
 	}
-	return m, m.awaitSessionEvent()
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, sequenceCmds(cmds...)
 }
 
 // handleAbort shows what was cleared when a run is cancelled.
@@ -885,6 +891,7 @@ func (m Model) handleAbort(msg session.Abort) (Model, tea.Cmd) {
 // deliver lifecycle events. Lagged subscriptions take a separate resync path;
 // every other close is terminal for this runtime generation.
 func (m Model) handleStreamClosed(err error) (Model, tea.Cmd) {
+	completedTools := m.turnReducer().TakeCompletedTools()
 	m.clearTurnCancellation()
 	entryIf, _ := m.turnReducer().StreamClosed(time.Now())
 	m.turnReducer().ClearActiveState(true)
@@ -898,10 +905,15 @@ func (m Model) handleStreamClosed(err error) (Model, tea.Cmd) {
 		message = fmt.Sprintf("runtime event stream closed: %v", err)
 	}
 	notice, _ := session.EntrySystem("Error: "+message, time.Now())
-	return m, tea.Sequence(
+	cmds := make([]tea.Cmd, 0, 3)
+	if len(completedTools) > 0 {
+		cmds = append(cmds, m.terminalCommit().Entries(completedTools...))
+	}
+	cmds = append(cmds,
 		m.terminalCommit().Entries(entryIf),
 		m.terminalCommit().Entries(notice),
 	)
+	return m, sequenceCmds(cmds...)
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
@@ -910,6 +922,9 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 		AwaitTerminal: awaitTerminal,
 	})
 	var cmds []tea.Cmd
+	if completedTools := m.turnReducer().TakeCompletedTools(); len(completedTools) > 0 {
+		cmds = append(cmds, m.terminalCommit().Entries(completedTools...))
+	}
 	entry, _ := session.EntrySystem(decision.EntryContent, time.Time{})
 	cmds = append(cmds, m.terminalCommit().Entries(entry))
 
@@ -967,6 +982,9 @@ func (m Model) handleTurnFinished(msg session.TurnEnd) (Model, tea.Cmd) {
 	assistant, assistantCompleted, printAssistant := m.turnReducer().FinishPendingAssistant()
 	if printAssistant {
 		cmds = append(cmds, m.terminalCommit().Entries(assistant))
+	}
+	if completedTools := m.turnReducer().TakeCompletedTools(); len(completedTools) > 0 {
+		cmds = append(cmds, m.terminalCommit().Entries(completedTools...))
 	}
 	if errText := assistantErrorText(assistant); errText != "" {
 		terminalFailure = true
@@ -1080,9 +1098,7 @@ func (m Model) handleToolExecEnd(msg session.ToolExecEnd) (Model, tea.Cmd) {
 	if toolUseID == "" {
 		toolUseID = m.Progress.LastToolUseID
 	}
-	if entry, ok := m.turnReducer().CompleteToolResult(toolUseID, msg); ok {
-		return m, tea.Sequence(m.terminalCommit().Entries(entry), m.awaitSessionEvent())
-	}
+	m.turnReducer().CompleteToolResult(toolUseID, msg)
 	return m, m.awaitSessionEvent()
 }
 

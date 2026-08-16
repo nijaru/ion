@@ -38,6 +38,7 @@ type TurnSummary struct {
 type InFlightState struct {
 	Pending            *session.Entry
 	PendingTools       map[string]session.Entry
+	CompletedTools     []session.Entry
 	CommittedAssistant *session.Entry // assistant entry that survived tool clearing
 	ReasonBuf          string
 	StreamBuf          string
@@ -488,6 +489,7 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	t.inFlight.AwaitingSettlement = false
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
+	t.inFlight.CompletedTools = nil
 	t.inFlight.CommittedAssistant = nil
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
@@ -1064,5 +1066,15 @@ func (t TurnReducer) CompleteToolResult(id string, msg session.Event) (session.E
 			},
 		}
 	}
+	t.inFlight.CompletedTools = append(t.inFlight.CompletedTools, entry)
 	return entry, true
+}
+
+func (t TurnReducer) TakeCompletedTools() []session.Entry {
+	if t.inFlight == nil || len(t.inFlight.CompletedTools) == 0 {
+		return nil
+	}
+	entries := append([]session.Entry(nil), t.inFlight.CompletedTools...)
+	t.inFlight.CompletedTools = nil
+	return entries
 }

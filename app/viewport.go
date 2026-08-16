@@ -17,6 +17,7 @@ func (m Model) renderPlaneB() string {
 	hasPendingTool := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleTool
 	hasPendingAgent := m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleAgent
 	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
+		len(m.InFlight.CompletedTools) == 0 &&
 		!hasPendingAgent &&
 		m.InFlight.ReasonBuf == "" {
 		return ""
@@ -33,6 +34,17 @@ func (m Model) renderPlaneB() string {
 				b.WriteString(m.planeBLine(m.st.dim, 4, line))
 				b.WriteString("\n")
 			}
+		}
+	}
+
+	// Completed tool results remain in the retained live turn until the model
+	// iteration reaches its terminal boundary. This keeps the label and output
+	// grouped with the following assistant response instead of printing a
+	// permanent scrollback line while the turn is still changing.
+	for _, entry := range m.InFlight.CompletedTools {
+		if rendered := m.renderPendingEntry(entry); rendered != "" {
+			b.WriteString(rendered)
+			b.WriteString("\n")
 		}
 	}
 

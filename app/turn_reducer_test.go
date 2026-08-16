@@ -181,6 +181,9 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	if _, ok := model.InFlight.PendingTools["tool-a"]; ok {
 		t.Fatalf("tool-a still pending: %#v", model.InFlight.PendingTools)
 	}
+	if len(model.InFlight.CompletedTools) != 1 || session.EntryText(model.InFlight.CompletedTools[0]) != "a done" {
+		t.Fatalf("completed tools = %#v, want a done", model.InFlight.CompletedTools)
+	}
 	// Pending should be promoted to toolB
 	if model.InFlight.Pending == nil || session.EntryText(*model.InFlight.Pending) != "b partial" {
 		t.Fatalf("pending = %#v, want tool-b promoted", model.InFlight.Pending)
@@ -206,6 +209,7 @@ func TestTurnReducerCompleteToolResultPromotesNextTool(t *testing.T) {
 	}
 	if model.InFlight.Pending != nil ||
 		len(model.InFlight.PendingTools) != 0 ||
+		len(model.InFlight.CompletedTools) != 2 ||
 		model.Progress.Mode != StateIonizing ||
 		model.Progress.Status != "" ||
 		model.Progress.ContextTokens != 0 {

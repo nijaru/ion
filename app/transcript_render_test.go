@@ -67,6 +67,17 @@ func TestLiveAndCommittedAssistantUseOneMarkdownProjection(t *testing.T) {
 	}
 }
 
+func TestCompletedToolRemainsGroupedInLivePlane(t *testing.T) {
+	model := readyModel(t)
+	entry := testToolEntry("bash echo done", "done\n", false)
+	model.InFlight.CompletedTools = []session.Entry{entry}
+
+	got := ansi.Strip(model.renderPlaneB())
+	if !strings.Contains(got, "Bash(echo done)") {
+		t.Fatalf("live plane = %q, want completed tool label", got)
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := testToolEntry("custom_tool", "line 1\nline 2\n", false)
