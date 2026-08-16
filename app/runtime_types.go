@@ -43,6 +43,7 @@ type InFlightState struct {
 	Pending            *session.Entry
 	PendingTools       map[string]session.Entry
 	CompletedTools     []session.Entry
+	ToolOrder          []string
 	CommittedAssistant *session.Entry // assistant entry that survived tool clearing
 	ReasonBuf          string
 	StreamBuf          string
@@ -491,10 +492,10 @@ func (t TurnReducer) ClearActiveState(full bool) {
 	}
 	t.inFlight.Thinking = false
 	t.inFlight.AwaitingSettlement = false
-	t.inFlight.Submitted = nil
 	t.inFlight.Pending = nil
 	t.inFlight.PendingTools = nil
 	t.inFlight.CompletedTools = nil
+	t.inFlight.ToolOrder = nil
 	t.inFlight.CommittedAssistant = nil
 	t.inFlight.StreamBuf = ""
 	t.inFlight.ReasonBuf = ""
@@ -1001,6 +1002,9 @@ func (t TurnReducer) StartToolCall(id string, ts time.Time, title string) {
 	}
 	if t.inFlight.PendingTools == nil {
 		t.inFlight.PendingTools = make(map[string]session.Entry)
+	}
+	if _, exists := t.inFlight.PendingTools[id]; !exists {
+		t.inFlight.ToolOrder = append(t.inFlight.ToolOrder, id)
 	}
 	t.inFlight.PendingTools[id] = &session.MessageEntry{
 		EntryBase: session.EntryBase{Timestamp: ts},

@@ -13,6 +13,19 @@ import (
 	"github.com/nijaru/ion/session"
 )
 
+func TestMixedAssistantTextRemainsVisibleWithToolCall(t *testing.T) {
+	model := readyModel(t)
+	entry := &session.MessageEntry{
+		Message: &session.AssistantMessage{Content: []session.Content{
+			session.TextContent{Text: "I will inspect that now."},
+			&session.ToolCall{ID: "call-1", Name: "bash", Arguments: map[string]any{"command": "pwd"}},
+		}},
+	}
+	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "I will inspect that now.") {
+		t.Fatalf("mixed assistant render = %q, want narrative text", got)
+	}
+}
+
 func TestToolOnlyAssistantDoesNotRenderDuplicateOrBareBlock(t *testing.T) {
 	model := readyModel(t)
 	entry := &session.MessageEntry{
@@ -103,6 +116,11 @@ func TestSubmittedUserRemainsInLivePlaneUntilPrintCompletion(t *testing.T) {
 	if next.InFlight.Submitted == nil {
 		t.Fatal("submitted prompt cleared before Bubble Tea print completion")
 	}
+	settled, _ := next.handleSettled(session.Settled{})
+	if settled.InFlight.Submitted == nil {
+		t.Fatal("settlement cleared submitted prompt before Bubble Tea print completion")
+	}
+	next = settled
 
 	next, _, handled = next.dispatchAppControlMessage(terminalCommitPrintedMsg{
 		generation: msg.generation,
@@ -120,16 +138,40 @@ func TestSubmittedUserRemainsInLivePlaneUntilPrintCompletion(t *testing.T) {
 func TestLiveTranscriptNodesUseStableLifecycleKeys(t *testing.T) {
 	model := readyModel(t)
 	completed := testToolEntry("bash echo done", "done\n", false)
+	completed.(*session.MessageEntry).Message.(*session.ToolResultMessage).ToolCallID = "call-1"
 	pending := testToolEntry("read file.txt", "", false)
 	model.InFlight.CompletedTools = []session.Entry{completed}
 	model.InFlight.PendingTools = map[string]session.Entry{"call-2": pending}
+	model.InFlight.ToolOrder = []string{"call-1", "call-2"}
 
 	nodes := model.liveTranscriptNodes()
 	if len(nodes) != 2 {
 		t.Fatalf("nodes = %#v, want completed and pending tools", nodes)
 	}
-	if nodes[0].key == "" || nodes[1].key != "tool:call-2" {
+	if nodes[0].key != "tool:call-1" || nodes[1].key != "tool:call-2" {
 		t.Fatalf("node keys = %#v, want stable tool lifecycle keys", nodes)
+	}
+}
+
+func TestLiveTranscriptNodesKeepAssistantNarrativeBeforeToolBatch(t *testing.T) {
+	model := readyModel(t)
+	assistant := testAgentEntry("I will inspect that now.", "")
+	completed := testToolEntry("bash pwd", "/workspace\n", false)
+	completed.(*session.MessageEntry).Message.(*session.ToolResultMessage).ToolCallID = "call-1"
+	pending := testToolEntry("read file.txt", "", false)
+	model.InFlight.Pending = &assistant
+	model.InFlight.CompletedTools = []session.Entry{completed}
+	model.InFlight.PendingTools = map[string]session.Entry{"call-2": pending}
+	model.InFlight.ToolOrder = []string{"call-1", "call-2"}
+
+	nodes := model.liveTranscriptNodes()
+	if len(nodes) != 3 {
+		t.Fatalf("nodes = %#v, want assistant and ordered tool batch", nodes)
+	}
+	for index, want := range []string{"assistant", "tool:call-1", "tool:call-2"} {
+		if nodes[index].key != want {
+			t.Fatalf("node %d key = %q, want %q: %#v", index, nodes[index].key, want, nodes)
+		}
 	}
 }
 

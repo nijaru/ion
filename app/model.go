@@ -1036,6 +1036,9 @@ func (m *Model) releasePendingEntryKeys(keys []string) {
 }
 
 func (m *Model) clearPrintedEntries() {
+	// Runtime replacement and replay invalidate any in-flight scrollback
+	// handoff along with the printed-entry projection.
+	m.InFlight.Submitted = nil
 	m.Model.terminalCommitEpoch++
 	m.Model.printedEntryKeys = make(map[string]struct{})
 	m.Model.pendingEntryKeys = make(map[string]struct{})

@@ -45,14 +45,9 @@ func (m Model) liveTranscriptNodes() []liveTranscriptNode {
 		})
 	}
 
-	for index, entry := range m.InFlight.CompletedTools {
-		key := entryPrintKey(entry)
-		if key == "" {
-			key = fmt.Sprintf("completed-tool:%d", index)
-		}
-		nodes = append(nodes, liveTranscriptNode{key: key, kind: liveTranscriptEntry, entry: entry})
-	}
-
+	// The assistant narrative belongs before the tool batch it introduces.
+	// Tool-only assistant shells remain invisible, while mixed text and tool
+	// calls retain their narrative in the same turn position.
 	if m.InFlight.Pending != nil {
 		entry := *m.InFlight.Pending
 		if session.EntryRole(entry) == session.RoleAgent && m.renderPendingEntry(entry) != "" {
@@ -64,12 +59,47 @@ func (m Model) liveTranscriptNodes() []liveTranscriptNode {
 		}
 	}
 
-	for _, id := range sortedKeys(m.InFlight.PendingTools) {
+	completed := make(map[string]session.Entry, len(m.InFlight.CompletedTools))
+	for index, entry := range m.InFlight.CompletedTools {
+		id := toolEntryID(entry)
+		if id == "" {
+			id = fmt.Sprintf("completed:%d", index)
+		}
+		completed[id] = entry
+	}
+	seen := make(map[string]struct{}, len(completed)+len(m.InFlight.PendingTools))
+	appendTool := func(id string, entry session.Entry) {
+		if entry == nil {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
 		nodes = append(nodes, liveTranscriptNode{
 			key:   "tool:" + id,
 			kind:  liveTranscriptEntry,
-			entry: m.InFlight.PendingTools[id],
+			entry: entry,
 		})
+	}
+	for _, id := range m.InFlight.ToolOrder {
+		if entry, ok := completed[id]; ok {
+			appendTool(id, entry)
+			continue
+		}
+		if entry, ok := m.InFlight.PendingTools[id]; ok {
+			appendTool(id, entry)
+		}
+	}
+	for index, entry := range m.InFlight.CompletedTools {
+		id := toolEntryID(entry)
+		if id == "" {
+			id = fmt.Sprintf("completed:%d", index)
+		}
+		appendTool(id, entry)
+	}
+	for _, id := range sortedKeys(m.InFlight.PendingTools) {
+		appendTool(id, m.InFlight.PendingTools[id])
 	}
 	if m.InFlight.Pending != nil && session.EntryRole(*m.InFlight.Pending) == session.RoleTool &&
 		len(m.InFlight.PendingTools) == 0 && m.renderPendingEntry(*m.InFlight.Pending) != "" {
@@ -80,6 +110,18 @@ func (m Model) liveTranscriptNodes() []liveTranscriptNode {
 		})
 	}
 	return nodes
+}
+
+func toolEntryID(entry session.Entry) string {
+	messageEntry, ok := entry.(*session.MessageEntry)
+	if !ok {
+		return ""
+	}
+	result, ok := messageEntry.Message.(*session.ToolResultMessage)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(result.ToolCallID)
 }
 
 // renderPlaneB renders the retained ephemeral turn projection. Completed
@@ -116,24 +158,6 @@ func (m Model) agentStreamContent() string {
 	return m.turnReducer().AgentStreamContent()
 }
 
-func pendingToolCalls(e session.Entry) []*session.ToolCall {
-	me, ok := e.(*session.MessageEntry)
-	if !ok {
-		return nil
-	}
-	am, ok := me.Message.(*session.AssistantMessage)
-	if !ok {
-		return nil
-	}
-	calls := make([]*session.ToolCall, 0, len(am.Content))
-	for _, content := range am.Content {
-		if call, ok := content.(*session.ToolCall); ok && call != nil {
-			calls = append(calls, call)
-		}
-	}
-	return calls
-}
-
 // renderPendingEntry renders an in-flight entry for Plane B.
 func (m Model) renderPendingEntry(e session.Entry) string {
 	toolVerbosity := m.verbosity("tool")
@@ -142,8 +166,9 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	case session.RoleAgent:
 		// An assistant shell can legitimately contain only tool calls or be
 		// waiting for its first text delta. Keep that shell retained in state,
-		// but do not project an orphan bullet into the transcript.
-		if strings.TrimSpace(session.EntryContent(e)) == "" || len(pendingToolCalls(e)) > 0 {
+		// but do not project an orphan bullet into the transcript. Narrative
+		// text must remain visible even when the same message also calls a tool.
+		if strings.TrimSpace(session.EntryContent(e)) == "" {
 			return ""
 		}
 		return m.renderLiveAgentContent(session.EntryContent(e))
