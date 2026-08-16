@@ -37,6 +37,17 @@ func (s modelCatalogStub) QueryAvailableModels(
 	return s.query(ctx, query)
 }
 
+func TestProviderSetupUsesOAuthForCodex(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	setup, err := providerSetupPrompt(t.Context(), &config.Config{Provider: "openai-codex"}, nil)
+	if err != nil {
+		t.Fatalf("provider setup: %v", err)
+	}
+	if setup != SetupPromptOAuth {
+		t.Fatalf("setup = %d, want OAuth setup", setup)
+	}
+}
+
 func TestModelSelectionForNonListingProviderOpensManualPrompt(t *testing.T) {
 	model := readyModel(t).WithConfig(&config.Config{Provider: "moonshot"})
 

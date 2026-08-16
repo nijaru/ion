@@ -155,7 +155,7 @@ func buildProviderItem(cfg *config.Config, def llm.Definition, resolver *llm.End
 	detail, tone, ready := providerDetail(cfg, def, resolver)
 	label, detail := providerItemLabelAndDetail(cfg, def, detail)
 	group := llm.GroupName(def)
-	if !ready && strings.HasPrefix(detail, "Set ") {
+	if !ready && (strings.HasPrefix(detail, "Set ") || strings.HasPrefix(detail, "Log in")) {
 		group = "Needs setup"
 	}
 	return pickerItem{
@@ -214,7 +214,7 @@ func providerDetail(cfg *config.Config, def llm.Definition, resolver *llm.Endpoi
 		def,
 		resolver,
 	)
-	if ready || !strings.HasPrefix(detail, "Set ") {
+	if ready || (!strings.HasPrefix(detail, "Set ") && !strings.HasPrefix(detail, "Log in")) {
 		return detail, pickerToneDefault, ready
 	}
 	return detail, pickerToneWarn, ready

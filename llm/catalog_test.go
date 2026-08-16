@@ -436,6 +436,11 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	if ready || detail != "Set OPENAI_API_KEY" {
 		t.Fatalf("direct credential state = (%q, %v), want Set OPENAI_API_KEY false", detail, ready)
 	}
+	codex := mustLookup(t, "openai-codex")
+	detail, ready = CredentialStateContext(context.Background(), nil, codex, nil)
+	if ready || detail != "Log in with /login openai-codex" {
+		t.Fatalf("Codex credential state = (%q, %v), want login guidance", detail, ready)
+	}
 }
 
 func TestCustomNamedProviderLookupAndResolution(t *testing.T) {

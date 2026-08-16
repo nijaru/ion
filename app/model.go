@@ -1397,6 +1397,17 @@ func providerSetupPrompt(
 	}
 	missingAuth := llm.RequiresAuth(cfg, def) &&
 		llm.ResolvedAuthToken(cfg, def) == ""
+	if def.ID == "openai-codex" {
+		_, ready := llm.CredentialStateContext(ctx, cfg, def, resolver)
+		if !ready {
+			return SetupPromptOAuth, nil
+		}
+	}
+	if missingAuth {
+		if _, ok := config.KnownOAuthProviders()[def.ID]; ok {
+			return SetupPromptOAuth, nil
+		}
+	}
 	if def.ID == llm.OpenAICompatibleID {
 		if missingAuth && strings.TrimSpace(cfg.Endpoint) != "" {
 			return SetupPromptAPIKey, nil

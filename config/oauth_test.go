@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -42,11 +43,44 @@ func TestGeneratePKCEAndState(t *testing.T) {
 	}
 }
 
+func TestRefreshOAuthCredential(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-new"}}`))
+	accessToken := "e30." + payload + ".sig"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "refresh-old" {
+			t.Fatalf("refresh form = %v", r.Form)
+		}
+		_ = json.NewEncoder(w).Encode(OAuthTokens{
+			AccessToken:  accessToken,
+			RefreshToken: "refresh-new",
+			ExpiresIn:    3600,
+		})
+	}))
+	defer server.Close()
+
+	tokens, err := refreshOAuthCredential(t.Context(), server.Client(), OAuthProviderConfig{
+		ClientID:         "client-test",
+		TokenURL:         server.URL,
+		AccountIDFromJWT: true,
+	}, CredentialProvider{RefreshToken: "refresh-old"})
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if tokens.AccessToken != accessToken || tokens.RefreshToken != "refresh-new" || tokens.AccountID != "acct-new" {
+		t.Fatalf("tokens = %#v", tokens)
+	}
+}
+
 func TestStartPKCEOAuthFlow(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
 
 	var receivedVerifier string
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test"}}`))
+	accessToken := "e30." + payload + ".sig"
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "invalid method", http.StatusMethodNotAllowed)
@@ -68,7 +102,7 @@ func TestStartPKCEOAuthFlow(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(OAuthTokens{
-			AccessToken:  "mock-access-token-12345",
+			AccessToken:  accessToken,
 			RefreshToken: "mock-refresh-token-67890",
 			TokenType:    "Bearer",
 			ExpiresIn:    3600,
@@ -85,7 +119,7 @@ func TestStartPKCEOAuthFlow(t *testing.T) {
 	go func() {
 		defer close(done)
 		tokens, err := StartPKCEOAuthFlow(ctx, StartOAuthFlowOptions{
-			Provider:         "openai",
+			Provider:         "openai-codex",
 			OpenBrowser:      false,
 			HTTPClient:       tokenServer.Client(),
 			TokenURLOverride: tokenServer.URL,
@@ -119,8 +153,11 @@ func TestStartPKCEOAuthFlow(t *testing.T) {
 			t.Errorf("StartPKCEOAuthFlow failed: %v", err)
 			return
 		}
-		if tokens.AccessToken != "mock-access-token-12345" {
-			t.Errorf("expected access token 'mock-access-token-12345', got %q", tokens.AccessToken)
+		if tokens.AccessToken != accessToken {
+			t.Errorf("access token = %q, want test token", tokens.AccessToken)
+		}
+		if tokens.AccountID != "acct-test" {
+			t.Errorf("account ID = %q, want acct-test", tokens.AccountID)
 		}
 		if tokens.RefreshToken != "mock-refresh-token-67890" {
 			t.Errorf("expected refresh token 'mock-refresh-token-67890', got %q", tokens.RefreshToken)
@@ -141,17 +178,20 @@ func TestStartPKCEOAuthFlow(t *testing.T) {
 	}
 
 	// Verify tokens were saved to credentials file
-	cred, ok := LookupOAuthTokens("openai")
+	cred, ok := LookupOAuthTokens("openai-codex")
 	if !ok {
 		t.Fatal("expected LookupOAuthTokens to find saved credentials")
 	}
-	if cred.AccessToken != "mock-access-token-12345" {
-		t.Fatalf("saved access token = %q, want 'mock-access-token-12345'", cred.AccessToken)
+	if cred.AccessToken != accessToken {
+		t.Fatalf("saved access token = %q, want test token", cred.AccessToken)
+	}
+	if cred.AccountID != "acct-test" {
+		t.Fatalf("saved account ID = %q, want acct-test", cred.AccountID)
 	}
 
-	// Verify LookupAPIKey also returns the OAuth AccessToken
-	apiKey, ok := LookupAPIKey("openai")
-	if !ok || apiKey != "mock-access-token-12345" {
-		t.Fatalf("LookupAPIKey = %q, %v; want 'mock-access-token-12345', true", apiKey, ok)
+	// Verify LookupAPIKey also returns the OAuth access token.
+	apiKey, ok := LookupAPIKey("openai-codex")
+	if !ok || apiKey != accessToken {
+		t.Fatalf("LookupAPIKey = %q, %v; want test token, true", apiKey, ok)
 	}
 }

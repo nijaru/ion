@@ -12,10 +12,10 @@ func TestHandleLoginCommandBrowserOAuth(t *testing.T) {
 
 	m := readyModel(t)
 
-	// 1. /login openai starts browser OAuth flow
+	// 1. /login openai uses API-key setup; Codex owns browser OAuth.
 	m, cmd := m.handleCommand("/login openai")
-	if cmd == nil {
-		t.Fatal("expected tea.Cmd for /login openai")
+	if cmd != nil || m.Picker.Setup == nil || m.Picker.Setup.kind != SetupPromptAPIKey {
+		t.Fatal("expected API-key setup for /login openai")
 	}
 
 	// 2. /login openai --key opens API key prompt
@@ -24,16 +24,16 @@ func TestHandleLoginCommandBrowserOAuth(t *testing.T) {
 		t.Fatalf("expected SetupPromptAPIKey for /login openai --key, got %#v", m.Picker.Setup)
 	}
 
-	// 3. /login chatgpt starts browser OAuth flow
+	// 3. /login openai-codex starts browser OAuth flow
 	m.pickerReducer().closeSetup()
-	m, cmd = m.handleCommand("/login chatgpt")
+	m, cmd = m.handleCommand("/login openai-codex")
 	if cmd == nil {
-		t.Fatal("expected tea.Cmd for /login chatgpt")
+		t.Fatal("expected tea.Cmd for /login openai-codex")
 	}
 
 	// 4. handleOAuthLoginFinished updates credentials and outputs confirmation
 	m, cmd = m.handleOAuthLoginFinished(oauthLoginFinishedMsg{
-		provider: "openai",
+		provider: "openai-codex",
 		tokens: &config.OAuthTokens{
 			AccessToken: "test-token-123",
 			ExpiresIn:   3600,

@@ -200,6 +200,27 @@ func TestFetchOpenAICompatibleModelsUsesCustomAuthEnvEndpointAndHeaders(t *testi
 	}
 }
 
+func TestQueryAvailableModelsListsAuthenticatedCodexModels(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := config.SaveOAuthCredentials("openai-codex", &config.OAuthTokens{
+		AccessToken: "access-token",
+		AccountID:   "acct-test",
+	}); err != nil {
+		t.Fatalf("save credentials: %v", err)
+	}
+	catalog := NewModelCatalog(ModelCatalogOptions{DataDir: t.TempDir()})
+	result, err := catalog.QueryAvailableModels(t.Context(), ModelCatalogQuery{
+		Config:    &config.Config{Provider: "openai-codex"},
+		Providers: []string{"openai-codex"},
+	})
+	if err != nil {
+		t.Fatalf("query codex models: %v", err)
+	}
+	if len(result.Models) == 0 || result.Models[0].Provider != "openai-codex" {
+		t.Fatalf("models = %#v, want authenticated Codex models", result.Models)
+	}
+}
+
 func TestQueryAvailableModelsFiltersUnconfiguredProviders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "configured")
 	t.Setenv("OPENROUTER_API_KEY", "")

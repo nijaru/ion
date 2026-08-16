@@ -504,6 +504,9 @@ func (m Model) handleModelPickerSetupResolved(
 		return m.openAPIKeyPrompt(&cfg, cfg.Provider, msg.preset)
 	case SetupPromptEndpoint:
 		return m.openEndpointPrompt(&cfg, msg.preset)
+	case SetupPromptOAuth:
+		m.pickerReducer().closeSetup()
+		return m.startBrowserOAuthLogin(cfg.Provider)
 	default:
 		return m.openModelSelectionForPreset(&cfg, msg.preset)
 	}
@@ -1008,6 +1011,9 @@ func (m Model) openProviderSelection(
 		return m.openAPIKeyPrompt(cfg, cfg.Provider, preset)
 	case SetupPromptEndpoint:
 		return m.openEndpointPrompt(cfg, preset)
+	case SetupPromptOAuth:
+		m.pickerReducer().closeOverlay()
+		return m.startBrowserOAuthLogin(cfg.Provider)
 	}
 
 	// Provider setup has already been resolved above. Catalog discovery is

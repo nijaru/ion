@@ -221,6 +221,7 @@ const (
 	SetupPromptAPIKey SetupPromptKind = iota + 1
 	SetupPromptEndpoint
 	SetupPromptModelID
+	SetupPromptOAuth
 )
 
 // RuntimeEntryReader is the read-only bootstrap projection needed to render

@@ -507,6 +507,7 @@ type ModelRouting struct {
 type ProviderConfig struct {
 	ID             string
 	APIKey         string
+	AccountID      string
 	APIEndpoint    string
 	DefaultHeaders map[string]string
 	Models         []Model

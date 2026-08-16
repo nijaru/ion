@@ -19,43 +19,45 @@ import (
 	"time"
 )
 
-// Default OpenAI ChatGPT OAuth parameters (matching standard PKCE CLI client)
+// OpenAI Codex OAuth parameters match the ChatGPT subscription client.
 const (
-	OpenAIOAuthIssuer   = "https://auth.openai.com"
-	OpenAIOAuthClientID = "app-973e44a4"
-	OpenAIOAuthScope    = "openid profile email offline_access model.request"
-	DefaultOAuthPort    = 1455
-	FallbackOAuthPort   = 1457
+	OpenAIOAuthIssuer        = "https://auth.openai.com"
+	OpenAICodexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+	OpenAICodexOAuthScope    = "openid profile email offline_access"
+	DefaultOAuthPort         = 1455
+	FallbackOAuthPort        = 1457
 )
 
 // OAuthProviderConfig defines the OAuth endpoints and client configuration for a provider.
 type OAuthProviderConfig struct {
-	Issuer      string
-	AuthURL     string
-	TokenURL    string
-	ClientID    string
-	Scopes      []string
-	DefaultPort int
+	Issuer               string
+	AuthURL              string
+	TokenURL             string
+	ClientID             string
+	Scopes               []string
+	DefaultPort          int
+	FixedRedirectPort    bool
+	AccountIDFromJWT     bool
+	AuthorizeQueryValues map[string]string
 }
 
 // KnownOAuthProviders returns the standard OAuth configurations for supported providers.
 func KnownOAuthProviders() map[string]OAuthProviderConfig {
 	return map[string]OAuthProviderConfig{
-		"openai": {
-			Issuer:      OpenAIOAuthIssuer,
-			AuthURL:     "https://auth.openai.com/oauth/authorize",
-			TokenURL:    "https://auth.openai.com/oauth/token",
-			ClientID:    OpenAIOAuthClientID,
-			Scopes:      strings.Fields(OpenAIOAuthScope),
-			DefaultPort: DefaultOAuthPort,
-		},
-		"chatgpt": {
-			Issuer:      OpenAIOAuthIssuer,
-			AuthURL:     "https://auth.openai.com/oauth/authorize",
-			TokenURL:    "https://auth.openai.com/oauth/token",
-			ClientID:    OpenAIOAuthClientID,
-			Scopes:      strings.Fields(OpenAIOAuthScope),
-			DefaultPort: DefaultOAuthPort,
+		"openai-codex": {
+			Issuer:            OpenAIOAuthIssuer,
+			AuthURL:           "https://auth.openai.com/oauth/authorize",
+			TokenURL:          "https://auth.openai.com/oauth/token",
+			ClientID:          OpenAICodexOAuthClientID,
+			Scopes:            strings.Fields(OpenAICodexOAuthScope),
+			DefaultPort:       DefaultOAuthPort,
+			FixedRedirectPort: true,
+			AccountIDFromJWT:  true,
+			AuthorizeQueryValues: map[string]string{
+				"id_token_add_organizations": "true",
+				"codex_cli_simplified_flow":  "true",
+				"originator":                 "ion",
+			},
 		},
 	}
 }
@@ -67,6 +69,7 @@ type OAuthTokens struct {
 	TokenType    string `json:"token_type,omitempty"`
 	ExpiresIn    int64  `json:"expires_in,omitempty"`
 	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	AccountID    string `json:"account_id,omitempty"`
 }
 
 // GeneratePKCE generates a random code verifier and its S256 code challenge.
@@ -116,6 +119,7 @@ func StartPKCEOAuthFlow(ctx context.Context, opts StartOAuthFlowOptions) (*OAuth
 	}
 	if opts.PortOverride > 0 {
 		cfg.DefaultPort = opts.PortOverride
+		cfg.FixedRedirectPort = false
 	}
 
 	verifier, challenge, err := GeneratePKCE()
@@ -128,8 +132,11 @@ func StartPKCEOAuthFlow(ctx context.Context, opts StartOAuthFlowOptions) (*OAuth
 		return nil, err
 	}
 
-	// Try default port, then fallback port, then any available port
-	listener, port, err := listenOnAvailablePort([]int{cfg.DefaultPort, FallbackOAuthPort, 0})
+	ports := []int{cfg.DefaultPort, FallbackOAuthPort, 0}
+	if cfg.FixedRedirectPort {
+		ports = []int{cfg.DefaultPort}
+	}
+	listener, port, err := listenOnAvailablePort(ports)
 	if err != nil {
 		return nil, fmt.Errorf("start local OAuth callback listener: %w", err)
 	}
@@ -145,6 +152,9 @@ func StartPKCEOAuthFlow(ctx context.Context, opts StartOAuthFlowOptions) (*OAuth
 	authValues.Set("code_challenge", challenge)
 	authValues.Set("code_challenge_method", "S256")
 	authValues.Set("state", state)
+	for key, value := range cfg.AuthorizeQueryValues {
+		authValues.Set(key, value)
+	}
 
 	authURL := fmt.Sprintf("%s?%s", cfg.AuthURL, authValues.Encode())
 
@@ -238,11 +248,112 @@ func StartPKCEOAuthFlow(ctx context.Context, opts StartOAuthFlowOptions) (*OAuth
 		if err != nil {
 			return nil, fmt.Errorf("exchange authorization code: %w", err)
 		}
+		if cfg.AccountIDFromJWT {
+			tokens.AccountID, err = accountIDFromJWT(tokens.AccessToken)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if strings.TrimSpace(tokens.RefreshToken) == "" {
+			return nil, errors.New("OAuth token response has no refresh token")
+		}
 
-		// Persist tokens
-		_ = SaveOAuthCredentials(opts.Provider, tokens)
+		if err := SaveOAuthCredentials(opts.Provider, tokens); err != nil {
+			return nil, fmt.Errorf("save OAuth credentials: %w", err)
+		}
 		return tokens, nil
 	}
+}
+
+func accountIDFromJWT(token string) (string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", errors.New("OpenAI Codex access token is not a JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode OpenAI Codex access token: %w", err)
+	}
+	var claims struct {
+		Auth struct {
+			ChatGPTAccountID string `json:"chatgpt_account_id"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("decode OpenAI Codex access token claims: %w", err)
+	}
+	if strings.TrimSpace(claims.Auth.ChatGPTAccountID) == "" {
+		return "", errors.New("OpenAI Codex access token has no ChatGPT account ID")
+	}
+	return strings.TrimSpace(claims.Auth.ChatGPTAccountID), nil
+}
+
+// RefreshOAuthCredentials refreshes a stored OAuth credential when the
+// provider supports refresh tokens and persists the replacement atomically.
+func RefreshOAuthCredentials(ctx context.Context, provider string) (*OAuthTokens, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	providerConfig, ok := KnownOAuthProviders()[provider]
+	if !ok {
+		return nil, fmt.Errorf("provider %q does not support OAuth refresh", provider)
+	}
+	stored, ok := LookupOAuthTokens(provider)
+	if !ok || strings.TrimSpace(stored.RefreshToken) == "" {
+		return nil, fmt.Errorf("provider %q has no refresh token", provider)
+	}
+	tokens, err := refreshOAuthCredential(ctx, http.DefaultClient, providerConfig, stored)
+	if err != nil {
+		return nil, err
+	}
+	if err := SaveOAuthCredentials(provider, tokens); err != nil {
+		return nil, fmt.Errorf("save refreshed OAuth credentials: %w", err)
+	}
+	return tokens, nil
+}
+
+func refreshOAuthCredential(
+	ctx context.Context,
+	client *http.Client,
+	provider OAuthProviderConfig,
+	stored CredentialProvider,
+) (*OAuthTokens, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	data := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {stored.RefreshToken},
+		"client_id":     {provider.ClientID},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create OAuth refresh request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("refresh OAuth credentials: %w", err)
+	}
+	defer response.Body.Close()
+	tokens, err := decodeOAuthTokenResponse(response)
+	if err != nil {
+		return nil, err
+	}
+	if tokens.RefreshToken == "" {
+		tokens.RefreshToken = stored.RefreshToken
+	}
+	if provider.AccountIDFromJWT {
+		accountID, accountErr := accountIDFromJWT(tokens.AccessToken)
+		if accountErr != nil {
+			return nil, accountErr
+		}
+		if stored.AccountID != "" && stored.AccountID != accountID {
+			return nil, errors.New("OpenAI Codex refresh changed ChatGPT account")
+		}
+		tokens.AccountID = accountID
+	} else if tokens.AccountID == "" {
+		tokens.AccountID = stored.AccountID
+	}
+	return tokens, nil
 }
 
 func exchangeCodeForTokens(
@@ -269,23 +380,28 @@ func exchangeCodeForTokens(
 	}
 	defer resp.Body.Close()
 
+	return decodeOAuthTokenResponse(resp)
+}
+
+func decodeOAuthTokenResponse(resp *http.Response) (*OAuthTokens, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("token endpoint returned status %d: %s", resp.StatusCode, string(body))
 	}
-
 	var tokens OAuthTokens
 	if err := json.Unmarshal(body, &tokens); err != nil {
 		return nil, fmt.Errorf("decode token response: %w", err)
 	}
-
-	if tokens.ExpiresIn > 0 {
-		tokens.ExpiresAt = time.Now().Unix() + tokens.ExpiresIn
+	if strings.TrimSpace(tokens.AccessToken) == "" {
+		return nil, errors.New("token response has no access token")
 	}
+	if tokens.ExpiresIn <= 0 {
+		return nil, errors.New("token response has no positive expiry")
+	}
+	tokens.ExpiresAt = time.Now().Unix() + tokens.ExpiresIn
 	return &tokens, nil
 }
 

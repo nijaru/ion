@@ -404,6 +404,8 @@ func (c *ModelCatalog) fetchModels(
 ) ([]ModelMetadata, error) {
 	provider = ResolveID(provider)
 	switch provider {
+	case "openai-codex":
+		return openAICodexModels(), nil
 	case "anthropic":
 		return c.anthropicFetcher(ctx, cfg)
 	case "openai":
@@ -455,6 +457,42 @@ func (c *ModelCatalog) fetchModels(
 			ResolvedHeaders(cfg),
 		)
 	}
+}
+
+func openAICodexModels() []ModelMetadata {
+	const contextLimit = 272000
+	const maxTokens = 128000
+	models := []struct {
+		id   string
+		name string
+		in   float64
+		out  float64
+	}{
+		{id: "gpt-5.4", name: "GPT-5.4", in: 2.5, out: 15},
+		{id: "gpt-5.4-mini", name: "GPT-5.4 mini", in: 0.75, out: 4.5},
+		{id: "gpt-5.5", name: "GPT-5.5", in: 5, out: 30},
+		{id: "gpt-5.6-luna", name: "GPT-5.6 Luna", in: 0.2, out: 1.2},
+		{id: "gpt-5.6-sol", name: "GPT-5.6 Sol", in: 5, out: 30},
+		{id: "gpt-5.6-terra", name: "GPT-5.6 Terra", in: 2, out: 12},
+	}
+	result := make([]ModelMetadata, 0, len(models))
+	for _, model := range models {
+		result = append(result, ModelMetadata{
+			ID:               model.id,
+			Provider:         "openai-codex",
+			Name:             model.name,
+			ContextLimit:     contextLimit,
+			MaxTokens:        maxTokens,
+			Input:            []string{"text", "image"},
+			InputPrice:       model.in,
+			OutputPrice:      model.out,
+			InputPriceKnown:  true,
+			OutputPriceKnown: true,
+			Reasoning:        true,
+			UpdatedAt:        time.Now().Unix(),
+		})
+	}
+	return result
 }
 
 type openRouterModelsResponse struct {

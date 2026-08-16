@@ -15,6 +15,7 @@ type CredentialProvider struct {
 	RefreshToken string `toml:"refresh_token,omitempty"`
 	TokenType    string `toml:"token_type,omitempty"`
 	ExpiresAt    int64  `toml:"expires_at,omitempty"`
+	AccountID    string `toml:"account_id,omitempty"`
 	AuthKind     string `toml:"auth_kind,omitempty"`
 }
 
@@ -84,6 +85,7 @@ func SaveOAuthCredentials(provider string, tokens *OAuthTokens) error {
 		RefreshToken: tokens.RefreshToken,
 		TokenType:    tokens.TokenType,
 		ExpiresAt:    tokens.ExpiresAt,
+		AccountID:    tokens.AccountID,
 		AuthKind:     "oauth",
 	}
 	return SaveCredentials(file)

@@ -43,17 +43,17 @@ ion
 
 ## Provider Setup
 
-The first interactive run opens the provider picker. Choose a provider, enter
-an API key when prompted, then choose a model. Providers that do not expose a
-model catalog open a model-ID prompt instead; enter the exact ID expected by
-that provider. You can also use `/model <id>` at any time.
+The first interactive run opens the provider picker. Choose a provider and
+complete its setup (API key or browser login), then choose a model. Providers
+that do not expose a model catalog open a model-ID prompt instead; enter the
+exact ID expected by that provider. You can also use `/model <id>` at any time.
 
-Ion supports direct API-key providers and custom OpenAI-compatible endpoints.
+Ion supports direct API-key providers, OpenAI Codex subscription OAuth, and
+custom OpenAI-compatible endpoints. OpenAI API-key access and ChatGPT/Codex
+subscription access are separate providers: use `openai` with
+`OPENAI_API_KEY`, or log in to `openai-codex` with `/login openai-codex`.
 OpenAI-compatible `/v1` APIs are the usual interface for local model servers,
 hosted gateways, and self-managed inference services.
-Ion does not currently use OpenAI or Codex subscription OAuth credentials;
-authentication is API-key based or supplied through an OpenAI-compatible
-endpoint configuration.
 
 Most users do not need a config file. Use `~/.ion/config.toml` only for custom
 endpoints, stable defaults, or provider settings you want outside the TUI.
@@ -79,7 +79,9 @@ auth_env_var = "CUSTOM_API_KEY"
 ```
 
 Runtime choices made in the TUI are stored in `~/.ion/state.toml`. API keys
-entered in Ion are stored in `~/.ion/credentials.toml`.
+and OAuth credentials entered in Ion are stored in `~/.ion/credentials.toml`.
+Run `ion auth login` for the browser-based OpenAI Codex subscription flow;
+`ion auth status` reports credential types without printing secrets.
 
 Configured MCP stdio servers are declared in `~/.ion/config.toml` with
 `[[mcp_servers]]` entries. See [docs/tools.md](docs/tools.md#mcp-servers) for
@@ -134,7 +136,7 @@ Common TUI commands:
 /help       show commands and keys
 /hotkeys    show all keyboard shortcuts
 /provider   choose a provider
-/login      save an API key
+/login      log in or save a provider API key
 /model      choose a model
 /thinking   choose reasoning effort
 /status     show runtime status

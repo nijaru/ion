@@ -46,6 +46,9 @@ func (m Model) openAPIKeyPrompt(
 }
 
 func providerSupportsAPIKeyPrompt(def llm.Definition) bool {
+	if def.ID == "openai-codex" {
+		return false
+	}
 	switch def.AuthKind {
 	case llm.AuthAPIKey, llm.AuthToken, llm.AuthOptional:
 		return true

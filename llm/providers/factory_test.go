@@ -11,6 +11,7 @@ import (
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
+	openaicodex "github.com/nijaru/ion/llm/providers/openai_codex"
 )
 
 type authCaptureTransport struct {
@@ -36,6 +37,27 @@ func (t *authCaptureTransport) RoundTrip(req *http.Request) (*http.Response, err
 		Body:       io.NopCloser(strings.NewReader("")),
 		Request:    req,
 	}, nil
+}
+
+func TestNewProviderFromConfigUsesCodexOAuthProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := config.SaveOAuthCredentials("openai-codex", &config.OAuthTokens{
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+		AccountID:    "acct-test",
+	}); err != nil {
+		t.Fatalf("save credentials: %v", err)
+	}
+	provider, err := NewProviderFromConfig(context.Background(), &config.Config{
+		Provider: "openai-codex",
+		Model:    "gpt-5.6-luna",
+	}, llm.NewEndpointResolver(llm.EndpointResolverOptions{}))
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	if _, ok := provider.(*openaicodex.Provider); !ok {
+		t.Fatalf("provider = %T, want *openaicodex.Provider", provider)
+	}
 }
 
 func TestNewProviderFromConfigUsesRuntimeAPIKeyOverride(t *testing.T) {

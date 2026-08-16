@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nijaru/ion/config"
 )
@@ -305,6 +306,17 @@ func CredentialStateContext(
 	def Definition,
 	resolver *EndpointResolver,
 ) (string, bool) {
+	if def.ID == "openai-codex" {
+		credential, ok := config.LookupOAuthTokens(def.ID)
+		if !ok || strings.TrimSpace(credential.AccountID) == "" {
+			return "Log in with /login openai-codex", false
+		}
+		if credential.ExpiresAt > 0 && credential.ExpiresAt <= time.Now().Unix() &&
+			strings.TrimSpace(credential.RefreshToken) == "" {
+			return "Log in with /login openai-codex", false
+		}
+		return "Ready", true
+	}
 	if def.ID == OpenAICompatibleID || (def.Kind == KindCustom && def.Family == FamilyOpenAI) {
 		configuredEndpoint := ""
 		if cfg != nil {
@@ -358,6 +370,9 @@ func CredentialStateContext(
 		return "Local", true
 	}
 	if RequiresAuth(cfg, def) {
+		if def.ID == "openai-codex" {
+			return "Log in with /login openai-codex", false
+		}
 		return fmt.Sprintf("Set %s", MissingAuthDetail(cfg, def)), false
 	}
 	return "Set provider options", false
@@ -472,6 +487,15 @@ var definitions = []Definition{
 		AuthKind:             AuthAPIKey,
 		DefaultEnvVar:        "OPENAI_API_KEY",
 		DefaultEndpoint:      "https://api.openai.com/v1",
+		SupportsModelListing: true,
+	},
+	{
+		ID:                   "openai-codex",
+		DisplayName:          "OpenAI Codex",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthToken,
+		DefaultEndpoint:      "https://chatgpt.com/backend-api",
 		SupportsModelListing: true,
 	},
 	{

@@ -15,7 +15,7 @@ func authCommandUsage() string {
 	return `Usage: ion auth <subcommand> [flags]
 
 Subcommands:
-  login [provider]    Authenticate via browser OAuth 2.0 PKCE (default: openai)
+  login [provider]    Authenticate via browser OAuth 2.0 PKCE (default: openai-codex)
   logout <provider>   Remove stored credentials for a provider
   status              Show active credential types for each provider
 `
@@ -27,7 +27,7 @@ func runAuthCommand(ctx context.Context, args []string, stdout io.Writer) error 
 	}
 	switch args[0] {
 	case "login":
-		provider := "openai"
+		provider := "openai-codex"
 		if len(args) > 1 {
 			provider = args[1]
 		}
@@ -79,7 +79,7 @@ func runAuthLogin(ctx context.Context, w io.Writer, provider string) error {
 	if tokens.ExpiresIn > 0 {
 		fmt.Fprintf(
 			w,
-			"Access token valid for %d minutes (automatic background refresh enabled).\n",
+			"Access token valid for %d minutes (Ion refreshes it when needed).\n",
 			tokens.ExpiresIn/60,
 		)
 	}

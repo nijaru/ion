@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nijaru/ion/config"
 	"github.com/nijaru/ion/llm"
@@ -11,6 +12,7 @@ import (
 	"github.com/nijaru/ion/llm/providers/gemini"
 	"github.com/nijaru/ion/llm/providers/ollama"
 	"github.com/nijaru/ion/llm/providers/openai"
+	openaicodex "github.com/nijaru/ion/llm/providers/openai_codex"
 	"github.com/nijaru/ion/llm/providers/openrouter"
 )
 
@@ -60,6 +62,30 @@ func NewProviderFromConfig(
 		Models:         configModels(cfg),
 		ModelRegistry:  modelRegistry,
 		ModelRouting:   convertRouting(providerName, cfg.Providers),
+	}
+
+	if def.ID == "openai-codex" {
+		credentials, ok := config.LookupOAuthTokens(def.ID)
+		if !ok || strings.TrimSpace(credentials.AccessToken) == "" {
+			return nil, fmt.Errorf("OpenAI Codex is not logged in; use /login openai-codex")
+		}
+		if credentials.ExpiresAt > 0 && time.Until(time.Unix(credentials.ExpiresAt, 0)) < 2*time.Minute {
+			refreshCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			_, refreshErr := config.RefreshOAuthCredentials(refreshCtx, def.ID)
+			cancel()
+			if refreshErr != nil {
+				return nil, fmt.Errorf("refresh OpenAI Codex credentials: %w", refreshErr)
+			}
+			credentials, ok = config.LookupOAuthTokens(def.ID)
+			if !ok {
+				return nil, fmt.Errorf("OpenAI Codex credentials disappeared after refresh")
+			}
+		}
+		if strings.TrimSpace(credentials.AccountID) == "" {
+			return nil, fmt.Errorf("OpenAI Codex credentials have no account ID; use /login openai-codex again")
+		}
+		providerCfg.AccountID = credentials.AccountID
+		return openaicodex.NewProvider(providerCfg), nil
 	}
 
 	switch def.Family {
