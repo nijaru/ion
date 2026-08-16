@@ -387,6 +387,7 @@ func (f *Find) Execute(ctx context.Context, args string) (string, error) {
 		ripgo.WithFindGlob(true),
 		ripgo.WithFindFullPath(strings.Contains(findPattern, "/")),
 		ripgo.WithFindType(findpkg.TypeFile),
+		ripgo.WithFindMetadata(false),
 		ripgo.WithFindHidden(true),
 		ripgo.WithFindGlobExcludes(".git", ".git/**", "**/.git", "**/.git/**"),
 	}
