@@ -815,6 +815,7 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) error {
 	}
 	m.Model.RecoveryRequest = 0
 	m.Model.InterruptedTurnRequest = 0
+	m.clearPrintedEntries()
 	m.applyRuntimeSnapshot(msg.runtime.Transition.Snapshot)
 	if msg.keybindings != nil {
 		m.Keybindings = msg.keybindings
