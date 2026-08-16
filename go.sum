@@ -92,6 +92,8 @@ github.com/nijaru/ripgo v0.0.0-20260816041614-927ff6d0294c h1:hdMNnnNLTI32P+v8Vd
 github.com/nijaru/ripgo v0.0.0-20260816041614-927ff6d0294c/go.mod h1:U27mt1e0YwexGAVxRsx/tupmEFNCSzsWarsZ0+D/Y1c=
 github.com/nijaru/ripgo v0.0.0-20260816042307-e6ecd2596a1a h1:iql7Suwx9WOlmBHu6cTYQsf1qZH0k+21D/GmtRH5/tY=
 github.com/nijaru/ripgo v0.0.0-20260816042307-e6ecd2596a1a/go.mod h1:U27mt1e0YwexGAVxRsx/tupmEFNCSzsWarsZ0+D/Y1c=
+github.com/nijaru/ripgo v0.0.0-20260816042512-fd320c687c21 h1:uMzFmRawlHTabLWqaoAjX/D/7xN3UOBeb2Lr1ptb0CI=
+github.com/nijaru/ripgo v0.0.0-20260816042512-fd320c687c21/go.mod h1:U27mt1e0YwexGAVxRsx/tupmEFNCSzsWarsZ0+D/Y1c=
 github.com/pelletier/go-toml/v2 v2.3.1 h1:MYEvvGnQjeNkRF1qUuGolNtNExTDwct51yp7olPtrEc=
 github.com/pelletier/go-toml/v2 v2.3.1/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=
