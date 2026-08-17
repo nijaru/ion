@@ -1,14 +1,13 @@
-# Go build output
-*.test
-.coverprofile
-/ion
-
-# Worktrees
-.worktrees/
+# Rust
+/target/
+**/*.rs.bk
 
 # Local data
 .DS_Store
 *.log
+
+# Worktrees
+.worktrees/
 
 # IDE
 .idea/
