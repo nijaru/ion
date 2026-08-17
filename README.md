@@ -9,14 +9,19 @@ $ ion
 > fix the parser bug
 ```
 
-This repository is a clean-sheet Rust rewrite. There is no installable
-binary yet. The last Go implementation is tagged `last-go` and is not a
-design, behavior, or migration reference.
+This repository is a clean-sheet Rust rewrite. Print mode can run one
+scripted turn. The last Go implementation is tagged `last-go` and is not
+a design, behavior, or migration reference.
+
+```text
+cargo run -p ion -- -p hello
+```
 
 ## Status
 
-Clean-sheet Rust rewrite. No installable binary yet. Current work lives
-in `ai/brief.md` and `tk ready`. The working target is `ai/DESIGN.md`.
+`RuntimeController` can submit, stream, cancel, and shut down a scripted
+print-mode turn. Tools, sessions, and the TUI are not built yet. Current
+work lives in `ai/brief.md` and `tk ready`.
 
 ## Planning sources
 
