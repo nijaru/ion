@@ -15,18 +15,17 @@ design, behavior, or migration reference.
 
 ## Status
 
-Phase 0 of `tk-q99i` is still open: synthesize the Rust product, ownership,
-failure semantics, protocol contracts, and acceptance gates from the
-rewrite handoff and current external sources. Subagents, MCP, ACP, and
-other runtime primitives are first-class design targets, implemented
-idiomatically in Rust.
+Ready work is `tk-mggy` (Phase 0): synthesize the Rust target from the
+rewrite handoff, TUI handoff, and current external sources. No Cargo
+workspace yet. Later slices are queued under `tk-q99i`.
 
 ## Planning sources
 
-- [AGENTS.md](AGENTS.md) — working rules for this repository
-- `ai/research/ion-rust-rewrite-handoff.md` — starting product and architecture target
-- `ai/research/ion-rust-current-source-research-packet.md` — external Rust/protocol research to recheck before use
-- `ai/research/ion-rust-tui-handoff.md` — TUI-only Ratatui/inline/reducer research
+- [AGENTS.md](AGENTS.md) — session-start contract
+- `ai/brief.md` — current head, ready task, next action
+- `ai/research/ion-rust-rewrite-handoff.md` — starting product target
+- `ai/research/ion-rust-tui-handoff.md` — TUI-layer research
+- `ai/research/ion-rust-current-source-research-packet.md` — versions to recheck
 
 ## License
 
