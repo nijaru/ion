@@ -15,17 +15,14 @@ design, behavior, or migration reference.
 
 ## Status
 
-Ready work is `tk-mggy` (Phase 0): synthesize the Rust target from the
-rewrite handoff, TUI handoff, and current external sources. No Cargo
-workspace yet. Later slices are queued under `tk-q99i`.
+Clean-sheet Rust rewrite. No installable binary yet. Current work and
+the next action live in `ai/brief.md` and `tk ready`.
 
 ## Planning sources
 
-- [AGENTS.md](AGENTS.md) — session-start contract
+- [AGENTS.md](AGENTS.md) — durable session rules
 - `ai/brief.md` — current head, ready task, next action
-- `ai/research/ion-rust-rewrite-handoff.md` — starting product target
-- `ai/research/ion-rust-tui-handoff.md` — TUI-layer research
-- `ai/research/ion-rust-current-source-research-packet.md` — versions to recheck
+- `ai/research/` — product, TUI, and protocol research
 
 ## License
 
