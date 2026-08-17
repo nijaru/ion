@@ -15,14 +15,15 @@ design, behavior, or migration reference.
 
 ## Status
 
-Clean-sheet Rust rewrite. No installable binary yet. Current work and
-the next action live in `ai/brief.md` and `tk ready`.
+Clean-sheet Rust rewrite. No installable binary yet. Current work lives
+in `ai/brief.md` and `tk ready`. The working target is `ai/DESIGN.md`.
 
 ## Planning sources
 
 - [AGENTS.md](AGENTS.md) — durable session rules
 - `ai/brief.md` — current head, ready task, next action
-- `ai/research/` — product, TUI, and protocol research
+- `ai/DESIGN.md` — working Rust target
+- `ai/research/` — imported product, TUI, and protocol research
 
 ## License
 
