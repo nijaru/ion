@@ -140,6 +140,7 @@ tasks atomic, demoable, and acceptance-tested. Log findings while fresh.
 
 - `ai/research/ion-rust-rewrite-handoff.md` — starting product and architecture target
 - `ai/research/ion-rust-current-source-research-packet.md` — external Rust/protocol research
+- `ai/research/ion-rust-tui-handoff.md` — TUI-only Ratatui/inline/reducer research
 - `ai/research/agent-reference-matrix.md` — reference evidence, not a spec
 - `ai/brief.md` — current state
 - `ai/decisions.md` — durable architectural decisions

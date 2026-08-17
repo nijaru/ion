@@ -26,6 +26,7 @@ idiomatically in Rust.
 - [AGENTS.md](AGENTS.md) — working rules for this repository
 - `ai/research/ion-rust-rewrite-handoff.md` — starting product and architecture target
 - `ai/research/ion-rust-current-source-research-packet.md` — external Rust/protocol research to recheck before use
+- `ai/research/ion-rust-tui-handoff.md` — TUI-only Ratatui/inline/reducer research
 
 ## License
 
