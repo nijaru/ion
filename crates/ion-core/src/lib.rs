@@ -8,13 +8,18 @@ mod error;
 mod ids;
 mod provider;
 mod runtime;
+mod tool;
 
 pub use error::{CommandError, RuntimeError};
 pub use ids::{AgentId, RuntimeCursor, TurnId};
-pub use provider::{Provider, ScriptedChunk, ScriptedProvider};
+pub use provider::{Provider, ScriptedMessage, ScriptedProvider};
 pub use runtime::{
     EventSubscription, PrintFrontend, Runtime, RuntimeEvent, RuntimeHandle, RuntimeSnapshot,
     TurnStatus,
+};
+pub use tool::{
+    BashTool, EditTool, FindTool, ReadTool, SearchTool, Tool, ToolCall, ToolCallId, ToolOutcome,
+    ToolRegistry, ToolResult, ToolSpec, WriteTool,
 };
 
 #[cfg(test)]

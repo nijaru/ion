@@ -12,9 +12,11 @@ use tracing::{debug, info, warn};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{AgentId, RuntimeCursor, TurnId};
 use crate::provider::{EngineSignal, Provider, ProviderRequest};
+use crate::tool::{ToolCall, ToolRegistry, ToolResult};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
+const TOOL_CAPACITY: usize = 32;
 const SUBSCRIBER_CAPACITY: usize = 64;
 
 type EventReceiver = mpsc::Receiver<Result<RuntimeEvent, RuntimeError>>;
@@ -176,11 +178,13 @@ pub struct Runtime {
 
 impl Runtime {
     #[must_use]
-    pub fn start(provider: impl Provider) -> Self {
+    pub fn start(provider: impl Provider, tools: ToolRegistry) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx };
         let join = tokio::spawn(async move {
-            Controller::new(Arc::new(provider), rx).run().await;
+            Controller::new(Arc::new(provider), Arc::new(tools), rx)
+                .run()
+                .await;
         });
         Self { handle, join }
     }
@@ -247,11 +251,14 @@ enum TurnState {
         turn_id: TurnId,
         prompt: String,
         cancel: CancellationToken,
+        /// Sender for tool results back to the running provider task.
+        tool_tx: mpsc::Sender<ToolResult>,
     },
 }
 
 struct Controller<P> {
     provider: Arc<P>,
+    tools: Arc<ToolRegistry>,
     commands: mpsc::Receiver<RuntimeCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -266,10 +273,15 @@ struct Controller<P> {
 }
 
 impl<P: Provider> Controller<P> {
-    fn new(provider: Arc<P>, commands: mpsc::Receiver<RuntimeCommand>) -> Self {
+    fn new(
+        provider: Arc<P>,
+        tools: Arc<ToolRegistry>,
+        commands: mpsc::Receiver<RuntimeCommand>,
+    ) -> Self {
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let mut controller = Self {
             provider,
+            tools,
             commands,
             engine_tx,
             engine_rx,
@@ -342,10 +354,12 @@ impl<P: Provider> Controller<P> {
         let turn_id = TurnId::new(self.next_turn);
         self.next_turn += 1;
         let cancel = self.cancel_root.child_token();
+        let (tool_tx, tool_rx) = mpsc::channel(TOOL_CAPACITY);
         self.turn = TurnState::Running {
             turn_id,
             prompt: prompt.clone(),
             cancel: cancel.clone(),
+            tool_tx: tool_tx.clone(),
         };
         self.emit(RuntimeEvent::TurnStarted {
             cursor: RuntimeCursor::default(),
@@ -355,13 +369,96 @@ impl<P: Provider> Controller<P> {
         });
 
         let provider = Arc::clone(&self.provider);
-        let request = ProviderRequest { turn_id, prompt };
+        let tools = self.tools.clone();
+        let request = ProviderRequest {
+            turn_id,
+            prompt,
+            tools: tools.specs(),
+        };
         let out = self.engine_tx.clone();
         self.tracker.spawn(async move {
-            provider.run(request, cancel, out.clone()).await;
+            provider.run(request, cancel, out.clone(), tool_rx).await;
             let _ = out.send(EngineSignal::ProviderExited { turn_id }).await;
         });
         Ok(turn_id)
+    }
+
+    fn handle_engine(&mut self, signal: EngineSignal) {
+        let Some(active) = (match &self.turn {
+            TurnState::Running { turn_id, .. } => Some(*turn_id),
+            TurnState::Idle => None,
+        }) else {
+            debug!("ignored engine signal with no running turn");
+            return;
+        };
+        match signal {
+            EngineSignal::TextDelta { turn_id, text } if turn_id == active => {
+                self.emit(RuntimeEvent::AssistantTextDelta {
+                    cursor: RuntimeCursor::default(),
+                    turn_id,
+                    text,
+                });
+            }
+            EngineSignal::ToolCallRequest { turn_id, call } if turn_id == active => {
+                let (tool_tx, cancel) = match &self.turn {
+                    TurnState::Running {
+                        tool_tx, cancel, ..
+                    } => (tool_tx.clone(), cancel.child_token()),
+                    TurnState::Idle => return,
+                };
+                self.spawn_tool_call(tool_tx, cancel, call);
+            }
+            EngineSignal::Completed { turn_id } if turn_id == active => {
+                self.finish_turn(turn_id);
+            }
+            EngineSignal::Cancelled { turn_id } if turn_id == active => {
+                self.cancel_settled(turn_id);
+            }
+            EngineSignal::Failed { turn_id, message } if turn_id == active => {
+                self.fail_turn(turn_id, message);
+            }
+            EngineSignal::ProviderExited { turn_id } if turn_id == active => {
+                self.fail_turn(
+                    turn_id,
+                    "provider exited without a terminal signal".to_owned(),
+                );
+            }
+            _ => debug!(?signal, "ignored stale engine signal"),
+        }
+    }
+
+    /// Spawn a tracked, cancellation-aware task that executes one tool and
+    /// feeds its result back to the running provider. The controller loop
+    /// only dispatches here; it never awaits tool I/O.
+    fn spawn_tool_call(
+        &self,
+        tool_tx: mpsc::Sender<ToolResult>,
+        cancel: CancellationToken,
+        call: ToolCall,
+    ) {
+        let ToolCall {
+            turn_id,
+            call_id,
+            name,
+            arguments,
+        } = call;
+        let tools = self.tools.clone();
+        debug!(turn = %turn_id, %call_id, tool = %name, "dispatching tool call");
+        self.tracker.spawn(async move {
+            let outcome = tools.execute(&name, &arguments, cancel).await;
+            let result = if outcome.is_error {
+                ToolResult::Err {
+                    call_id,
+                    error: outcome.output,
+                }
+            } else {
+                ToolResult::Ok {
+                    call_id,
+                    output: outcome.output,
+                }
+            };
+            let _ = tool_tx.send(result).await;
+        });
     }
 
     fn cancel_turn(&mut self, turn_id: TurnId) -> Result<(), CommandError> {
@@ -420,41 +517,6 @@ impl<P: Provider> Controller<P> {
                     prompt: prompt.clone(),
                 },
             },
-        }
-    }
-
-    fn handle_engine(&mut self, signal: EngineSignal) {
-        let Some(active) = (match &self.turn {
-            TurnState::Running { turn_id, .. } => Some(*turn_id),
-            TurnState::Idle => None,
-        }) else {
-            debug!("ignored engine signal with no running turn");
-            return;
-        };
-        match signal {
-            EngineSignal::TextDelta { turn_id, text } if turn_id == active => {
-                self.emit(RuntimeEvent::AssistantTextDelta {
-                    cursor: RuntimeCursor::default(),
-                    turn_id,
-                    text,
-                });
-            }
-            EngineSignal::Completed { turn_id } if turn_id == active => {
-                self.finish_turn(turn_id);
-            }
-            EngineSignal::Cancelled { turn_id } if turn_id == active => {
-                self.cancel_settled(turn_id);
-            }
-            EngineSignal::Failed { turn_id, message } if turn_id == active => {
-                self.fail_turn(turn_id, message);
-            }
-            EngineSignal::ProviderExited { turn_id } if turn_id == active => {
-                self.fail_turn(
-                    turn_id,
-                    "provider exited without a terminal signal".to_owned(),
-                );
-            }
-            _ => debug!(?signal, "ignored stale engine signal"),
         }
     }
 

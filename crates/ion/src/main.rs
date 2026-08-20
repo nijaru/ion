@@ -4,7 +4,9 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::Parser;
-use ion_core::{PrintFrontend, Runtime, RuntimeError, ScriptedChunk, ScriptedProvider};
+use ion_core::{
+    PrintFrontend, Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, ToolRegistry,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -45,10 +47,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run_print(prompt: String) -> Result<(), RuntimeError> {
-    let provider = ScriptedProvider::new(vec![ScriptedChunk::immediate(format!(
-        "scripted: {prompt}\n"
-    ))]);
-    let runtime = Runtime::start(provider);
+    let provider =
+        ScriptedProvider::new(vec![ScriptedMessage::text(format!("scripted: {prompt}\n"))]);
+    let tools = ToolRegistry::default();
+    let runtime = Runtime::start(provider, tools);
     let handle = runtime.handle();
     let result = PrintFrontend::new(io::stdout()).run(&handle, prompt).await;
     let shutdown = handle.shutdown().await;
