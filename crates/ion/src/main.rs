@@ -4,9 +4,11 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::Parser;
-use ion_core::{
-    PrintFrontend, Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, ToolRegistry,
-};
+use ion_core::{Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, ToolRegistry};
+
+mod print;
+
+use print::PrintFrontend;
 
 #[derive(Parser, Debug)]
 #[command(

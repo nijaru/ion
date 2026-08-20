@@ -136,7 +136,6 @@ enum SessionCommand {
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
     Subscribe {
-        after: Option<RuntimeCursor>,
         reply: oneshot::Sender<SubscribeReply>,
     },
     Close {
@@ -247,23 +246,19 @@ impl SessionHandle {
     pub async fn snapshot(&self) -> Result<SessionSnapshot, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .try_send(SessionCommand::Subscribe { after: None, reply })
+            .try_send(SessionCommand::Subscribe { reply })
             .map_err(command_send_error)?;
         let (snapshot, _events) = rx.await.map_err(|_| CommandError::RuntimeDropped)??;
         Ok(snapshot)
     }
 
+    /// Snapshot plus bounded live events (DESIGN.md §21.2). A consumer
+    /// that falls behind resynchronizes from a fresh snapshot; past
+    /// events are never replayed.
     pub async fn subscribe(&self) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
-        self.subscribe_after(None).await
-    }
-
-    pub async fn subscribe_after(
-        &self,
-        after: Option<RuntimeCursor>,
-    ) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .try_send(SessionCommand::Subscribe { after, reply })
+            .try_send(SessionCommand::Subscribe { reply })
             .map_err(command_send_error)?;
         let (snapshot, events) = rx.await.map_err(|_| CommandError::RuntimeDropped)??;
         Ok((snapshot, EventSubscription { rx: events }))
@@ -357,7 +352,6 @@ struct SessionRuntime<P> {
     cancel_root: CancellationToken,
     tracker: TaskTracker,
     cursor: RuntimeCursor,
-    events: Vec<RuntimeEvent>,
     /// Canonical semantic session log until the store takes over.
     entries: Vec<SessionEntry>,
     next_operation: u64,
@@ -397,7 +391,6 @@ impl<P: Provider> SessionRuntime<P> {
             cancel_root: CancellationToken::new(),
             tracker: TaskTracker::new(),
             cursor: RuntimeCursor::default(),
-            events: Vec::new(),
             entries: Vec::new(),
             next_operation: 1,
             operation: None,
@@ -458,8 +451,8 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.cancel(operation_id));
                 false
             }
-            SessionCommand::Subscribe { after, reply } => {
-                let _ = reply.send(self.subscribe(after));
+            SessionCommand::Subscribe { reply } => {
+                let _ = reply.send(self.subscribe());
                 false
             }
             SessionCommand::Close { reply } => {
@@ -827,28 +820,12 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    fn subscribe(&mut self, after: Option<RuntimeCursor>) -> SubscribeReply {
+    fn subscribe(&mut self) -> SubscribeReply {
         if self.closed {
             return Err(CommandError::Closed);
         }
         let (tx, rx) = mpsc::channel(SUBSCRIBER_CAPACITY);
         let snapshot = self.snapshot();
-        if let Some(after) = after {
-            for event in &self.events {
-                if event.cursor() > after {
-                    match tx.try_send(Ok(event.clone())) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            let _ = tx.try_send(Err(RuntimeError::SubscriptionLagged));
-                            return Ok((snapshot, rx));
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            return Ok((snapshot, rx));
-                        }
-                    }
-                }
-            }
-        }
         self.subscribers.push(Subscriber { tx });
         Ok((snapshot, rx))
     }
@@ -914,7 +891,6 @@ impl<P: Provider> SessionRuntime<P> {
                 );
             }
         }
-        self.events.push(event.clone());
         self.subscribers
             .retain(|sub| match sub.tx.try_send(Ok(event.clone())) {
                 Ok(()) => true,
@@ -998,48 +974,5 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
-    }
-}
-
-/// Print frontend: projects session events to a writer (DESIGN.md §21.1).
-pub struct PrintFrontend<W> {
-    writer: W,
-}
-
-impl<W: std::io::Write> PrintFrontend<W> {
-    pub fn new(writer: W) -> Self {
-        Self { writer }
-    }
-
-    pub async fn run(
-        &mut self,
-        session: &SessionHandle,
-        prompt: impl Into<String>,
-    ) -> Result<(), RuntimeError> {
-        let (_snapshot, mut events) = session.subscribe().await?;
-        session.submit(prompt).await?;
-        loop {
-            match events.recv().await? {
-                RuntimeEvent::AssistantTextDelta { text, .. } => {
-                    self.writer
-                        .write_all(text.as_bytes())
-                        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-                    self.writer
-                        .flush()
-                        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-                }
-                RuntimeEvent::OperationFinished { .. } => return Ok(()),
-                RuntimeEvent::OperationCancelled { .. } => {
-                    return Err(RuntimeError::OperationCancelled);
-                }
-                RuntimeEvent::OperationFailed { message, .. } => {
-                    return Err(RuntimeError::OperationFailed(message));
-                }
-                RuntimeEvent::SessionClosed { .. } => {
-                    return Err(RuntimeError::Command(CommandError::Closed));
-                }
-                RuntimeEvent::OperationStarted { .. } | RuntimeEvent::ToolStarted { .. } => {}
-            }
-        }
     }
 }

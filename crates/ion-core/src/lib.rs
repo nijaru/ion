@@ -19,8 +19,8 @@ pub use error::{CommandError, RuntimeError};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
 pub use provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
 pub use runtime::{
-    EventSubscription, OperationStatus, PrintFrontend, Runtime, RuntimeEvent, RuntimeHandle,
-    SessionHandle, SessionSnapshot,
+    EventSubscription, OperationStatus, Runtime, RuntimeEvent, RuntimeHandle, SessionHandle,
+    SessionSnapshot,
 };
 pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,

@@ -710,26 +710,6 @@ async fn close_rejects_new_work_and_joins() {
     runtime.join().await.expect("join");
 }
 
-#[tokio::test]
-async fn print_frontend_writes_streamed_text() {
-    let runtime = Runtime::start(
-        ScriptedProvider::new(vec![
-            ScriptedMessage::text("hel"),
-            ScriptedMessage::text("lo\n"),
-        ]),
-        ToolRegistry::default(),
-    );
-    let session = runtime.session();
-    let mut buf = Vec::new();
-    crate::PrintFrontend::new(&mut buf)
-        .run(&session, "hi")
-        .await
-        .expect("print");
-    assert_eq!(String::from_utf8(buf).expect("utf8"), "hello\n");
-    session.close().await.expect("close");
-    runtime.join().await.expect("join");
-}
-
 #[tokio::test(start_paused = true)]
 async fn delayed_chunk_respects_cancel_without_waiting_full_delay() {
     let runtime = Runtime::start(
