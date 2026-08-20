@@ -14,24 +14,27 @@ submit → stream → tool call/result → steer/follow-up → cancel/error → 
 
 ## Session start
 
-Before claims or choosing work:
+Context lives in the central repository at
+`~/github/nijaru/agent-context/projects/github.com/nijaru/ion/ai/`
+(load the `ai-context` skill for resolution rules; never recreate a
+repository-local `ai/`). Before claims or choosing work:
 
-    cat ai/brief.md
+    cat ~/github/nijaru/agent-context/projects/github.com/nijaru/ion/ai/brief.md
     tk ready
     git log --oneline -10
     git status --short
 
 Do the highest-priority unblocked `tk` task. Current source, tests,
-`ai/brief.md`, and `tk` outrank chat and imported research. Load a
-research file only when that task needs it. Do not load `ai/journal.md`
-at startup.
+the central `brief.md`, and `tk` outrank chat and imported research.
+Load a research file only when that task needs it. Do not load
+`journal.md` at startup.
 
 ## Authority
 
 1. Current Rust source and tests, once they exist.
-2. `ai/brief.md` and the ready `tk` task for current work.
-3. `ai/decisions.md` for rationale still in force.
-4. `ai/research/` for product, TUI, protocol, and reference notes.
+2. The central `brief.md` and the ready `tk` task for current work.
+3. Central `decisions.md` for rationale still in force.
+4. Central `research/` for product, TUI, protocol, and reference notes.
    Recheck versions and protocol docs before using them.
 
 Tag `last-go` is a recovery snapshot, not a product, architecture,
@@ -48,8 +51,8 @@ is not an Ion requirement.
 2. Name the Ion owner, lifecycle, failure/recovery, and acceptance check.
 3. Implement that contract. Delete the obsolete path in the same change.
 4. Prove it with tests, then run the matching gates.
-5. Update `ai/brief.md`, `ai/decisions.md` if rationale changed,
-   `ai/journal.md` for the factual outcome, and the `tk` log. Commit the
+5. Update the central `brief.md`, `decisions.md` if rationale changed,
+   and `journal.md` for the factual outcome, and the `tk` log. Commit the
    coherent chunk.
 
 Choose work in this order: correctness and ownership, safety,
