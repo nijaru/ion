@@ -23,7 +23,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::ids::TurnId;
+use crate::ids::OperationId;
 
 /// Identifier for an in-flight tool call. Scoped to a turn, monotonic.
 pub type ToolCallId = u64;
@@ -38,16 +38,18 @@ pub struct ToolSpec {
     pub input_schema: Value,
 }
 
-/// A tool call requested by a provider, routed through the controller.
+/// A complete tool call requested by a provider, admitted through the
+/// runtime's policy/effect path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
-    pub turn_id: TurnId,
+    pub operation_id: OperationId,
     pub call_id: ToolCallId,
     pub name: String,
     pub arguments: Value,
 }
 
-/// Result of a tool call, fed back to the provider that requested it.
+/// Settlement of one tool effect, recorded as a semantic session entry
+/// (DESIGN.md §16.4): exactly what the model will see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolResult {
     Ok { call_id: ToolCallId, output: String },

@@ -1,78 +1,85 @@
-//! Provider port used by the turn engine.
+//! Provider port used by the operation engine.
+//!
+//! One `run` call is one ModelStep effect (DESIGN.md §6, §10.3): project
+//! input plus a frozen tool snapshot in, one validated provider
+//! generation out. The `SessionRuntime` owns the operation loop; a
+//! provider never drives tools itself.
 
 use std::future::Future;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
-use crate::ids::TurnId;
-use crate::tool::{ToolCall, ToolResult, ToolSpec};
+use crate::ids::OperationId;
+use crate::tool::{ToolCall, ToolSpec};
 
-/// What a provider is asked to do for one turn: the turn to drive, the
-/// user prompt, and the tool specs the controller can dispatch.
+/// What one model step asks the provider: the operation it belongs to,
+/// the projected input, and the frozen capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRequest {
-    pub turn_id: TurnId,
+    pub operation_id: OperationId,
     pub prompt: String,
     pub tools: Vec<ToolSpec>,
 }
 
-/// Signals flowing provider → controller. The controller owns the turn,
-/// so every variant carries `turn_id` to disambiguate concurrent/stale
-/// signals from a still-running provider.
+/// Signals flowing provider → session runtime for one model step
+/// (DESIGN.md §15.1). A provider stream becomes durable semantic
+/// assistant content only at a validated completion boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineSignal {
     TextDelta {
-        turn_id: TurnId,
+        operation_id: OperationId,
         text: String,
     },
-    /// The provider wants the controller to run a tool and feed the
-    /// result back through the dedicated tool channel.
-    ToolCallRequest {
-        turn_id: TurnId,
+    /// One complete provider-native tool call. Never executed from
+    /// partial streamed JSON (DESIGN.md §15.2).
+    ToolCallCompleted {
+        operation_id: OperationId,
         call: ToolCall,
     },
     Completed {
-        turn_id: TurnId,
+        operation_id: OperationId,
     },
     Failed {
-        turn_id: TurnId,
+        operation_id: OperationId,
         message: String,
     },
     Cancelled {
-        turn_id: TurnId,
+        operation_id: OperationId,
     },
-    /// The provider's task finished without emitting a terminal signal.
+    /// The provider's task finished without a terminal signal for its
+    /// model step. `step` tags the spawning step so stale sentinels from
+    /// earlier steps are ignored.
     ProviderExited {
-        turn_id: TurnId,
+        operation_id: OperationId,
+        step: u64,
     },
 }
 
-/// A provider adapter that drives a deterministic scripted transcript.
-///
-/// Each [`ScriptedMessage`] is either text (optionally delayed, to exercise
-/// cancellation mid-flush) or a tool call the controller executes before
-/// handing the result back on the tool channel. The provider then resumes
-/// the script, simulating a model reacting to tool output.
+/// A provider adapter executing one model step per `run` call.
 pub trait Provider: Send + Sync + 'static {
     fn run(
         &self,
         request: ProviderRequest,
         cancel: CancellationToken,
         out: mpsc::Sender<EngineSignal>,
-        incoming: mpsc::Receiver<ToolResult>,
     ) -> impl Future<Output = ()> + Send;
 }
 
-/// A step in a scripted transcript.
+/// One scripted model step. A script drives successive steps: the
+/// runtime executes admitted tools between steps and starts the next
+/// step with the projected continuation.
 #[derive(Debug, Clone)]
 pub enum ScriptedMessage {
     /// Emit `text` as an assistant text delta. `delay` is waited first
-    /// (and is cancellation-aware).
+    /// (cancellation-aware).
     Text { delay: Duration, text: String },
-    /// Request a tool call and wait for its result before continuing.
+    /// Emit one complete tool call, then complete the step. The runtime
+    /// runs the tool and starts the next step.
     ToolCall {
         name: String,
         arguments: serde_json::Value,
@@ -105,15 +112,29 @@ impl ScriptedMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+/// A provider adapter that plays a scripted transcript across successive
+/// model steps. Each `run` consumes script messages until the step
+/// completes: text messages stream as deltas; a tool-call message emits
+/// the call and ends the step.
+#[derive(Debug)]
 pub struct ScriptedProvider {
+    cursor: Mutex<ScriptCursor>,
+    call_ids: AtomicU64,
+}
+
+#[derive(Debug)]
+struct ScriptCursor {
+    next: usize,
     messages: Vec<ScriptedMessage>,
 }
 
 impl ScriptedProvider {
     #[must_use]
     pub fn new(messages: Vec<ScriptedMessage>) -> Self {
-        Self { messages }
+        Self {
+            cursor: Mutex::new(ScriptCursor { next: 0, messages }),
+            call_ids: AtomicU64::new(1),
+        }
     }
 
     #[must_use]
@@ -128,15 +149,24 @@ impl Provider for ScriptedProvider {
         request: ProviderRequest,
         cancel: CancellationToken,
         out: mpsc::Sender<EngineSignal>,
-        mut incoming: mpsc::Receiver<ToolResult>,
     ) -> impl Future<Output = ()> + Send {
-        let messages = self.messages.clone();
-        let turn_id = request.turn_id;
+        let operation_id = request.operation_id;
         async move {
-            let mut call_id: crate::tool::ToolCallId = 1;
-            for message in messages {
+            loop {
+                let message = {
+                    let mut cursor = self.cursor.lock().expect("script cursor poisoned");
+                    let message = cursor.messages.get(cursor.next).cloned();
+                    if message.is_some() {
+                        cursor.next += 1;
+                    }
+                    message
+                };
+                let Some(message) = message else {
+                    let _ = out.send(EngineSignal::Completed { operation_id }).await;
+                    return;
+                };
                 if cancel.is_cancelled() {
-                    let _ = out.send(EngineSignal::Cancelled { turn_id }).await;
+                    let _ = out.send(EngineSignal::Cancelled { operation_id }).await;
                     return;
                 }
                 match message {
@@ -145,7 +175,7 @@ impl Provider for ScriptedProvider {
                             tokio::select! {
                                 () = cancel.cancelled() => {
                                     let _ = out
-                                        .send(EngineSignal::Cancelled { turn_id })
+                                        .send(EngineSignal::Cancelled { operation_id })
                                         .await;
                                     return;
                                 }
@@ -153,11 +183,11 @@ impl Provider for ScriptedProvider {
                             }
                         }
                         if cancel.is_cancelled() {
-                            let _ = out.send(EngineSignal::Cancelled { turn_id }).await;
+                            let _ = out.send(EngineSignal::Cancelled { operation_id }).await;
                             return;
                         }
                         if out
-                            .send(EngineSignal::TextDelta { turn_id, text })
+                            .send(EngineSignal::TextDelta { operation_id, text })
                             .await
                             .is_err()
                         {
@@ -165,14 +195,13 @@ impl Provider for ScriptedProvider {
                         }
                     }
                     ScriptedMessage::ToolCall { name, arguments } => {
-                        let id = call_id;
-                        call_id += 1;
+                        let call_id = self.call_ids.fetch_add(1, Ordering::Relaxed);
                         if out
-                            .send(EngineSignal::ToolCallRequest {
-                                turn_id,
+                            .send(EngineSignal::ToolCallCompleted {
+                                operation_id,
                                 call: ToolCall {
-                                    turn_id,
-                                    call_id: id,
+                                    operation_id,
+                                    call_id,
                                     name,
                                     arguments,
                                 },
@@ -182,49 +211,11 @@ impl Provider for ScriptedProvider {
                         {
                             return;
                         }
-                        tokio::select! {
-                            result = incoming.recv() => {
-                                match result {
-                                    Some(ToolResult::Ok { output, .. }) => {
-                                        if out
-                                            .send(EngineSignal::TextDelta {
-                                                turn_id,
-                                                text: output,
-                                            })
-                                            .await
-                                            .is_err()
-                                        {
-                                            return;
-                                        }
-                                    }
-                                    Some(ToolResult::Err { error, .. }) => {
-                                        let _ = out
-                                            .send(EngineSignal::Failed {
-                                                turn_id,
-                                                message: error,
-                                            })
-                                            .await;
-                                        return;
-                                    }
-                                    None => return,
-                                }
-                            }
-                            () = cancel.cancelled() => {
-                                let _ = out
-                                    .send(EngineSignal::Cancelled { turn_id })
-                                    .await;
-                                return;
-                            }
-                        }
+                        let _ = out.send(EngineSignal::Completed { operation_id }).await;
+                        return;
                     }
                 }
             }
-
-            if cancel.is_cancelled() {
-                let _ = out.send(EngineSignal::Cancelled { turn_id }).await;
-                return;
-            }
-            let _ = out.send(EngineSignal::Completed { turn_id }).await;
         }
     }
 }

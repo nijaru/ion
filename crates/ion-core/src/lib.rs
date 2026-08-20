@@ -1,21 +1,30 @@
-//! Runtime contract for Ion.
+//! Runtime contract for Ion: one agent loop inside a durable,
+//! single-writer session runtime (DESIGN.md).
 //!
-//! The controller owns live turn state. Frontends hold a [`RuntimeHandle`]
-//! and subscribe to [`RuntimeEvent`]s. Persistence, tools, and TUI state are
-//! out of scope for this crate's first slice.
+//! The process-level [`Runtime`] composes one or more sessions; each
+//! loaded session has exactly one mutation authority: its private
+//! `SessionRuntime` task driving the pure [`OperationMachine`] transition
+//! core. Frontends hold a
+//! [`SessionHandle`] and subscribe to [`RuntimeEvent`]s. Persistence,
+//! tools, and TUI state are out of scope until their owning slices.
 
 mod error;
 mod ids;
 mod provider;
 mod runtime;
+mod session;
 mod tool;
 
 pub use error::{CommandError, RuntimeError};
-pub use ids::{AgentId, RuntimeCursor, TurnId};
-pub use provider::{Provider, ScriptedMessage, ScriptedProvider};
+pub use ids::{OperationId, RuntimeCursor, SessionId};
+pub use provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
 pub use runtime::{
-    EventSubscription, PrintFrontend, Runtime, RuntimeEvent, RuntimeHandle, RuntimeSnapshot,
-    TurnStatus,
+    EventSubscription, OperationStatus, PrintFrontend, Runtime, RuntimeEvent, RuntimeHandle,
+    SessionHandle, SessionSnapshot,
+};
+pub use session::{
+    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
+    OperationState, SessionEntry, Transition, TransitionError,
 };
 pub use tool::{
     BashTool, EditTool, FindTool, ReadTool, SearchTool, Tool, ToolCall, ToolCallId, ToolOutcome,

@@ -51,9 +51,9 @@ async fn run_print(prompt: String) -> Result<(), RuntimeError> {
         ScriptedProvider::new(vec![ScriptedMessage::text(format!("scripted: {prompt}\n"))]);
     let tools = ToolRegistry::default();
     let runtime = Runtime::start(provider, tools);
-    let handle = runtime.handle();
-    let result = PrintFrontend::new(io::stdout()).run(&handle, prompt).await;
-    let shutdown = handle.shutdown().await;
+    let session = runtime.session();
+    let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
+    let shutdown = session.close().await;
     let join = runtime.join().await;
     result?;
     shutdown?;
