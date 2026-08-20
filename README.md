@@ -1,7 +1,8 @@
 # Ion
 
-Ion is a terminal coding agent. The intended experience is a Pi-like
-minimal surface:
+Ion is a terminal coding agent: a small model-facing agent loop inside a
+durable, single-writer session runtime. The intended experience is a
+Pi-like minimal surface:
 
 ```text
 $ ion
@@ -9,26 +10,29 @@ $ ion
 > fix the parser bug
 ```
 
-This repository is a clean-sheet Rust rewrite. Print mode can run one
-scripted turn. The last Go implementation is tagged `last-go` and is not
-a design, behavior, or migration reference.
+This repository is a clean-sheet Rust rewrite. The authoritative target
+design is [DESIGN.md](DESIGN.md). The last Go implementation is tagged
+`last-go` and is not a design, behavior, or migration reference.
 
 ```text
-cargo run -p ion -- -p hello
+cargo run -p ion -- -p "hello world"
 ```
 
 ## Status
 
-`RuntimeController` can submit, stream, cancel, and shut down a scripted
-print-mode turn. Tools, sessions, and the TUI are not built yet. Current
-work lives in `ai/brief.md` and `tk ready`.
+Print mode runs one scripted operation through the durable runtime
+contract: process `Runtime` + single-writer `SessionRuntime`, a pure
+`OperationMachine` transition core, inbox steering/follow-up, and
+cancel-aware sequential tool effects. SQLite persistence is next
+(DESIGN.md §32 Step 2); TUI, MCP/ACP, and child sessions follow.
+Current work lives in `tk ready` and the central `brief.md` (see
+AGENTS.md).
 
 ## Planning sources
 
-- [AGENTS.md](AGENTS.md) — durable session rules
-- `ai/brief.md` — current head, ready task, next action
-- `ai/DESIGN.md` — working Rust target
-- `ai/research/` — imported product, TUI, and protocol research
+- [DESIGN.md](DESIGN.md) — authoritative target design
+- [AGENTS.md](AGENTS.md) — every-session rules, authority, invariants
+- Central `agent-context` brief — current head, ready task, next action
 
 ## License
 

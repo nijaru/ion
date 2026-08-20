@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ids::OperationId;
 
-/// Identifier for an in-flight tool call. Scoped to a turn, monotonic.
+/// Identifier for an in-flight tool call. Monotonic per provider.
 pub type ToolCallId = u64;
 
 /// Static description of a tool: name, short doc, and JSON-Schema for its
