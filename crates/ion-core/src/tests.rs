@@ -3314,3 +3314,152 @@ async fn malformed_compact_arguments_deny_model_visibly() {
         "the denial must be model-visible as a tool error"
     );
 }
+
+// ---- Overflow recovery: one compaction, one retry (DESIGN.md §14.7.5) ----
+
+#[derive(Clone)]
+struct OverflowProbe {
+    log: Arc<Mutex<Vec<ProviderRequest>>>,
+    always_overflow: bool,
+}
+
+impl OverflowProbe {
+    fn requests(&self) -> Vec<ProviderRequest> {
+        self.log.lock().expect("log poisoned").clone()
+    }
+}
+
+impl Provider for OverflowProbe {
+    fn run(
+        &self,
+        request: ProviderRequest,
+        _cancel: CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
+    ) -> impl Future<Output = ()> + Send {
+        let operation_id = request.operation_id;
+        let step = request.step;
+        let is_compaction = request.plan.messages.iter().any(|message| {
+            matches!(message, crate::context::ContextMessage::User { content }
+                if content.contains("Summarize the conversation"))
+        });
+        self.log.lock().expect("log poisoned").push(request);
+        async move {
+            if is_compaction {
+                let _ = out
+                    .send(EngineSignal::TextDelta {
+                        operation_id,
+                        step,
+                        text: "overflow-summary: goal kept; next step kept".to_owned(),
+                    })
+                    .await;
+                let _ = out
+                    .send(EngineSignal::Completed { operation_id, step })
+                    .await;
+                return;
+            }
+            if step == 1 || self.always_overflow {
+                let _ = out
+                    .send(EngineSignal::Failed {
+                        operation_id,
+                        step,
+                        message: "provider error: This model's maximum context length is \
+                                  exceeded"
+                            .to_owned(),
+                    })
+                    .await;
+                return;
+            }
+            let _ = out
+                .send(EngineSignal::TextDelta {
+                    operation_id,
+                    step,
+                    text: "retry answer".to_owned(),
+                })
+                .await;
+            let _ = out
+                .send(EngineSignal::Completed { operation_id, step })
+                .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn context_overflow_compacts_once_and_retries() {
+    let probe = OverflowProbe {
+        log: Arc::new(Mutex::new(Vec::new())),
+        always_overflow: false,
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "the retried step must complete the operation: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // Step 1: plain. Step 2: the overflow compaction. Step 3: the retry
+    // over the summary baseline.
+    let requests = probe.requests();
+    assert_eq!(requests.len(), 3, "compact once, retry once: {requests:?}");
+    assert!(
+        requests[2]
+            .plan
+            .messages
+            .iter()
+            .any(|m| m.prompt_text().contains("overflow-summary")),
+        "the retry must project the summary baseline"
+    );
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(
+        loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, crate::session::SessionEntry::Compaction { .. })),
+        "the overflow compaction must be durable"
+    );
+}
+
+#[tokio::test]
+async fn repeated_overflow_fails_visibly() {
+    let probe = OverflowProbe {
+        log: Arc::new(Mutex::new(Vec::new())),
+        always_overflow: true,
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFailed { .. })),
+        "a second overflow must fail visibly: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // Exactly one compaction happened; the retry's failure was terminal.
+    let requests = probe.requests();
+    assert_eq!(requests.len(), 3, "no compaction loop: {requests:?}");
+    let summarize_steps = requests
+        .iter()
+        .filter(|request| {
+            request
+                .plan
+                .messages
+                .iter()
+                .any(|m| m.prompt_text().contains("Summarize the conversation"))
+        })
+        .count();
+    assert_eq!(summarize_steps, 1, "only one summarize step may run");
+}

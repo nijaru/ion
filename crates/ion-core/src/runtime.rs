@@ -484,6 +484,18 @@ struct Subscriber {
     tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
 }
 
+/// Does a provider failure message indicate the context exceeded the
+/// model's window (14.7.5)? Conservative substring match over the
+/// common provider phrasings; unknown phrasings fail visibly instead
+/// of triggering a speculative compaction.
+fn is_context_overflow(message: &str) -> bool {
+    let lowered = message.to_lowercase();
+    lowered.contains("context length")
+        || lowered.contains("context window")
+        || lowered.contains("too many token")
+        || lowered.contains("prompt is too long")
+}
+
 /// A model-invoked compaction request parsed from `compact` tool
 /// arguments (DESIGN.md §14.7.3).
 #[derive(Debug, Clone)]
@@ -590,6 +602,9 @@ struct SessionRuntime<P> {
     /// The running compaction was model-invoked (14.7.3); without a
     /// recovery request it finishes the operation instead of prompting.
     compaction_was_model_invoked: bool,
+    /// An overflow already triggered the one compaction+retry
+    /// (14.7.5); a second overflow fails the operation visibly.
+    overflow_retry_used: bool,
     /// The previous step was compaction itself; prevents the
     /// compaction step's own usage from re-triggering compaction.
     last_step_was_compaction: bool,
@@ -646,6 +661,7 @@ impl<P: Provider> SessionRuntime<P> {
             pending_compact: None,
             recovery_after_compaction: false,
             compaction_was_model_invoked: false,
+            overflow_retry_used: false,
             last_step_was_compaction: false,
             model_step: 0,
             subscribers: Vec::new(),
@@ -879,6 +895,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_text.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
+        self.overflow_retry_used = false;
         // Usage/hint/compaction anchors are session-level: context
         // persists across operations, so they survive a new submit.
         self.advance().await;
@@ -1985,6 +2002,17 @@ impl<P: Provider> SessionRuntime<P> {
                     .operation
                     .as_ref()
                     .is_some_and(|active| active.machine.cancel_requested());
+                if !cancel_requested
+                    && is_context_overflow(&message)
+                    && !self.overflow_retry_used
+                    && !self.last_step_was_compaction
+                {
+                    // 14.7.5: one compaction, one retry. The failed
+                    // attempt produced no durable effect beyond its
+                    // intent; its partial request state is discarded.
+                    self.settle_overflow_to_compaction().await;
+                    return;
+                }
                 let transition = if cancel_requested {
                     Transition::ProviderCancelled
                 } else {
@@ -2072,6 +2100,72 @@ impl<P: Provider> SessionRuntime<P> {
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
         self.advance().await;
+    }
+
+    /// Settle a context-overflow failure into a compaction (14.7.5):
+    /// the failed attempt's effect settles without entries, the
+    /// Compaction intent commits in the same transaction, and the
+    /// retry is the natural continuation after the summary lands.
+    async fn settle_overflow_to_compaction(&mut self) {
+        self.overflow_retry_used = true;
+        let mut staged = self.operation.clone().expect("settle needs an operation");
+        let mut plan = project(&self.entries, self.first_entry_seq());
+        plan.messages.push(crate::context::ContextMessage::User {
+            content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
+        });
+        let applied = staged
+            .machine
+            .apply(Transition::OverflowCompaction { plan: plan.clone() })
+            .expect("overflow compaction while AssistantEffectPending");
+        let EffectIntent::Compaction { operation_id, .. } = applied.intents[0].clone() else {
+            panic!("OverflowCompaction must yield a compaction intent");
+        };
+        let settled = staged
+            .open_effect
+            .take()
+            .map(|effect| SettledEffect {
+                id: effect.id,
+                settlement: serde_json::json!({ "kind": "model_step", "overflow": true }),
+            })
+            .into_iter()
+            .collect();
+        let effect = EffectRecord {
+            id: EffectId::generate(),
+            kind: "compaction".to_owned(),
+            recovery_class: RecoveryClass::ReplaySafe,
+            effective_input: serde_json::json!({ "plan": plan }),
+            attempt: 1,
+        };
+        staged.open_effect = Some(effect.clone());
+        let (request, new_entry_seq) = build_commit_request(
+            self.session_id,
+            &staged,
+            staged.state_seq + 1,
+            self.next_entry_seq,
+            applied.entries.clone(),
+            vec![effect],
+            settled,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return;
+        }
+        self.next_entry_seq = new_entry_seq;
+        staged.state_seq += 1;
+        self.operation = Some(staged);
+        // The failed attempt's partial buffers are discarded; usage
+        // from a rejected request is not trustworthy.
+        self.draft_text.clear();
+        self.draft_calls.clear();
+        self.draft_usage = None;
+        self.last_step_was_compaction = true;
+        self.last_hint_tokens = None;
+        warn!(%operation_id, "context overflow; compacting once and retrying");
+        self.spawn_model_step(operation_id, plan, Vec::new());
     }
 
     /// Settle a compaction step: the summary becomes a readable entry

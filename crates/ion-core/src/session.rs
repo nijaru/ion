@@ -140,6 +140,13 @@ pub enum Transition {
     /// `continue_after_compaction` (14.7.3): the tool call ended the
     /// run's planning, so there is nothing left to prompt.
     FinishAfterCompaction,
+    /// The provider rejected the step because the context exceeded the
+    /// window (14.7.5): settle the failed attempt without entries and
+    /// move to compaction; the retry is the natural continuation after
+    /// the summary baseline lands.
+    OverflowCompaction {
+        plan: ContextPlan,
+    },
     /// Start the next model step from a quiescent state. `plan` is the
     /// model-facing projection the runtime derived from the session
     /// transcript (deterministic, §14/§31 invariant 15).
@@ -398,6 +405,7 @@ impl OperationMachine {
             } => self.compaction_completed(summary, covers_through_seq),
             Transition::CompactionFailed => self.compaction_failed(),
             Transition::FinishAfterCompaction => self.finish_after_compaction(),
+            Transition::OverflowCompaction { plan } => self.overflow_compaction(plan),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -754,6 +762,25 @@ impl OperationMachine {
                 transition: "recover_compaction",
             });
         }
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: vec![EffectIntent::Compaction {
+                operation_id: self.operation_id,
+                plan,
+            }],
+            cancel_effects: false,
+        })
+    }
+
+    fn overflow_compaction(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::AssistantEffectPending) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "overflow_compaction",
+            });
+        }
+        self.state = OperationState::CompactionPending;
         Ok(Applied {
             state: self.state.clone(),
             entries: Vec::new(),
