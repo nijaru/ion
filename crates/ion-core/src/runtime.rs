@@ -391,7 +391,37 @@ impl Runtime {
         store: SessionStore,
         policy: Arc<dyn PolicyEngine>,
     ) -> Self {
-        Self::spawn_session_with_policy(provider, tools, store, SessionId::generate(), None, policy)
+        Self::spawn_session_with_policy(
+            provider,
+            tools,
+            store,
+            SessionId::generate(),
+            None,
+            policy,
+            RuntimeBudget::unbounded(),
+        )
+    }
+
+    /// Compose the runtime with an explicit approval policy and a
+    /// runtime-enforced budget (§20.5). Used for bounded child
+    /// sessions; hosts may also budget the root session.
+    #[must_use]
+    pub fn start_budgeted(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        budget: RuntimeBudget,
+    ) -> Self {
+        Self::spawn_session_with_policy(
+            provider,
+            tools,
+            store,
+            SessionId::generate(),
+            None,
+            policy,
+            budget,
+        )
     }
 
     /// Reopen a previously persisted session: the transcript and any
@@ -433,6 +463,7 @@ impl Runtime {
             session_id,
             loaded,
             Arc::new(DefaultPolicy),
+            RuntimeBudget::unbounded(),
         )
     }
 
@@ -443,6 +474,7 @@ impl Runtime {
         session_id: SessionId,
         loaded: Option<LoadedSession>,
         policy: Arc<dyn PolicyEngine>,
+        budget: RuntimeBudget,
     ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
@@ -461,6 +493,7 @@ impl Runtime {
                     tools,
                     store,
                     policy,
+                    budget,
                 },
                 rx,
                 loaded,
@@ -577,11 +610,32 @@ struct ActiveOperation {
 /// The composed collaborators one session runtime runs with (DESIGN.md
 /// §4.1): one provider port, one capability snapshot, one store, one
 /// approval policy.
+/// Runtime-enforced budget bounds (§20.5). `None`/zero means
+/// unbounded; exact defaults are configuration, not architecture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeBudget {
+    /// Maximum model steps (provider requests) per operation.
+    pub max_model_steps: Option<u32>,
+    /// Maximum admitted tool effects per operation.
+    pub max_tool_calls: Option<u32>,
+}
+
+impl RuntimeBudget {
+    #[must_use]
+    pub const fn unbounded() -> Self {
+        Self {
+            max_model_steps: None,
+            max_tool_calls: None,
+        }
+    }
+}
+
 struct SessionDeps<P> {
     provider: Arc<P>,
     tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
+    budget: RuntimeBudget,
 }
 
 struct SessionRuntime<P> {
@@ -591,6 +645,9 @@ struct SessionRuntime<P> {
     tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
+    budget: RuntimeBudget,
+    /// Tool effects admitted by the active operation (budget counter).
+    operation_tool_calls: u32,
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -661,6 +718,7 @@ impl<P: Provider> SessionRuntime<P> {
             tools,
             store,
             policy,
+            budget,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -671,6 +729,8 @@ impl<P: Provider> SessionRuntime<P> {
             tools,
             store,
             policy,
+            budget,
+            operation_tool_calls: 0,
             commands,
             engine_tx,
             engine_rx,
@@ -935,6 +995,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_calls.clear();
         self.draft_usage = None;
         self.overflow_retry_used = false;
+        self.operation_tool_calls = 0;
         // Usage/hint/compaction anchors are session-level: context
         // persists across operations, so they survive a new submit.
         self.advance().await;
@@ -1724,7 +1785,62 @@ impl<P: Provider> SessionRuntime<P> {
 
     /// Commit the model-step effect intent, then spawn the provider
     /// effect. Returns false when persistence failed.
+    /// Fail the active operation durably for a spent budget
+    /// dimension (§20.5): model-visible, terminal, no retry.
+    async fn fail_budgeted(&mut self, dimension: &str) {
+        if self.operation.is_none() {
+            return;
+        }
+        let message = format!("operation budget exceeded: {dimension}");
+        warn!(session = %self.session_id, %message, "budget exhausted");
+        let mut staged = self
+            .operation
+            .clone()
+            .expect("budget fail needs an operation");
+        let applied = staged
+            .machine
+            .apply(Transition::FailOperation {
+                message: message.clone(),
+            })
+            .expect("fail operation for budget");
+        let (request, new_entry_seq) = build_commit_request(
+            self.session_id,
+            &staged,
+            staged.state_seq + 1,
+            self.next_entry_seq,
+            applied.entries.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return;
+        }
+        self.next_entry_seq = new_entry_seq;
+        staged.state_seq += 1;
+        self.entries.extend(applied.entries);
+        // Emits OperationFailed for the Failed outcome (terminal event
+        // contract); idling here mirrors the approval-required path so
+        // no command observes a Finished-but-open operation.
+        self.emit_terminal_state(&applied.state);
+        self.operation.take();
+    }
+
     async fn start_model_step(&mut self) -> bool {
+        if self
+            .budget
+            .max_model_steps
+            .is_some_and(|max| self.model_step >= u64::from(max))
+        {
+            // Budget bounds are runtime-enforced (§20.5): the
+            // operation fails model-visibly instead of looping.
+            self.fail_budgeted("model steps").await;
+            return false;
+        }
         let plan = self.project_model_step_plan().await;
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
@@ -1809,6 +1925,19 @@ impl<P: Provider> SessionRuntime<P> {
                 // input.
                 Err(message) => PolicyDecision::Deny(message.clone()),
             },
+        };
+        // Tool-call budget (§20.5): spent budget denies further calls
+        // model-visibly; the model can still finish its turn. Compact
+        // stays exempt: it is harness maintenance, not a capability.
+        let over_tool_budget = compact_request.is_none()
+            && self
+                .budget
+                .max_tool_calls
+                .is_some_and(|max| self.operation_tool_calls >= max);
+        let decision = if over_tool_budget {
+            PolicyDecision::Deny("operation tool-call budget exhausted".to_owned())
+        } else {
+            decision
         };
         if decision == PolicyDecision::ApprovalRequired {
             // §17.4: nothing may execute, so nothing is committed as an
@@ -1942,6 +2071,7 @@ impl<P: Provider> SessionRuntime<P> {
                 },
             ));
         } else {
+            self.operation_tool_calls += 1;
             self.emit(RuntimeEvent::ToolStarted {
                 cursor: RuntimeCursor::default(),
                 operation_id: call.operation_id,

@@ -28,8 +28,8 @@ pub use provider::{
     EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider, TokenUsage,
 };
 pub use runtime::{
-    EventSubscription, OperationStatus, Runtime, RuntimeEvent, RuntimeHandle, SessionHandle,
-    SessionSnapshot,
+    EventSubscription, OperationStatus, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
+    SessionHandle, SessionSnapshot,
 };
 pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
