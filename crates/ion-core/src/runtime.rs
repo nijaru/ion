@@ -84,6 +84,15 @@ pub enum RuntimeEvent {
         /// Short canonical-target summary for display (path or command).
         target: Option<String>,
     },
+    /// A started tool effect settled durably. Emitted after the
+    /// settlement checkpoint commits, so subscribers see completion
+    /// exactly when it is durable.
+    ToolSettled {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        call_id: u64,
+        is_error: bool,
+    },
     OperationFinished {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -111,12 +120,29 @@ pub enum RuntimeEvent {
 }
 
 impl RuntimeEvent {
+    /// The operation this event belongs to, when it is bound to one.
+    #[must_use]
+    pub const fn operation_id(&self) -> Option<OperationId> {
+        match self {
+            Self::OperationStarted { operation_id, .. }
+            | Self::AssistantTextDelta { operation_id, .. }
+            | Self::ToolStarted { operation_id, .. }
+            | Self::ToolSettled { operation_id, .. }
+            | Self::OperationFinished { operation_id, .. }
+            | Self::OperationFailed { operation_id, .. }
+            | Self::OperationCancelled { operation_id, .. }
+            | Self::OperationApprovalRequired { operation_id, .. } => Some(*operation_id),
+            Self::SessionClosed { .. } => None,
+        }
+    }
+
     #[must_use]
     pub const fn cursor(&self) -> RuntimeCursor {
         match self {
             Self::OperationStarted { cursor, .. }
             | Self::AssistantTextDelta { cursor, .. }
             | Self::ToolStarted { cursor, .. }
+            | Self::ToolSettled { cursor, .. }
             | Self::OperationFinished { cursor, .. }
             | Self::OperationFailed { cursor, .. }
             | Self::OperationCancelled { cursor, .. }
@@ -2324,6 +2350,8 @@ impl<P: Provider> SessionRuntime<P> {
 
     async fn handle_tool_result(&mut self, settlement: ToolSettlement) {
         let (effect_id, result) = settlement;
+        let call_id = result.call_id();
+        let is_error = matches!(&result, ToolResult::Err { .. });
         let expected = self
             .operation
             .as_ref()
@@ -2366,6 +2394,12 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         staged.open_effect = None;
         self.entries.extend(applied.entries);
+        self.emit(RuntimeEvent::ToolSettled {
+            cursor: RuntimeCursor::default(),
+            operation_id: staged.machine.operation_id(),
+            call_id,
+            is_error,
+        });
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
         self.advance().await;
@@ -2743,6 +2777,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         RuntimeEvent::OperationStarted { cursor: slot, .. }
         | RuntimeEvent::AssistantTextDelta { cursor: slot, .. }
         | RuntimeEvent::ToolStarted { cursor: slot, .. }
+        | RuntimeEvent::ToolSettled { cursor: slot, .. }
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
         | RuntimeEvent::OperationFailed { cursor: slot, .. }
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
@@ -2756,6 +2791,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::OperationStarted { .. } => "operation_started",
         RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
         RuntimeEvent::ToolStarted { .. } => "tool_started",
+        RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",

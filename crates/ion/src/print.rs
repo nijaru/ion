@@ -31,6 +31,8 @@ impl<W: Write> PrintFrontend<W> {
                         .flush()
                         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
                 }
+                // Tool settlement is durable-state news, not output.
+                RuntimeEvent::ToolStarted { .. } | RuntimeEvent::ToolSettled { .. } => {}
                 RuntimeEvent::OperationFinished { .. } => return Ok(()),
                 RuntimeEvent::OperationCancelled { .. } => {
                     return Err(RuntimeError::OperationCancelled);
@@ -44,7 +46,7 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::SessionClosed { .. } => {
                     return Err(RuntimeError::Command(CommandError::Closed));
                 }
-                RuntimeEvent::OperationStarted { .. } | RuntimeEvent::ToolStarted { .. } => {}
+                RuntimeEvent::OperationStarted { .. } => {}
             }
         }
     }

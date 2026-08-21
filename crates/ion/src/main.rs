@@ -5,20 +5,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use futures_util::future::Either;
+use ion::openrouter::OpenRouterProvider;
+use ion::print::PrintFrontend;
+use ion::scripted_provider_factory;
+use ion::settings::Settings;
+use ion::tui;
+use ion::{CliProvider, acp};
 use ion_core::{
     Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, SessionStore, default_db_path,
 };
-use std::future::Future;
-
-mod openrouter;
-mod print;
-mod settings;
-mod tui;
-
-use openrouter::OpenRouterProvider;
-use print::PrintFrontend;
-use settings::Settings;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -39,6 +34,10 @@ struct Cli {
     /// TUI instead of starting a new one.
     #[arg(long = "resume")]
     resume: bool,
+    /// Serve the Agent Client Protocol (v1) on stdio instead of
+    /// running the TUI or print mode.
+    #[arg(long = "acp")]
+    acp: bool,
     /// Tools this non-interactive run may execute without approval,
     /// comma-separated (e.g. --allow bash,write). Everything else
     /// terminates the operation with ApprovalRequired (DESIGN.md §17).
@@ -61,6 +60,9 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if cli.acp {
+        return run_acp(&cli, &settings).await;
+    }
     if cli.print.is_none() {
         return run_tui(&cli, &settings).await;
     }
@@ -75,32 +77,56 @@ async fn main() -> ExitCode {
     }
 }
 
-/// The host's provider choice for one invocation. `Provider` is not
-/// dyn-compatible by design; the host composes concretely.
-enum CliProvider {
-    Scripted(ScriptedProvider),
-    OpenRouter(OpenRouterProvider),
-}
-
-impl ion_core::Provider for CliProvider {
-    fn run(
-        &self,
-        request: ion_core::ProviderRequest,
-        cancel: tokio_util::sync::CancellationToken,
-        out: tokio::sync::mpsc::Sender<ion_core::EngineSignal>,
-    ) -> impl Future<Output = ()> + Send {
-        // The arms return distinct concrete futures; erase them for the
-        // host-level dispatch.
-        Box::pin(match self {
-            CliProvider::Scripted(provider) => {
-                let fut = provider.run(request, cancel, out);
-                Either::Left(fut)
+async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
+    let model = cli
+        .model
+        .clone()
+        .or_else(|| settings.openrouter_model().ok().flatten());
+    let api_key = match model.as_deref() {
+        Some(_) => match std::env::var("OPENROUTER_API_KEY") {
+            Ok(key) => Some(key),
+            Err(_) => {
+                let _ = writeln!(io::stderr(), "model requires OPENROUTER_API_KEY");
+                return ExitCode::from(2);
             }
-            CliProvider::OpenRouter(provider) => {
-                let fut = provider.run(request, cancel, out);
-                Either::Right(fut)
-            }
-        })
+        },
+        None => None,
+    };
+    let store = match SessionStore::open(default_db_path()) {
+        Ok(store) => Arc::new(store),
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "store: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
+        Arc::new(ion_core::DefaultPolicy)
+    } else {
+        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
+    };
+    // ACP sessions may arrive concurrently; each gets its own provider
+    // instance via the factory.
+    let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync> = match model {
+        Some(model) => {
+            let key = api_key.expect("checked");
+            Arc::new(move || {
+                CliProvider::OpenRouter(OpenRouterProvider::new(model.clone(), key.clone()))
+            })
+        }
+        None => scripted_provider_factory(vec![ScriptedMessage::text("scripted provider\n")]),
+    };
+    let config = acp::AcpConfig {
+        make_provider,
+        store,
+        policy,
+    };
+    let _ = settings;
+    match acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "acp: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

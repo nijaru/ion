@@ -55,6 +55,7 @@ fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::OperationStarted { .. } => "operation_started",
             RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
             RuntimeEvent::ToolStarted { .. } => "tool_started",
+            RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
             RuntimeEvent::OperationFailed { .. } => "operation_failed",
             RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",

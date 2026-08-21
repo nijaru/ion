@@ -562,6 +562,14 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 operation: format!("running {tool}"),
             };
         }
+        RuntimeEvent::ToolSettled { is_error, .. } => {
+            if let Some(row) = state.tool_rows.last_mut() {
+                // The running row is the one this settlement answers.
+                if is_error && !row.ends_with("✗") {
+                    row.push_str(" ✗");
+                }
+            }
+        }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
             state.status = UiStatus::Idle;
