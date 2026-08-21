@@ -23,6 +23,29 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
+const SCHEMA_VERSION: i64 = 1;
+
+/// Ordered, transactional migrations gated by `PRAGMA user_version`
+/// (DESIGN.md §11.1). Version 0 (fresh or pre-versioning) applies the
+/// initial schema; a database from a newer Ion is refused, never
+/// silently reinterpreted (§26.3).
+fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(StoreError::Sqlite(format!(
+            "database schema version {version} is newer than this Ion supports ({SCHEMA_VERSION})"
+        )));
+    }
+    if version == SCHEMA_VERSION {
+        return Ok(());
+    }
+    let tx = connection.transaction()?;
+    tx.execute_batch(SCHEMA)?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -97,11 +120,17 @@ pub struct EntryRecord {
     pub entry: SessionEntry,
 }
 
-/// A total operation-state checkpoint (DESIGN.md §10.1).
+/// A total operation-state checkpoint (DESIGN.md §10.1). Carries
+/// everything needed to rebuild the live machine on reopen: the frozen
+/// capability snapshot, the operation prompt, and the pending effect
+/// intent, if any.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckpointPayload {
     pub state: OperationState,
     pub cancel_requested: bool,
+    pub prompt: String,
+    pub tools: Vec<crate::tool::ToolSpec>,
+    pub open_effect: Option<EffectRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,12 +141,20 @@ pub struct CheckpointRecord {
 
 /// An effect intent opened before repeat-sensitive execution
 /// (DESIGN.md §12.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectRecord {
     pub id: EffectId,
     pub kind: String,
     pub recovery_class: RecoveryClass,
     pub effective_input: serde_json::Value,
+}
+
+/// One settled effect: the typed outcome is stored with the effect row
+/// so recovery can classify the crash window (DESIGN.md §12.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledEffect {
+    pub id: EffectId,
+    pub settlement: serde_json::Value,
 }
 
 /// One durable inbox item (DESIGN.md §6).
@@ -144,7 +181,7 @@ pub struct CommitRequest {
     pub checkpoint: CheckpointRecord,
     pub entries: Vec<EntryRecord>,
     pub open_effects: Vec<EffectRecord>,
-    pub settled_effects: Vec<EffectId>,
+    pub settled_effects: Vec<SettledEffect>,
     /// Inbox items inserted by this transition (status as recorded).
     pub inbox: Vec<InboxRecord>,
     /// Previously pending inbox items this transition applied.
@@ -245,7 +282,7 @@ impl SessionStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
-        connection.execute_batch(SCHEMA)?;
+        apply_migrations(&mut connection)?;
         let (tx, mut rx) = mpsc::channel(STORE_CAPACITY);
         let fail_next_write = Arc::new(AtomicBool::new(false));
         let fail_flag = Arc::clone(&fail_next_write);
@@ -430,11 +467,23 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             ],
         )?;
     }
-    for effect_id in &request.settled_effects {
-        tx.execute(
-            "UPDATE effects SET status = 'settled', settled_at = ?2 WHERE id = ?1",
-            rusqlite::params![effect_id.as_uuid().to_string(), now_ms()],
+    for settled in &request.settled_effects {
+        let affected = tx.execute(
+            "UPDATE effects SET status = 'settled', settlement = ?2, settled_at = ?3
+             WHERE id = ?1 AND operation_id = ?4 AND status = 'pending'",
+            rusqlite::params![
+                settled.id.as_uuid().to_string(),
+                settled.settlement.to_string(),
+                now_ms(),
+                request.operation_id.as_uuid().to_string(),
+            ],
         )?;
+        if affected != 1 {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "settlement matched no pending effect {}",
+                settled.id
+            )));
+        }
     }
     for item in &request.inbox {
         insert_inbox(&tx, request.session_id, request.operation_id, item)?;
@@ -552,8 +601,10 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     let mut rows = statement.query(rusqlite::params![id])?;
     while let Some(row) = rows.next()? {
         let seq: i64 = row.get(0)?;
+        let seq = u64::try_from(seq)
+            .map_err(|_| StoreError::Sqlite(format!("corrupt entry seq {seq}")))?;
         let payload: String = row.get(1)?;
-        entries.push((seq as u64, decode("entry", payload)?));
+        entries.push((seq, decode("entry", payload)?));
     }
 
     let mut statement = connection.prepare(

@@ -15,7 +15,7 @@ use crate::session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
 };
-use crate::store::SessionStore;
+use crate::store::{CheckpointPayload, CheckpointRecord, CommitRequest, SessionStore};
 use crate::tool::{RecoveryClass, ToolRegistry, ToolResult, ToolSpec};
 
 const STEP: Duration = Duration::from_millis(50);
@@ -118,13 +118,17 @@ fn accept_appends_user_entry_and_enters_accepted() {
 #[test]
 fn start_model_step_commits_intent_with_frozen_tools() {
     let (mut machine, _) = machine_with_tools("goal", vec![spec("read")]);
-    let applied = machine.apply(Transition::StartModelStep).expect("start");
+    let applied = machine
+        .apply(Transition::StartModelStep {
+            prompt: "user: goal".to_owned(),
+        })
+        .expect("start");
     assert_eq!(machine.state(), &OperationState::AssistantEffectPending);
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
-            prompt: "goal".to_owned(),
+            prompt: "user: goal".to_owned(),
             tools: vec![spec("read")],
         }]
     );
@@ -133,7 +137,11 @@ fn start_model_step_commits_intent_with_frozen_tools() {
 #[test]
 fn provider_completed_without_inbox_finishes_completed() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     let applied = machine
         .apply(Transition::ProviderCompleted {
             text: "done".to_owned(),
@@ -155,7 +163,11 @@ fn provider_completed_without_inbox_finishes_completed() {
 #[test]
 fn provider_completed_with_tools_plans_then_admits_sequentially() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     let applied = machine
         .apply(Transition::ProviderCompleted {
             text: "using tools".to_owned(),
@@ -238,7 +250,11 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
 #[test]
 fn tool_error_is_a_model_visible_result_and_continues() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     machine
         .apply(Transition::ProviderCompleted {
             text: String::new(),
@@ -269,7 +285,11 @@ fn tool_error_is_a_model_visible_result_and_continues() {
 #[test]
 fn steer_during_effect_queues_and_applies_at_the_boundary() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: "user: goal".to_owned(),
+        })
+        .expect("start");
     let applied = machine
         .apply(Transition::ApplyInbox {
             item: InboxItem {
@@ -292,7 +312,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     // Accepted input exists, so the operation continues.
     assert_eq!(machine.state(), &OperationState::NeedContinuation);
 
-    let drained = machine.drain_inbox().expect("drain");
+    let drained = machine.drain_steers().expect("steer drain");
     assert_eq!(drained.len(), 1);
     assert_eq!(machine.state(), &OperationState::NeedAssistant);
     assert_eq!(
@@ -302,12 +322,16 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
         }]
     );
 
-    let applied = machine.apply(Transition::StartModelStep).expect("step 2");
+    let applied = machine
+        .apply(Transition::StartModelStep {
+            prompt: "user: goal\nassistant: partial\nuser: and also check tests".to_owned(),
+        })
+        .expect("step 2");
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
-            prompt: "goal\nand also check tests".to_owned(),
+            prompt: "user: goal\nassistant: partial\nuser: and also check tests".to_owned(),
             tools: vec![],
         }]
     );
@@ -316,7 +340,11 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
 #[test]
 fn follow_up_continues_the_same_operation() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     machine
         .apply(Transition::ApplyInbox {
             item: InboxItem {
@@ -332,8 +360,12 @@ fn follow_up_continues_the_same_operation() {
         })
         .expect("complete");
     assert_eq!(machine.state(), &OperationState::NeedContinuation);
-    machine.drain_inbox().expect("drain");
-    machine.apply(Transition::StartModelStep).expect("step 2");
+    machine.drain_followups().expect("follow-up drain");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: "user: goal\nuser: now summarize".to_owned(),
+        })
+        .expect("step 2");
     machine
         .apply(Transition::ProviderCompleted {
             text: "second".to_owned(),
@@ -350,7 +382,11 @@ fn follow_up_continues_the_same_operation() {
 fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     // During a model step.
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     let applied = machine.apply(Transition::CancelRequested).expect("cancel");
     assert!(applied.cancel_effects);
     assert_eq!(machine.state(), &OperationState::AssistantEffectPending);
@@ -365,7 +401,11 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
 
     // During a tool effect.
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     machine
         .apply(Transition::ProviderCompleted {
             text: String::new(),
@@ -395,7 +435,11 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
 #[test]
 fn provider_failure_after_cancel_request_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     machine.apply(Transition::CancelRequested).expect("cancel");
     // The runtime maps a provider error after a cancel request to the
     // cancellation outcome; the raw transition is still typed.
@@ -416,10 +460,14 @@ fn suspend_from_any_open_state_is_recoverable_not_cancelled() {
     // cancellation outcome (DESIGN.md §9.5).
     let cases: Vec<fn(&mut OperationMachine)> = vec![
         |m| {
-            let _ = m.apply(Transition::StartModelStep);
+            let _ = m.apply(Transition::StartModelStep {
+                prompt: String::new(),
+            });
         },
         |m| {
-            let _ = m.apply(Transition::StartModelStep);
+            let _ = m.apply(Transition::StartModelStep {
+                prompt: String::new(),
+            });
             let _ = m.apply(Transition::ProviderCompleted {
                 text: String::new(),
                 tool_calls: vec![call(1, "read")],
@@ -482,9 +530,14 @@ fn invalid_state_transition_pairs_are_typed_errors() {
 
     // From AssistantEffectPending:
     let (mut m, _) = machine_with_tools("goal", vec![]);
-    m.apply(Transition::StartModelStep).expect("start");
+    m.apply(Transition::StartModelStep {
+        prompt: String::new(),
+    })
+    .expect("start");
     let err = m
-        .apply(Transition::StartModelStep)
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
         .expect_err("double start");
     assert_eq!(
         (err.state, err.transition),
@@ -495,14 +548,19 @@ fn invalid_state_transition_pairs_are_typed_errors() {
 
     // From Finished:
     let (mut m, _) = machine_with_tools("goal", vec![]);
-    m.apply(Transition::StartModelStep).expect("start");
+    m.apply(Transition::StartModelStep {
+        prompt: String::new(),
+    })
+    .expect("start");
     m.apply(Transition::ProviderCancelled).expect("cancel");
     assert!(matches!(
         m.state(),
         OperationState::Finished(OperationOutcome::Cancelled)
     ));
     for transition in [
-        Transition::StartModelStep,
+        Transition::StartModelStep {
+            prompt: String::new(),
+        },
         Transition::ApplyInbox {
             item: InboxItem {
                 kind: InboxKind::Steer,
@@ -521,7 +579,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
         },
     ] {
         let label = match &transition {
-            Transition::StartModelStep => "start_model_step",
+            Transition::StartModelStep { .. } => "start_model_step",
             Transition::ApplyInbox { .. } => "apply_inbox",
             Transition::AdmitNextTool => "admit_next_tool",
             Transition::CancelRequested => "cancel_requested",
@@ -538,7 +596,11 @@ fn invalid_state_transition_pairs_are_typed_errors() {
 #[test]
 fn failed_transition_leaves_state_unmutated() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     let before = machine.state().clone();
     assert!(machine.apply(Transition::AdmitNextTool).is_err());
     assert_eq!(machine.state(), &before);
@@ -568,12 +630,14 @@ impl Provider for SharedLogProvider {
         out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send {
         let operation_id = request.operation_id;
+        let step = request.step;
         let delay = self.settle_delay;
         async move {
             self.log.lock().expect("log poisoned").push(request);
             if out
                 .send(EngineSignal::TextDelta {
                     operation_id,
+                    step,
                     text: "working".to_owned(),
                 })
                 .await
@@ -582,7 +646,9 @@ impl Provider for SharedLogProvider {
                 return;
             }
             sleep(delay).await;
-            let _ = out.send(EngineSignal::Completed { operation_id }).await;
+            let _ = out
+                .send(EngineSignal::Completed { operation_id, step })
+                .await;
         }
     }
 }
@@ -1209,10 +1275,10 @@ async fn steer_projection_reaches_the_next_model_step() {
         2,
         "one steer must open exactly one new step"
     );
-    assert_eq!(requests[0].prompt, "goal");
+    assert_eq!(requests[0].prompt, "user: goal");
     assert_eq!(
-        requests[1].prompt, "goal\nand also check tests",
-        "the steer must be projected into the next step"
+        requests[1].prompt, "user: goal\nassistant: working\nuser: and also check tests",
+        "the steer must be projected into the next step's transcript view"
     );
 }
 
@@ -1481,10 +1547,14 @@ fn recovery_classes_match_the_design() {
 fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
     for setup in [
         |m: &mut OperationMachine| {
-            let _ = m.apply(Transition::StartModelStep);
+            let _ = m.apply(Transition::StartModelStep {
+                prompt: String::new(),
+            });
         },
         |m: &mut OperationMachine| {
-            let _ = m.apply(Transition::StartModelStep);
+            let _ = m.apply(Transition::StartModelStep {
+                prompt: String::new(),
+            });
             let _ = m.apply(Transition::ProviderCompleted {
                 text: String::new(),
                 tool_calls: vec![call(1, "read")],
@@ -1505,7 +1575,11 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
         assert!(applied.cancel_effects);
     }
     let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine.apply(Transition::StartModelStep).expect("start");
+    machine
+        .apply(Transition::StartModelStep {
+            prompt: String::new(),
+        })
+        .expect("start");
     machine.apply(Transition::ProviderCancelled).expect("done");
     let err = machine
         .apply(Transition::FailOperation {
@@ -1513,4 +1587,155 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
         })
         .expect_err("finished is terminal");
     assert_eq!(err.transition, "fail_operation");
+}
+
+// ---- Reopen and schema integrity (Codex review blockers) ----
+
+#[tokio::test]
+async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
+    let db = temp_db("reopen");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("start"),
+            ScriptedMessage::delayed(Duration::from_secs(30), "late"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    // The durable transcript at close time is whatever was committed;
+    // a delta that never settled stays an ephemeral draft (§10.3).
+    let before = session.snapshot().await.expect("snapshot");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    // Reopen the same session: the suspended operation must be rebuilt.
+    let store = SessionStore::open(&db).expect("reopen store");
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store,
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let OperationStatus::Active {
+        operation_id: reopened_id,
+        prompt,
+        state,
+    } = snapshot.operation
+    else {
+        panic!("expected the open operation to be rebuilt, got idle");
+    };
+    assert_eq!(prompt, "goal");
+    assert_eq!(state, OperationState::Suspended);
+    // Recovery decisions are Step 3 work: an open operation blocks new
+    // submits rather than being silently resumed or cancelled.
+    let err = session.submit("new").await.expect_err("busy");
+    assert!(matches!(err, CommandError::Busy { operation_id } if operation_id == reopened_id));
+    // The transcript reproduced exactly what was committed before close.
+    assert_eq!(
+        entry_kinds(
+            &snapshot
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i as u64, e.clone()))
+                .collect::<Vec<_>>()
+        ),
+        entry_kinds(
+            &before
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i as u64, e.clone()))
+                .collect::<Vec<_>>()
+        )
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[test]
+fn store_refuses_a_database_from_a_newer_schema() {
+    let db = temp_db("future");
+    {
+        let store = SessionStore::open(&db).expect("open");
+        let _ = store;
+    }
+    // Simulate a future Ion bumping the schema version.
+    let connection = rusqlite::Connection::open(&db).expect("raw open");
+    connection
+        .pragma_update(None, "user_version", 99)
+        .expect("bump version");
+    drop(connection);
+    let err = SessionStore::open(&db).expect_err("future schema must be refused");
+    assert!(err.to_string().contains("newer"), "got: {err}");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn settlement_must_match_a_pending_effect_of_the_operation() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // A settlement for an unknown or already-settled effect must be
+    // rejected, not silently succeed on zero rows.
+    let loaded = store.load(session_id).await.expect("load");
+    let operation_id = loaded.operations[0].id;
+    let ghost = crate::ids::EffectId::generate();
+    let err = store
+        .commit(CommitRequest {
+            session_id,
+            operation_id,
+            checkpoint: CheckpointRecord {
+                state_seq: 999,
+                payload: CheckpointPayload {
+                    state: OperationState::Finished(OperationOutcome::Completed),
+                    cancel_requested: false,
+                    prompt: String::new(),
+                    tools: Vec::new(),
+                    open_effect: None,
+                },
+            },
+            entries: Vec::new(),
+            open_effects: Vec::new(),
+            settled_effects: vec![crate::store::SettledEffect {
+                id: ghost,
+                settlement: serde_json::json!({}),
+            }],
+            inbox: Vec::new(),
+            inbox_applied: Vec::new(),
+        })
+        .await
+        .expect_err("ghost settlement must fail");
+    assert!(err.to_string().contains("matched no pending effect"));
 }

@@ -175,10 +175,14 @@ impl ToolRegistry {
         &self.cwd
     }
 
-    /// All registered tool specs.
+    /// All registered tool specs, ordered by name. The order is part of
+    /// the capability snapshot, so it must be deterministic across
+    /// processes for prompt-prefix stability (DESIGN.md P9, §14.4).
     #[must_use]
     pub fn specs(&self) -> Vec<ToolSpec> {
-        self.entries.values().map(|e| e.spec.clone()).collect()
+        let mut specs: Vec<ToolSpec> = self.entries.values().map(|e| e.spec.clone()).collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
     }
 
     /// Look up a tool's spec by name.
@@ -245,9 +249,11 @@ impl ToolRegistry {
 /// Build the default core-tool entries under `cwd`.
 fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
-    // Recovery classes per DESIGN.md §12.2: reads are replay-safe,
-    // write/edit reconcile from stored pre/post images, bash and
-    // anything unknown never replay automatically.
+    // Recovery classes per DESIGN.md §12.2: reads are replay-safe; bash
+    // and anything unknown never replay automatically. write/edit are
+    // NeverReplay until §12.3 preimage/postimage evidence is persisted
+    // with the intent; downgrading them to Reconcile without that
+    // evidence would claim a reconciliation Ion cannot perform.
     let tools: Vec<(Arc<dyn Tool>, RecoveryClass)> = vec![
         (
             Arc::new(ReadTool {

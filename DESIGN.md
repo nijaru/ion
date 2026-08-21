@@ -669,6 +669,13 @@ Finishing
 Finished { completed | failed | cancelled | declined | indeterminate }
 ```
 
+A checkpoint MUST carry everything needed to rebuild the live machine on
+reopen: the total state, the frozen capability snapshot, the operation
+prompt, pending inbox ownership, and any pending effect intent.
+`Suspended` is recoverable state, not a black hole: reopening rebuilds
+the operation from its checkpoint and surfaces it; what resuming it
+means is recovery policy (Step 3).
+
 The final Rust enum can refine this. Do not create states without distinct recovery semantics.
 
 ## 10.2 Transition rule
@@ -2058,9 +2065,10 @@ Implement:
 - dedicated `rusqlite` store thread;
 - durable admission;
 - semantic entries;
-- operation checkpoints;
-- effect intents/settlements;
-- resume/open.
+- operation checkpoints sufficient to rebuild the machine;
+- effect intents/settlements with exact effective input and recovery
+  class;
+- resume/open (reconstruct transcript and open operations).
 
 Migrate the existing one-provider + tool loop through it.
 
@@ -2087,7 +2095,12 @@ must work through a real provider/read tool, stream live output, persist semanti
 
 ## Step 4 — Context/provider correctness
 
-- `ContextProjector`;
+The minimal model-step plan (projected input plus frozen capability
+snapshot) is persisted with every step from Step 2 onward — Step 3
+recovery cannot replay a provider request without it. What Step 4 adds
+is the full context architecture:
+
+- `ContextProjector` replacing the placeholder transcript projection;
 - stable `ContextManifest`;
 - model-step snapshot;
 - prompt-cache discipline/metrics;

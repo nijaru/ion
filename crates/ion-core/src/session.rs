@@ -109,8 +109,12 @@ pub enum Transition {
     ApplyInbox {
         item: InboxItem,
     },
-    /// Start the next model step from a quiescent state.
-    StartModelStep,
+    /// Start the next model step from a quiescent state. `prompt` is the
+    /// model-facing projection the runtime derived from the session
+    /// transcript (placeholder for the ContextProjector, §14/§32 Step 4).
+    StartModelStep {
+        prompt: String,
+    },
     /// A validated completed provider generation.
     ProviderCompleted {
         text: String,
@@ -174,13 +178,12 @@ pub struct OperationMachine {
     operation_id: OperationId,
     prompt: String,
     state: OperationState,
-    /// Accepted inbox items not yet applied to session history.
-    inbox: Vec<InboxItem>,
-    /// Model-facing input accumulated so far (prompt, then applied
-    /// steers/follow-ups); every model step of the operation projects the
-    /// full accumulated input. Replaced by the ContextProjector in
-    /// DESIGN.md §32 Step 4.
-    projected: String,
+    /// Accepted steers, applied at the next reasoning boundary (the next
+    /// model step, including tool continuations) — §9.2.
+    steers: Vec<InboxItem>,
+    /// Accepted follow-ups, applied only after the current response
+    /// reaches its follow-up boundary (NeedContinuation) — §9.3.
+    followups: Vec<InboxItem>,
     /// Immutable capability snapshot for every model step of this
     /// operation (DESIGN.md §18.2).
     tools: Vec<ToolSpec>,
@@ -208,14 +211,37 @@ impl OperationMachine {
         };
         let machine = Self {
             operation_id,
-            inbox: Vec::new(),
             cancel_requested: false,
             state: OperationState::Accepted,
-            projected: prompt.clone(),
+            steers: Vec::new(),
+            followups: Vec::new(),
             tools,
             prompt,
         };
         (machine, applied)
+    }
+
+    /// Rebuild a machine from a durable checkpoint on reopen. Pending
+    /// inbox items come from the store's pending inbox rows.
+    #[must_use]
+    pub fn restore(
+        operation_id: OperationId,
+        prompt: String,
+        tools: Vec<ToolSpec>,
+        state: OperationState,
+        cancel_requested: bool,
+        steers: Vec<InboxItem>,
+        followups: Vec<InboxItem>,
+    ) -> Self {
+        Self {
+            operation_id,
+            prompt,
+            state,
+            steers,
+            followups,
+            tools,
+            cancel_requested,
+        }
     }
 
     #[must_use]
@@ -228,6 +254,13 @@ impl OperationMachine {
         &self.prompt
     }
 
+    /// The capability snapshot frozen for this operation's model steps
+    /// (DESIGN.md §18.2).
+    #[must_use]
+    pub const fn frozen_tools(&self) -> &Vec<ToolSpec> {
+        &self.tools
+    }
+
     #[must_use]
     pub const fn state(&self) -> &OperationState {
         &self.state
@@ -238,10 +271,22 @@ impl OperationMachine {
         self.cancel_requested
     }
 
-    /// True when queued inbox items wait for a continuation boundary.
+    /// True when queued steers wait for the next reasoning boundary.
+    #[must_use]
+    pub fn has_queued_steers(&self) -> bool {
+        !self.steers.is_empty()
+    }
+
+    /// True when queued follow-ups wait for the follow-up boundary.
+    #[must_use]
+    pub fn has_queued_followups(&self) -> bool {
+        !self.followups.is_empty()
+    }
+
+    /// True when any accepted inbox item is still pending.
     #[must_use]
     pub fn has_queued_inbox(&self) -> bool {
-        !self.inbox.is_empty()
+        self.has_queued_steers() || self.has_queued_followups()
     }
 
     /// Apply one transition. Invalid state/transition pairs are typed
@@ -249,7 +294,7 @@ impl OperationMachine {
     pub fn apply(&mut self, transition: Transition) -> Result<Applied, TransitionError> {
         match transition {
             Transition::ApplyInbox { item } => self.apply_inbox(item),
-            Transition::StartModelStep => self.start_model_step(),
+            Transition::StartModelStep { prompt } => self.start_model_step(prompt),
             Transition::ProviderCompleted { text, tool_calls } => {
                 self.provider_completed(text, tool_calls)
             }
@@ -264,42 +309,63 @@ impl OperationMachine {
     }
 
     fn apply_inbox(&mut self, item: InboxItem) -> Result<Applied, TransitionError> {
-        match self.state {
+        let applies_now = match item.kind {
+            // Steer joins at the next reasoning boundary (§9.2).
+            InboxKind::Steer => matches!(
+                self.state,
+                OperationState::Accepted
+                    | OperationState::NeedAssistant
+                    | OperationState::NeedContinuation
+            ),
+            // Follow-up waits for the response's follow-up boundary
+            // (§9.3); it never joins between tool continuations.
+            InboxKind::FollowUp => matches!(self.state, OperationState::NeedContinuation),
+            InboxKind::Prompt => {
+                return Err(TransitionError {
+                    state: state_name(&self.state),
+                    transition: "apply_inbox",
+                });
+            }
+        };
+        if applies_now {
+            self.state = OperationState::NeedAssistant;
+            Ok(Applied {
+                state: self.state.clone(),
+                entries: vec![SessionEntry::UserMessage { text: item.text }],
+                intents: Vec::new(),
+                cancel_effects: false,
+            })
+        } else if matches!(
+            self.state,
             OperationState::Accepted
-            | OperationState::NeedAssistant
-            | OperationState::NeedContinuation => {
-                self.projected.push('\n');
-                self.projected.push_str(&item.text);
-                self.state = OperationState::NeedAssistant;
-                Ok(Applied {
-                    state: self.state.clone(),
-                    entries: vec![SessionEntry::UserMessage { text: item.text }],
-                    intents: Vec::new(),
-                    cancel_effects: false,
-                })
+                | OperationState::NeedAssistant
+                | OperationState::NeedContinuation
+                | OperationState::AssistantEffectPending
+                | OperationState::ToolsPlanned { .. }
+                | OperationState::ToolEffectPending { .. }
+        ) {
+            match item.kind {
+                InboxKind::Steer => self.steers.push(item),
+                InboxKind::FollowUp => self.followups.push(item),
+                InboxKind::Prompt => unreachable!("rejected above"),
             }
-            OperationState::AssistantEffectPending
-            | OperationState::ToolsPlanned { .. }
-            | OperationState::ToolEffectPending { .. } => {
-                self.inbox.push(item);
-                Ok(Applied {
-                    state: self.state.clone(),
-                    entries: Vec::new(),
-                    intents: Vec::new(),
-                    cancel_effects: false,
-                })
-            }
-            ref state => Err(TransitionError {
-                state: state_name(state),
+            Ok(Applied {
+                state: self.state.clone(),
+                entries: Vec::new(),
+                intents: Vec::new(),
+                cancel_effects: false,
+            })
+        } else {
+            Err(TransitionError {
+                state: state_name(&self.state),
                 transition: "apply_inbox",
-            }),
+            })
         }
     }
 
-    fn start_model_step(&mut self) -> Result<Applied, TransitionError> {
+    fn start_model_step(&mut self, prompt: String) -> Result<Applied, TransitionError> {
         match self.state {
             OperationState::Accepted | OperationState::NeedAssistant => {
-                let prompt = self.projected.clone();
                 self.state = OperationState::AssistantEffectPending;
                 Ok(Applied {
                     state: self.state.clone(),
@@ -332,10 +398,10 @@ impl OperationMachine {
         }
         let mut entries = vec![SessionEntry::AssistantMessage { text }];
         if tool_calls.is_empty() {
-            if self.inbox.is_empty() {
-                self.state = OperationState::Finished(OperationOutcome::Completed);
-            } else {
+            if self.has_queued_inbox() {
                 self.state = OperationState::NeedContinuation;
+            } else {
+                self.state = OperationState::Finished(OperationOutcome::Completed);
             }
         } else {
             for call in &tool_calls {
@@ -487,16 +553,66 @@ impl OperationMachine {
         })
     }
 
-    /// Drain queued inbox items at a continuation boundary. Each applied
-    /// item moves the machine to [`OperationState::NeedAssistant`].
-    pub fn drain_inbox(&mut self) -> Result<Vec<Applied>, TransitionError> {
+    /// Drain queued steers at a reasoning boundary. Each applied item
+    /// moves the machine to [`OperationState::NeedAssistant`].
+    pub fn drain_steers(&mut self) -> Result<Vec<Applied>, TransitionError> {
         let mut applied = Vec::new();
-        while let Some(item) = self.inbox.first().cloned() {
-            self.inbox.remove(0);
+        while let Some(item) = self.steers.first().cloned() {
+            self.steers.remove(0);
             applied.push(self.apply_inbox(item)?);
         }
         Ok(applied)
     }
+
+    /// Drain queued follow-ups at the follow-up boundary
+    /// ([`OperationState::NeedContinuation`]).
+    pub fn drain_followups(&mut self) -> Result<Vec<Applied>, TransitionError> {
+        let mut applied = Vec::new();
+        while let Some(item) = self.followups.first().cloned() {
+            self.followups.remove(0);
+            applied.push(self.apply_inbox(item)?);
+        }
+        Ok(applied)
+    }
+}
+
+/// Derive the model-facing input for one model step from the session
+/// transcript. Deterministic: the same entries always project to the
+/// same prompt (DESIGN.md §31 invariant 15). Placeholder for the
+/// ContextProjector and ContextManifest (§14, §32 Step 4).
+#[must_use]
+pub fn project_transcript(entries: &[SessionEntry]) -> String {
+    let mut out = String::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        match entry {
+            SessionEntry::UserMessage { text } => {
+                out.push_str("user: ");
+                out.push_str(text);
+            }
+            SessionEntry::AssistantMessage { text } => {
+                out.push_str("assistant: ");
+                out.push_str(text);
+            }
+            SessionEntry::ToolCall { call } => {
+                out.push_str("tool_call: ");
+                out.push_str(&call.name);
+                out.push('(');
+                out.push_str(&call.arguments.to_string());
+                out.push(')');
+            }
+            SessionEntry::ToolResult { result } => {
+                out.push_str("tool_result: ");
+                match result {
+                    crate::tool::ToolResult::Ok { output, .. } => out.push_str(output),
+                    crate::tool::ToolResult::Err { error, .. } => out.push_str(error),
+                }
+            }
+        }
+    }
+    out
 }
 
 fn state_name(state: &OperationState) -> &'static str {

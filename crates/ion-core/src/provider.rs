@@ -22,6 +22,9 @@ use crate::tool::{ToolCall, ToolSpec};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRequest {
     pub operation_id: OperationId,
+    /// Monotonic model-step counter within the operation. Providers echo
+    /// it in every signal so the runtime can drop stale generations.
+    pub step: u64,
     pub prompt: String,
     pub tools: Vec<ToolSpec>,
 }
@@ -33,23 +36,28 @@ pub struct ProviderRequest {
 pub enum EngineSignal {
     TextDelta {
         operation_id: OperationId,
+        step: u64,
         text: String,
     },
     /// One complete provider-native tool call. Never executed from
     /// partial streamed JSON (DESIGN.md §15.2).
     ToolCallCompleted {
         operation_id: OperationId,
+        step: u64,
         call: ToolCall,
     },
     Completed {
         operation_id: OperationId,
+        step: u64,
     },
     Failed {
         operation_id: OperationId,
+        step: u64,
         message: String,
     },
     Cancelled {
         operation_id: OperationId,
+        step: u64,
     },
     /// The provider's task finished without a terminal signal for its
     /// model step. `step` tags the spawning step so stale sentinels from
@@ -151,6 +159,7 @@ impl Provider for ScriptedProvider {
         out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send {
         let operation_id = request.operation_id;
+        let step = request.step;
         async move {
             loop {
                 let message = {
@@ -162,11 +171,15 @@ impl Provider for ScriptedProvider {
                     message
                 };
                 let Some(message) = message else {
-                    let _ = out.send(EngineSignal::Completed { operation_id }).await;
+                    let _ = out
+                        .send(EngineSignal::Completed { operation_id, step })
+                        .await;
                     return;
                 };
                 if cancel.is_cancelled() {
-                    let _ = out.send(EngineSignal::Cancelled { operation_id }).await;
+                    let _ = out
+                        .send(EngineSignal::Cancelled { operation_id, step })
+                        .await;
                     return;
                 }
                 match message {
@@ -175,7 +188,7 @@ impl Provider for ScriptedProvider {
                             tokio::select! {
                                 () = cancel.cancelled() => {
                                     let _ = out
-                                        .send(EngineSignal::Cancelled { operation_id })
+                                        .send(EngineSignal::Cancelled { operation_id, step })
                                         .await;
                                     return;
                                 }
@@ -183,11 +196,17 @@ impl Provider for ScriptedProvider {
                             }
                         }
                         if cancel.is_cancelled() {
-                            let _ = out.send(EngineSignal::Cancelled { operation_id }).await;
+                            let _ = out
+                                .send(EngineSignal::Cancelled { operation_id, step })
+                                .await;
                             return;
                         }
                         if out
-                            .send(EngineSignal::TextDelta { operation_id, text })
+                            .send(EngineSignal::TextDelta {
+                                operation_id,
+                                step,
+                                text,
+                            })
                             .await
                             .is_err()
                         {
@@ -199,6 +218,7 @@ impl Provider for ScriptedProvider {
                         if out
                             .send(EngineSignal::ToolCallCompleted {
                                 operation_id,
+                                step,
                                 call: ToolCall {
                                     operation_id,
                                     call_id,
@@ -211,7 +231,9 @@ impl Provider for ScriptedProvider {
                         {
                             return;
                         }
-                        let _ = out.send(EngineSignal::Completed { operation_id }).await;
+                        let _ = out
+                            .send(EngineSignal::Completed { operation_id, step })
+                            .await;
                         return;
                     }
                 }
