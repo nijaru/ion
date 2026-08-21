@@ -85,6 +85,13 @@ pub enum OperationOutcome {
     Failed(String),
     Cancelled,
     Indeterminate,
+    /// Non-interactive policy gate: a concrete action needs an approval
+    /// no one can grant in this mode, so the operation terminates with
+    /// a clear record instead of inviting a model retry loop
+    /// (DESIGN.md §17.4).
+    ApprovalRequired {
+        tool: String,
+    },
 }
 
 /// The durable fact that Ion is allowed to perform one repeat-sensitive
@@ -153,6 +160,12 @@ pub enum Transition {
     /// Recovery: an unresolved NeverReplay effect becomes indeterminate;
     /// the user/agent must inspect and decide (§12.2).
     SettleIndeterminate,
+    /// The policy gate requires an approval that cannot be granted in
+    /// this mode; the operation terminates before any effect intent is
+    /// committed (DESIGN.md §17.4).
+    ApprovalRequired {
+        tool: String,
+    },
     /// Session close while operating (DESIGN.md §9.5).
     Suspend,
 }
@@ -269,6 +282,17 @@ impl OperationMachine {
         &self.prompt
     }
 
+    /// Peek the next planned tool call without admitting it. The
+    /// runtime policy gate inspects the canonical invocation before any
+    /// effect intent is committed (DESIGN.md §17.3).
+    #[must_use]
+    pub fn next_planned_call(&self) -> Option<&ToolCall> {
+        match &self.state {
+            OperationState::ToolsPlanned { pending } => pending.first(),
+            _ => None,
+        }
+    }
+
     /// The capability snapshot frozen for this operation's model steps
     /// (DESIGN.md §18.2).
     #[must_use]
@@ -322,6 +346,7 @@ impl OperationMachine {
             Transition::RecoverModelStep { plan } => self.recover_model_step(plan),
             Transition::RecoverTool { call } => self.recover_tool(call),
             Transition::SettleIndeterminate => self.settle_indeterminate(),
+            Transition::ApprovalRequired { tool } => self.approval_required(tool),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -608,6 +633,22 @@ impl OperationMachine {
             entries: Vec::new(),
             intents: Vec::new(),
             cancel_effects: true,
+        })
+    }
+
+    fn approval_required(&mut self, tool: String) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::ToolsPlanned { .. }) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "approval_required",
+            });
+        }
+        self.state = OperationState::Finished(OperationOutcome::ApprovalRequired { tool });
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: false,
         })
     }
 

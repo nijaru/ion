@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::Parser;
 use futures_util::future::Either;
@@ -32,6 +33,11 @@ struct Cli {
     /// instead of the scripted provider. Requires OPENROUTER_API_KEY.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
+    /// Tools this non-interactive run may execute without approval,
+    /// comma-separated (e.g. --allow bash,write). Everything else
+    /// terminates the operation with ApprovalRequired (DESIGN.md §17).
+    #[arg(long = "allow", value_name = "TOOLS", value_delimiter = ',')]
+    allow: Vec<String>,
 }
 
 #[tokio::main]
@@ -50,7 +56,7 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    match run_print(prompt, cli.model).await {
+    match run_print(prompt, cli.model, cli.allow).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             let _ = writeln!(io::stderr(), "{err}");
@@ -88,7 +94,11 @@ impl ion_core::Provider for CliProvider {
     }
 }
 
-async fn run_print(prompt: String, model: Option<String>) -> Result<(), RuntimeError> {
+async fn run_print(
+    prompt: String,
+    model: Option<String>,
+    allow: Vec<String>,
+) -> Result<(), RuntimeError> {
     let provider = match model {
         Some(model) => {
             let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
@@ -103,12 +113,14 @@ async fn run_print(prompt: String, model: Option<String>) -> Result<(), RuntimeE
         ))])),
     };
     let tools = ToolRegistry::default();
-    let runtime = Runtime::start_with_store(
-        provider,
-        tools,
-        SessionStore::open(default_db_path())
-            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?,
-    );
+    let store = SessionStore::open(default_db_path())
+        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    let policy: Arc<dyn ion_core::PolicyEngine> = if allow.is_empty() {
+        Arc::new(ion_core::DefaultPolicy)
+    } else {
+        Arc::new(ion_core::AllowlistPolicy::new(allow))
+    };
+    let runtime = Runtime::start_with_policy(provider, tools, store, policy);
     let session = runtime.session();
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;

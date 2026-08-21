@@ -30,6 +30,11 @@ pub enum RuntimeError {
     OperationFailed(String),
     #[error("operation cancelled")]
     OperationCancelled,
+    #[error(
+        "approval required: `{tool}` is not allowed in non-interactive mode; \
+         grant it explicitly (e.g. --allow {tool})"
+    )]
+    ApprovalRequired { tool: String },
     #[error("event subscription lagged")]
     SubscriptionLagged,
     #[error("event subscription closed")]

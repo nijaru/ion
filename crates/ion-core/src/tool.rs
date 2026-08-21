@@ -142,6 +142,35 @@ pub enum RecoveryClass {
     NeverReplay,
 }
 
+/// The effective target of one tool invocation, canonicalized before
+/// the policy sees it (DESIGN.md §17.3): the policy approves exactly
+/// what the executor will use, never a raw model string.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CanonicalTarget {
+    /// Absolute, lexically normalized path (cwd-relative arguments are
+    /// resolved against the tool registry's working directory).
+    Path { path: std::path::PathBuf },
+    /// The exact shell command the executor will run.
+    Command { command: String },
+}
+
+/// Lexically normalize a path without touching the filesystem:
+/// collapse `.` and resolve `..` against the path itself.
+#[must_use]
+pub fn normalize(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
 /// can clone the working directory cheaply before invoking a tool.
 #[derive(Clone)]
@@ -202,6 +231,50 @@ impl ToolRegistry {
 
     /// Validate `arguments` against a tool's schema: the value must be an
     /// object containing every name in the schema's `"required"` array.
+    /// Canonicalize one invocation's effective target (§17.3). Pure:
+    /// no filesystem access, so the decision input cannot change
+    /// between policy and executor.
+    pub fn canonicalize(&self, name: &str, arguments: &Value) -> Result<CanonicalTarget, String> {
+        let resolve = |key: &str| -> Result<std::path::PathBuf, String> {
+            let raw = arguments
+                .get(key)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("missing string argument: {key}"))?;
+            let joined = if std::path::Path::new(raw).is_absolute() {
+                std::path::PathBuf::from(raw)
+            } else {
+                self.cwd.join(raw)
+            };
+            Ok(normalize(&joined))
+        };
+        match name {
+            "read" | "write" | "edit" => Ok(CanonicalTarget::Path {
+                path: resolve("path")?,
+            }),
+            "search" | "find" => {
+                if arguments.get("path").is_some() {
+                    Ok(CanonicalTarget::Path {
+                        path: resolve("path")?,
+                    })
+                } else {
+                    Ok(CanonicalTarget::Path {
+                        path: normalize(&self.cwd),
+                    })
+                }
+            }
+            "bash" => {
+                let command = arguments
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "missing string argument: command".to_owned())?;
+                Ok(CanonicalTarget::Command {
+                    command: command.to_owned(),
+                })
+            }
+            other => Err(format!("unknown tool: {other}")),
+        }
+    }
+
     pub fn validate(&self, name: &str, arguments: &Value) -> Result<(), String> {
         let entry = self
             .entries

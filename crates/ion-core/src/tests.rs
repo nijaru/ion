@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::{ContextMessage, ContextPlan};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::OperationId;
+use crate::policy::{AllowlistPolicy, PolicyEngine};
 use crate::provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
 use crate::runtime::{OperationStatus, Runtime, RuntimeEvent, SaturatedHandle, SessionHandle};
 use crate::session::{
@@ -34,6 +35,7 @@ async fn collect_until_terminal(
             RuntimeEvent::OperationFinished { .. }
                 | RuntimeEvent::OperationCancelled { .. }
                 | RuntimeEvent::OperationFailed { .. }
+                | RuntimeEvent::OperationApprovalRequired { .. }
                 | RuntimeEvent::SessionClosed { .. }
         );
         out.push(event);
@@ -53,6 +55,7 @@ fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
             RuntimeEvent::OperationFailed { .. } => "operation_failed",
             RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
+            RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
             RuntimeEvent::SessionClosed { .. } => "session_closed",
         })
         .collect()
@@ -68,11 +71,27 @@ fn texts(events: &[RuntimeEvent]) -> Vec<String> {
         .collect()
 }
 
+/// Tests that exercise mechanics rather than policy run with every
+/// core tool granted; the policy-gate tests construct their own.
+fn permissive_policy() -> Arc<dyn PolicyEngine> {
+    Arc::new(AllowlistPolicy::new([
+        "read", "write", "edit", "bash", "search", "find",
+    ]))
+}
+
 /// Runtime over an in-memory store; file-backed stores are exercised by
 /// the dedicated store tests below.
 fn start_runtime(provider: impl crate::Provider, tools: ToolRegistry) -> Runtime {
     let store = SessionStore::open_in_memory().expect("in-memory store");
-    Runtime::start_with_store(provider, tools, store)
+    start_runtime_with_store(provider, tools, store)
+}
+
+fn start_runtime_with_store(
+    provider: impl crate::Provider,
+    tools: ToolRegistry,
+    store: SessionStore,
+) -> Runtime {
+    Runtime::start_with_policy(provider, tools, store, permissive_policy())
 }
 
 fn tool_runtime() -> Runtime {
@@ -1434,7 +1453,7 @@ async fn restart_reproduces_the_logical_transcript() {
         ScriptedMessage::tool("bash", json!({"command":"echo persisted"})),
         ScriptedMessage::text("final\n"),
     ]);
-    let runtime = Runtime::start_with_store(provider, ToolRegistry::default(), store);
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
@@ -1475,7 +1494,7 @@ async fn restart_reproduces_the_logical_transcript() {
 #[tokio::test]
 async fn durable_admission_failure_is_visible_and_non_corrupting() {
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::echo(),
         ToolRegistry::default(),
         store.clone(),
@@ -1509,7 +1528,7 @@ async fn mid_operation_persistence_failure_fails_the_operation_visibly() {
         "bash",
         json!({"command":"sleep 1 && echo slow"}),
     )]);
-    let runtime = Runtime::start_with_store(provider, ToolRegistry::default(), store.clone());
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store.clone());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("go").await.expect("submit");
@@ -1546,7 +1565,7 @@ async fn mid_operation_persistence_failure_fails_the_operation_visibly() {
 async fn cancel_request_is_durable() {
     let db = temp_db("cancel");
     let store = SessionStore::open(&db).expect("open store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![
             ScriptedMessage::text("start"),
             ScriptedMessage::delayed(Duration::from_secs(30), "late"),
@@ -1587,7 +1606,7 @@ async fn cancel_request_is_durable() {
 async fn steer_is_durable_as_pending_inbox() {
     let db = temp_db("steer");
     let store = SessionStore::open(&db).expect("open store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![
             ScriptedMessage::text("start"),
             ScriptedMessage::delayed(Duration::from_secs(30), "late"),
@@ -1696,7 +1715,7 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
 async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
     let db = temp_db("reopen");
     let store = SessionStore::open(&db).expect("open store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![
             ScriptedMessage::text("start"),
             ScriptedMessage::delayed(Duration::from_secs(30), "late"),
@@ -1805,7 +1824,7 @@ fn store_refuses_a_database_from_a_newer_schema() {
 #[tokio::test]
 async fn settlement_must_match_a_pending_effect_of_the_operation() {
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::echo(),
         ToolRegistry::default(),
         store.clone(),
@@ -1872,7 +1891,7 @@ async fn wait_for_state(session: &SessionHandle, predicate: impl Fn(&OperationSt
 #[tokio::test]
 async fn crash_during_model_step_recovers_by_replay() {
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![ScriptedMessage::delayed(
             Duration::from_secs(30),
             "never arrives",
@@ -1935,7 +1954,7 @@ async fn crash_during_replayable_tool_recovers_by_reexecution() {
 
     let store = SessionStore::open_in_memory().expect("store");
     let registry = ToolRegistry::with_cwd(&dir);
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![ScriptedMessage::tool(
             "read",
             json!({"path":"note.txt"}),
@@ -2000,7 +2019,7 @@ async fn crash_during_replayable_tool_recovers_by_reexecution() {
 #[tokio::test]
 async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![ScriptedMessage::tool(
             "bash",
             json!({"command":"sleep 30"}),
@@ -2113,7 +2132,7 @@ fn projector_is_deterministic_and_pairs_tool_calls() {
 #[tokio::test]
 async fn usage_persists_with_the_settlement() {
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![
             ScriptedMessage::Usage(crate::provider::TokenUsage {
                 input: 100,
@@ -2148,7 +2167,7 @@ async fn usage_survives_a_failed_operation() {
     // §27.2: usage is independent of operation success — a failed
     // step's tokens still land in the ledger via the settlement commit.
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(
+    let runtime = start_runtime_with_store(
         ScriptedProvider::new(vec![
             ScriptedMessage::Usage(crate::provider::TokenUsage {
                 input: 5,
@@ -2172,4 +2191,196 @@ async fn usage_survives_a_failed_operation() {
     let rows = store.usage(session_id).await.expect("usage rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].input_tokens, 5);
+}
+
+// ---- Policy, trust, and approvals (DESIGN.md §17, §32 Step 4 slice 2) ----
+
+#[test]
+fn canonicalization_resolves_and_normalizes_paths() {
+    let registry = ToolRegistry::with_cwd("/tmp/project");
+    let target = registry
+        .canonicalize("read", &json!({ "path": "src/../src/main.rs" }))
+        .expect("canonicalize");
+    assert_eq!(
+        target,
+        crate::tool::CanonicalTarget::Path {
+            path: "/tmp/project/src/main.rs".into()
+        }
+    );
+    let target = registry
+        .canonicalize("read", &json!({ "path": "/etc/hosts" }))
+        .expect("canonicalize");
+    assert_eq!(
+        target,
+        crate::tool::CanonicalTarget::Path {
+            path: "/etc/hosts".into()
+        }
+    );
+    let target = registry
+        .canonicalize("bash", &json!({ "command": "echo hi" }))
+        .expect("canonicalize");
+    assert_eq!(
+        target,
+        crate::tool::CanonicalTarget::Command {
+            command: "echo hi".into()
+        }
+    );
+    assert!(registry.canonicalize("read", &json!({})).is_err());
+}
+
+#[test]
+fn approval_required_terminates_from_tools_planned_only() {
+    let (mut machine, _) = OperationMachine::accept(OperationId::generate(), "goal", Vec::new());
+    machine
+        .apply(Transition::StartModelStep {
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
+        })
+        .expect("start model step");
+    let applied = machine
+        .apply(Transition::ProviderCompleted {
+            text: String::new(),
+            tool_calls: vec![ToolCall {
+                operation_id: machine.operation_id(),
+                call_id: 1,
+                name: "bash".to_owned(),
+                arguments: json!({ "command": "echo hi" }),
+            }],
+        })
+        .expect("plan tools");
+    assert!(matches!(applied.state, OperationState::ToolsPlanned { .. }));
+
+    let applied = machine
+        .apply(Transition::ApprovalRequired {
+            tool: "bash".to_owned(),
+        })
+        .expect("approval-required from ToolsPlanned");
+    assert_eq!(
+        applied.state,
+        OperationState::Finished(OperationOutcome::ApprovalRequired {
+            tool: "bash".to_owned()
+        })
+    );
+    assert!(applied.intents.is_empty(), "no effect intent may exist");
+    assert!(applied.entries.is_empty());
+
+    // Terminal: the transition is invalid everywhere else.
+    assert!(
+        machine
+            .apply(Transition::ApprovalRequired {
+                tool: "bash".to_owned(),
+            })
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn default_policy_terminates_bash_as_approval_required() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "bash",
+            json!({ "command": "echo hi" }),
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded.iter().any(
+            |e| matches!(e, RuntimeEvent::OperationApprovalRequired { tool, .. } if tool == "bash")
+        ),
+        "default policy must gate bash: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // Durable: the outcome and the planned call survive reopen, and no
+    // tool result ever exists because nothing executed.
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(matches!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Finished(OperationOutcome::ApprovalRequired { ref tool }) if tool == "bash"
+    ));
+    let has_call = loaded
+        .entries
+        .iter()
+        .any(|(_, entry)| matches!(entry, SessionEntry::ToolCall { call } if call.name == "bash"));
+    let has_result = loaded
+        .entries
+        .iter()
+        .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }));
+    assert!(has_call, "the planned call stays visible");
+    assert!(!has_result, "nothing executed");
+}
+
+#[tokio::test]
+async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
+    // Granted: the documented mechanism admits bash end to end.
+    let store = SessionStore::open_in_memory().expect("store");
+    let policy: Arc<dyn PolicyEngine> = Arc::new(AllowlistPolicy::new(["bash"]));
+    let runtime = Runtime::start_with_policy(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::tool("bash", json!({ "command": "echo granted" })),
+            ScriptedMessage::text("done"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+        policy,
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    // Denied: the policy rejection settles as a model-visible tool
+    // error so the model can choose another path (§17.4).
+    struct DenyAll;
+    impl PolicyEngine for DenyAll {
+        fn decide(
+            &self,
+            _tool: &str,
+            _target: &crate::tool::CanonicalTarget,
+        ) -> crate::policy::PolicyDecision {
+            crate::policy::PolicyDecision::Deny("denied by test policy".to_owned())
+        }
+    }
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::tool("read", json!({ "path": "x" })),
+            ScriptedMessage::text("after denial"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+        Arc::new(DenyAll),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let loaded = store.load(session_id).await.expect("load");
+    let denied = loaded.entries.iter().any(|(_, entry)| {
+        matches!(entry, SessionEntry::ToolResult {
+            result: ToolResult::Err { error, .. },
+        } if error.contains("denied by test policy"))
+    });
+    assert!(denied, "policy denial must be model-visible: {loaded:?}");
 }

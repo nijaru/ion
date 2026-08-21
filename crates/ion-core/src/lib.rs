@@ -11,6 +11,7 @@
 mod context;
 mod error;
 mod ids;
+mod policy;
 mod provider;
 mod runtime;
 mod session;
@@ -20,6 +21,7 @@ mod tool;
 pub use context::{ContextMessage, ContextPlan, SYSTEM_SECTION, project};
 pub use error::{CommandError, RuntimeError};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
+pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use provider::{
     EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider, TokenUsage,
 };
@@ -37,8 +39,8 @@ pub use store::{
     default_db_path,
 };
 pub use tool::{
-    BashTool, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool, ToolCall, ToolCallId,
-    ToolOutcome, ToolRegistry, ToolResult, ToolSpec, WriteTool,
+    BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
+    ToolCall, ToolCallId, ToolOutcome, ToolRegistry, ToolResult, ToolSpec, WriteTool,
 };
 
 #[cfg(test)]

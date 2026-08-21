@@ -22,6 +22,7 @@ use tracing::{debug, error, info, warn};
 use crate::context::{ContextPlan, project};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
+use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
 use crate::provider::{EngineSignal, Provider, ProviderRequest, TokenUsage};
 use crate::session::{
     EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
@@ -75,6 +76,14 @@ pub enum RuntimeEvent {
         cursor: RuntimeCursor,
         operation_id: OperationId,
     },
+    /// Non-interactive policy gate (DESIGN.md §17.4): a concrete action
+    /// needed an approval no caller could grant; the operation
+    /// terminated durably with `ApprovalRequired`.
+    OperationApprovalRequired {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        tool: String,
+    },
     SessionClosed {
         cursor: RuntimeCursor,
     },
@@ -90,6 +99,7 @@ impl RuntimeEvent {
             | Self::OperationFinished { cursor, .. }
             | Self::OperationFailed { cursor, .. }
             | Self::OperationCancelled { cursor, .. }
+            | Self::OperationApprovalRequired { cursor, .. }
             | Self::SessionClosed { cursor } => *cursor,
         }
     }
@@ -324,6 +334,19 @@ impl Runtime {
         Self::spawn_session(provider, tools, store, SessionId::generate(), None)
     }
 
+    /// Compose the runtime with an explicit approval policy (DESIGN.md
+    /// §17): the documented mechanism for callers that can grant
+    /// actions non-interactively.
+    #[must_use]
+    pub fn start_with_policy(
+        provider: impl Provider,
+        tools: ToolRegistry,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+    ) -> Self {
+        Self::spawn_session_with_policy(provider, tools, store, SessionId::generate(), None, policy)
+    }
+
     /// Reopen a previously persisted session: the transcript and any
     /// open operation are rebuilt from the store (DESIGN.md §32 Step 2,
     /// §9.5). Recovery decisions for a non-terminal operation are Step 3
@@ -356,6 +379,24 @@ impl Runtime {
         session_id: SessionId,
         loaded: Option<LoadedSession>,
     ) -> Self {
+        Self::spawn_session_with_policy(
+            provider,
+            tools,
+            store,
+            session_id,
+            loaded,
+            Arc::new(DefaultPolicy),
+        )
+    }
+
+    fn spawn_session_with_policy(
+        provider: impl Provider,
+        tools: ToolRegistry,
+        store: SessionStore,
+        session_id: SessionId,
+        loaded: Option<LoadedSession>,
+        policy: Arc<dyn PolicyEngine>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
@@ -365,9 +406,20 @@ impl Runtime {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
         let join = tokio::spawn(async move {
-            SessionRuntime::new(session_id, cwd, provider, tools, store, rx, loaded)
-                .run()
-                .await;
+            SessionRuntime::new(
+                session_id,
+                cwd,
+                SessionDeps {
+                    provider,
+                    tools,
+                    store,
+                    policy,
+                },
+                rx,
+                loaded,
+            )
+            .run()
+            .await;
         });
         Self {
             handle,
@@ -429,12 +481,23 @@ struct ActiveOperation {
 
 /// The single-writer owner of one loaded session's mutable live state
 /// (DESIGN.md §4.3).
+/// The composed collaborators one session runtime runs with (DESIGN.md
+/// §4.1): one provider port, one capability snapshot, one store, one
+/// approval policy.
+struct SessionDeps<P> {
+    provider: Arc<P>,
+    tools: Arc<ToolRegistry>,
+    store: SessionStore,
+    policy: Arc<dyn PolicyEngine>,
+}
+
 struct SessionRuntime<P> {
     session_id: SessionId,
     cwd: String,
     provider: Arc<P>,
     tools: Arc<ToolRegistry>,
     store: SessionStore,
+    policy: Arc<dyn PolicyEngine>,
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -468,12 +531,16 @@ impl<P: Provider> SessionRuntime<P> {
     fn new(
         session_id: SessionId,
         cwd: String,
-        provider: Arc<P>,
-        tools: Arc<ToolRegistry>,
-        store: SessionStore,
+        deps: SessionDeps<P>,
         commands: mpsc::Receiver<SessionCommand>,
         loaded: Option<LoadedSession>,
     ) -> Self {
+        let SessionDeps {
+            provider,
+            tools,
+            store,
+            policy,
+        } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
         let mut runtime = Self {
@@ -482,6 +549,7 @@ impl<P: Provider> SessionRuntime<P> {
             provider,
             tools,
             store,
+            policy,
             commands,
             engine_tx,
             engine_rx,
@@ -1190,6 +1258,69 @@ impl<P: Provider> SessionRuntime<P> {
     /// settle a validation denial through the normal path). Returns
     /// false when persistence failed.
     async fn admit_next_tool(&mut self) -> bool {
+        // The policy gate runs before any effect intent is committed
+        // (§17.3): peek the next call, canonicalize it, and decide.
+        let Some(call) = self
+            .operation
+            .as_ref()
+            .and_then(|active| active.machine.next_planned_call().cloned())
+        else {
+            error!(session = %self.session_id, "admit with no planned call; fencing");
+            self.closed = true;
+            return false;
+        };
+        let canonical = self.tools.canonicalize(&call.name, &call.arguments);
+        let decision = match &canonical {
+            Ok(target) => self.policy.decide(&call.name, target),
+            // Canonicalization failure is a model-visible denial, not a
+            // harness failure: the model produced an unusable input.
+            Err(message) => PolicyDecision::Deny(message.clone()),
+        };
+        if decision == PolicyDecision::ApprovalRequired {
+            // §17.4: nothing may execute, so nothing is committed as an
+            // effect intent; the operation terminates with the durable
+            // ApprovalRequired outcome.
+            let mut staged = self.operation.clone().expect("admit needs an operation");
+            let applied = staged
+                .machine
+                .apply(Transition::ApprovalRequired {
+                    tool: call.name.clone(),
+                })
+                .expect("approval-required from ToolsPlanned");
+            let (request, new_entry_seq) = build_commit_request(
+                self.session_id,
+                &staged,
+                staged.state_seq + 1,
+                self.next_entry_seq,
+                applied.entries.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            if let Err(err) = self.store.commit(request).await {
+                self.fail_operation_on_persistence(err).await;
+                return false;
+            }
+            self.next_entry_seq = new_entry_seq;
+            staged.state_seq += 1;
+            self.operation = Some(staged);
+            warn!(tool = %call.name, "approval required; terminating the operation");
+            self.emit_terminal_state(&applied.state);
+            // Terminal: idle the operation here (the caller's arm
+            // returns without re-reading state), synchronously so no
+            // command can observe a Finished-but-open operation.
+            self.operation.take();
+            return true;
+        }
+
+        let denial: Option<String> = match decision {
+            PolicyDecision::Deny(message) => Some(message),
+            PolicyDecision::Allow => self.tools.validate(&call.name, &call.arguments).err(),
+            PolicyDecision::ApprovalRequired => unreachable!("handled above"),
+        };
         let mut staged = self.operation.clone().expect("admit needs an operation");
         let applied = staged
             .machine
@@ -1198,8 +1329,9 @@ impl<P: Provider> SessionRuntime<P> {
         let EffectIntent::Tool { call } = applied.intents[0].clone() else {
             panic!("AdmitNextTool must yield a tool intent");
         };
-        // Validation happens before the effect intent is durable; a
-        // denial settles as a model-visible result (§17.3, §16.5).
+        // The exact invocation the executor will use is part of the
+        // durable intent (§17.3: never approve one string and execute
+        // a materially different one).
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: format!("tool:{}", call.name),
@@ -1208,6 +1340,7 @@ impl<P: Provider> SessionRuntime<P> {
                 "tool": call.name,
                 "arguments": call.arguments,
                 "call_id": call.call_id,
+                "canonical": canonical.ok(),
             }),
             attempt: 1,
         };
@@ -1235,7 +1368,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
-        if let Err(message) = self.tools.validate(&call.name, &call.arguments) {
+        if let Some(message) = denial {
             // The denial settles through the normal tool-result path; the
             // tool never started, so no ToolStarted event is emitted.
             let _ = self.tool_tx.try_send((
@@ -1608,6 +1741,13 @@ impl<P: Provider> SessionRuntime<P> {
                         message: message.clone(),
                     });
                 }
+                OperationOutcome::ApprovalRequired { tool } => {
+                    self.emit(RuntimeEvent::OperationApprovalRequired {
+                        cursor: RuntimeCursor::default(),
+                        operation_id,
+                        tool: tool.clone(),
+                    });
+                }
                 OperationOutcome::Cancelled => {
                     self.emit(RuntimeEvent::OperationCancelled {
                         cursor: RuntimeCursor::default(),
@@ -1871,6 +2011,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
         | RuntimeEvent::OperationFailed { cursor: slot, .. }
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
+        | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
     }
 }
@@ -1883,6 +2024,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
+        RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
     }
 }

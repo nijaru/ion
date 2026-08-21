@@ -35,6 +35,9 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::OperationCancelled { .. } => {
                     return Err(RuntimeError::OperationCancelled);
                 }
+                RuntimeEvent::OperationApprovalRequired { tool, .. } => {
+                    return Err(RuntimeError::ApprovalRequired { tool });
+                }
                 RuntimeEvent::OperationFailed { message, .. } => {
                     return Err(RuntimeError::OperationFailed(message));
                 }
