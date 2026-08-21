@@ -153,6 +153,9 @@ pub enum CanonicalTarget {
     Path { path: std::path::PathBuf },
     /// The exact shell command the executor will run.
     Command { command: String },
+    /// A registered non-native tool (MCP/extension): the invocation
+    /// goes through its owning transport, not local I/O (§19.2).
+    Remote { tool: String },
 }
 
 /// Lexically normalize a path without touching the filesystem:
@@ -383,7 +386,18 @@ impl ToolRegistry {
                     command: command.to_owned(),
                 })
             }
-            other => Err(format!("unknown tool: {other}")),
+            other => {
+                // Registered non-native tools (MCP/extension scopes)
+                // canonicalize to a remote target; truly unknown names
+                // still deny model-visibly.
+                if self.entries.contains_key(other) {
+                    Ok(CanonicalTarget::Remote {
+                        tool: other.to_owned(),
+                    })
+                } else {
+                    Err(format!("unknown tool: {other}"))
+                }
+            }
         }
     }
 

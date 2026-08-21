@@ -57,6 +57,7 @@ fn target_summary(
             |n| n.to_string_lossy().into_owned(),
         )),
         Ok(crate::tool::CanonicalTarget::Command { command }) => Some(command),
+        Ok(crate::tool::CanonicalTarget::Remote { tool }) => Some(tool),
         Err(_) => None,
     }
 }

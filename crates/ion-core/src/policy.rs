@@ -36,11 +36,14 @@ pub trait PolicyEngine: Send + Sync + 'static {
 pub struct DefaultPolicy;
 
 impl PolicyEngine for DefaultPolicy {
-    fn decide(&self, tool: &str, _target: &CanonicalTarget) -> PolicyDecision {
-        match tool {
-            "bash" => PolicyDecision::ApprovalRequired,
-            "read" | "write" | "edit" | "search" | "find" => PolicyDecision::Allow,
-            other => PolicyDecision::Deny(format!("unknown tool: {other}")),
+    fn decide(&self, _tool: &str, target: &CanonicalTarget) -> PolicyDecision {
+        match target {
+            CanonicalTarget::Path { .. } => PolicyDecision::Allow,
+            // Unbounded side effects: local shell and remote MCP/extension
+            // effects both require an explicit grant (§12.4, §19.2).
+            CanonicalTarget::Command { .. } | CanonicalTarget::Remote { .. } => {
+                PolicyDecision::ApprovalRequired
+            }
         }
     }
 }

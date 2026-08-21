@@ -3534,3 +3534,81 @@ async fn broken_mcp_server_never_blocks_startup() {
         "the healthy server still publishes"
     );
 }
+
+#[tokio::test]
+async fn mcp_tool_flows_through_the_normal_operation_path() {
+    // Catalog with the fake server's tool published.
+    let catalog = crate::ToolCatalog::default();
+    crate::McpService::new()
+        .start_into(&[fake_mcp_server()], &catalog)
+        .await;
+
+    // Scripted model: call the MCP tool, then summarize the result.
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::ToolCall {
+            name: "fake__echo".to_owned(),
+            arguments: json!({ "message": "through the runtime" }),
+        },
+        ScriptedMessage::text("done"),
+    ]);
+    let store = SessionStore::open_in_memory().expect("store");
+    // AllowlistPolicy is the documented grant mechanism (§17.2).
+    let policy = Arc::new(AllowlistPolicy::new(["fake__echo"]));
+    let runtime = Runtime::start_with_policy(provider, catalog, store.clone(), policy);
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "{recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // The remote effect ran through admission/policy/recovery like any
+    // native tool and its output reached the next model step.
+    let loaded = store.load(session_id).await.expect("load");
+    // user -> assistant -> tool call -> tool result -> assistant(done)
+    assert_eq!(loaded.entries.len(), 5);
+    let last = &loaded.entries.last().expect("entries").1;
+    assert!(
+        serde_json::to_string(last)
+            .map(|text| text.contains("done"))
+            .unwrap_or(false),
+        "the continuation step must see the tool output: {last:?}"
+    );
+}
+
+#[tokio::test]
+async fn default_policy_requires_approval_for_mcp_tools() {
+    let catalog = crate::ToolCatalog::default();
+    crate::McpService::new()
+        .start_into(&[fake_mcp_server()], &catalog)
+        .await;
+
+    let provider = ScriptedProvider::new(vec![ScriptedMessage::ToolCall {
+        name: "fake__echo".to_owned(),
+        arguments: json!({ "message": "hi" }),
+    }]);
+    let store = SessionStore::open_in_memory().expect("store");
+    // DefaultPolicy is the runtime default: unbounded remote effects
+    // need an explicit grant.
+    let runtime = Runtime::start_with_store(provider, catalog, store);
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded.iter().any(
+            |e| matches!(e, RuntimeEvent::OperationApprovalRequired { tool, .. }
+                if tool == "fake__echo")
+        ),
+        "unapproved MCP tools terminate with ApprovalRequired semantics: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
