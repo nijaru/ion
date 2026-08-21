@@ -810,6 +810,11 @@ pub async fn run(
     let mut guard = TerminalGuard::enter()
         .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
     install_panic_hook();
+    // Test-only hook: the PTY restoration test drives a real panic
+    // through the guard's restore path.
+    if std::env::var_os("ION_TEST_PANIC").is_some() {
+        panic!("ION_TEST_PANIC");
+    }
 
     // The inline viewport anchors at the cursor; push it to the
     // bottom of the screen first (ratatui inline-example pattern) so

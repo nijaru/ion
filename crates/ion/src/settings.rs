@@ -61,6 +61,10 @@ impl Settings {
         }
     }
     pub fn path() -> Option<PathBuf> {
+        // Test/isolation override.
+        if let Some(path) = std::env::var_os("ION_SETTINGS") {
+            return Some(PathBuf::from(path));
+        }
         let base = etcetera::base_strategy::choose_base_strategy().ok()?;
         use etcetera::base_strategy::BaseStrategy;
         Some(base.config_dir().join("ion").join("settings.toml"))

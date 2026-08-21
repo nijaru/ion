@@ -184,15 +184,21 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match tui::run(
-        runtime.session(),
+    let session = runtime.session();
+    let result = tui::run(
+        session.clone(),
         store,
         resume_session,
         settings.theme(),
         keymap,
     )
-    .await
-    {
+    .await;
+    if result.is_err() {
+        // The TUI died before its own close path; shut the actor down
+        // or join would await a task waiting on this very handle.
+        let _ = session.close().await;
+    }
+    match result {
         Ok(()) => {
             let _ = runtime.join().await;
             ExitCode::SUCCESS
