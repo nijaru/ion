@@ -776,6 +776,7 @@ fn state_kind(state: &OperationState) -> &'static str {
         OperationState::ToolsPlanned { .. } => "tools_planned",
         OperationState::ToolEffectPending { .. } => "tool_effect_pending",
         OperationState::NeedContinuation => "need_continuation",
+        OperationState::CompactionPending => "compaction_pending",
         OperationState::Suspended => "suspended",
         OperationState::Finished(_) => "finished",
     }
@@ -787,6 +788,7 @@ fn entry_kind(entry: &SessionEntry) -> &'static str {
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",
+        SessionEntry::Compaction { .. } => "compaction",
     }
 }
 

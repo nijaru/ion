@@ -33,6 +33,12 @@ pub enum ContextMessage {
     },
 }
 
+/// The instruction sent with a compaction step (DESIGN.md §14.7).
+/// Part of the deterministic plan, so recovery replays identically.
+pub const SUMMARIZE_INSTRUCTION: &str = "Summarize the conversation above into a compact \
+handoff for a future assistant instance. Preserve: the user's goal, \
+decisions made, files touched, and the exact next step. Omit pleasantries.";
+
 /// The exact semantic projection for one model step (DESIGN.md §6).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContextPlan {
@@ -40,13 +46,39 @@ pub struct ContextPlan {
     pub messages: Vec<ContextMessage>,
 }
 
+impl ContextMessage {
+    /// The readable text content of this message, whatever its role.
+    #[must_use]
+    pub fn prompt_text(&self) -> &str {
+        match self {
+            Self::User { content } | Self::Tool { content, .. } => content,
+            Self::Assistant { content, .. } => content,
+        }
+    }
+}
+
 /// Project session entries into a model-neutral plan. Pure and
-/// deterministic.
+/// deterministic. `first_seq` is the durable seq of `entries[0]`, so a
+/// compaction baseline can name what it covers (§14.7).
 #[must_use]
-pub fn project(entries: &[SessionEntry]) -> ContextPlan {
+pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
     let mut messages: Vec<ContextMessage> = Vec::new();
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         match entry {
+            SessionEntry::Compaction {
+                covers_through_seq,
+                summary,
+            } => {
+                // Lossy projection maintenance (§14.7): the summary
+                // replaces everything through its coverage boundary;
+                // canonical entries stay durable.
+                if (*covers_through_seq + 1) >= first_seq + index as u64 {
+                    messages.clear();
+                }
+                messages.push(ContextMessage::User {
+                    content: format!("[Context summary of the earlier conversation]\n{summary}"),
+                });
+            }
             SessionEntry::UserMessage { text } => {
                 messages.push(ContextMessage::User {
                     content: text.clone(),

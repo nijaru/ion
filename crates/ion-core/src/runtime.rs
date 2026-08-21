@@ -517,6 +517,12 @@ struct SessionRuntime<P> {
     /// Token usage buffered from the live model step; persisted at the
     /// settlement boundary (DESIGN.md §27.2).
     draft_usage: Option<TokenUsage>,
+    /// Input tokens of the most recent settled model step; drives the
+    /// automatic compaction threshold (§14.7).
+    last_input_tokens: u64,
+    /// The previous step was compaction itself; prevents the
+    /// compaction step's own usage from re-triggering compaction.
+    last_step_was_compaction: bool,
     /// Monotonic model-step counter for the active operation; provider
     /// signals carry the step that produced them, and stale generations
     /// are dropped.
@@ -564,6 +570,8 @@ impl<P: Provider> SessionRuntime<P> {
             draft_text: String::new(),
             draft_calls: Vec::new(),
             draft_usage: None,
+            last_input_tokens: 0,
+            last_step_was_compaction: false,
             model_step: 0,
             subscribers: Vec::new(),
             closed: false,
@@ -796,6 +804,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_text.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
+        self.last_input_tokens = 0;
+        self.last_step_was_compaction = false;
         self.advance().await;
         Ok(operation_id)
     }
@@ -932,7 +942,7 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let plan = project(&self.entries);
+                let plan = project(&self.entries, self.first_entry_seq());
                 let mut staged = self.operation.clone().expect("operation present");
                 let applied = staged
                     .machine
@@ -976,6 +986,54 @@ impl<P: Provider> SessionRuntime<P> {
                 self.operation = Some(staged);
                 warn!(%operation_id, "recovered a pending model step by replay");
                 self.spawn_model_step(operation_id, plan, tools);
+            }
+            OperationState::CompactionPending => {
+                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                    error!(session = %self.session_id, "pending compaction without an effect intent; fencing");
+                    self.closed = true;
+                    return;
+                };
+                let plan = project(&self.entries, self.first_entry_seq());
+                let mut staged = self.operation.clone().expect("operation present");
+                staged
+                    .machine
+                    .apply(Transition::RecoverCompaction { plan: plan.clone() })
+                    .expect("recover a pending compaction step");
+                let settled = vec![SettledEffect {
+                    id: open.id,
+                    settlement: serde_json::json!({ "recovered": "process_loss" }),
+                }];
+                let effect = EffectRecord {
+                    id: EffectId::generate(),
+                    kind: open.kind.clone(),
+                    recovery_class: open.recovery_class,
+                    effective_input: serde_json::json!({ "plan": plan }),
+                    attempt: open.attempt + 1,
+                };
+                let (request, new_entry_seq) = build_commit_request(
+                    self.session_id,
+                    &staged,
+                    staged.state_seq + 1,
+                    self.next_entry_seq,
+                    Vec::new(),
+                    vec![effect.clone()],
+                    settled,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                if let Err(err) = self.store.commit(request).await {
+                    self.fail_operation_on_persistence(err).await;
+                    return;
+                }
+                let operation_id = staged.machine.operation_id();
+                self.next_entry_seq = new_entry_seq;
+                staged.state_seq += 1;
+                staged.open_effect = Some(effect);
+                self.operation = Some(staged);
+                warn!(%operation_id, "recovered a pending compaction step by replay");
+                self.spawn_model_step(operation_id, plan, Vec::new());
             }
             OperationState::ToolEffectPending { .. } => {
                 let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
@@ -1269,6 +1327,11 @@ impl<P: Provider> SessionRuntime<P> {
     /// inbox items at their boundaries, then start the next model step
     /// or admit the next planned tool. Each move commits durably before
     /// its effect starts (§12.1).
+    /// The durable seq of the first in-memory transcript entry.
+    fn first_entry_seq(&self) -> u64 {
+        self.next_entry_seq - self.entries.len() as u64
+    }
+
     async fn advance(&mut self) {
         loop {
             let Some(state) = self
@@ -1293,6 +1356,14 @@ impl<P: Provider> SessionRuntime<P> {
                             return;
                         }
                         continue;
+                    }
+                    if self.compaction_due() {
+                        // §14.7: compact at the continuation boundary
+                        // when the context is large and work remains.
+                        if !self.start_compaction().await {
+                            return;
+                        }
+                        return;
                     }
                     if !self.start_model_step().await {
                         return;
@@ -1375,10 +1446,71 @@ impl<P: Provider> SessionRuntime<P> {
         true
     }
 
+    /// Automatic compaction trigger (§14.7): the last model step saw a
+    /// large context AND more model work remains in this operation.
+    /// Compacting before an operation goes idle would buy nothing.
+    fn compaction_due(&self) -> bool {
+        const COMPACTION_INPUT_TOKEN_THRESHOLD: u64 = 100_000;
+        self.last_input_tokens > COMPACTION_INPUT_TOKEN_THRESHOLD && !self.last_step_was_compaction
+    }
+
+    /// Commit the compaction effect intent, then spawn the provider
+    /// effect that produces the readable summary. Returns false when
+    /// persistence failed.
+    async fn start_compaction(&mut self) -> bool {
+        let mut plan = project(&self.entries, self.first_entry_seq());
+        plan.messages.push(crate::context::ContextMessage::User {
+            content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
+        });
+        let mut staged = self
+            .operation
+            .clone()
+            .expect("compaction needs an operation");
+        let applied = staged
+            .machine
+            .apply(Transition::StartCompaction { plan: plan.clone() })
+            .expect("start compaction from a continuation boundary");
+        let EffectIntent::Compaction { operation_id, .. } = applied.intents[0].clone() else {
+            panic!("StartCompaction must yield a compaction intent");
+        };
+        let effect = EffectRecord {
+            id: EffectId::generate(),
+            kind: "compaction".to_owned(),
+            recovery_class: RecoveryClass::ReplaySafe,
+            effective_input: serde_json::json!({ "plan": plan }),
+            attempt: 1,
+        };
+        staged.open_effect = Some(effect.clone());
+        let (request, new_entry_seq) = build_commit_request(
+            self.session_id,
+            &staged,
+            staged.state_seq + 1,
+            self.next_entry_seq,
+            Vec::new(),
+            vec![effect],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return false;
+        }
+        self.next_entry_seq = new_entry_seq;
+        staged.state_seq += 1;
+        self.operation = Some(staged);
+        self.last_step_was_compaction = true;
+        info!(%operation_id, "starting automatic compaction");
+        self.spawn_model_step(operation_id, plan, Vec::new());
+        true
+    }
+
     /// Commit the model-step effect intent, then spawn the provider
     /// effect. Returns false when persistence failed.
     async fn start_model_step(&mut self) -> bool {
-        let plan = project(&self.entries);
+        let plan = project(&self.entries, self.first_entry_seq());
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
             .machine
@@ -1663,6 +1795,10 @@ impl<P: Provider> SessionRuntime<P> {
             debug!(?signal, "ignored engine signal from a stale model step");
             return;
         }
+        if matches!(active.machine.state(), OperationState::CompactionPending) {
+            self.settle_compaction(signal).await;
+            return;
+        }
         match signal {
             EngineSignal::TextDelta { text, .. } => {
                 self.draft_text.push_str(&text);
@@ -1673,6 +1809,7 @@ impl<P: Provider> SessionRuntime<P> {
                 });
             }
             EngineSignal::UsageUpdate { usage, .. } => {
+                self.last_input_tokens = usage.input;
                 self.draft_usage = Some(usage);
             }
             EngineSignal::ToolCallCompleted { call, .. } => {
@@ -1730,6 +1867,7 @@ impl<P: Provider> SessionRuntime<P> {
             debug!("ignored settlement for an already-settled model step");
             return;
         }
+        self.last_step_was_compaction = false;
         let applied = staged
             .machine
             .apply(transition)
@@ -1768,6 +1906,74 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             usage,
+        );
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return;
+        }
+        self.next_entry_seq = new_entry_seq;
+        staged.state_seq += 1;
+        self.entries.extend(applied.entries);
+        self.emit_terminal_state(&applied.state.clone());
+        self.operation = Some(staged);
+        self.advance().await;
+    }
+
+    /// Settle a compaction step: the summary becomes a readable entry
+    /// covering everything before it; failure continues without a
+    /// baseline (visible in tracing), unless cancellation was requested.
+    async fn settle_compaction(&mut self, signal: EngineSignal) {
+        let mut staged = self.operation.clone().expect("settle needs an operation");
+        if !matches!(staged.machine.state(), OperationState::CompactionPending) {
+            debug!("ignored settlement for an already-settled compaction step");
+            return;
+        }
+        let transition = match signal {
+            EngineSignal::TextDelta { text, .. } => {
+                self.draft_text.push_str(&text);
+                return;
+            }
+            EngineSignal::Completed { .. } => {
+                let summary = std::mem::take(&mut self.draft_text);
+                Transition::CompactionCompleted {
+                    summary,
+                    covers_through_seq: self.next_entry_seq - 1,
+                }
+            }
+            EngineSignal::Failed { message, .. } => {
+                warn!(message = %message, "compaction generation failed; continuing without a baseline");
+                Transition::CompactionFailed
+            }
+            EngineSignal::Cancelled { .. } | EngineSignal::ProviderExited { .. } => {
+                Transition::CompactionFailed
+            }
+            EngineSignal::ToolCallCompleted { .. } | EngineSignal::UsageUpdate { .. } => return,
+        };
+        let applied = staged
+            .machine
+            .apply(transition)
+            .expect("compaction settlement while CompactionPending");
+        let settled = staged
+            .open_effect
+            .take()
+            .map(|effect| SettledEffect {
+                id: effect.id,
+                settlement: serde_json::json!({ "kind": "compaction" }),
+            })
+            .into_iter()
+            .collect();
+        let (request, new_entry_seq) = build_commit_request(
+            self.session_id,
+            &staged,
+            staged.state_seq + 1,
+            self.next_entry_seq,
+            applied.entries.clone(),
+            Vec::new(),
+            settled,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;

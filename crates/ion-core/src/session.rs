@@ -34,6 +34,13 @@ pub struct InboxItem {
 /// not entries.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionEntry {
+    /// Readable compaction baseline (DESIGN.md §14.7): the summary
+    /// replaces entries through `covers_through_seq` in the model
+    /// projection only; canonical entries stay durable.
+    Compaction {
+        covers_through_seq: u64,
+        summary: String,
+    },
     UserMessage {
         text: String,
     },
@@ -71,6 +78,10 @@ pub enum OperationState {
     /// Assistant completed without tool calls; accepted inbox items are
     /// pending, so the operation continues.
     NeedContinuation,
+    /// A compaction effect intent is committed; the provider is
+    /// producing the readable summary (DESIGN.md §14.7). Canonical
+    /// history is untouched; the summary becomes a projection baseline.
+    CompactionPending,
     /// Session closed while the operation was open; recoverable on
     /// restart (DESIGN.md §9.5). Not a user cancellation.
     Suspended,
@@ -106,6 +117,14 @@ pub enum EffectIntent {
     },
     /// One tool invocation with the exact effective arguments.
     Tool { call: ToolCall },
+    /// One compaction step: the provider summarizes the projected
+    /// history; the result becomes a readable Compaction entry
+    /// (DESIGN.md §14.7). ReplaySafe (§12.5): provider generation over
+    /// local canonical context.
+    Compaction {
+        operation_id: OperationId,
+        plan: ContextPlan,
+    },
 }
 
 /// Inputs to the transition function. Provider/tool outcomes are fed by
@@ -165,6 +184,26 @@ pub enum Transition {
     /// committed (DESIGN.md §17.4).
     ApprovalRequired {
         tool: String,
+    },
+    /// Begin a compaction step at a continuation boundary (§14.7).
+    StartCompaction {
+        plan: ContextPlan,
+    },
+    /// A validated compaction generation: the summary becomes a
+    /// readable semantic entry covering history through
+    /// `covers_through_seq`; canonical entries stay durable.
+    CompactionCompleted {
+        summary: String,
+        covers_through_seq: u64,
+    },
+    /// The compaction generation failed or was cancelled. Compaction is
+    /// maintenance, so the operation continues without a baseline
+    /// unless a cancellation was requested (§14.7, P13 via tracing).
+    CompactionFailed,
+    /// Recovery (§32 Step 3): re-issue a pending compaction effect.
+    /// Provider generation over local canonical context is ReplaySafe.
+    RecoverCompaction {
+        plan: ContextPlan,
     },
     /// Session close while operating (DESIGN.md §9.5).
     Suspend,
@@ -347,6 +386,13 @@ impl OperationMachine {
             Transition::RecoverTool { call } => self.recover_tool(call),
             Transition::SettleIndeterminate => self.settle_indeterminate(),
             Transition::ApprovalRequired { tool } => self.approval_required(tool),
+            Transition::StartCompaction { plan } => self.start_compaction(plan),
+            Transition::RecoverCompaction { plan } => self.recover_compaction(plan),
+            Transition::CompactionCompleted {
+                summary,
+                covers_through_seq,
+            } => self.compaction_completed(summary, covers_through_seq),
+            Transition::CompactionFailed => self.compaction_failed(),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -652,6 +698,88 @@ impl OperationMachine {
         })
     }
 
+    fn start_compaction(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
+        match self.state {
+            OperationState::NeedAssistant | OperationState::NeedContinuation => {
+                self.state = OperationState::CompactionPending;
+                Ok(Applied {
+                    state: self.state.clone(),
+                    entries: Vec::new(),
+                    intents: vec![EffectIntent::Compaction {
+                        operation_id: self.operation_id,
+                        plan,
+                    }],
+                    cancel_effects: false,
+                })
+            }
+            ref state => Err(TransitionError {
+                state: state_name(state),
+                transition: "start_compaction",
+            }),
+        }
+    }
+
+    fn compaction_completed(
+        &mut self,
+        summary: String,
+        covers_through_seq: u64,
+    ) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::CompactionPending) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "compaction_completed",
+            });
+        }
+        self.state = OperationState::NeedAssistant;
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: vec![SessionEntry::Compaction {
+                covers_through_seq,
+                summary,
+            }],
+            intents: Vec::new(),
+            cancel_effects: false,
+        })
+    }
+
+    fn recover_compaction(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::CompactionPending) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "recover_compaction",
+            });
+        }
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: vec![EffectIntent::Compaction {
+                operation_id: self.operation_id,
+                plan,
+            }],
+            cancel_effects: false,
+        })
+    }
+
+    fn compaction_failed(&mut self) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::CompactionPending) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "compaction_failed",
+            });
+        }
+        self.state = if self.cancel_requested {
+            OperationState::Finished(OperationOutcome::Cancelled)
+        } else {
+            OperationState::NeedAssistant
+        };
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: false,
+        })
+    }
+
     fn suspend(&mut self) -> Result<Applied, TransitionError> {
         if matches!(self.state, OperationState::Finished(_)) {
             return Err(TransitionError {
@@ -699,6 +827,7 @@ fn state_name(state: &OperationState) -> &'static str {
         OperationState::ToolsPlanned { .. } => "tools_planned",
         OperationState::ToolEffectPending { .. } => "tool_effect_pending",
         OperationState::NeedContinuation => "need_continuation",
+        OperationState::CompactionPending => "compaction_pending",
         OperationState::Suspended => "suspended",
         OperationState::Finished(_) => "finished",
     }
