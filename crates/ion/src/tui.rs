@@ -25,7 +25,8 @@ use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use crate::settings::Theme;
 use ion_core::{
-    CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionStore,
+    CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
+    SessionStore,
 };
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -79,6 +80,9 @@ pub struct UiState {
     kill_buffer: String,
     /// Streaming assistant draft for the live step.
     draft: String,
+    /// True after an event lag dropped deltas: the draft is partial
+    /// and must never present as a completed turn.
+    draft_degraded: bool,
     /// Completed tool rows for the live operation, newest last.
     tool_rows: Vec<String>,
     status: UiStatus,
@@ -431,8 +435,29 @@ impl UiState {
                 styled.spans.insert(0, Span::from("ion « ").dim());
                 self.pending_scrollback.push(styled);
             }
+            if self.draft_degraded {
+                self.pending_scrollback.push(
+                    Line::from("… truncated by display lag; full text: ion --resume").yellow(),
+                );
+                self.draft_degraded = false;
+            }
             self.draft.clear();
         }
+        self.draft_degraded = false;
+    }
+
+    /// Rebuild live state from a fresh snapshot after an event lag
+    /// (§21.4): the snapshot is authoritative for operation status;
+    /// partial deltas and missed tool rows are display-only losses.
+    fn resync_after_lag(&mut self, snapshot: &SessionSnapshot) {
+        self.status = match &snapshot.operation {
+            OperationStatus::Idle => UiStatus::Idle,
+            OperationStatus::Active { prompt, .. } => UiStatus::Working {
+                operation: format!("working: {prompt}"),
+            },
+        };
+        self.tool_rows.clear();
+        self.draft_degraded = !self.draft.is_empty();
     }
 }
 
@@ -701,9 +726,24 @@ pub async fn run(
                         }
                     }
                     Err(RuntimeError::SubscriptionLagged) => {
-                        // Bounded loss (§21.4): the snapshot on next
-                        // subscribe is authoritative; v0 continues with
-                        // the live stream.
+                        // Bounded loss (§21.4): re-subscribe; the fresh
+                        // snapshot is authoritative for live state.
+                        match session.subscribe().await {
+                            Ok((snapshot, fresh)) => {
+                                events = fresh;
+                                active_operation = match &snapshot.operation {
+                                    OperationStatus::Active { operation_id, .. } => {
+                                        Some(*operation_id)
+                                    }
+                                    OperationStatus::Idle => None,
+                                };
+                                state.resync_after_lag(&snapshot);
+                            }
+                            Err(err) => {
+                                result = Err(err.into());
+                                break;
+                            }
+                        }
                         continue;
                     }
                     Err(err) => {
@@ -895,6 +935,64 @@ mod tests {
         let line = markdown_line("a * b and c` d");
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "a * b and c` d");
+    }
+
+    #[test]
+    fn resync_after_lag_rebuilds_status_and_degrades_draft() {
+        let mut state = UiState::new();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::AssistantTextDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                text: "partial".to_owned(),
+            },
+        );
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            operation: OperationStatus::Idle,
+            entries: Vec::new(),
+        };
+        state.resync_after_lag(&snapshot);
+        assert_eq!(state.status, UiStatus::Idle);
+        assert!(state.tool_rows.is_empty());
+        assert!(state.draft_degraded);
+    }
+
+    #[test]
+    fn degraded_draft_flushes_with_truncation_marker() {
+        let mut state = UiState::new();
+        state.draft = "partial ans".to_owned();
+        state.draft_degraded = true;
+        state.flush_draft();
+        assert!(state.pending_scrollback.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("truncated by display lag"))
+        }));
+        assert!(!state.draft_degraded);
+    }
+
+    #[test]
+    fn resync_after_lag_tracks_active_operation() {
+        let mut state = UiState::new();
+        let operation_id = OperationId::generate();
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            operation: OperationStatus::Active {
+                operation_id,
+                prompt: "do things".to_owned(),
+                state: ion_core::OperationState::NeedAssistant,
+            },
+            entries: Vec::new(),
+        };
+        state.resync_after_lag(&snapshot);
+        assert_eq!(
+            state.status,
+            UiStatus::Working {
+                operation: "working: do things".to_owned()
+            }
+        );
     }
 
     #[test]
