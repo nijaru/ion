@@ -18,7 +18,10 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use ion_core::{EngineSignal, Provider, ProviderRequest, ToolCall, ToolSpec};
+use ion_core::{
+    ContextMessage, ContextPlan, EngineSignal, Provider, ProviderRequest, TokenUsage, ToolCall,
+    ToolSpec,
+};
 
 /// A step in the OpenAI-compatible SSE stream, decoded.
 #[derive(Debug)]
@@ -30,7 +33,7 @@ enum StreamEvent {
         name: Option<String>,
         arguments_fragment: String,
     },
-    FinishReason(String),
+    Usage(TokenUsage),
 }
 
 pub struct OpenRouterProvider {
@@ -96,8 +99,9 @@ impl Provider for OpenRouterProvider {
         async move {
             let mut body = serde_json::json!({
                 "model": model,
-                "messages": [{ "role": "user", "content": request.prompt }],
+                "messages": message_payloads(&request.plan),
                 "stream": true,
+                "stream_options": { "include_usage": true },
             });
             if !request.tools.is_empty() {
                 body["tools"] = OpenRouterProvider::tool_specs(&request.tools);
@@ -145,7 +149,6 @@ impl Provider for OpenRouterProvider {
             let mut buffer = Vec::new();
             // Accumulated tool calls by stream index: (id, name, args).
             let mut tool_calls: Vec<(Option<String>, String, String)> = Vec::new();
-            let mut finish_reason: Option<String> = None;
 
             loop {
                 let chunk = tokio::select! {
@@ -210,8 +213,18 @@ impl Provider for OpenRouterProvider {
                                         }
                                         slot.2.push_str(&arguments_fragment);
                                     }
-                                    StreamEvent::FinishReason(reason) => {
-                                        finish_reason = Some(reason)
+                                    StreamEvent::Usage(usage) => {
+                                        if out
+                                            .send(EngineSignal::UsageUpdate {
+                                                operation_id,
+                                                step,
+                                                usage,
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
                                     }
                                 }
                             }
@@ -230,9 +243,9 @@ impl Provider for OpenRouterProvider {
                         }
                     }
                 }
-                if finish_reason.is_some() {
-                    break;
-                }
+                // No early break on finish_reason: the usage chunk (and
+                // any trailing provider metadata) arrives after it; the
+                // stream ends at [DONE] or EOF.
             }
 
             // The step is complete: emit whole tool calls only (§15.2).
@@ -278,6 +291,60 @@ impl Provider for OpenRouterProvider {
     }
 }
 
+/// Translate a deterministic context plan into OpenAI-compatible chat
+/// messages: one system message, then role-structured conversation
+/// messages with paired tool results.
+fn message_payloads(plan: &ContextPlan) -> Vec<serde_json::Value> {
+    let mut out = vec![serde_json::json!({
+        "role": "system",
+        "content": plan.system,
+    })];
+    for message in &plan.messages {
+        match message {
+            ContextMessage::User { content } => {
+                out.push(serde_json::json!({ "role": "user", "content": content }));
+            }
+            ContextMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
+                let mut message = serde_json::json!({ "role": "assistant" });
+                if content.is_empty() {
+                    message["content"] = serde_json::Value::Null;
+                } else {
+                    message["content"] = serde_json::json!(content);
+                }
+                if !tool_calls.is_empty() {
+                    message["tool_calls"] = serde_json::Value::Array(
+                        tool_calls
+                            .iter()
+                            .map(|call| {
+                                serde_json::json!({
+                                    "id": format!("call_{}", call.call_id),
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.name,
+                                        "arguments": call.arguments.to_string(),
+                                    },
+                                })
+                            })
+                            .collect(),
+                    );
+                }
+                out.push(message);
+            }
+            ContextMessage::Tool { call_id, content } => {
+                out.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": format!("call_{}", call_id),
+                    "content": content,
+                }));
+            }
+        }
+    }
+    out
+}
+
 fn find_line_end(buffer: &[u8]) -> Option<usize> {
     buffer.iter().position(|&b| b == b'\n')
 }
@@ -298,10 +365,23 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
     if value.get("error").is_some() {
         return Err(format!("provider error: {}", value["error"]));
     }
-    let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
-        return Ok(Vec::new());
-    };
     let mut events = Vec::new();
+    if let (Some(input), Some(output)) = (
+        value
+            .get("usage")
+            .and_then(|usage| usage.get("prompt_tokens"))
+            .and_then(|v| v.as_u64()),
+        value
+            .get("usage")
+            .and_then(|usage| usage.get("completion_tokens"))
+            .and_then(|v| v.as_u64()),
+    ) {
+        events.push(StreamEvent::Usage(TokenUsage { input, output }));
+    }
+    let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
+        // Usage-only terminal chunks carry an empty choices array.
+        return Ok(events);
+    };
     if let Some(delta) = choice.get("delta") {
         if let Some(text) = delta
             .get("content")
@@ -337,9 +417,6 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
             }
         }
     }
-    if let Some(reason) = choice.get("finish_reason").and_then(|f| f.as_str()) {
-        events.push(StreamEvent::FinishReason(reason.to_owned()));
-    }
     Ok(events)
 }
 
@@ -352,14 +429,26 @@ mod tests {
     use std::time::Duration;
 
     /// One-shot local SSE server: replies to the first request with
-    /// `body` as an HTTP response, then stops.
-    fn spawn_sse_server(body: &'static str) -> String {
+    /// `body` as an HTTP response, then stops. The request body lands
+    /// in `captured` for assertions.
+    fn spawn_sse_server(
+        body: &'static str,
+        captured: Option<std::sync::mpsc::Sender<String>>,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().expect("accept");
-            let mut buf = [0u8; 8192];
-            let _ = socket.read(&mut buf);
+            let mut buf = vec![0u8; 16384];
+            let n = socket.read(&mut buf).unwrap_or(0);
+            if let (Some(captured), Some(payload)) = (
+                captured,
+                String::from_utf8(buf[..n].to_vec())
+                    .ok()
+                    .and_then(|text| text.split("\r\n\r\n").nth(1).map(str::to_owned)),
+            ) {
+                let _ = captured.send(payload);
+            }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -375,7 +464,12 @@ mod tests {
         let request = ProviderRequest {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
-            prompt: "user: hello".to_owned(),
+            plan: ContextPlan {
+                system: "sys".to_owned(),
+                messages: vec![ContextMessage::User {
+                    content: "hello".to_owned(),
+                }],
+            },
             tools: Vec::new(),
         };
         let handle = tokio::spawn(async move {
@@ -396,6 +490,7 @@ mod tests {
              data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
              data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
              data: [DONE]\n\n",
+            None,
         );
         let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
         let signals = collect(provider).await;
@@ -420,6 +515,7 @@ mod tests {
              data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"Cargo.toml\\\"}\"}}]}}]}\n\n\
              data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
              data: [DONE]\n\n",
+            None,
         );
         let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
         let signals = collect(provider).await;
@@ -449,6 +545,7 @@ mod tests {
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read\",\"arguments\":\"{not json\"}}]}}]}\n\n\
              data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
              data: [DONE]\n\n",
+            None,
         );
         let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
         let signals = collect(provider).await;
@@ -476,5 +573,52 @@ mod tests {
             "live step must complete"
         );
         let _ = ToolRegistry::default();
+    }
+    #[tokio::test]
+    async fn plan_becomes_role_structured_messages() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            Some(tx),
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+        assert!(matches!(
+            signals.last(),
+            Some(EngineSignal::Completed { .. })
+        ));
+        let body: serde_json::Value = serde_json::from_str(
+            &rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("body"),
+        )
+        .expect("json body");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "sys");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hello");
+    }
+
+    #[tokio::test]
+    async fn final_usage_chunk_becomes_a_usage_signal() {
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":34}}\n\n\
+             data: [DONE]\n\n",
+            None,
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+        let usages: Vec<_> = signals
+            .iter()
+            .filter_map(|signal| match signal {
+                EngineSignal::UsageUpdate { usage, .. } => Some(*usage),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(usages.len(), 1);
+        assert_eq!((usages[0].input, usages[0].output), (120, 34));
     }
 }

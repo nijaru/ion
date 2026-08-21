@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use rusqlite::Connection;
+use rusqlite::types::Type;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -23,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Ordered, transactional migrations gated by `PRAGMA user_version`
 /// (DESIGN.md §11.1). Version 0 (fresh or pre-versioning) applies the
@@ -50,12 +51,38 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
         // countable (DESIGN.md §11.3, §15.4).
         tx.execute_batch("ALTER TABLE effects ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")?;
     }
+    if version == 2 {
+        // v3: token usage ledger, persisted at settlement boundaries
+        // independent of operation success (DESIGN.md §27.2).
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES sessions(id),
+                operation_id TEXT NOT NULL,
+                step INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                recorded_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_operation ON usage(operation_id);",
+        )?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
 }
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    operation_id TEXT NOT NULL,
+    step INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    recorded_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL,
@@ -201,6 +228,26 @@ pub struct CommitRequest {
     pub inbox: Vec<InboxRecord>,
     /// Previously pending inbox items this transition applied.
     pub inbox_applied: Vec<InboxId>,
+    /// Token usage rows persisted atomically with this transition
+    /// (DESIGN.md §27.2).
+    pub usage: Vec<UsageRecord>,
+}
+
+/// One persisted token-usage row (DESIGN.md §27.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRecord {
+    pub step: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// One usage row as read back for reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRow {
+    pub operation_id: OperationId,
+    pub step: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// A session loaded from the store.
@@ -256,6 +303,10 @@ enum StoreCommand {
     Load {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
+    },
+    Usage {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
     },
 }
 
@@ -353,6 +404,12 @@ impl SessionStore {
             .await
     }
 
+    /// Token usage rows recorded for one session (DESIGN.md §27.2).
+    pub async fn usage(&self, session_id: SessionId) -> Result<Vec<UsageRow>, StoreError> {
+        self.request(|reply| StoreCommand::Usage { session_id, reply })
+            .await
+    }
+
     /// Test hook (DESIGN.md §30.5): the next mutating command fails
     /// visibly and nothing is written.
     pub fn fail_next_write(&self) {
@@ -412,7 +469,35 @@ fn handle_command(
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
+        StoreCommand::Usage { session_id, reply } => {
+            let _ = reply.send(usage_rows(connection, session_id));
+        }
     }
+}
+
+fn usage_rows(
+    connection: &mut Connection,
+    session_id: SessionId,
+) -> Result<Vec<UsageRow>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT operation_id, step, input_tokens, output_tokens
+         FROM usage WHERE session_id = ?1 ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map([session_id.as_uuid().to_string()], |row| {
+            Ok(UsageRow {
+                operation_id: OperationId::from_uuid(
+                    Uuid::parse_str(&row.get::<_, String>(0)?).map_err(|_| {
+                        rusqlite::Error::InvalidColumnType(0, "operation_id".into(), Type::Text)
+                    })?,
+                ),
+                step: row.get::<_, i64>(1)? as u64,
+                input_tokens: row.get::<_, i64>(2)? as u64,
+                output_tokens: row.get::<_, i64>(3)? as u64,
+            })
+        })?
+        .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+    Ok(rows)
 }
 
 fn check_injected(flag: &AtomicBool) -> Result<(), StoreError> {
@@ -480,6 +565,20 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                 effect.effective_input.to_string(),
                 now_ms(),
                 effect.attempt as i64,
+            ],
+        )?;
+    }
+    for usage in &request.usage {
+        tx.execute(
+            "INSERT INTO usage (session_id, operation_id, step, input_tokens, output_tokens, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                request.session_id.as_uuid().to_string(),
+                request.operation_id.as_uuid().to_string(),
+                usage.step as i64,
+                usage.input_tokens as i64,
+                usage.output_tokens as i64,
+                now_ms(),
             ],
         )?;
     }

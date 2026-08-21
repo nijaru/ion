@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
+use crate::context::{ContextMessage, ContextPlan};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::OperationId;
 use crate::provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
@@ -16,7 +17,7 @@ use crate::session::{
     OperationState, SessionEntry, Transition,
 };
 use crate::store::{CheckpointPayload, CheckpointRecord, CommitRequest, SessionStore};
-use crate::tool::{RecoveryClass, ToolRegistry, ToolResult, ToolSpec};
+use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
 
 const STEP: Duration = Duration::from_millis(50);
 
@@ -120,7 +121,12 @@ fn start_model_step_commits_intent_with_frozen_tools() {
     let (mut machine, _) = machine_with_tools("goal", vec![spec("read")]);
     let applied = machine
         .apply(Transition::StartModelStep {
-            prompt: "user: goal".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal".to_owned(),
+                }],
+            },
         })
         .expect("start");
     assert_eq!(machine.state(), &OperationState::AssistantEffectPending);
@@ -128,7 +134,12 @@ fn start_model_step_commits_intent_with_frozen_tools() {
         applied.intents,
         vec![EffectIntent::ModelStep {
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
-            prompt: "user: goal".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal".to_owned(),
+                }],
+            },
             tools: vec![spec("read")],
         }]
     );
@@ -139,7 +150,10 @@ fn provider_completed_without_inbox_finishes_completed() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     let applied = machine
@@ -165,7 +179,10 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     let applied = machine
@@ -252,7 +269,10 @@ fn tool_error_is_a_model_visible_result_and_continues() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     machine
@@ -287,7 +307,12 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: "user: goal".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal".to_owned(),
+                }],
+            },
         })
         .expect("start");
     let applied = machine
@@ -324,14 +349,26 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
 
     let applied = machine
         .apply(Transition::StartModelStep {
-            prompt: "user: goal\nassistant: partial\nuser: and also check tests".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal\nassistant: partial\nuser: and also check tests"
+                        .to_owned(),
+                }],
+            },
         })
         .expect("step 2");
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
-            prompt: "user: goal\nassistant: partial\nuser: and also check tests".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal\nassistant: partial\nuser: and also check tests"
+                        .to_owned(),
+                }],
+            },
             tools: vec![],
         }]
     );
@@ -342,7 +379,10 @@ fn follow_up_continues_the_same_operation() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     machine
@@ -363,7 +403,12 @@ fn follow_up_continues_the_same_operation() {
     machine.drain_followups().expect("follow-up drain");
     machine
         .apply(Transition::StartModelStep {
-            prompt: "user: goal\nuser: now summarize".to_owned(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: vec![ContextMessage::User {
+                    content: "user: goal\nuser: now summarize".to_owned(),
+                }],
+            },
         })
         .expect("step 2");
     machine
@@ -384,7 +429,10 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     let applied = machine.apply(Transition::CancelRequested).expect("cancel");
@@ -403,7 +451,10 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     machine
@@ -437,7 +488,10 @@ fn provider_failure_after_cancel_request_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     machine.apply(Transition::CancelRequested).expect("cancel");
@@ -461,12 +515,18 @@ fn suspend_from_any_open_state_is_recoverable_not_cancelled() {
     let cases: Vec<fn(&mut OperationMachine)> = vec![
         |m| {
             let _ = m.apply(Transition::StartModelStep {
-                prompt: String::new(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
             });
         },
         |m| {
             let _ = m.apply(Transition::StartModelStep {
-                prompt: String::new(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
             });
             let _ = m.apply(Transition::ProviderCompleted {
                 text: String::new(),
@@ -531,12 +591,18 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     // From AssistantEffectPending:
     let (mut m, _) = machine_with_tools("goal", vec![]);
     m.apply(Transition::StartModelStep {
-        prompt: String::new(),
+        plan: ContextPlan {
+            system: String::new(),
+            messages: Vec::new(),
+        },
     })
     .expect("start");
     let err = m
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect_err("double start");
     assert_eq!(
@@ -549,7 +615,10 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     // From Finished:
     let (mut m, _) = machine_with_tools("goal", vec![]);
     m.apply(Transition::StartModelStep {
-        prompt: String::new(),
+        plan: ContextPlan {
+            system: String::new(),
+            messages: Vec::new(),
+        },
     })
     .expect("start");
     m.apply(Transition::ProviderCancelled).expect("cancel");
@@ -559,7 +628,10 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     ));
     for transition in [
         Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         },
         Transition::ApplyInbox {
             item: InboxItem {
@@ -598,7 +670,10 @@ fn failed_transition_leaves_state_unmutated() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     let before = machine.state().clone();
@@ -1275,10 +1350,27 @@ async fn steer_projection_reaches_the_next_model_step() {
         2,
         "one steer must open exactly one new step"
     );
-    assert_eq!(requests[0].prompt, "user: goal");
     assert_eq!(
-        requests[1].prompt, "user: goal\nassistant: working\nuser: and also check tests",
-        "the steer must be projected into the next step's transcript view"
+        requests[0].plan.messages,
+        vec![ContextMessage::User {
+            content: "goal".to_owned()
+        }]
+    );
+    assert_eq!(
+        requests[1].plan.messages,
+        vec![
+            ContextMessage::User {
+                content: "goal".to_owned()
+            },
+            ContextMessage::Assistant {
+                content: "working".to_owned(),
+                tool_calls: Vec::new(),
+            },
+            ContextMessage::User {
+                content: "and also check tests".to_owned()
+            },
+        ],
+        "the steer must be projected into the next step's plan"
     );
 }
 
@@ -1548,12 +1640,18 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
     for setup in [
         |m: &mut OperationMachine| {
             let _ = m.apply(Transition::StartModelStep {
-                prompt: String::new(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
             });
         },
         |m: &mut OperationMachine| {
             let _ = m.apply(Transition::StartModelStep {
-                prompt: String::new(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
             });
             let _ = m.apply(Transition::ProviderCompleted {
                 text: String::new(),
@@ -1577,7 +1675,10 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
-            prompt: String::new(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
         })
         .expect("start");
     machine.apply(Transition::ProviderCancelled).expect("done");
@@ -1735,6 +1836,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
             indeterminate_effects: Vec::new(),
             inbox: Vec::new(),
             inbox_applied: Vec::new(),
+            usage: Vec::new(),
         })
         .await
         .expect_err("ghost settlement must fail");
@@ -1952,4 +2054,112 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     ));
     session.close().await.expect("close");
     runtime.join().await.expect("join");
+}
+
+// ---- Context projection and usage ledger (DESIGN.md §32 Step 4 slice 1) ----
+
+fn plan_of(entries: &[SessionEntry]) -> crate::context::ContextPlan {
+    crate::context::project(entries)
+}
+
+#[test]
+fn projector_is_deterministic_and_pairs_tool_calls() {
+    let entries = vec![
+        SessionEntry::UserMessage {
+            text: "goal".to_owned(),
+        },
+        SessionEntry::AssistantMessage {
+            text: "reading".to_owned(),
+        },
+        SessionEntry::ToolCall {
+            call: ToolCall {
+                operation_id: OperationId::generate(),
+                call_id: 7,
+                name: "read".to_owned(),
+                arguments: serde_json::json!({ "path": "a.txt" }),
+            },
+        },
+        SessionEntry::ToolResult {
+            result: ToolResult::Ok {
+                call_id: 7,
+                output: "contents".to_owned(),
+            },
+        },
+    ];
+    let first = plan_of(&entries);
+    let second = plan_of(&entries);
+    assert_eq!(first, second, "the same entries must project identically");
+    assert_eq!(first.messages.len(), 3);
+    let crate::context::ContextMessage::Assistant { tool_calls, .. } = &first.messages[1] else {
+        panic!("tool call must attach to the assistant message");
+    };
+    assert_eq!(tool_calls.len(), 1);
+    let crate::context::ContextMessage::Tool { call_id, content } = &first.messages[2] else {
+        panic!("tool result must project as a tool message");
+    };
+    assert_eq!((*call_id, content.as_str()), (7, "contents"));
+}
+
+#[tokio::test]
+async fn usage_persists_with_the_settlement() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 100,
+                output: 20,
+            }),
+            ScriptedMessage::text("done"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let rows = store.usage(session_id).await.expect("usage rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "usage must persist exactly once at the settlement boundary"
+    );
+    assert_eq!(rows[0].input_tokens, 100);
+    assert_eq!(rows[0].output_tokens, 20);
+    assert_eq!(rows[0].step, 1);
+}
+
+#[tokio::test]
+async fn usage_survives_a_failed_operation() {
+    // §27.2: usage is independent of operation success — a failed
+    // step's tokens still land in the ledger via the settlement commit.
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 5,
+                output: 1,
+            }),
+            ScriptedMessage::Fail {
+                message: "boom".to_owned(),
+            },
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    // The step fails visibly; the usage row must still be committed.
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let rows = store.usage(session_id).await.expect("usage rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].input_tokens, 5);
 }

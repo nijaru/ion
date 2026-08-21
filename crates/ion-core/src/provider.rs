@@ -14,8 +14,16 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::ContextPlan;
 use crate::ids::OperationId;
 use crate::tool::{ToolCall, ToolSpec};
+
+/// Token accounting for one model step (DESIGN.md §27.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+}
 
 /// What one model step asks the provider: the operation it belongs to,
 /// the projected input, and the frozen capability snapshot.
@@ -25,7 +33,9 @@ pub struct ProviderRequest {
     /// Monotonic model-step counter within the operation. Providers echo
     /// it in every signal so the runtime can drop stale generations.
     pub step: u64,
-    pub prompt: String,
+    /// The deterministic projection of session state for this step
+    /// (DESIGN.md §14, §31 invariant 15).
+    pub plan: ContextPlan,
     pub tools: Vec<ToolSpec>,
 }
 
@@ -58,6 +68,14 @@ pub enum EngineSignal {
     Cancelled {
         operation_id: OperationId,
         step: u64,
+    },
+    /// Token usage reported by the provider for this step, when it
+    /// exposes one. Buffered and persisted at the settlement boundary,
+    /// independent of operation success (DESIGN.md §27.2).
+    UsageUpdate {
+        operation_id: OperationId,
+        step: u64,
+        usage: TokenUsage,
     },
     /// The provider's task finished without a terminal signal for its
     /// model step. `step` tags the spawning step so stale sentinels from
@@ -92,6 +110,10 @@ pub enum ScriptedMessage {
         name: String,
         arguments: serde_json::Value,
     },
+    /// Emit a usage update, then continue with the next message.
+    Usage(TokenUsage),
+    /// Fail the step with the given message.
+    Fail { message: String },
 }
 
 impl ScriptedMessage {
@@ -206,6 +228,29 @@ impl Provider for ScriptedProvider {
                                 operation_id,
                                 step,
                                 text,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    ScriptedMessage::Fail { message } => {
+                        let _ = out
+                            .send(EngineSignal::Failed {
+                                operation_id,
+                                step,
+                                message,
+                            })
+                            .await;
+                        return;
+                    }
+                    ScriptedMessage::Usage(usage) => {
+                        if out
+                            .send(EngineSignal::UsageUpdate {
+                                operation_id,
+                                step,
+                                usage,
                             })
                             .await
                             .is_err()

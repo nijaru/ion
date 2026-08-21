@@ -6,6 +6,7 @@
 //! these transitions, executes the intents as spawned effects, and owns
 //! the session entry log until the SQLite store takes over (§32 Step 2).
 
+use crate::context::ContextPlan;
 use crate::ids::OperationId;
 use crate::tool::{ToolCall, ToolResult, ToolSpec};
 
@@ -93,7 +94,7 @@ pub enum EffectIntent {
     /// One model step: projected input + tool snapshot.
     ModelStep {
         operation_id: OperationId,
-        prompt: String,
+        plan: ContextPlan,
         tools: Vec<ToolSpec>,
     },
     /// One tool invocation with the exact effective arguments.
@@ -109,11 +110,11 @@ pub enum Transition {
     ApplyInbox {
         item: InboxItem,
     },
-    /// Start the next model step from a quiescent state. `prompt` is the
+    /// Start the next model step from a quiescent state. `plan` is the
     /// model-facing projection the runtime derived from the session
-    /// transcript (placeholder for the ContextProjector, §14/§32 Step 4).
+    /// transcript (deterministic, §14/§31 invariant 15).
     StartModelStep {
-        prompt: String,
+        plan: ContextPlan,
     },
     /// A validated completed provider generation.
     ProviderCompleted {
@@ -142,7 +143,7 @@ pub enum Transition {
     /// found pending after process loss. Provider generation with local
     /// canonical context is ReplaySafe (§12.2).
     RecoverModelStep {
-        prompt: String,
+        plan: ContextPlan,
     },
     /// Recovery: re-execute a ReplaySafe tool effect found pending after
     /// process loss, with its exact effective input.
@@ -308,7 +309,7 @@ impl OperationMachine {
     pub fn apply(&mut self, transition: Transition) -> Result<Applied, TransitionError> {
         match transition {
             Transition::ApplyInbox { item } => self.apply_inbox(item),
-            Transition::StartModelStep { prompt } => self.start_model_step(prompt),
+            Transition::StartModelStep { plan } => self.start_model_step(plan),
             Transition::ProviderCompleted { text, tool_calls } => {
                 self.provider_completed(text, tool_calls)
             }
@@ -318,7 +319,7 @@ impl OperationMachine {
             Transition::ToolSettled { result } => self.tool_settled(result),
             Transition::CancelRequested => self.cancel_requested_transition(),
             Transition::FailOperation { message } => self.fail_operation(message),
-            Transition::RecoverModelStep { prompt } => self.recover_model_step(prompt),
+            Transition::RecoverModelStep { plan } => self.recover_model_step(plan),
             Transition::RecoverTool { call } => self.recover_tool(call),
             Transition::SettleIndeterminate => self.settle_indeterminate(),
             Transition::Suspend => self.suspend(),
@@ -380,7 +381,7 @@ impl OperationMachine {
         }
     }
 
-    fn start_model_step(&mut self, prompt: String) -> Result<Applied, TransitionError> {
+    fn start_model_step(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
         match self.state {
             OperationState::Accepted | OperationState::NeedAssistant => {
                 self.state = OperationState::AssistantEffectPending;
@@ -389,7 +390,7 @@ impl OperationMachine {
                     entries: Vec::new(),
                     intents: vec![EffectIntent::ModelStep {
                         operation_id: self.operation_id,
-                        prompt,
+                        plan,
                         tools: self.tools.clone(),
                     }],
                     cancel_effects: false,
@@ -554,7 +555,7 @@ impl OperationMachine {
         })
     }
 
-    fn recover_model_step(&mut self, prompt: String) -> Result<Applied, TransitionError> {
+    fn recover_model_step(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
                 state: state_name(&self.state),
@@ -566,7 +567,7 @@ impl OperationMachine {
             entries: Vec::new(),
             intents: vec![EffectIntent::ModelStep {
                 operation_id: self.operation_id,
-                prompt,
+                plan,
                 tools: self.tools.clone(),
             }],
             cancel_effects: false,
@@ -647,45 +648,6 @@ impl OperationMachine {
         }
         Ok(applied)
     }
-}
-
-/// Derive the model-facing input for one model step from the session
-/// transcript. Deterministic: the same entries always project to the
-/// same prompt (DESIGN.md §31 invariant 15). Placeholder for the
-/// ContextProjector and ContextManifest (§14, §32 Step 4).
-#[must_use]
-pub fn project_transcript(entries: &[SessionEntry]) -> String {
-    let mut out = String::new();
-    for (index, entry) in entries.iter().enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        match entry {
-            SessionEntry::UserMessage { text } => {
-                out.push_str("user: ");
-                out.push_str(text);
-            }
-            SessionEntry::AssistantMessage { text } => {
-                out.push_str("assistant: ");
-                out.push_str(text);
-            }
-            SessionEntry::ToolCall { call } => {
-                out.push_str("tool_call: ");
-                out.push_str(&call.name);
-                out.push('(');
-                out.push_str(&call.arguments.to_string());
-                out.push(')');
-            }
-            SessionEntry::ToolResult { result } => {
-                out.push_str("tool_result: ");
-                match result {
-                    crate::tool::ToolResult::Ok { output, .. } => out.push_str(output),
-                    crate::tool::ToolResult::Err { error, .. } => out.push_str(error),
-                }
-            }
-        }
-    }
-    out
 }
 
 fn state_name(state: &OperationState) -> &'static str {

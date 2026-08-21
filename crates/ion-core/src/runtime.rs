@@ -19,16 +19,18 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
+use crate::context::{ContextPlan, project};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
-use crate::provider::{EngineSignal, Provider, ProviderRequest};
+use crate::provider::{EngineSignal, Provider, ProviderRequest, TokenUsage};
 use crate::session::{
     EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
-    SessionEntry, Transition, project_transcript,
+    SessionEntry, Transition,
 };
 use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
     InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect, StoreError,
+    UsageRecord,
 };
 use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
 
@@ -449,6 +451,9 @@ struct SessionRuntime<P> {
     /// Ephemeral draft of the in-flight model step; never durable.
     draft_text: String,
     draft_calls: Vec<ToolCall>,
+    /// Token usage buffered from the live model step; persisted at the
+    /// settlement boundary (DESIGN.md §27.2).
+    draft_usage: Option<TokenUsage>,
     /// Monotonic model-step counter for the active operation; provider
     /// signals carry the step that produced them, and stale generations
     /// are dropped.
@@ -490,6 +495,7 @@ impl<P: Provider> SessionRuntime<P> {
             operation: None,
             draft_text: String::new(),
             draft_calls: Vec::new(),
+            draft_usage: None,
             model_step: 0,
             subscribers: Vec::new(),
             closed: false,
@@ -721,6 +727,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation = Some(active);
         self.draft_text.clear();
         self.draft_calls.clear();
+        self.draft_usage = None;
         self.advance().await;
         Ok(operation_id)
     }
@@ -767,6 +774,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             vec![record],
+            Vec::new(),
             Vec::new(),
         );
         self.store
@@ -823,6 +831,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         self.store
             .commit(request)
@@ -855,13 +864,11 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let prompt = project_transcript(&self.entries);
+                let plan = project(&self.entries);
                 let mut staged = self.operation.clone().expect("operation present");
                 let applied = staged
                     .machine
-                    .apply(Transition::RecoverModelStep {
-                        prompt: prompt.clone(),
-                    })
+                    .apply(Transition::RecoverModelStep { plan: plan.clone() })
                     .expect("recover a pending model step");
                 let EffectIntent::ModelStep { tools, .. } = applied.intents[0].clone() else {
                     panic!("RecoverModelStep must yield a model-step intent");
@@ -874,7 +881,7 @@ impl<P: Provider> SessionRuntime<P> {
                     id: EffectId::generate(),
                     kind: open.kind,
                     recovery_class: open.recovery_class,
-                    effective_input: serde_json::json!({ "prompt": prompt, "tools": tools }),
+                    effective_input: serde_json::json!({ "plan": plan, "tools": tools }),
                     attempt: open.attempt + 1,
                 };
                 let (request, new_entry_seq) = build_commit_request(
@@ -885,6 +892,7 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                     vec![effect.clone()],
                     settled,
+                    Vec::new(),
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
@@ -899,7 +907,7 @@ impl<P: Provider> SessionRuntime<P> {
                 staged.open_effect = Some(effect);
                 self.operation = Some(staged);
                 warn!(%operation_id, "recovered a pending model step by replay");
-                self.spawn_model_step(operation_id, prompt, tools);
+                self.spawn_model_step(operation_id, plan, tools);
             }
             OperationState::ToolEffectPending { .. } => {
                 let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
@@ -938,6 +946,7 @@ impl<P: Provider> SessionRuntime<P> {
                             Vec::new(),
                             vec![effect.clone()],
                             settled,
+                            Vec::new(),
                             Vec::new(),
                             Vec::new(),
                             Vec::new(),
@@ -983,6 +992,7 @@ impl<P: Provider> SessionRuntime<P> {
                             Vec::new(),
                             settled,
                             indeterminate,
+                            Vec::new(),
                             Vec::new(),
                             Vec::new(),
                         );
@@ -1108,6 +1118,7 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
                 applied_ids,
+                Vec::new(),
             );
             (staged, drained, request, new_entry_seq)
         };
@@ -1127,13 +1138,11 @@ impl<P: Provider> SessionRuntime<P> {
     /// Commit the model-step effect intent, then spawn the provider
     /// effect. Returns false when persistence failed.
     async fn start_model_step(&mut self) -> bool {
-        let prompt = project_transcript(&self.entries);
+        let plan = project(&self.entries);
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
             .machine
-            .apply(Transition::StartModelStep {
-                prompt: prompt.clone(),
-            })
+            .apply(Transition::StartModelStep { plan: plan.clone() })
             .expect("start model step from a quiescent state");
         let EffectIntent::ModelStep {
             operation_id,
@@ -1147,7 +1156,7 @@ impl<P: Provider> SessionRuntime<P> {
             id: EffectId::generate(),
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({ "prompt": prompt, "tools": tools }),
+            effective_input: serde_json::json!({ "plan": plan, "tools": tools }),
             attempt: 1,
         };
         // The pending effect is part of the checkpoint: it must be on the
@@ -1164,6 +1173,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
@@ -1172,7 +1182,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
-        self.spawn_model_step(operation_id, prompt, tools);
+        self.spawn_model_step(operation_id, plan, tools);
         true
     }
 
@@ -1216,6 +1226,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
@@ -1249,7 +1260,7 @@ impl<P: Provider> SessionRuntime<P> {
     fn spawn_model_step(
         &mut self,
         operation_id: OperationId,
-        prompt: String,
+        plan: ContextPlan,
         tools: Vec<ToolSpec>,
     ) {
         let provider = Arc::clone(&self.provider);
@@ -1264,7 +1275,7 @@ impl<P: Provider> SessionRuntime<P> {
         let request = ProviderRequest {
             operation_id,
             step,
-            prompt,
+            plan,
             tools,
         };
         debug!(%operation_id, step, "starting model step effect");
@@ -1334,6 +1345,9 @@ impl<P: Provider> SessionRuntime<P> {
                     text,
                 });
             }
+            EngineSignal::UsageUpdate { usage, .. } => {
+                self.draft_usage = Some(usage);
+            }
             EngineSignal::ToolCallCompleted { call, .. } => {
                 if call.operation_id != active.machine.operation_id() {
                     debug!(?call, "dropped tool call attributed to another operation");
@@ -1402,6 +1416,19 @@ impl<P: Provider> SessionRuntime<P> {
             })
             .into_iter()
             .collect();
+        // Usage persists with the settlement, independent of operation
+        // success (DESIGN.md §27.2).
+        let usage = self
+            .draft_usage
+            .take()
+            .map(|u| {
+                vec![UsageRecord {
+                    step: self.model_step,
+                    input_tokens: u.input,
+                    output_tokens: u.output,
+                }]
+            })
+            .unwrap_or_default();
         let (request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
@@ -1413,6 +1440,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            usage,
         );
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
@@ -1457,6 +1485,7 @@ impl<P: Provider> SessionRuntime<P> {
             applied.entries.clone(),
             Vec::new(),
             settled,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1515,6 +1544,7 @@ impl<P: Provider> SessionRuntime<P> {
             &staged,
             staged.state_seq + 1,
             self.next_entry_seq,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1647,6 +1677,7 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             );
             match self.store.commit(request).await {
                 Ok(()) => {
@@ -1766,6 +1797,7 @@ fn build_commit_request(
     indeterminate_effects: Vec<EffectId>,
     inbox: Vec<InboxRecord>,
     inbox_applied: Vec<InboxId>,
+    usage: Vec<UsageRecord>,
 ) -> (CommitRequest, u64) {
     let mut seq = next_entry_seq;
     let entries = entries
@@ -1798,6 +1830,7 @@ fn build_commit_request(
         indeterminate_effects,
         inbox,
         inbox_applied,
+        usage,
     };
     (request, seq)
 }
@@ -1810,6 +1843,7 @@ fn signal_operation_id(signal: &EngineSignal) -> OperationId {
     match signal {
         EngineSignal::TextDelta { operation_id, .. }
         | EngineSignal::ToolCallCompleted { operation_id, .. }
+        | EngineSignal::UsageUpdate { operation_id, .. }
         | EngineSignal::Completed { operation_id, .. }
         | EngineSignal::Failed { operation_id, .. }
         | EngineSignal::Cancelled { operation_id, .. }
@@ -1821,6 +1855,7 @@ fn signal_step(signal: &EngineSignal) -> u64 {
     match signal {
         EngineSignal::TextDelta { step, .. }
         | EngineSignal::ToolCallCompleted { step, .. }
+        | EngineSignal::UsageUpdate { step, .. }
         | EngineSignal::Completed { step, .. }
         | EngineSignal::Failed { step, .. }
         | EngineSignal::Cancelled { step, .. }
