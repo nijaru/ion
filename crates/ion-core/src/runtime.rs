@@ -1038,9 +1038,9 @@ impl<P: Provider> SessionRuntime<P> {
                         warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
                         self.spawn_tool_effect(Some(effect_id), call);
                     }
-                    RecoveryClass::NeverReplay | RecoveryClass::Reconcile => {
-                        // No reconciliation evidence exists yet (§12.3);
-                        // an unresolved effect of this class is
+                    RecoveryClass::NeverReplay => {
+                        // Side effects cannot be classified (§12.4); an
+                        // unresolved effect of this class is
                         // indeterminate, never replayed.
                         let mut staged = self.operation.clone().expect("operation present");
                         let applied = staged
@@ -1077,6 +1077,178 @@ impl<P: Provider> SessionRuntime<P> {
                         self.operation = Some(staged);
                         warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
                         self.advance().await;
+                    }
+
+                    RecoveryClass::Reconcile => {
+                        // §12.3: classify the pending file mutation
+                        // against the recorded evidence and the file
+                        // state found after process loss.
+                        let evidence = open
+                            .effective_input
+                            .get("reconciliation")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let verdict = match &evidence {
+                            serde_json::Value::Null => crate::tool::ReconcileVerdict::Unknown,
+                            evidence => {
+                                let current = match evidence.get("path").and_then(|v| v.as_str()) {
+                                    Some(path) => {
+                                        crate::tool::file_hash(std::path::Path::new(path)).await
+                                    }
+                                    None => None,
+                                };
+                                crate::tool::classify_reconciliation(evidence, current)
+                            }
+                        };
+                        match verdict {
+                            crate::tool::ReconcileVerdict::SafeToExecute => {
+                                // The evidence proves re-execution is
+                                // exactly-once: the file still matches
+                                // the recorded preimage.
+                                let call = tool_call_from_input(&open.effective_input)
+                                    .unwrap_or_else(|| {
+                                        panic!("reconcilable tool effect without a usable input")
+                                    });
+                                let mut staged = self.operation.clone().expect("operation present");
+                                staged
+                                    .machine
+                                    .apply(Transition::RecoverTool { call: call.clone() })
+                                    .expect("recover a pending reconcilable tool effect");
+                                let settled = vec![SettledEffect {
+                                    id: open.id,
+                                    settlement: serde_json::json!({
+                                        "recovered": "reconciled_preimage_match",
+                                    }),
+                                }];
+                                let effect = EffectRecord {
+                                    id: EffectId::generate(),
+                                    kind: open.kind.clone(),
+                                    recovery_class: open.recovery_class,
+                                    effective_input: open.effective_input.clone(),
+                                    attempt: open.attempt + 1,
+                                };
+                                let effect_id = effect.id;
+                                let (request, new_entry_seq) = build_commit_request(
+                                    self.session_id,
+                                    &staged,
+                                    staged.state_seq + 1,
+                                    self.next_entry_seq,
+                                    Vec::new(),
+                                    vec![effect.clone()],
+                                    settled,
+                                    Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                );
+                                if let Err(err) = self.store.commit(request).await {
+                                    self.fail_operation_on_persistence(err).await;
+                                    return;
+                                }
+                                let operation_id = staged.machine.operation_id();
+                                self.next_entry_seq = new_entry_seq;
+                                staged.state_seq += 1;
+                                staged.open_effect = Some(effect.clone());
+                                self.operation = Some(staged);
+                                self.emit(RuntimeEvent::ToolStarted {
+                                    cursor: RuntimeCursor::default(),
+                                    operation_id,
+                                    call_id: call.call_id,
+                                    tool: call.name.clone(),
+                                });
+                                self.spawn_tool_effect(Some(effect_id), call);
+                                info!(%operation_id, "reconciled a pending file mutation by preimage match");
+                            }
+                            crate::tool::ReconcileVerdict::AlreadyApplied => {
+                                // The postimage is on disk: settle the
+                                // effect as completed without repeating
+                                // it.
+                                let call_id = open
+                                    .effective_input
+                                    .get("call_id")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or_default();
+                                let mut staged = self.operation.clone().expect("operation present");
+                                let applied = staged
+                                    .machine
+                                    .apply(Transition::ToolSettled {
+                                        result: ToolResult::Ok {
+                                            call_id,
+                                            output: "recovered: already applied".to_owned(),
+                                        },
+                                    })
+                                    .expect("settle an already-applied reconcilable effect");
+                                let settled = vec![SettledEffect {
+                                    id: open.id,
+                                    settlement: serde_json::json!({
+                                        "recovered": "reconciled_postimage_match",
+                                    }),
+                                }];
+                                let (request, new_entry_seq) = build_commit_request(
+                                    self.session_id,
+                                    &staged,
+                                    staged.state_seq + 1,
+                                    self.next_entry_seq,
+                                    applied.entries.clone(),
+                                    Vec::new(),
+                                    settled,
+                                    Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                );
+                                if let Err(err) = self.store.commit(request).await {
+                                    self.fail_operation_on_persistence(err).await;
+                                    return;
+                                }
+                                let operation_id = staged.machine.operation_id();
+                                self.next_entry_seq = new_entry_seq;
+                                staged.state_seq += 1;
+                                staged.open_effect = None;
+                                self.entries.extend(applied.entries);
+                                self.operation = Some(staged);
+                                info!(%operation_id, "reconciled a pending file mutation as already applied");
+                                self.advance().await;
+                            }
+                            crate::tool::ReconcileVerdict::Conflict
+                            | crate::tool::ReconcileVerdict::Unknown => {
+                                // The file matches neither record, or no
+                                // evidence exists: never overwrite; the
+                                // user decides (§12.2, §12.3).
+                                let mut staged = self.operation.clone().expect("operation present");
+                                let applied = staged
+                                    .machine
+                                    .apply(Transition::SettleIndeterminate)
+                                    .expect("settle an unresolved effect as indeterminate");
+                                let indeterminate = vec![open.id];
+                                let (request, new_entry_seq) = build_commit_request(
+                                    self.session_id,
+                                    &staged,
+                                    staged.state_seq + 1,
+                                    self.next_entry_seq,
+                                    applied.entries.clone(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                    indeterminate,
+                                    Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
+                                );
+                                if let Err(err) = self.store.commit(request).await {
+                                    self.fail_operation_on_persistence(err).await;
+                                    return;
+                                }
+                                let operation_id = staged.machine.operation_id();
+                                self.next_entry_seq = new_entry_seq;
+                                staged.state_seq += 1;
+                                staged.open_effect = None;
+                                self.entries.extend(applied.entries);
+                                self.emit_terminal_state(&applied.state);
+                                self.operation = Some(staged);
+                                warn!(%operation_id, "a pending file mutation settled as indeterminate (conflict)");
+                                self.advance().await;
+                            }
+                        }
                     }
                 }
             }
@@ -1316,10 +1488,31 @@ impl<P: Provider> SessionRuntime<P> {
             return true;
         }
 
-        let denial: Option<String> = match decision {
+        let mut denial: Option<String> = match decision {
             PolicyDecision::Deny(message) => Some(message),
             PolicyDecision::Allow => self.tools.validate(&call.name, &call.arguments).err(),
             PolicyDecision::ApprovalRequired => unreachable!("handled above"),
+        };
+        // §12.3: file-mutating effects persist reconciliation evidence
+        // with the intent, before execution. An evidence failure means
+        // the invocation could not be classified, so it is denied
+        // model-visibly instead of admitted blind.
+        let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
+            match crate::tool::reconciliation_evidence(
+                self.tools.cwd(),
+                &call.name,
+                &call.arguments,
+            )
+            .await
+            {
+                Ok(evidence) => Some(evidence),
+                Err(message) => {
+                    denial = Some(message);
+                    None
+                }
+            }
+        } else {
+            None
         };
         let mut staged = self.operation.clone().expect("admit needs an operation");
         let applied = staged
@@ -1341,6 +1534,7 @@ impl<P: Provider> SessionRuntime<P> {
                 "arguments": call.arguments,
                 "call_id": call.call_id,
                 "canonical": canonical.ok(),
+                "reconciliation": evidence,
             }),
             attempt: 1,
         };

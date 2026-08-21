@@ -173,6 +173,117 @@ pub fn normalize(path: &std::path::Path) -> std::path::PathBuf {
 
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
 /// can clone the working directory cheaply before invoking a tool.
+/// SHA-256 of one file's contents, or `None` when it does not exist.
+pub(crate) async fn file_hash(path: &Path) -> Option<[u8; 32]> {
+    match fs::read(path).await {
+        Ok(bytes) => {
+            use sha2::{Digest, Sha256};
+            Some(Sha256::digest(&bytes).into())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => None,
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Reconciliation evidence for one write/edit invocation (DESIGN.md
+/// §12.3), computed at admission before the effect intent is
+/// committed: target path, preimage existence/hash, and the intended
+/// postimage hash. Pure with respect to the file's future: only reads.
+pub async fn reconciliation_evidence(
+    cwd: &Path,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let path_arg = arguments
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing string argument: path".to_owned())?;
+    let full = resolve_under(cwd, path_arg).map_err(|e| e.output)?;
+    let preimage = match file_hash(&full).await {
+        Some(hash) => serde_json::json!({ "exists": true, "hash": hex(&hash) }),
+        None => serde_json::json!({ "exists": false }),
+    };
+    let postimage: Vec<u8> = match name {
+        "write" => arguments
+            .get("contents")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing string argument: contents".to_owned())?
+            .as_bytes()
+            .to_vec(),
+        "edit" => {
+            let old_str = arguments
+                .get("old_str")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing string argument: old_str".to_owned())?;
+            let new_str = arguments
+                .get("new_str")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let original = fs::read_to_string(&full)
+                .await
+                .map_err(|err| format!("read failed: {err}"))?;
+            if !original.contains(old_str) {
+                return Err("old_str not found in file".to_owned());
+            }
+            original.replacen(old_str, new_str, 1).into_bytes()
+        }
+        other => return Err(format!("tool {other} takes no reconciliation evidence")),
+    };
+    use sha2::{Digest, Sha256};
+    let postimage_hash = Sha256::digest(&postimage);
+    Ok(serde_json::json!({
+        "path": full,
+        "preimage": preimage,
+        "postimage_hash": hex(postimage_hash.as_slice()),
+    }))
+}
+
+/// What recovery may do with a pending Reconcile effect, given the
+/// recorded evidence and the file state found after process loss
+/// (DESIGN.md §12.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileVerdict {
+    /// The postimage is already on disk: the effect completed before
+    /// the crash; settle without repeating.
+    AlreadyApplied,
+    /// The file still matches the recorded preimage: safe to execute
+    /// the intended write exactly once.
+    SafeToExecute,
+    /// The file matches neither: conflict; never overwrite.
+    Conflict,
+    /// No usable evidence (effect predates evidence or is malformed).
+    Unknown,
+}
+
+/// Classify a pending Reconcile effect against the current file state.
+#[must_use]
+pub fn classify_reconciliation(evidence: &Value, current: Option<[u8; 32]>) -> ReconcileVerdict {
+    let current_hex = current.map(|hash| hex(&hash));
+    let postimage = evidence.get("postimage_hash").and_then(|v| v.as_str());
+    if postimage == current_hex.as_deref() && postimage.is_some() {
+        return ReconcileVerdict::AlreadyApplied;
+    }
+    let Some(preimage) = evidence.get("preimage") else {
+        return ReconcileVerdict::Unknown;
+    };
+    let preimage_matches = if preimage.get("exists").and_then(|v| v.as_bool()) == Some(true) {
+        preimage.get("hash").and_then(|v| v.as_str()) == current_hex.as_deref()
+    } else {
+        current.is_none()
+    };
+    if preimage_matches {
+        ReconcileVerdict::SafeToExecute
+    } else {
+        ReconcileVerdict::Conflict
+    }
+}
+
+/// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
+/// can clone the working directory cheaply before invoking a tool.
 #[derive(Clone)]
 pub struct ToolRegistry {
     cwd: Arc<Path>,
@@ -322,11 +433,11 @@ impl ToolRegistry {
 /// Build the default core-tool entries under `cwd`.
 fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
-    // Recovery classes per DESIGN.md §12.2: reads are replay-safe; bash
-    // and anything unknown never replay automatically. write/edit are
-    // NeverReplay until §12.3 preimage/postimage evidence is persisted
-    // with the intent; downgrading them to Reconcile without that
-    // evidence would claim a reconciliation Ion cannot perform.
+    // Recovery classes per DESIGN.md §12.2/§12.3: reads are
+    // replay-safe; bash never replays automatically (§12.4); write/edit
+    // reconcile because admission persists preimage/postimage evidence
+    // with the intent, so recovery can classify the file state it
+    // finds.
     let tools: Vec<(Arc<dyn Tool>, RecoveryClass)> = vec![
         (
             Arc::new(ReadTool {
