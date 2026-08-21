@@ -1918,6 +1918,8 @@ impl<P: Provider> SessionRuntime<P> {
                     step: self.model_step,
                     input_tokens: u.input,
                     output_tokens: u.output,
+                    cache_read_tokens: u.cache_read,
+                    cache_write_tokens: u.cache_write,
                 }]
             })
             .unwrap_or_default();

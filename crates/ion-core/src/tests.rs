@@ -2141,6 +2141,8 @@ async fn usage_persists_with_the_settlement() {
             ScriptedMessage::Usage(crate::provider::TokenUsage {
                 input: 100,
                 output: 20,
+                cache_read: 60,
+                cache_write: 0,
             }),
             ScriptedMessage::text("done"),
         ]),
@@ -2163,6 +2165,8 @@ async fn usage_persists_with_the_settlement() {
     );
     assert_eq!(rows[0].input_tokens, 100);
     assert_eq!(rows[0].output_tokens, 20);
+    assert_eq!(rows[0].cache_read_tokens, 60);
+    assert_eq!(rows[0].cache_write_tokens, 0);
     assert_eq!(rows[0].step, 1);
 }
 
@@ -2176,6 +2180,8 @@ async fn usage_survives_a_failed_operation() {
             ScriptedMessage::Usage(crate::provider::TokenUsage {
                 input: 5,
                 output: 1,
+                cache_read: 0,
+                cache_write: 0,
             }),
             ScriptedMessage::Fail {
                 message: "boom".to_owned(),
@@ -2892,6 +2898,8 @@ impl Provider for CompactionProbe {
                         usage: crate::provider::TokenUsage {
                             input: 200_000,
                             output: 10,
+                            cache_read: 0,
+                            cache_write: 0,
                         },
                     })
                     .await;

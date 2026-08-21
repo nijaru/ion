@@ -366,17 +366,32 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
         return Err(format!("provider error: {}", value["error"]));
     }
     let mut events = Vec::new();
+    let usage_value = value.get("usage");
     if let (Some(input), Some(output)) = (
-        value
-            .get("usage")
+        usage_value
             .and_then(|usage| usage.get("prompt_tokens"))
             .and_then(|v| v.as_u64()),
-        value
-            .get("usage")
+        usage_value
             .and_then(|usage| usage.get("completion_tokens"))
             .and_then(|v| v.as_u64()),
     ) {
-        events.push(StreamEvent::Usage(TokenUsage { input, output }));
+        let cache_read = usage_value
+            .and_then(|usage| usage.get("prompt_tokens_details"))
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        // Anthropic-style cache writes, when the upstream passes them
+        // through OpenRouter.
+        let cache_write = usage_value
+            .and_then(|usage| usage.get("cache_creation_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        events.push(StreamEvent::Usage(TokenUsage {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }));
     }
     let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
         // Usage-only terminal chunks carry an empty choices array.
@@ -620,5 +635,29 @@ mod tests {
             .collect();
         assert_eq!(usages.len(), 1);
         assert_eq!((usages[0].input, usages[0].output), (120, 34));
+        assert_eq!(usages[0].cache_read, 0);
+        assert_eq!(usages[0].cache_write, 0);
+    }
+
+    #[tokio::test]
+    async fn cache_metrics_decode_from_usage_details() {
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":10,\
+             \"prompt_tokens_details\":{\"cached_tokens\":420},\"cache_creation_input_tokens\":80}}\n\n\
+             data: [DONE]\n\n",
+            None,
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+        let usages: Vec<_> = signals
+            .iter()
+            .filter_map(|signal| match signal {
+                EngineSignal::UsageUpdate { usage, .. } => Some(*usage),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(usages.len(), 1);
+        assert_eq!(usages[0].cache_read, 420);
+        assert_eq!(usages[0].cache_write, 80);
     }
 }

@@ -23,6 +23,10 @@ use crate::tool::{ToolCall, ToolSpec};
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
+    /// Tokens served from the provider prompt cache (§14.4).
+    pub cache_read: u64,
+    /// Tokens written to the provider prompt cache (§14.4).
+    pub cache_write: u64,
 }
 
 /// What one model step asks the provider: the operation it belongs to,

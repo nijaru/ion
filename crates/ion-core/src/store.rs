@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS usage (
     step INTEGER NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     recorded_at INTEGER NOT NULL
 );
 
@@ -221,6 +223,8 @@ pub struct UsageRecord {
     pub step: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
 }
 
 /// One usage row as read back for reporting.
@@ -230,6 +234,8 @@ pub struct UsageRow {
     pub step: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
 }
 
 /// A session loaded from the store.
@@ -494,7 +500,8 @@ fn usage_rows(
     session_id: SessionId,
 ) -> Result<Vec<UsageRow>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT operation_id, step, input_tokens, output_tokens
+        "SELECT operation_id, step, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens
          FROM usage WHERE session_id = ?1 ORDER BY id",
     )?;
     let rows = statement
@@ -508,6 +515,8 @@ fn usage_rows(
                 step: row.get::<_, i64>(1)? as u64,
                 input_tokens: row.get::<_, i64>(2)? as u64,
                 output_tokens: row.get::<_, i64>(3)? as u64,
+                cache_read_tokens: row.get::<_, i64>(4)? as u64,
+                cache_write_tokens: row.get::<_, i64>(5)? as u64,
             })
         })?
         .collect::<Result<Vec<_>, rusqlite::Error>>()?;
@@ -584,14 +593,16 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
     }
     for usage in &request.usage {
         tx.execute(
-            "INSERT INTO usage (session_id, operation_id, step, input_tokens, output_tokens, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO usage (session_id, operation_id, step, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 request.session_id.as_uuid().to_string(),
                 request.operation_id.as_uuid().to_string(),
                 usage.step as i64,
                 usage.input_tokens as i64,
                 usage.output_tokens as i64,
+                usage.cache_read_tokens as i64,
+                usage.cache_write_tokens as i64,
                 now_ms(),
             ],
         )?;

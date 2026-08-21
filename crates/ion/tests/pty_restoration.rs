@@ -45,6 +45,7 @@ fn strip_ansi(text: &str) -> String {
 
 struct PtySession {
     _settings: tempfile::NamedTempFile,
+    _data_root: tempfile::TempDir,
     output: Arc<Mutex<Vec<u8>>>,
     master_write: std::fs::File,
     slave: std::fs::File,
@@ -83,8 +84,12 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
         )
     };
     let settings = scripted_settings();
+    let data_root = tempfile::tempdir().expect("temp data root");
     let mut command = Command::new(env!("CARGO_BIN_EXE_ion"));
     command.env("ION_SETTINGS", settings.path());
+    // Isolate the session store: the schema version gate must never
+    // see (or refuse) the developer's real database.
+    command.env("XDG_DATA_HOME", data_root.path());
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -153,6 +158,7 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
 
     PtySession {
         _settings: settings,
+        _data_root: data_root,
         output: collected,
         master_write: master_write.into(),
         slave: held_slave.into(),
