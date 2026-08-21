@@ -3466,3 +3466,71 @@ async fn repeated_overflow_fails_visibly() {
         .count();
     assert_eq!(summarize_steps, 1, "only one summarize step may run");
 }
+
+// ---- MCP service (DESIGN.md §19) ----
+
+fn fake_mcp_server() -> crate::ServerDef {
+    let script = format!(
+        "{}/tests/fixtures/fake_mcp_server.py",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    crate::ServerDef {
+        name: "fake".to_owned(),
+        command: "python3".to_owned(),
+        args: vec![script],
+    }
+}
+
+#[tokio::test]
+async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
+    let catalog = crate::ToolCatalog::default();
+    crate::McpService::new()
+        .start_into(&[fake_mcp_server()], &catalog)
+        .await;
+
+    // Published under a namespaced scope, visible to model steps.
+    let specs = catalog.specs();
+    let echo = specs
+        .iter()
+        .find(|spec| spec.name == "fake__echo")
+        .expect("the fake server's echo tool must be registered");
+    assert_eq!(echo.description, "Echo the message back");
+
+    // Invocation through the normal Tool contract.
+    let outcome = catalog
+        .execute(
+            "fake__echo",
+            &json!({ "message": "hello" }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.output);
+    assert_eq!(outcome.output, "echo: hello");
+
+    // Server-side failures stay model-visible tool errors.
+    let outcome = catalog
+        .execute(
+            "fake__echo",
+            &json!({ "message": "hi", "fail": true }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    assert!(outcome.is_error);
+    assert!(outcome.output.contains("forced failure"));
+}
+
+#[tokio::test]
+async fn broken_mcp_server_never_blocks_startup() {
+    let catalog = crate::ToolCatalog::default();
+    let mut defs = vec![fake_mcp_server()];
+    defs.push(crate::ServerDef {
+        name: "missing".to_owned(),
+        command: "/nonexistent/ion-missing-binary".to_owned(),
+        args: vec![],
+    });
+    crate::McpService::new().start_into(&defs, &catalog).await;
+    assert!(
+        catalog.specs().iter().any(|s| s.name == "fake__echo"),
+        "the healthy server still publishes"
+    );
+}

@@ -11,6 +11,7 @@
 mod context;
 mod error;
 mod ids;
+mod mcp;
 mod policy;
 mod provider;
 mod runtime;
@@ -21,6 +22,7 @@ mod tool;
 pub use context::{ContextMessage, ContextPlan, SYSTEM_SECTION, project};
 pub use error::{CommandError, RuntimeError};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
+pub use mcp::{McpService, ServerDef};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use provider::{
     EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider, TokenUsage,

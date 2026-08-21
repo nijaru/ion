@@ -46,6 +46,28 @@ pub struct Settings {
     theme: Option<Theme>,
     #[serde(default)]
     pub keybindings: Keybindings,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// One `[[mcp_servers]]` entry: a stdio MCP server launched at
+/// startup (DESIGN.md §19).
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+impl From<McpServerConfig> for ion_core::ServerDef {
+    fn from(config: McpServerConfig) -> Self {
+        Self {
+            name: config.name,
+            command: config.command,
+            args: config.args,
+        }
+    }
 }
 
 impl Settings {
@@ -58,6 +80,7 @@ impl Settings {
             default_provider: Some("openrouter".to_owned()),
             theme: None,
             keybindings: Keybindings::default(),
+            mcp_servers: Vec::new(),
         }
     }
     pub fn path() -> Option<PathBuf> {

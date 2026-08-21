@@ -7,8 +7,7 @@ use std::sync::Arc;
 use clap::Parser;
 use futures_util::future::Either;
 use ion_core::{
-    Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, SessionStore, ToolRegistry,
-    default_db_path,
+    Runtime, RuntimeError, ScriptedMessage, ScriptedProvider, SessionStore, default_db_path,
 };
 use std::future::Future;
 
@@ -105,6 +104,23 @@ impl ion_core::Provider for CliProvider {
     }
 }
 
+/// Compose the tool surface: core tools plus every configured MCP
+/// server's published tools. A failing server logs and is skipped -
+/// one broken server never blocks startup (DESIGN.md §19.1).
+async fn build_catalog(settings: &Settings) -> ion_core::ToolCatalog {
+    let tools = ion_core::ToolCatalog::default();
+    if !settings.mcp_servers.is_empty() {
+        let defs: Vec<ion_core::ServerDef> = settings
+            .mcp_servers
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect();
+        ion_core::McpService::new().start_into(&defs, &tools).await;
+    }
+    tools
+}
+
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let model = match resolve_model(cli.model.clone(), settings) {
         Ok(model) => model,
@@ -170,7 +186,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     } else {
         None
     };
-    let tools = ToolRegistry::default();
+    let tools = build_catalog(settings).await;
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
         Arc::new(ion_core::DefaultPolicy)
     } else {
@@ -247,7 +263,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
             "scripted: {prompt}\n"
         ))])),
     };
-    let tools = ToolRegistry::default();
+    let tools = build_catalog(settings).await;
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
