@@ -30,6 +30,7 @@ pub use session::{
 pub use store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
     InboxStatus, LoadedOperation, LoadedSession, SessionRecord, SessionStore, StoreError,
+    default_db_path,
 };
 pub use tool::{
     BashTool, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool, ToolCall, ToolCallId,
