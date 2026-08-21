@@ -1133,7 +1133,9 @@ Stable-prefix rules:
 - do not rewrite old messages merely to reduce token count;
 - avoid adding/removing/reordering tools every turn;
 - make compaction an explicit cache reset;
-- record provider cache-read/cache-write metrics when available.
+- record provider cache-read/cache-write metrics when available. This
+  is required, not optional: the compaction safety net (14.7.4)
+  computes `context_tokens` from full usage including cache reads.
 
 Tool/config changes that invalidate the prefix should be observable as such.
 
@@ -1184,6 +1186,109 @@ The projector uses the summary + suffix for future model context.
 Provider-native opaque compaction MAY be retained as an optimization only if there is also a readable portable representation.
 
 Do not aggressively prune arbitrary middle history by default. It harms both evidence and prompt-cache reuse.
+
+### 14.7.1 Who decides to compact
+
+Compaction is decided at three levels, in order of preference:
+
+1. **The model, at a genuine task boundary**, informed by usage hints
+   (14.7.2) and acting through the `compact` tool (14.7.3). This is the
+   primary path: the model knows whether it is mid-refactor or between
+   tasks; a fixed token count does not.
+2. **The harness, as a safety net** (14.7.4), only when measured usage
+   approaches the model's actual context window. The threshold is
+   relative to the window, never a fixed token count: a fixed number is
+   wrong for every model except the one it was tuned for.
+3. **Overflow recovery** (14.7.5), when the provider rejects a request
+   because the context exceeded the window despite the estimates.
+
+### 14.7.2 Context-usage hints
+
+The projector MAY append a synthetic trailing user message carrying
+usage data, so the model can reason about its own context budget:
+
+```text
+[ctx 128k/1m]
+```
+
+- Data only. No priming language ("context is growing"); the number is
+  the signal. Labels prime reflexive compaction.
+- A `[>200k]` marker flags the higher-cost tier; it does not request
+  action.
+- Hints are derived, never persisted: they are computed at projection
+  time from the usage ledger (14.4) exactly like the system section,
+  and re-derivable from durable usage entries. They must sit at the
+  trailing edge of the prompt so they do not invalidate prefix-cache
+  reuse of earlier content.
+- Thresholds: the first hint when usage crosses `min(0.5 × window,
+  128k)` tokens; subsequent hints are throttled so they do not repeat
+  on every step — emit again only when usage has grown by a material
+  delta (on the order of 5% of the window or 25k tokens, whichever is
+  smaller).
+- If the model's context window is unknown, hint at the 128k absolute
+  threshold and omit the denominator (`[ctx 128k/?]`).
+
+### 14.7.3 Model-invoked compaction
+
+Expose a `compact` tool to the model:
+
+```text
+compact(instructions?: string, continue_after_compaction?: bool)
+```
+
+- Policy: always allowed; compaction is a harness maintenance action,
+  not a capability grant.
+- Semantics: the tool call ends the current run's planning. The harness
+  lets the run settle (durable settlement of the current operation),
+  then commits the Compaction effect intent (ReplaySafe, §12) with the
+  caller's instructions recorded in `effective_input`.
+- `continue_after_compaction`: when true, after the compaction commits
+  the harness starts one hidden recovery turn whose prompt instructs
+  the model to resume only unfinished work without repeating settled
+  effects, then give a final response. The recovery turn is a normal
+  accepted operation marked hidden in presentation; it is durable like
+  any other.
+- Failure follows the existing rule: continue without a baseline
+  (warn), unless cancel was requested.
+
+### 14.7.4 Safety-net automatic compaction
+
+At continuation boundaries only (run settled, before the next model
+step — compacting mid-run buys nothing), the harness compacts when:
+
+```text
+context_tokens > context_window − reserve_tokens
+```
+
+- `context_tokens` comes from the usage ledger's most recent settled
+  step: input + output + cache_read + cache_write (14.4), plus an
+  estimate for trailing content newer than the last usage report.
+- `reserve_tokens` defaults to 16k (summary prompt + output headroom)
+  and is configurable.
+- Requires a known context window from model metadata (15.x). When the
+  window is unknown, the safety net is disabled and overflow recovery
+  (14.7.5) is the backstop.
+- The re-compaction guard stands: never compact twice in a row on the
+  same boundary.
+
+### 14.7.5 Overflow recovery
+
+When the provider rejects a request because the context exceeded the
+window, the harness MAY run one compaction and retry the step once.
+This is the only path that may discard the failed attempt's partial
+request state, because the attempt produced no durable effect beyond
+the already-committed intent. Repeated overflow after a compaction
+retry fails the operation visibly; it must not loop.
+
+---
+
+### 14.8 Model metadata
+
+Provider adapters expose per-model metadata, minimally the context
+window size, as part of the adapter contract (15.x). The compaction
+hints (14.7.2) and safety net (14.7.4) consume it; unknown windows
+degrade gracefully (absolute hint threshold, safety net disabled,
+overflow recovery as backstop). Adapters MUST NOT guess a window.
 
 ---
 
@@ -2106,7 +2211,9 @@ is the full context architecture:
 - prompt-cache discipline/metrics;
 - provider capability flags;
 - strict tool-call handling;
-- readable compaction;
+- readable compaction per 14.7: usage hints, the model-invoked
+  `compact` tool, the window-relative safety net, overflow recovery,
+  and full usage capture (cache reads) in the ledger;
 - instruction/context changes at safe boundaries;
 - trust + approval pipeline.
 
@@ -2232,7 +2339,7 @@ These should be resolved by evidence during their owning implementation work:
 1. Exact Rust variants/fields of total `OperationState`.
 2. Whether `operation_states` remains append-only total snapshots forever or later gets compaction.
 3. Exact context manifest storage encoding/content-addressing scheme.
-4. Exact automatic compaction thresholds and summarization prompt.
+4. ~~Exact automatic compaction thresholds~~ Resolved (2026-08-20, §14.7.1–14.7.5): hints at min(50% window, 128k) throttled by delta; safety net at `window − reserve_tokens` (16k default); overflow recovery retries once. Summarization prompt remains open until live tuning.
 5. Exact default child concurrency/depth/token budgets.
 6. Exact initial child workspace modes and when worktree support becomes worth it.
 7. OS credential backend and migration from environment variables.
