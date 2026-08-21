@@ -484,6 +484,40 @@ struct Subscriber {
     tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
 }
 
+/// A model-invoked compaction request parsed from `compact` tool
+/// arguments (DESIGN.md §14.7.3).
+#[derive(Debug, Clone)]
+struct PendingCompact {
+    instructions: Option<String>,
+    continue_after: bool,
+}
+
+/// Parse `compact` tool arguments. A malformed payload is a
+/// model-visible denial, not a harness failure.
+fn parse_compact_arguments(arguments: &serde_json::Value) -> Result<PendingCompact, String> {
+    let Some(object) = arguments.as_object() else {
+        return Err("compact arguments must be an object".to_owned());
+    };
+    let instructions = match object.get("instructions") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value @ serde_json::Value::String(_)) => {
+            Some(value.as_str().expect("string").to_owned())
+        }
+        Some(_) => return Err("compact instructions must be a string".to_owned()),
+    };
+    let continue_after = match object.get("continue_after_compaction") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(flag)) => *flag,
+        Some(_) => {
+            return Err("continue_after_compaction must be a boolean".to_owned());
+        }
+    };
+    Ok(PendingCompact {
+        instructions,
+        continue_after,
+    })
+}
+
 /// The live, in-memory side of the active operation. Cloned whole to
 /// stage a transition: a failed durable commit discards the staged clone
 /// and never mutates live state (DESIGN.md §26.2).
@@ -547,6 +581,15 @@ struct SessionRuntime<P> {
     /// Cached model context window (14.8); fetched from the adapter
     /// once, on first use.
     context_window: Option<u64>,
+    /// A model-invoked compaction (14.7.3) waiting for the run to
+    /// settle; consumed at the next continuation boundary.
+    pending_compact: Option<PendingCompact>,
+    /// Whether the consumed compaction should be followed by a hidden
+    /// recovery turn.
+    recovery_after_compaction: bool,
+    /// The running compaction was model-invoked (14.7.3); without a
+    /// recovery request it finishes the operation instead of prompting.
+    compaction_was_model_invoked: bool,
     /// The previous step was compaction itself; prevents the
     /// compaction step's own usage from re-triggering compaction.
     last_step_was_compaction: bool,
@@ -600,6 +643,9 @@ impl<P: Provider> SessionRuntime<P> {
             last_context_tokens: None,
             last_hint_tokens: None,
             context_window: None,
+            pending_compact: None,
+            recovery_after_compaction: false,
+            compaction_was_model_invoked: false,
             last_step_was_compaction: false,
             model_step: 0,
             subscribers: Vec::new(),
@@ -1392,10 +1438,20 @@ impl<P: Provider> SessionRuntime<P> {
                         }
                         continue;
                     }
+                    if let Some(request) = self.pending_compact.take() {
+                        // §14.7.3: the run has settled; compact now with
+                        // the caller's preservation instructions.
+                        self.recovery_after_compaction = request.continue_after;
+                        self.compaction_was_model_invoked = true;
+                        if !self.start_compaction(request.instructions).await {
+                            return;
+                        }
+                        return;
+                    }
                     if self.safety_net_compaction_due() {
                         // §14.7.4: compact at the continuation boundary
                         // when the context nears the model's window.
-                        if !self.start_compaction().await {
+                        if !self.start_compaction(None).await {
                             return;
                         }
                         return;
@@ -1525,11 +1581,15 @@ impl<P: Provider> SessionRuntime<P> {
     /// Commit the compaction effect intent, then spawn the provider
     /// effect that produces the readable summary. Returns false when
     /// persistence failed.
-    async fn start_compaction(&mut self) -> bool {
+    async fn start_compaction(&mut self, instructions: Option<String>) -> bool {
         let mut plan = project(&self.entries, self.first_entry_seq());
-        plan.messages.push(crate::context::ContextMessage::User {
-            content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
-        });
+        let mut content = crate::context::SUMMARIZE_INSTRUCTION.to_owned();
+        if let Some(instructions) = instructions {
+            content.push_str("\n\nPreservation instructions from the caller: ");
+            content.push_str(&instructions);
+        }
+        plan.messages
+            .push(crate::context::ContextMessage::User { content });
         let mut staged = self
             .operation
             .clone()
@@ -1642,12 +1702,27 @@ impl<P: Provider> SessionRuntime<P> {
             self.closed = true;
             return false;
         };
+        // The compact tool is a harness maintenance action (14.7.3):
+        // always allowed, never a capability grant. Its arguments are
+        // parsed here and consumed at the next continuation boundary;
+        // execution itself settles as a normal no-op tool result.
+        let mut compact_request: Option<Result<PendingCompact, String>> = None;
+        if call.name == "compact" {
+            compact_request = Some(parse_compact_arguments(&call.arguments));
+        }
         let canonical = self.tools.canonicalize(&call.name, &call.arguments);
-        let decision = match &canonical {
-            Ok(target) => self.policy.decide(&call.name, target),
-            // Canonicalization failure is a model-visible denial, not a
-            // harness failure: the model produced an unusable input.
-            Err(message) => PolicyDecision::Deny(message.clone()),
+        let decision = match &compact_request {
+            Some(Ok(_)) => PolicyDecision::Allow,
+            // Malformed compact arguments deny model-visibly with the
+            // parse message, before the policy gate sees the tool.
+            Some(Err(message)) => PolicyDecision::Deny(message.clone()),
+            None => match &canonical {
+                Ok(target) => self.policy.decide(&call.name, target),
+                // Canonicalization failure is a model-visible denial,
+                // not a harness failure: the model produced an unusable
+                // input.
+                Err(message) => PolicyDecision::Deny(message.clone()),
+            },
         };
         if decision == PolicyDecision::ApprovalRequired {
             // §17.4: nothing may execute, so nothing is committed as an
@@ -1691,7 +1766,14 @@ impl<P: Provider> SessionRuntime<P> {
 
         let mut denial: Option<String> = match decision {
             PolicyDecision::Deny(message) => Some(message),
-            PolicyDecision::Allow => self.tools.validate(&call.name, &call.arguments).err(),
+            PolicyDecision::Allow => match compact_request {
+                Some(Ok(request)) => {
+                    self.pending_compact = Some(request);
+                    None
+                }
+                Some(Err(message)) => Some(message),
+                None => self.tools.validate(&call.name, &call.arguments).err(),
+            },
             PolicyDecision::ApprovalRequired => unreachable!("handled above"),
         };
         // §12.3: file-mutating effects persist reconciliation evidence
@@ -2055,8 +2137,51 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.entries.extend(applied.entries);
+        if self.compaction_was_model_invoked && !self.recovery_after_compaction {
+            // 14.7.3: the compact tool call ended the run's planning;
+            // without a recovery request the operation is done.
+            self.compaction_was_model_invoked = false;
+            let mut staged = staged;
+            let applied = staged
+                .machine
+                .apply(Transition::FinishAfterCompaction)
+                .expect("finish after model-invoked compaction");
+            let (request, new_entry_seq) = build_commit_request(
+                self.session_id,
+                &staged,
+                staged.state_seq + 1,
+                new_entry_seq,
+                applied.entries.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            if let Err(err) = self.store.commit(request).await {
+                self.fail_operation_on_persistence(err).await;
+                return;
+            }
+            self.next_entry_seq = new_entry_seq;
+            self.entries.extend(applied.entries);
+            self.emit_terminal_state(&applied.state);
+            self.operation.take();
+            return;
+        }
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
+        if self.recovery_after_compaction {
+            self.recovery_after_compaction = false;
+            // §14.7.3: one hidden recovery turn that resumes only
+            // unfinished work without repeating settled effects.
+            if let Err(err) = self
+                .enqueue_inbox(InboxKind::Steer, crate::context::RESUME_MESSAGE.to_owned())
+                .await
+            {
+                warn!(?err, "recovery turn could not be enqueued");
+            }
+        }
         self.advance().await;
     }
 

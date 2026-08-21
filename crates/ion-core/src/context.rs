@@ -183,6 +183,13 @@ pub fn push_hint(plan: &mut ContextPlan, hint: String) {
     plan.messages.push(ContextMessage::User { content: hint });
 }
 
+/// The hidden recovery turn's prompt after a compaction with
+/// `continue_after_compaction` (DESIGN.md §14.7.3): resume only
+/// unfinished work without repeating settled effects.
+pub const RESUME_MESSAGE: &str = "The conversation context was just compacted. Resume only the \
+unfinished work from before the compaction; do not repeat any action that already completed. \
+When nothing remains, give a final response.";
+
 #[cfg(test)]
 mod hint_tests {
     use super::*;

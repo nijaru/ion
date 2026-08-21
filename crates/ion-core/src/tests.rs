@@ -3142,3 +3142,175 @@ async fn usage_hints_are_derived_trailing_messages_never_persisted() {
         "hints are never persisted"
     );
 }
+
+// ---- Model-invoked compaction (DESIGN.md §14.7.3) ----
+
+#[derive(Clone)]
+struct CompactToolProbe {
+    log: Arc<Mutex<Vec<ProviderRequest>>>,
+    compact_arguments: serde_json::Value,
+}
+
+impl CompactToolProbe {
+    fn requests(&self) -> Vec<ProviderRequest> {
+        self.log.lock().expect("log poisoned").clone()
+    }
+}
+
+impl Provider for CompactToolProbe {
+    fn run(
+        &self,
+        request: ProviderRequest,
+        _cancel: CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
+    ) -> impl Future<Output = ()> + Send {
+        let operation_id = request.operation_id;
+        let step = request.step;
+        let is_compaction = request.plan.messages.iter().any(|message| {
+            matches!(message, crate::context::ContextMessage::User { content }
+                if content.contains("Summarize the conversation"))
+        });
+        self.log.lock().expect("log poisoned").push(request);
+        async move {
+            if step == 1 {
+                let _ = out
+                    .send(EngineSignal::ToolCallCompleted {
+                        operation_id,
+                        step,
+                        call: crate::tool::ToolCall {
+                            operation_id,
+                            call_id: 1,
+                            name: "compact".to_owned(),
+                            arguments: self.compact_arguments.clone(),
+                        },
+                    })
+                    .await;
+            }
+            let text = if is_compaction {
+                "compact-summary: decisions kept; next step known"
+            } else {
+                "recovery complete"
+            };
+            let _ = out
+                .send(EngineSignal::TextDelta {
+                    operation_id,
+                    step,
+                    text: text.to_owned(),
+                })
+                .await;
+            let _ = out
+                .send(EngineSignal::Completed { operation_id, step })
+                .await;
+        }
+    }
+}
+
+async fn run_compact_tool_test(
+    arguments: serde_json::Value,
+) -> (Vec<ProviderRequest>, SessionStore, crate::SessionId) {
+    let probe = CompactToolProbe {
+        log: Arc::new(Mutex::new(Vec::new())),
+        compact_arguments: arguments,
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "operation must finish cleanly: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    (probe.requests(), store, session_id)
+}
+
+#[tokio::test]
+async fn compact_tool_compacts_with_instructions_and_recovers() {
+    let (requests, store, session_id) = run_compact_tool_test(json!({
+        "instructions": "keep the file paths and the decision",
+        "continue_after_compaction": true
+    }))
+    .await;
+
+    // Step 1: plain. Step 2: compaction with the caller's instructions.
+    // Step 3: the hidden recovery turn over the summary baseline.
+    assert_eq!(
+        requests.len(),
+        3,
+        "tool -> compaction -> recovery: {requests:?}"
+    );
+    let summarize = &requests[1].plan.messages;
+    assert!(
+        summarize.iter().any(|m| m
+            .prompt_text()
+            .contains("keep the file paths and the decision")),
+        "preservation instructions must ride the summarize step"
+    );
+    let recovery = &requests[2].plan.messages;
+    assert!(
+        recovery
+            .iter()
+            .any(|m| m.prompt_text().contains("compact-summary")),
+        "recovery projects the summary baseline"
+    );
+    assert!(
+        recovery
+            .iter()
+            .any(|m| m.prompt_text().contains("Resume only the unfinished work")),
+        "recovery turn carries the resume instruction: {recovery:?}"
+    );
+
+    // The compaction entry is durable.
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(
+        loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, crate::session::SessionEntry::Compaction { .. })),
+        "compaction must be a durable semantic entry"
+    );
+}
+
+#[tokio::test]
+async fn compact_tool_without_continue_does_not_recover() {
+    let (requests, _store, _session_id) =
+        run_compact_tool_test(json!({ "instructions": "keep it short" })).await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "no recovery turn without continue_after_compaction: {requests:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_compact_arguments_deny_model_visibly() {
+    let (requests, store, session_id) = run_compact_tool_test(json!({ "instructions": 42 })).await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "the denial result feeds one continuation step, no compaction: {requests:?}"
+    );
+    assert!(
+        !requests.iter().any(|request| request
+            .plan
+            .messages
+            .iter()
+            .any(|m| m.prompt_text().contains("Summarize the conversation"))),
+        "a denied compact must never start compaction"
+    );
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(
+        loaded.entries.iter().any(
+            |(_, entry)| matches!(entry, crate::session::SessionEntry::ToolResult { result }
+                if matches!(result, crate::tool::ToolResult::Err { error, .. }
+                    if error.contains("instructions must be a string")))
+        ),
+        "the denial must be model-visible as a tool error"
+    );
+}

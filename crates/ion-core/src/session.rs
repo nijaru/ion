@@ -136,6 +136,10 @@ pub enum Transition {
     ApplyInbox {
         item: InboxItem,
     },
+    /// Finish the operation after a model-invoked compaction without
+    /// `continue_after_compaction` (14.7.3): the tool call ended the
+    /// run's planning, so there is nothing left to prompt.
+    FinishAfterCompaction,
     /// Start the next model step from a quiescent state. `plan` is the
     /// model-facing projection the runtime derived from the session
     /// transcript (deterministic, §14/§31 invariant 15).
@@ -393,6 +397,7 @@ impl OperationMachine {
                 covers_through_seq,
             } => self.compaction_completed(summary, covers_through_seq),
             Transition::CompactionFailed => self.compaction_failed(),
+            Transition::FinishAfterCompaction => self.finish_after_compaction(),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -756,6 +761,22 @@ impl OperationMachine {
                 operation_id: self.operation_id,
                 plan,
             }],
+            cancel_effects: false,
+        })
+    }
+
+    fn finish_after_compaction(&mut self) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::NeedAssistant) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "finish_after_compaction",
+            });
+        }
+        self.state = OperationState::Finished(OperationOutcome::Completed);
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
             cancel_effects: false,
         })
     }

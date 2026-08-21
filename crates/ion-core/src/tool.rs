@@ -431,6 +431,44 @@ impl ToolRegistry {
 }
 
 /// Build the default core-tool entries under `cwd`.
+/// The model-invoked compaction trigger (DESIGN.md §14.7.3). Always
+/// allowed: compaction is harness maintenance, not a capability grant.
+pub struct CompactTool;
+
+impl Tool for CompactTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "compact".to_owned(),
+            description: "Compact the conversation context into a summary. Call this at a task boundary when the context is large and the next phase of work needs room. Optionally name what must be preserved."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "instructions": {
+                        "type": "string",
+                        "description": "What the summary must preserve (decisions, paths, next steps)."
+                    },
+                    "continue_after_compaction": {
+                        "type": "boolean",
+                        "description": "Start a recovery turn after compaction to finish unfinished work."
+                    }
+                },
+                "required": []
+            }),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        _arguments: Value,
+        _cancel: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            ToolOutcome::text("compaction scheduled; it runs when this step settles")
+        })
+    }
+}
+
 fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
     // Recovery classes per DESIGN.md §12.2/§12.3: reads are
@@ -475,6 +513,10 @@ fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
             }),
             RecoveryClass::ReplaySafe,
         ),
+        // Harness maintenance action (14.7.3): the runtime intercepts
+        // the call at admission; execution itself is a no-op so the
+        // normal tool-result path settles it durably.
+        (Arc::new(CompactTool), RecoveryClass::ReplaySafe),
     ];
     let mut map = HashMap::new();
     for (tool, recovery_class) in tools {
