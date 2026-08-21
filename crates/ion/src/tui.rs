@@ -43,6 +43,8 @@ pub enum UiEffect {
 pub enum UiMessage {
     Runtime(RuntimeEvent),
     Key(KeyEvent),
+    /// Bracketed-paste payload; inserted at the cursor.
+    Paste(String),
     SubmitAccepted,
     SubmitRejected(String),
     SteerAccepted,
@@ -64,6 +66,17 @@ pub enum UiStatus {
 pub struct UiState {
     /// Composer buffer.
     composer: String,
+    /// Cursor position as a char offset into `composer`.
+    cursor: usize,
+    /// Submitted prompts, oldest first; up/down navigates.
+    history: Vec<String>,
+    /// Position in `history` while browsing; None edits the live
+    /// draft.
+    history_index: Option<usize>,
+    /// The live draft set aside when history browsing starts.
+    history_stash: Option<String>,
+    /// Last kill (ctrl-k/u/w); ctrl-y yanks it back.
+    kill_buffer: String,
     /// Streaming assistant draft for the live step.
     draft: String,
     /// Completed tool rows for the live operation, newest last.
@@ -89,6 +102,10 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
     let mut state = state;
     match message {
         UiMessage::Key(key) => handle_key(state, key),
+        UiMessage::Paste(text) => {
+            insert_at_cursor(&mut state, &text);
+            (state, None)
+        }
         UiMessage::Runtime(event) => (apply_runtime_event(state, event), None),
         UiMessage::SubmitAccepted => {
             state.composer.clear();
@@ -135,27 +152,170 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
             if text.is_empty() {
                 return (state, None);
             }
+            state.history.push(text.clone());
+            state.composer.clear();
+            state.cursor = 0;
+            state.history_index = None;
+            state.history_stash = None;
             match &state.status {
                 UiStatus::Idle => (state, Some(UiEffect::Submit { text })),
                 UiStatus::Working { .. } => (state, Some(UiEffect::Steer { text })),
             }
         }
+        (KeyCode::Left, _) if state.cursor > 0 => {
+            state.cursor -= 1;
+            state.exit_history_browse();
+            (state, None)
+        }
+        (KeyCode::Right, _) if state.cursor < state.composer.chars().count() => {
+            state.cursor += 1;
+            state.exit_history_browse();
+            (state, None)
+        }
+        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+            state.cursor = 0;
+            (state, None)
+        }
+        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+            state.cursor = state.composer.chars().count();
+            (state, None)
+        }
+        (KeyCode::Delete, _) => {
+            delete_at_cursor(&mut state);
+            (state, None)
+        }
+        (KeyCode::Up, _) => {
+            browse_history(&mut state, -1);
+            (state, None)
+        }
+        (KeyCode::Down, _) => {
+            browse_history(&mut state, 1);
+            (state, None)
+        }
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+            let chars = state.composer.chars().count();
+            state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
+            (state, None)
+        }
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
+            state.cursor = 0;
+            (state, None)
+        }
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+            let start = word_start(&state.composer, state.cursor);
+            state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
+            state.cursor = start;
+            (state, None)
+        }
+        (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+            let yank = state.kill_buffer.clone();
+            insert_at_cursor(&mut state, &yank);
+            (state, None)
+        }
         (KeyCode::Backspace, _) => {
-            state.composer.pop();
+            if state.cursor > 0 {
+                state.cursor -= 1;
+                delete_at_cursor(&mut state);
+            }
             (state, None)
         }
         (KeyCode::Char(' '), _) => {
-            state.composer.push(' ');
+            insert_at_cursor(&mut state, " ");
             (state, None)
         }
         (KeyCode::Char(ch), modifiers)
             if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT =>
         {
-            state.composer.push(ch);
+            insert_at_cursor(&mut state, &ch.to_string());
             (state, None)
         }
         _ => (state, None),
     }
+}
+
+fn insert_at_cursor(state: &mut UiState, text: &str) {
+    let byte = char_offset_to_byte(&state.composer, state.cursor);
+    state.composer.insert_str(byte, text);
+    state.cursor += text.chars().count();
+    state.exit_history_browse();
+}
+
+fn delete_at_cursor(state: &mut UiState) {
+    let end = char_offset_to_byte(&state.composer, state.cursor + 1);
+    let byte = char_offset_to_byte(&state.composer, state.cursor);
+    if byte < end {
+        state.composer.replace_range(byte..end, "");
+    }
+}
+
+/// Remove chars `[from, to)` and return them.
+fn split_off_chars(buffer: &mut String, from: usize, to: usize) -> String {
+    let start = char_offset_to_byte(buffer, from);
+    let end = char_offset_to_byte(buffer, to);
+    buffer.drain(start..end).collect()
+}
+
+/// Start of the word before `cursor` (whitespace-delimited).
+fn word_start(buffer: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = buffer.chars().take(cursor).collect();
+    let mut i = chars.len();
+    while i > 0 && chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    while i > 0 && !chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+fn char_offset_to_byte(buffer: &str, offset: usize) -> usize {
+    buffer
+        .char_indices()
+        .nth(offset)
+        .map_or(buffer.len(), |(byte, _)| byte)
+}
+
+impl UiState {
+    fn exit_history_browse(&mut self) {
+        if self.history_index.is_some() {
+            self.history_index = None;
+            self.history_stash = None;
+        }
+    }
+}
+
+/// Step through submitted prompts; direction -1 is older. Leaving the
+/// live draft stashes it; stepping past the newest entry restores it.
+fn browse_history(state: &mut UiState, direction: i32) {
+    if state.history.is_empty() {
+        return;
+    }
+    let index = match state.history_index {
+        None => {
+            if direction >= 0 {
+                return;
+            }
+            state.history_stash = Some(state.composer.clone());
+            state.history.len() - 1
+        }
+        Some(index) => {
+            let next = index as i64 + i64::from(direction);
+            if next < 0 {
+                return;
+            }
+            if next as usize >= state.history.len() {
+                state.history_index = None;
+                state.composer = state.history_stash.take().unwrap_or_default();
+                state.cursor = state.composer.chars().count();
+                return;
+            }
+            next as usize
+        }
+    };
+    state.history_index = Some(index);
+    state.composer = state.history[index].clone();
+    state.cursor = state.composer.chars().count();
 }
 
 fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
@@ -339,8 +499,14 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
         }
     };
     frame.render_widget(status, rows[2]);
+    let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
+    let composer_line = format!(
+        "{}▏{}",
+        &state.composer[..cursor_byte],
+        &state.composer[cursor_byte..]
+    );
     frame.render_widget(
-        Paragraph::new(Line::from(state.composer.clone() + "▏").style(palette.composer)),
+        Paragraph::new(Line::from(composer_line).style(palette.composer)),
         rows[3],
     );
 }
@@ -449,16 +615,24 @@ pub async fn run(
 
         tokio::select! {
             maybe_key = key_stream.next() => {
-                let Some(Ok(TermEvent::Key(key))) = maybe_key else {
-                    result = Err(RuntimeError::OperationFailed(
-                        "terminal event stream ended".to_owned(),
-                    ));
-                    break;
-                };
-                let (next, effect) = update(state, UiMessage::Key(key));
-                state = next;
-                if let Some(effect) = effect {
-                    dispatch(&session, &mut state, active_operation, effect).await;
+                match maybe_key {
+                    Some(Ok(TermEvent::Key(key))) => {
+                        let (next, effect) = update(state, UiMessage::Key(key));
+                        state = next;
+                        if let Some(effect) = effect {
+                            dispatch(&session, &mut state, active_operation, effect).await;
+                        }
+                    }
+                    Some(Ok(TermEvent::Paste(text))) => {
+                        let (next, _) = update(state, UiMessage::Paste(text));
+                        state = next;
+                    }
+                    _ => {
+                        result = Err(RuntimeError::OperationFailed(
+                            "terminal event stream ended".to_owned(),
+                        ));
+                        break;
+                    }
                 }
             }
             event = events.recv() => {
@@ -601,6 +775,75 @@ mod tests {
         UiMessage::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    fn ctrl(ch: char) -> UiMessage {
+        UiMessage::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
+    }
+
+    fn type_text(state: UiState, text: &str) -> UiState {
+        text.chars()
+            .fold(state, |state, ch| update(state, key(KeyCode::Char(ch))).0)
+    }
+
+    #[test]
+    fn cursor_moves_and_edits_mid_string() {
+        let state = type_text(UiState::new(), "hello");
+        let state = update(state, key(KeyCode::Left)).0;
+        let state = update(state, key(KeyCode::Left)).0;
+        let state = update(state, key(KeyCode::Left)).0;
+        let state = type_text(state, "X");
+        assert_eq!(state.composer.as_str(), "heXllo");
+        let state = update(state, key(KeyCode::Delete)).0;
+        assert_eq!(state.composer.as_str(), "heXlo");
+    }
+
+    #[test]
+    fn paste_inserts_at_cursor() {
+        let state = type_text(UiState::new(), "ab");
+        let (state, _) = update(state, UiMessage::Paste("cd".to_owned()));
+        assert_eq!(state.composer.as_str(), "abcd");
+        let state = update(state, key(KeyCode::Home)).0;
+        let (state, _) = update(state, UiMessage::Paste("0".to_owned()));
+        assert_eq!(state.composer.as_str(), "0abcd");
+    }
+
+    #[test]
+    fn history_browses_and_restores_draft() {
+        let state = type_text(UiState::new(), "first");
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        assert!(matches!(effect, Some(UiEffect::Submit { .. })));
+        let state = type_text(state, "draft");
+        let state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.composer.as_str(), "first");
+        let state = update(state, key(KeyCode::Down)).0;
+        assert_eq!(state.composer.as_str(), "draft");
+    }
+
+    #[test]
+    fn submit_pushes_history_and_clears_composer() {
+        let state = type_text(UiState::new(), "one");
+        let (state, _) = update(state, key(KeyCode::Enter));
+        assert_eq!(state.composer.as_str(), "");
+        let state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.composer.as_str(), "one");
+    }
+
+    #[test]
+    fn kill_and_yank_round_trip() {
+        let state = type_text(UiState::new(), "hello world");
+        let state = update(state, ctrl('w')).0;
+        assert_eq!(state.composer.as_str(), "hello ");
+        let state = update(state, ctrl('y')).0;
+        assert_eq!(state.composer.as_str(), "hello world");
+    }
+
+    #[test]
+    fn ctrl_k_kills_to_end() {
+        let state = type_text(UiState::new(), "abcdef");
+        let state = update(state, key(KeyCode::Left)).0;
+        let state = update(state, ctrl('k')).0;
+        assert_eq!(state.composer.as_str(), "abcde");
+    }
+
     #[test]
     fn composer_types_and_submits_when_idle() {
         let state = UiState::new();
@@ -728,6 +971,7 @@ mod tests {
         use ratatui::{Terminal as RTerminal, backend::TestBackend};
         let mut state = UiState::new();
         state.composer = "hello world".to_owned();
+        state.cursor = state.composer.chars().count();
         state.status = UiStatus::Working {
             operation: "running bash".to_owned(),
         };
