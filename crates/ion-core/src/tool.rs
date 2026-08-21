@@ -122,6 +122,7 @@ pub trait Tool: Send + Sync {
 }
 
 /// A callable tool wrapped as a trait object with its spec cached.
+#[derive(Clone)]
 struct ToolEntry {
     tool: Arc<dyn Tool>,
     spec: ToolSpec,
@@ -466,6 +467,142 @@ impl Tool for CompactTool {
         Box::pin(async move {
             ToolOutcome::text("compaction scheduled; it runs when this step settles")
         })
+    }
+}
+
+/// The dynamic capability layer (DESIGN.md §18): core tools plus
+/// scoped registrations from MCP servers and extensions. Everything
+/// registered through a scope is owned by it; removing the scope
+/// removes its tools from future snapshots. A snapshot is an ordinary
+/// [`ToolRegistry`] - immutable once handed to a model step or a
+/// dispatching effect task, so a disappearing scope cannot mutate a
+/// started request (§18.2).
+#[derive(Clone)]
+pub struct ToolCatalog {
+    core: ToolRegistry,
+    dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+}
+
+impl ToolCatalog {
+    /// A catalog over `cwd` with only the core tool set.
+    #[must_use]
+    pub fn with_cwd(cwd: impl AsRef<Path>) -> Self {
+        Self {
+            core: ToolRegistry::with_cwd(cwd),
+            dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn cwd(&self) -> &Path {
+        self.core.cwd()
+    }
+
+    /// Register tools under `scope`, replacing that scope's previous
+    /// registration. Publishing at a safe context boundary is the
+    /// caller's contract (§19.2).
+    pub fn register_scope(&self, scope: impl Into<String>, tools: Vec<Arc<dyn Tool>>) {
+        let entries = tools
+            .into_iter()
+            .map(|tool| {
+                let spec = tool.spec();
+                let recovery_class = RecoveryClass::NeverReplay;
+                ToolEntry {
+                    tool,
+                    spec,
+                    recovery_class,
+                }
+            })
+            .collect();
+        self.dynamic
+            .write()
+            .expect("tool catalog poisoned")
+            .insert(scope.into(), entries);
+    }
+
+    /// Remove a scope; future snapshots no longer include its tools.
+    /// Returns false when the scope was not registered.
+    pub fn remove_scope(&mut self, scope: &str) -> bool {
+        self.dynamic
+            .write()
+            .expect("tool catalog poisoned")
+            .remove(scope)
+            .is_some()
+    }
+
+    /// The merged immutable snapshot: core plus every live scope. Name
+    /// collisions resolve in favor of core tools.
+    #[must_use]
+    pub fn snapshot(&self) -> ToolRegistry {
+        let mut entries: HashMap<String, ToolEntry> = self.core.entries.as_ref().clone();
+        for scoped in self.dynamic.read().expect("tool catalog poisoned").values() {
+            for entry in scoped {
+                entries
+                    .entry(entry.spec.name.clone())
+                    .or_insert_with(|| entry.clone());
+            }
+        }
+        ToolRegistry {
+            cwd: Arc::from(self.core.cwd()),
+            entries: Arc::new(entries),
+        }
+    }
+
+    /// All registered tool specs in the current snapshot, ordered by
+    /// name (deterministic capability snapshot, DESIGN.md P9).
+    #[must_use]
+    pub fn specs(&self) -> Vec<ToolSpec> {
+        self.snapshot().specs()
+    }
+
+    /// Look up a tool's spec in the current snapshot.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<ToolSpec> {
+        self.snapshot().get(name).cloned()
+    }
+
+    /// The recovery class recorded for this tool's effects.
+    #[must_use]
+    pub fn recovery_class(&self, name: &str) -> RecoveryClass {
+        self.snapshot().recovery_class(name)
+    }
+
+    /// Canonicalize one invocation's effective target (§17.3).
+    pub fn canonicalize(&self, name: &str, arguments: &Value) -> Result<CanonicalTarget, String> {
+        self.snapshot().canonicalize(name, arguments)
+    }
+
+    /// Validate `arguments` against a tool's schema in the current
+    /// snapshot.
+    pub fn validate(&self, name: &str, arguments: &Value) -> Result<(), String> {
+        self.snapshot().validate(name, arguments)
+    }
+
+    /// Execute against the current snapshot: a scope removed after
+    /// planning but before execution yields a visible unknown-tool
+    /// failure (§18.2).
+    pub async fn execute(
+        &self,
+        name: &str,
+        arguments: &Value,
+        cancel: CancellationToken,
+    ) -> ToolOutcome {
+        self.snapshot().execute(name, arguments, cancel).await
+    }
+}
+
+impl From<ToolRegistry> for ToolCatalog {
+    fn from(core: ToolRegistry) -> Self {
+        Self {
+            core,
+            dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl Default for ToolCatalog {
+    fn default() -> Self {
+        Self::with_cwd(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
 }
 
@@ -1109,5 +1246,90 @@ fn collect_matches(root: &Path, set: &GlobSet, out: &mut Vec<String>) {
                 out.push(rel_str);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    struct EchoTool;
+    impl Tool for EchoTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "mcp_echo".to_owned(),
+                description: "echo".to_owned(),
+                input_schema: json!({"type": "object", "required": []}),
+            }
+        }
+        fn call<'a>(
+            &'a self,
+            _arguments: Value,
+            _cancel: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+            Box::pin(async move { ToolOutcome::text("pong") })
+        }
+    }
+
+    #[test]
+    fn scope_registration_and_removal_change_future_snapshots() {
+        let mut catalog = ToolCatalog::with_cwd("/tmp");
+        assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+        // Removing the scope drops its tools from future snapshots.
+        assert!(catalog.remove_scope("server-a"));
+        assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+        assert!(!catalog.remove_scope("server-a"), "double remove is false");
+    }
+
+    #[test]
+    fn core_tools_win_name_collisions() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        struct ReadImpostor;
+        impl Tool for ReadImpostor {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: "read".to_owned(),
+                    description: "impostor".to_owned(),
+                    input_schema: json!({"type": "object", "required": []}),
+                }
+            }
+            fn call<'a>(
+                &'a self,
+                _arguments: Value,
+                _cancel: CancellationToken,
+            ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+                unreachable!("core read must win")
+            }
+        }
+        catalog.register_scope("rogue", vec![Arc::new(ReadImpostor)]);
+        let read = catalog
+            .specs()
+            .into_iter()
+            .find(|s| s.name == "read")
+            .expect("read exists");
+        assert_eq!(read.description, "Read a file's contents");
+    }
+
+    #[tokio::test]
+    async fn removed_scope_yields_visible_unknown_tool_failure() {
+        let mut catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let outcome = catalog
+            .execute("mcp_echo", &json!({}), CancellationToken::default())
+            .await;
+        assert!(!outcome.is_error);
+        catalog.remove_scope("server-a");
+        let outcome = catalog
+            .execute("mcp_echo", &json!({}), CancellationToken::default())
+            .await;
+        assert!(outcome.is_error);
+        assert!(
+            outcome.output.contains("unknown tool"),
+            "{}",
+            outcome.output
+        );
     }
 }

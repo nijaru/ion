@@ -33,7 +33,7 @@ use crate::store::{
     InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect, StoreError,
     UsageRecord,
 };
-use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
+use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
@@ -47,7 +47,7 @@ type ToolSettlement = (EffectId, ToolResult);
 /// effort; None when canonicalization fails — the denial surfaces
 /// elsewhere).
 fn target_summary(
-    tools: &ToolRegistry,
+    tools: &ToolCatalog,
     name: &str,
     arguments: &serde_json::Value,
 ) -> Option<String> {
@@ -338,7 +338,7 @@ impl Runtime {
     /// root. Panics if the store cannot be opened; hosts that need
     /// graceful handling use [`Runtime::start_with_store`].
     #[must_use]
-    pub fn start(provider: impl Provider, tools: ToolRegistry) -> Self {
+    pub fn start(provider: impl Provider, tools: impl Into<ToolCatalog>) -> Self {
         let store = SessionStore::open(crate::store::default_db_path())
             .expect("open the default session store");
         Self::start_with_store(provider, tools, store)
@@ -348,7 +348,7 @@ impl Runtime {
     #[must_use]
     pub fn start_with_store(
         provider: impl Provider,
-        tools: ToolRegistry,
+        tools: impl Into<ToolCatalog>,
         store: SessionStore,
     ) -> Self {
         Self::spawn_session(provider, tools, store, SessionId::generate(), None)
@@ -360,7 +360,7 @@ impl Runtime {
     #[must_use]
     pub fn start_with_policy(
         provider: impl Provider,
-        tools: ToolRegistry,
+        tools: impl Into<ToolCatalog>,
         store: SessionStore,
         policy: Arc<dyn PolicyEngine>,
     ) -> Self {
@@ -374,7 +374,7 @@ impl Runtime {
     /// blocks new submits.
     pub async fn open_session(
         provider: impl Provider,
-        tools: ToolRegistry,
+        tools: impl Into<ToolCatalog>,
         store: SessionStore,
         session_id: SessionId,
     ) -> Result<Self, RuntimeError> {
@@ -394,7 +394,7 @@ impl Runtime {
     #[must_use]
     fn spawn_session(
         provider: impl Provider,
-        tools: ToolRegistry,
+        tools: impl Into<ToolCatalog>,
         store: SessionStore,
         session_id: SessionId,
         loaded: Option<LoadedSession>,
@@ -411,7 +411,7 @@ impl Runtime {
 
     fn spawn_session_with_policy(
         provider: impl Provider,
-        tools: ToolRegistry,
+        tools: impl Into<ToolCatalog>,
         store: SessionStore,
         session_id: SessionId,
         loaded: Option<LoadedSession>,
@@ -421,7 +421,7 @@ impl Runtime {
         let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
         let provider = Arc::new(provider);
-        let tools = Arc::new(tools);
+        let tools = Arc::new(tools.into());
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -552,7 +552,7 @@ struct ActiveOperation {
 /// approval policy.
 struct SessionDeps<P> {
     provider: Arc<P>,
-    tools: Arc<ToolRegistry>,
+    tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
 }
@@ -561,7 +561,7 @@ struct SessionRuntime<P> {
     session_id: SessionId,
     cwd: String,
     provider: Arc<P>,
-    tools: Arc<ToolRegistry>,
+    tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     commands: mpsc::Receiver<SessionCommand>,
