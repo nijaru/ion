@@ -18,11 +18,12 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::{execute, terminal};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Stylize;
+use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
+use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionStore,
 };
@@ -273,9 +274,39 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Colors for the live viewport, chosen once from the theme setting.
+/// Scrollback styling stays theme-independent (dim/red/yellow read on
+/// both light and dark terminals).
+#[derive(Clone, Copy)]
+pub struct Palette {
+    pub status_idle: Style,
+    pub status_working: Style,
+    pub tool_row: Style,
+    pub composer: Style,
+}
+
+/// `Auto` follows the terminal preference, which has no portable query
+/// in crossterm; it currently resolves to the dark palette.
+pub fn palette(theme: Theme) -> Palette {
+    match theme {
+        Theme::Dark | Theme::Auto => Palette {
+            status_idle: Style::new().dim(),
+            status_working: Style::new().cyan(),
+            tool_row: Style::new().dim(),
+            composer: Style::new(),
+        },
+        Theme::Light => Palette {
+            status_idle: Style::new().dark_gray(),
+            status_working: Style::new().blue(),
+            tool_row: Style::new().dark_gray(),
+            composer: Style::new(),
+        },
+    }
+}
+
 /// Render the live inline viewport: transcript tail, tool rows, draft,
 /// status, composer.
-pub fn render(state: &UiState, frame: &mut Frame) {
+pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
     let area = frame.area();
     // The inline viewport keeps cells between frames; clear before
     // drawing so stale status/draft text never survives a redraw.
@@ -290,7 +321,7 @@ pub fn render(state: &UiState, frame: &mut Frame) {
 
     let mut tail: Vec<Line> = Vec::new();
     if let Some(latest) = state.tool_rows.last() {
-        tail.push(Line::from(latest.clone()).dim());
+        tail.push(Line::from(latest.clone()).style(palette.tool_row));
     }
     if !state.draft.is_empty() {
         tail.push(Line::from(format!("ion « {}", state.draft)));
@@ -302,11 +333,16 @@ pub fn render(state: &UiState, frame: &mut Frame) {
             "idle — type a prompt, esc quits  [area {}x{}@{}]",
             area.width, area.height, area.y
         ))
-        .dim(),
-        UiStatus::Working { operation } => Line::from(format!("● {operation}")).cyan(),
+        .style(palette.status_idle),
+        UiStatus::Working { operation } => {
+            Line::from(format!("● {operation}")).style(palette.status_working)
+        }
     };
     frame.render_widget(status, rows[2]);
-    frame.render_widget(Paragraph::new(state.composer.clone() + "▏"), rows[3]);
+    frame.render_widget(
+        Paragraph::new(Line::from(state.composer.clone() + "▏").style(palette.composer)),
+        rows[3],
+    );
 }
 
 /// The TUI event loop: runtime events and terminal keys into the
@@ -316,7 +352,9 @@ pub async fn run(
     session: SessionHandle,
     store: Arc<SessionStore>,
     resume_session: Option<ion_core::SessionId>,
+    theme: Theme,
 ) -> Result<(), RuntimeError> {
+    let palette = palette(theme);
     let mut guard = TerminalGuard::enter()
         .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
     install_panic_hook();
@@ -388,7 +426,7 @@ pub async fn run(
             terminal.clear().ok();
         }
         terminal
-            .draw(|frame| render(&state, frame))
+            .draw(|frame| render(&state, frame, &palette))
             .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
         #[cfg(debug_assertions)]
         if let Ok(mut log) = std::fs::OpenOptions::new()
@@ -695,7 +733,9 @@ mod tests {
         };
         let backend = TestBackend::new(40, 6);
         let mut terminal = RTerminal::new(backend).expect("terminal");
-        terminal.draw(|frame| render(&state, frame)).expect("draw");
+        terminal
+            .draw(|frame| render(&state, frame, &palette(Theme::Dark)))
+            .expect("draw");
         let buffer = terminal.backend().buffer();
         let content: String = (0..buffer.area().height)
             .map(|y| {

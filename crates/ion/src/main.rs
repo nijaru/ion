@@ -14,10 +14,12 @@ use std::future::Future;
 
 mod openrouter;
 mod print;
+mod settings;
 mod tui;
 
 use openrouter::OpenRouterProvider;
 use print::PrintFrontend;
+use settings::Settings;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,12 +55,19 @@ async fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+    let settings = match Settings::load() {
+        Ok(settings) => settings,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "settings: {err}");
+            return ExitCode::from(2);
+        }
+    };
     if cli.print.is_none() {
-        return run_tui(&cli).await;
+        return run_tui(&cli, &settings).await;
     }
-    let prompt = cli.print.expect("checked above");
+    let prompt = cli.print.clone().expect("checked above");
 
-    match run_print(prompt, cli.model, cli.allow).await {
+    match run_print(prompt, &cli, &settings).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             let _ = writeln!(io::stderr(), "{err}");
@@ -96,18 +105,32 @@ impl ion_core::Provider for CliProvider {
     }
 }
 
-async fn run_tui(cli: &Cli) -> ExitCode {
-    let api_key = match cli.model.as_deref() {
+async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
+    let model = match resolve_model(cli.model.clone(), settings) {
+        Ok(model) => model,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "{err}");
+            return ExitCode::from(2);
+        }
+    };
+    let api_key = match model.as_deref() {
         Some(_) => match std::env::var("OPENROUTER_API_KEY") {
             Ok(key) => Some(key),
             Err(_) => {
-                let _ = writeln!(io::stderr(), "--model requires OPENROUTER_API_KEY");
+                let _ = writeln!(
+                    io::stderr(),
+                    "model requires OPENROUTER_API_KEY (set it, or clear \
+                     defaultModel in {})",
+                    Settings::path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "~/.config/ion/settings.toml".to_owned())
+                );
                 return ExitCode::from(2);
             }
         },
         None => None,
     };
-    let provider = match cli.model.clone() {
+    let provider = match model {
         Some(model) => {
             CliProvider::OpenRouter(OpenRouterProvider::new(model, api_key.expect("checked")))
         }
@@ -154,7 +177,7 @@ async fn run_tui(cli: &Cli) -> ExitCode {
     } else {
         Runtime::start_with_policy(provider, tools, (*store).clone(), policy)
     };
-    match tui::run(runtime.session(), store, resume_session).await {
+    match tui::run(runtime.session(), store, resume_session, settings.theme()).await {
         Ok(()) => {
             let _ = runtime.join().await;
             ExitCode::SUCCESS
@@ -167,11 +190,18 @@ async fn run_tui(cli: &Cli) -> ExitCode {
     }
 }
 
-async fn run_print(
-    prompt: String,
-    model: Option<String>,
-    allow: Vec<String>,
-) -> Result<(), RuntimeError> {
+/// `--model` wins; otherwise the settings default (pi-style: the
+/// compiled-in defaults mirror the maintainer's pi settings).
+fn resolve_model(cli_model: Option<String>, settings: &Settings) -> Result<Option<String>, String> {
+    if cli_model.is_some() {
+        return Ok(cli_model);
+    }
+    settings.openrouter_model()
+}
+
+async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
+    let model =
+        resolve_model(cli.model.clone(), settings).map_err(RuntimeError::OperationFailed)?;
     let provider = match model {
         Some(model) => {
             let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
@@ -188,10 +218,10 @@ async fn run_print(
     let tools = ToolRegistry::default();
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let policy: Arc<dyn ion_core::PolicyEngine> = if allow.is_empty() {
+    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
         Arc::new(ion_core::DefaultPolicy)
     } else {
-        Arc::new(ion_core::AllowlistPolicy::new(allow))
+        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
     let runtime = Runtime::start_with_policy(provider, tools, store, policy);
     let session = runtime.session();
