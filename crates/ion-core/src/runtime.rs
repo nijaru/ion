@@ -596,6 +596,9 @@ struct SessionRuntime<P> {
     /// A model-invoked compaction (14.7.3) waiting for the run to
     /// settle; consumed at the next continuation boundary.
     pending_compact: Option<PendingCompact>,
+    /// Reopened Suspended operations awaiting durable settlement
+    /// (§9.5); empty unless --resume found one.
+    suspended_operations: Vec<(OperationId, u64, crate::store::CheckpointPayload)>,
     /// Whether the consumed compaction should be followed by a hidden
     /// recovery turn.
     recovery_after_compaction: bool,
@@ -659,6 +662,7 @@ impl<P: Provider> SessionRuntime<P> {
             last_hint_tokens: None,
             context_window: None,
             pending_compact: None,
+            suspended_operations: Vec::new(),
             recovery_after_compaction: false,
             compaction_was_model_invoked: false,
             overflow_retry_used: false,
@@ -691,9 +695,17 @@ impl<P: Provider> SessionRuntime<P> {
                 // Terminal operations stay in the transcript only.
                 continue;
             }
-            // Suspended and mid-flight operations are both recoverable
-            // state (§9.5); they rebuild and surface, and Step 3 decides
-            // what resuming them means.
+            if matches!(payload.state, OperationState::Suspended) {
+                // Suspend is teardown with effects cancelled (§9.4);
+                // the operation can never continue. Skip it here; the
+                // async recovery pass settles it durably so it cannot
+                // block the session forever.
+                self.suspended_operations
+                    .push((operation.id, state_seq, payload.clone()));
+                continue;
+            }
+            // Mid-flight operations are recoverable state (§9.5); they
+            // rebuild and surface.
             if self.operation.is_some() {
                 error!(
                     session = %self.session_id,
@@ -1020,6 +1032,36 @@ impl<P: Provider> SessionRuntime<P> {
     /// unresolved NeverReplay effects settle as indeterminate and are
     /// never replayed (§12.2); quiescent operations simply continue.
     async fn recover_open_operation(&mut self) {
+        let suspended = std::mem::take(&mut self.suspended_operations);
+        for (operation_id, state_seq, payload) in suspended {
+            let request = CommitRequest {
+                session_id: self.session_id,
+                operation_id,
+                checkpoint: CheckpointRecord {
+                    state_seq: state_seq + 1,
+                    payload: crate::store::CheckpointPayload {
+                        state: OperationState::Finished(OperationOutcome::Cancelled),
+                        cancel_requested: false,
+                        prompt: payload.prompt.clone(),
+                        tools: payload.tools.clone(),
+                        open_effect: None,
+                    },
+                },
+                entries: Vec::new(),
+                open_effects: Vec::new(),
+                settled_effects: Vec::new(),
+                indeterminate_effects: Vec::new(),
+                inbox: Vec::new(),
+                inbox_applied: Vec::new(),
+                usage: Vec::new(),
+            };
+            if let Err(err) = self.store.commit(request).await {
+                error!(session = %self.session_id, error = %err, "could not settle a suspended operation");
+                self.closed = true;
+                return;
+            }
+            info!(session = %self.session_id, operation = %operation_id, "settled a reopened suspended operation as cancelled");
+        }
         let Some(state) = self
             .operation
             .as_ref()

@@ -38,6 +38,7 @@ pub use store::{
     InboxStatus, LoadedOperation, LoadedSession, SessionRecord, SessionStore, StoreError,
     default_db_path,
 };
+pub use tool::target_from_arguments;
 pub use tool::{
     BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
     ToolCall, ToolCallId, ToolOutcome, ToolRegistry, ToolResult, ToolSpec, WriteTool,

@@ -796,6 +796,21 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
     );
 }
 
+/// Enter the terminal before any session state is touched: the
+/// close-on-error path suspends open operations, so a failed launch
+/// must never get as far as opening or resuming a session.
+pub fn setup_terminal() -> Result<TerminalGuard, RuntimeError> {
+    let guard = TerminalGuard::enter()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
+    install_panic_hook();
+    // Test-only hook: the PTY restoration test drives a real panic
+    // through the guard's restore path.
+    if std::env::var_os("ION_TEST_PANIC").is_some() {
+        panic!("ION_TEST_PANIC");
+    }
+    Ok(guard)
+}
+
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (§22.2).
@@ -805,16 +820,9 @@ pub async fn run(
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
     keymap: KeyMap,
+    mut guard: TerminalGuard,
 ) -> Result<(), RuntimeError> {
     let palette = palette(theme);
-    let mut guard = TerminalGuard::enter()
-        .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
-    install_panic_hook();
-    // Test-only hook: the PTY restoration test drives a real panic
-    // through the guard's restore path.
-    if std::env::var_os("ION_TEST_PANIC").is_some() {
-        panic!("ION_TEST_PANIC");
-    }
 
     // The inline viewport anchors at the cursor; push it to the
     // bottom of the screen first (ratatui inline-example pattern) so
@@ -1054,7 +1062,9 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
         ion_core::SessionEntry::UserMessage { text } => Some(format!("you » {text}")),
         ion_core::SessionEntry::AssistantMessage { text } => Some(format!("ion « {text}")),
         ion_core::SessionEntry::ToolCall { call } => {
-            Some(format!("· {} (call {})…", call.name, call.call_id))
+            let target = ion_core::target_from_arguments(&call.name, &call.arguments)
+                .unwrap_or_else(|| format!("(call {})", call.call_id));
+            Some(format!("· {} {target}…", call.name))
         }
         ion_core::SessionEntry::ToolResult {
             result: ion_core::ToolResult::Ok { output, .. },

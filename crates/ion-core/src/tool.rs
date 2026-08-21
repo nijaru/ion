@@ -469,6 +469,25 @@ impl Tool for CompactTool {
     }
 }
 
+/// A short display summary of a tool call's target, derived from the
+/// raw arguments. Used where durable entries are rendered without a
+/// registry (recovered transcripts); matches what live emission shows
+/// because canonicalization preserves the file name and command text.
+#[must_use]
+pub fn target_from_arguments(name: &str, arguments: &Value) -> Option<String> {
+    if name == "bash" {
+        return arguments
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+    }
+    arguments.get("path").and_then(|v| v.as_str()).map(|path| {
+        std::path::Path::new(path)
+            .file_name()
+            .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
+    })
+}
+
 fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
     // Recovery classes per DESIGN.md §12.2/§12.3: reads are

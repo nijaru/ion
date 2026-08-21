@@ -147,6 +147,10 @@ pub enum Transition {
     OverflowCompaction {
         plan: ContextPlan,
     },
+    /// Settle a reopened Suspended operation as cancelled (§9.5):
+    /// suspend means teardown with effects cancelled, so the operation
+    /// can never continue; leaving it open would block the session.
+    SettleSuspended,
     /// Start the next model step from a quiescent state. `plan` is the
     /// model-facing projection the runtime derived from the session
     /// transcript (deterministic, §14/§31 invariant 15).
@@ -405,6 +409,7 @@ impl OperationMachine {
             } => self.compaction_completed(summary, covers_through_seq),
             Transition::CompactionFailed => self.compaction_failed(),
             Transition::FinishAfterCompaction => self.finish_after_compaction(),
+            Transition::SettleSuspended => self.settle_suspended(),
             Transition::OverflowCompaction { plan } => self.overflow_compaction(plan),
             Transition::Suspend => self.suspend(),
         }
@@ -788,6 +793,22 @@ impl OperationMachine {
                 operation_id: self.operation_id,
                 plan,
             }],
+            cancel_effects: false,
+        })
+    }
+
+    fn settle_suspended(&mut self) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::Suspended) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "settle_suspended",
+            });
+        }
+        self.state = OperationState::Finished(OperationOutcome::Cancelled);
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
             cancel_effects: false,
         })
     }

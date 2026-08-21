@@ -1747,32 +1747,25 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
     runtime.join().await.expect("join");
     drop(session);
 
-    // Reopen the same session: the suspended operation must be rebuilt.
+    // Reopen the same session: the suspended operation settles as
+    // cancelled (§9.5 — suspend is teardown with effects cancelled, so
+    // it can never continue) and the session accepts new work.
     let store = SessionStore::open(&db).expect("reopen store");
     let runtime = Runtime::open_session(
         ScriptedProvider::echo(),
         ToolRegistry::default(),
-        store,
+        store.clone(),
         session_id,
     )
     .await
     .expect("reopen");
     let session = runtime.session();
     let snapshot = session.snapshot().await.expect("snapshot");
-    let OperationStatus::Active {
-        operation_id: reopened_id,
-        prompt,
-        state,
-    } = snapshot.operation
-    else {
-        panic!("expected the open operation to be rebuilt, got idle");
-    };
-    assert_eq!(prompt, "goal");
-    assert_eq!(state, OperationState::Suspended);
-    // Recovery decisions are Step 3 work: an open operation blocks new
-    // submits rather than being silently resumed or cancelled.
-    let err = session.submit("new").await.expect_err("busy");
-    assert!(matches!(err, CommandError::Busy { operation_id } if operation_id == reopened_id));
+    assert_eq!(
+        snapshot.operation,
+        OperationStatus::Idle,
+        "a settled suspended operation must not block the session"
+    );
     // The transcript reproduced exactly what was committed before close.
     assert_eq!(
         entry_kinds(
@@ -1792,6 +1785,16 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
                 .collect::<Vec<_>>()
         )
     );
+    // The settlement is durable: the latest checkpoint is terminal.
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.operations.len(), 1);
+    assert!(matches!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Finished(_) | OperationState::Suspended
+    ));
+    // New work is accepted immediately.
+    session.submit("new").await.expect("submit after settle");
+    collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));

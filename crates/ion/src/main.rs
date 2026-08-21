@@ -138,6 +138,16 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             "scripted provider: build with --model for real answers\n",
         )])),
     };
+    // Terminal first: the close-on-error path below suspends open
+    // operations, so a terminal-less launch must fail before any
+    // session state exists.
+    let guard = match tui::setup_terminal() {
+        Ok(guard) => guard,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "{err}");
+            return ExitCode::from(2);
+        }
+    };
     let store = match SessionStore::open(default_db_path()) {
         Ok(store) => Arc::new(store),
         Err(err) => {
@@ -191,6 +201,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         resume_session,
         settings.theme(),
         keymap,
+        guard,
     )
     .await;
     if result.is_err() {
