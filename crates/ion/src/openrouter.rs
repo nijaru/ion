@@ -41,6 +41,7 @@ pub struct OpenRouterProvider {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    context_window: tokio::sync::OnceCell<Option<u64>>,
 }
 
 impl OpenRouterProvider {
@@ -53,6 +54,7 @@ impl OpenRouterProvider {
             api_key: api_key.into(),
             base_url: "https://openrouter.ai/api/v1".to_owned(),
             client: reqwest::Client::new(),
+            context_window: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -84,6 +86,33 @@ impl OpenRouterProvider {
 }
 
 impl Provider for OpenRouterProvider {
+    /// Fetch the model's `context_length` from the models endpoint
+    /// once, lazily; any failure degrades to unknown (§14.8).
+    async fn context_window(&self) -> Option<u64> {
+        *self
+            .context_window
+            .get_or_init(|| async {
+                let url = format!("{}/models/{}", self.base_url, self.model);
+                let value = self
+                    .client
+                    .get(url)
+                    .bearer_auth(&self.api_key)
+                    .send()
+                    .await
+                    .ok()?
+                    .error_for_status()
+                    .ok()?
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()?;
+                value
+                    .get("data")
+                    .and_then(|data| data.get("context_length"))
+                    .and_then(|v| v.as_u64())
+            })
+            .await
+    }
+
     fn run(
         &self,
         request: ProviderRequest,
@@ -659,5 +688,22 @@ mod tests {
         assert_eq!(usages.len(), 1);
         assert_eq!(usages[0].cache_read, 420);
         assert_eq!(usages[0].cache_write, 80);
+    }
+
+    #[tokio::test]
+    async fn context_window_fetched_from_models_endpoint() {
+        let base_url = spawn_sse_server(
+            "{\"data\":{\"id\":\"test/model\",\"context_length\":1000000}}",
+            None,
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        assert_eq!(provider.context_window().await, Some(1_000_000));
+    }
+
+    #[tokio::test]
+    async fn context_window_degrades_to_unknown_on_bad_payload() {
+        let base_url = spawn_sse_server("{\"data\":{}}", None);
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        assert_eq!(provider.context_window().await, None);
     }
 }

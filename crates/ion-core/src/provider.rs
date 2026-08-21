@@ -98,6 +98,14 @@ pub trait Provider: Send + Sync + 'static {
         cancel: CancellationToken,
         out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send;
+
+    /// The model's context window in tokens (§14.8). `None` means
+    /// unknown: hints degrade to an absolute threshold, the compaction
+    /// safety net is disabled, and overflow recovery is the backstop.
+    /// Adapters must not guess.
+    fn context_window(&self) -> impl Future<Output = Option<u64>> + Send {
+        std::future::ready(None)
+    }
 }
 
 /// One scripted model step. A script drives successive steps: the
@@ -154,6 +162,7 @@ impl ScriptedMessage {
 pub struct ScriptedProvider {
     cursor: Mutex<ScriptCursor>,
     call_ids: AtomicU64,
+    context_window: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -168,7 +177,15 @@ impl ScriptedProvider {
         Self {
             cursor: Mutex::new(ScriptCursor { next: 0, messages }),
             call_ids: AtomicU64::new(1),
+            context_window: None,
         }
+    }
+
+    /// Set the model context window the runtime should assume (§14.8).
+    #[must_use]
+    pub fn with_context_window(mut self, tokens: u64) -> Self {
+        self.context_window = Some(tokens);
+        self
     }
 
     #[must_use]
@@ -178,6 +195,10 @@ impl ScriptedProvider {
 }
 
 impl Provider for ScriptedProvider {
+    async fn context_window(&self) -> Option<u64> {
+        self.context_window
+    }
+
     fn run(
         &self,
         request: ProviderRequest,
