@@ -537,9 +537,16 @@ struct SessionRuntime<P> {
     /// Token usage buffered from the live model step; persisted at the
     /// settlement boundary (DESIGN.md §27.2).
     draft_usage: Option<TokenUsage>,
-    /// Input tokens of the most recent settled model step; drives the
-    /// automatic compaction threshold (§14.7).
-    last_input_tokens: u64,
+    /// Full token cost (input + output + cache) of the most recent
+    /// settled step; anchors usage hints and the safety net (14.7).
+    last_context_tokens: Option<u64>,
+    /// Context size at the most recent emitted usage hint; the hint
+    /// throttle anchor. In-memory only: losing it costs one extra
+    /// hint after restart, never a missed one.
+    last_hint_tokens: Option<u64>,
+    /// Cached model context window (14.8); fetched from the adapter
+    /// once, on first use.
+    context_window: Option<u64>,
     /// The previous step was compaction itself; prevents the
     /// compaction step's own usage from re-triggering compaction.
     last_step_was_compaction: bool,
@@ -590,7 +597,9 @@ impl<P: Provider> SessionRuntime<P> {
             draft_text: String::new(),
             draft_calls: Vec::new(),
             draft_usage: None,
-            last_input_tokens: 0,
+            last_context_tokens: None,
+            last_hint_tokens: None,
+            context_window: None,
             last_step_was_compaction: false,
             model_step: 0,
             subscribers: Vec::new(),
@@ -824,8 +833,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_text.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
-        self.last_input_tokens = 0;
-        self.last_step_was_compaction = false;
+        // Usage/hint/compaction anchors are session-level: context
+        // persists across operations, so they survive a new submit.
         self.advance().await;
         Ok(operation_id)
     }
@@ -962,7 +971,7 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let plan = project(&self.entries, self.first_entry_seq());
+                let plan = self.project_model_step_plan().await;
                 let mut staged = self.operation.clone().expect("operation present");
                 let applied = staged
                     .machine
@@ -1383,9 +1392,9 @@ impl<P: Provider> SessionRuntime<P> {
                         }
                         continue;
                     }
-                    if self.compaction_due() {
-                        // §14.7: compact at the continuation boundary
-                        // when the context is large and work remains.
+                    if self.safety_net_compaction_due() {
+                        // §14.7.4: compact at the continuation boundary
+                        // when the context nears the model's window.
                         if !self.start_compaction().await {
                             return;
                         }
@@ -1472,12 +1481,45 @@ impl<P: Provider> SessionRuntime<P> {
         true
     }
 
-    /// Automatic compaction trigger (§14.7): the last model step saw a
-    /// large context AND more model work remains in this operation.
-    /// Compacting before an operation goes idle would buy nothing.
-    fn compaction_due(&self) -> bool {
-        const COMPACTION_INPUT_TOKEN_THRESHOLD: u64 = 100_000;
-        self.last_input_tokens > COMPACTION_INPUT_TOKEN_THRESHOLD && !self.last_step_was_compaction
+    /// Project the model-step input and append the context-usage hint
+    /// when one is due (14.7.2). Both the fresh start and the recovery
+    /// re-projection go through here so a recovered step sees the same
+    /// trailing-edge hint policy. The hint is derived, never persisted.
+    async fn project_model_step_plan(&mut self) -> crate::context::ContextPlan {
+        if self.context_window.is_none() {
+            let window = self.provider.context_window().await;
+            self.context_window = window;
+        }
+        let mut plan = project(&self.entries, self.first_entry_seq());
+        let hint = crate::context::usage_hint(
+            self.last_context_tokens.unwrap_or(0),
+            self.context_window,
+            self.last_hint_tokens,
+        );
+        if let Some(hint) = hint {
+            self.last_hint_tokens = self.last_context_tokens;
+            crate::context::push_hint(&mut plan, hint);
+        }
+        plan
+    }
+
+    /// Safety-net compaction check (§14.7.4), evaluated at
+    /// continuation boundaries only: compact when the measured context
+    /// is within the reserve of the model's actual window. A fixed
+    /// token threshold would be wrong for every model except the one
+    /// it was tuned for. Unknown windows disable the net; overflow
+    /// recovery (14.7.5) is the backstop.
+    fn safety_net_compaction_due(&self) -> bool {
+        const RESERVE_TOKENS: u64 = 16_000;
+        if self.last_step_was_compaction {
+            return false;
+        }
+        match self.context_window {
+            Some(window) => {
+                self.last_context_tokens.unwrap_or(0) > window.saturating_sub(RESERVE_TOKENS)
+            }
+            None => false,
+        }
     }
 
     /// Commit the compaction effect intent, then spawn the provider
@@ -1528,6 +1570,7 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         self.operation = Some(staged);
         self.last_step_was_compaction = true;
+        self.last_hint_tokens = None;
         info!(%operation_id, "starting automatic compaction");
         self.spawn_model_step(operation_id, plan, Vec::new());
         true
@@ -1536,7 +1579,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// Commit the model-step effect intent, then spawn the provider
     /// effect. Returns false when persistence failed.
     async fn start_model_step(&mut self) -> bool {
-        let plan = project(&self.entries, self.first_entry_seq());
+        let plan = self.project_model_step_plan().await;
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
             .machine
@@ -1836,7 +1879,8 @@ impl<P: Provider> SessionRuntime<P> {
                 });
             }
             EngineSignal::UsageUpdate { usage, .. } => {
-                self.last_input_tokens = usage.input;
+                self.last_context_tokens =
+                    Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
                 self.draft_usage = Some(usage);
             }
             EngineSignal::ToolCallCompleted { call, .. } => {

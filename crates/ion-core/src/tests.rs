@@ -2864,9 +2864,19 @@ fn compaction_transitions_are_total() {
     let _ = applied;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct CompactionProbe {
     log: Arc<Mutex<Vec<ProviderRequest>>>,
+    context_window: Option<u64>,
+}
+
+impl CompactionProbe {
+    fn with_window(tokens: u64) -> Self {
+        Self {
+            log: Arc::new(Mutex::new(Vec::new())),
+            context_window: Some(tokens),
+        }
+    }
 }
 
 impl CompactionProbe {
@@ -2876,6 +2886,10 @@ impl CompactionProbe {
 }
 
 impl Provider for CompactionProbe {
+    async fn context_window(&self) -> Option<u64> {
+        self.context_window
+    }
+
     fn run(
         &self,
         request: ProviderRequest,
@@ -2930,7 +2944,9 @@ impl Provider for CompactionProbe {
 
 #[tokio::test]
 async fn large_context_compacts_at_the_continuation_boundary() {
-    let probe = CompactionProbe::default();
+    // 200k usage against a 128k window trips the safety net
+    // (context_tokens > window - 16k reserve, 14.7.4).
+    let probe = CompactionProbe::with_window(128_000);
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
     let session_id = runtime.session_id();
@@ -3004,4 +3020,125 @@ fn entry_kind_name(entry: &SessionEntry) -> &'static str {
         SessionEntry::ToolResult { .. } => "tool_result",
         SessionEntry::Compaction { .. } => "compaction",
     }
+}
+
+// ---- Context-usage hints (DESIGN.md §14.7.2) ----
+
+#[derive(Clone)]
+struct HintProbe {
+    log: Arc<Mutex<Vec<crate::provider::ProviderRequest>>>,
+}
+
+impl Provider for HintProbe {
+    fn run(
+        &self,
+        request: crate::provider::ProviderRequest,
+        _cancel: CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
+    ) -> impl Future<Output = ()> + Send {
+        let operation_id = request.operation_id;
+        let step = request.step;
+        self.log.lock().expect("log poisoned").push(request);
+        async move {
+            if step == 1 {
+                let _ = out
+                    .send(EngineSignal::UsageUpdate {
+                        operation_id,
+                        step,
+                        usage: crate::provider::TokenUsage {
+                            input: 200_000,
+                            output: 40_000,
+                            cache_read: 0,
+                            cache_write: 0,
+                        },
+                    })
+                    .await;
+            }
+            let _ = out
+                .send(EngineSignal::TextDelta {
+                    operation_id,
+                    step,
+                    text: "ok".to_owned(),
+                })
+                .await;
+            let _ = out
+                .send(EngineSignal::Completed { operation_id, step })
+                .await;
+        }
+    }
+
+    async fn context_window(&self) -> Option<u64> {
+        Some(1_000_000)
+    }
+}
+
+#[tokio::test]
+async fn usage_hints_are_derived_trailing_messages_never_persisted() {
+    let probe = HintProbe {
+        log: Arc::new(Mutex::new(Vec::new())),
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(probe.clone(), ToolRegistry::default(), store.clone());
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+
+    // First operation: usage lands (240k total), no hint yet — the
+    // hint rides the NEXT model step's projection.
+    session.submit("one").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    for _ in 0..100 {
+        if session.snapshot().await.expect("snapshot").operation == OperationStatus::Idle {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+
+    // Second operation: the projection now carries the trailing hint.
+    session.submit("two").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    for _ in 0..100 {
+        if session.snapshot().await.expect("snapshot").operation == OperationStatus::Idle {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let requests = probe.log.lock().expect("log poisoned").clone();
+    assert!(requests.len() >= 2, "two operations, at least two steps");
+    let first = &requests[0];
+    assert!(
+        !first
+            .plan
+            .messages
+            .iter()
+            .any(|m| m.prompt_text().contains("[ctx")),
+        "the first step has no prior usage; no hint may appear"
+    );
+    let later = &requests[1];
+    let hinted = later
+        .plan
+        .messages
+        .last()
+        .map(|m| m.prompt_text().contains("[ctx 240k/1m] [>200k]"))
+        .unwrap_or(false);
+    assert!(
+        hinted,
+        "second projection must carry the trailing-edge hint; got {:?}",
+        later.plan.messages.last().map(|m| m.prompt_text())
+    );
+
+    // The hint is derived: the durable transcript has no hint entry.
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(
+        loaded.entries.iter().all(|entry| {
+            !serde_json::to_string(entry)
+                .map(|text| text.contains("[ctx"))
+                .unwrap_or(true)
+        }),
+        "hints are never persisted"
+    );
 }
