@@ -1787,8 +1787,18 @@ fn store_refuses_a_database_from_a_newer_schema() {
         .pragma_update(None, "user_version", 99)
         .expect("bump version");
     drop(connection);
-    let err = SessionStore::open(&db).expect_err("future schema must be refused");
-    assert!(err.to_string().contains("newer"), "got: {err}");
+    let err = SessionStore::open(&db).expect_err("foreign schema must be refused");
+    assert!(err.to_string().contains("does not match"), "got: {err}");
+
+    // A database from an older dev build is refused too: v0 migrates
+    // nothing (no compatibility guarantees across builds).
+    let connection = rusqlite::Connection::open(&db).expect("raw open");
+    connection
+        .pragma_update(None, "user_version", 2)
+        .expect("stale version");
+    drop(connection);
+    let err = SessionStore::open(&db).expect_err("stale schema must be refused");
+    assert!(err.to_string().contains("does not match"), "got: {err}");
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 

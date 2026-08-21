@@ -26,50 +26,32 @@ const STORE_CAPACITY: usize = 64;
 
 const SCHEMA_VERSION: i64 = 3;
 
-/// Ordered, transactional migrations gated by `PRAGMA user_version`
-/// (DESIGN.md §11.1). Version 0 (fresh or pre-versioning) applies the
-/// initial schema; a database from a newer Ion is refused, never
-/// silently reinterpreted (§26.3).
+/// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
+/// guarantees: a fresh database gets the current schema, and a database
+/// written by any other version — older dev build or newer Ion — is
+/// refused, never migrated and never silently reinterpreted (§26.3).
 fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > SCHEMA_VERSION {
-        return Err(StoreError::Sqlite(format!(
-            "database schema version {version} is newer than this Ion supports ({SCHEMA_VERSION})"
-        )));
-    }
     if version == SCHEMA_VERSION {
         return Ok(());
     }
-    let tx = connection.transaction()?;
-    if version < 1 {
-        // Fresh database: the initial schema is already at the current
-        // shape.
-        tx.execute_batch(SCHEMA)?;
+    if version == 0
+        && connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count == 0)?
+    {
+        connection.execute_batch(SCHEMA)?;
+        connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        return Ok(());
     }
-    if version == 1 {
-        // v2: effect attempts, persisted so recovery replays are
-        // countable (DESIGN.md §11.3, §15.4).
-        tx.execute_batch("ALTER TABLE effects ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")?;
-    }
-    if version == 2 {
-        // v3: token usage ledger, persisted at settlement boundaries
-        // independent of operation success (DESIGN.md §27.2).
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id),
-                operation_id TEXT NOT NULL,
-                step INTEGER NOT NULL,
-                input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                recorded_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_usage_operation ON usage(operation_id);",
-        )?;
-    }
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    tx.commit()?;
-    Ok(())
+    Err(StoreError::Sqlite(format!(
+        "database schema version {version} does not match this Ion ({SCHEMA_VERSION}); \
+         Ion v0 keeps no compatibility across builds — move the database aside"
+    )))
 }
 
 const SCHEMA: &str = "
