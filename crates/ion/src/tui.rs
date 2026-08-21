@@ -421,6 +421,10 @@ impl UiState {
     /// turn (inline scrollback pattern: completed content leaves the
     /// live viewport). Assistant lines get markdown-lite styling.
     fn flush_draft(&mut self) {
+        // Tool rows precede the text they enabled.
+        for row in self.tool_rows.drain(..) {
+            self.pending_scrollback.push(Line::from(row).dim());
+        }
         if !self.draft.is_empty() {
             for line in self.draft.lines() {
                 let mut styled = markdown_line(line);
@@ -428,9 +432,6 @@ impl UiState {
                 self.pending_scrollback.push(styled);
             }
             self.draft.clear();
-        }
-        for row in self.tool_rows.drain(..) {
-            self.pending_scrollback.push(Line::from(row).dim());
         }
     }
 }
