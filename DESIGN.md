@@ -761,7 +761,7 @@ Initial recommendation:
 - foreign keys enabled;
 - busy timeout;
 - `synchronous=FULL` initially for strong accepted-intent durability; benchmark before weakening it;
-- explicit migrations/schema version;
+- explicit schema version gate (see §33.12);
 - no async connection pool until measured need exists.
 
 Why `rusqlite` over `sqlx` initially: Ion has a local single-writer durability problem, not a high-concurrency web-database problem. Direct transaction control and a simple DB thread are more valuable than async pool machinery.
@@ -2205,6 +2205,23 @@ Rejected. Provider/model incompatibilities belong in explicit adapter policy and
 ## 33.11 Shadow Git as session durability
 
 Rejected. Git is useful workspace history; it is not the agent runtime's effect journal or cancellation mechanism.
+
+## 33.12 Per-version schema migrations before a released format
+
+Rejected while Ion is v0 with no compatibility guarantees. Ordered
+migration steps are machinery for moving databases between released
+formats; before the first release there are no databases in the wild,
+only developer machines, so the steps would be speculative
+compatibility code (v0 rule: no speculative abstractions, no
+compatibility aliases).
+
+The store keeps an explicit `PRAGMA user_version` gate instead: a
+fresh empty database receives the current schema; a database from any
+other build — older development artifact or newer Ion — is refused
+visibly with a move-it-aside error, never migrated and never silently
+reinterpreted (§26.3). When Ion first promises on-disk compatibility,
+ordered migrations become a requirement and this decision is
+revisited.
 
 ---
 
