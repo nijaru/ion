@@ -360,11 +360,20 @@ where
     }
     let runtime = Runtime::start_with_policy(
         (config.make_provider)(),
-        catalog,
+        catalog.clone(),
         (*config.store).clone(),
         Arc::clone(&config.policy),
     );
-    let session_id_string = runtime.session_id().to_string();
+    let session_id = runtime.session_id();
+    // ACP sessions can delegate to bounded read-only children (§20).
+    let factory = Arc::clone(&config.make_provider);
+    crate::enable_children(
+        &catalog,
+        &config.store,
+        Arc::new(move || factory()),
+        session_id,
+    );
+    let session_id_string = session_id.to_string();
     let handle = runtime.session();
     Ok((
         session_id_string,

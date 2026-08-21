@@ -21,7 +21,7 @@ mod store;
 mod tool;
 
 pub use context::{ContextMessage, ContextPlan, SYSTEM_SECTION, project};
-pub use delegate::{ChildSpec, DelegateConfig, DelegateTool};
+pub use delegate::{ChildSpec, DelegateConfig, DelegateTool, child_budget_default};
 pub use error::{CommandError, RuntimeError};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
 pub use mcp::{McpService, ServerDef};

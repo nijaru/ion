@@ -25,6 +25,17 @@ use crate::runtime::{Runtime, RuntimeBudget};
 use crate::store::SessionStore;
 use crate::tool::{Tool, ToolOutcome, ToolSpec};
 
+/// Conservative default bounds for children (§20.5): exact numbers are
+/// host configuration; these exist so hosts that do not tune budgets
+/// still cannot loop forever.
+#[must_use]
+pub fn child_budget_default() -> RuntimeBudget {
+    RuntimeBudget {
+        max_model_steps: Some(16),
+        max_tool_calls: Some(64),
+    }
+}
+
 /// One requested child in a delegation call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSpec {

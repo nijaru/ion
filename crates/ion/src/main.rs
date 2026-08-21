@@ -5,9 +5,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
+use ion::enable_children;
 use ion::openrouter::OpenRouterProvider;
 use ion::print::PrintFrontend;
-use ion::scripted_provider_factory;
 use ion::settings::Settings;
 use ion::tui;
 use ion::{CliProvider, acp};
@@ -78,19 +78,12 @@ async fn main() -> ExitCode {
 }
 
 async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
-    let model = cli
-        .model
-        .clone()
-        .or_else(|| settings.openrouter_model().ok().flatten());
-    let api_key = match model.as_deref() {
-        Some(_) => match std::env::var("OPENROUTER_API_KEY") {
-            Ok(key) => Some(key),
-            Err(_) => {
-                let _ = writeln!(io::stderr(), "model requires OPENROUTER_API_KEY");
-                return ExitCode::from(2);
-            }
-        },
-        None => None,
+    let make_provider = match provider_factory(cli, settings) {
+        Ok(factory) => factory,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "{err}");
+            return ExitCode::from(2);
+        }
     };
     let store = match SessionStore::open(default_db_path()) {
         Ok(store) => Arc::new(store),
@@ -104,23 +97,11 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
     } else {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
-    // ACP sessions may arrive concurrently; each gets its own provider
-    // instance via the factory.
-    let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync> = match model {
-        Some(model) => {
-            let key = api_key.expect("checked");
-            Arc::new(move || {
-                CliProvider::OpenRouter(OpenRouterProvider::new(model.clone(), key.clone()))
-            })
-        }
-        None => scripted_provider_factory(vec![ScriptedMessage::text("scripted provider\n")]),
-    };
     let config = acp::AcpConfig {
         make_provider,
         store,
         policy,
     };
-    let _ = settings;
     match acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -148,37 +129,12 @@ async fn build_catalog(settings: &Settings) -> ion_core::ToolCatalog {
 }
 
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
-    let model = match resolve_model(cli.model.clone(), settings) {
-        Ok(model) => model,
+    let make_provider = match provider_factory(cli, settings) {
+        Ok(factory) => factory,
         Err(err) => {
             let _ = writeln!(io::stderr(), "{err}");
             return ExitCode::from(2);
         }
-    };
-    let api_key = match model.as_deref() {
-        Some(_) => match std::env::var("OPENROUTER_API_KEY") {
-            Ok(key) => Some(key),
-            Err(_) => {
-                let _ = writeln!(
-                    io::stderr(),
-                    "model requires OPENROUTER_API_KEY (set it, or clear \
-                     defaultModel in {})",
-                    Settings::path()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "~/.config/ion/settings.toml".to_owned())
-                );
-                return ExitCode::from(2);
-            }
-        },
-        None => None,
-    };
-    let provider = match model {
-        Some(model) => {
-            CliProvider::OpenRouter(OpenRouterProvider::new(model, api_key.expect("checked")))
-        }
-        None => CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
-            "scripted provider: build with --model for real answers\n",
-        )])),
     };
     // Terminal first: the close-on-error path below suspends open
     // operations, so a terminal-less launch must fail before any
@@ -219,7 +175,14 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
     let runtime = if let Some(session_id) = resume_session {
-        match Runtime::open_session(provider, tools, (*store).clone(), session_id).await {
+        match Runtime::open_session(
+            (make_provider)(),
+            tools.clone(),
+            (*store).clone(),
+            session_id,
+        )
+        .await
+        {
             Ok(runtime) => runtime,
             Err(err) => {
                 let _ = writeln!(io::stderr(), "resume: {err}");
@@ -227,8 +190,14 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             }
         }
     } else {
-        Runtime::start_with_policy(provider, tools, (*store).clone(), policy)
+        Runtime::start_with_policy((make_provider)(), tools.clone(), (*store).clone(), policy)
     };
+    enable_children(
+        &tools,
+        &store,
+        Arc::clone(&make_provider),
+        runtime.session_id(),
+    );
     let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
         Ok(keymap) => keymap,
         Err(err) => {
@@ -273,22 +242,31 @@ fn resolve_model(cli_model: Option<String>, settings: &Settings) -> Result<Optio
     settings.openrouter_model()
 }
 
-async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
-    let model =
-        resolve_model(cli.model.clone(), settings).map_err(RuntimeError::OperationFailed)?;
-    let provider = match model {
+/// The provider factory shared by the root session and any children it
+/// delegates to (§20): every child gets a fresh adapter instance.
+fn provider_factory(
+    cli: &Cli,
+    settings: &Settings,
+) -> Result<Arc<dyn Fn() -> CliProvider + Send + Sync>, String> {
+    let model = resolve_model(cli.model.clone(), settings)?;
+    Ok(match model {
         Some(model) => {
-            let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                RuntimeError::OperationFailed(
-                    "--model requires OPENROUTER_API_KEY to be set".to_owned(),
-                )
-            })?;
-            CliProvider::OpenRouter(OpenRouterProvider::new(model, api_key))
+            let key = std::env::var("OPENROUTER_API_KEY")
+                .map_err(|_| "model requires OPENROUTER_API_KEY to be set".to_owned())?;
+            Arc::new(move || {
+                CliProvider::OpenRouter(OpenRouterProvider::new(model.clone(), key.clone()))
+            })
         }
-        None => CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(format!(
-            "scripted: {prompt}\n"
-        ))])),
-    };
+        None => Arc::new(|| {
+            CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
+                "scripted provider: build with --model for real answers\n",
+            )]))
+        }),
+    })
+}
+
+async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
+    let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let tools = build_catalog(settings).await;
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
@@ -297,7 +275,14 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     } else {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
-    let runtime = Runtime::start_with_policy(provider, tools, store, policy);
+    let runtime =
+        Runtime::start_with_policy((make_provider)(), tools.clone(), store.clone(), policy);
+    enable_children(
+        &tools,
+        &store,
+        Arc::clone(&make_provider),
+        runtime.session_id(),
+    );
     let session = runtime.session();
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;

@@ -47,6 +47,31 @@ impl Provider for CliProvider {
     }
 }
 
+/// Register the bounded-child delegation surface (§20) on a started
+/// runtime: the delegate tool needs the parent session id, which only
+/// exists once the runtime is composed. Call before the first submit.
+pub fn enable_children<P>(
+    tools: &ion_core::ToolCatalog,
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    parent_id: ion_core::SessionId,
+) where
+    P: ion_core::Provider,
+{
+    tools.register_scope(
+        "delegate",
+        vec![Arc::new(ion_core::DelegateTool::new(
+            ion_core::DelegateConfig {
+                store: store.clone(),
+                make_provider,
+                max_active_children: 4,
+                child_budget: ion_core::child_budget_default(),
+            },
+            parent_id,
+        ))],
+    );
+}
+
 /// Build the scripted-provider factory used when no real model is
 /// configured. Shared by the CLI frontends and tests.
 pub fn scripted_provider_factory(
