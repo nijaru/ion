@@ -43,6 +43,24 @@ type EventReceiver = mpsc::Receiver<Result<RuntimeEvent, RuntimeError>>;
 type SubscribeReply = Result<(SessionSnapshot, EventReceiver), CommandError>;
 type ToolSettlement = (EffectId, ToolResult);
 
+/// One-line display summary of a call's canonical target (best
+/// effort; None when canonicalization fails — the denial surfaces
+/// elsewhere).
+fn target_summary(
+    tools: &ToolRegistry,
+    name: &str,
+    arguments: &serde_json::Value,
+) -> Option<String> {
+    match tools.canonicalize(name, arguments) {
+        Ok(crate::tool::CanonicalTarget::Path { path }) => Some(path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )),
+        Ok(crate::tool::CanonicalTarget::Command { command }) => Some(command),
+        Err(_) => None,
+    }
+}
+
 /// Live presentation events (DESIGN.md §21.3). Durable semantic state
 /// lives in session entries and operation state, never here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +80,8 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         call_id: u64,
         tool: String,
+        /// Short canonical-target summary for display (path or command).
+        target: Option<String>,
     },
     OperationFinished {
         cursor: RuntimeCursor,
@@ -1091,6 +1111,7 @@ impl<P: Provider> SessionRuntime<P> {
                             cursor: RuntimeCursor::default(),
                             operation_id,
                             call_id: call.call_id,
+                            target: target_summary(&self.tools, &call.name, &call.arguments),
                             tool: call.name.clone(),
                         });
                         warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
@@ -1212,6 +1233,11 @@ impl<P: Provider> SessionRuntime<P> {
                                     cursor: RuntimeCursor::default(),
                                     operation_id,
                                     call_id: call.call_id,
+                                    target: target_summary(
+                                        &self.tools,
+                                        &call.name,
+                                        &call.arguments,
+                                    ),
                                     tool: call.name.clone(),
                                 });
                                 self.spawn_tool_effect(Some(effect_id), call);
@@ -1709,6 +1735,7 @@ impl<P: Provider> SessionRuntime<P> {
                 cursor: RuntimeCursor::default(),
                 operation_id: call.operation_id,
                 call_id: call.call_id,
+                target: target_summary(&self.tools, &call.name, &call.arguments),
                 tool: call.name.clone(),
             });
             self.spawn_tool_effect(effect_id_of(self.operation.as_ref()), call);

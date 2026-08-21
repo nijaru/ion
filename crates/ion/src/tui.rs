@@ -19,7 +19,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::{execute, terminal};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
@@ -333,8 +333,11 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         RuntimeEvent::AssistantTextDelta { text, .. } => {
             state.draft.push_str(&text);
         }
-        RuntimeEvent::ToolStarted { tool, call_id, .. } => {
-            state.tool_rows.push(format!("· {tool} (call {call_id})…"));
+        RuntimeEvent::ToolStarted { tool, target, .. } => {
+            state.tool_rows.push(match target {
+                Some(target) => format!("· {tool} {target}…"),
+                None => format!("· {tool}…"),
+            });
             state.status = UiStatus::Working {
                 operation: format!("running {tool}"),
             };
@@ -374,15 +377,55 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
     state
 }
 
+/// Markdown-lite inline styling for assistant scrollback: `**bold**`
+/// and `` `code` `` spans; unmatched markers stay literal. Headers
+/// (leading #) render bold. No block structure — the viewport wraps
+/// plain lines.
+fn markdown_line(line: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut rest = line;
+    if let Some(after) = rest.strip_prefix('#') {
+        let after = after.trim_start();
+        spans.push(Span::from(format!("## {after}")).bold());
+        return Line::from(spans);
+    }
+    while let Some(start) = rest.find(['`', '*']) {
+        let marker = rest[start..].chars().next().expect("find matched");
+        let token = if marker == '`' { "`" } else { "**" };
+        let Some(end) = rest[start + token.len()..].find(token) else {
+            break;
+        };
+        let (plain, styled, tail) = (
+            &rest[..start],
+            &rest[start + token.len()..start + token.len() + end],
+            &rest[start + token.len() + end + token.len()..],
+        );
+        if !plain.is_empty() {
+            spans.push(Span::from(plain.to_owned()));
+        }
+        spans.push(if marker == '`' {
+            Span::from(styled.to_owned()).cyan()
+        } else {
+            Span::from(styled.to_owned()).bold()
+        });
+        rest = tail;
+    }
+    if !rest.is_empty() || spans.is_empty() {
+        spans.push(Span::from(rest.to_owned()));
+    }
+    Line::from(spans)
+}
+
 impl UiState {
     /// Move the live draft into scrollback as a completed assistant
     /// turn (inline scrollback pattern: completed content leaves the
-    /// live viewport).
+    /// live viewport). Assistant lines get markdown-lite styling.
     fn flush_draft(&mut self) {
         if !self.draft.is_empty() {
             for line in self.draft.lines() {
-                self.pending_scrollback
-                    .push(Line::from(format!("ion « {line}")));
+                let mut styled = markdown_line(line);
+                styled.spans.insert(0, Span::from("ion « ").dim());
+                self.pending_scrollback.push(styled);
             }
             self.draft.clear();
         }
@@ -769,7 +812,8 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_core::OperationId;
+    use ion_core::{OperationId, RuntimeCursor};
+    use ratatui::style::{Color, Modifier};
 
     fn key(code: KeyCode) -> UiMessage {
         UiMessage::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -834,6 +878,41 @@ mod tests {
         assert_eq!(state.composer.as_str(), "hello ");
         let state = update(state, ctrl('y')).0;
         assert_eq!(state.composer.as_str(), "hello world");
+    }
+
+    #[test]
+    fn markdown_lite_styles_bold_and_code() {
+        let line = markdown_line("use **bold** and `code` here");
+        let text: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, vec!["use ", "bold", " and ", "code", " here"]);
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(line.spans[3].style.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn markdown_lite_leaves_unmatched_markers_literal() {
+        let line = markdown_line("a * b and c` d");
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "a * b and c` d");
+    }
+
+    #[test]
+    fn tool_row_shows_canonical_target() {
+        let mut state = UiState::new();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ToolStarted {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                call_id: 1,
+                tool: "read".to_owned(),
+                target: Some("Cargo.toml".to_owned()),
+            },
+        );
+        assert_eq!(
+            state.tool_rows.last().map(String::as_str),
+            Some("· read Cargo.toml…")
+        );
     }
 
     #[test]
