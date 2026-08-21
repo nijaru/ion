@@ -14,6 +14,7 @@ use std::future::Future;
 
 mod openrouter;
 mod print;
+mod tui;
 
 use openrouter::OpenRouterProvider;
 use print::PrintFrontend;
@@ -33,6 +34,10 @@ struct Cli {
     /// instead of the scripted provider. Requires OPENROUTER_API_KEY.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
+    /// Reopen the most recent persisted session in the interactive
+    /// TUI instead of starting a new one.
+    #[arg(long = "resume")]
+    resume: bool,
     /// Tools this non-interactive run may execute without approval,
     /// comma-separated (e.g. --allow bash,write). Everything else
     /// terminates the operation with ApprovalRequired (DESIGN.md §17).
@@ -48,13 +53,10 @@ async fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
-    let Some(prompt) = cli.print else {
-        let _ = writeln!(
-            io::stderr(),
-            "interactive TUI is not implemented yet; use ion -p \"prompt\""
-        );
-        return ExitCode::from(2);
-    };
+    if cli.print.is_none() {
+        return run_tui(&cli).await;
+    }
+    let prompt = cli.print.expect("checked above");
 
     match run_print(prompt, cli.model, cli.allow).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -91,6 +93,77 @@ impl ion_core::Provider for CliProvider {
                 Either::Right(fut)
             }
         })
+    }
+}
+
+async fn run_tui(cli: &Cli) -> ExitCode {
+    let api_key = match cli.model.as_deref() {
+        Some(_) => match std::env::var("OPENROUTER_API_KEY") {
+            Ok(key) => Some(key),
+            Err(_) => {
+                let _ = writeln!(io::stderr(), "--model requires OPENROUTER_API_KEY");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    let provider = match cli.model.clone() {
+        Some(model) => {
+            CliProvider::OpenRouter(OpenRouterProvider::new(model, api_key.expect("checked")))
+        }
+        None => CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
+            "scripted provider: build with --model for real answers\n",
+        )])),
+    };
+    let store = match SessionStore::open(default_db_path()) {
+        Ok(store) => Arc::new(store),
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "store: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let resume_session = if cli.resume {
+        match store.latest_session().await {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                let _ = writeln!(io::stderr(), "no persisted session to resume");
+                return ExitCode::from(2);
+            }
+            Err(err) => {
+                let _ = writeln!(io::stderr(), "store: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    let tools = ToolRegistry::default();
+    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
+        Arc::new(ion_core::DefaultPolicy)
+    } else {
+        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
+    };
+    let runtime = if let Some(session_id) = resume_session {
+        match Runtime::open_session(provider, tools, (*store).clone(), session_id).await {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let _ = writeln!(io::stderr(), "resume: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Runtime::start_with_policy(provider, tools, (*store).clone(), policy)
+    };
+    match tui::run(runtime.session(), store, resume_session).await {
+        Ok(()) => {
+            let _ = runtime.join().await;
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            let _ = runtime.join().await;
+            let _ = writeln!(io::stderr(), "{err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

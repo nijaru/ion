@@ -286,6 +286,9 @@ enum StoreCommand {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
     },
+    LatestSession {
+        reply: oneshot::Sender<Result<Option<SessionId>, StoreError>>,
+    },
     Usage {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
@@ -392,6 +395,12 @@ impl SessionStore {
             .await
     }
 
+    /// The most recently updated session, for `--resume`.
+    pub async fn latest_session(&self) -> Result<Option<SessionId>, StoreError> {
+        self.request(|reply| StoreCommand::LatestSession { reply })
+            .await
+    }
+
     /// Test hook (DESIGN.md §30.5): the next mutating command fails
     /// visibly and nothing is written.
     pub fn fail_next_write(&self) {
@@ -454,7 +463,30 @@ fn handle_command(
         StoreCommand::Usage { session_id, reply } => {
             let _ = reply.send(usage_rows(connection, session_id));
         }
+        StoreCommand::LatestSession { reply } => {
+            let _ = reply.send(latest_session(connection));
+        }
     }
+}
+
+fn latest_session(connection: &mut Connection) -> Result<Option<SessionId>, StoreError> {
+    let row: Option<String> = connection
+        .query_row(
+            "SELECT id FROM sessions ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+    row.map(|id| {
+        Uuid::parse_str(&id)
+            .map(SessionId::from_uuid)
+            .map_err(|_| StoreError::Sqlite("session id is not a uuid".into()))
+    })
+    .transpose()
 }
 
 fn usage_rows(
