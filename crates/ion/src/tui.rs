@@ -62,6 +62,212 @@ pub enum UiStatus {
     },
 }
 
+/// One editor/global action, matched against decoded keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Quit,
+    Cancel,
+    Submit,
+    HistoryPrevious,
+    HistoryNext,
+    CursorLeft,
+    CursorRight,
+    CursorHome,
+    CursorEnd,
+    KillToEnd,
+    KillToStart,
+    KillWord,
+    Yank,
+}
+
+/// Resolved action → key bindings. Plain data owned by the UI state;
+/// defaults match pi's editor defaults where they overlap.
+#[derive(Debug, Clone)]
+pub struct KeyMap {
+    bindings: Vec<(Action, KeyCode, KeyModifiers)>,
+}
+
+impl Default for KeyMap {
+    fn default() -> Self {
+        let bind = |map: &mut Vec<(Action, KeyCode, KeyModifiers)>,
+                    action: Action,
+                    code: KeyCode,
+                    modifiers: KeyModifiers| {
+            map.push((action, code, modifiers));
+        };
+        let mut bindings = Vec::new();
+        bind(
+            &mut bindings,
+            Action::Quit,
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::Cancel,
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::Cancel,
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::Submit,
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::HistoryPrevious,
+            KeyCode::Up,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::HistoryNext,
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorLeft,
+            KeyCode::Left,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorRight,
+            KeyCode::Right,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorHome,
+            KeyCode::Home,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorHome,
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorEnd,
+            KeyCode::End,
+            KeyModifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::CursorEnd,
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::KillToEnd,
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::KillToStart,
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::KillWord,
+            KeyCode::Char('w'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::Yank,
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+        );
+        KeyMap { bindings }
+    }
+}
+
+impl KeyMap {
+    /// Apply settings overrides: each named action rebinds to the
+    /// given key string. Unparsable strings are a config error.
+    pub fn from_settings(overrides: &crate::settings::Keybindings) -> Result<Self, String> {
+        let mut map = KeyMap::default();
+        let rebind =
+            |map: &mut KeyMap, action: Action, spec: &Option<String>| -> Result<(), String> {
+                if let Some(spec) = spec {
+                    let (code, modifiers) = parse_key(spec)?;
+                    map.bindings.retain(|(a, _, _)| *a != action);
+                    map.bindings.push((action, code, modifiers));
+                }
+                Ok(())
+            };
+        rebind(&mut map, Action::Quit, &overrides.quit)?;
+        rebind(&mut map, Action::Cancel, &overrides.cancel)?;
+        rebind(&mut map, Action::Submit, &overrides.submit)?;
+        rebind(
+            &mut map,
+            Action::HistoryPrevious,
+            &overrides.history_previous,
+        )?;
+        rebind(&mut map, Action::HistoryNext, &overrides.history_next)?;
+        rebind(&mut map, Action::CursorLeft, &overrides.cursor_left)?;
+        rebind(&mut map, Action::CursorRight, &overrides.cursor_right)?;
+        rebind(&mut map, Action::CursorHome, &overrides.cursor_home)?;
+        rebind(&mut map, Action::CursorEnd, &overrides.cursor_end)?;
+        rebind(&mut map, Action::KillToEnd, &overrides.kill_to_end)?;
+        rebind(&mut map, Action::KillToStart, &overrides.kill_to_start)?;
+        rebind(&mut map, Action::KillWord, &overrides.kill_word)?;
+        rebind(&mut map, Action::Yank, &overrides.yank)?;
+        Ok(map)
+    }
+
+    fn action_for(&self, key: &KeyEvent) -> Option<Action> {
+        self.bindings
+            .iter()
+            .find(|(_, code, modifiers)| *code == key.code && *modifiers == key.modifiers)
+            .map(|(action, _, _)| *action)
+    }
+}
+
+/// Parse a keybinding string like `ctrl+k`, `alt+left`, or `enter`.
+fn parse_key(spec: &str) -> Result<(KeyCode, KeyModifiers), String> {
+    let mut modifiers = KeyModifiers::NONE;
+    let mut key = None;
+    for part in spec.split('+') {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" => modifiers |= KeyModifiers::CONTROL,
+            "alt" => modifiers |= KeyModifiers::ALT,
+            "shift" => modifiers |= KeyModifiers::SHIFT,
+            "enter" => key = Some(KeyCode::Enter),
+            "esc" | "escape" => key = Some(KeyCode::Esc),
+            "tab" => key = Some(KeyCode::Tab),
+            "backspace" => key = Some(KeyCode::Backspace),
+            "delete" => key = Some(KeyCode::Delete),
+            "up" => key = Some(KeyCode::Up),
+            "down" => key = Some(KeyCode::Down),
+            "left" => key = Some(KeyCode::Left),
+            "right" => key = Some(KeyCode::Right),
+            "home" => key = Some(KeyCode::Home),
+            "end" => key = Some(KeyCode::End),
+            single if single.chars().count() == 1 => {
+                key = Some(KeyCode::Char(single.chars().next().expect("checked")));
+            }
+            other => return Err(format!("unknown key {other:?} in binding {spec:?}")),
+        }
+    }
+    key.map(|code| (code, modifiers))
+        .ok_or_else(|| format!("empty key binding {spec:?}"))
+}
+
 /// One UI state owner (§22.1). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -78,6 +284,8 @@ pub struct UiState {
     history_stash: Option<String>,
     /// Last kill (ctrl-k/u/w); ctrl-y yanks it back.
     kill_buffer: String,
+    /// Resolved key bindings (settings overrides applied).
+    keymap: KeyMap,
     /// Streaming assistant draft for the live step.
     draft: String,
     /// True after an event lag dropped deltas: the draft is partial
@@ -96,6 +304,11 @@ impl UiState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replace the key bindings with settings-resolved ones.
+    pub fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
     }
 }
 
@@ -128,10 +341,42 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
     }
 }
 
-fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-            // Ctrl-C cancels the active operation; a second press quits.
+fn handle_key(state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    if let Some(action) = state.keymap.action_for(&key) {
+        return handle_action(state, action);
+    }
+    match key.code {
+        KeyCode::Backspace => handle_backspace(state),
+        KeyCode::Delete => {
+            let mut state = state;
+            delete_at_cursor(&mut state);
+            (state, None)
+        }
+        KeyCode::Char(' ') if key.modifiers.is_empty() => {
+            let mut state = state;
+            insert_at_cursor(&mut state, " ");
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            let mut state = state;
+            insert_at_cursor(&mut state, &ch.to_string());
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
+fn handle_backspace(mut state: UiState) -> (UiState, Option<UiEffect>) {
+    if state.cursor > 0 {
+        state.cursor -= 1;
+        delete_at_cursor(&mut state);
+    }
+    (state, None)
+}
+
+fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffect>) {
+    match action {
+        Action::Cancel => {
             if matches!(state.status, UiStatus::Idle) {
                 state.quit_requested = true;
                 (state, Some(UiEffect::Quit))
@@ -139,19 +384,11 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 (state, Some(UiEffect::Cancel))
             }
         }
-        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+        Action::Quit => {
             state.quit_requested = true;
             (state, Some(UiEffect::Quit))
         }
-        (KeyCode::Esc, _) => {
-            if matches!(state.status, UiStatus::Idle) {
-                state.quit_requested = true;
-                (state, Some(UiEffect::Quit))
-            } else {
-                (state, Some(UiEffect::Cancel))
-            }
-        }
-        (KeyCode::Enter, _) => {
+        Action::Submit => {
             let text = state.composer.trim().to_owned();
             if text.is_empty() {
                 return (state, None);
@@ -166,75 +403,54 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 UiStatus::Working { .. } => (state, Some(UiEffect::Steer { text })),
             }
         }
-        (KeyCode::Left, _) if state.cursor > 0 => {
+        Action::CursorLeft if state.cursor > 0 => {
             state.cursor -= 1;
             state.exit_history_browse();
             (state, None)
         }
-        (KeyCode::Right, _) if state.cursor < state.composer.chars().count() => {
+        Action::CursorRight if state.cursor < state.composer.chars().count() => {
             state.cursor += 1;
             state.exit_history_browse();
             (state, None)
         }
-        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+        Action::CursorLeft | Action::CursorRight => (state, None),
+        Action::CursorHome => {
             state.cursor = 0;
             (state, None)
         }
-        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+        Action::CursorEnd => {
             state.cursor = state.composer.chars().count();
             (state, None)
         }
-        (KeyCode::Delete, _) => {
-            delete_at_cursor(&mut state);
-            (state, None)
-        }
-        (KeyCode::Up, _) => {
+        Action::HistoryPrevious => {
             browse_history(&mut state, -1);
             (state, None)
         }
-        (KeyCode::Down, _) => {
+        Action::HistoryNext => {
             browse_history(&mut state, 1);
             (state, None)
         }
-        (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+        Action::KillToEnd => {
             let chars = state.composer.chars().count();
             state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
             (state, None)
         }
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+        Action::KillToStart => {
             state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
             state.cursor = 0;
             (state, None)
         }
-        (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+        Action::KillWord => {
             let start = word_start(&state.composer, state.cursor);
             state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
             state.cursor = start;
             (state, None)
         }
-        (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+        Action::Yank => {
             let yank = state.kill_buffer.clone();
             insert_at_cursor(&mut state, &yank);
             (state, None)
         }
-        (KeyCode::Backspace, _) => {
-            if state.cursor > 0 {
-                state.cursor -= 1;
-                delete_at_cursor(&mut state);
-            }
-            (state, None)
-        }
-        (KeyCode::Char(' '), _) => {
-            insert_at_cursor(&mut state, " ");
-            (state, None)
-        }
-        (KeyCode::Char(ch), modifiers)
-            if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT =>
-        {
-            insert_at_cursor(&mut state, &ch.to_string());
-            (state, None)
-        }
-        _ => (state, None),
     }
 }
 
@@ -588,6 +804,7 @@ pub async fn run(
     store: Arc<SessionStore>,
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
+    keymap: KeyMap,
 ) -> Result<(), RuntimeError> {
     let palette = palette(theme);
     let mut guard = TerminalGuard::enter()
@@ -639,6 +856,7 @@ pub async fn run(
     let mut key_stream = EventStream::new();
 
     let mut state = UiState::new();
+    state.set_keymap(keymap);
     let (snapshot, mut events) = session.subscribe().await?;
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
@@ -935,6 +1153,43 @@ mod tests {
         let line = markdown_line("a * b and c` d");
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "a * b and c` d");
+    }
+
+    #[test]
+    fn parse_key_handles_modifiers_and_names() {
+        assert_eq!(
+            parse_key("ctrl+k").unwrap(),
+            (KeyCode::Char('k'), KeyModifiers::CONTROL)
+        );
+        assert_eq!(
+            parse_key("alt+left").unwrap(),
+            (KeyCode::Left, KeyModifiers::ALT)
+        );
+        assert_eq!(
+            parse_key("enter").unwrap(),
+            (KeyCode::Enter, KeyModifiers::NONE)
+        );
+        assert!(parse_key("ctrl+nope").is_err());
+    }
+
+    #[test]
+    fn keymap_override_rebinds_action() {
+        let overrides: crate::settings::Keybindings = toml::from_str("quit = \"ctrl+q\"").unwrap();
+        let map = KeyMap::from_settings(&overrides).unwrap();
+        let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_q), Some(Action::Quit));
+        // The old binding is gone.
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_d), None);
+    }
+
+    #[test]
+    fn default_keymap_matches_pi_overlap() {
+        let map = KeyMap::default();
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(map.action_for(&up), Some(Action::HistoryPrevious));
+        let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_y), Some(Action::Yank));
     }
 
     #[test]

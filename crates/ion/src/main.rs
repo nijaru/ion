@@ -177,7 +177,22 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     } else {
         Runtime::start_with_policy(provider, tools, (*store).clone(), policy)
     };
-    match tui::run(runtime.session(), store, resume_session, settings.theme()).await {
+    let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
+        Ok(keymap) => keymap,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "settings: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    match tui::run(
+        runtime.session(),
+        store,
+        resume_session,
+        settings.theme(),
+        keymap,
+    )
+    .await
+    {
         Ok(()) => {
             let _ = runtime.join().await;
             ExitCode::SUCCESS

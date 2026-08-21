@@ -16,12 +16,36 @@ pub enum Theme {
     Auto,
 }
 
+/// Per-action key overrides; unset actions keep their defaults.
+/// Key strings: modifiers `ctrl+`/`alt+`/`shift+` plus a key name
+/// (letter, `enter`, `esc`, `tab`, `backspace`, `delete`, `up`,
+/// `down`, `left`, `right`, `home`, `end`).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Keybindings {
+    pub quit: Option<String>,
+    pub cancel: Option<String>,
+    pub submit: Option<String>,
+    pub history_previous: Option<String>,
+    pub history_next: Option<String>,
+    pub cursor_left: Option<String>,
+    pub cursor_right: Option<String>,
+    pub cursor_home: Option<String>,
+    pub cursor_end: Option<String>,
+    pub kill_to_end: Option<String>,
+    pub kill_to_start: Option<String>,
+    pub kill_word: Option<String>,
+    pub yank: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     default_model: Option<String>,
     default_provider: Option<String>,
     theme: Option<Theme>,
+    #[serde(default)]
+    pub keybindings: Keybindings,
 }
 
 impl Settings {
@@ -33,6 +57,7 @@ impl Settings {
             default_model: Some("stealth/ox-alpha".to_owned()),
             default_provider: Some("openrouter".to_owned()),
             theme: None,
+            keybindings: Keybindings::default(),
         }
     }
     pub fn path() -> Option<PathBuf> {
