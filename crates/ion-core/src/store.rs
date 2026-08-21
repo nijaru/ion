@@ -23,7 +23,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Ordered, transactional migrations gated by `PRAGMA user_version`
 /// (DESIGN.md §11.1). Version 0 (fresh or pre-versioning) applies the
@@ -40,7 +40,16 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
         return Ok(());
     }
     let tx = connection.transaction()?;
-    tx.execute_batch(SCHEMA)?;
+    if version < 1 {
+        // Fresh database: the initial schema is already at the current
+        // shape.
+        tx.execute_batch(SCHEMA)?;
+    }
+    if version == 1 {
+        // v2: effect attempts, persisted so recovery replays are
+        // countable (DESIGN.md §11.3, §15.4).
+        tx.execute_batch("ALTER TABLE effects ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
@@ -100,7 +109,8 @@ CREATE TABLE IF NOT EXISTS effects (
     effective_input TEXT NOT NULL,
     settlement TEXT,
     created_at INTEGER NOT NULL,
-    settled_at INTEGER
+    settled_at INTEGER,
+    attempt INTEGER NOT NULL DEFAULT 1
 );
 ";
 
@@ -147,6 +157,8 @@ pub struct EffectRecord {
     pub kind: String,
     pub recovery_class: RecoveryClass,
     pub effective_input: serde_json::Value,
+    /// 1 for a fresh effect; recovery replays increment it (§15.4).
+    pub attempt: u64,
 }
 
 /// One settled effect: the typed outcome is stored with the effect row
@@ -182,6 +194,9 @@ pub struct CommitRequest {
     pub entries: Vec<EntryRecord>,
     pub open_effects: Vec<EffectRecord>,
     pub settled_effects: Vec<SettledEffect>,
+    /// Unresolved NeverReplay effects marked indeterminate after process
+    /// loss (DESIGN.md §12.2).
+    pub indeterminate_effects: Vec<EffectId>,
     /// Inbox items inserted by this transition (status as recorded).
     pub inbox: Vec<InboxRecord>,
     /// Previously pending inbox items this transition applied.
@@ -454,8 +469,8 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
     }
     for effect in &request.open_effects {
         tx.execute(
-            "INSERT INTO effects (id, operation_id, kind, recovery_class, status, effective_input, created_at)
-             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)",
+            "INSERT INTO effects (id, operation_id, kind, recovery_class, status, effective_input, created_at, attempt)
+             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7)",
             rusqlite::params![
                 effect.id.as_uuid().to_string(),
                 request.operation_id.as_uuid().to_string(),
@@ -464,8 +479,25 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                     .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?,
                 effect.effective_input.to_string(),
                 now_ms(),
+                effect.attempt as i64,
             ],
         )?;
+    }
+    for effect_id in &request.indeterminate_effects {
+        let affected = tx.execute(
+            "UPDATE effects SET status = 'indeterminate', settled_at = ?2
+             WHERE id = ?1 AND operation_id = ?3 AND status = 'pending'",
+            rusqlite::params![
+                effect_id.as_uuid().to_string(),
+                now_ms(),
+                request.operation_id.as_uuid().to_string(),
+            ],
+        )?;
+        if affected != 1 {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "indeterminate settlement matched no pending effect {effect_id}"
+            )));
+        }
     }
     for settled in &request.settled_effects {
         let affected = tx.execute(

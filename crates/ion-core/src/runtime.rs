@@ -396,6 +396,14 @@ impl Runtime {
             .await
             .map_err(|_| RuntimeError::OperationFailed("runtime task panicked".to_owned()))
     }
+
+    /// Test hook (DESIGN.md §30.2): abort the session task at its current
+    /// await point without close semantics — the process-loss crash
+    /// window. Durable state stays at the last committed checkpoint.
+    #[cfg(test)]
+    pub(crate) fn crash(&self) {
+        self.join.abort();
+    }
 }
 
 struct Subscriber {
@@ -595,6 +603,9 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
         info!(session = %self.session_id, "session opened");
+        if self.operation.is_some() {
+            self.recover_open_operation().await;
+        }
         loop {
             tokio::select! {
                 command = self.commands.recv() => {
@@ -754,6 +765,7 @@ impl<P: Provider> SessionRuntime<P> {
             applied.entries,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             vec![record],
             Vec::new(),
         );
@@ -810,6 +822,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         self.store
             .commit(request)
@@ -820,6 +833,186 @@ impl<P: Provider> SessionRuntime<P> {
         staged.cancel.cancel();
         self.operation = Some(staged);
         Ok(())
+    }
+
+    /// Ordinary recovery for an operation found open after process loss
+    /// (DESIGN.md §32 Step 3, §25.3): pending model steps and
+    /// ReplaySafe tool effects replay with a persisted attempt count;
+    /// unresolved NeverReplay effects settle as indeterminate and are
+    /// never replayed (§12.2); quiescent operations simply continue.
+    async fn recover_open_operation(&mut self) {
+        let Some(state) = self
+            .operation
+            .as_ref()
+            .map(|active| active.machine.state().clone())
+        else {
+            return;
+        };
+        match state {
+            OperationState::AssistantEffectPending => {
+                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                    error!(session = %self.session_id, "pending model step without an effect intent; fencing");
+                    self.closed = true;
+                    return;
+                };
+                let prompt = project_transcript(&self.entries);
+                let mut staged = self.operation.clone().expect("operation present");
+                let applied = staged
+                    .machine
+                    .apply(Transition::RecoverModelStep {
+                        prompt: prompt.clone(),
+                    })
+                    .expect("recover a pending model step");
+                let EffectIntent::ModelStep { tools, .. } = applied.intents[0].clone() else {
+                    panic!("RecoverModelStep must yield a model-step intent");
+                };
+                let settled = vec![SettledEffect {
+                    id: open.id,
+                    settlement: serde_json::json!({ "recovered": "process_loss" }),
+                }];
+                let effect = EffectRecord {
+                    id: EffectId::generate(),
+                    kind: open.kind,
+                    recovery_class: open.recovery_class,
+                    effective_input: serde_json::json!({ "prompt": prompt, "tools": tools }),
+                    attempt: open.attempt + 1,
+                };
+                let (request, new_entry_seq) = build_commit_request(
+                    self.session_id,
+                    &staged,
+                    staged.state_seq + 1,
+                    self.next_entry_seq,
+                    Vec::new(),
+                    vec![effect.clone()],
+                    settled,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                if let Err(err) = self.store.commit(request).await {
+                    self.fail_operation_on_persistence(err).await;
+                    return;
+                }
+                let operation_id = staged.machine.operation_id();
+                self.next_entry_seq = new_entry_seq;
+                staged.state_seq += 1;
+                staged.open_effect = Some(effect);
+                self.operation = Some(staged);
+                warn!(%operation_id, "recovered a pending model step by replay");
+                self.spawn_model_step(operation_id, prompt, tools);
+            }
+            OperationState::ToolEffectPending { .. } => {
+                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                    error!(session = %self.session_id, "pending tool effect without an effect intent; fencing");
+                    self.closed = true;
+                    return;
+                };
+                match open.recovery_class {
+                    RecoveryClass::ReplaySafe => {
+                        // Re-execute with the exact effective input.
+                        let call =
+                            tool_call_from_input(&open.effective_input).unwrap_or_else(|| {
+                                panic!("replay-safe tool effect without a usable input")
+                            });
+                        let mut staged = self.operation.clone().expect("operation present");
+                        staged
+                            .machine
+                            .apply(Transition::RecoverTool { call: call.clone() })
+                            .expect("recover a pending replay-safe tool effect");
+                        let settled = vec![SettledEffect {
+                            id: open.id,
+                            settlement: serde_json::json!({ "recovered": "process_loss" }),
+                        }];
+                        let effect = EffectRecord {
+                            id: EffectId::generate(),
+                            kind: open.kind.clone(),
+                            recovery_class: open.recovery_class,
+                            effective_input: open.effective_input.clone(),
+                            attempt: open.attempt + 1,
+                        };
+                        let (request, new_entry_seq) = build_commit_request(
+                            self.session_id,
+                            &staged,
+                            staged.state_seq + 1,
+                            self.next_entry_seq,
+                            Vec::new(),
+                            vec![effect.clone()],
+                            settled,
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        );
+                        if let Err(err) = self.store.commit(request).await {
+                            self.fail_operation_on_persistence(err).await;
+                            return;
+                        }
+                        let operation_id = staged.machine.operation_id();
+                        self.next_entry_seq = new_entry_seq;
+                        staged.state_seq += 1;
+                        let effect_id = effect.id;
+                        staged.open_effect = Some(effect);
+                        self.operation = Some(staged);
+                        self.emit(RuntimeEvent::ToolStarted {
+                            cursor: RuntimeCursor::default(),
+                            operation_id,
+                            call_id: call.call_id,
+                            tool: call.name.clone(),
+                        });
+                        warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
+                        self.spawn_tool_effect(Some(effect_id), call);
+                    }
+                    RecoveryClass::NeverReplay | RecoveryClass::Reconcile => {
+                        // No reconciliation evidence exists yet (§12.3);
+                        // an unresolved effect of this class is
+                        // indeterminate, never replayed.
+                        let mut staged = self.operation.clone().expect("operation present");
+                        let applied = staged
+                            .machine
+                            .apply(Transition::SettleIndeterminate)
+                            .expect("settle an unresolved effect as indeterminate");
+                        // The indeterminate status IS the settlement; the
+                        // effect must not also be marked settled.
+                        let settled = Vec::new();
+                        let indeterminate = vec![open.id];
+                        let (request, new_entry_seq) = build_commit_request(
+                            self.session_id,
+                            &staged,
+                            staged.state_seq + 1,
+                            self.next_entry_seq,
+                            applied.entries.clone(),
+                            Vec::new(),
+                            settled,
+                            indeterminate,
+                            Vec::new(),
+                            Vec::new(),
+                        );
+                        if let Err(err) = self.store.commit(request).await {
+                            self.fail_operation_on_persistence(err).await;
+                            return;
+                        }
+                        let operation_id = staged.machine.operation_id();
+                        self.next_entry_seq = new_entry_seq;
+                        staged.state_seq += 1;
+                        staged.open_effect = None;
+                        self.entries.extend(applied.entries);
+                        self.emit_terminal_state(&applied.state);
+                        self.operation = Some(staged);
+                        warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
+                        self.advance().await;
+                    }
+                }
+            }
+            OperationState::Accepted
+            | OperationState::NeedAssistant
+            | OperationState::NeedContinuation
+            | OperationState::ToolsPlanned { .. }
+            | OperationState::Suspended => {
+                // Quiescent or fully-committed states continue through
+                // ordinary flow.
+                self.advance().await;
+            }
+            OperationState::Finished(_) => {}
+        }
     }
 
     /// Drive the machine forward from quiescent states: drain queued
@@ -913,6 +1106,7 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
                 applied_ids,
             );
             (staged, drained, request, new_entry_seq)
@@ -954,14 +1148,19 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({ "prompt": prompt, "tools": tools }),
+            attempt: 1,
         };
+        // The pending effect is part of the checkpoint: it must be on the
+        // staged operation before the commit is built.
+        staged.open_effect = Some(effect.clone());
         let (request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
             self.next_entry_seq,
             Vec::new(),
-            vec![effect.clone()],
+            vec![effect],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -972,7 +1171,6 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        staged.open_effect = Some(effect);
         self.operation = Some(staged);
         self.spawn_model_step(operation_id, prompt, tools);
         true
@@ -999,15 +1197,22 @@ impl<P: Provider> SessionRuntime<P> {
             effective_input: serde_json::json!({
                 "tool": call.name,
                 "arguments": call.arguments,
+                "call_id": call.call_id,
             }),
+            attempt: 1,
         };
+        // The pending effect is part of the checkpoint: it must be on the
+        // staged operation before the commit is built.
+        let effect_id = effect.id;
+        staged.open_effect = Some(effect.clone());
         let (request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
             self.next_entry_seq,
             Vec::new(),
-            vec![effect.clone()],
+            vec![effect],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1018,8 +1223,6 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        let effect_id = effect.id;
-        staged.open_effect = Some(effect);
         self.operation = Some(staged);
         if let Err(message) = self.tools.validate(&call.name, &call.arguments) {
             // The denial settles through the normal tool-result path; the
@@ -1209,6 +1412,7 @@ impl<P: Provider> SessionRuntime<P> {
             settled,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
@@ -1253,6 +1457,7 @@ impl<P: Provider> SessionRuntime<P> {
             applied.entries.clone(),
             Vec::new(),
             settled,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -1310,6 +1515,7 @@ impl<P: Provider> SessionRuntime<P> {
             &staged,
             staged.state_seq + 1,
             self.next_entry_seq,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1440,6 +1646,7 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             );
             match self.store.commit(request).await {
                 Ok(()) => {
@@ -1522,6 +1729,19 @@ impl<P: Provider> SessionRuntime<P> {
     }
 }
 
+/// Reconstruct a tool call from a persisted effect's exact effective
+/// input (DESIGN.md §12.1). Returns None for inputs from older schemas
+/// that lack the call identity.
+fn tool_call_from_input(input: &serde_json::Value) -> Option<ToolCall> {
+    let operation_id = OperationId::from_uuid(uuid::Uuid::now_v7());
+    Some(ToolCall {
+        operation_id,
+        call_id: input.get("call_id")?.as_u64()?,
+        name: input.get("tool")?.as_str()?.to_owned(),
+        arguments: input.get("arguments")?.clone(),
+    })
+}
+
 fn machine_snapshot_tools(machine: &OperationMachine) -> Vec<ToolSpec> {
     // The frozen capability snapshot is part of every checkpoint.
     machine.frozen_tools().clone()
@@ -1543,6 +1763,7 @@ fn build_commit_request(
     entries: Vec<SessionEntry>,
     open_effects: Vec<EffectRecord>,
     settled_effects: Vec<SettledEffect>,
+    indeterminate_effects: Vec<EffectId>,
     inbox: Vec<InboxRecord>,
     inbox_applied: Vec<InboxId>,
 ) -> (CommitRequest, u64) {
@@ -1574,6 +1795,7 @@ fn build_commit_request(
         entries,
         open_effects,
         settled_effects,
+        indeterminate_effects,
         inbox,
         inbox_applied,
     };

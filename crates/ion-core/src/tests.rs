@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::OperationId;
 use crate::provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
-use crate::runtime::{OperationStatus, Runtime, RuntimeEvent, SaturatedHandle};
+use crate::runtime::{OperationStatus, Runtime, RuntimeEvent, SaturatedHandle, SessionHandle};
 use crate::session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
@@ -1732,10 +1732,224 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
                 id: ghost,
                 settlement: serde_json::json!({}),
             }],
+            indeterminate_effects: Vec::new(),
             inbox: Vec::new(),
             inbox_applied: Vec::new(),
         })
         .await
         .expect_err("ghost settlement must fail");
     assert!(err.to_string().contains("matched no pending effect"));
+}
+
+// ---- Crash-window recovery (DESIGN.md §32 Step 3, §30.2) ----
+
+async fn wait_for_state(session: &SessionHandle, predicate: impl Fn(&OperationState) -> bool) {
+    for _ in 0..50 {
+        let snapshot = session.snapshot().await.expect("snapshot");
+        if matches!(
+            snapshot.operation,
+            OperationStatus::Active { ref state, .. } if predicate(state)
+        ) {
+            return;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("operation never reached the expected state");
+}
+
+#[tokio::test]
+async fn crash_during_model_step_recovers_by_replay() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_secs(30),
+            "never arrives",
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    session.submit("goal").await.expect("submit");
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::AssistantEffectPending)
+    })
+    .await;
+
+    // Process loss mid-model-step: no close, no settlement.
+    runtime.crash();
+    drop(runtime);
+    drop(session);
+
+    // Reopen: the pending model step replays with a bumped attempt.
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::AssistantTextDelta { text, .. } if text == "recovered\n"
+        )),
+        "the replayed model step must stream: {recorded:?}"
+    );
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(
+        checkpoint.state,
+        OperationState::Finished(OperationOutcome::Completed)
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn crash_during_replayable_tool_recovers_by_reexecution() {
+    let dir = std::env::temp_dir().join(format!("ion-crash-read-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("note.txt"), "persisted bytes").expect("write");
+
+    let store = SessionStore::open_in_memory().expect("store");
+    let registry = ToolRegistry::with_cwd(&dir);
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "read",
+            json!({"path":"note.txt"}),
+        )]),
+        registry,
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("read it").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::ToolStarted { .. }) {
+            break;
+        }
+    }
+
+    // Process loss while the read effect is in flight.
+    runtime.crash();
+    drop(runtime);
+    drop(session);
+
+    // Reopen: read is ReplaySafe, so it re-executes and the operation
+    // continues into the next model step.
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("after recovery\n")]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(
+        checkpoint.state,
+        OperationState::Finished(OperationOutcome::Completed)
+    );
+    assert!(loaded.entries.iter().any(|(_, entry)| matches!(
+        entry,
+        SessionEntry::ToolResult {
+            result: ToolResult::Ok { output, .. },
+        } if output.contains("persisted bytes")
+    )));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "bash",
+            json!({"command":"sleep 30"}),
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("run").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::ToolStarted { .. }) {
+            break;
+        }
+    }
+
+    // Process loss while a NeverReplay effect is in flight.
+    runtime.crash();
+    drop(runtime);
+    drop(session);
+
+    // Reopen: bash must NOT re-execute; the operation settles as
+    // indeterminate and the session stays usable.
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.operation, OperationStatus::Idle);
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(
+        checkpoint.state,
+        OperationState::Finished(OperationOutcome::Indeterminate)
+    );
+    assert!(
+        !loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+    );
+
+    // The session accepts new work after the indeterminate settlement.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit("next").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { operation_id: id, .. }) if *id == operation_id
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }

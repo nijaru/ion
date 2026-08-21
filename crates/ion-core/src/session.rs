@@ -138,6 +138,20 @@ pub enum Transition {
     FailOperation {
         message: String,
     },
+    /// Recovery (§32 Step 3): re-issue the model step of an operation
+    /// found pending after process loss. Provider generation with local
+    /// canonical context is ReplaySafe (§12.2).
+    RecoverModelStep {
+        prompt: String,
+    },
+    /// Recovery: re-execute a ReplaySafe tool effect found pending after
+    /// process loss, with its exact effective input.
+    RecoverTool {
+        call: ToolCall,
+    },
+    /// Recovery: an unresolved NeverReplay effect becomes indeterminate;
+    /// the user/agent must inspect and decide (§12.2).
+    SettleIndeterminate,
     /// Session close while operating (DESIGN.md §9.5).
     Suspend,
 }
@@ -304,6 +318,9 @@ impl OperationMachine {
             Transition::ToolSettled { result } => self.tool_settled(result),
             Transition::CancelRequested => self.cancel_requested_transition(),
             Transition::FailOperation { message } => self.fail_operation(message),
+            Transition::RecoverModelStep { prompt } => self.recover_model_step(prompt),
+            Transition::RecoverTool { call } => self.recover_tool(call),
+            Transition::SettleIndeterminate => self.settle_indeterminate(),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -529,6 +546,62 @@ impl OperationMachine {
             });
         }
         self.state = OperationState::Finished(OperationOutcome::Failed(message));
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: true,
+        })
+    }
+
+    fn recover_model_step(&mut self, prompt: String) -> Result<Applied, TransitionError> {
+        if !matches!(self.state, OperationState::AssistantEffectPending) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "recover_model_step",
+            });
+        }
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: vec![EffectIntent::ModelStep {
+                operation_id: self.operation_id,
+                prompt,
+                tools: self.tools.clone(),
+            }],
+            cancel_effects: false,
+        })
+    }
+
+    fn recover_tool(&mut self, call: ToolCall) -> Result<Applied, TransitionError> {
+        match &self.state {
+            OperationState::ToolEffectPending { .. } => {}
+            state => {
+                return Err(TransitionError {
+                    state: state_name(state),
+                    transition: "recover_tool",
+                });
+            }
+        }
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: vec![EffectIntent::Tool { call }],
+            cancel_effects: false,
+        })
+    }
+
+    fn settle_indeterminate(&mut self) -> Result<Applied, TransitionError> {
+        if !matches!(
+            self.state,
+            OperationState::AssistantEffectPending | OperationState::ToolEffectPending { .. }
+        ) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "settle_indeterminate",
+            });
+        }
+        self.state = OperationState::Finished(OperationOutcome::Indeterminate);
         Ok(Applied {
             state: self.state.clone(),
             entries: Vec::new(),
