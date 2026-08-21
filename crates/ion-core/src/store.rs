@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     cwd TEXT NOT NULL,
-    title TEXT NOT NULL
+    title TEXT NOT NULL,
+    parent_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS entries (
@@ -131,6 +132,9 @@ pub struct SessionRecord {
     pub id: SessionId,
     pub cwd: String,
     pub title: String,
+    /// Present for bounded child sessions (§20.3): lineage is durable
+    /// before the child runs.
+    pub parent_session_id: Option<SessionId>,
 }
 
 /// One entry to append; `seq` is storage-assigned by the runtime's
@@ -534,12 +538,14 @@ fn check_injected(flag: &AtomicBool) -> Result<(), StoreError> {
 fn create_session(connection: &Connection, record: &SessionRecord) -> Result<(), rusqlite::Error> {
     let now = now_ms();
     connection.execute(
-        "INSERT INTO sessions (id, created_at, updated_at, cwd, title) VALUES (?1, ?2, ?2, ?3, ?4)",
+        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
+         VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
         rusqlite::params![
             record.id.as_uuid().to_string(),
             now,
             record.cwd,
-            record.title
+            record.title,
+            record.parent_session_id.map(|id| id.as_uuid().to_string()),
         ],
     )?;
     Ok(())
@@ -736,13 +742,16 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     let id = session_id.as_uuid().to_string();
     let session = connection
         .query_row(
-            "SELECT cwd, title FROM sessions WHERE id = ?1",
+            "SELECT cwd, title, parent_session_id FROM sessions WHERE id = ?1",
             rusqlite::params![id],
             |row| {
                 Ok(SessionRecord {
                     id: session_id,
                     cwd: row.get(0)?,
                     title: row.get(1)?,
+                    parent_session_id: row
+                        .get::<_, Option<String>>(2)?
+                        .and_then(|text| SessionId::parse(&text)),
                 })
             },
         )

@@ -313,6 +313,20 @@ impl ToolRegistry {
         }
     }
 
+    /// A read-only registry rooted at `cwd`: the research-child
+    /// capability set (§20.4). Structural narrowing - write paths are
+    /// absent, not denied at the gate.
+    #[must_use]
+    pub fn read_only(cwd: impl AsRef<Path>) -> Self {
+        let cwd: Arc<Path> = Arc::from(cwd.as_ref());
+        let mut all = core_tools(&cwd);
+        all.retain(|name, _| matches!(name.as_str(), "read" | "search" | "find"));
+        Self {
+            cwd,
+            entries: Arc::new(all),
+        }
+    }
+
     /// The directory tool paths are resolved against.
     #[must_use]
     pub fn cwd(&self) -> &Path {
@@ -501,10 +515,14 @@ impl ToolCatalog {
     /// A catalog over `cwd` with only the core tool set.
     #[must_use]
     pub fn with_cwd(cwd: impl AsRef<Path>) -> Self {
-        Self {
-            core: ToolRegistry::with_cwd(cwd),
-            dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
-        }
+        Self::from(ToolRegistry::with_cwd(cwd))
+    }
+
+    /// A read-only catalog over `cwd` (§20.4): the bounded research
+    /// child capability set.
+    #[must_use]
+    pub fn read_only(cwd: impl AsRef<Path>) -> Self {
+        Self::from(ToolRegistry::read_only(cwd))
     }
 
     #[must_use]

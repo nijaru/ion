@@ -351,6 +351,64 @@ fn command_send_error(err: mpsc::error::TrySendError<SessionCommand>) -> Command
     }
 }
 
+/// Everything one spawned session task is composed from.
+struct Composition<P> {
+    provider: P,
+    tools: ToolCatalog,
+    store: SessionStore,
+    policy: Arc<dyn PolicyEngine>,
+    budget: RuntimeBudget,
+    parent: Option<SessionId>,
+}
+
+impl<P: Provider> Composition<P> {
+    fn new(provider: P, tools: impl Into<ToolCatalog>, store: SessionStore) -> Self {
+        Self {
+            provider,
+            tools: tools.into(),
+            store,
+            policy: Arc::new(DefaultPolicy),
+            budget: RuntimeBudget::unbounded(),
+            parent: None,
+        }
+    }
+
+    fn spawn(self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
+        let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        let handle = RuntimeHandle { tx: tx.clone() };
+        let session = SessionHandle { tx };
+        let provider = Arc::new(self.provider);
+        let tools = Arc::new(self.tools);
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let join = tokio::spawn(async move {
+            SessionRuntime::new(
+                session_id,
+                cwd,
+                SessionDeps {
+                    provider,
+                    tools,
+                    store: self.store,
+                    policy: self.policy,
+                    budget: self.budget,
+                    parent: self.parent,
+                },
+                rx,
+                loaded,
+            )
+            .run()
+            .await;
+        });
+        Runtime {
+            handle,
+            session,
+            session_id,
+            join,
+        }
+    }
+}
+
 /// Process-level runtime: composition and the session registry. v0 keeps
 /// exactly one loaded session (DESIGN.md §32 Step 1).
 pub struct Runtime {
@@ -378,7 +436,7 @@ impl Runtime {
         tools: impl Into<ToolCatalog>,
         store: SessionStore,
     ) -> Self {
-        Self::spawn_session(provider, tools, store, SessionId::generate(), None)
+        Composition::new(provider, tools, store).spawn(SessionId::generate(), None)
     }
 
     /// Compose the runtime with an explicit approval policy (DESIGN.md
@@ -391,15 +449,28 @@ impl Runtime {
         store: SessionStore,
         policy: Arc<dyn PolicyEngine>,
     ) -> Self {
-        Self::spawn_session_with_policy(
-            provider,
-            tools,
-            store,
-            SessionId::generate(),
-            None,
-            policy,
-            RuntimeBudget::unbounded(),
-        )
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.spawn(SessionId::generate(), None)
+    }
+
+    /// Compose a bounded child session with durable lineage (§20.1,
+    /// §20.3): the same primitive as a root session - own machine, own
+    /// store record - plus a persisted parent reference.
+    #[must_use]
+    pub fn start_child(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        budget: RuntimeBudget,
+        parent: SessionId,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.budget = budget;
+        composition.parent = Some(parent);
+        composition.spawn(SessionId::generate(), None)
     }
 
     /// Compose the runtime with an explicit approval policy and a
@@ -413,15 +484,10 @@ impl Runtime {
         policy: Arc<dyn PolicyEngine>,
         budget: RuntimeBudget,
     ) -> Self {
-        Self::spawn_session_with_policy(
-            provider,
-            tools,
-            store,
-            SessionId::generate(),
-            None,
-            policy,
-            budget,
-        )
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.budget = budget;
+        composition.spawn(SessionId::generate(), None)
     }
 
     /// Reopen a previously persisted session: the transcript and any
@@ -439,74 +505,8 @@ impl Runtime {
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-        Ok(Self::spawn_session(
-            provider,
-            tools,
-            store,
-            session_id,
-            Some(loaded),
-        ))
-    }
-
-    #[must_use]
-    fn spawn_session(
-        provider: impl Provider,
-        tools: impl Into<ToolCatalog>,
-        store: SessionStore,
-        session_id: SessionId,
-        loaded: Option<LoadedSession>,
-    ) -> Self {
-        Self::spawn_session_with_policy(
-            provider,
-            tools,
-            store,
-            session_id,
-            loaded,
-            Arc::new(DefaultPolicy),
-            RuntimeBudget::unbounded(),
-        )
-    }
-
-    fn spawn_session_with_policy(
-        provider: impl Provider,
-        tools: impl Into<ToolCatalog>,
-        store: SessionStore,
-        session_id: SessionId,
-        loaded: Option<LoadedSession>,
-        policy: Arc<dyn PolicyEngine>,
-        budget: RuntimeBudget,
-    ) -> Self {
-        let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
-        let handle = RuntimeHandle { tx: tx.clone() };
-        let session = SessionHandle { tx };
-        let provider = Arc::new(provider);
-        let tools = Arc::new(tools.into());
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let join = tokio::spawn(async move {
-            SessionRuntime::new(
-                session_id,
-                cwd,
-                SessionDeps {
-                    provider,
-                    tools,
-                    store,
-                    policy,
-                    budget,
-                },
-                rx,
-                loaded,
-            )
-            .run()
-            .await;
-        });
-        Self {
-            handle,
-            session,
-            session_id,
-            join,
-        }
+        let composition = Composition::new(provider, tools, store);
+        Ok(composition.spawn(session_id, Some(loaded)))
     }
 
     #[must_use]
@@ -636,6 +636,8 @@ struct SessionDeps<P> {
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
+    /// Durable lineage for bounded child sessions (§20.3).
+    parent: Option<SessionId>,
 }
 
 struct SessionRuntime<P> {
@@ -646,6 +648,7 @@ struct SessionRuntime<P> {
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
+    parent_session_id: Option<SessionId>,
     /// Tool effects admitted by the active operation (budget counter).
     operation_tool_calls: u32,
     commands: mpsc::Receiver<SessionCommand>,
@@ -719,6 +722,7 @@ impl<P: Provider> SessionRuntime<P> {
             store,
             policy,
             budget,
+            parent,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -730,6 +734,7 @@ impl<P: Provider> SessionRuntime<P> {
             store,
             policy,
             budget,
+            parent_session_id: parent,
             operation_tool_calls: 0,
             commands,
             engine_tx,
@@ -862,6 +867,7 @@ impl<P: Provider> SessionRuntime<P> {
                 id: self.session_id,
                 cwd: self.cwd.clone(),
                 title: String::new(),
+                parent_session_id: self.parent_session_id,
             };
             if let Err(err) = self.store.create_session(record).await {
                 error!(
@@ -1919,6 +1925,11 @@ impl<P: Provider> SessionRuntime<P> {
             // parse message, before the policy gate sees the tool.
             Some(Err(message)) => PolicyDecision::Deny(message.clone()),
             None => match &canonical {
+                // Delegation is a structural capability (§20.4): every
+                // effect a child can produce is individually gated
+                // inside the child, so spawning one needs no grant -
+                // same reasoning as compact.
+                Ok(_) if call.name == "delegate" => PolicyDecision::Allow,
                 Ok(target) => self.policy.decide(&call.name, target),
                 // Canonicalization failure is a model-visible denial,
                 // not a harness failure: the model produced an unusable

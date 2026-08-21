@@ -27,6 +27,12 @@ impl SessionId {
     pub const fn as_uuid(self) -> Uuid {
         self.0
     }
+
+    /// Parse the bare UUID form stored in SQLite (no display prefix).
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
 }
 
 impl fmt::Display for SessionId {

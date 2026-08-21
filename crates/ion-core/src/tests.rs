@@ -2526,6 +2526,7 @@ mod reconcile {
                 id: session_id,
                 cwd: cwd.to_string_lossy().into_owned(),
                 title: "reconcile".to_owned(),
+                parent_session_id: None,
             })
             .await
             .expect("create session");
@@ -3720,4 +3721,326 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
         })
         .count();
     assert_eq!(tool_intents, 1, "second call denied, first admitted");
+}
+
+// ---- Bounded child delegation (§20, Step 7) ----
+
+fn delegate_tool(
+    store: SessionStore,
+    child_script: Vec<ScriptedMessage>,
+    parent: crate::SessionId,
+    budget: crate::RuntimeBudget,
+) -> Arc<dyn crate::tool::Tool> {
+    Arc::new(crate::DelegateTool::new(
+        crate::DelegateConfig {
+            store,
+            make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
+            max_active_children: 4,
+            child_budget: budget,
+        },
+        parent,
+    ))
+}
+
+/// Extract `session-<uuid>` references from a delegate result.
+fn child_ids(output: &str) -> Vec<crate::SessionId> {
+    output
+        .split("[child session: ")
+        .skip(1)
+        .filter_map(|part| {
+            let end = part.find(']')?;
+            crate::ids::SessionId::parse(part[..end].trim_start_matches("session-"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn two_read_only_children_run_and_report_lineage() {
+    let child_script = vec![ScriptedMessage::text("child answer")];
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::ToolCall {
+            name: "delegate".to_owned(),
+            arguments: json!({
+                "children": [
+                    { "objective": "investigate a" },
+                    { "objective": "investigate b", "context": "seed text" }
+                ]
+            }),
+        },
+        ScriptedMessage::text("done"),
+    ]);
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::default();
+    let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
+    let parent_id = runtime.session_id();
+    catalog.register_scope(
+        "delegate",
+        vec![delegate_tool(
+            store.clone(),
+            child_script,
+            parent_id,
+            crate::RuntimeBudget::unbounded(),
+        )],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("fan out").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "{recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // The tool result reached the parent transcript with both children
+    // referenced.
+    let loaded = store.load(parent_id).await.expect("load");
+    let tool_output = loaded
+        .entries
+        .iter()
+        .find_map(|(_, entry)| {
+            serde_json::to_string(entry)
+                .ok()
+                .filter(|text| text.contains("child answer"))
+        })
+        .expect("child results in parent transcript");
+
+    // Both children are durable sessions with lineage to the parent.
+    let ids = child_ids(&tool_output);
+    assert_eq!(ids.len(), 2, "{tool_output}");
+    for child in ids {
+        let child_loaded = store.load(child).await.expect("child session");
+        assert_eq!(child_loaded.session.parent_session_id, Some(parent_id));
+    }
+}
+
+#[tokio::test]
+async fn child_cannot_widen_capabilities() {
+    // The child's provider asks for bash; the read-only catalog has no
+    // bash and the gate denies the unknown tool model-visibly.
+    let child_script = vec![ScriptedMessage::ToolCall {
+        name: "bash".to_owned(),
+        arguments: json!({ "command": "rm -rf /" }),
+    }];
+    let provider = ScriptedProvider::new(vec![ScriptedMessage::ToolCall {
+        name: "delegate".to_owned(),
+        arguments: json!({ "children": [{ "objective": "try to escape" }] }),
+    }]);
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::default();
+    let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
+    let parent_id = runtime.session_id();
+    catalog.register_scope(
+        "delegate",
+        vec![delegate_tool(
+            store.clone(),
+            child_script,
+            parent_id,
+            crate::RuntimeBudget::unbounded(),
+        )],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("escape").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "{recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let loaded = store.load(parent_id).await.expect("load");
+    let tool_output = loaded
+        .entries
+        .iter()
+        .find_map(|(_, entry)| {
+            serde_json::to_string(entry)
+                .ok()
+                .filter(|text| text.contains("child failed"))
+        })
+        .expect("the escape attempt fails visibly");
+    assert!(
+        tool_output.contains("unknown tool") || tool_output.contains("approval"),
+        "denial is about the capability, not a crash: {tool_output}"
+    );
+}
+
+#[tokio::test]
+async fn budget_stops_a_runaway_child() {
+    // The child would loop forever; its budget stops it after one
+    // model step. The parent still finishes.
+    let looping_child = || {
+        ScriptedProvider::new(vec![
+            ScriptedMessage::ToolCall {
+                name: "read".to_owned(),
+                arguments: json!({ "path": "Cargo.toml" }),
+            },
+            ScriptedMessage::ToolCall {
+                name: "read".to_owned(),
+                arguments: json!({ "path": "Cargo.toml" }),
+            },
+        ])
+    };
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::ToolCall {
+            name: "delegate".to_owned(),
+            arguments: json!({ "children": [{ "objective": "loop" }] }),
+        },
+        ScriptedMessage::text("gave up on the child"),
+    ]);
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::default();
+    let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
+    let parent_id = runtime.session_id();
+    catalog.register_scope(
+        "delegate",
+        vec![Arc::new(crate::DelegateTool::new(
+            crate::DelegateConfig {
+                store: store.clone(),
+                make_provider: Arc::new(looping_child),
+                max_active_children: 4,
+                child_budget: crate::RuntimeBudget {
+                    max_model_steps: Some(1),
+                    max_tool_calls: None,
+                },
+            },
+            parent_id,
+        ))],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("run away").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
+        "parent survives a failed child: {recorded:?}"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let loaded = store.load(parent_id).await.expect("load");
+    let tool_output = loaded
+        .entries
+        .iter()
+        .find_map(|(_, entry)| {
+            serde_json::to_string(entry)
+                .ok()
+                .filter(|text| text.contains("budget exceeded"))
+        })
+        .expect("budget failure surfaces to the parent");
+    assert!(tool_output.contains("child session"));
+}
+
+/// A provider that records the cancellation tokens it is given and
+/// then waits for cancellation - a child that hangs forever unless the
+/// parent's cancel propagates (§20.6).
+#[derive(Clone)]
+struct HangingProvider {
+    tokens: Arc<std::sync::Mutex<Vec<tokio_util::sync::CancellationToken>>>,
+}
+
+impl crate::Provider for HangingProvider {
+    fn run(
+        &self,
+        request: crate::ProviderRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        out: tokio::sync::mpsc::Sender<crate::EngineSignal>,
+    ) -> impl Future<Output = ()> + Send {
+        self.tokens.lock().expect("tokens").push(cancel.clone());
+        async move {
+            cancel.cancelled().await;
+            let _ = out
+                .send(crate::EngineSignal::Cancelled {
+                    operation_id: request.operation_id,
+                    step: request.step,
+                })
+                .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn parent_cancel_cancels_running_children() {
+    let tokens: Arc<std::sync::Mutex<Vec<tokio_util::sync::CancellationToken>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let spy_tokens = Arc::clone(&tokens);
+    let provider = ScriptedProvider::new(vec![ScriptedMessage::ToolCall {
+        name: "delegate".to_owned(),
+        arguments: json!({ "children": [{ "objective": "hang" }] }),
+    }]);
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::default();
+    let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
+    let parent_id = runtime.session_id();
+    catalog.register_scope(
+        "delegate",
+        vec![Arc::new(crate::DelegateTool::new(
+            crate::DelegateConfig {
+                store: store.clone(),
+                make_provider: Arc::new(move || HangingProvider {
+                    tokens: Arc::clone(&spy_tokens),
+                }),
+                max_active_children: 4,
+                child_budget: crate::RuntimeBudget::unbounded(),
+            },
+            parent_id,
+        ))],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit("cancel me").await.expect("submit");
+    // Wait for the child provider to record its token, then cancel.
+    for _ in 0..100 {
+        if !tokens.lock().expect("tokens").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        !tokens.lock().expect("tokens").is_empty(),
+        "child provider started"
+    );
+    session.cancel(operation_id).await.expect("cancel");
+
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationCancelled { .. })),
+        "{recorded:?}"
+    );
+    // §20.6: the descendant's token fired with the parent's.
+    for _ in 0..100 {
+        if tokens
+            .lock()
+            .expect("tokens")
+            .iter()
+            .all(|token| token.is_cancelled())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        tokens
+            .lock()
+            .expect("tokens")
+            .iter()
+            .all(|token| token.is_cancelled()),
+        "parent cancellation must reach descendants"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }

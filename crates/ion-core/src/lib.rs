@@ -9,6 +9,7 @@
 //! tools, and TUI state are out of scope until their owning slices.
 
 mod context;
+mod delegate;
 mod error;
 mod ids;
 mod mcp;
@@ -20,6 +21,7 @@ mod store;
 mod tool;
 
 pub use context::{ContextMessage, ContextPlan, SYSTEM_SECTION, project};
+pub use delegate::{ChildSpec, DelegateConfig, DelegateTool};
 pub use error::{CommandError, RuntimeError};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
 pub use mcp::{McpService, ServerDef};
