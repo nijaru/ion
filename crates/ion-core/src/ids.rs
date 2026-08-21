@@ -1,24 +1,30 @@
-//! Stable identity newtypes for the live runtime.
+//! Durable identity newtypes (DESIGN.md §11.2).
 //!
-//! Durable externally meaningful IDs become UUIDv7 with the SQLite
-//! substrate (DESIGN.md §11.2, §32 Step 2); these u64 newtypes order
-//! in-memory live state only.
+//! Sessions, operations, effects, and entries use UUIDv7. UUID ordering
+//! is never semantic: each session has a storage-assigned monotonic
+//! integer `seq` for durable order, and live runtime events keep a
+//! separate in-memory cursor.
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SessionId(u64);
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SessionId(Uuid);
 
 impl SessionId {
-    pub const FIRST: Self = Self(1);
-
     #[must_use]
-    pub const fn new(raw: u64) -> Self {
-        Self(raw)
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
     }
 
     #[must_use]
-    pub const fn as_u64(self) -> u64 {
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
         self.0
     }
 }
@@ -29,17 +35,22 @@ impl fmt::Display for SessionId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OperationId(u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct OperationId(Uuid);
 
 impl OperationId {
     #[must_use]
-    pub const fn new(raw: u64) -> Self {
-        Self(raw)
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
     }
 
     #[must_use]
-    pub const fn as_u64(self) -> u64 {
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
         self.0
     }
 }
@@ -47,6 +58,51 @@ impl OperationId {
 impl fmt::Display for OperationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "op-{}", self.0)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct EffectId(Uuid);
+
+impl EffectId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl fmt::Display for EffectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "effect-{}", self.0)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct InboxId(Uuid);
+
+impl InboxId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
     }
 }
 

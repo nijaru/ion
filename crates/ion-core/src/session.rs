@@ -11,7 +11,7 @@ use crate::tool::{ToolCall, ToolResult, ToolSpec};
 
 /// Durably accepted input that has not yet been applied to model-visible
 /// session history (DESIGN.md §6).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InboxKind {
     /// Opens an operation when idle.
     Prompt,
@@ -23,7 +23,7 @@ pub enum InboxKind {
     FollowUp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InboxItem {
     pub kind: InboxKind,
     pub text: String,
@@ -31,7 +31,7 @@ pub struct InboxItem {
 
 /// Append-only semantic item (DESIGN.md §6). Streaming text deltas are
 /// not entries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionEntry {
     UserMessage {
         text: String,
@@ -51,7 +51,7 @@ pub enum SessionEntry {
 /// Total durable operation state (DESIGN.md §10.1). Only states with
 /// distinct recovery semantics exist; approval, retry-wait, and
 /// compaction states arrive with their owning phases.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OperationState {
     /// Prompt accepted durably; model step not yet started.
     Accepted,
@@ -78,7 +78,7 @@ pub enum OperationState {
 
 /// Terminal outcomes (DESIGN.md §10.1). `Indeterminate` is produced only
 /// by recovery of an unresolved NeverReplay effect (§32 Step 3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OperationOutcome {
     Completed,
     Failed(String),
@@ -88,7 +88,7 @@ pub enum OperationOutcome {
 
 /// The durable fact that Ion is allowed to perform one repeat-sensitive
 /// external effect (DESIGN.md §6, §12.1). Committed before execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EffectIntent {
     /// One model step: projected input + tool snapshot.
     ModelStep {
@@ -128,6 +128,12 @@ pub enum Transition {
     },
     /// Semantic cancellation request (DESIGN.md §9.4).
     CancelRequested,
+    /// Harness failure (lost persistence, impossible invariant) from any
+    /// open state; distinct from model-visible tool outcomes (§16.5,
+    /// §26.2).
+    FailOperation {
+        message: String,
+    },
     /// Session close while operating (DESIGN.md §9.5).
     Suspend,
 }
@@ -160,8 +166,10 @@ impl std::fmt::Display for TransitionError {
 }
 
 /// One active operation's transition authority. The session is idle when
-/// no machine exists.
-#[derive(Debug)]
+/// no machine exists. Cloning stages a transition: a failed durable
+/// commit discards the staged clone and never mutates live state
+/// (DESIGN.md §26.2).
+#[derive(Debug, Clone)]
 pub struct OperationMachine {
     operation_id: OperationId,
     prompt: String,
@@ -250,6 +258,7 @@ impl OperationMachine {
             Transition::AdmitNextTool => self.admit_next_tool(),
             Transition::ToolSettled { result } => self.tool_settled(result),
             Transition::CancelRequested => self.cancel_requested_transition(),
+            Transition::FailOperation { message } => self.fail_operation(message),
             Transition::Suspend => self.suspend(),
         }
     }
@@ -435,6 +444,25 @@ impl OperationMachine {
             });
         }
         self.cancel_requested = true;
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: true,
+        })
+    }
+
+    fn fail_operation(&mut self, message: String) -> Result<Applied, TransitionError> {
+        if matches!(
+            self.state,
+            OperationState::Finished(_) | OperationState::Suspended
+        ) {
+            return Err(TransitionError {
+                state: state_name(&self.state),
+                transition: "fail_operation",
+            });
+        }
+        self.state = OperationState::Finished(OperationOutcome::Failed(message));
         Ok(Applied {
             state: self.state.clone(),
             entries: Vec::new(),

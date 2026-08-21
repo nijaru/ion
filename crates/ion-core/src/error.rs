@@ -18,6 +18,8 @@ pub enum CommandError {
     NoActiveOperation,
     #[error("operation {operation_id} is not the active operation")]
     NotActive { operation_id: OperationId },
+    #[error("durable write failed: {0}")]
+    Persistence(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

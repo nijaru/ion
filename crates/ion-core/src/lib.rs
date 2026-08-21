@@ -13,6 +13,7 @@ mod ids;
 mod provider;
 mod runtime;
 mod session;
+mod store;
 mod tool;
 
 pub use error::{CommandError, RuntimeError};
@@ -26,9 +27,13 @@ pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition, TransitionError,
 };
+pub use store::{
+    CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
+    InboxStatus, LoadedOperation, LoadedSession, SessionRecord, SessionStore, StoreError,
+};
 pub use tool::{
-    BashTool, EditTool, FindTool, ReadTool, SearchTool, Tool, ToolCall, ToolCallId, ToolOutcome,
-    ToolRegistry, ToolResult, ToolSpec, WriteTool,
+    BashTool, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool, ToolCall, ToolCallId,
+    ToolOutcome, ToolRegistry, ToolResult, ToolSpec, WriteTool,
 };
 
 #[cfg(test)]

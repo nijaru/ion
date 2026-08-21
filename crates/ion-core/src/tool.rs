@@ -31,7 +31,7 @@ pub type ToolCallId = u64;
 /// Static description of a tool: name, short doc, and JSON-Schema for its
 /// input object. The schema's top-level `"required"` array drives argument
 /// validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
@@ -40,7 +40,7 @@ pub struct ToolSpec {
 
 /// A complete tool call requested by a provider, admitted through the
 /// runtime's policy/effect path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
     pub operation_id: OperationId,
     pub call_id: ToolCallId,
@@ -50,7 +50,7 @@ pub struct ToolCall {
 
 /// Settlement of one tool effect, recorded as a semantic session entry
 /// (DESIGN.md §16.4): exactly what the model will see.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolResult {
     Ok { call_id: ToolCallId, output: String },
     Err { call_id: ToolCallId, error: String },
@@ -125,6 +125,21 @@ pub trait Tool: Send + Sync {
 struct ToolEntry {
     tool: Arc<dyn Tool>,
     spec: ToolSpec,
+    recovery_class: RecoveryClass,
+}
+
+/// How an unresolved effect of this tool may be settled after process
+/// loss (DESIGN.md §12.2). Recorded with the effect intent before
+/// execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RecoveryClass {
+    /// Repeating the effect cannot duplicate an external mutation.
+    ReplaySafe,
+    /// Postconditions can be inspected before re-execution.
+    Reconcile,
+    /// Repeating may duplicate an external mutation; unresolved means
+    /// indeterminate, never automatic replay.
+    NeverReplay,
 }
 
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
@@ -170,6 +185,15 @@ impl ToolRegistry {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ToolSpec> {
         self.entries.get(name).map(|e| &e.spec)
+    }
+
+    /// The recovery class recorded for this tool's effects. Unknown
+    /// tools are `NeverReplay` (DESIGN.md §12.2).
+    #[must_use]
+    pub fn recovery_class(&self, name: &str) -> RecoveryClass {
+        self.entries
+            .get(name)
+            .map_or(RecoveryClass::NeverReplay, |e| e.recovery_class)
     }
 
     /// Validate `arguments` against a tool's schema: the value must be an
@@ -221,30 +245,58 @@ impl ToolRegistry {
 /// Build the default core-tool entries under `cwd`.
 fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
-    let tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(ReadTool {
-            cwd: cwd_path.clone(),
-        }),
-        Arc::new(WriteTool {
-            cwd: cwd_path.clone(),
-        }),
-        Arc::new(EditTool {
-            cwd: cwd_path.clone(),
-        }),
-        Arc::new(BashTool {
-            cwd: cwd_path.clone(),
-        }),
-        Arc::new(SearchTool {
-            cwd: cwd_path.clone(),
-        }),
-        Arc::new(FindTool {
-            cwd: cwd_path.clone(),
-        }),
+    // Recovery classes per DESIGN.md §12.2: reads are replay-safe,
+    // write/edit reconcile from stored pre/post images, bash and
+    // anything unknown never replay automatically.
+    let tools: Vec<(Arc<dyn Tool>, RecoveryClass)> = vec![
+        (
+            Arc::new(ReadTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::ReplaySafe,
+        ),
+        (
+            Arc::new(WriteTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::Reconcile,
+        ),
+        (
+            Arc::new(EditTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::Reconcile,
+        ),
+        (
+            Arc::new(BashTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::NeverReplay,
+        ),
+        (
+            Arc::new(SearchTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::ReplaySafe,
+        ),
+        (
+            Arc::new(FindTool {
+                cwd: cwd_path.clone(),
+            }),
+            RecoveryClass::ReplaySafe,
+        ),
     ];
     let mut map = HashMap::new();
-    for tool in tools {
+    for (tool, recovery_class) in tools {
         let spec = tool.spec();
-        map.insert(spec.name.clone(), ToolEntry { tool, spec });
+        map.insert(
+            spec.name.clone(),
+            ToolEntry {
+                tool,
+                spec,
+                recovery_class,
+            },
+        );
     }
     map
 }

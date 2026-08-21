@@ -1,10 +1,13 @@
-//! Process `Runtime`, single-writer `SessionRuntime`, and frontends
-//! (DESIGN.md §4, §7, §8, §21).
+//! Process `Runtime`, single-writer `SessionRuntime`, and the durable
+//! commit flow (DESIGN.md §4, §8, §9, §10, §11).
 //!
 //! The process-level `Runtime` owns composition and the session
 //! registry; one loaded session has exactly one mutation authority, its
-//! `SessionRuntime` task. Effect tasks (provider steps, tool calls) run
-//! outside the mutation line; their outcomes re-enter as transitions.
+//! `SessionRuntime` task. Transitions are staged on a machine clone,
+//! committed to SQLite as one transaction, and only then installed in
+//! memory — a failed commit never updates authoritative state
+//! (§26.2). Provider/tool I/O stays off the mutation line; only bounded
+//! local persistence is awaited (§4.3).
 
 use std::fmt;
 use std::sync::Arc;
@@ -13,16 +16,20 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{CommandError, RuntimeError};
-use crate::ids::{OperationId, RuntimeCursor, SessionId};
+use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
 use crate::provider::{EngineSignal, Provider, ProviderRequest};
 use crate::session::{
-    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
-    OperationState, SessionEntry, Transition,
+    EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
+    SessionEntry, Transition,
 };
-use crate::tool::{ToolCall, ToolRegistry, ToolResult};
+use crate::store::{
+    CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
+    InboxStatus, SessionRecord, SessionStore, StoreError,
+};
+use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
@@ -177,7 +184,7 @@ impl RuntimeHandle {
 }
 
 /// Command sender for one loaded session (DESIGN.md §8.1). Success means
-/// the transition authority accepted the command.
+/// the transition authority accepted the command durably (P4).
 #[derive(Clone)]
 pub struct SessionHandle {
     tx: mpsc::Sender<SessionCommand>,
@@ -190,7 +197,7 @@ impl fmt::Debug for SessionHandle {
 }
 
 impl SessionHandle {
-    /// Accept a prompt and open a new operation when idle.
+    /// Accept a prompt durably and open a new operation when idle.
     pub async fn submit(&self, prompt: impl Into<String>) -> Result<OperationId, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -230,7 +237,7 @@ impl SessionHandle {
     }
 
     /// Request semantic cancellation of the active operation
-    /// (DESIGN.md §9.4). Acknowledgment means the request is recorded;
+    /// (DESIGN.md §9.4). Acknowledgment means the request is durable;
     /// settlement arrives as an event.
     pub async fn cancel(&self, operation_id: OperationId) -> Result<(), CommandError> {
         let (reply, rx) = oneshot::channel();
@@ -283,32 +290,50 @@ fn command_send_error(err: mpsc::error::TrySendError<SessionCommand>) -> Command
 }
 
 /// Process-level runtime: composition and the session registry. v0 keeps
-/// exactly one loaded session (DESIGN.md §32 Step 1); multi-session
-/// creation arrives with the durable store (§32 Step 2).
+/// exactly one loaded session (DESIGN.md §32 Step 1).
 pub struct Runtime {
     handle: RuntimeHandle,
     session: SessionHandle,
+    session_id: SessionId,
     join: JoinHandle<()>,
 }
 
 impl Runtime {
-    /// Compose the runtime with one session backed by `provider` and
-    /// `tools`.
+    /// Compose the runtime with one durable session in the default data
+    /// root. Panics if the store cannot be opened; hosts that need
+    /// graceful handling use [`Runtime::start_with_store`].
     #[must_use]
     pub fn start(provider: impl Provider, tools: ToolRegistry) -> Self {
+        let store = SessionStore::open(crate::store::default_db_path())
+            .expect("open the default session store");
+        Self::start_with_store(provider, tools, store)
+    }
+
+    /// Compose the runtime with one durable session in `store`.
+    #[must_use]
+    pub fn start_with_store(
+        provider: impl Provider,
+        tools: ToolRegistry,
+        store: SessionStore,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
         let provider = Arc::new(provider);
         let tools = Arc::new(tools);
+        let session_id = SessionId::generate();
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let join = tokio::spawn(async move {
-            SessionRuntime::new(SessionId::FIRST, provider, tools, rx)
+            SessionRuntime::new(session_id, cwd, provider, tools, store, rx)
                 .run()
                 .await;
         });
         Self {
             handle,
             session,
+            session_id,
             join,
         }
     }
@@ -324,6 +349,11 @@ impl Runtime {
         self.session.clone()
     }
 
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
     pub async fn join(self) -> Result<(), RuntimeError> {
         self.join
             .await
@@ -335,15 +365,29 @@ struct Subscriber {
     tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
 }
 
+/// The live, in-memory side of the active operation. Durable truth is in
+/// the store; this is rebuilt from it on resume.
+struct ActiveOperation {
+    machine: OperationMachine,
+    cancel: CancellationToken,
+    state_seq: u64,
+    /// The one in-flight effect intent, if any.
+    open_effect: Option<EffectId>,
+    /// Inbox items durably accepted but not yet applied.
+    pending_inbox: Vec<InboxId>,
+}
+
 /// The single-writer owner of one loaded session's mutable live state
 /// (DESIGN.md §4.3): bounded mailbox, the active operation machine, the
-/// session entry log, pending input state, snapshots, and its owned
-/// effect tasks. It never awaits provider or tool I/O on its mutation
-/// line; effects run as spawned tasks and re-enter as transitions.
+/// session entry view, snapshots, and its owned effect tasks. It awaits
+/// only bounded local persistence on its mutation line; provider/tool
+/// I/O runs as spawned effects and re-enters as transitions.
 struct SessionRuntime<P> {
     session_id: SessionId,
+    cwd: String,
     provider: Arc<P>,
     tools: Arc<ToolRegistry>,
+    store: SessionStore,
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -352,10 +396,11 @@ struct SessionRuntime<P> {
     cancel_root: CancellationToken,
     tracker: TaskTracker,
     cursor: RuntimeCursor,
-    /// Canonical semantic session log until the store takes over.
+    /// Canonical semantic session view, mirroring the durable store.
     entries: Vec<SessionEntry>,
-    next_operation: u64,
-    operation: Option<(OperationMachine, CancellationToken)>,
+    /// Next storage-assigned entry sequence.
+    next_entry_seq: u64,
+    operation: Option<ActiveOperation>,
     /// Ephemeral draft of the in-flight model step; never durable.
     draft_text: String,
     draft_calls: Vec<ToolCall>,
@@ -373,16 +418,20 @@ struct SessionRuntime<P> {
 impl<P: Provider> SessionRuntime<P> {
     fn new(
         session_id: SessionId,
+        cwd: String,
         provider: Arc<P>,
         tools: Arc<ToolRegistry>,
+        store: SessionStore,
         commands: mpsc::Receiver<SessionCommand>,
     ) -> Self {
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
         Self {
             session_id,
+            cwd,
             provider,
             tools,
+            store,
             commands,
             engine_tx,
             engine_rx,
@@ -392,7 +441,7 @@ impl<P: Provider> SessionRuntime<P> {
             tracker: TaskTracker::new(),
             cursor: RuntimeCursor::default(),
             entries: Vec::new(),
-            next_operation: 1,
+            next_entry_seq: 1,
             operation: None,
             draft_text: String::new(),
             draft_calls: Vec::new(),
@@ -404,24 +453,40 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     async fn run(mut self) {
+        let record = SessionRecord {
+            id: self.session_id,
+            cwd: self.cwd.clone(),
+            title: String::new(),
+        };
+        if let Err(err) = self.store.create_session(record).await {
+            error!(
+                session = %self.session_id,
+                %err,
+                "session row not durable; session will not start"
+            );
+            self.closed = true;
+            self.subscribers.clear();
+            return;
+        }
+        info!(session = %self.session_id, "session opened");
         loop {
             tokio::select! {
                 command = self.commands.recv() => {
                     let Some(command) = command else {
                         break;
                     };
-                    if self.handle_command(command) {
+                    if self.handle_command(command).await {
                         break;
                     }
                 }
                 signal = self.engine_rx.recv() => {
                     if let Some(signal) = signal {
-                        self.handle_engine(signal);
+                        self.handle_engine(signal).await;
                     }
                 }
                 result = self.tool_rx.recv() => {
                     if let Some(result) = result {
-                        self.handle_tool_result(result);
+                        self.handle_tool_result(result).await;
                     }
                 }
             }
@@ -430,25 +495,25 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     /// Returns true when the session loop must exit.
-    fn handle_command(&mut self, command: SessionCommand) -> bool {
+    async fn handle_command(&mut self, command: SessionCommand) -> bool {
         match command {
             SessionCommand::Submit { prompt, reply } => {
-                let _ = reply.send(self.submit(prompt));
+                let _ = reply.send(self.submit(prompt).await);
                 false
             }
             SessionCommand::Steer { text, reply } => {
-                let _ = reply.send(self.enqueue_inbox(InboxKind::Steer, text));
+                let _ = reply.send(self.enqueue_inbox(InboxKind::Steer, text).await);
                 false
             }
             SessionCommand::FollowUp { text, reply } => {
-                let _ = reply.send(self.enqueue_inbox(InboxKind::FollowUp, text));
+                let _ = reply.send(self.enqueue_inbox(InboxKind::FollowUp, text).await);
                 false
             }
             SessionCommand::Cancel {
                 operation_id,
                 reply,
             } => {
-                let _ = reply.send(self.cancel(operation_id));
+                let _ = reply.send(self.cancel(operation_id).await);
                 false
             }
             SessionCommand::Subscribe { reply } => {
@@ -462,80 +527,178 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    fn submit(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+    async fn submit(&mut self, prompt: String) -> Result<OperationId, CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        if let Some((machine, _)) = &self.operation {
+        if let Some(active) = &self.operation {
             return Err(CommandError::Busy {
-                operation_id: machine.operation_id(),
+                operation_id: active.machine.operation_id(),
             });
         }
-        let operation_id = OperationId::new(self.next_operation);
-        self.next_operation += 1;
-        let cancel = self.cancel_root.child_token();
+        let operation_id = OperationId::generate();
         let (machine, applied) =
             OperationMachine::accept(operation_id, prompt.clone(), self.tools.specs());
-        self.operation = Some((machine, cancel));
-        self.draft_text.clear();
-        self.draft_calls.clear();
-        self.commit(&applied);
+        let root_inbox = InboxRecord {
+            id: InboxId::generate(),
+            kind: InboxKind::Prompt,
+            text: prompt.clone(),
+            status: InboxStatus::Applied,
+        };
+        let entry = self.entry_record(&applied.entries[0]);
+        let checkpoint = CheckpointRecord {
+            state_seq: 1,
+            payload: CheckpointPayload {
+                state: machine.state().clone(),
+                cancel_requested: false,
+            },
+        };
+        // Accepted intent is durable before acknowledgment (P4, §9.1).
+        self.store
+            .begin_operation(self.session_id, operation_id, root_inbox, checkpoint, entry)
+            .await
+            .map_err(persistence_command_error)?;
+
+        let active = ActiveOperation {
+            machine,
+            cancel: self.cancel_root.child_token(),
+            state_seq: 1,
+            open_effect: None,
+            pending_inbox: Vec::new(),
+        };
+        self.entries.extend(applied.entries.iter().cloned());
         self.emit(RuntimeEvent::OperationStarted {
             cursor: RuntimeCursor::default(),
             operation_id,
             prompt,
         });
-        self.advance();
+        self.operation = Some(active);
+        self.draft_text.clear();
+        self.draft_calls.clear();
+        self.advance().await;
         Ok(operation_id)
     }
 
-    fn enqueue_inbox(&mut self, kind: InboxKind, text: String) -> Result<(), CommandError> {
+    async fn enqueue_inbox(&mut self, kind: InboxKind, text: String) -> Result<(), CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let Some((machine, _)) = &mut self.operation else {
+        let Some(active) = &mut self.operation else {
             return Err(CommandError::NoActiveOperation);
         };
-        let applied = machine
+        let inbox_id = InboxId::generate();
+        // Stage on a clone; a failed commit never mutates live state
+        // (DESIGN.md §26.2).
+        let mut staged = active.machine.clone();
+        let applied = staged
             .apply(Transition::ApplyInbox {
-                item: InboxItem { kind, text },
+                item: InboxItem {
+                    kind: kind.clone(),
+                    text: text.clone(),
+                },
             })
             .expect("inbox apply from an active operation");
-        self.commit(&applied);
-        self.advance();
+        let applied_now = !applied.entries.is_empty();
+        let record = InboxRecord {
+            id: inbox_id,
+            kind,
+            text,
+            status: if applied_now {
+                InboxStatus::Applied
+            } else {
+                InboxStatus::Pending
+            },
+        };
+        let request = build_commit_request(
+            self.session_id,
+            staged.operation_id(),
+            active.state_seq + 1,
+            &mut self.next_entry_seq,
+            &staged,
+            applied.entries.clone(),
+            Vec::new(),
+            Vec::new(),
+            vec![record],
+            Vec::new(),
+        );
+        self.store
+            .commit(request)
+            .await
+            .map_err(persistence_command_error)?;
+
+        active.machine = staged;
+        active.state_seq += 1;
+        if applied_now {
+            self.entries.extend(applied.entries);
+        } else {
+            active.pending_inbox.push(inbox_id);
+        }
+        self.advance().await;
         Ok(())
     }
 
-    /// Request semantic cancellation (DESIGN.md §9.4): record the
-    /// request first, then signal descendant effects.
-    fn cancel(&mut self, operation_id: OperationId) -> Result<(), CommandError> {
+    /// Request semantic cancellation (DESIGN.md §9.4): the request is
+    /// durable before acknowledgment, then descendant effects are
+    /// signalled.
+    async fn cancel(&mut self, operation_id: OperationId) -> Result<(), CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let Some((machine, cancel)) = &mut self.operation else {
+        let operation = self
+            .operation
+            .as_ref()
+            .map(|active| active.machine.operation_id());
+        if operation.is_none() {
             return Err(CommandError::NoActiveOperation);
-        };
-        if machine.operation_id() != operation_id {
+        }
+        if operation != Some(operation_id) {
             return Err(CommandError::NotActive { operation_id });
         }
-        let applied = machine
-            .apply(Transition::CancelRequested)
-            .expect("cancel request from an active operation");
-        cancel.cancel();
-        self.commit(&applied);
+        let (staged, request) = {
+            let active = self.operation.as_mut().expect("operation checked above");
+            let mut staged = active.machine.clone();
+            staged
+                .apply(Transition::CancelRequested)
+                .expect("cancel request from an active operation");
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            (staged, request)
+        };
+        self.store
+            .commit(request)
+            .await
+            .map_err(persistence_command_error)?;
+        let active = self.operation.as_mut().expect("operation checked above");
+        active.machine = staged;
+        active.state_seq += 1;
+        active.cancel.cancel();
         Ok(())
     }
 
     /// Drive the machine forward from quiescent states: drain queued
     /// inbox items at the continuation boundary, then start the next
-    /// model step or admit the next planned tool. Returns after spawning
-    /// an effect; outcomes re-enter through the engine/tool channels.
-    fn advance(&mut self) {
+    /// model step or admit the next planned tool. Each move commits
+    /// durably before its effect starts (§12.1).
+    async fn advance(&mut self) {
         loop {
-            let Some((machine, _)) = &mut self.operation else {
+            let Some(active_state) = self
+                .operation
+                .as_ref()
+                .map(|active| active.machine.state().clone())
+            else {
                 return;
             };
-            match machine.state() {
+            match active_state {
                 OperationState::Finished(_) => {
                     self.operation.take();
                     return;
@@ -543,32 +706,29 @@ impl<P: Provider> SessionRuntime<P> {
                 OperationState::Accepted
                 | OperationState::NeedAssistant
                 | OperationState::NeedContinuation => {
-                    if machine.has_queued_inbox() {
-                        let drained = machine
-                            .drain_inbox()
-                            .expect("inbox drain at a continuation boundary");
-                        for applied in drained {
-                            self.commit(&applied);
+                    if self
+                        .operation
+                        .as_ref()
+                        .is_some_and(|active| active.machine.has_queued_inbox())
+                    {
+                        if !self.drain_inbox().await {
+                            return;
                         }
                         continue;
                     }
                     assert!(
-                        !matches!(machine.state(), OperationState::NeedContinuation),
+                        !matches!(active_state, OperationState::NeedContinuation),
                         "NeedContinuation without queued inbox is impossible state"
                     );
-                    let applied = machine
-                        .apply(Transition::StartModelStep)
-                        .expect("start model step from a quiescent state");
-                    self.spawn_intents(&applied);
-                    self.commit(&applied);
+                    if !self.start_model_step().await {
+                        return;
+                    }
                     return;
                 }
                 OperationState::ToolsPlanned { .. } => {
-                    let applied = machine
-                        .apply(Transition::AdmitNextTool)
-                        .expect("admit next tool from ToolsPlanned");
-                    self.spawn_intents(&applied);
-                    self.commit(&applied);
+                    if !self.admit_next_tool().await {
+                        return;
+                    }
                     return;
                 }
                 _ => return,
@@ -576,113 +736,233 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    fn spawn_intents(&mut self, applied: &Applied) {
-        let operation_id = self
-            .operation
-            .as_ref()
-            .map(|(machine, _)| machine.operation_id());
-        let Some(operation_id) = operation_id else {
-            return;
-        };
-        for intent in &applied.intents {
-            match intent {
-                EffectIntent::ModelStep {
-                    operation_id: id,
-                    prompt,
-                    tools,
-                } => {
-                    let provider = Arc::clone(&self.provider);
-                    let cancel = self
-                        .operation
-                        .as_ref()
-                        .map(|(_, token)| token.child_token())
-                        .unwrap_or_else(|| self.cancel_root.child_token());
-                    let out = self.engine_tx.clone();
-                    debug!(%operation_id, "starting model step effect");
-                    let id = *id;
-                    let request = ProviderRequest {
-                        operation_id: id,
-                        prompt: prompt.clone(),
-                        tools: tools.clone(),
-                    };
-                    self.step_terminal_seen = false;
-                    self.model_step += 1;
-                    let step = self.model_step;
-                    let terminal = self.engine_tx.clone();
-                    self.tracker.spawn(async move {
-                        provider.run(request, cancel, out.clone()).await;
-                        let _ = terminal
-                            .send(EngineSignal::ProviderExited {
-                                operation_id: id,
-                                step,
-                            })
-                            .await;
-                    });
-                }
-                EffectIntent::Tool { call } => {
-                    let ToolCall {
-                        call_id,
-                        name,
-                        arguments,
-                        ..
-                    } = call;
-                    let call_id = *call_id;
-                    // Canonicalization and schema validation happen before
-                    // the effect starts; a denial becomes a model-visible
-                    // tool result (DESIGN.md §17.3, §16.5).
-                    if let Err(message) = self.tools.validate(name, arguments) {
-                        self.tool_tx
-                            .try_send(ToolResult::Err {
-                                call_id,
-                                error: message,
-                            })
-                            .expect("tool outcome channel closed while dispatching denial");
-                        continue;
-                    }
-                    self.emit(RuntimeEvent::ToolStarted {
-                        cursor: RuntimeCursor::default(),
-                        operation_id,
-                        call_id,
-                        tool: name.clone(),
-                    });
-                    let tools = Arc::clone(&self.tools);
-                    let cancel = self
-                        .operation
-                        .as_ref()
-                        .map(|(_, token)| token.child_token())
-                        .unwrap_or_else(|| self.cancel_root.child_token());
-                    let tool_tx = self.tool_tx.clone();
-                    let name = name.clone();
-                    let arguments = arguments.clone();
-                    debug!(%operation_id, %call_id, tool = %name, "dispatching tool effect");
-                    self.tracker.spawn(async move {
-                        let outcome = tools.execute(&name, &arguments, cancel).await;
-                        let result = if outcome.is_error {
-                            ToolResult::Err {
-                                call_id,
-                                error: outcome.output,
-                            }
-                        } else {
-                            ToolResult::Ok {
-                                call_id,
-                                output: outcome.output,
-                            }
-                        };
-                        let _ = tool_tx.send(result).await;
-                    });
-                }
+    /// Drain queued inbox items as one durable transaction. Returns
+    /// false when persistence failed and the operation was failed
+    /// visibly.
+    async fn drain_inbox(&mut self) -> bool {
+        let (staged, drained, request) = {
+            let active = self.operation.as_mut().expect("drain needs an operation");
+            let mut staged = active.machine.clone();
+            let drained = staged
+                .drain_inbox()
+                .expect("inbox drain at a continuation boundary");
+            let mut entries = Vec::new();
+            for applied in &drained {
+                entries.extend(applied.entries.iter().cloned());
             }
+            let applied_ids: Vec<InboxId> = active.pending_inbox.drain(..drained.len()).collect();
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                entries,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                applied_ids,
+            );
+            (staged, drained, request)
+        };
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return false;
         }
+        let active = self.operation.as_mut().expect("operation present");
+        active.machine = staged;
+        active.state_seq += 1;
+        for applied in &drained {
+            self.entries.extend(applied.entries.iter().cloned());
+        }
+        true
     }
 
-    fn handle_engine(&mut self, signal: EngineSignal) {
-        let operation_id = match &self.operation {
-            Some((machine, _)) => machine.operation_id(),
-            None => {
-                debug!(?signal, "ignored engine signal with no active operation");
-                return;
-            }
+    /// Commit the model-step effect intent, then spawn the provider
+    /// effect. Returns false when persistence failed.
+    async fn start_model_step(&mut self) -> bool {
+        let (staged, applied, effect, request) = {
+            let active = self.operation.as_mut().expect("step needs an operation");
+            let mut staged = active.machine.clone();
+            let applied = staged
+                .apply(Transition::StartModelStep)
+                .expect("start model step from a quiescent state");
+            let EffectIntent::ModelStep { prompt, .. } = applied.intents[0].clone() else {
+                panic!("StartModelStep must yield a model-step intent");
+            };
+            let effect = EffectRecord {
+                id: EffectId::generate(),
+                kind: "model_step".to_owned(),
+                recovery_class: RecoveryClass::ReplaySafe,
+                effective_input: serde_json::json!({ "prompt": prompt }),
+            };
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                Vec::new(),
+                vec![effect.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            (staged, applied, effect, request)
         };
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return false;
+        }
+        let active = self.operation.as_mut().expect("operation present");
+        active.machine = staged;
+        active.state_seq += 1;
+        active.open_effect = Some(effect.id);
+        let EffectIntent::ModelStep {
+            operation_id,
+            prompt,
+            tools,
+        } = applied.intents[0].clone()
+        else {
+            unreachable!("checked above");
+        };
+        self.spawn_model_step(operation_id, prompt, tools);
+        true
+    }
+
+    /// Commit a tool effect intent, then spawn the tool effect (or
+    /// settle a validation denial through the normal path). Returns
+    /// false when persistence failed.
+    async fn admit_next_tool(&mut self) -> bool {
+        let (staged, call, effect, request) = {
+            let active = self.operation.as_mut().expect("admit needs an operation");
+            let mut staged = active.machine.clone();
+            let applied = staged
+                .apply(Transition::AdmitNextTool)
+                .expect("admit next tool from ToolsPlanned");
+            let EffectIntent::Tool { call } = applied.intents[0].clone() else {
+                panic!("AdmitNextTool must yield a tool intent");
+            };
+            // Validation happens before the effect intent is durable; a
+            // denial settles as a model-visible result (§17.3, §16.5).
+            let effect = EffectRecord {
+                id: EffectId::generate(),
+                kind: format!("tool:{}", call.name),
+                recovery_class: self.tools.recovery_class(&call.name),
+                effective_input: call.arguments.clone(),
+            };
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                Vec::new(),
+                vec![effect.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            (staged, call, effect, request)
+        };
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return false;
+        }
+        let active = self.operation.as_mut().expect("operation present");
+        active.machine = staged;
+        active.state_seq += 1;
+        active.open_effect = Some(effect.id);
+        if let Err(message) = self.tools.validate(&call.name, &call.arguments) {
+            // The denial settles through the normal tool-result path; the
+            // tool never started, so no ToolStarted event is emitted.
+            let _ = self.tool_tx.try_send(ToolResult::Err {
+                call_id: call.call_id,
+                error: message,
+            });
+        } else {
+            self.emit(RuntimeEvent::ToolStarted {
+                cursor: RuntimeCursor::default(),
+                operation_id: call.operation_id,
+                call_id: call.call_id,
+                tool: call.name.clone(),
+            });
+            self.spawn_tool_effect(call);
+        }
+        true
+    }
+
+    fn spawn_model_step(
+        &mut self,
+        operation_id: OperationId,
+        prompt: String,
+        tools: Vec<ToolSpec>,
+    ) {
+        let provider = Arc::clone(&self.provider);
+        let cancel = self
+            .operation
+            .as_ref()
+            .map(|active| active.cancel.child_token())
+            .unwrap_or_else(|| self.cancel_root.child_token());
+        let out = self.engine_tx.clone();
+        self.step_terminal_seen = false;
+        self.model_step += 1;
+        let step = self.model_step;
+        let request = ProviderRequest {
+            operation_id,
+            prompt,
+            tools,
+        };
+        debug!(%operation_id, step, "starting model step effect");
+        let terminal = self.engine_tx.clone();
+        self.tracker.spawn(async move {
+            provider.run(request, cancel, out.clone()).await;
+            let _ = terminal
+                .send(EngineSignal::ProviderExited { operation_id, step })
+                .await;
+        });
+    }
+
+    fn spawn_tool_effect(&mut self, call: ToolCall) {
+        let operation_id = call.operation_id;
+        let tools = Arc::clone(&self.tools);
+        let cancel = self
+            .operation
+            .as_ref()
+            .map(|active| active.cancel.child_token())
+            .unwrap_or_else(|| self.cancel_root.child_token());
+        let tool_tx = self.tool_tx.clone();
+        let ToolCall {
+            call_id,
+            name,
+            arguments,
+            ..
+        } = call;
+        let _ = operation_id;
+        debug!(tool = %name, %call_id, "dispatching tool effect");
+        self.tracker.spawn(async move {
+            let outcome = tools.execute(&name, &arguments, cancel).await;
+            let result = if outcome.is_error {
+                ToolResult::Err {
+                    call_id,
+                    error: outcome.output,
+                }
+            } else {
+                ToolResult::Ok {
+                    call_id,
+                    output: outcome.output,
+                }
+            };
+            let _ = tool_tx.send(result).await;
+        });
+    }
+
+    async fn handle_engine(&mut self, signal: EngineSignal) {
+        let Some(active) = &self.operation else {
+            debug!("ignored engine signal with no active operation");
+            return;
+        };
+        let operation_id = active.machine.operation_id();
         if operation_id != signal_operation_id(&signal) {
             debug!(?signal, "ignored stale engine signal");
             return;
@@ -705,90 +985,197 @@ impl<P: Provider> SessionRuntime<P> {
                 self.step_terminal_seen = true;
                 let text = std::mem::take(&mut self.draft_text);
                 let tool_calls = std::mem::take(&mut self.draft_calls);
-                let applied = self
-                    .operation
-                    .as_mut()
-                    .and_then(|(machine, _)| {
-                        machine
-                            .apply(Transition::ProviderCompleted { text, tool_calls })
-                            .ok()
-                    })
-                    .expect("provider completion while AssistantEffectPending");
-                self.commit(&applied);
-                self.advance();
+                self.settle_model_step(Transition::ProviderCompleted { text, tool_calls })
+                    .await;
             }
             EngineSignal::Failed { message, .. } => {
+                self.step_terminal_seen = true;
                 let cancel_requested = self
                     .operation
                     .as_ref()
-                    .is_some_and(|(machine, _)| machine.cancel_requested());
+                    .is_some_and(|active| active.machine.cancel_requested());
                 let transition = if cancel_requested {
                     Transition::ProviderCancelled
                 } else {
                     Transition::ProviderFailed { message }
                 };
-                self.step_terminal_seen = true;
-                let applied = self
-                    .operation
-                    .as_mut()
-                    .and_then(|(machine, _)| machine.apply(transition).ok())
-                    .expect("provider failure while AssistantEffectPending");
-                self.commit(&applied);
-                self.advance();
+                self.settle_model_step(transition).await;
             }
             EngineSignal::Cancelled { .. } => {
                 self.step_terminal_seen = true;
-                let applied = self
-                    .operation
-                    .as_mut()
-                    .and_then(|(machine, _)| machine.apply(Transition::ProviderCancelled).ok())
-                    .expect("provider cancellation while AssistantEffectPending");
-                self.commit(&applied);
-                self.advance();
+                self.settle_model_step(Transition::ProviderCancelled).await;
             }
             EngineSignal::ProviderExited { step, .. } => {
                 if self.step_terminal_seen || step != self.model_step {
                     debug!(?signal, "ignored stale provider exit sentinel");
                     return;
                 }
-                let applied = self
-                    .operation
-                    .as_mut()
-                    .and_then(|(machine, _)| {
-                        machine
-                            .apply(Transition::ProviderFailed {
-                                message: "provider exited without a terminal signal".to_owned(),
-                            })
-                            .ok()
-                    })
-                    .expect("provider exit while AssistantEffectPending");
-                self.commit(&applied);
-                self.advance();
+                self.step_terminal_seen = true;
+                self.settle_model_step(Transition::ProviderFailed {
+                    message: "provider exited without a terminal signal".to_owned(),
+                })
+                .await;
             }
         }
     }
 
-    fn handle_tool_result(&mut self, result: ToolResult) {
-        let Some((machine, _)) = &mut self.operation else {
-            debug!("ignored tool result with no active operation");
-            return;
+    /// Commit a model-step settlement atomically: settled effect, semantic
+    /// entries, and the next total state agree in one transaction.
+    async fn settle_model_step(&mut self, transition: Transition) {
+        let (staged, applied, request) = {
+            let active = self.operation.as_mut().expect("settle needs an operation");
+            let mut staged = active.machine.clone();
+            let applied = staged
+                .apply(transition)
+                .expect("model-step settlement while AssistantEffectPending");
+            let settled = active.open_effect.take().into_iter().collect();
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                applied.entries.clone(),
+                Vec::new(),
+                settled,
+                Vec::new(),
+                Vec::new(),
+            );
+            (staged, applied, request)
         };
-        let applied = machine
-            .apply(Transition::ToolSettled { result })
-            .expect("tool settlement while ToolEffectPending");
-        self.commit(&applied);
-        self.advance();
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return;
+        }
+        let active = self.operation.as_mut().expect("operation present");
+        active.machine = staged;
+        active.state_seq += 1;
+        let finished = applied.state.clone();
+        self.entries.extend(applied.entries);
+        self.emit_terminal_state(&finished);
+        self.advance().await;
     }
 
-    /// Append transition output to the session log and derive terminal
-    /// live events.
-    fn commit(&mut self, applied: &Applied) {
-        self.entries.extend(applied.entries.iter().cloned());
-        if let OperationState::Finished(outcome) = &applied.state {
-            let Some((machine, _)) = &self.operation else {
+    async fn handle_tool_result(&mut self, result: ToolResult) {
+        let (staged, applied, request) = {
+            let active = self.operation.as_mut().expect("settle needs an operation");
+            let mut staged = active.machine.clone();
+            let applied = staged
+                .apply(Transition::ToolSettled { result })
+                .expect("tool settlement while ToolEffectPending");
+            let settled = active.open_effect.take().into_iter().collect();
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                applied.entries.clone(),
+                Vec::new(),
+                settled,
+                Vec::new(),
+                Vec::new(),
+            );
+            (staged, applied, request)
+        };
+        if let Err(err) = self.store.commit(request).await {
+            self.fail_operation_on_persistence(err).await;
+            return;
+        }
+        let active = self.operation.as_mut().expect("operation present");
+        active.machine = staged;
+        active.state_seq += 1;
+        let finished = applied.state.clone();
+        self.entries.extend(applied.entries);
+        self.emit_terminal_state(&finished);
+        self.advance().await;
+    }
+
+    /// A required commit failed: the staged transition never happened.
+    /// Fail the operation visibly from its last durable state; never
+    /// continue as if durability succeeded (DESIGN.md §26.2).
+    async fn fail_operation_on_persistence(&mut self, err: StoreError) {
+        let operation = self
+            .operation
+            .as_ref()
+            .map(|active| active.machine.operation_id());
+        let Some(operation_id) = operation else {
+            error!(session = %self.session_id, %err, "persistence failed with no active operation");
+            return;
+        };
+        error!(
+            %operation_id,
+            %err,
+            "durable commit failed; failing the operation from its last checkpoint"
+        );
+        let was_finished = self
+            .operation
+            .as_ref()
+            .is_some_and(|active| matches!(active.machine.state(), OperationState::Finished(_)));
+        if was_finished {
+            // The failed write was the terminal checkpoint itself; the
+            // durable operation stays open and recoverable.
+            self.operation.take();
+            self.emit(RuntimeEvent::OperationFailed {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+                message: format!("persistence failed: {err}"),
+            });
+            return;
+        }
+        // Fail the operation durably from its last committed checkpoint.
+        let (applied, request) = {
+            let active = self.operation.as_mut().expect("operation present");
+            let applied = active
+                .machine
+                .apply(Transition::FailOperation {
+                    message: format!("persistence failed: {err}"),
+                })
+                .expect("fail the operation from an open state");
+            let request = build_commit_request(
+                self.session_id,
+                operation_id,
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &active.machine,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            (applied, request)
+        };
+        match self.store.commit(request).await {
+            Ok(()) => {}
+            Err(second) => {
+                error!(%operation_id, %second, "terminal checkpoint also failed; durable operation stays open");
+            }
+        }
+        let active = self.operation.as_mut().expect("operation present");
+        active.state_seq += 1;
+        active.cancel.cancel();
+        let finished = applied.state.clone();
+        self.entries.extend(applied.entries);
+        self.emit_terminal_state(&finished);
+        self.operation.take();
+    }
+
+    fn entry_record(&mut self, entry: &SessionEntry) -> EntryRecord {
+        let seq = self.next_entry_seq;
+        self.next_entry_seq += 1;
+        EntryRecord {
+            seq,
+            entry: entry.clone(),
+        }
+    }
+
+    fn emit_terminal_state(&mut self, state: &OperationState) {
+        if let OperationState::Finished(outcome) = state {
+            let Some(active) = &self.operation else {
                 return;
             };
-            let operation_id = machine.operation_id();
+            let operation_id = active.machine.operation_id();
             match outcome {
                 OperationOutcome::Completed => {
                     self.emit(RuntimeEvent::OperationFinished {
@@ -835,30 +1222,55 @@ impl<P: Provider> SessionRuntime<P> {
             cursor: self.cursor,
             operation: match &self.operation {
                 None => OperationStatus::Idle,
-                Some((machine, _)) => OperationStatus::Active {
-                    operation_id: machine.operation_id(),
-                    prompt: machine.prompt().to_owned(),
-                    state: machine.state().clone(),
+                Some(active) => OperationStatus::Active {
+                    operation_id: active.machine.operation_id(),
+                    prompt: active.machine.prompt().to_owned(),
+                    state: active.machine.state().clone(),
                 },
             },
             entries: self.entries.clone(),
         }
     }
 
-    /// Session close (DESIGN.md §9.5, §25): stop accepting work, signal
-    /// owned effects, wait for them, drain, exit. An open operation is
-    /// suspended — never recorded as a user cancellation.
+    /// Session close (DESIGN.md §9.5, §25): stop accepting work, suspend
+    /// the open operation durably, signal owned effects, wait for them,
+    /// drain, exit. Close is never a user cancellation.
     async fn close_internal(&mut self) {
         if self.closed {
             return;
         }
         self.closed = true;
-        if let Some((machine, cancel)) = self.operation.as_mut() {
-            let applied = machine
+        if let Some(active) = &mut self.operation {
+            let mut staged = active.machine.clone();
+            staged
                 .apply(Transition::Suspend)
                 .expect("suspend from an open operation");
-            cancel.cancel();
-            self.commit(&applied);
+            let request = build_commit_request(
+                self.session_id,
+                staged.operation_id(),
+                active.state_seq + 1,
+                &mut self.next_entry_seq,
+                &staged,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            match self.store.commit(request).await {
+                Ok(()) => {
+                    active.machine = staged;
+                    active.state_seq += 1;
+                }
+                Err(err) => {
+                    error!(
+                        session = %self.session_id,
+                        %err,
+                        "suspend checkpoint failed; durable operation stays open"
+                    );
+                }
+            }
+            active.cancel.cancel();
         }
         self.cancel_root.cancel();
         self.tracker.close();
@@ -904,6 +1316,86 @@ impl<P: Provider> SessionRuntime<P> {
     }
 }
 
+/// Build the durable record of one staged transition. Entry sequences are
+/// assigned here so a commit owns its exact seq range.
+#[allow(clippy::too_many_arguments)]
+fn build_commit_request(
+    session_id: SessionId,
+    operation_id: OperationId,
+    state_seq: u64,
+    next_entry_seq: &mut u64,
+    staged: &OperationMachine,
+    entries: Vec<SessionEntry>,
+    open_effects: Vec<EffectRecord>,
+    settled_effects: Vec<EffectId>,
+    inbox: Vec<InboxRecord>,
+    inbox_applied: Vec<InboxId>,
+) -> CommitRequest {
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            let seq = *next_entry_seq;
+            *next_entry_seq += 1;
+            EntryRecord { seq, entry }
+        })
+        .collect();
+    CommitRequest {
+        session_id,
+        operation_id,
+        checkpoint: CheckpointRecord {
+            state_seq,
+            payload: CheckpointPayload {
+                state: staged.state().clone(),
+                cancel_requested: staged.cancel_requested(),
+            },
+        },
+        entries,
+        open_effects,
+        settled_effects,
+        inbox,
+        inbox_applied,
+    }
+}
+
+fn persistence_command_error(err: StoreError) -> CommandError {
+    CommandError::Persistence(err.to_string())
+}
+
+fn signal_operation_id(signal: &EngineSignal) -> OperationId {
+    match signal {
+        EngineSignal::TextDelta { operation_id, .. }
+        | EngineSignal::ToolCallCompleted { operation_id, .. }
+        | EngineSignal::Completed { operation_id }
+        | EngineSignal::Failed { operation_id, .. }
+        | EngineSignal::Cancelled { operation_id }
+        | EngineSignal::ProviderExited { operation_id, .. } => *operation_id,
+    }
+}
+
+fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
+    match event {
+        RuntimeEvent::OperationStarted { cursor: slot, .. }
+        | RuntimeEvent::AssistantTextDelta { cursor: slot, .. }
+        | RuntimeEvent::ToolStarted { cursor: slot, .. }
+        | RuntimeEvent::OperationFinished { cursor: slot, .. }
+        | RuntimeEvent::OperationFailed { cursor: slot, .. }
+        | RuntimeEvent::OperationCancelled { cursor: slot, .. }
+        | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
+    }
+}
+
+fn event_kind(event: &RuntimeEvent) -> &'static str {
+    match event {
+        RuntimeEvent::OperationStarted { .. } => "operation_started",
+        RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
+        RuntimeEvent::ToolStarted { .. } => "tool_started",
+        RuntimeEvent::OperationFinished { .. } => "operation_finished",
+        RuntimeEvent::OperationFailed { .. } => "operation_failed",
+        RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
+        RuntimeEvent::SessionClosed { .. } => "session_closed",
+    }
+}
+
 #[cfg(test)]
 pub(crate) struct SaturatedHandle {
     handle: RuntimeHandle,
@@ -939,40 +1431,5 @@ impl RuntimeHandle {
                 mpsc::error::TrySendError::Full(_) => CommandError::QueueSaturated,
                 mpsc::error::TrySendError::Closed(_) => CommandError::Closed,
             })
-    }
-}
-
-fn signal_operation_id(signal: &EngineSignal) -> OperationId {
-    match signal {
-        EngineSignal::TextDelta { operation_id, .. }
-        | EngineSignal::ToolCallCompleted { operation_id, .. }
-        | EngineSignal::Completed { operation_id }
-        | EngineSignal::Failed { operation_id, .. }
-        | EngineSignal::Cancelled { operation_id }
-        | EngineSignal::ProviderExited { operation_id, .. } => *operation_id,
-    }
-}
-
-fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
-    match event {
-        RuntimeEvent::OperationStarted { cursor: slot, .. }
-        | RuntimeEvent::AssistantTextDelta { cursor: slot, .. }
-        | RuntimeEvent::ToolStarted { cursor: slot, .. }
-        | RuntimeEvent::OperationFinished { cursor: slot, .. }
-        | RuntimeEvent::OperationFailed { cursor: slot, .. }
-        | RuntimeEvent::OperationCancelled { cursor: slot, .. }
-        | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
-    }
-}
-
-fn event_kind(event: &RuntimeEvent) -> &'static str {
-    match event {
-        RuntimeEvent::OperationStarted { .. } => "operation_started",
-        RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
-        RuntimeEvent::ToolStarted { .. } => "tool_started",
-        RuntimeEvent::OperationFinished { .. } => "operation_finished",
-        RuntimeEvent::OperationFailed { .. } => "operation_failed",
-        RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
-        RuntimeEvent::SessionClosed { .. } => "session_closed",
     }
 }

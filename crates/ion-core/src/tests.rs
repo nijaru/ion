@@ -15,7 +15,8 @@ use crate::session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
 };
-use crate::tool::{ToolRegistry, ToolResult, ToolSpec};
+use crate::store::SessionStore;
+use crate::tool::{RecoveryClass, ToolRegistry, ToolResult, ToolSpec};
 
 const STEP: Duration = Duration::from_millis(50);
 
@@ -66,14 +67,21 @@ fn texts(events: &[RuntimeEvent]) -> Vec<String> {
         .collect()
 }
 
+/// Runtime over an in-memory store; file-backed stores are exercised by
+/// the dedicated store tests below.
+fn start_runtime(provider: impl crate::Provider, tools: ToolRegistry) -> Runtime {
+    let store = SessionStore::open_in_memory().expect("in-memory store");
+    Runtime::start_with_store(provider, tools, store)
+}
+
 fn tool_runtime() -> Runtime {
-    Runtime::start(ScriptedProvider::echo(), ToolRegistry::default())
+    start_runtime(ScriptedProvider::echo(), ToolRegistry::default())
 }
 
 // ---- Pure operation transition core (DESIGN.md §30.1) ----
 
 fn machine_with_tools(prompt: &str, tools: Vec<ToolSpec>) -> (OperationMachine, Applied) {
-    OperationMachine::accept(OperationId::new(1), prompt, tools)
+    OperationMachine::accept(OperationId::from_uuid(uuid::Uuid::nil()), prompt, tools)
 }
 
 fn spec(name: &str) -> ToolSpec {
@@ -86,7 +94,7 @@ fn spec(name: &str) -> ToolSpec {
 
 fn call(id: u64, name: &str) -> crate::tool::ToolCall {
     crate::tool::ToolCall {
-        operation_id: OperationId::new(1),
+        operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
         call_id: id,
         name: name.to_owned(),
         arguments: json!({}),
@@ -115,7 +123,7 @@ fn start_model_step_commits_intent_with_frozen_tools() {
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
-            operation_id: OperationId::new(1),
+            operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
             prompt: "goal".to_owned(),
             tools: vec![spec("read")],
         }]
@@ -298,7 +306,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
-            operation_id: OperationId::new(1),
+            operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
             prompt: "goal\nand also check tests".to_owned(),
             tools: vec![],
         }]
@@ -583,7 +591,7 @@ impl Provider for SharedLogProvider {
 
 #[tokio::test]
 async fn streams_scripted_text_in_order() {
-    let runtime = Runtime::start(
+    let runtime = start_runtime(
         ScriptedProvider::new(vec![
             ScriptedMessage::text("hel"),
             ScriptedMessage::text("lo"),
@@ -619,7 +627,7 @@ async fn streams_scripted_text_in_order() {
 
 #[tokio::test]
 async fn cancel_stops_provider_before_later_chunks() {
-    let runtime = Runtime::start(
+    let runtime = start_runtime(
         ScriptedProvider::new(vec![
             ScriptedMessage::text("one"),
             ScriptedMessage::delayed(Duration::from_secs(30), "two"),
@@ -656,7 +664,7 @@ async fn cancel_stops_provider_before_later_chunks() {
 
 #[tokio::test]
 async fn busy_submit_is_rejected() {
-    let runtime = Runtime::start(
+    let runtime = start_runtime(
         ScriptedProvider::new(vec![ScriptedMessage::delayed(
             Duration::from_secs(30),
             "later",
@@ -710,9 +718,9 @@ async fn close_rejects_new_work_and_joins() {
     runtime.join().await.expect("join");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn delayed_chunk_respects_cancel_without_waiting_full_delay() {
-    let runtime = Runtime::start(
+    let runtime = start_runtime(
         ScriptedProvider::new(vec![ScriptedMessage::delayed(
             Duration::from_secs(30),
             "late",
@@ -735,7 +743,7 @@ async fn delayed_chunk_respects_cancel_without_waiting_full_delay() {
 
 #[tokio::test]
 async fn session_returns_to_idle_after_finish_and_accepts_next_operation() {
-    let runtime = Runtime::start(ScriptedProvider::echo(), ToolRegistry::default());
+    let runtime = start_runtime(ScriptedProvider::echo(), ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let first = session.submit("a").await.expect("first");
@@ -943,7 +951,7 @@ async fn tool_loop_success_admits_tools_and_finishes() {
         ScriptedMessage::tool("bash", json!({"command":"echo tool-said-hello"})),
         ScriptedMessage::text("final answer\n"),
     ]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let operation_id = session.submit("go").await.expect("submit");
@@ -982,7 +990,7 @@ async fn tool_error_is_model_visible_and_operation_continues() {
         "read",
         json!({"path":"definitely-not-here.txt"}),
     )]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let operation_id = session.submit("go").await.expect("submit");
@@ -1013,7 +1021,7 @@ async fn tool_error_is_model_visible_and_operation_continues() {
 async fn malformed_args_are_denied_before_the_effect_starts() {
     let provider =
         ScriptedProvider::new(vec![ScriptedMessage::tool("read", json!({"bogus": true}))]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("go").await.expect("submit");
@@ -1043,7 +1051,7 @@ async fn malformed_args_are_denied_before_the_effect_starts() {
 #[tokio::test]
 async fn unknown_tool_is_denied_before_the_effect_starts() {
     let provider = ScriptedProvider::new(vec![ScriptedMessage::tool("frobnicate", json!({}))]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("go").await.expect("submit");
@@ -1075,7 +1083,7 @@ async fn cancel_during_tool_cancels_operation_and_kills_process() {
         "bash",
         json!({"command":"sleep 30 && echo PWNED"}),
     )]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let operation_id = session.submit("go").await.expect("submit");
@@ -1116,7 +1124,7 @@ async fn tool_loop_multiple_calls_run_sequentially_in_one_operation() {
         ScriptedMessage::tool("bash", json!({"command":"echo two"})),
         ScriptedMessage::text("done\n"),
     ]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let operation_id = session.submit("go").await.expect("submit");
@@ -1157,7 +1165,7 @@ async fn model_step_request_carries_frozen_tool_specs() {
         ScriptedMessage::tool("read", json!({"path":"Cargo.toml"})),
         ScriptedMessage::text("done"),
     ]);
-    let runtime = Runtime::start(provider, ToolRegistry::default());
+    let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("go").await.expect("submit");
@@ -1186,7 +1194,7 @@ async fn steer_projection_reaches_the_next_model_step() {
         log: Arc::default(),
         settle_delay: Duration::from_millis(150),
     };
-    let runtime = Runtime::start(provider.clone(), ToolRegistry::default());
+    let runtime = start_runtime(provider.clone(), ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("goal").await.expect("submit");
@@ -1210,7 +1218,7 @@ async fn steer_projection_reaches_the_next_model_step() {
 
 #[tokio::test]
 async fn close_while_operating_suspends_instead_of_cancelling() {
-    let runtime = Runtime::start(
+    let runtime = start_runtime(
         ScriptedProvider::new(vec![ScriptedMessage::delayed(
             Duration::from_secs(30),
             "late",
@@ -1237,4 +1245,272 @@ async fn close_while_operating_suspends_instead_of_cancelling() {
             .any(|e| matches!(e, RuntimeEvent::OperationCancelled { .. }))
     );
     runtime.join().await.expect("join");
+}
+
+// ---- Durable session store (DESIGN.md §32 Step 2) ----
+
+fn temp_db(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ion-store-test-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir.join("sessions.db")
+}
+
+fn entry_kinds(entries: &[(u64, crate::SessionEntry)]) -> Vec<&'static str> {
+    entries
+        .iter()
+        .map(|(_, entry)| match entry {
+            crate::SessionEntry::UserMessage { .. } => "user_message",
+            crate::SessionEntry::AssistantMessage { .. } => "assistant_message",
+            crate::SessionEntry::ToolCall { .. } => "tool_call",
+            crate::SessionEntry::ToolResult { .. } => "tool_result",
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn restart_reproduces_the_logical_transcript() {
+    let db = temp_db("restart");
+    let store = SessionStore::open(&db).expect("open store");
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::tool("bash", json!({"command":"echo persisted"})),
+        ScriptedMessage::text("final\n"),
+    ]);
+    let runtime = Runtime::start_with_store(provider, ToolRegistry::default(), store);
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("read it").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    // Reopen the same database: the logical transcript must reproduce.
+    let store = SessionStore::open(&db).expect("reopen store");
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(
+        entry_kinds(&loaded.entries),
+        [
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "assistant_message",
+        ]
+    );
+    assert_eq!(loaded.operations.len(), 1);
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(
+        checkpoint.state,
+        OperationState::Finished(OperationOutcome::Completed)
+    );
+    assert!(!checkpoint.cancel_requested);
+    assert!(loaded.pending_inbox.is_empty());
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn durable_admission_failure_is_visible_and_non_corrupting() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    // Wait until the session row is committed before injecting.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    store.fail_next_write();
+
+    let err = session.submit("lost").await.expect_err("submit must fail");
+    assert!(matches!(err, CommandError::Persistence(_)));
+    // No operation was installed: the session is still idle and usable.
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.operation, OperationStatus::Idle);
+    assert!(snapshot.entries.is_empty());
+
+    let operation_id = session.submit("kept").await.expect("retry succeeds");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { operation_id: id, .. }) if *id == operation_id
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn mid_operation_persistence_failure_fails_the_operation_visibly() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let provider = ScriptedProvider::new(vec![ScriptedMessage::tool(
+        "bash",
+        json!({"command":"sleep 1 && echo slow"}),
+    )]);
+    let runtime = Runtime::start_with_store(provider, ToolRegistry::default(), store.clone());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    // Wait for the tool effect to start, then fail its settlement commit.
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::ToolStarted { .. }) {
+            break;
+        }
+    }
+    store.fail_next_write();
+
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    let failed = recorded.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::OperationFailed { message, .. } if message.contains("persistence failed")
+        )
+    });
+    assert!(failed, "persistence failure must be visible: {recorded:?}");
+    assert!(
+        !recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn cancel_request_is_durable() {
+    let db = temp_db("cancel");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("start"),
+            ScriptedMessage::delayed(Duration::from_secs(30), "late"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit("slow").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    session.cancel(operation_id).await.expect("cancel");
+    collect_until_terminal(&mut events).await.expect("settle");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let store = SessionStore::open(&db).expect("reopen");
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(
+        checkpoint.cancel_requested,
+        "the cancellation request must be durable"
+    );
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn steer_is_durable_as_pending_inbox() {
+    let db = temp_db("steer");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("start"),
+            ScriptedMessage::delayed(Duration::from_secs(30), "late"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    session.steer("and also check tests").await.expect("steer");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let store = SessionStore::open(&db).expect("reopen");
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.pending_inbox.len(), 1);
+    assert_eq!(loaded.pending_inbox[0].text, "and also check tests");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[test]
+fn recovery_classes_match_the_design() {
+    let registry = ToolRegistry::default();
+    assert_eq!(registry.recovery_class("read"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("search"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("find"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("write"), RecoveryClass::Reconcile);
+    assert_eq!(registry.recovery_class("edit"), RecoveryClass::Reconcile);
+    assert_eq!(registry.recovery_class("bash"), RecoveryClass::NeverReplay);
+    assert_eq!(
+        registry.recovery_class("unknown-tool"),
+        RecoveryClass::NeverReplay
+    );
+}
+
+#[test]
+fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
+    for setup in [
+        |m: &mut OperationMachine| {
+            let _ = m.apply(Transition::StartModelStep);
+        },
+        |m: &mut OperationMachine| {
+            let _ = m.apply(Transition::StartModelStep);
+            let _ = m.apply(Transition::ProviderCompleted {
+                text: String::new(),
+                tool_calls: vec![call(1, "read")],
+            });
+        },
+    ] {
+        let (mut machine, _) = machine_with_tools("goal", vec![]);
+        setup(&mut machine);
+        let applied = machine
+            .apply(Transition::FailOperation {
+                message: "harness failure".to_owned(),
+            })
+            .expect("fail from an open state");
+        assert_eq!(
+            machine.state(),
+            &OperationState::Finished(OperationOutcome::Failed("harness failure".to_owned()))
+        );
+        assert!(applied.cancel_effects);
+    }
+    let (mut machine, _) = machine_with_tools("goal", vec![]);
+    machine.apply(Transition::StartModelStep).expect("start");
+    machine.apply(Transition::ProviderCancelled).expect("done");
+    let err = machine
+        .apply(Transition::FailOperation {
+            message: "late".to_owned(),
+        })
+        .expect_err("finished is terminal");
+    assert_eq!(err.transition, "fail_operation");
 }

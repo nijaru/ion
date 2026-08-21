@@ -50,16 +50,18 @@ impl<W: Write> PrintFrontend<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_core::{Runtime, ScriptedMessage, ScriptedProvider, ToolRegistry};
+    use ion_core::{Runtime, ScriptedMessage, ScriptedProvider, SessionStore, ToolRegistry};
 
     #[tokio::test]
     async fn print_frontend_writes_streamed_text() {
-        let runtime = Runtime::start(
+        let store = SessionStore::open_in_memory().expect("in-memory store");
+        let runtime = Runtime::start_with_store(
             ScriptedProvider::new(vec![
                 ScriptedMessage::text("hel"),
                 ScriptedMessage::text("lo\n"),
             ]),
             ToolRegistry::default(),
+            store,
         );
         let session = runtime.session();
         let mut buf = Vec::new();
