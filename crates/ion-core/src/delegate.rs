@@ -184,7 +184,10 @@ async fn run_child<P>(
 where
     P: Provider,
 {
-    let catalog = crate::tool::ToolCatalog::read_only(".");
+    // Absolute root: relative cwd would make every child path
+    // resolution depend on the host process's working directory.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let catalog = crate::tool::ToolCatalog::read_only(cwd);
     let runtime = Runtime::start_child(
         (config.make_provider)(),
         catalog,

@@ -732,7 +732,17 @@ fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf, ToolOutcome> {
     }
     let candidate = cwd.join(relative);
     let normalized = lexically_normalize(&candidate);
-    if !normalized.starts_with(cwd) {
+    // Containment is checked on normalized forms. A relative root
+    // normalizes to "." (no prefix to match), so containment there
+    // means: the candidate stayed relative and did not climb out with
+    // ".." - which normalization preserves as a leading component.
+    let root = lexically_normalize(cwd);
+    let contained = if root == Path::new(".") {
+        !normalized.starts_with("..")
+    } else {
+        normalized.starts_with(&root)
+    };
+    if !contained {
         return Err(ToolOutcome::error(format!(
             "path escapes the project root: {raw}"
         )));
@@ -1256,10 +1266,15 @@ impl Tool for FindTool {
     }
 }
 
-/// Walk `root` recursively and collect relative paths matching `set`,
-/// skipping hidden entries and `target`.
+/// Walk `root` recursively and collect paths matching `set`, relative
+/// to `root` itself - not to each visited directory, which would test
+/// nested files as bare names. Skips hidden entries and `target`.
 fn collect_matches(root: &Path, set: &GlobSet, out: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(root) {
+    collect_matches_under(root, root, set, out);
+}
+
+fn collect_matches_under(original_root: &Path, dir: &Path, set: &GlobSet, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -1270,12 +1285,15 @@ fn collect_matches(root: &Path, set: &GlobSet, out: &mut Vec<String>) {
             continue;
         }
         if path.is_dir() {
-            collect_matches(&path, set, out);
+            collect_matches_under(original_root, &path, set, out);
         } else {
-            let rel = path.strip_prefix(root).unwrap_or(&path);
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if set.is_match(&rel_str) || set.is_match(&name) {
-                out.push(rel_str);
+            let rel = path
+                .strip_prefix(original_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if set.is_match(&rel) || set.is_match(&name) {
+                out.push(rel);
             }
         }
     }

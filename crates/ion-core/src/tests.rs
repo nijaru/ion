@@ -4044,3 +4044,59 @@ async fn parent_cancel_cancels_running_children() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+// ---- Dogfood round 2 regressions ----
+
+#[tokio::test]
+async fn find_matches_nested_paths_against_the_search_root() {
+    // Found live: nested files were tested as bare names because the
+    // walk stripped each visited directory instead of the search root.
+    let dir = tempfile::tempdir().expect("tmpdir");
+    std::fs::create_dir_all(dir.path().join("crates").join("alpha")).expect("mkdir");
+    std::fs::create_dir_all(dir.path().join("crates").join("beta")).expect("mkdir");
+    std::fs::write(dir.path().join("crates").join("alpha").join("C.toml"), "x").expect("write");
+    std::fs::write(dir.path().join("crates").join("beta").join("C.toml"), "x").expect("write");
+    std::fs::write(dir.path().join("top.toml"), "x").expect("write");
+
+    let registry = crate::ToolRegistry::read_only(dir.path());
+    let outcome = registry
+        .execute(
+            "find",
+            &json!({ "pattern": "crates/*/C.toml" }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.output);
+    let mut found: Vec<&str> = outcome.output.lines().collect();
+    found.sort_unstable();
+    assert_eq!(
+        found,
+        vec!["crates/alpha/C.toml", "crates/beta/C.toml"],
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn path_resolution_containment_survives_a_relative_cwd() {
+    // Found live: with registry cwd ".", normalization dropped the
+    // CurDir component and every subpath read as an escape.
+    let dir = tempfile::tempdir().expect("tmpdir");
+    std::fs::create_dir_all(dir.path().join("crates")).expect("mkdir");
+    std::fs::write(dir.path().join("crates").join("a.txt"), "x").expect("write");
+
+    // "." as cwd: the delegate child configuration.
+    let registry = crate::ToolRegistry::read_only(".");
+    // The tempdir must be the process cwd for this probe.
+    let prev = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(dir.path()).expect("chdir");
+    let outcome = registry
+        .execute(
+            "find",
+            &json!({ "path": "crates", "pattern": "*.txt" }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    std::env::set_current_dir(prev).expect("restore cwd");
+    assert!(!outcome.is_error, "{}", outcome.output);
+    assert!(outcome.output.contains("a.txt"), "{outcome:?}");
+}
