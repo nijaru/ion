@@ -4473,3 +4473,57 @@ async fn event_lag_is_signaled_reliably_and_snapshot_carries_live_draft() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn cancel_during_lag_is_visible_after_resubscribe() {
+    // §21.4: critical lifecycle events are never silently dropped. A
+    // subscriber that lags and resubscribes must see the terminal
+    // state in the snapshot, not a stream that just goes quiet.
+    let mut messages: Vec<ScriptedMessage> = (0..80)
+        .map(|i| ScriptedMessage::text(format!("d{i} ")))
+        .collect();
+    messages.push(ScriptedMessage::delayed(Duration::from_secs(30), "never"));
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy(
+        ScriptedProvider::new(messages),
+        ToolRegistry::default(),
+        store.clone(),
+        permissive_policy(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit("goal").await.expect("submit");
+    // Overflow the ring without reading, then cancel mid-step.
+    sleep(Duration::from_millis(300)).await;
+    session.cancel(operation_id).await.expect("cancel");
+    sleep(Duration::from_millis(200)).await;
+
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("recv");
+    assert!(matches!(first, Err(RuntimeError::SubscriptionLagged)));
+
+    let (fresh, _events) = session.subscribe().await.expect("resubscribe");
+    assert_eq!(fresh.operation, OperationStatus::Idle);
+    assert!(fresh.live.is_none());
+    for attempt in 0..5 {
+        match store.load(runtime.session_id()).await {
+            Ok(loaded) => {
+                let (_, checkpoint) = &loaded.operations[0].latest;
+                assert_eq!(
+                    checkpoint.state,
+                    OperationState::Finished(OperationOutcome::Cancelled)
+                );
+                break;
+            }
+            Err(err) => {
+                eprintln!("attempt {attempt}: {err:?}");
+                assert!(attempt < 4, "load never succeeded");
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
