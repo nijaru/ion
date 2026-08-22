@@ -1,15 +1,17 @@
-//! MCP capability transport (DESIGN.md §19).
+//! Subprocess extensions (DESIGN.md §24, Step 9).
 //!
-//! [`McpService`] owns server definitions, process/transport
-//! lifecycle, protocol negotiation, and published tool descriptors.
-//! Sessions never supervise MCP processes: the service registers each
-//! server's tools into the [`ToolCatalog`] under a dedicated scope,
-//! and invocations flow through the normal policy/effect path like
-//! any other tool.
+//! An extension is a subprocess publishing tools over the shared stdio
+//! JSON-RPC client - language-neutral by construction: any runtime
+//! that speaks the initialize/tools-list/tools-call shape works. Each
+//! extension owns an [`ToolCatalog`] scope (`ext:<name>`); unloading
+//! tears down the scope structurally (§24.4).
 //!
-//! Wire protocol: MCP stdio transport - newline-delimited JSON-RPC 2.0
-//! over the server's stdin/stdout (spec 2025-11-25), carried by the
-//! shared [`StdioRpc`] client (§24.2).
+//! Contributions start closed: tools only (§24.3). Commands, skills,
+//! and hooks are future contribution types with their own semantics.
+//!
+//! Trust (§24.5): executable configuration from the project directory
+//! is only honored when the caller passes an explicit trust grant;
+//! user-level configuration is trusted by being user-authored.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,39 +25,39 @@ use std::pin::Pin;
 use crate::rpc::{PeerDef, StdioRpc};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
-/// Handshake and discovery timeouts: a slow server delays startup once,
-/// visibly, then is skipped.
+/// Handshake timeout: a slow extension delays startup once, visibly,
+/// then is skipped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Protocol version requested during `initialize`. Bumped deliberately;
-/// per §19.4 today's version never shapes core storage or semantics.
+/// Protocol version requested during initialize; matches the MCP
+/// handshake shape so the two transports share one wire contract.
 const PROTOCOL_VERSION: &str = "2025-11-25";
 
-/// One configured MCP server (settings.toml `[mcp_servers.<name>]`).
+/// One configured extension (settings or trusted project manifest).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerDef {
+pub struct ExtensionDef {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
 }
 
-/// Owns every configured MCP server's lifecycle and published
-/// capabilities (§19.1).
+/// Owns extension subprocesses and publishes their tool contributions
+/// (the supervisor role in the lifecycle hierarchy, §25.1).
 #[derive(Default)]
-pub struct McpService {
+pub struct ExtensionService {
     _marker: (),
 }
 
-impl McpService {
+impl ExtensionService {
     #[must_use]
     pub fn new() -> Self {
         Self { _marker: () }
     }
 
-    /// Start `defs`, discover their tools, and register them into
-    /// `catalog` under `mcp:<name>` scopes. A failing server logs a
-    /// warning and is skipped: one broken server never blocks startup.
-    pub async fn start_into(&self, defs: &[ServerDef], catalog: &ToolCatalog) {
+    /// Start `defs` and register their tools under `ext:<name>` scopes.
+    /// A failing extension logs a warning and is skipped: one broken
+    /// extension never blocks startup.
+    pub async fn start_into(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) {
         for def in defs {
             let peer = PeerDef {
                 name: def.name.clone(),
@@ -64,61 +66,58 @@ impl McpService {
             };
             let client_info = json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
                 "clientInfo": { "name": "ion", "version": env!("CARGO_PKG_VERSION") },
             });
             let rpc = match StdioRpc::spawn(&peer, client_info, HANDSHAKE_TIMEOUT).await {
                 Ok(rpc) => rpc,
                 Err(err) => {
-                    tracing::warn!(server = %def.name, error = %err, "MCP server failed to start");
+                    tracing::warn!(extension = %def.name, error = %err, "extension failed to start");
                     continue;
                 }
             };
-            // MCP clients must send notifications/initialized after a
-            // successful handshake (spec 2025-11-25).
-            rpc.notify("notifications/initialized").await;
-
             let arc = Arc::new(rpc);
             match arc.list_tools().await {
                 Ok(tools) => {
                     let scoped: Vec<Arc<dyn Tool>> = tools
                         .into_iter()
                         .map(|spec| {
-                            Arc::new(McpTool {
+                            Arc::new(ExtensionTool {
                                 connection: Arc::clone(&arc),
-                                // Namespaced so two servers cannot collide.
                                 exposed_name: format!("{}__{}", def.name, spec.name),
                                 remote_name: spec.name.clone(),
                                 spec,
+                                extension_name: def.name.clone(),
                             }) as Arc<dyn Tool>
                         })
                         .collect();
                     tracing::info!(
-                        server = %def.name,
+                        extension = %def.name,
                         tools = scoped.len(),
-                        "MCP server ready"
+                        "extension ready"
                     );
-                    catalog.register_scope(format!("mcp:{}", def.name), scoped);
+                    catalog.register_scope(format!("ext:{}", def.name), scoped);
                 }
                 Err(err) => {
-                    tracing::warn!(server = %def.name, error = %err, "MCP tools/list failed");
+                    tracing::warn!(extension = %def.name, error = %err, "extension tools/list failed");
                 }
             }
         }
     }
 }
 
-/// An MCP tool surfaced through the normal [`Tool`] contract:
-/// admission, policy, canonicalization, and recovery behave exactly as
-/// for native tools. Remote effects never replay automatically.
-struct McpTool {
+/// An extension tool through the ordinary [`Tool`] contract (§24.2):
+/// policy, cancellation, and events behave exactly as for native and
+/// MCP tools. A dead process yields a typed crash error naming the
+/// extension; the runtime survives it.
+struct ExtensionTool {
     connection: Arc<StdioRpc>,
     exposed_name: String,
     remote_name: String,
     spec: crate::tool::ToolSpec,
+    extension_name: String,
 }
 
-impl Tool for McpTool {
+impl Tool for ExtensionTool {
     fn spec(&self) -> crate::tool::ToolSpec {
         let mut spec = self.spec.clone();
         spec.name = self.exposed_name.clone();
@@ -135,6 +134,12 @@ impl Tool for McpTool {
             tokio::select! {
                 result = call => match result {
                     Ok(text) => ToolOutcome::text(text),
+                    // Typed failure: the extension's own error vs. a
+                    // dead process are distinguishable to the model.
+                    Err(err) if err.contains("server closed") => ToolOutcome::error(format!(
+                        "extension `{}` crashed",
+                        self.extension_name
+                    )),
                     Err(err) => ToolOutcome::error(err),
                 },
                 () = cancel.cancelled() => ToolOutcome::error("cancelled"),

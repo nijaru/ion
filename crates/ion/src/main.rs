@@ -38,6 +38,10 @@ struct Cli {
     /// running the TUI or print mode.
     #[arg(long = "acp")]
     acp: bool,
+    /// Trust project-local executable configuration (.ion/
+    /// extensions.toml) for this run (§24.5). Never set automatically.
+    #[arg(long = "trust-project")]
+    trust_project: bool,
     /// Tools this non-interactive run may execute without approval,
     /// comma-separated (e.g. --allow bash,write). Everything else
     /// terminates the operation with ApprovalRequired (DESIGN.md §17).
@@ -114,7 +118,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 /// Compose the tool surface: core tools plus every configured MCP
 /// server's published tools. A failing server logs and is skipped -
 /// one broken server never blocks startup (DESIGN.md §19.1).
-async fn build_catalog(settings: &Settings) -> ion_core::ToolCatalog {
+async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog {
     let tools = ion_core::ToolCatalog::default();
     if !settings.mcp_servers.is_empty() {
         let defs: Vec<ion_core::ServerDef> = settings
@@ -124,6 +128,15 @@ async fn build_catalog(settings: &Settings) -> ion_core::ToolCatalog {
             .map(Into::into)
             .collect();
         ion_core::McpService::new().start_into(&defs, &tools).await;
+    }
+    // Project-local extension manifests load only under an explicit
+    // trust grant (§24.5).
+    let cwd = std::env::current_dir().ok();
+    let ext_defs = ion::settings::load_extension_defs(settings, cwd.as_deref(), cli.trust_project);
+    if !ext_defs.is_empty() {
+        ion_core::ExtensionService::new()
+            .start_into(&ext_defs, &tools)
+            .await;
     }
     tools
 }
@@ -168,7 +181,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     } else {
         None
     };
-    let tools = build_catalog(settings).await;
+    let tools = build_catalog(settings, cli).await;
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
         Arc::new(ion_core::DefaultPolicy)
     } else {
@@ -267,7 +280,7 @@ fn provider_factory(
 
 async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
-    let tools = build_catalog(settings).await;
+    let tools = build_catalog(settings, cli).await;
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
