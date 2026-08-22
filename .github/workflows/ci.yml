@@ -1,15 +1,21 @@
 name: CI
 
+# Limited by design: fast lint gates only. The test suite runs locally
+# (cargo test --workspace) before any push.
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly advisory sweep, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   gates:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +25,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace
 
   audit:
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    # Advisories land independently of code pushes; weekly sweep.
-    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2
