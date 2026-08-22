@@ -33,12 +33,12 @@ use ion_core::{
 /// never runtime state.
 #[derive(Clone)]
 pub struct HostConfig {
-    /// Model id for the /model display.
+    /// Model id for the /model display; also marks switching as
+    /// possible (a real model is configured; scripted launches have
+    /// nothing to switch to).
     pub model_name: Option<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
-    /// `/model <id>` switching; absent under scripted providers.
-    pub model_switch: Option<std::sync::Arc<crate::ModelSwitch>>,
 }
 
 impl HostConfig {
@@ -47,7 +47,6 @@ impl HostConfig {
         Self {
             model_name,
             hide_thinking_block,
-            model_switch: None,
         }
     }
 }
@@ -1029,7 +1028,7 @@ pub async fn run(
     host: HostConfig,
     mut guard: TerminalGuard,
 ) -> Result<(), RuntimeError> {
-    let model_switch = host.model_switch.clone();
+    let switching_available = host.model_name.is_some();
 
     let palette = palette(theme);
 
@@ -1081,10 +1080,16 @@ pub async fn run(
     // config seeds it here and nowhere else.
     let mut state = UiState::new();
     state.set_keymap(keymap);
-    state.set_model_name(host.model_name);
+    state.set_model_name(host.model_name.clone());
     state.thinking_visible = !host.hide_thinking_block;
-    state.model_switching_available = model_switch.is_some();
+    state.model_switching_available = switching_available;
     let (snapshot, mut events) = session.subscribe().await?;
+    // The session's durable selection is authoritative once subscribed;
+    // a resumed session may have switched models in an earlier run.
+    // Scripted launches keep the host's display fallback.
+    if host.model_name.is_some() {
+        state.set_model_name(Some(snapshot.model_ref.clone()));
+    }
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
         OperationStatus::Idle => None,
@@ -1134,13 +1139,7 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(
-                                &session,
-                                &mut state,
-                                model_switch.as_ref(),
-                                active_operation,
-                                effect,
-                            ).await;
+                            dispatch(&session, &mut state, active_operation, effect).await;
                         }
                     }
                     Some(Ok(TermEvent::Paste(text))) => {
@@ -1173,13 +1172,7 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Runtime(event));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(
-                                &session,
-                                &mut state,
-                                model_switch.as_ref(),
-                                active_operation,
-                                effect,
-                            ).await;
+                            dispatch(&session, &mut state, active_operation, effect).await;
                         }
                     }
                     Err(RuntimeError::SubscriptionLagged) => {
@@ -1226,7 +1219,6 @@ pub async fn run(
 async fn dispatch(
     session: &SessionHandle,
     state: &mut UiState,
-    model_switch: Option<&std::sync::Arc<crate::ModelSwitch>>,
     active_operation: Option<ion_core::OperationId>,
     effect: UiEffect,
 ) {
@@ -1258,15 +1250,14 @@ async fn dispatch(
             ),
             Err(err) => notice(state, &format!("compact failed: {err}")),
         },
-        UiEffect::SwitchModel { model } => match model_switch {
-            Some(switch) => {
-                let previous = switch.switch(&model).await;
+        UiEffect::SwitchModel { model } => match session.switch_model(&model).await {
+            Ok(previous) => {
                 state.model_name = Some(model.clone());
                 notice(state, &format!("model switched: {previous} -> {model}"));
                 let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
                 *state = next;
             }
-            None => notice(state, "model switching unavailable (scripted provider)"),
+            Err(err) => notice(state, &format!("model switch failed: {err}")),
         },
         UiEffect::Steer { text } => match session.steer(text).await {
             Ok(()) => {
@@ -1308,6 +1299,9 @@ fn print_banner(
 fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>) {
     let line = match entry {
         ion_core::SessionEntry::UserMessage { text } => Some(format!("you » {text}")),
+        ion_core::SessionEntry::ModelChanged { model_ref } => {
+            Some(format!("· model → {model_ref}"))
+        }
         ion_core::SessionEntry::AssistantMessage { text } => Some(format!("ion « {text}")),
         ion_core::SessionEntry::ToolCall { call } => {
             let target = ion_core::target_from_arguments(&call.name, &call.arguments)
@@ -1470,6 +1464,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             operation: OperationStatus::Idle,
             entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
         };
         state.resync_after_lag(&snapshot);
         assert_eq!(state.status, UiStatus::Idle);
@@ -1503,6 +1498,7 @@ pub(crate) mod tests {
                 state: ion_core::OperationState::NeedAssistant,
             },
             entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
         };
         state.resync_after_lag(&snapshot);
         assert_eq!(

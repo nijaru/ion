@@ -142,45 +142,55 @@ async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog 
 }
 
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
-    // The TUI owns a model switch slot: the runtime's provider swaps
-    // at model-step boundaries via /model <id>; children keep the
-    // launch-time model.
-    let (root_provider, make_provider, model_switch) =
-        match resolve_model(cli.model.clone(), settings) {
-            Ok(Some(model)) => {
-                let key = match std::env::var("OPENROUTER_API_KEY") {
-                    Ok(key) => key,
-                    Err(_) => {
-                        let _ =
-                            writeln!(io::stderr(), "model requires OPENROUTER_API_KEY to be set");
-                        return ExitCode::from(2);
-                    }
-                };
-                let make: Arc<dyn Fn(String) -> CliProvider + Send + Sync> =
-                    Arc::new(move |model: String| {
-                        CliProvider::OpenRouter(OpenRouterProvider::new(model, key.clone()))
-                    });
-                let switch = Arc::new(ion::ModelSwitch::new(model.clone(), Arc::clone(&make)));
-                let initial = model.clone();
-                let make_children: Arc<dyn Fn() -> CliProvider + Send + Sync> =
-                    Arc::new(move || make(initial.clone()));
-                ((switch.provider()), make_children, Some(switch))
-            }
-            Ok(None) => {
-                let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(|| {
-                    CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
-                        "scripted provider: build with --model for real answers\n",
-                    )]))
+    // The runtime owns model selection: /model <id> commits a durable
+    // change through SessionHandle::switch_model and applies at the
+    // next step boundary. The host only composes the resolver factory
+    // and seeds the launch default.
+    let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>>;
+    let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync>;
+    let model_name: Option<String>;
+    match resolve_model(cli.model.clone(), settings) {
+        Ok(Some(model)) => {
+            let key = match std::env::var("OPENROUTER_API_KEY") {
+                Ok(key) => key,
+                Err(_) => {
+                    let _ = writeln!(io::stderr(), "model requires OPENROUTER_API_KEY to be set");
+                    return ExitCode::from(2);
+                }
+            };
+            let make: Arc<dyn Fn(String) -> CliProvider + Send + Sync> =
+                Arc::new(move |model: String| {
+                    CliProvider::OpenRouter(OpenRouterProvider::new(model, key.clone()))
                 });
-                let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>> =
-                    Arc::new(ion_core::SwitchingProvider::new("scripted", (make)()));
-                (root_provider, make, None)
-            }
-            Err(err) => {
-                let _ = writeln!(io::stderr(), "{err}");
-                return ExitCode::from(2);
-            }
-        };
+            root_provider = Arc::new(ion_core::SwitchingProvider::switchable(
+                model.clone(),
+                make(model.clone()),
+                Arc::clone(&make),
+            ));
+            let initial = model.clone();
+            make_provider = Arc::new(move || make(initial.clone()));
+            model_name = Some(model);
+        }
+        Ok(None) => {
+            let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(|| {
+                CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
+                    "scripted provider: build with --model for real answers\n",
+                )]))
+            });
+            root_provider = Arc::new(ion_core::SwitchingProvider::new(
+                "scripted",
+                CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
+                    "scripted provider: build with --model for real answers\n",
+                )])),
+            ));
+            make_provider = make;
+            model_name = None;
+        }
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "{err}");
+            return ExitCode::from(2);
+        }
+    }
     // Terminal first: the close-on-error path below suspends open
     // operations, so a terminal-less launch must fail before any
     // session state exists.
@@ -246,11 +256,6 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let session = runtime.session();
-    let model_name = if model_switch.is_some() {
-        resolve_model(cli.model.clone(), settings).ok().flatten()
-    } else {
-        None
-    };
     let result = tui::run(
         session.clone(),
         store,
@@ -260,7 +265,6 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         tui::HostConfig {
             model_name,
             hide_thinking_block: settings.hide_thinking_block,
-            model_switch,
         },
         guard,
     )

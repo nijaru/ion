@@ -23,7 +23,7 @@ use crate::context::{ContextPlan, project};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
-use crate::provider::{EngineSignal, Provider, ProviderRequest, TokenUsage};
+use crate::provider::{EngineSignal, ModelConfig, Provider, ProviderRequest, TokenUsage};
 use crate::session::{
     EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
     SessionEntry, Transition,
@@ -182,6 +182,9 @@ pub struct SessionSnapshot {
     pub cursor: RuntimeCursor,
     pub operation: OperationStatus,
     pub entries: Vec<SessionEntry>,
+    /// The session's durable model selection; authoritative across
+    /// resume (§14.8).
+    pub model_ref: String,
 }
 
 pub struct EventSubscription {
@@ -220,6 +223,10 @@ enum SessionCommand {
     Compact {
         instructions: Option<String>,
         reply: oneshot::Sender<Result<bool, CommandError>>,
+    },
+    SwitchModel {
+        model_ref: String,
+        reply: oneshot::Sender<Result<String, CommandError>>,
     },
     Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
@@ -332,6 +339,19 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::Closed)?
     }
 
+    /// Durably select the model used by future model steps. A running
+    /// step keeps its frozen model snapshot. Returns the previous id.
+    pub async fn switch_model(&self, model_ref: impl Into<String>) -> Result<String, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::SwitchModel {
+                model_ref: model_ref.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
     pub async fn cancel(&self, operation_id: OperationId) -> Result<(), CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -406,6 +426,7 @@ impl<P: Provider> Composition<P> {
     }
 
     fn spawn(self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
+        let initial_model_ref = self.provider.initial_model_ref();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
@@ -420,6 +441,7 @@ impl<P: Provider> Composition<P> {
                 cwd,
                 SessionDeps {
                     provider,
+                    initial_model_ref,
                     tools,
                     store: self.store,
                     policy: self.policy,
@@ -664,6 +686,7 @@ impl RuntimeBudget {
 
 struct SessionDeps<P> {
     provider: Arc<P>,
+    initial_model_ref: String,
     tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
@@ -676,6 +699,9 @@ struct SessionRuntime<P> {
     session_id: SessionId,
     cwd: String,
     provider: Arc<P>,
+    /// Authoritative model selection for future steps. The initial id
+    /// is in the session row; changes are semantic entries.
+    selected_model_ref: String,
     tools: Arc<ToolCatalog>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
@@ -753,6 +779,7 @@ impl<P: Provider> SessionRuntime<P> {
     ) -> Self {
         let SessionDeps {
             provider,
+            initial_model_ref,
             tools,
             store,
             policy,
@@ -765,6 +792,7 @@ impl<P: Provider> SessionRuntime<P> {
             session_id,
             cwd,
             provider,
+            selected_model_ref: initial_model_ref,
             tools,
             store,
             policy,
@@ -811,9 +839,13 @@ impl<P: Provider> SessionRuntime<P> {
     /// sequence, and — for a non-terminal operation — the complete
     /// machine, its pending inbox, and its pending effect intent.
     fn restore_from(&mut self, loaded: LoadedSession) {
+        self.selected_model_ref = loaded.session.initial_model_ref.clone();
         let mut max_seq = 0;
         for (seq, entry) in loaded.entries {
             max_seq = max_seq.max(seq);
+            if let SessionEntry::ModelChanged { model_ref } = &entry {
+                self.selected_model_ref.clone_from(model_ref);
+            }
             self.entries.push(entry);
         }
         self.next_entry_seq = max_seq + 1;
@@ -903,6 +935,7 @@ impl<P: Provider> SessionRuntime<P> {
                 id: self.session_id,
                 cwd: self.cwd.clone(),
                 title: String::new(),
+                initial_model_ref: self.selected_model_ref.clone(),
                 parent_session_id: self.parent_session_id,
             };
             if let Err(err) = self.store.create_session(record).await {
@@ -984,6 +1017,10 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(Ok(requested));
                 false
             }
+            SessionCommand::SwitchModel { model_ref, reply } => {
+                let _ = reply.send(self.switch_model(model_ref).await);
+                false
+            }
             SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
                 false
@@ -1050,6 +1087,7 @@ impl<P: Provider> SessionRuntime<P> {
         });
         self.operation = Some(active);
         self.draft_text.clear();
+        self.draft_thinking.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
         self.overflow_retry_used = false;
@@ -1058,6 +1096,36 @@ impl<P: Provider> SessionRuntime<P> {
         // persists across operations, so they survive a new submit.
         self.advance().await;
         Ok(operation_id)
+    }
+
+    async fn switch_model(&mut self, model_ref: String) -> Result<String, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let model_ref = model_ref.trim().to_owned();
+        if model_ref.is_empty() || !self.provider.supports_model(&model_ref) {
+            return Err(CommandError::UnsupportedModel(model_ref));
+        }
+        let previous = self.selected_model_ref.clone();
+        if model_ref == previous {
+            return Ok(previous);
+        }
+        let entry = SessionEntry::ModelChanged {
+            model_ref: model_ref.clone(),
+        };
+        let record = self.stage_entry(&entry);
+        self.store
+            .append_entry(self.session_id, record)
+            .await
+            .map_err(persistence_command_error)?;
+        self.next_entry_seq += 1;
+        self.entries.push(entry);
+        self.selected_model_ref = model_ref;
+        // Model-relative metadata and hint throttling cannot cross a
+        // selection boundary.
+        self.context_window = None;
+        self.last_hint_tokens = None;
+        Ok(previous)
     }
 
     async fn enqueue_inbox(&mut self, kind: InboxKind, text: String) -> Result<(), CommandError> {
@@ -1222,24 +1290,38 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let plan = self.project_model_step_plan().await;
+                let Some((step, model, plan, persisted_tools)) =
+                    model_step_from_input(&open.effective_input)
+                else {
+                    error!(session = %self.session_id, "pending model step lacks an exact model snapshot; fencing");
+                    self.closed = true;
+                    return;
+                };
                 let mut staged = self.operation.clone().expect("operation present");
                 let applied = staged
                     .machine
-                    .apply(Transition::RecoverModelStep { plan: plan.clone() })
+                    .apply(Transition::RecoverModelStep {
+                        model: model.clone(),
+                        plan: plan.clone(),
+                    })
                     .expect("recover a pending model step");
                 let EffectIntent::ModelStep { tools, .. } = applied.intents[0].clone() else {
                     panic!("RecoverModelStep must yield a model-step intent");
                 };
+                if tools != persisted_tools {
+                    error!(session = %self.session_id, "pending model step tool snapshot disagrees with checkpoint; fencing");
+                    self.closed = true;
+                    return;
+                }
                 let settled = vec![SettledEffect {
                     id: open.id,
                     settlement: serde_json::json!({ "recovered": "process_loss" }),
                 }];
                 let effect = EffectRecord {
                     id: EffectId::generate(),
-                    kind: open.kind,
+                    kind: open.kind.clone(),
                     recovery_class: open.recovery_class,
-                    effective_input: serde_json::json!({ "plan": plan, "tools": tools }),
+                    effective_input: open.effective_input.clone(),
                     attempt: open.attempt + 1,
                 };
                 let (request, new_entry_seq) = build_commit_request(
@@ -1264,8 +1346,9 @@ impl<P: Provider> SessionRuntime<P> {
                 staged.state_seq += 1;
                 staged.open_effect = Some(effect);
                 self.operation = Some(staged);
-                warn!(%operation_id, "recovered a pending model step by replay");
-                self.spawn_model_step(operation_id, plan, tools);
+                self.model_step = step.saturating_sub(1);
+                warn!(%operation_id, model = %model.model_ref, "recovered a pending model step by replay");
+                self.spawn_model_step(operation_id, model, plan, tools);
             }
             OperationState::CompactionPending => {
                 let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
@@ -1273,7 +1356,11 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let plan = project(&self.entries, self.first_entry_seq());
+                let Some((step, model, plan)) = compaction_from_input(&open.effective_input) else {
+                    error!(session = %self.session_id, "pending compaction lacks an exact model snapshot; fencing");
+                    self.closed = true;
+                    return;
+                };
                 let mut staged = self.operation.clone().expect("operation present");
                 staged
                     .machine
@@ -1287,7 +1374,7 @@ impl<P: Provider> SessionRuntime<P> {
                     id: EffectId::generate(),
                     kind: open.kind.clone(),
                     recovery_class: open.recovery_class,
-                    effective_input: serde_json::json!({ "plan": plan }),
+                    effective_input: open.effective_input.clone(),
                     attempt: open.attempt + 1,
                 };
                 let (request, new_entry_seq) = build_commit_request(
@@ -1312,8 +1399,9 @@ impl<P: Provider> SessionRuntime<P> {
                 staged.state_seq += 1;
                 staged.open_effect = Some(effect);
                 self.operation = Some(staged);
-                warn!(%operation_id, "recovered a pending compaction step by replay");
-                self.spawn_model_step(operation_id, plan, Vec::new());
+                self.model_step = step.saturating_sub(1);
+                warn!(%operation_id, model = %model.model_ref, "recovered a pending compaction step by replay");
+                self.spawn_model_step(operation_id, model, plan, Vec::new());
             }
             OperationState::ToolEffectPending { .. } => {
                 let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
@@ -1746,11 +1834,21 @@ impl<P: Provider> SessionRuntime<P> {
     /// when one is due (14.7.2). Both the fresh start and the recovery
     /// re-projection go through here so a recovered step sees the same
     /// trailing-edge hint policy. The hint is derived, never persisted.
-    async fn project_model_step_plan(&mut self) -> crate::context::ContextPlan {
+    async fn current_model_config(&mut self) -> ModelConfig {
         if self.context_window.is_none() {
-            let window = self.provider.context_window().await;
-            self.context_window = window;
+            self.context_window = self
+                .provider
+                .context_window_for(&self.selected_model_ref)
+                .await;
         }
+        ModelConfig {
+            model_ref: self.selected_model_ref.clone(),
+            context_window: self.context_window,
+        }
+    }
+
+    async fn project_model_step_plan(&mut self) -> crate::context::ContextPlan {
+        let _ = self.current_model_config().await;
         let mut plan = project(&self.entries, self.first_entry_seq());
         let hint = crate::context::usage_hint(
             self.last_context_tokens.unwrap_or(0),
@@ -1787,6 +1885,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// effect that produces the readable summary. Returns false when
     /// persistence failed.
     async fn start_compaction(&mut self, instructions: Option<String>) -> bool {
+        let model = self.current_model_config().await;
         let mut plan = project(&self.entries, self.first_entry_seq());
         let mut content = crate::context::SUMMARIZE_INSTRUCTION.to_owned();
         if let Some(instructions) = instructions {
@@ -1810,7 +1909,11 @@ impl<P: Provider> SessionRuntime<P> {
             id: EffectId::generate(),
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({ "plan": plan }),
+            effective_input: serde_json::json!({
+                "step": self.model_step + 1,
+                "model": model,
+                "plan": plan
+            }),
             attempt: 1,
         };
         staged.open_effect = Some(effect.clone());
@@ -1837,7 +1940,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.last_step_was_compaction = true;
         self.last_hint_tokens = None;
         info!(%operation_id, "starting automatic compaction");
-        self.spawn_model_step(operation_id, plan, Vec::new());
+        self.spawn_model_step(operation_id, model, plan, Vec::new());
         true
     }
 
@@ -1900,13 +2003,18 @@ impl<P: Provider> SessionRuntime<P> {
             return false;
         }
         let plan = self.project_model_step_plan().await;
+        let model = self.current_model_config().await;
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
             .machine
-            .apply(Transition::StartModelStep { plan: plan.clone() })
+            .apply(Transition::StartModelStep {
+                model: model.clone(),
+                plan: plan.clone(),
+            })
             .expect("start model step from a quiescent state");
         let EffectIntent::ModelStep {
             operation_id,
+            model,
             tools,
             ..
         } = applied.intents[0].clone()
@@ -1917,7 +2025,12 @@ impl<P: Provider> SessionRuntime<P> {
             id: EffectId::generate(),
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({ "plan": plan, "tools": tools }),
+            effective_input: serde_json::json!({
+                "step": self.model_step + 1,
+                "model": model,
+                "plan": plan,
+                "tools": tools
+            }),
             attempt: 1,
         };
         // The pending effect is part of the checkpoint: it must be on the
@@ -1943,7 +2056,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
-        self.spawn_model_step(operation_id, plan, tools);
+        self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
 
@@ -2150,6 +2263,7 @@ impl<P: Provider> SessionRuntime<P> {
     fn spawn_model_step(
         &mut self,
         operation_id: OperationId,
+        model: ModelConfig,
         plan: ContextPlan,
         tools: Vec<ToolSpec>,
     ) {
@@ -2165,10 +2279,11 @@ impl<P: Provider> SessionRuntime<P> {
         let request = ProviderRequest {
             operation_id,
             step,
+            model: model.clone(),
             plan,
             tools,
         };
-        debug!(%operation_id, step, "starting model step effect");
+        debug!(%operation_id, step, model = %model.model_ref, "starting model step effect");
         let terminal = self.engine_tx.clone();
         self.tracker.spawn(async move {
             provider.run(request, cancel, out.clone()).await;
@@ -2263,9 +2378,6 @@ impl<P: Provider> SessionRuntime<P> {
             }
             EngineSignal::Completed { .. } => {
                 let text = std::mem::take(&mut self.draft_text);
-                // Thinking ends with the step; it was display-only and
-                // never becomes assistant content or a session entry.
-                self.draft_thinking.clear();
                 let tool_calls = std::mem::take(&mut self.draft_calls);
                 self.settle_model_step(Transition::ProviderCompleted { text, tool_calls })
                     .await;
@@ -2310,7 +2422,8 @@ impl<P: Provider> SessionRuntime<P> {
 
     /// Commit a model-step settlement atomically: settled effect (with
     /// its typed outcome), semantic entries, and the next total state
-    /// agree in one transaction.
+    /// agree in one transaction. Every settlement path ends the live
+    /// reasoning draft (display-only, §21.3).
     async fn settle_model_step(&mut self, transition: Transition) {
         let mut staged = self.operation.clone().expect("settle needs an operation");
         if !matches!(
@@ -2321,6 +2434,7 @@ impl<P: Provider> SessionRuntime<P> {
             debug!("ignored settlement for an already-settled model step");
             return;
         }
+        self.draft_thinking.clear();
         self.last_step_was_compaction = false;
         let applied = staged
             .machine
@@ -2382,6 +2496,7 @@ impl<P: Provider> SessionRuntime<P> {
     async fn settle_overflow_to_compaction(&mut self) {
         self.overflow_retry_used = true;
         let mut staged = self.operation.clone().expect("settle needs an operation");
+        let model = self.current_model_config().await;
         let mut plan = project(&self.entries, self.first_entry_seq());
         plan.messages.push(crate::context::ContextMessage::User {
             content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
@@ -2406,7 +2521,11 @@ impl<P: Provider> SessionRuntime<P> {
             id: EffectId::generate(),
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({ "plan": plan }),
+            effective_input: serde_json::json!({
+                "step": self.model_step + 1,
+                "model": model,
+                "plan": plan
+            }),
             attempt: 1,
         };
         staged.open_effect = Some(effect.clone());
@@ -2433,12 +2552,13 @@ impl<P: Provider> SessionRuntime<P> {
         // The failed attempt's partial buffers are discarded; usage
         // from a rejected request is not trustworthy.
         self.draft_text.clear();
+        self.draft_thinking.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
         self.last_step_was_compaction = true;
         self.last_hint_tokens = None;
         warn!(%operation_id, "context overflow; compacting once and retrying");
-        self.spawn_model_step(operation_id, plan, Vec::new());
+        self.spawn_model_step(operation_id, model, plan, Vec::new());
     }
 
     /// Settle a compaction step: the summary becomes a readable entry
@@ -2763,6 +2883,7 @@ impl<P: Provider> SessionRuntime<P> {
                 },
             },
             entries: self.entries.clone(),
+            model_ref: self.selected_model_ref.clone(),
         }
     }
 
@@ -2887,6 +3008,37 @@ fn tool_call_from_input(input: &serde_json::Value) -> Option<ToolCall> {
         name: input.get("tool")?.as_str()?.to_owned(),
         arguments: input.get("arguments")?.clone(),
     })
+}
+
+/// Reconstruct the frozen model snapshot from a persisted provider
+/// effect's exact effective input (DESIGN.md §14.8). Recovery replays
+/// this identity or fences; it never substitutes a launch default.
+fn model_from_input(model: &serde_json::Value) -> Option<ModelConfig> {
+    Some(ModelConfig {
+        model_ref: model.get("model_ref")?.as_str()?.to_owned(),
+        context_window: model
+            .get("context_window")
+            .and_then(serde_json::Value::as_u64),
+    })
+}
+
+/// `(step, model, plan)` from a persisted model-step effect input.
+fn model_step_from_input(
+    input: &serde_json::Value,
+) -> Option<(u64, ModelConfig, ContextPlan, Vec<ToolSpec>)> {
+    let step = input.get("step")?.as_u64()?;
+    let model = model_from_input(input.get("model")?)?;
+    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
+    let tools = serde_json::from_value(input.get("tools")?.clone()).ok()?;
+    Some((step, model, plan, tools))
+}
+
+/// `(step, model, plan)` from a persisted compaction effect input.
+fn compaction_from_input(input: &serde_json::Value) -> Option<(u64, ModelConfig, ContextPlan)> {
+    let step = input.get("step")?.as_u64()?;
+    let model = model_from_input(input.get("model")?)?;
+    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
+    Some((step, model, plan))
 }
 
 fn machine_snapshot_tools(machine: &OperationMachine) -> Vec<ToolSpec> {

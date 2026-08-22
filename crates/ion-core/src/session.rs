@@ -8,6 +8,7 @@
 
 use crate::context::ContextPlan;
 use crate::ids::OperationId;
+use crate::provider::ModelConfig;
 use crate::tool::{ToolCall, ToolResult, ToolSpec};
 
 /// Durably accepted input that has not yet been applied to model-visible
@@ -43,6 +44,12 @@ pub enum SessionEntry {
     },
     UserMessage {
         text: String,
+    },
+    /// A durably accepted model selection. It applies only to model
+    /// steps started after this entry; any in-flight step keeps its
+    /// frozen [`ModelConfig`].
+    ModelChanged {
+        model_ref: String,
     },
     /// Only validated completed provider output becomes this entry.
     AssistantMessage {
@@ -109,9 +116,10 @@ pub enum OperationOutcome {
 /// external effect (DESIGN.md §6, §12.1). Committed before execution.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EffectIntent {
-    /// One model step: projected input + tool snapshot.
+    /// One model step: projected input + frozen model/tool snapshot.
     ModelStep {
         operation_id: OperationId,
+        model: ModelConfig,
         plan: ContextPlan,
         tools: Vec<ToolSpec>,
     },
@@ -155,6 +163,7 @@ pub enum Transition {
     /// model-facing projection the runtime derived from the session
     /// transcript (deterministic, §14/§31 invariant 15).
     StartModelStep {
+        model: ModelConfig,
         plan: ContextPlan,
     },
     /// A validated completed provider generation.
@@ -184,6 +193,7 @@ pub enum Transition {
     /// found pending after process loss. Provider generation with local
     /// canonical context is ReplaySafe (§12.2).
     RecoverModelStep {
+        model: ModelConfig,
         plan: ContextPlan,
     },
     /// Recovery: re-execute a ReplaySafe tool effect found pending after
@@ -387,7 +397,7 @@ impl OperationMachine {
     pub fn apply(&mut self, transition: Transition) -> Result<Applied, TransitionError> {
         match transition {
             Transition::ApplyInbox { item } => self.apply_inbox(item),
-            Transition::StartModelStep { plan } => self.start_model_step(plan),
+            Transition::StartModelStep { model, plan } => self.start_model_step(model, plan),
             Transition::ProviderCompleted { text, tool_calls } => {
                 self.provider_completed(text, tool_calls)
             }
@@ -397,7 +407,7 @@ impl OperationMachine {
             Transition::ToolSettled { result } => self.tool_settled(result),
             Transition::CancelRequested => self.cancel_requested_transition(),
             Transition::FailOperation { message } => self.fail_operation(message),
-            Transition::RecoverModelStep { plan } => self.recover_model_step(plan),
+            Transition::RecoverModelStep { model, plan } => self.recover_model_step(model, plan),
             Transition::RecoverTool { call } => self.recover_tool(call),
             Transition::SettleIndeterminate => self.settle_indeterminate(),
             Transition::ApprovalRequired { tool } => self.approval_required(tool),
@@ -470,7 +480,11 @@ impl OperationMachine {
         }
     }
 
-    fn start_model_step(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
+    fn start_model_step(
+        &mut self,
+        model: ModelConfig,
+        plan: ContextPlan,
+    ) -> Result<Applied, TransitionError> {
         match self.state {
             OperationState::Accepted | OperationState::NeedAssistant => {
                 self.state = OperationState::AssistantEffectPending;
@@ -479,6 +493,7 @@ impl OperationMachine {
                     entries: Vec::new(),
                     intents: vec![EffectIntent::ModelStep {
                         operation_id: self.operation_id,
+                        model,
                         plan,
                         tools: self.tools.clone(),
                     }],
@@ -644,7 +659,11 @@ impl OperationMachine {
         })
     }
 
-    fn recover_model_step(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
+    fn recover_model_step(
+        &mut self,
+        model: ModelConfig,
+        plan: ContextPlan,
+    ) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
                 state: state_name(&self.state),
@@ -656,6 +675,7 @@ impl OperationMachine {
             entries: Vec::new(),
             intents: vec![EffectIntent::ModelStep {
                 operation_id: self.operation_id,
+                model,
                 plan,
                 tools: self.tools.clone(),
             }],

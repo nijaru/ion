@@ -104,10 +104,40 @@ fn truncate_tail(text: &str, max_lines: usize, max_bytes: usize) -> Option<Strin
     let lines: Vec<&str> = text.lines().collect();
     let mut kept: Vec<&str> = lines.iter().rev().take(max_lines).rev().copied().collect();
     let mut dropped = lines.len() - kept.len();
-    // Byte bound: drop whole lines from the head until it fits.
-    while kept.iter().map(|l| l.len() + 1).sum::<usize>() > max_bytes && kept.len() > 1 {
-        kept.remove(0);
-        dropped += 1;
+    // The byte bound is a hard total, truncation marker included: drop
+    // whole lines from the head while over budget, then cut a lone
+    // oversized line on a char boundary so one minified line cannot
+    // bypass the limit.
+    loop {
+        let marker_len = if dropped > 0 {
+            format!("… {dropped} earlier lines\n").len()
+        } else {
+            0
+        };
+        let body_len: usize = kept
+            .iter()
+            .map(|l| l.len() + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        if marker_len + body_len <= max_bytes {
+            break;
+        }
+        if kept.len() > 1 {
+            kept.remove(0);
+            dropped += 1;
+            continue;
+        }
+        let budget = max_bytes.saturating_sub(marker_len);
+        let line = kept[0];
+        let mut end = 0;
+        for (index, ch) in line.char_indices() {
+            if index + ch.len_utf8() > budget {
+                break;
+            }
+            end = index + ch.len_utf8();
+        }
+        kept[0] = &line[..end];
+        break;
     }
     if dropped > 0 {
         Some(format!("… {dropped} earlier lines\n{}", kept.join("\n")))
@@ -1417,5 +1447,44 @@ mod catalog_tests {
             "{}",
             outcome.output
         );
+    }
+}
+
+#[cfg(test)]
+mod preview_bound_tests {
+    use super::*;
+
+    fn ok_result(output: &str) -> ToolResult {
+        ToolResult::Ok {
+            call_id: 1,
+            output: output.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_single_oversized_line_is_cut_to_the_hard_byte_bound() {
+        // Found in review: the old loop only dropped whole lines, so
+        // one minified-JSON line bypassed 2 KiB entirely.
+        let line = "x".repeat(100_000);
+        let preview = ok_result(&line).display_preview().expect("nonempty output");
+        assert!(preview.len() <= PREVIEW_MAX_BYTES, "{}", preview.len());
+    }
+
+    #[test]
+    fn a_multibyte_line_cuts_on_a_char_boundary() {
+        let line = "\u{1F600}".repeat(5_000); // four bytes each, one visual glyph
+        let preview = ok_result(&line).display_preview().expect("nonempty output");
+        assert!(preview.len() <= PREVIEW_MAX_BYTES, "{}", preview.len());
+        assert!(preview.is_char_boundary(preview.len()));
+    }
+
+    #[test]
+    fn multiline_tail_keeps_the_end_and_counts_the_marker() {
+        let text: String = (0..100).map(|i| format!("line-{i}\n")).collect();
+        let preview = ok_result(&text).display_preview().expect("nonempty output");
+        assert!(preview.contains("line-99"));
+        assert!(!preview.contains("line-0\n"));
+        assert!(preview.lines().count() <= PREVIEW_MAX_LINES + 1);
+        assert!(preview.len() <= PREVIEW_MAX_BYTES);
     }
 }

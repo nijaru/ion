@@ -18,6 +18,8 @@ pub enum CommandError {
     NoActiveOperation,
     #[error("operation {operation_id} is not the active operation")]
     NotActive { operation_id: OperationId },
+    #[error("model {0:?} is not available from this provider")]
+    UnsupportedModel(String),
     #[error("durable write failed: {0}")]
     Persistence(String),
 }

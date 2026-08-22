@@ -84,6 +84,10 @@ pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
                     content: text.clone(),
                 });
             }
+            SessionEntry::ModelChanged { .. } => {
+                // Configuration lineage is canonical session state, not
+                // a conversational message.
+            }
             SessionEntry::AssistantMessage { text } => {
                 messages.push(ContextMessage::Assistant {
                     content: text.clone(),

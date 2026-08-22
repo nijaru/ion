@@ -25,6 +25,14 @@ use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
 
 const STEP: Duration = Duration::from_millis(50);
 
+/// Frozen model snapshot used by transition tests.
+fn step_model() -> crate::provider::ModelConfig {
+    crate::provider::ModelConfig {
+        model_ref: "test-model".to_owned(),
+        context_window: None,
+    }
+}
+
 async fn collect_until_terminal(
     events: &mut crate::EventSubscription,
 ) -> Result<Vec<RuntimeEvent>, RuntimeError> {
@@ -145,6 +153,7 @@ fn start_model_step_commits_intent_with_frozen_tools() {
     let (mut machine, _) = machine_with_tools("goal", vec![spec("read")]);
     let applied = machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: vec![ContextMessage::User {
@@ -157,6 +166,7 @@ fn start_model_step_commits_intent_with_frozen_tools() {
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
+            model: step_model(),
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
             plan: ContextPlan {
                 system: String::new(),
@@ -174,6 +184,7 @@ fn provider_completed_without_inbox_finishes_completed() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -203,6 +214,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -293,6 +305,7 @@ fn tool_error_is_a_model_visible_result_and_continues() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -331,6 +344,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: vec![ContextMessage::User {
@@ -373,6 +387,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
 
     let applied = machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: vec![ContextMessage::User {
@@ -385,6 +400,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     assert_eq!(
         applied.intents,
         vec![EffectIntent::ModelStep {
+            model: step_model(),
             operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
             plan: ContextPlan {
                 system: String::new(),
@@ -403,6 +419,7 @@ fn follow_up_continues_the_same_operation() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -427,6 +444,7 @@ fn follow_up_continues_the_same_operation() {
     machine.drain_followups().expect("follow-up drain");
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: vec![ContextMessage::User {
@@ -453,6 +471,7 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -475,6 +494,7 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -512,6 +532,7 @@ fn provider_failure_after_cancel_request_settles_cancelled() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -539,6 +560,7 @@ fn suspend_from_any_open_state_is_recoverable_not_cancelled() {
     let cases: Vec<fn(&mut OperationMachine)> = vec![
         |m| {
             let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
                 plan: ContextPlan {
                     system: String::new(),
                     messages: Vec::new(),
@@ -547,6 +569,7 @@ fn suspend_from_any_open_state_is_recoverable_not_cancelled() {
         },
         |m| {
             let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
                 plan: ContextPlan {
                     system: String::new(),
                     messages: Vec::new(),
@@ -615,6 +638,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     // From AssistantEffectPending:
     let (mut m, _) = machine_with_tools("goal", vec![]);
     m.apply(Transition::StartModelStep {
+        model: step_model(),
         plan: ContextPlan {
             system: String::new(),
             messages: Vec::new(),
@@ -623,6 +647,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     .expect("start");
     let err = m
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -639,6 +664,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     // From Finished:
     let (mut m, _) = machine_with_tools("goal", vec![]);
     m.apply(Transition::StartModelStep {
+        model: step_model(),
         plan: ContextPlan {
             system: String::new(),
             messages: Vec::new(),
@@ -652,6 +678,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
     ));
     for transition in [
         Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -694,6 +721,7 @@ fn failed_transition_leaves_state_unmutated() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -1443,6 +1471,7 @@ fn entry_kinds(entries: &[(u64, crate::SessionEntry)]) -> Vec<&'static str> {
         .iter()
         .map(|(_, entry)| match entry {
             crate::SessionEntry::UserMessage { .. } => "user_message",
+            crate::SessionEntry::ModelChanged { .. } => "model_changed",
             crate::SessionEntry::AssistantMessage { .. } => "assistant_message",
             crate::SessionEntry::ToolCall { .. } => "tool_call",
             crate::SessionEntry::ToolResult { .. } => "tool_result",
@@ -1665,6 +1694,7 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
     for setup in [
         |m: &mut OperationMachine| {
             let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
                 plan: ContextPlan {
                     system: String::new(),
                     messages: Vec::new(),
@@ -1673,6 +1703,7 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
         },
         |m: &mut OperationMachine| {
             let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
                 plan: ContextPlan {
                     system: String::new(),
                     messages: Vec::new(),
@@ -1700,6 +1731,7 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -2248,6 +2280,7 @@ fn approval_required_terminates_from_tools_planned_only() {
     let (mut machine, _) = OperationMachine::accept(OperationId::generate(), "goal", Vec::new());
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -2527,6 +2560,7 @@ mod reconcile {
                 id: session_id,
                 cwd: cwd.to_string_lossy().into_owned(),
                 title: "reconcile".to_owned(),
+                initial_model_ref: "test-model".to_owned(),
                 parent_session_id: None,
             })
             .await
@@ -2568,6 +2602,7 @@ mod reconcile {
                 .expect("evidence");
         machine
             .apply(Transition::StartModelStep {
+                model: step_model(),
                 plan: ContextPlan {
                     system: String::new(),
                     messages: Vec::new(),
@@ -2801,6 +2836,7 @@ fn compaction_transitions_are_total() {
     let (mut machine, _) = machine_with_tools("goal", vec![]);
     machine
         .apply(Transition::StartModelStep {
+            model: step_model(),
             plan: ContextPlan {
                 system: String::new(),
                 messages: Vec::new(),
@@ -3021,6 +3057,7 @@ async fn large_context_compacts_at_the_continuation_boundary() {
 fn entry_kind_name(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
+        SessionEntry::ModelChanged { .. } => "model_changed",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",
@@ -4204,21 +4241,193 @@ async fn switching_provider_swaps_models_at_step_boundaries() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 
-    // A fresh operation after the swap sees the new model's script.
-    let provider = SwitchingProvider::new(
+    // A durable mid-session change lands on the next operation's steps.
+    // The host factory resolves each exact model id; selection itself
+    // lives in the session.
+    let make: std::sync::Arc<dyn Fn(String) -> ScriptedProvider + Send + Sync> =
+        std::sync::Arc::new(|m| {
+            ScriptedProvider::new(vec![ScriptedMessage::text(format!("switched-to-{m}\n"))])
+        });
+    let provider = SwitchingProvider::switchable(
         "a",
         ScriptedProvider::new(vec![ScriptedMessage::text("first\n")]),
+        make,
     );
-    let previous = provider.switch("b", |m| {
-        ScriptedProvider::new(vec![ScriptedMessage::text(format!("switched-to-{m}\n"))])
-    });
-    assert_eq!(previous.await, "a");
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert_eq!(texts(&recorded), vec!["first\n".to_owned()]);
+
+    let previous = session.switch_model("b").await.expect("switch");
+    assert_eq!(previous, "a");
+    session.submit("again").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(texts(&recorded), vec!["switched-to-b\n".to_owned()]);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn model_switch_refuses_an_id_the_resolver_cannot_build() {
+    // A fixed provider accepts only its own model; the refusal happens
+    // before any durable change.
+    use crate::provider::SwitchingProvider;
+
+    let provider = SwitchingProvider::new("a", ScriptedProvider::echo());
+    let runtime = start_runtime(provider, ToolRegistry::default());
+    let session = runtime.session();
+    let err = session.switch_model("nonexistent").await;
+    assert!(matches!(err, Err(crate::CommandError::UnsupportedModel(_))));
+    // The accepted model is unchanged and still works.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert_eq!(texts(&recorded), vec!["ok".to_owned()]);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn reasoning_draft_clears_on_provider_failure() {
+    // Found in review: only the Completed path cleared the live
+    // reasoning buffer; failure paths retained stale reasoning into
+    // the next operation.
+    let runtime = start_runtime(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Thinking {
+                text: "pondering".to_owned(),
+            },
+            ScriptedMessage::Fail {
+                message: "provider exploded".to_owned(),
+            },
+        ]),
+        ToolRegistry::default(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFailed { .. })
+    ));
+
+    // The next operation must not resurrect the failed step's reasoning
+    // (the exhausted script completes silently with no deltas).
+    session.submit("again").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::ThinkingDelta { .. }))
+    );
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn crash_recovery_replays_with_the_persisted_model_not_the_launch_default() {
+    // DESIGN.md §14.8: the restart's launch default must never
+    // substitute for a pending step's frozen model snapshot.
+    use crate::provider::SwitchingProvider;
+    use std::sync::Arc;
+
+    let db = temp_db("model-recovery");
+    let store = SessionStore::open(&db).expect("store");
+    let make: Arc<dyn Fn(String) -> ScriptedProvider + Send + Sync> = Arc::new(|m: String| {
+        ScriptedProvider::new(vec![ScriptedMessage::text(format!("served-by-{m}\n"))])
+    });
+    let provider = SwitchingProvider::switchable(
+        "a",
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_secs(30),
+            "never arrives",
+        )]),
+        Arc::clone(&make),
+    );
+    let runtime = Runtime::start_with_policy(
+        provider,
+        ToolRegistry::default(),
+        store.clone(),
+        permissive_policy(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    session.submit("goal").await.expect("submit");
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::AssistantEffectPending)
+    })
+    .await;
+
+    // Process loss mid-model-step under model "a".
+    runtime.crash();
+    drop(runtime);
+    drop(session);
+
+    // Reopen composed for model "b": recovery must still serve the
+    // pending step from "a" via the resolver, never from "b".
+    let make_reopen: Arc<dyn Fn(String) -> ScriptedProvider + Send + Sync> = Arc::new(|m| {
+        if m == "a" {
+            ScriptedProvider::new(vec![ScriptedMessage::text("recovered-under-a\n")])
+        } else {
+            ScriptedProvider::new(vec![ScriptedMessage::text(format!("served-by-{m}\n"))])
+        }
+    });
+    let reopen_provider = SwitchingProvider::switchable(
+        "b",
+        ScriptedProvider::new(vec![ScriptedMessage::text("served-by-b\n")]),
+        make_reopen,
+    );
+    let runtime = Runtime::open_session(
+        reopen_provider,
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    // The persisted selection survives restart: the "b" launch default
+    // never becomes this session's authority.
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.model_ref, "a");
+
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::AssistantTextDelta { text, .. } if text == "recovered-under-a\n"
+        )),
+        "recovery must replay the persisted model: {recorded:?}"
+    );
+    assert!(
+        !recorded.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::AssistantTextDelta { text, .. } if text.contains("served-by")
+        )),
+        "the launch default must not serve the recovered step"
+    );
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+
+    // §11.3: each attempt row names the exact model that ran.
+    let connection = rusqlite::Connection::open(&db).expect("open db");
+    let refs: Vec<String> = connection
+        .prepare("SELECT model_ref FROM model_steps ORDER BY created_at")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("rows");
+    assert_eq!(refs, vec!["a".to_owned(), "a".to_owned()], "{refs:?}");
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");

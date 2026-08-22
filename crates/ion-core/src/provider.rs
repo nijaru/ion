@@ -5,9 +5,10 @@
 //! generation out. The `SessionRuntime` owns the operation loop; a
 //! provider never drives tools itself.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -29,14 +30,25 @@ pub struct TokenUsage {
     pub cache_write: u64,
 }
 
+/// Provider identity and metadata frozen for one model-step attempt.
+/// Recovery must use this exact identity rather than the host's current
+/// launch default (DESIGN.md §§6, 11.3, 14.8).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelConfig {
+    pub model_ref: String,
+    pub context_window: Option<u64>,
+}
+
 /// What one model step asks the provider: the operation it belongs to,
-/// the projected input, and the frozen capability snapshot.
+/// the projected input, and the frozen model/capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRequest {
     pub operation_id: OperationId,
     /// Monotonic model-step counter within the operation. Providers echo
     /// it in every signal so the runtime can drop stale generations.
     pub step: u64,
+    /// Exact provider identity and metadata persisted with the effect.
+    pub model: ModelConfig,
     /// The deterministic projection of session state for this step
     /// (DESIGN.md §14, §31 invariant 15).
     pub plan: ContextPlan,
@@ -107,16 +119,37 @@ pub trait Provider: Send + Sync + 'static {
         out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send;
 
-    /// The model's context window in tokens (§14.8). `None` means
-    /// unknown: hints degrade to an absolute threshold, the compaction
-    /// safety net is disabled, and overflow recovery is the backstop.
-    /// Adapters must not guess.
+    /// Initial model selection for a newly-created session. Hosts may
+    /// choose it, but the session persists it before any model effect.
+    fn initial_model_ref(&self) -> String {
+        std::any::type_name::<Self>().to_owned()
+    }
+
+    /// Whether this composed provider can resolve an exact model id.
+    fn supports_model(&self, model_ref: &str) -> bool {
+        model_ref == self.initial_model_ref()
+    }
+
+    /// Metadata for an exact model id. `None` means unknown: hints
+    /// degrade to an absolute threshold and overflow is the backstop.
+    fn context_window_for(&self, model_ref: &str) -> impl Future<Output = Option<u64>> + Send {
+        let supported = self.supports_model(model_ref);
+        async move {
+            if supported {
+                self.context_window().await
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Metadata for this provider's fixed model. Adapters must not guess.
     fn context_window(&self) -> impl Future<Output = Option<u64>> + Send {
         std::future::ready(None)
     }
 }
 
-impl<P: Provider> Provider for std::sync::Arc<P> {
+impl<P: Provider> Provider for Arc<P> {
     async fn run(
         &self,
         request: ProviderRequest,
@@ -126,67 +159,110 @@ impl<P: Provider> Provider for std::sync::Arc<P> {
         (**self).run(request, cancel, out).await
     }
 
+    fn initial_model_ref(&self) -> String {
+        (**self).initial_model_ref()
+    }
+
+    fn supports_model(&self, model_ref: &str) -> bool {
+        (**self).supports_model(model_ref)
+    }
+
+    async fn context_window_for(&self, model_ref: &str) -> Option<u64> {
+        (**self).context_window_for(model_ref).await
+    }
+
     async fn context_window(&self) -> Option<u64> {
         (**self).context_window().await
     }
 }
 
-/// Host-owned model switching: one provider slot swapped between
-/// steps. A running step holds the slot lock until it settles, so a
-/// switch always takes effect at a clean model-step boundary - never
-/// mid-stream. The slot is composition-level configuration, not
-/// durable session state (DESIGN.md §20: one mutation authority for
-/// durable state; this owns none).
+/// Host-composed provider resolver. SessionRuntime owns the selected
+/// model id; each immutable ProviderRequest selects an exact cached
+/// provider. Locks protect only the cache and are never held over I/O.
 pub struct SwitchingProvider<P: Provider> {
-    current: tokio::sync::Mutex<SwitchSlot<P>>,
-}
-
-struct SwitchSlot<P: Provider> {
-    model: String,
-    provider: P,
+    initial_model: String,
+    providers: Mutex<HashMap<String, Arc<P>>>,
+    make: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
 }
 
 impl<P: Provider> SwitchingProvider<P> {
+    /// A fixed provider. It accepts only `model` and cannot switch.
     #[must_use]
     pub fn new(model: impl Into<String>, provider: P) -> Self {
+        let model = model.into();
+        let mut providers = HashMap::new();
+        providers.insert(model.clone(), Arc::new(provider));
         Self {
-            current: tokio::sync::Mutex::new(SwitchSlot {
-                model: model.into(),
-                provider,
-            }),
+            initial_model: model,
+            providers: Mutex::new(providers),
+            make: None,
         }
     }
 
-    /// The model id backing the next model step.
-    pub async fn current_model(&self) -> String {
-        self.current.lock().await.model.clone()
+    /// A model resolver for a session whose selection may change.
+    #[must_use]
+    pub fn switchable(
+        model: impl Into<String>,
+        provider: P,
+        make: Arc<dyn Fn(String) -> P + Send + Sync>,
+    ) -> Self {
+        let model = model.into();
+        let mut providers = HashMap::new();
+        providers.insert(model.clone(), Arc::new(provider));
+        Self {
+            initial_model: model,
+            providers: Mutex::new(providers),
+            make: Some(make),
+        }
     }
 
-    /// Swap the slot to `make(model)`. Returns the previous model id.
-    pub async fn switch(&self, model: impl Into<String>, make: impl FnOnce(String) -> P) -> String {
-        let model = model.into();
-        let mut slot = self.current.lock().await;
-        let previous = std::mem::replace(&mut slot.model, model.clone());
-        slot.provider = make(model);
-        previous
+    fn provider_for(&self, model_ref: &str) -> Option<Arc<P>> {
+        let mut providers = self.providers.lock().expect("provider cache poisoned");
+        if let Some(provider) = providers.get(model_ref) {
+            return Some(Arc::clone(provider));
+        }
+        let provider = Arc::new((self.make.as_ref()?)(model_ref.to_owned()));
+        providers.insert(model_ref.to_owned(), Arc::clone(&provider));
+        Some(provider)
     }
 }
 
 impl<P: Provider> Provider for SwitchingProvider<P> {
-    // The slot lock is held across the step: concurrent switches
-    // queue behind the live step instead of racing it.
     async fn run(
         &self,
         request: ProviderRequest,
         cancel: tokio_util::sync::CancellationToken,
         out: mpsc::Sender<EngineSignal>,
     ) {
-        let slot = self.current.lock().await;
-        slot.provider.run(request, cancel, out).await;
+        let Some(provider) = self.provider_for(&request.model.model_ref) else {
+            let _ = out
+                .send(EngineSignal::Failed {
+                    operation_id: request.operation_id,
+                    step: request.step,
+                    message: format!("model {} is unavailable", request.model.model_ref),
+                })
+                .await;
+            return;
+        };
+        provider.run(request, cancel, out).await;
     }
 
-    async fn context_window(&self) -> Option<u64> {
-        self.current.lock().await.provider.context_window().await
+    fn initial_model_ref(&self) -> String {
+        self.initial_model.clone()
+    }
+
+    fn supports_model(&self, model_ref: &str) -> bool {
+        self.make.is_some()
+            || self
+                .providers
+                .lock()
+                .expect("provider cache poisoned")
+                .contains_key(model_ref)
+    }
+
+    async fn context_window_for(&self, model_ref: &str) -> Option<u64> {
+        let provider = self.provider_for(model_ref)?;
+        provider.context_window().await
     }
 }
 

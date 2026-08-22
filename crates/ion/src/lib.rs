@@ -18,50 +18,6 @@ use openrouter::OpenRouterProvider;
 pub use acp::{AcpConfig, serve as acp_serve};
 pub use settings::Settings;
 
-/// Host-level `/model <id>` switching for the root TUI session: swaps
-/// the OpenRouter model id behind the runtime's provider slot. The
-/// switch applies at the next model-step boundary; children spawned by
-/// delegation keep the launch-time model (per-call override is
-/// deferred). Composition-level configuration - not durable session
-/// state.
-#[derive(Clone)]
-pub struct ModelSwitch {
-    inner: Arc<ion_core::SwitchingProvider<CliProvider>>,
-    make: Arc<dyn Fn(String) -> CliProvider + Send + Sync>,
-}
-
-impl ModelSwitch {
-    #[must_use]
-    pub fn new(
-        initial_model: String,
-        make: Arc<dyn Fn(String) -> CliProvider + Send + Sync>,
-    ) -> Self {
-        Self {
-            inner: Arc::new(ion_core::SwitchingProvider::new(
-                initial_model.clone(),
-                make(initial_model),
-            )),
-            make,
-        }
-    }
-
-    /// The provider slot for runtime composition.
-    #[must_use]
-    pub fn provider(&self) -> Arc<ion_core::SwitchingProvider<CliProvider>> {
-        Arc::clone(&self.inner)
-    }
-
-    pub async fn current(&self) -> String {
-        self.inner.current_model().await
-    }
-
-    /// Swap models; returns the previous model id.
-    pub async fn switch(&self, model: impl Into<String>) -> String {
-        let make = Arc::clone(&self.make);
-        self.inner.switch(model, move |model| make(model)).await
-    }
-}
-
 /// The host's provider choice for one invocation. `Provider` is not
 /// dyn-compatible by design; the host composes concretely.
 pub enum CliProvider {
@@ -88,6 +44,13 @@ impl Provider for CliProvider {
                 Either::Right(fut)
             }
         })
+    }
+
+    async fn context_window(&self) -> Option<u64> {
+        match self {
+            CliProvider::Scripted(_) => None,
+            CliProvider::OpenRouter(provider) => provider.context_window().await,
+        }
     }
 }
 

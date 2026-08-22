@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at INTEGER NOT NULL,
     cwd TEXT NOT NULL,
     title TEXT NOT NULL,
-    parent_session_id TEXT
+    parent_session_id TEXT,
+    initial_model_ref TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS entries (
@@ -124,6 +125,15 @@ CREATE TABLE IF NOT EXISTS effects (
     settled_at INTEGER,
     attempt INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS model_steps (
+    effect_id TEXT PRIMARY KEY REFERENCES effects(id),
+    operation_id TEXT NOT NULL REFERENCES operations(id),
+    step INTEGER NOT NULL,
+    model_ref TEXT NOT NULL,
+    context_window INTEGER,
+    created_at INTEGER NOT NULL
+);
 ";
 
 /// One durable session row.
@@ -132,6 +142,9 @@ pub struct SessionRecord {
     pub id: SessionId,
     pub cwd: String,
     pub title: String,
+    /// Host-selected launch default, persisted before the first effect.
+    /// Later changes are append-only [`SessionEntry::ModelChanged`] rows.
+    pub initial_model_ref: String,
     /// Present for bounded child sessions (§20.3): lineage is durable
     /// before the child runs.
     pub parent_session_id: Option<SessionId>,
@@ -292,6 +305,11 @@ enum StoreCommand {
         request: CommitRequest,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    AppendEntry {
+        session_id: SessionId,
+        entry: EntryRecord,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
     Load {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
@@ -394,6 +412,21 @@ impl SessionStore {
             .await
     }
 
+    /// Append semantic session configuration while idle or while an
+    /// immutable effect is in flight. The session runtime assigns seq.
+    pub async fn append_entry(
+        &self,
+        session_id: SessionId,
+        entry: EntryRecord,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::AppendEntry {
+            session_id,
+            entry,
+            reply,
+        })
+        .await
+    }
+
     pub async fn load(&self, session_id: SessionId) -> Result<LoadedSession, StoreError> {
         self.request(|reply| StoreCommand::Load { session_id, reply })
             .await
@@ -467,6 +500,15 @@ fn handle_command(
                     .and_then(|()| commit(connection, &request).map_err(StoreError::from)),
             );
         }
+        StoreCommand::AppendEntry {
+            session_id,
+            entry,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                append_entry(connection, session_id, &entry).map_err(StoreError::from)
+            }));
+        }
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
@@ -538,17 +580,32 @@ fn check_injected(flag: &AtomicBool) -> Result<(), StoreError> {
 fn create_session(connection: &Connection, record: &SessionRecord) -> Result<(), rusqlite::Error> {
     let now = now_ms();
     connection.execute(
-        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
-         VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
+        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id, initial_model_ref)
+         VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             record.id.as_uuid().to_string(),
             now,
             record.cwd,
             record.title,
             record.parent_session_id.map(|id| id.as_uuid().to_string()),
+            record.initial_model_ref,
         ],
     )?;
     Ok(())
+}
+
+fn append_entry(
+    connection: &mut Connection,
+    session_id: SessionId,
+    entry: &EntryRecord,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    insert_entry(&tx, session_id, entry)?;
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now_ms()],
+    )?;
+    tx.commit()
 }
 
 fn begin_operation(
@@ -596,6 +653,36 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                 effect.attempt as i64,
             ],
         )?;
+        if effect.kind == "model_step" {
+            let model = effect.effective_input.get("model").ok_or_else(|| {
+                rusqlite::Error::InvalidParameterName("model step missing model".to_owned())
+            })?;
+            let model_ref = model
+                .get("model_ref")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName("model step missing model_ref".to_owned())
+                })?;
+            let step = effect
+                .effective_input
+                .get("step")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName("model step missing step".to_owned())
+                })?;
+            tx.execute(
+                "INSERT INTO model_steps (effect_id, operation_id, step, model_ref, context_window, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    effect.id.as_uuid().to_string(),
+                    request.operation_id.as_uuid().to_string(),
+                    step as i64,
+                    model_ref,
+                    model.get("context_window").and_then(serde_json::Value::as_u64).map(|v| v as i64),
+                    now_ms(),
+                ],
+            )?;
+        }
     }
     for usage in &request.usage {
         tx.execute(
@@ -742,7 +829,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     let id = session_id.as_uuid().to_string();
     let session = connection
         .query_row(
-            "SELECT cwd, title, parent_session_id FROM sessions WHERE id = ?1",
+            "SELECT cwd, title, parent_session_id, initial_model_ref FROM sessions WHERE id = ?1",
             rusqlite::params![id],
             |row| {
                 Ok(SessionRecord {
@@ -752,6 +839,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
                     parent_session_id: row
                         .get::<_, Option<String>>(2)?
                         .and_then(|text| SessionId::parse(&text)),
+                    initial_model_ref: row.get(3)?,
                 })
             },
         )
@@ -837,6 +925,7 @@ fn state_kind(state: &OperationState) -> &'static str {
 fn entry_kind(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
+        SessionEntry::ModelChanged { .. } => "model_changed",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",

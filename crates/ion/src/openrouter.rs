@@ -529,6 +529,10 @@ mod tests {
         let request = ProviderRequest {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
+            model: ion_core::ModelConfig {
+                model_ref: "test/model".to_owned(),
+                context_window: None,
+            },
             plan: ContextPlan {
                 system: "sys".to_owned(),
                 messages: vec![ContextMessage::User {
