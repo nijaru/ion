@@ -36,11 +36,12 @@ cargo run -p ion -- --model stealth/ox-alpha
 
 In print mode everything else terminates the operation with an
 approval requirement instead of executing. In the TUI, `/help` lists
-the slash commands (`/compact`, `/model`).
+the slash commands (`/compact`, `/model`); `/model <id>` switches
+models durably at the next step boundary and survives restart.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
-and cancellation survive restarts.
+cancellation, and model selection survive restarts.
 
 ## Configuration
 
