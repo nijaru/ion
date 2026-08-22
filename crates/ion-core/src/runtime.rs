@@ -203,6 +203,13 @@ enum SessionCommand {
         operation_id: OperationId,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
+    /// User-requested compaction: honored at the next continuation
+    /// boundary of the active operation. Ok(false) = idle, nothing to
+    /// compact (compaction runs within an operation, §14.7).
+    Compact {
+        instructions: Option<String>,
+        reply: oneshot::Sender<Result<bool, CommandError>>,
+    },
     Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
     },
@@ -300,6 +307,20 @@ impl SessionHandle {
     /// Request semantic cancellation of the active operation
     /// (DESIGN.md §9.4). Acknowledgment means the request is durable;
     /// settlement arrives as an event.
+    /// Request compaction of the active operation at its next safe
+    /// boundary (user-facing /compact; §14.7). Returns false when the
+    /// session is idle - compaction runs within an operation.
+    pub async fn compact(&self, instructions: Option<String>) -> Result<bool, CommandError> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::Compact {
+                instructions,
+                reply: tx,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::Closed)?
+    }
+
     pub async fn cancel(&self, operation_id: OperationId) -> Result<(), CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -930,6 +951,22 @@ impl<P: Provider> SessionRuntime<P> {
                 reply,
             } => {
                 let _ = reply.send(self.cancel(operation_id).await);
+                false
+            }
+            SessionCommand::Compact {
+                instructions,
+                reply,
+            } => {
+                let requested = self.operation.is_some();
+                if requested {
+                    // Consumed at the next continuation boundary by the
+                    // same path the model's own compact tool uses.
+                    self.pending_compact = Some(PendingCompact {
+                        instructions,
+                        continue_after: false,
+                    });
+                }
+                let _ = reply.send(Ok(requested));
                 false
             }
             SessionCommand::Subscribe { reply } => {

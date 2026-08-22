@@ -35,6 +35,7 @@ use ion_core::{
 pub enum UiEffect {
     Submit { text: String },
     Steer { text: String },
+    Compact { instructions: Option<String> },
     Cancel,
     Quit,
 }
@@ -48,6 +49,7 @@ pub enum UiMessage {
     Paste(String),
     SubmitAccepted,
     SubmitRejected(String),
+    CompactAccepted,
     SteerAccepted,
     SteerRejected(String),
 }
@@ -294,6 +296,8 @@ pub struct UiState {
     /// Completed tool rows for the live operation, newest last.
     tool_rows: Vec<String>,
     status: UiStatus,
+    /// Model id for /model display (host-provided, not runtime state).
+    model_name: Option<String>,
     /// Lines queued for scrollback: flushed above the inline viewport
     /// when the composer redraws.
     pending_scrollback: Vec<Line<'static>>,
@@ -304,6 +308,11 @@ impl UiState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Host-provided model id for the /model display.
+    pub fn set_model_name(&mut self, model_name: Option<String>) {
+        self.model_name = model_name;
     }
 
     /// Replace the key bindings with settings-resolved ones.
@@ -326,6 +335,12 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
         UiMessage::Runtime(event) => (apply_runtime_event(state, event), None),
         UiMessage::SubmitAccepted => {
             state.composer.clear();
+            (state, None)
+        }
+        UiMessage::CompactAccepted => {
+            state
+                .pending_scrollback
+                .push(Line::from("compaction requested at next boundary").dim());
             (state, None)
         }
         UiMessage::SteerAccepted => {
@@ -374,6 +389,50 @@ fn handle_backspace(mut state: UiState) -> (UiState, Option<UiEffect>) {
     (state, None)
 }
 
+/// One user-visible scrollback notice (system line).
+fn notice(state: &mut UiState, text: &str) {
+    state
+        .pending_scrollback
+        .push(Line::from(text.to_owned()).dim());
+}
+
+/// Slash-command surface: /help, /compact, /model. Anything else is a
+/// visible unknown-command error, never a silent no-op.
+fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffect>) {
+    let (name, rest) = match command.split_once(' ') {
+        Some((name, rest)) => (name, rest.trim()),
+        None => (command, ""),
+    };
+    match name {
+        "help" => {
+            for line in [
+                "/compact [instructions] - summarize the active operation's context",
+                "/model                  - show the model in use",
+                "/help                   - this list",
+            ] {
+                notice(state, line);
+            }
+            (std::mem::take(state), None)
+        }
+        "compact" => {
+            let instructions = (!rest.is_empty()).then(|| rest.to_owned());
+            (
+                std::mem::take(state),
+                Some(UiEffect::Compact { instructions }),
+            )
+        }
+        "model" => {
+            let shown = state.model_name.as_deref().unwrap_or("(scripted provider)");
+            notice(state, &format!("model: {shown}"));
+            (std::mem::take(state), None)
+        }
+        other => {
+            notice(state, &format!("unknown command: /{other} (try /help)"));
+            (std::mem::take(state), None)
+        }
+    }
+}
+
 fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffect>) {
     match action {
         Action::Cancel => {
@@ -393,11 +452,16 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if text.is_empty() {
                 return (state, None);
             }
-            state.history.push(text.clone());
             state.composer.clear();
             state.cursor = 0;
             state.history_index = None;
             state.history_stash = None;
+            // Slash commands are frontend presentation over SessionHandle
+            // commands - never TUI-only session logic.
+            if let Some(command) = text.strip_prefix('/') {
+                return handle_command(&mut state, command);
+            }
+            state.history.push(text.clone());
             match &state.status {
                 UiStatus::Idle => (state, Some(UiEffect::Submit { text })),
                 UiStatus::Working { .. } => (state, Some(UiEffect::Steer { text })),
@@ -828,8 +892,12 @@ pub async fn run(
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
     keymap: KeyMap,
+    model_name: Option<String>,
     mut guard: TerminalGuard,
 ) -> Result<(), RuntimeError> {
+    let mut state = UiState::new();
+    state.set_model_name(model_name);
+
     let palette = palette(theme);
 
     // The inline viewport anchors at the cursor; push it to the
@@ -1027,6 +1095,17 @@ async fn dispatch(
                 );
                 *state = next;
             }
+        },
+        UiEffect::Compact { instructions } => match session.compact(instructions).await {
+            Ok(true) => {
+                let (next, _) = update(std::mem::take(state), UiMessage::CompactAccepted);
+                *state = next;
+            }
+            Ok(false) => notice(
+                state,
+                "nothing to compact: compaction runs within an operation",
+            ),
+            Err(err) => notice(state, &format!("compact failed: {err}")),
         },
         UiEffect::Steer { text } => match session.steer(text).await {
             Ok(()) => {

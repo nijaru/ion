@@ -219,12 +219,14 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let session = runtime.session();
+    let model_name = resolve_model(cli.model.clone(), settings).ok().flatten();
     let result = tui::run(
         session.clone(),
         store,
         resume_session,
         settings.theme(),
         keymap,
+        model_name,
         guard,
     )
     .await;

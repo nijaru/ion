@@ -269,3 +269,61 @@ fn clean_exit_restores_the_terminal() {
     assert!(status.success(), "clean exit must be code 0");
     session.assert_cooked();
 }
+
+#[test]
+fn slash_commands_render_notices_without_runtime_calls() {
+    let mut session = spawn_ion(&[]);
+    assert!(
+        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        "TUI idle banner never appeared"
+    );
+    use std::io::Write as _;
+
+    // /help
+    session
+        .master_write
+        .write_all(b"/help\r")
+        .expect("write /help");
+    assert!(
+        session.wait_for_output("/compact", std::time::Duration::from_secs(10)),
+        "help listed the commands"
+    );
+
+    // Unknown command.
+    session
+        .master_write
+        .write_all(b"/nope\r")
+        .expect("write /nope");
+    assert!(
+        session.wait_for_output("unknown command: /nope", std::time::Duration::from_secs(10)),
+        "unknown command surfaced; buffer: {:?}",
+        String::from_utf8_lossy(&session.output.lock().unwrap())
+    );
+
+    // /model
+    session
+        .master_write
+        .write_all(b"/model\r")
+        .expect("write /model");
+    assert!(
+        session.wait_for_output(
+            "model: (scripted provider)",
+            std::time::Duration::from_secs(10)
+        ),
+        "/model shows the provider"
+    );
+
+    // /compact while idle explains itself.
+    session
+        .master_write
+        .write_all(b"/compact\r")
+        .expect("write /compact");
+    assert!(
+        session.wait_for_output("nothing to compact", std::time::Duration::from_secs(10)),
+        "idle /compact explains itself"
+    );
+    session.master_write.write_all(&[0x03]).ok();
+    session.master_write.flush().ok();
+    let _ = session.child.wait();
+    session.assert_cooked();
+}
