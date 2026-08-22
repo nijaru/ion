@@ -101,6 +101,28 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
 }
 
 #[tokio::test]
+async fn a_second_language_registers_the_same_logical_tool() {
+    // Bash fixture: the transport contract holds regardless of the
+    // extension's runtime (§24.2).
+    let catalog = ToolCatalog::default();
+    ExtensionService::new()
+        .start_into(
+            &[ExtensionDef {
+                name: "pingkit".to_owned(),
+                command: "bash".to_owned(),
+                args: vec![fixture("ping_extension.sh")],
+            }],
+            &catalog,
+        )
+        .await;
+    let outcome = catalog
+        .execute("pingkit__ping", &json!({}), CancellationToken::new())
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.output);
+    assert_eq!(outcome.output, "pong");
+}
+
+#[tokio::test]
 async fn project_extensions_respect_workspace_trust() {
     let dir = tempfile::tempdir().expect("tmpdir");
     let project = dir.path();
