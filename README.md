@@ -1,38 +1,75 @@
 # Ion
 
-Ion is a terminal coding agent: a small model-facing agent loop inside a
-durable, single-writer session runtime. The intended experience is a
-Pi-like minimal surface:
+Ion is a terminal coding agent: a small model-facing agent loop inside
+a durable, single-writer session runtime.
 
-```text
-$ ion
-
-> fix the parser bug
-```
-
-This repository is a clean-sheet Rust rewrite. The authoritative target
+This is a clean-sheet Rust rewrite at v0. The authoritative target
 design is [DESIGN.md](DESIGN.md). The last Go implementation is tagged
 `last-go` and is not a design, behavior, or migration reference.
 
-```text
-cargo run -p ion -- -p "hello world"
+## Quickstart
+
+Requires a Rust stable toolchain.
+
+```sh
+cargo run -p ion
 ```
 
-## Status
+This opens the interactive TUI with the scripted provider — no model
+key needed. To use a real model, set `OPENROUTER_API_KEY` and either
+put `defaultModel` in `~/.config/ion/settings.toml` or pass it:
 
-Print mode runs one scripted operation through the durable runtime
-contract: process `Runtime` + single-writer `SessionRuntime`, a pure
-`OperationMachine` transition core, inbox steering/follow-up, and
-cancel-aware sequential tool effects. SQLite persistence is next
-(DESIGN.md §32 Step 2); TUI, MCP/ACP, and child sessions follow.
-Current work lives in `tk ready` and the central `brief.md` (see
-AGENTS.md).
+```sh
+cargo run -p ion -- --model stealth/ox-alpha
+```
 
-## Planning sources
+## Usage
 
-- [DESIGN.md](DESIGN.md) — authoritative target design
-- [AGENTS.md](AGENTS.md) — every-session rules, authority, invariants
-- Central `agent-context` brief — current head, ready task, next action
+| Command | Behavior |
+| :--- | :--- |
+| `ion` | Interactive TUI (new session) |
+| `ion --resume` | Reopen the most recent persisted session |
+| `ion -p "prompt"` | Run one prompt in print mode and exit |
+| `ion --acp` | Serve Agent Client Protocol v1 on stdio |
+| `ion --allow bash,write` | Print mode: tools that may run without approval |
+| `ion --trust-project` | Load project-local `.ion/extensions.toml` for this run |
+
+In print mode everything else terminates the operation with an
+approval requirement instead of executing. In the TUI, `/help` lists
+the slash commands (`/compact`, `/model`).
+
+Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
+platform default) and are replayed on resume; compaction, steering,
+and cancellation survive restarts.
+
+## Configuration
+
+Settings live at `~/.config/ion/settings.toml`. Minimal example:
+
+```toml
+theme = "dark"
+defaultModel = "stealth/ox-alpha"
+
+[[mcp_servers]]
+name = "docs"
+command = "npx"
+args = ["-y", "@some/mcp-docs-server"]
+```
+
+Malformed settings are a hard error, never silently ignored.
+Project-local extensions load only behind explicit `--trust-project`.
+
+## Development
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
+
+CI runs the lint gates only; tests are expected to pass locally before
+push. Current work and status live in [AGENTS.md](AGENTS.md) and the
+central `agent-context` brief.
 
 ## License
 
