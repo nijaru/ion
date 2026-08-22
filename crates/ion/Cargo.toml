@@ -31,3 +31,6 @@ tracing-subscriber.workspace = true
 libc = "0.2.189"
 nix = { version = "0.31.3", features = ["fs", "term"] }
 tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -95,14 +95,13 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
     }
     // The TUI owns a terminal: give the child the PTY as its
     // controlling tty so crossterm's /dev/tty access lands on it.
+    #[allow(unsafe_code)] // pre_exec runs between fork and exec
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| {
             // SAFETY: the forked child is single-threaded; these calls
             // only touch process/tty state.
             libc::setsid();
-            // ioctl disabled for bisect
-
             Ok(())
         });
     }

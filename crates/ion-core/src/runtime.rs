@@ -13,7 +13,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -37,10 +37,10 @@ use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
+/// Broadcast buffer per subscriber (§21.4): a slow UI never blocks or
+/// grows the runtime; overflow surfaces as a reliable lag error.
 const SUBSCRIBER_CAPACITY: usize = 64;
-
-type EventReceiver = mpsc::Receiver<Result<RuntimeEvent, RuntimeError>>;
-type SubscribeReply = Result<(SessionSnapshot, EventReceiver), CommandError>;
+type SubscribeReply = Result<(SessionSnapshot, EventSubscription), CommandError>;
 type ToolSettlement = (EffectId, ToolResult);
 
 /// One-line display summary of a call's canonical target (best
@@ -185,17 +185,45 @@ pub struct SessionSnapshot {
     /// The session's durable model selection; authoritative across
     /// resume (§14.8).
     pub model_ref: String,
+    /// Live draft of the active operation (§21.4): present iff an
+    /// operation is running. A lagged subscriber reconstructs its view
+    /// from this instead of guessing from partial deltas.
+    pub live: Option<LiveOperationState>,
+}
+
+/// One started-but-unsettled tool call of the live operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTool {
+    pub call_id: u64,
+    pub tool: String,
+    pub target: Option<String>,
+}
+
+/// Live, never-durable draft state of the active operation (§21.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveOperationState {
+    /// Accumulated assistant text of the in-flight step.
+    pub draft_text: String,
+    /// Display-only reasoning text; MAY be discarded by a frontend.
+    pub draft_thinking: String,
+    /// Started-but-unsettled tool calls, oldest first.
+    pub pending_tools: Vec<PendingTool>,
 }
 
 pub struct EventSubscription {
-    rx: mpsc::Receiver<Result<RuntimeEvent, RuntimeError>>,
+    rx: broadcast::Receiver<RuntimeEvent>,
 }
 
 impl EventSubscription {
     pub async fn recv(&mut self) -> Result<RuntimeEvent, RuntimeError> {
         match self.rx.recv().await {
-            Some(result) => result,
-            None => Err(RuntimeError::SubscriptionClosed),
+            Ok(event) => Ok(event),
+            Err(broadcast::error::RecvError::Lagged(_skipped)) => {
+                // Reliable by construction: the receiver detects the
+                // gap against the ring tail (§21.4).
+                Err(RuntimeError::SubscriptionLagged)
+            }
+            Err(broadcast::error::RecvError::Closed) => Err(RuntimeError::SubscriptionClosed),
         }
     }
 }
@@ -381,7 +409,7 @@ impl SessionHandle {
             .try_send(SessionCommand::Subscribe { reply })
             .map_err(command_send_error)?;
         let (snapshot, events) = rx.await.map_err(|_| CommandError::RuntimeDropped)??;
-        Ok((snapshot, EventSubscription { rx: events }))
+        Ok((snapshot, events))
     }
 
     /// Close the session (DESIGN.md §9.5): lifecycle shutdown, never a
@@ -594,10 +622,6 @@ impl Runtime {
     }
 }
 
-struct Subscriber {
-    tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
-}
-
 /// Does a provider failure message indicate the context exceeded the
 /// model's window (14.7.5)? Conservative substring match over the
 /// common provider phrasings; unknown phrasings fail visibly instead
@@ -763,7 +787,11 @@ struct SessionRuntime<P> {
     /// signals carry the step that produced them, and stale generations
     /// are dropped.
     model_step: u64,
-    subscribers: Vec<Subscriber>,
+    events: broadcast::Sender<RuntimeEvent>,
+    /// Started-but-unsettled tool calls of the active operation;
+    /// mirrors emitted ToolStarted/ToolSettled for snapshot
+    /// reconstruction (§21.4).
+    live_tools: Vec<PendingTool>,
     closed: bool,
     /// True when reopened from the store; the session row already exists.
     resumed: bool,
@@ -788,6 +816,7 @@ impl<P: Provider> SessionRuntime<P> {
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
+        let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut runtime = Self {
             session_id,
             cwd,
@@ -824,7 +853,8 @@ impl<P: Provider> SessionRuntime<P> {
             overflow_retry_used: false,
             last_step_was_compaction: false,
             model_step: 0,
-            subscribers: Vec::new(),
+            events,
+            live_tools: Vec::new(),
             closed: false,
             resumed: false,
         };
@@ -945,7 +975,6 @@ impl<P: Provider> SessionRuntime<P> {
                     "session row not durable; session will not start"
                 );
                 self.closed = true;
-                self.subscribers.clear();
                 return;
             }
         }
@@ -1090,6 +1119,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_thinking.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
+        self.live_tools.clear();
         self.overflow_retry_used = false;
         self.operation_tool_calls = 0;
         // Usage/hint/compaction anchors are session-level: context
@@ -1455,13 +1485,12 @@ impl<P: Provider> SessionRuntime<P> {
                         let effect_id = effect.id;
                         staged.open_effect = Some(effect);
                         self.operation = Some(staged);
-                        self.emit(RuntimeEvent::ToolStarted {
-                            cursor: RuntimeCursor::default(),
+                        self.emit_tool_started(
                             operation_id,
-                            call_id: call.call_id,
-                            target: target_summary(&self.tools, &call.name, &call.arguments),
-                            tool: call.name.clone(),
-                        });
+                            call.call_id,
+                            &call.name,
+                            target_summary(&self.tools, &call.name, &call.arguments),
+                        );
                         warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
                         self.spawn_tool_effect(Some(effect_id), call);
                     }
@@ -1577,17 +1606,12 @@ impl<P: Provider> SessionRuntime<P> {
                                 staged.state_seq += 1;
                                 staged.open_effect = Some(effect.clone());
                                 self.operation = Some(staged);
-                                self.emit(RuntimeEvent::ToolStarted {
-                                    cursor: RuntimeCursor::default(),
+                                self.emit_tool_started(
                                     operation_id,
-                                    call_id: call.call_id,
-                                    target: target_summary(
-                                        &self.tools,
-                                        &call.name,
-                                        &call.arguments,
-                                    ),
-                                    tool: call.name.clone(),
-                                });
+                                    call.call_id,
+                                    &call.name,
+                                    target_summary(&self.tools, &call.name, &call.arguments),
+                                );
                                 self.spawn_tool_effect(Some(effect_id), call);
                                 info!(%operation_id, "reconciled a pending file mutation by preimage match");
                             }
@@ -2248,13 +2272,8 @@ impl<P: Provider> SessionRuntime<P> {
             ));
         } else {
             self.operation_tool_calls += 1;
-            self.emit(RuntimeEvent::ToolStarted {
-                cursor: RuntimeCursor::default(),
-                operation_id: call.operation_id,
-                call_id: call.call_id,
-                target: target_summary(&self.tools, &call.name, &call.arguments),
-                tool: call.name.clone(),
-            });
+            let target = target_summary(&self.tools, &call.name, &call.arguments);
+            self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
             self.spawn_tool_effect(effect_id_of(self.operation.as_ref()), call);
         }
         true
@@ -2720,6 +2739,7 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         staged.open_effect = None;
         self.entries.extend(applied.entries);
+        self.live_tools.retain(|pending| pending.call_id != call_id);
         self.emit(RuntimeEvent::ToolSettled {
             cursor: RuntimeCursor::default(),
             operation_id: staged.machine.operation_id(),
@@ -2818,6 +2838,10 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn emit_terminal_state(&mut self, state: &OperationState) {
+        // A terminal operation has no unsettled tools; any survivor is
+        // a cancelled or failed call whose spinner must not resurrect
+        // in a post-lag reconstruction.
+        self.live_tools.clear();
         if let OperationState::Finished(outcome) = state {
             let Some(active) = &self.operation else {
                 return;
@@ -2865,10 +2889,9 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let (tx, rx) = mpsc::channel(SUBSCRIBER_CAPACITY);
         let snapshot = self.snapshot();
-        self.subscribers.push(Subscriber { tx });
-        Ok((snapshot, rx))
+        let rx = self.events.subscribe();
+        Ok((snapshot, EventSubscription { rx }))
     }
 
     fn snapshot(&self) -> SessionSnapshot {
@@ -2884,7 +2907,36 @@ impl<P: Provider> SessionRuntime<P> {
             },
             entries: self.entries.clone(),
             model_ref: self.selected_model_ref.clone(),
+            live: self.operation.as_ref().map(|_| LiveOperationState {
+                draft_text: self.draft_text.clone(),
+                draft_thinking: self.draft_thinking.clone(),
+                pending_tools: self.live_tools.clone(),
+            }),
         }
+    }
+
+    /// Emit ToolStarted and mirror it into the live-tool set so a
+    /// lagged subscriber's snapshot names the same spinners.
+    fn emit_tool_started(
+        &mut self,
+        operation_id: OperationId,
+        call_id: u64,
+        tool: &str,
+        target: Option<String>,
+    ) {
+        self.emit(RuntimeEvent::ToolStarted {
+            cursor: RuntimeCursor::default(),
+            operation_id,
+            call_id,
+            target: target.clone(),
+            tool: tool.to_owned(),
+        });
+        self.live_tools.retain(|pending| pending.call_id != call_id);
+        self.live_tools.push(PendingTool {
+            call_id,
+            tool: tool.to_owned(),
+            target,
+        });
     }
 
     /// Session close (DESIGN.md §9.5, §25): stop accepting work, suspend
@@ -2964,7 +3016,6 @@ impl<P: Provider> SessionRuntime<P> {
         self.emit(RuntimeEvent::SessionClosed {
             cursor: RuntimeCursor::default(),
         });
-        self.subscribers.clear();
         Ok(())
     }
 
@@ -2984,16 +3035,11 @@ impl<P: Provider> SessionRuntime<P> {
                 );
             }
         }
-        self.subscribers
-            .retain(|sub| match sub.tx.try_send(Ok(event.clone())) {
-                Ok(()) => true,
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    warn!("detaching lagged runtime subscriber");
-                    let _ = sub.tx.try_send(Err(RuntimeError::SubscriptionLagged));
-                    false
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => false,
-            });
+        // A full ring drops the oldest buffered events for that
+        // receiver; the receiver detects the gap and reports lag
+        // reliably (broadcast semantics, §21.4). No receivers is the
+        // normal idle case.
+        let _ = self.events.send(event);
     }
 }
 

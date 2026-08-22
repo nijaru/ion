@@ -863,8 +863,30 @@ impl UiState {
             },
         };
         self.tool_rows.clear();
-        self.draft_thinking.clear();
-        self.draft_degraded = !self.draft.is_empty();
+        match &snapshot.live {
+            // The snapshot's draft is the runtime's authoritative
+            // accumulation, so reconstruction is exact (§21.4).
+            Some(live) => {
+                self.draft = live.draft_text.clone();
+                self.draft_thinking = live.draft_thinking.clone();
+                for tool in &live.pending_tools {
+                    let label = match &tool.target {
+                        Some(target) => format!("· {} {target}…", tool.tool),
+                        None => format!("· {}…", tool.tool),
+                    };
+                    self.tool_rows.push(ToolRow {
+                        label,
+                        preview: None,
+                    });
+                }
+                self.draft_degraded = false;
+            }
+            None => {
+                self.draft.clear();
+                self.draft_thinking.clear();
+                self.draft_degraded = false;
+            }
+        }
     }
 }
 
@@ -1450,26 +1472,59 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resync_after_lag_rebuilds_status_and_degrades_draft() {
+    fn resync_after_lag_reconstructs_live_view_from_snapshot() {
         let mut state = UiState::new();
         state = apply_runtime_event(
             state,
             RuntimeEvent::AssistantTextDelta {
                 cursor: RuntimeCursor::default(),
                 operation_id: OperationId::generate(),
-                text: "partial".to_owned(),
+                text: "stale partial".to_owned(),
             },
         );
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            operation: OperationStatus::Active {
+                operation_id: OperationId::generate(),
+                prompt: "do things".to_owned(),
+                state: ion_core::OperationState::NeedAssistant,
+            },
+            entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
+            live: Some(ion_core::LiveOperationState {
+                draft_text: "authoritative draft".to_owned(),
+                draft_thinking: "reasoning so far".to_owned(),
+                pending_tools: vec![ion_core::PendingTool {
+                    call_id: 7,
+                    tool: "read".to_owned(),
+                    target: Some("Cargo.toml".to_owned()),
+                }],
+            }),
+        };
+        state.resync_after_lag(&snapshot);
+        assert_eq!(state.draft, "authoritative draft");
+        assert_eq!(state.draft_thinking, "reasoning so far");
+        assert!(!state.draft_degraded);
+        assert_eq!(state.tool_rows.len(), 1);
+        assert_eq!(state.tool_rows[0].label, "· read Cargo.toml…");
+    }
+
+    #[test]
+    fn resync_after_lag_on_idle_clears_partial_draft() {
+        let mut state = UiState::new();
+        state.draft = "partial".to_owned();
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            live: None,
         };
         state.resync_after_lag(&snapshot);
         assert_eq!(state.status, UiStatus::Idle);
         assert!(state.tool_rows.is_empty());
-        assert!(state.draft_degraded);
+        assert!(state.draft.is_empty());
+        assert!(!state.draft_degraded);
     }
 
     #[test]
@@ -1499,6 +1554,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            live: None,
         };
         state.resync_after_lag(&snapshot);
         assert_eq!(

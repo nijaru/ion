@@ -9,6 +9,9 @@ rust-version = "1.94.0"
 license = "MIT"
 repository = "https://github.com/nijaru/ion"
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 [workspace.dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
 ion-core = { path = "crates/ion-core" }

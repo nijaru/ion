@@ -4432,3 +4432,44 @@ async fn crash_recovery_replays_with_the_persisted_model_not_the_launch_default(
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn event_lag_is_signaled_reliably_and_snapshot_carries_live_draft() {
+    // DESIGN.md §21.4: a full queue cannot be used to enqueue its own
+    // overflow signal, so lag is detected by the receiver against the
+    // ring tail; the fresh snapshot then carries the authoritative
+    // draft for reconstruction.
+    let mut messages: Vec<ScriptedMessage> = (0..80)
+        .map(|i| ScriptedMessage::text(format!("d{i} ")))
+        .collect();
+    // Keep the operation in flight so the live draft survives until
+    // the resubscribe.
+    messages.push(ScriptedMessage::delayed(Duration::from_secs(30), "never"));
+    let runtime = start_runtime(ScriptedProvider::new(messages), ToolRegistry::default());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("goal").await.expect("submit");
+
+    // Do not read while 80 deltas overflow the 64-slot ring.
+    sleep(Duration::from_millis(300)).await;
+    let first = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("recv");
+    assert!(
+        matches!(&first, Err(RuntimeError::SubscriptionLagged)),
+        "lag must be delivered reliably, got {first:?}"
+    );
+
+    let (fresh_snapshot, mut fresh) = session.subscribe().await.expect("resubscribe");
+    let live = fresh_snapshot.live.as_ref().expect("live state present");
+    assert!(live.draft_text.contains("d0 "));
+    assert!(live.draft_text.contains("d79 "));
+    assert!(live.pending_tools.is_empty());
+
+    // The fresh stream continues from the tail without lag errors;
+    // only the still-pending delayed delta remains when we stop.
+    while let Ok(Ok(_)) = timeout(Duration::from_millis(100), fresh.recv()).await {}
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}

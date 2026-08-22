@@ -19,7 +19,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use ion_core::{
-    EventSubscription, OperationId, Provider, Runtime, RuntimeEvent, SessionStore, ToolCatalog,
+    EventSubscription, OperationId, Provider, Runtime, RuntimeError, RuntimeEvent, SessionStore,
+    ToolCatalog,
 };
 
 /// The ACP major version this adapter speaks (v1 is the stable spec;
@@ -206,8 +207,12 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     loop {
-        let Ok(event) = events.recv().await else {
-            return TurnStop::Failed("event stream closed".to_owned());
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(RuntimeError::SubscriptionLagged) => {
+                return TurnStop::Failed("event stream lagged; updates incomplete".to_owned());
+            }
+            Err(_) => return TurnStop::Failed("event stream closed".to_owned()),
         };
         if event.operation_id() != Some(operation_id) {
             continue;

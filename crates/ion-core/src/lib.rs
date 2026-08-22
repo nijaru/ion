@@ -34,8 +34,8 @@ pub use provider::{
     SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
-    EventSubscription, OperationStatus, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
-    SessionHandle, SessionSnapshot,
+    EventSubscription, LiveOperationState, OperationStatus, PendingTool, Runtime, RuntimeBudget,
+    RuntimeEvent, RuntimeHandle, SessionHandle, SessionSnapshot,
 };
 pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,

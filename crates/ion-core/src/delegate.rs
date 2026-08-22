@@ -249,8 +249,14 @@ async fn pump_child(
 ) -> ChildTerminal {
     let mut draft = String::new();
     loop {
-        let Ok(event) = events.recv().await else {
-            return ChildTerminal::Failed("event stream closed".to_owned());
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(crate::RuntimeError::SubscriptionLagged) => {
+                // The compact result must not present silently
+                // incomplete deltas as the child's answer (§21.4).
+                return ChildTerminal::Failed("child event stream lagged".to_owned());
+            }
+            Err(_) => return ChildTerminal::Failed("event stream closed".to_owned()),
         };
         if event.operation_id() != Some(operation_id) {
             continue;

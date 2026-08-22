@@ -1149,6 +1149,7 @@ async fn run_shell(cwd: &Path, command: &str, cancel: CancellationToken) -> Tool
 /// reaps the direct child.
 fn kill_process_group(pgid: i32) {
     #[cfg(unix)]
+    #[allow(unsafe_code)] // libc::kill on our own child's process group
     unsafe {
         let _ = libc::kill(-pgid, libc::SIGKILL);
     }
