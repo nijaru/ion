@@ -4177,3 +4177,49 @@ async fn tool_settled_event_carries_a_bounded_preview() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn switching_provider_swaps_models_at_step_boundaries() {
+    use crate::provider::SwitchingProvider;
+
+    // Two scripted providers with distinguishable replies; a switch
+    // mid-operation lands on the next step's reply.
+    let provider = SwitchingProvider::new(
+        "a",
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("from-a\n"),
+            ScriptedMessage::text("still-a\n"),
+        ]),
+    );
+    let runtime = start_runtime(provider, ToolRegistry::default());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert_eq!(
+        texts(&recorded),
+        vec!["from-a\n".to_owned(), "still-a\n".to_owned()]
+    );
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // A fresh operation after the swap sees the new model's script.
+    let provider = SwitchingProvider::new(
+        "a",
+        ScriptedProvider::new(vec![ScriptedMessage::text("first\n")]),
+    );
+    let previous = provider.switch("b", |m| {
+        ScriptedProvider::new(vec![ScriptedMessage::text(format!("switched-to-{m}\n"))])
+    });
+    assert_eq!(previous.await, "a");
+    let runtime = start_runtime(provider, ToolRegistry::default());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert_eq!(texts(&recorded), vec!["switched-to-b\n".to_owned()]);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}

@@ -29,13 +29,27 @@ use ion_core::{
     SessionStore,
 };
 
-/// Host-provided display configuration, fixed per launch.
-#[derive(Debug, Clone, Default)]
+/// Host-provided configuration for one launch. Cloneable handles;
+/// never runtime state.
+#[derive(Clone)]
 pub struct HostConfig {
     /// Model id for the /model display.
     pub model_name: Option<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
+    /// `/model <id>` switching; absent under scripted providers.
+    pub model_switch: Option<std::sync::Arc<crate::ModelSwitch>>,
+}
+
+impl HostConfig {
+    #[must_use]
+    pub fn display_only(model_name: Option<String>, hide_thinking_block: bool) -> Self {
+        Self {
+            model_name,
+            hide_thinking_block,
+            model_switch: None,
+        }
+    }
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -45,6 +59,7 @@ pub enum UiEffect {
     Submit { text: String },
     Steer { text: String },
     Compact { instructions: Option<String> },
+    SwitchModel { model: String },
     Cancel,
     Quit,
 }
@@ -332,6 +347,8 @@ pub struct UiState {
     /// Whether reasoning renders at all (ctrl+t; seeded by the
     /// hideThinkingBlock setting).
     thinking_visible: bool,
+    /// Whether /model <id> can switch (host provided a switch handle).
+    model_switching_available: bool,
     /// Whether settled tool rows render their output preview
     /// (ctrl+o, pi-parity app.tools.expand).
     tool_output_expanded: bool,
@@ -452,7 +469,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
         "help" => {
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
-                "/model                  - show the model in use",
+                "/model [id]             - show or switch the model",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
                 "/help                   - this list",
@@ -469,9 +486,21 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             )
         }
         "model" => {
-            let shown = state.model_name.as_deref().unwrap_or("(scripted provider)");
-            notice(state, &format!("model: {shown}"));
-            (std::mem::take(state), None)
+            if rest.is_empty() {
+                let shown = state.model_name.as_deref().unwrap_or("(scripted provider)");
+                notice(state, &format!("model: {shown}"));
+                return (std::mem::take(state), None);
+            }
+            if !state.model_switching_available {
+                notice(state, "model switching unavailable (scripted provider)");
+                return (std::mem::take(state), None);
+            }
+            (
+                std::mem::take(state),
+                Some(UiEffect::SwitchModel {
+                    model: rest.to_owned(),
+                }),
+            )
         }
         other => {
             notice(state, &format!("unknown command: /{other} (try /help)"));
@@ -1000,9 +1029,7 @@ pub async fn run(
     host: HostConfig,
     mut guard: TerminalGuard,
 ) -> Result<(), RuntimeError> {
-    let mut state = UiState::new();
-    state.set_model_name(host.model_name);
-    state.thinking_visible = !host.hide_thinking_block;
+    let model_switch = host.model_switch.clone();
 
     let palette = palette(theme);
 
@@ -1050,8 +1077,13 @@ pub async fn run(
     // by Terminal::clear) cannot deadlock against key reads.
     let mut key_stream = EventStream::new();
 
+    // One live UiState for the whole loop; host-provided display
+    // config seeds it here and nowhere else.
     let mut state = UiState::new();
     state.set_keymap(keymap);
+    state.set_model_name(host.model_name);
+    state.thinking_visible = !host.hide_thinking_block;
+    state.model_switching_available = model_switch.is_some();
     let (snapshot, mut events) = session.subscribe().await?;
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
@@ -1102,7 +1134,13 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(&session, &mut state, active_operation, effect).await;
+                            dispatch(
+                                &session,
+                                &mut state,
+                                model_switch.as_ref(),
+                                active_operation,
+                                effect,
+                            ).await;
                         }
                     }
                     Some(Ok(TermEvent::Paste(text))) => {
@@ -1135,7 +1173,13 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Runtime(event));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(&session, &mut state, active_operation, effect).await;
+                            dispatch(
+                                &session,
+                                &mut state,
+                                model_switch.as_ref(),
+                                active_operation,
+                                effect,
+                            ).await;
                         }
                     }
                     Err(RuntimeError::SubscriptionLagged) => {
@@ -1182,6 +1226,7 @@ pub async fn run(
 async fn dispatch(
     session: &SessionHandle,
     state: &mut UiState,
+    model_switch: Option<&std::sync::Arc<crate::ModelSwitch>>,
     active_operation: Option<ion_core::OperationId>,
     effect: UiEffect,
 ) {
@@ -1212,6 +1257,16 @@ async fn dispatch(
                 "nothing to compact: compaction runs within an operation",
             ),
             Err(err) => notice(state, &format!("compact failed: {err}")),
+        },
+        UiEffect::SwitchModel { model } => match model_switch {
+            Some(switch) => {
+                let previous = switch.switch(&model).await;
+                state.model_name = Some(model.clone());
+                notice(state, &format!("model switched: {previous} -> {model}"));
+                let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
+                *state = next;
+            }
+            None => notice(state, "model switching unavailable (scripted provider)"),
         },
         UiEffect::Steer { text } => match session.steer(text).await {
             Ok(()) => {

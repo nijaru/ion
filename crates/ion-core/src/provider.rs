@@ -116,6 +116,80 @@ pub trait Provider: Send + Sync + 'static {
     }
 }
 
+impl<P: Provider> Provider for std::sync::Arc<P> {
+    async fn run(
+        &self,
+        request: ProviderRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
+    ) {
+        (**self).run(request, cancel, out).await
+    }
+
+    async fn context_window(&self) -> Option<u64> {
+        (**self).context_window().await
+    }
+}
+
+/// Host-owned model switching: one provider slot swapped between
+/// steps. A running step holds the slot lock until it settles, so a
+/// switch always takes effect at a clean model-step boundary - never
+/// mid-stream. The slot is composition-level configuration, not
+/// durable session state (DESIGN.md §20: one mutation authority for
+/// durable state; this owns none).
+pub struct SwitchingProvider<P: Provider> {
+    current: tokio::sync::Mutex<SwitchSlot<P>>,
+}
+
+struct SwitchSlot<P: Provider> {
+    model: String,
+    provider: P,
+}
+
+impl<P: Provider> SwitchingProvider<P> {
+    #[must_use]
+    pub fn new(model: impl Into<String>, provider: P) -> Self {
+        Self {
+            current: tokio::sync::Mutex::new(SwitchSlot {
+                model: model.into(),
+                provider,
+            }),
+        }
+    }
+
+    /// The model id backing the next model step.
+    pub async fn current_model(&self) -> String {
+        self.current.lock().await.model.clone()
+    }
+
+    /// Swap the slot to `make(model)`. Returns the previous model id.
+    pub async fn switch(&self, model: impl Into<String>, make: impl FnOnce(String) -> P) -> String {
+        let model = model.into();
+        let mut slot = self.current.lock().await;
+        let previous = std::mem::replace(&mut slot.model, model.clone());
+        slot.provider = make(model);
+        previous
+    }
+}
+
+impl<P: Provider> Provider for SwitchingProvider<P> {
+    // The slot lock is held across the step: concurrent switches
+    // queue behind the live step instead of racing it.
+    async fn run(
+        &self,
+        request: ProviderRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
+    ) {
+        let slot = self.current.lock().await;
+        slot.provider.run(request, cancel, out).await;
+    }
+
+    async fn context_window(&self) -> Option<u64> {
+        self.current.lock().await.provider.context_window().await
+    }
+}
+
 /// One scripted model step. A script drives successive steps: the
 /// runtime executes admitted tools between steps and starts the next
 /// step with the projected continuation.

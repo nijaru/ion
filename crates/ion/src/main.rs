@@ -142,13 +142,45 @@ async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog 
 }
 
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
-    let make_provider = match provider_factory(cli, settings) {
-        Ok(factory) => factory,
-        Err(err) => {
-            let _ = writeln!(io::stderr(), "{err}");
-            return ExitCode::from(2);
-        }
-    };
+    // The TUI owns a model switch slot: the runtime's provider swaps
+    // at model-step boundaries via /model <id>; children keep the
+    // launch-time model.
+    let (root_provider, make_provider, model_switch) =
+        match resolve_model(cli.model.clone(), settings) {
+            Ok(Some(model)) => {
+                let key = match std::env::var("OPENROUTER_API_KEY") {
+                    Ok(key) => key,
+                    Err(_) => {
+                        let _ =
+                            writeln!(io::stderr(), "model requires OPENROUTER_API_KEY to be set");
+                        return ExitCode::from(2);
+                    }
+                };
+                let make: Arc<dyn Fn(String) -> CliProvider + Send + Sync> =
+                    Arc::new(move |model: String| {
+                        CliProvider::OpenRouter(OpenRouterProvider::new(model, key.clone()))
+                    });
+                let switch = Arc::new(ion::ModelSwitch::new(model.clone(), Arc::clone(&make)));
+                let initial = model.clone();
+                let make_children: Arc<dyn Fn() -> CliProvider + Send + Sync> =
+                    Arc::new(move || make(initial.clone()));
+                ((switch.provider()), make_children, Some(switch))
+            }
+            Ok(None) => {
+                let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(|| {
+                    CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
+                        "scripted provider: build with --model for real answers\n",
+                    )]))
+                });
+                let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>> =
+                    Arc::new(ion_core::SwitchingProvider::new("scripted", (make)()));
+                (root_provider, make, None)
+            }
+            Err(err) => {
+                let _ = writeln!(io::stderr(), "{err}");
+                return ExitCode::from(2);
+            }
+        };
     // Terminal first: the close-on-error path below suspends open
     // operations, so a terminal-less launch must fail before any
     // session state exists.
@@ -188,13 +220,8 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
     let runtime = if let Some(session_id) = resume_session {
-        match Runtime::open_session(
-            (make_provider)(),
-            tools.clone(),
-            (*store).clone(),
-            session_id,
-        )
-        .await
+        match Runtime::open_session(root_provider, tools.clone(), (*store).clone(), session_id)
+            .await
         {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -203,7 +230,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             }
         }
     } else {
-        Runtime::start_with_policy((make_provider)(), tools.clone(), (*store).clone(), policy)
+        Runtime::start_with_policy(root_provider, tools.clone(), (*store).clone(), policy)
     };
     enable_children(
         &tools,
@@ -219,7 +246,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let session = runtime.session();
-    let model_name = resolve_model(cli.model.clone(), settings).ok().flatten();
+    let model_name = if model_switch.is_some() {
+        resolve_model(cli.model.clone(), settings).ok().flatten()
+    } else {
+        None
+    };
     let result = tui::run(
         session.clone(),
         store,
@@ -229,6 +260,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         tui::HostConfig {
             model_name,
             hide_thinking_block: settings.hide_thinking_block,
+            model_switch,
         },
         guard,
     )

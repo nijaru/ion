@@ -30,7 +30,8 @@ pub use ids::{OperationId, RuntimeCursor, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use provider::{
-    EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider, TokenUsage,
+    EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider, SwitchingProvider,
+    TokenUsage,
 };
 pub use runtime::{
     EventSubscription, OperationStatus, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
