@@ -78,6 +78,42 @@ impl ToolResult {
             Self::Err { error, .. } => error,
         }
     }
+
+    /// Bounded display text for frontend rendering: the tail of the
+    /// result, never the full body. Purely presentational - the model
+    /// always sees the complete settled output from the session entry.
+    #[must_use]
+    pub fn display_preview(&self) -> Option<String> {
+        let text = match self {
+            Self::Ok { output, .. } => output,
+            Self::Err { error, .. } => error,
+        };
+        truncate_tail(text, PREVIEW_MAX_LINES, PREVIEW_MAX_BYTES)
+    }
+}
+
+/// Frontend preview bounds (pi-parity: tail-truncated so errors and
+/// results stay visible).
+const PREVIEW_MAX_LINES: usize = 20;
+const PREVIEW_MAX_BYTES: usize = 2 * 1024;
+
+fn truncate_tail(text: &str, max_lines: usize, max_bytes: usize) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<&str> = lines.iter().rev().take(max_lines).rev().copied().collect();
+    let mut dropped = lines.len() - kept.len();
+    // Byte bound: drop whole lines from the head until it fits.
+    while kept.iter().map(|l| l.len() + 1).sum::<usize>() > max_bytes && kept.len() > 1 {
+        kept.remove(0);
+        dropped += 1;
+    }
+    if dropped > 0 {
+        Some(format!("… {dropped} earlier lines\n{}", kept.join("\n")))
+    } else {
+        Some(kept.join("\n"))
+    }
 }
 
 /// Outcome of tool execution, before it is classified into a [`ToolResult`].

@@ -29,6 +29,15 @@ use ion_core::{
     SessionStore,
 };
 
+/// Host-provided display configuration, fixed per launch.
+#[derive(Debug, Clone, Default)]
+pub struct HostConfig {
+    /// Model id for the /model display.
+    pub model_name: Option<String>,
+    /// Seed for ctrl+t (pi-parity hideThinkingBlock).
+    pub hide_thinking_block: bool,
+}
+
 /// What the reducer wants the event loop to do. Effects are the only
 /// path back into the runtime (§22.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +79,8 @@ pub enum Action {
     Quit,
     Cancel,
     Submit,
+    ToggleToolOutput,
+    ToggleThinking,
     HistoryPrevious,
     HistoryNext,
     CursorLeft,
@@ -194,6 +205,18 @@ impl Default for KeyMap {
             KeyCode::Char('y'),
             KeyModifiers::CONTROL,
         );
+        bind(
+            &mut bindings,
+            Action::ToggleToolOutput,
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::ToggleThinking,
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        );
         KeyMap { bindings }
     }
 }
@@ -229,6 +252,12 @@ impl KeyMap {
         rebind(&mut map, Action::KillToStart, &overrides.kill_to_start)?;
         rebind(&mut map, Action::KillWord, &overrides.kill_word)?;
         rebind(&mut map, Action::Yank, &overrides.yank)?;
+        rebind(
+            &mut map,
+            Action::ToggleToolOutput,
+            &overrides.toggle_tool_output,
+        )?;
+        rebind(&mut map, Action::ToggleThinking, &overrides.toggle_thinking)?;
         Ok(map)
     }
 
@@ -270,6 +299,14 @@ fn parse_key(spec: &str) -> Result<(KeyCode, KeyModifiers), String> {
         .ok_or_else(|| format!("empty key binding {spec:?}"))
 }
 
+/// One started tool effect: its display label plus the bounded output
+/// preview from settlement (rendered only while expanded).
+#[derive(Debug, Clone)]
+struct ToolRow {
+    label: String,
+    preview: Option<String>,
+}
+
 /// One UI state owner (§22.1). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -290,11 +327,19 @@ pub struct UiState {
     keymap: KeyMap,
     /// Streaming assistant draft for the live step.
     draft: String,
+    /// Live reasoning text for the current step (display-only).
+    draft_thinking: String,
+    /// Whether reasoning renders at all (ctrl+t; seeded by the
+    /// hideThinkingBlock setting).
+    thinking_visible: bool,
+    /// Whether settled tool rows render their output preview
+    /// (ctrl+o, pi-parity app.tools.expand).
+    tool_output_expanded: bool,
     /// True after an event lag dropped deltas: the draft is partial
     /// and must never present as a completed turn.
     draft_degraded: bool,
     /// Completed tool rows for the live operation, newest last.
-    tool_rows: Vec<String>,
+    tool_rows: Vec<ToolRow>,
     status: UiStatus,
     /// Model id for /model display (host-provided, not runtime state).
     model_name: Option<String>,
@@ -408,6 +453,8 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
                 "/model                  - show the model in use",
+                "ctrl+o                  - toggle tool output previews",
+                "ctrl+t                  - toggle thinking blocks",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -446,6 +493,14 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         Action::Quit => {
             state.quit_requested = true;
             (state, Some(UiEffect::Quit))
+        }
+        Action::ToggleToolOutput => {
+            state.tool_output_expanded = !state.tool_output_expanded;
+            (state, None)
+        }
+        Action::ToggleThinking => {
+            state.thinking_visible = !state.thinking_visible;
+            (state, None)
         }
         Action::Submit => {
             let text = state.composer.trim().to_owned();
@@ -615,23 +670,34 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             };
         }
         RuntimeEvent::AssistantTextDelta { text, .. } => {
+            flush_thinking(&mut state);
             state.draft.push_str(&text);
         }
+        RuntimeEvent::ThinkingDelta { text, .. } => {
+            state.draft_thinking.push_str(&text);
+        }
         RuntimeEvent::ToolStarted { tool, target, .. } => {
-            state.tool_rows.push(match target {
-                Some(target) => format!("· {tool} {target}…"),
-                None => format!("· {tool}…"),
+            flush_thinking(&mut state);
+            state.tool_rows.push(ToolRow {
+                label: match target {
+                    Some(target) => format!("· {tool} {target}…"),
+                    None => format!("· {tool}…"),
+                },
+                preview: None,
             });
             state.status = UiStatus::Working {
                 operation: format!("running {tool}"),
             };
         }
-        RuntimeEvent::ToolSettled { is_error, .. } => {
+        RuntimeEvent::ToolSettled {
+            is_error, preview, ..
+        } => {
             if let Some(row) = state.tool_rows.last_mut() {
                 // The running row is the one this settlement answers.
-                if is_error && !row.ends_with("✗") {
-                    row.push_str(" ✗");
+                if is_error && !row.label.ends_with("✗") {
+                    row.label.push_str(" ✗");
                 }
+                row.preview = preview;
             }
         }
         RuntimeEvent::OperationFinished { .. } => {
@@ -708,14 +774,38 @@ fn markdown_line(line: &str) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Move accumulated reasoning into scrollback as a dim italic block.
+/// Hidden thinking is dropped, matching pi's hideThinkingBlock.
+fn flush_thinking(state: &mut UiState) {
+    if state.draft_thinking.is_empty() {
+        return;
+    }
+    if state.thinking_visible {
+        for line in state.draft_thinking.lines() {
+            state
+                .pending_scrollback
+                .push(Line::from(format!("✻ {line}")).dim().italic());
+        }
+    }
+    state.draft_thinking.clear();
+}
+
 impl UiState {
     /// Move the live draft into scrollback as a completed assistant
     /// turn (inline scrollback pattern: completed content leaves the
     /// live viewport). Assistant lines get markdown-lite styling.
     fn flush_draft(&mut self) {
-        // Tool rows precede the text they enabled.
+        flush_thinking(self);
+        // Tool rows precede the text they enabled. Expanded rendering
+        // includes each settled output preview (pi-parity ctrl+o).
         for row in self.tool_rows.drain(..) {
-            self.pending_scrollback.push(Line::from(row).dim());
+            self.pending_scrollback.push(Line::from(row.label).dim());
+            if self.tool_output_expanded {
+                for line in row.preview.iter().flat_map(|p| p.lines()) {
+                    self.pending_scrollback
+                        .push(Line::from(format!("  {line}")).dark_gray());
+                }
+            }
         }
         if !self.draft.is_empty() {
             for line in self.draft.lines() {
@@ -745,6 +835,7 @@ impl UiState {
             },
         };
         self.tool_rows.clear();
+        self.draft_thinking.clear();
         self.draft_degraded = !self.draft.is_empty();
     }
 }
@@ -838,10 +929,24 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
 
     let mut tail: Vec<Line> = Vec::new();
     if let Some(latest) = state.tool_rows.last() {
-        tail.push(Line::from(latest.clone()).style(palette.tool_row));
+        tail.push(Line::from(latest.label.clone()).style(palette.tool_row));
+        if state.tool_output_expanded {
+            for line in latest.preview.iter().flat_map(|p| p.lines()) {
+                tail.push(
+                    Line::from(format!("  {line}"))
+                        .style(palette.tool_row)
+                        .italic(),
+                );
+            }
+        }
     }
     if !state.draft.is_empty() {
         tail.push(Line::from(format!("ion « {}", state.draft)));
+    } else if !state.draft_thinking.is_empty() && state.thinking_visible {
+        // Live reasoning tail: the last line still growing.
+        if let Some(last) = state.draft_thinking.lines().last() {
+            tail.push(Line::from(format!("✻ {last}")).dim().italic());
+        }
     }
     frame.render_widget(Paragraph::new(tail).wrap(Wrap { trim: false }), rows[0]);
 
@@ -892,11 +997,12 @@ pub async fn run(
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
     keymap: KeyMap,
-    model_name: Option<String>,
+    host: HostConfig,
     mut guard: TerminalGuard,
 ) -> Result<(), RuntimeError> {
     let mut state = UiState::new();
-    state.set_model_name(model_name);
+    state.set_model_name(host.model_name);
+    state.thinking_visible = !host.hide_thinking_block;
 
     let palette = palette(theme);
 
@@ -1171,20 +1277,20 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ion_core::{OperationId, RuntimeCursor};
     use ratatui::style::{Color, Modifier};
 
-    fn key(code: KeyCode) -> UiMessage {
+    pub(crate) fn key(code: KeyCode) -> UiMessage {
         UiMessage::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
-    fn ctrl(ch: char) -> UiMessage {
+    pub(crate) fn ctrl(ch: char) -> UiMessage {
         UiMessage::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
     }
 
-    fn type_text(state: UiState, text: &str) -> UiState {
+    pub(crate) fn type_text(state: UiState, text: &str) -> UiState {
         text.chars()
             .fold(state, |state, ch| update(state, key(KeyCode::Char(ch))).0)
     }
@@ -1366,7 +1472,7 @@ mod tests {
             },
         );
         assert_eq!(
-            state.tool_rows.last().map(String::as_str),
+            state.tool_rows.last().map(|row| row.label.as_str()),
             Some("· read Cargo.toml…")
         );
     }
@@ -1531,5 +1637,127 @@ mod tests {
             .join("\n");
         assert!(content.contains("hello world▏"), "{content}");
         assert!(content.contains("● running bash"), "{content}");
+    }
+}
+
+#[cfg(test)]
+mod display_surface_tests {
+    use super::tests::ctrl;
+    use super::*;
+    use ion_core::{OperationId, RuntimeCursor};
+
+    fn settled(preview: Option<String>) -> UiMessage {
+        UiMessage::Runtime(RuntimeEvent::ToolSettled {
+            cursor: RuntimeCursor::default(),
+            operation_id: OperationId::generate(),
+            call_id: 1,
+            is_error: false,
+            preview,
+        })
+    }
+
+    fn started(state: UiState) -> UiState {
+        apply_runtime_event(
+            state,
+            RuntimeEvent::ToolStarted {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                call_id: 1,
+                tool: "bash".to_owned(),
+                target: Some("echo hi".to_owned()),
+            },
+        )
+    }
+
+    #[test]
+    fn settlement_stores_the_preview_on_the_running_row() {
+        let state = started(UiState::new());
+        let state = update(state, settled(Some("hello\nworld".to_owned()))).0;
+        let row = state.tool_rows.last().expect("row");
+        assert_eq!(row.preview.as_deref(), Some("hello\nworld"));
+    }
+
+    #[test]
+    fn ctrl_o_toggles_whether_flushed_rows_carry_previews() {
+        let state = started(UiState::new());
+        let state = update(state, settled(Some("hello\nworld".to_owned()))).0;
+
+        // Collapsed (default): label only.
+        let mut collapsed = state.clone();
+        collapsed.flush_draft();
+        assert!(
+            collapsed
+                .pending_scrollback
+                .iter()
+                .all(|line| !line.to_string().contains("world"))
+        );
+
+        // Expanded: preview lines follow the label.
+        let expanded = update(state, ctrl('o')).0;
+        let mut expanded_state = expanded;
+        expanded_state.flush_draft();
+        assert!(
+            expanded_state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("world"))
+        );
+    }
+
+    #[test]
+    fn thinking_flushes_before_text_and_respects_visibility() {
+        let mut state = UiState::new();
+        state.thinking_visible = true;
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ThinkingDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                text: "deep thought".to_owned(),
+            },
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::AssistantTextDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                text: "answer".to_owned(),
+            },
+        );
+        // Thinking flushed into scrollback at the first text delta.
+        assert!(state.draft_thinking.is_empty());
+        assert_eq!(state.draft, "answer");
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("deep thought"))
+        );
+
+        // Hidden mode drops reasoning entirely.
+        let mut hidden = UiState::new();
+        hidden.thinking_visible = false;
+        hidden = apply_runtime_event(
+            hidden,
+            RuntimeEvent::ThinkingDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                text: "secret".to_owned(),
+            },
+        );
+        hidden = apply_runtime_event(
+            hidden,
+            RuntimeEvent::AssistantTextDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                text: "x".to_owned(),
+            },
+        );
+        assert!(
+            !hidden
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("secret"))
+        );
     }
 }

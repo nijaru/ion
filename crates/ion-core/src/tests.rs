@@ -54,6 +54,7 @@ fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
         .map(|event| match event {
             RuntimeEvent::OperationStarted { .. } => "operation_started",
             RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
+            RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
             RuntimeEvent::ToolStarted { .. } => "tool_started",
             RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
@@ -4099,4 +4100,80 @@ async fn path_resolution_containment_survives_a_relative_cwd() {
     std::env::set_current_dir(prev).expect("restore cwd");
     assert!(!outcome.is_error, "{}", outcome.output);
     assert!(outcome.output.contains("a.txt"), "{outcome:?}");
+}
+
+// ---- Display-only surfaces: thinking deltas + tool previews ----
+
+#[tokio::test]
+async fn thinking_deltas_stream_but_stay_out_of_the_transcript() {
+    let runtime = start_runtime(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Thinking {
+                text: "pondering the request".to_owned(),
+            },
+            ScriptedMessage::text("answer\n"),
+        ]),
+        ToolRegistry::default(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("hi").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+
+    let mut thinking = Vec::new();
+    for event in &recorded {
+        if let RuntimeEvent::ThinkingDelta { text, .. } = event {
+            thinking.push(text.clone());
+        }
+    }
+    assert_eq!(thinking, vec!["pondering the request".to_owned()]);
+    // Text is unaffected and the operation finished cleanly.
+    assert_eq!(texts(&recorded), vec!["answer\n".to_owned()]);
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    // Thinking never becomes a durable entry (display-only surface).
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert!(snapshot.entries.iter().all(|entry| match entry {
+        SessionEntry::AssistantMessage { text } => text == "answer\n",
+        _ => true,
+    }));
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn tool_settled_event_carries_a_bounded_preview() {
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::tool(
+            "bash",
+            json!({"command":"for i in $(seq 1 60); do echo line-$i; done"}),
+        ),
+        ScriptedMessage::text("done\n"),
+    ]);
+    let runtime = start_runtime(provider, ToolRegistry::default());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+
+    let previews: Vec<Option<String>> = recorded
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ToolSettled { preview, .. } => Some(preview.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(previews.len(), 1);
+    let preview = previews[0].as_ref().expect("bash produced output");
+    // Tail-truncated: keeps the end, bounds the head.
+    assert!(preview.contains("line-60"));
+    assert!(!preview.contains("line-1\n"));
+    assert!(preview.starts_with('…'));
+    assert!(preview.lines().count() <= 21);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }

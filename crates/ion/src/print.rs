@@ -33,6 +33,8 @@ impl<W: Write> PrintFrontend<W> {
                 }
                 // Tool settlement is durable-state news, not output.
                 RuntimeEvent::ToolStarted { .. } | RuntimeEvent::ToolSettled { .. } => {}
+                // Print mode is quiet output only.
+                RuntimeEvent::ThinkingDelta { .. } => {}
                 RuntimeEvent::OperationFinished { .. } => return Ok(()),
                 RuntimeEvent::OperationCancelled { .. } => {
                     return Err(RuntimeError::OperationCancelled);

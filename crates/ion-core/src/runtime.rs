@@ -76,6 +76,13 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         text: String,
     },
+    /// Streamed reasoning text, display-only. Never persisted: thinking
+    /// never becomes assistant content (partial model output rule).
+    ThinkingDelta {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        text: String,
+    },
     ToolStarted {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -92,6 +99,8 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         call_id: u64,
         is_error: bool,
+        /// Bounded tail of the settled output for frontend rendering.
+        preview: Option<String>,
     },
     OperationFinished {
         cursor: RuntimeCursor,
@@ -126,6 +135,7 @@ impl RuntimeEvent {
         match self {
             Self::OperationStarted { operation_id, .. }
             | Self::AssistantTextDelta { operation_id, .. }
+            | Self::ThinkingDelta { operation_id, .. }
             | Self::ToolStarted { operation_id, .. }
             | Self::ToolSettled { operation_id, .. }
             | Self::OperationFinished { operation_id, .. }
@@ -141,6 +151,7 @@ impl RuntimeEvent {
         match self {
             Self::OperationStarted { cursor, .. }
             | Self::AssistantTextDelta { cursor, .. }
+            | Self::ThinkingDelta { cursor, .. }
             | Self::ToolStarted { cursor, .. }
             | Self::ToolSettled { cursor, .. }
             | Self::OperationFinished { cursor, .. }
@@ -687,6 +698,9 @@ struct SessionRuntime<P> {
     operation: Option<ActiveOperation>,
     /// Ephemeral draft of the in-flight model step; never durable.
     draft_text: String,
+    /// Live reasoning text for the current step; cleared at settlement.
+    /// Display-only: thinking is never durable assistant content.
+    draft_thinking: String,
     draft_calls: Vec<ToolCall>,
     /// Token usage buffered from the live model step; persisted at the
     /// settlement boundary (DESIGN.md §27.2).
@@ -769,6 +783,7 @@ impl<P: Provider> SessionRuntime<P> {
             next_entry_seq: 1,
             operation: None,
             draft_text: String::new(),
+            draft_thinking: String::new(),
             draft_calls: Vec::new(),
             draft_usage: None,
             last_context_tokens: None,
@@ -2224,6 +2239,14 @@ impl<P: Provider> SessionRuntime<P> {
                     text,
                 });
             }
+            EngineSignal::ThinkingDelta { text, .. } => {
+                self.draft_thinking.push_str(&text);
+                self.emit(RuntimeEvent::ThinkingDelta {
+                    cursor: RuntimeCursor::default(),
+                    operation_id: active.machine.operation_id(),
+                    text,
+                });
+            }
             EngineSignal::UsageUpdate { usage, .. } => {
                 self.last_context_tokens =
                     Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
@@ -2240,6 +2263,9 @@ impl<P: Provider> SessionRuntime<P> {
             }
             EngineSignal::Completed { .. } => {
                 let text = std::mem::take(&mut self.draft_text);
+                // Thinking ends with the step; it was display-only and
+                // never becomes assistant content or a session entry.
+                self.draft_thinking.clear();
                 let tool_calls = std::mem::take(&mut self.draft_calls);
                 self.settle_model_step(Transition::ProviderCompleted { text, tool_calls })
                     .await;
@@ -2443,6 +2469,7 @@ impl<P: Provider> SessionRuntime<P> {
             EngineSignal::Cancelled { .. } | EngineSignal::ProviderExited { .. } => {
                 Transition::CompactionFailed
             }
+            EngineSignal::ThinkingDelta { .. } => return,
             EngineSignal::ToolCallCompleted { .. } | EngineSignal::UsageUpdate { .. } => return,
         };
         let applied = staged
@@ -2530,6 +2557,7 @@ impl<P: Provider> SessionRuntime<P> {
         let (effect_id, result) = settlement;
         let call_id = result.call_id();
         let is_error = matches!(&result, ToolResult::Err { .. });
+        let preview = result.display_preview();
         let expected = self
             .operation
             .as_ref()
@@ -2577,6 +2605,7 @@ impl<P: Provider> SessionRuntime<P> {
             operation_id: staged.machine.operation_id(),
             call_id,
             is_error,
+            preview,
         });
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
@@ -2929,6 +2958,7 @@ fn persistence_command_error(err: StoreError) -> CommandError {
 fn signal_operation_id(signal: &EngineSignal) -> OperationId {
     match signal {
         EngineSignal::TextDelta { operation_id, .. }
+        | EngineSignal::ThinkingDelta { operation_id, .. }
         | EngineSignal::ToolCallCompleted { operation_id, .. }
         | EngineSignal::UsageUpdate { operation_id, .. }
         | EngineSignal::Completed { operation_id, .. }
@@ -2941,6 +2971,7 @@ fn signal_operation_id(signal: &EngineSignal) -> OperationId {
 fn signal_step(signal: &EngineSignal) -> u64 {
     match signal {
         EngineSignal::TextDelta { step, .. }
+        | EngineSignal::ThinkingDelta { step, .. }
         | EngineSignal::ToolCallCompleted { step, .. }
         | EngineSignal::UsageUpdate { step, .. }
         | EngineSignal::Completed { step, .. }
@@ -2954,6 +2985,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
     match event {
         RuntimeEvent::OperationStarted { cursor: slot, .. }
         | RuntimeEvent::AssistantTextDelta { cursor: slot, .. }
+        | RuntimeEvent::ThinkingDelta { cursor: slot, .. }
         | RuntimeEvent::ToolStarted { cursor: slot, .. }
         | RuntimeEvent::ToolSettled { cursor: slot, .. }
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
@@ -2968,6 +3000,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
     match event {
         RuntimeEvent::OperationStarted { .. } => "operation_started",
         RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
+        RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
         RuntimeEvent::ToolStarted { .. } => "tool_started",
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",

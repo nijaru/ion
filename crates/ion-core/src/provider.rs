@@ -53,6 +53,14 @@ pub enum EngineSignal {
         step: u64,
         text: String,
     },
+    /// Streamed reasoning text from a reasoning model (OpenRouter
+    /// `delta.reasoning`). Display-only: thinking is never buffered
+    /// into assistant content or durable entries.
+    ThinkingDelta {
+        operation_id: OperationId,
+        step: u64,
+        text: String,
+    },
     /// One complete provider-native tool call. Never executed from
     /// partial streamed JSON (DESIGN.md §15.2).
     ToolCallCompleted {
@@ -116,6 +124,8 @@ pub enum ScriptedMessage {
     /// Emit `text` as an assistant text delta. `delay` is waited first
     /// (cancellation-aware).
     Text { delay: Duration, text: String },
+    /// Emit `text` as a reasoning delta (display-only surface).
+    Thinking { text: String },
     /// Emit one complete tool call, then complete the step. The runtime
     /// runs the tool and starts the next step.
     ToolCall {
@@ -250,6 +260,19 @@ impl Provider for ScriptedProvider {
                         }
                         if out
                             .send(EngineSignal::TextDelta {
+                                operation_id,
+                                step,
+                                text,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    ScriptedMessage::Thinking { text } => {
+                        if out
+                            .send(EngineSignal::ThinkingDelta {
                                 operation_id,
                                 step,
                                 text,

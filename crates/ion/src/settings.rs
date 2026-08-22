@@ -36,6 +36,8 @@ pub struct Keybindings {
     pub kill_to_start: Option<String>,
     pub kill_word: Option<String>,
     pub yank: Option<String>,
+    pub toggle_tool_output: Option<String>,
+    pub toggle_thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -50,6 +52,9 @@ pub struct Settings {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
+    /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock).
+    #[serde(default)]
+    pub hide_thinking_block: bool,
 }
 
 /// One `[[extensions]]` entry: a subprocess extension publishing tools
@@ -95,6 +100,7 @@ impl Settings {
             keybindings: Keybindings::default(),
             mcp_servers: Vec::new(),
             extensions: Vec::new(),
+            hide_thinking_block: true,
         }
     }
     pub fn path() -> Option<PathBuf> {
@@ -118,6 +124,7 @@ impl Settings {
             keybindings: crate::settings::Keybindings::default(),
             mcp_servers: Vec::new(),
             extensions: Vec::new(),
+            hide_thinking_block: false,
         }
     }
 

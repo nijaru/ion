@@ -27,6 +27,7 @@ use ion_core::{
 #[derive(Debug)]
 enum StreamEvent {
     Text(String),
+    Thinking(String),
     ToolCallFragment {
         index: u64,
         id: Option<String>,
@@ -217,6 +218,19 @@ impl Provider for OpenRouterProvider {
                                     StreamEvent::Text(text) => {
                                         if out
                                             .send(EngineSignal::TextDelta {
+                                                operation_id,
+                                                step,
+                                                text,
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                    StreamEvent::Thinking(text) => {
+                                        if out
+                                            .send(EngineSignal::ThinkingDelta {
                                                 operation_id,
                                                 step,
                                                 text,
@@ -434,6 +448,13 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
         {
             events.push(StreamEvent::Text(text.to_owned()));
         }
+        if let Some(text) = delta
+            .get("reasoning")
+            .and_then(|c| c.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            events.push(StreamEvent::Thinking(text.to_owned()));
+        }
         if let Some(fragments) = delta.get("tool_calls").and_then(|t| t.as_array()) {
             for fragment in fragments {
                 let index = fragment.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
@@ -525,6 +546,36 @@ mod tests {
         }
         let _ = handle.await;
         signals
+    }
+
+    #[tokio::test]
+    async fn streams_reasoning_as_thinking_deltas() {
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"ponder\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"ans\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            None,
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+        let thinking: Vec<&str> = signals
+            .iter()
+            .filter_map(|s| match s {
+                EngineSignal::ThinkingDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking, ["ponder"]);
+        // Text and completion are unaffected by interleaved reasoning.
+        assert!(signals.iter().any(|s| matches!(
+            s,
+            EngineSignal::TextDelta { text, .. } if text == "ans"
+        )));
+        assert!(matches!(
+            signals.last(),
+            Some(EngineSignal::Completed { .. })
+        ));
     }
 
     #[tokio::test]

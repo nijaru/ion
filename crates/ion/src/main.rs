@@ -226,7 +226,10 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         resume_session,
         settings.theme(),
         keymap,
-        model_name,
+        tui::HostConfig {
+            model_name,
+            hide_thinking_block: settings.hide_thinking_block,
+        },
         guard,
     )
     .await;

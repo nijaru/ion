@@ -259,6 +259,9 @@ async fn pump_child(
             crate::RuntimeEvent::AssistantTextDelta { text, .. } => {
                 draft.push_str(&text);
             }
+            // Thinking and tool previews are parent-display-only; a
+            // child's terminal draft is its final assistant text.
+            crate::RuntimeEvent::ThinkingDelta { .. } => {}
             crate::RuntimeEvent::OperationFinished { .. } => {
                 let result = if draft.is_empty() {
                     "(no output)".to_owned()

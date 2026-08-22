@@ -224,6 +224,17 @@ where
                 )
                 .await;
             }
+            RuntimeEvent::ThinkingDelta { text, .. } => {
+                update(
+                    output,
+                    session_id,
+                    json!({
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": { "type": "text", "text": text },
+                    }),
+                )
+                .await;
+            }
             RuntimeEvent::ToolStarted { call_id, tool, .. } => {
                 update(
                     output,
