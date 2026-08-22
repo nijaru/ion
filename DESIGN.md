@@ -534,6 +534,7 @@ SessionHandle
   submit(...)
   steer(...)
   follow_up(...)
+  switch_model(...)
   cancel(...)
   approve(...)
   reject(...)
@@ -565,6 +566,12 @@ reply Accepted { operation_id }
 ```
 
 Success means accepted durably, not merely queued in RAM.
+
+A model-selection command is correctness-significant. The host supplies
+an initial default, but `SessionRuntime` owns the accepted per-session
+selection. `switch_model` appends a semantic configuration entry before
+acknowledgment. It never mutates an in-flight `ModelStep`; the new
+selection applies to the next step started after the commit.
 
 ## 8.3 Bounded mailboxes
 
@@ -1282,13 +1289,40 @@ retry fails the operation visibly; it must not loop.
 
 ---
 
-### 14.8 Model metadata
+### 14.8 Model metadata and selection
 
 Provider adapters expose per-model metadata, minimally the context
 window size, as part of the adapter contract (15.x). The compaction
 hints (14.7.2) and safety net (14.7.4) consume it; unknown windows
 degrade gracefully (absolute hint threshold, safety net disabled,
 overflow recovery as backstop). Adapters MUST NOT guess a window.
+
+The host-selected launch model is only an initial default. Once a
+session exists, `SessionRuntime` is the sole authority for the selected
+model:
+
+- the initial model reference is durable before the first model effect;
+- a mid-session change is an append-only semantic configuration entry,
+  committed before `switch_model` acknowledges;
+- an in-flight step keeps its frozen model/config snapshot; a committed
+  change applies only to later steps;
+- every provider attempt persists its exact `model_ref`, semantic
+  provider settings, and metadata snapshot in the model-step record and
+  effect input before execution;
+- recovery reuses that exact persisted snapshot. If the provider,
+  credentials, or model are unavailable, recovery fails visibly; it
+  never substitutes the current launch default;
+- child sessions persist their own initial selection. Parent changes do
+  not mutate existing children.
+
+Provider construction and credentials remain host composition. A
+provider resolver may cache providers by model id, but it is not the
+selection authority. It selects from the immutable request, releases any
+cache lock before metadata or generation I/O, and never holds a lock for
+a whole model step.
+
+Changing models resets model-relative derived hint/compaction metadata.
+A context window cached for one model MUST NOT be reused for another.
 
 ---
 
@@ -1641,9 +1675,11 @@ Keep at least these conceptual domains distinct:
 OperationStarted
 AssistantDraftStarted
 AssistantTextDelta
+ReasoningDelta
 AssistantDraftReset
 ToolStarted
 ToolProgress
+ToolSettled
 ApprovalRequested
 OperationFinished
 OperationFailed
@@ -1657,11 +1693,31 @@ Tracing spans, timing, provider wire diagnostics, cache hit/miss metrics.
 
 An observability event does not become model context just because it exists.
 
+Provider-reported reasoning is a live-only presentation surface. Adapters
+MUST distinguish raw reasoning from a provider-produced reasoning summary
+when the wire protocol distinguishes them. Exposure is controlled by one
+host policy shared by frontends; a TUI visibility toggle is not authority
+to leak reasoning through ACP. Reasoning never becomes assistant content
+or a durable semantic entry, and every terminal/reset path clears its
+live buffer.
+
+`ToolSettled` MAY carry a derived tail preview for presentation after the
+durable settlement commits. The full semantic tool result remains
+canonical. Preview line and byte limits are hard total bounds, including
+one-line and multibyte output plus any truncation marker.
+
 ## 21.4 Backpressure
 
 Critical lifecycle/approval/error events are not silently dropped.
 
 High-frequency deltas MAY be coalesced when the snapshot contains the authoritative current draft. A slow UI must not create an unbounded memory queue that can destabilize the agent runtime.
+
+Lag notification itself must be reliable: a full event queue cannot be
+used to enqueue its own overflow signal. Detach/closure is an acceptable
+signal only when subscribers classify it as lag and resubscribe. The
+fresh snapshot includes the runtime instance id and enough current draft
+and tool status to reconstruct the live view; display-only reasoning MAY
+be discarded explicitly.
 
 ---
 
@@ -1690,8 +1746,11 @@ render(UiState)
 ## 22.2 Runtime interaction
 
 UI effects call `SessionHandle`; responses return as messages/events.
+Model changes follow this path; a frontend never owns or swaps the
+provider directly.
 
-The UI never blocks rendering on provider/tool I/O.
+The UI never blocks rendering on provider/tool/metadata I/O. Cache locks
+are not step-boundary synchronization and MUST NOT span provider futures.
 
 ## 22.3 Inline-first
 
