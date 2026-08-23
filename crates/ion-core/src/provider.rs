@@ -33,10 +33,37 @@ pub struct TokenUsage {
 /// Provider identity and metadata frozen for one model-step attempt.
 /// Recovery must use this exact identity rather than the host's current
 /// launch default (DESIGN.md §§6, 11.3, 14.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelCapabilities {
+    /// The adapter can expose provider reasoning as a separate live signal.
+    pub reasoning: bool,
+    /// The adapter can project and accept the frozen tool snapshot.
+    pub tool_calls: bool,
+    /// The adapter reports prompt-cache metrics with provider semantics.
+    pub prompt_cache: bool,
+    /// The adapter can stream normalized deltas.
+    pub streaming: bool,
+    /// A fresh exact request is a supported recovery action after process loss.
+    pub recovery: bool,
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self {
+            reasoning: false,
+            tool_calls: true,
+            prompt_cache: false,
+            streaming: true,
+            recovery: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelConfig {
     pub model_ref: String,
     pub context_window: Option<u64>,
+    pub capabilities: ModelCapabilities,
 }
 
 /// What one model step asks the provider: the operation it belongs to,
@@ -147,6 +174,25 @@ pub trait Provider: Send + Sync + 'static {
     fn context_window(&self) -> impl Future<Output = Option<u64>> + Send {
         std::future::ready(None)
     }
+
+    /// Capabilities for the provider's fixed model. Defaults are
+    /// conservative and adapters override them when they can prove support.
+    fn capabilities(&self) -> impl Future<Output = ModelCapabilities> + Send {
+        std::future::ready(ModelCapabilities::default())
+    }
+
+    /// Capabilities for an exact model id. Unknown models do not grant
+    /// capabilities merely because a host requested them.
+    fn capabilities_for(&self, model_ref: &str) -> impl Future<Output = ModelCapabilities> + Send {
+        let supported = self.supports_model(model_ref);
+        async move {
+            if supported {
+                self.capabilities().await
+            } else {
+                ModelCapabilities::default()
+            }
+        }
+    }
 }
 
 impl<P: Provider> Provider for Arc<P> {
@@ -173,6 +219,14 @@ impl<P: Provider> Provider for Arc<P> {
 
     async fn context_window(&self) -> Option<u64> {
         (**self).context_window().await
+    }
+
+    async fn capabilities(&self) -> ModelCapabilities {
+        (**self).capabilities().await
+    }
+
+    async fn capabilities_for(&self, model_ref: &str) -> ModelCapabilities {
+        (**self).capabilities_for(model_ref).await
     }
 }
 
@@ -264,6 +318,13 @@ impl<P: Provider> Provider for SwitchingProvider<P> {
         let provider = self.provider_for(model_ref)?;
         provider.context_window().await
     }
+
+    async fn capabilities_for(&self, model_ref: &str) -> ModelCapabilities {
+        let Some(provider) = self.provider_for(model_ref) else {
+            return ModelCapabilities::default();
+        };
+        provider.capabilities().await
+    }
 }
 
 /// One scripted model step. A script drives successive steps: the
@@ -323,6 +384,7 @@ pub struct ScriptedProvider {
     cursor: Mutex<ScriptCursor>,
     call_ids: AtomicU64,
     context_window: Option<u64>,
+    prompt_cache: bool,
 }
 
 #[derive(Debug)]
@@ -338,6 +400,7 @@ impl ScriptedProvider {
             cursor: Mutex::new(ScriptCursor { next: 0, messages }),
             call_ids: AtomicU64::new(1),
             context_window: None,
+            prompt_cache: false,
         }
     }
 
@@ -345,6 +408,14 @@ impl ScriptedProvider {
     #[must_use]
     pub fn with_context_window(mut self, tokens: u64) -> Self {
         self.context_window = Some(tokens);
+        self
+    }
+
+    /// Mark prompt-cache metrics as supported by this scripted adapter.
+    /// Tests use this to exercise cache-expectation diagnostics.
+    #[must_use]
+    pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_cache = enabled;
         self
     }
 
@@ -357,6 +428,14 @@ impl ScriptedProvider {
 impl Provider for ScriptedProvider {
     async fn context_window(&self) -> Option<u64> {
         self.context_window
+    }
+
+    async fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities {
+            reasoning: true,
+            prompt_cache: self.prompt_cache,
+            ..ModelCapabilities::default()
+        }
     }
 
     fn run(

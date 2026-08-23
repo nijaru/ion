@@ -19,8 +19,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use ion_core::{
-    ContextMessage, ContextPlan, EngineSignal, Provider, ProviderRequest, TokenUsage, ToolCall,
-    ToolSpec,
+    ContextMessage, ContextPlan, EngineSignal, ModelCapabilities, Provider, ProviderRequest,
+    TokenUsage, ToolCall, ToolSpec,
 };
 
 /// A step in the OpenAI-compatible SSE stream, decoded.
@@ -87,6 +87,16 @@ impl OpenRouterProvider {
 }
 
 impl Provider for OpenRouterProvider {
+    async fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities {
+            reasoning: true,
+            tool_calls: true,
+            prompt_cache: true,
+            streaming: true,
+            recovery: true,
+        }
+    }
+
     /// Fetch the model's `context_length` from the models endpoint
     /// once, lazily; any failure degrades to unknown (§14.8).
     async fn context_window(&self) -> Option<u64> {
@@ -127,6 +137,27 @@ impl Provider for OpenRouterProvider {
         let base_url = self.base_url.clone();
         let client = self.client.clone();
         async move {
+            if !request.model.capabilities.streaming {
+                let _ = out
+                    .send(EngineSignal::Failed {
+                        operation_id,
+                        step,
+                        message: "provider capability mismatch: streaming is required".to_owned(),
+                    })
+                    .await;
+                return;
+            }
+            if !request.tools.is_empty() && !request.model.capabilities.tool_calls {
+                let _ = out
+                    .send(EngineSignal::Failed {
+                        operation_id,
+                        step,
+                        message: "provider capability mismatch: tool calls are unavailable"
+                            .to_owned(),
+                    })
+                    .await;
+                return;
+            }
             let mut body = serde_json::json!({
                 "model": model,
                 "messages": message_payloads(&request.plan),
@@ -229,6 +260,9 @@ impl Provider for OpenRouterProvider {
                                         }
                                     }
                                     StreamEvent::Thinking(text) => {
+                                        if !request.model.capabilities.reasoning {
+                                            continue;
+                                        }
                                         if out
                                             .send(EngineSignal::ThinkingDelta {
                                                 operation_id,
@@ -532,6 +566,10 @@ mod tests {
             model: ion_core::ModelConfig {
                 model_ref: "test/model".to_owned(),
                 context_window: None,
+                capabilities: ion_core::ModelCapabilities {
+                    reasoning: true,
+                    ..ion_core::ModelCapabilities::default()
+                },
             },
             plan: ContextPlan {
                 system: "sys".to_owned(),

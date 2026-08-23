@@ -30,6 +30,7 @@ fn step_model() -> crate::provider::ModelConfig {
     crate::provider::ModelConfig {
         model_ref: "test-model".to_owned(),
         context_window: None,
+        capabilities: crate::provider::ModelCapabilities::default(),
     }
 }
 
@@ -2429,6 +2430,54 @@ async fn usage_survives_a_failed_operation() {
     assert_eq!(rows[0].input_tokens, 5);
 }
 
+#[tokio::test]
+async fn cache_expectation_records_cold_start_then_stable_prefix_reuse() {
+    let db = temp_db("cache-expectation");
+    let store = SessionStore::open(&db).expect("store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("first"),
+            ScriptedMessage::text("second"),
+        ])
+        .with_prompt_cache(true),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("one").await.expect("first submit");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("first collect");
+    session.submit("two").await.expect("second submit");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("second collect");
+    let session_id = runtime.session_id();
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let connection = rusqlite::Connection::open(&db).expect("open db");
+    let expectations: Vec<String> = connection
+        .prepare("SELECT cache_expectation FROM model_steps ORDER BY created_at")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("rows");
+    assert_eq!(expectations, ["cold_start", "prefix_reuse_expected"]);
+    let fingerprints: Vec<String> = connection
+        .prepare("SELECT context_fingerprint FROM model_steps ORDER BY created_at")
+        .expect("prepare fingerprints")
+        .query_map([], |row| row.get(0))
+        .expect("query fingerprints")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("fingerprint rows");
+    assert_eq!(fingerprints.len(), 2);
+    assert_eq!(fingerprints[0], fingerprints[1]);
+    let _ = store.load(session_id).await.expect("load");
+}
+
 // ---- Policy, trust, and approvals (DESIGN.md §17, §32 Step 4 slice 2) ----
 
 #[test]
@@ -4710,20 +4759,40 @@ async fn crash_recovery_replays_with_the_persisted_model_not_the_launch_default(
 
     // §11.3: each attempt row names the exact model that ran.
     let connection = rusqlite::Connection::open(&db).expect("open db");
-    let refs: Vec<(String, String, String)> = connection
+    let refs: Vec<(String, String, String, String, String, String)> = connection
         .prepare(
-            "SELECT model_ref, capability_snapshot_id, context_manifest_id
+            "SELECT model_ref, capability_snapshot_id, context_manifest_id,
+                    capabilities, context_fingerprint, cache_expectation
              FROM model_steps ORDER BY created_at",
         )
         .expect("prepare")
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
         .expect("query")
         .collect::<Result<Vec<_>, _>>()
         .expect("rows");
     assert_eq!(refs.len(), 2, "{refs:?}");
-    assert!(refs.iter().all(|(model, snapshot, manifest)| {
-        model == "a" && snapshot.len() == 64 && manifest.len() == 64
-    }));
+    assert!(refs.iter().all(
+        |(model, snapshot, manifest, capabilities, fingerprint, expectation)| {
+            let capabilities: crate::provider::ModelCapabilities =
+                serde_json::from_str(capabilities).expect("capabilities json");
+            model == "a"
+                && snapshot.len() == 64
+                && manifest.len() == 64
+                && fingerprint.len() == 64
+                && expectation == "unsupported"
+                && capabilities.tool_calls
+                && !capabilities.prompt_cache
+        }
+    ));
     let snapshot_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM capability_snapshots", [], |row| {
             row.get(0)

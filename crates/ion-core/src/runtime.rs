@@ -26,7 +26,9 @@ use crate::context::{
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
-use crate::provider::{EngineSignal, ModelConfig, Provider, ProviderRequest, TokenUsage};
+use crate::provider::{
+    EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, TokenUsage,
+};
 use crate::session::{
     EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
     SessionEntry, Transition,
@@ -817,9 +819,14 @@ struct SessionRuntime<P> {
     /// throttle anchor. In-memory only: losing it costs one extra
     /// hint after restart, never a missed one.
     last_hint_tokens: Option<u64>,
+    /// Stable-prefix fingerprint used to explain prompt-cache expectations
+    /// at the next model-step boundary.
+    last_prefix_fingerprint: Option<String>,
     /// Cached model context window (14.8); fetched from the adapter
     /// once, on first use.
     context_window: Option<u64>,
+    /// Cached model capability metadata, keyed by the selected model.
+    model_capabilities: Option<(String, ModelCapabilities)>,
     /// A model-invoked compaction (14.7.3) waiting for the run to
     /// settle; consumed at the next continuation boundary.
     pending_compact: Option<PendingCompact>,
@@ -909,7 +916,9 @@ impl<P: Provider> SessionRuntime<P> {
             draft_usage: None,
             last_context_tokens: None,
             last_hint_tokens: None,
+            last_prefix_fingerprint: None,
             context_window: None,
+            model_capabilities: None,
             pending_compact: None,
             suspended_operations: Vec::new(),
             recovery_after_compaction: false,
@@ -1224,7 +1233,9 @@ impl<P: Provider> SessionRuntime<P> {
         // Model-relative metadata and hint throttling cannot cross a
         // selection boundary.
         self.context_window = None;
+        self.model_capabilities = None;
         self.last_hint_tokens = None;
+        self.last_prefix_fingerprint = None;
         Ok(previous)
     }
 
@@ -1392,8 +1403,15 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let Some((step, model, plan, persisted_snapshot_id, persisted_manifest_id)) =
-                    model_step_from_input(&open.effective_input)
+                let Some((
+                    step,
+                    model,
+                    plan,
+                    persisted_snapshot_id,
+                    persisted_manifest_id,
+                    persisted_prefix_fingerprint,
+                    persisted_cache_expectation,
+                )) = model_step_from_input(&open.effective_input)
                 else {
                     error!(session = %self.session_id, "pending model step lacks an exact model snapshot; fencing");
                     self.closed = true;
@@ -1402,7 +1420,11 @@ impl<P: Provider> SessionRuntime<P> {
                 let mut staged = self.operation.clone().expect("operation present");
                 let snapshot_id =
                     CapabilitySnapshot::new(staged.machine.frozen_tools().to_vec()).id;
-                if snapshot_id != persisted_snapshot_id || persisted_manifest_id.is_empty() {
+                if snapshot_id != persisted_snapshot_id
+                    || persisted_manifest_id.is_empty()
+                    || persisted_prefix_fingerprint.is_empty()
+                    || persisted_cache_expectation.is_empty()
+                {
                     error!(session = %self.session_id, "pending model step capability snapshot disagrees with checkpoint; fencing");
                     self.closed = true;
                     return;
@@ -1451,6 +1473,7 @@ impl<P: Provider> SessionRuntime<P> {
                 staged.open_effect = Some(effect);
                 self.operation = Some(staged);
                 self.model_step = step.saturating_sub(1);
+                self.last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
                 warn!(%operation_id, model = %model.model_ref, "recovered a pending model step by replay");
                 self.spawn_model_step(operation_id, model, plan, tools);
             }
@@ -1950,6 +1973,17 @@ impl<P: Provider> SessionRuntime<P> {
     /// re-projection go through here so a recovered step sees the same
     /// trailing-edge hint policy. The hint is derived, never persisted.
     async fn current_model_config(&mut self) -> ModelConfig {
+        if self
+            .model_capabilities
+            .as_ref()
+            .is_none_or(|(model_ref, _)| model_ref != &self.selected_model_ref)
+        {
+            let capabilities = self
+                .provider
+                .capabilities_for(&self.selected_model_ref)
+                .await;
+            self.model_capabilities = Some((self.selected_model_ref.clone(), capabilities));
+        }
         if self.context_window.is_none() {
             self.context_window = self
                 .provider
@@ -1959,6 +1993,11 @@ impl<P: Provider> SessionRuntime<P> {
         ModelConfig {
             model_ref: self.selected_model_ref.clone(),
             context_window: self.context_window,
+            capabilities: self
+                .model_capabilities
+                .as_ref()
+                .expect("model capabilities cached")
+                .1,
         }
     }
 
@@ -1966,6 +2005,17 @@ impl<P: Provider> SessionRuntime<P> {
         let snapshot = CapabilitySnapshot::new(self.tools.specs());
         let manifest = ContextManifest::new(&snapshot, self.trusted_resources.clone());
         (snapshot, manifest)
+    }
+
+    fn cache_expectation(&self, model: &ModelConfig, prefix_fingerprint: &str) -> &'static str {
+        if !model.capabilities.prompt_cache {
+            return "unsupported";
+        }
+        match self.last_prefix_fingerprint.as_deref() {
+            None => "cold_start",
+            Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
+            Some(_) => "prefix_changed",
+        }
     }
 
     async fn project_model_step_plan(
@@ -2064,6 +2114,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation = Some(staged);
         self.last_step_was_compaction = true;
         self.last_hint_tokens = None;
+        self.last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
         true
@@ -2150,6 +2201,8 @@ impl<P: Provider> SessionRuntime<P> {
         let capability_snapshot = CapabilitySnapshot::new(tools.clone());
         let context_manifest =
             ContextManifest::new(&capability_snapshot, self.trusted_resources.clone());
+        let prefix_fingerprint = context_manifest.stable_prefix_fingerprint(&model.model_ref);
+        let cache_expectation = self.cache_expectation(&model, &prefix_fingerprint);
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: "model_step".to_owned(),
@@ -2159,7 +2212,9 @@ impl<P: Provider> SessionRuntime<P> {
                 "model": model,
                 "plan": plan,
                 "capability_snapshot_id": capability_snapshot.id,
-                "context_manifest_id": context_manifest.id
+                "context_manifest_id": context_manifest.id,
+                "prefix_fingerprint": prefix_fingerprint,
+                "cache_expectation": cache_expectation
             }),
             attempt: 1,
         };
@@ -2187,6 +2242,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
+        self.last_prefix_fingerprint = Some(prefix_fingerprint);
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -2695,6 +2751,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_usage = None;
         self.last_step_was_compaction = true;
         self.last_hint_tokens = None;
+        self.last_prefix_fingerprint = None;
         warn!(%operation_id, "context overflow; compacting once and retrying");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
     }
@@ -3184,24 +3241,37 @@ fn model_from_input(model: &serde_json::Value) -> Option<ModelConfig> {
         context_window: model
             .get("context_window")
             .and_then(serde_json::Value::as_u64),
+        capabilities: serde_json::from_value(model.get("capabilities")?.clone()).ok()?,
     })
 }
 
 /// `(step, model, plan)` from a persisted model-step effect input.
 fn model_step_from_input(
     input: &serde_json::Value,
-) -> Option<(u64, ModelConfig, ContextPlan, String, String)> {
+) -> Option<(
+    u64,
+    ModelConfig,
+    ContextPlan,
+    String,
+    String,
+    String,
+    String,
+)> {
     let step = input.get("step")?.as_u64()?;
     let model = model_from_input(input.get("model")?)?;
     let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
     let capability_snapshot_id = input.get("capability_snapshot_id")?.as_str()?.to_owned();
     let context_manifest_id = input.get("context_manifest_id")?.as_str()?.to_owned();
+    let prefix_fingerprint = input.get("prefix_fingerprint")?.as_str()?.to_owned();
+    let cache_expectation = input.get("cache_expectation")?.as_str()?.to_owned();
     Some((
         step,
         model,
         plan,
         capability_snapshot_id,
         context_manifest_id,
+        prefix_fingerprint,
+        cache_expectation,
     ))
 }
 

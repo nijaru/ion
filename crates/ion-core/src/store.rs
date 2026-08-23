@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -145,6 +145,9 @@ CREATE TABLE IF NOT EXISTS model_steps (
     context_window INTEGER,
     capability_snapshot_id TEXT NOT NULL REFERENCES capability_snapshots(id),
     context_manifest_id TEXT NOT NULL REFERENCES context_manifests(id),
+    capabilities TEXT NOT NULL,
+    context_fingerprint TEXT NOT NULL,
+    cache_expectation TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
 ";
@@ -740,6 +743,53 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                 .ok_or_else(|| {
                     rusqlite::Error::InvalidParameterName("model step missing model_ref".to_owned())
                 })?;
+            let capabilities: crate::provider::ModelCapabilities =
+                serde_json::from_value(model.get("capabilities").cloned().ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "model step missing provider capabilities".to_owned(),
+                    )
+                })?)
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+            let prefix_fingerprint = effect
+                .effective_input
+                .get("prefix_fingerprint")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "model step missing context fingerprint".to_owned(),
+                    )
+                })?;
+            let cache_expectation = effect
+                .effective_input
+                .get("cache_expectation")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "model step missing cache expectation".to_owned(),
+                    )
+                })?;
+            if !matches!(
+                cache_expectation,
+                "unsupported" | "cold_start" | "prefix_reuse_expected" | "prefix_changed"
+            ) {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "model step has an unknown cache expectation".to_owned(),
+                ));
+            }
+            let manifest_payload: String = tx.query_row(
+                "SELECT payload FROM context_manifests WHERE id = ?1",
+                [context_manifest_id],
+                |row| row.get(0),
+            )?;
+            let manifest: crate::context::ContextManifest = serde_json::from_str(&manifest_payload)
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+            if manifest.stable_prefix_fingerprint(model_ref) != prefix_fingerprint {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "model step context fingerprint mismatch".to_owned(),
+                ));
+            }
+            let capabilities_payload = serde_json::to_string(&capabilities)
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
             let step = effect
                 .effective_input
                 .get("step")
@@ -750,8 +800,9 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             tx.execute(
                 "INSERT INTO model_steps (
                     effect_id, operation_id, step, model_ref, context_window,
-                    capability_snapshot_id, context_manifest_id, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    capability_snapshot_id, context_manifest_id, capabilities,
+                    context_fingerprint, cache_expectation, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     effect.id.as_uuid().to_string(),
                     request.operation_id.as_uuid().to_string(),
@@ -763,6 +814,9 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                         .map(|v| v as i64),
                     capability_snapshot_id,
                     context_manifest_id,
+                    capabilities_payload,
+                    prefix_fingerprint,
+                    cache_expectation,
                     now_ms(),
                 ],
             )?;

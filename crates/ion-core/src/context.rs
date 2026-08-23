@@ -87,6 +87,14 @@ impl ContextManifest {
             && digest_json(&(&self.system, &self.capability_snapshot_id, &self.resources))
                 == self.id
     }
+
+    /// Fingerprint the provider-visible stable prefix for one model. The
+    /// model is included because prompt caches are never shared across model
+    /// identities merely because the local manifest is equal.
+    #[must_use]
+    pub fn stable_prefix_fingerprint(&self, model_ref: &str) -> String {
+        digest_json(&("ion-prefix-v1", model_ref, &self.id))
+    }
 }
 
 /// Load only explicitly trusted, root-scoped instruction resources.

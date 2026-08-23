@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use futures_util::future::Either;
 
-use ion_core::{EngineSignal, Provider, ProviderRequest, ScriptedProvider};
+use ion_core::{EngineSignal, ModelCapabilities, Provider, ProviderRequest, ScriptedProvider};
 use openrouter::OpenRouterProvider;
 
 pub use acp::{AcpConfig, serve as acp_serve};
@@ -52,6 +52,13 @@ impl Provider for CliProvider {
         match self {
             CliProvider::Scripted(_) => None,
             CliProvider::OpenRouter(provider) => provider.context_window().await,
+        }
+    }
+
+    async fn capabilities(&self) -> ModelCapabilities {
+        match self {
+            CliProvider::Scripted(provider) => provider.capabilities().await,
+            CliProvider::OpenRouter(provider) => provider.capabilities().await,
         }
     }
 }
