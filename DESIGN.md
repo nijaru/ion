@@ -1723,7 +1723,11 @@ be discarded explicitly.
 
 # 22. TUI architecture
 
-Ratatui is the rendering substrate; Ion owns application state/update semantics.
+Ion renders its TUI through its own line-diff screen layer over crossterm:
+committed scrollback and the live composer/footer region are one growing
+line array; each frame diffs against the previous and writes changed rows.
+This mirrors the pi-tui model proven as a daily driver. Ion owns application
+state/update semantics.
 
 ## 22.1 One UI state owner
 
@@ -1756,7 +1760,10 @@ are not step-boundary synchronization and MUST NOT span provider futures.
 
 Ion SHOULD support the Pi-like inline terminal experience as a first-class mode: completed transcript remains useful terminal scrollback while the live composer/status area redraws efficiently.
 
-Use current Ratatui inline viewport/diff primitives available at implementation time. Re-verify exact APIs (`Viewport::Inline`, resize behavior, insertion primitives) rather than encoding a stale API into the architecture.
+Use the line-diff screen (§22 intro): completed transcript lines are part of
+the same rendered array as the live composer/status area, so nothing is ever
+inserted above a reserved region and no stale cells can survive a flush.
+The screen layer owns cursor placement, scrolling, and resize handling.
 
 ## 22.4 Terminal restoration
 

@@ -11,22 +11,18 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use ratatui::backend::CrosstermBackend;
+
 use ratatui::crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode,
     KeyEvent, KeyModifiers,
 };
 use ratatui::crossterm::{execute, terminal};
-use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
-use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
+use unicode_width::UnicodeWidthChar as _;
+use unicode_width::UnicodeWidthStr as _;
 
-/// Inline viewport height: transcript tail, tool row, status,
-/// composer, plus headroom for multi-line drafts.
-const INLINE_VIEWPORT_ROWS: u16 = 12;
-
+use crate::screen::{Frame, Screen};
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
@@ -966,27 +962,74 @@ pub fn palette(theme: Theme) -> Palette {
     }
 }
 
-/// Render the live inline viewport: transcript tail, tool rows, draft,
-/// status, composer.
-pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
-    let area = frame.area();
-    // The inline viewport keeps cells between frames; clear before
-    // drawing so stale status/draft text never survives a redraw.
-    frame.render_widget(Clear, area);
-    let rows = Layout::vertical([
-        Constraint::Min(1),    // transcript tail / draft
-        Constraint::Length(1), // tool row (latest)
-        Constraint::Length(1), // status
-        Constraint::Length(1), // composer
-    ])
-    .split(area);
+/// Wrap one styled line to `width` columns (display width, char
+/// boundaries). Styles carry over to the continuation rows.
+/// Convert any borrowed Line to an owned `'static` one.
+fn clone_static(line: &Line<'_>) -> Line<'static> {
+    Line::from(
+        line.spans
+            .iter()
+            .map(|s| Span::styled(s.content.to_string(), s.style))
+            .collect::<Vec<_>>(),
+    )
+}
 
-    let mut tail: Vec<Line> = Vec::new();
+fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
+    if total <= width {
+        return vec![clone_static(line)];
+    }
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut cur: Vec<Span> = Vec::new();
+    let mut cur_width = 0usize;
+    for span in &line.spans {
+        let style = span.style;
+        let mut chunk = String::new();
+        for ch in span.content.chars() {
+            let cw = ch.width().unwrap_or(0);
+            if cur_width + cw > width && cur_width > 0 {
+                if !chunk.is_empty() {
+                    cur.push(Span::styled(std::mem::take(&mut chunk), style));
+                }
+                rows.push(Line::from(std::mem::take(&mut cur)));
+                cur_width = 0;
+            }
+            chunk.push(ch);
+            cur_width += cw;
+        }
+        if !chunk.is_empty() {
+            cur.push(Span::styled(chunk, style));
+        }
+    }
+    if !cur.is_empty() {
+        rows.push(Line::from(cur));
+    }
+    if rows.is_empty() {
+        rows.push(Line::from(String::new()));
+    }
+    rows
+}
+
+fn str_width(line: &Line<'_>) -> usize {
+    line.spans.iter().map(|s| s.content.width()).sum()
+}
+
+/// The live region below the committed transcript: tool rows, draft
+/// tail, status, composer. Returns pre-wrapped rows plus the hardware
+/// cursor position relative to this region.
+fn build_live(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
     if let Some(latest) = state.tool_rows.last() {
-        tail.push(Line::from(latest.label.clone()).style(palette.tool_row));
+        lines.push(Line::from(latest.label.clone()).style(palette.tool_row));
         if state.tool_output_expanded {
             for line in latest.preview.iter().flat_map(|p| p.lines()) {
-                tail.push(
+                lines.push(
                     Line::from(format!("  {line}"))
                         .style(palette.tool_row)
                         .italic(),
@@ -995,39 +1038,72 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
         }
     }
     if !state.draft.is_empty() {
-        tail.push(Line::from(format!("ion « {}", state.draft)));
-    } else if !state.draft_thinking.is_empty() && state.thinking_visible {
-        // Live reasoning tail: the last line still growing.
-        if let Some(last) = state.draft_thinking.lines().last() {
-            tail.push(Line::from(format!("✻ {last}")).dim().italic());
-        }
+        lines.push(Line::from(format!("ion « {}", state.draft)));
+    } else if let Some(last) = state
+        .draft_thinking
+        .lines()
+        .last()
+        .filter(|_| state.thinking_visible && !state.draft_thinking.is_empty())
+    {
+        lines.push(Line::from(format!("✻ {last}")).dim().italic());
     }
-    frame.render_widget(Paragraph::new(tail).wrap(Wrap { trim: false }), rows[0]);
 
     let status = match &state.status {
         UiStatus::Idle => {
-            let mut line = String::from("idle — type a prompt, esc quits");
+            let mut text = String::from("idle — type a prompt, esc quits");
             if let Some(model) = &state.model_name {
-                line.push_str("  ·  ");
-                line.push_str(model);
+                text.push_str("  ·  ");
+                text.push_str(model);
             }
-            Line::from(line).style(palette.status_idle)
+            Line::from(text).style(palette.status_idle)
         }
         UiStatus::Working { operation } => {
             Line::from(format!("● {operation}")).style(palette.status_working)
         }
     };
-    frame.render_widget(status, rows[2]);
+    lines.push(status);
+
+    // Composer: real hardware cursor instead of a drawn bar.
     let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
-    let composer_line = format!(
-        "› {}▏{}",
-        &state.composer[..cursor_byte],
-        &state.composer[cursor_byte..]
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(composer_line).style(palette.composer)),
-        rows[3],
-    );
+    let before = &state.composer[..cursor_byte];
+    let after = &state.composer[cursor_byte..];
+    let prompt = "› ";
+    let target_col = prompt.width() + before.width();
+    let composer = Line::from(format!("{prompt}{before}{after}"));
+    let wrapped = wrap_line(&composer, width);
+    let mut cursor = None;
+    let mut walked = 0usize;
+    for (i, row) in wrapped.iter().enumerate() {
+        let row_width = str_width(row);
+        if target_col <= walked + row_width {
+            cursor = Some((lines.len() + i, (target_col - walked) as u16));
+            break;
+        }
+        walked += row_width;
+    }
+    lines.extend(wrapped);
+
+    (lines, cursor)
+}
+
+/// The complete frame: wrapped transcript plus the live region.
+fn build_frame(
+    transcript: &[Line<'static>],
+    state: &UiState,
+    palette: &Palette,
+    width: u16,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(transcript.len() + 8);
+    for line in transcript {
+        lines.extend(wrap_line(line, width as usize));
+    }
+    let committed_rows = lines.len();
+    let (live, mut cursor) = build_live(state, palette, width as usize);
+    if let Some((row, _col)) = &mut cursor {
+        *row += committed_rows;
+    }
+    lines.extend(live);
+    (lines, cursor)
 }
 
 /// Enter the terminal before any session state is touched: the
@@ -1061,42 +1137,31 @@ pub async fn run(
 
     let palette = palette(theme);
 
-    // The inline viewport anchors at the cursor. Ratatui reserves the
-    // requested rows; completed scrollback accumulates above via
-    // insert_before, so no manual spacing is pushed here.
-    io::stdout().flush().ok();
+    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+    let mut screen = Screen::new(term_w, term_h);
+    let mut out = io::stdout();
 
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(INLINE_VIEWPORT_ROWS),
-        },
-    )
-    .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
+    // Committed transcript: banner, restored entries, flushed turns.
+    // The live region is rebuilt every frame from UiState; committed
+    // lines never change once appended (§22 line-diff model).
+    let mut transcript: Vec<Line<'static>> = Vec::new();
+    let banner = if resume_session.is_some() {
+        "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
+    } else {
+        "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
+    };
+    transcript.push(Line::from(banner).dim());
 
-    print_banner(&mut terminal, resume_session.is_some())?;
-
-    // Resume: project the persisted transcript into scrollback.
+    // Resume: project the persisted transcript into the committed array.
     if let Some(session_id) = resume_session {
         let loaded = store
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-        let mut restored: Vec<Line> = Vec::new();
         for (_, entry) in loaded.entries {
-            push_entry_lines(&entry, &mut restored);
+            push_entry_lines(&entry, &mut transcript);
         }
-        if !restored.is_empty() {
-            let count = restored.len() as u16;
-            let _ = terminal.insert_before(count, |buf| {
-                Paragraph::new(restored.clone()).render(buf.area, buf);
-            });
-        }
-        let _ = terminal.insert_before(1, |buf| {
-            Paragraph::new(Line::from(format!("— resumed session {session_id} —")).dim())
-                .render(buf.area, buf);
-        });
+        transcript.push(Line::from(format!("— resumed session {session_id} —")).dim());
     }
 
     // The EventStream is the sole terminal reader, so crossterm parses
@@ -1123,57 +1188,34 @@ pub async fn run(
         OperationStatus::Idle => None,
     };
     let mut result: Result<(), RuntimeError> = Ok(());
-    // Content moved above the viewport this iteration: cells under the
-    // viewport's previous position hold the old frame and must be
-    // erased (inline viewports never clear outside their region).
-    let mut scrolled = resume_session.is_some();
+    // Crossterm's EventStream can terminate on transient reads (notably
+    // SIGWINCH during resize). Recreate it rather than treating the
+    // stream end as fatal; give up only after repeated immediate ends.
+    let mut stream_recreations = 0u32;
+    const MAX_STREAM_RECREATIONS: u32 = 64;
 
     loop {
-        // Flush completed content into scrollback, then draw the live
-        // viewport (inline pattern, §22.3).
+        // Size changes are polled directly: resize events ride the same
+        // fragile stream as keys.
+        if let Ok((w, h)) = crossterm::terminal::size() {
+            screen.resize(w, h);
+        }
+        // Flush completed turns into the committed transcript, then
+        // draw transcript + live region as one line-diff frame (§22).
         if !state.pending_scrollback.is_empty() {
-            let lines = std::mem::take(&mut state.pending_scrollback);
-            let count = lines.len() as u16;
-            let _ = terminal.insert_before(count, |buf| {
-                Paragraph::new(lines.clone()).render(buf.area, buf);
-            });
-            scrolled = true;
-            // The viewport moved; the previous buffer no longer matches
-            // the screen. Force a full repaint (safe: the EventStream
-            // owns terminal reads, so the cursor query cannot deadlock).
-            terminal.clear().ok();
+            let flushed = std::mem::take(&mut state.pending_scrollback);
+            transcript.extend(flushed);
         }
-        let frame_area = terminal
-            .draw(|frame| render(&state, frame, &palette))
-            .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?
-            .area;
-        if scrolled {
-            scrolled = false;
-            let (_, screen_height) =
-                crossterm::terminal::size().unwrap_or((0, frame_area.bottom()));
-            if frame_area.bottom() < screen_height {
-                execute!(
-                    io::stdout(),
-                    crossterm::cursor::MoveTo(0, frame_area.bottom()),
-                    crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-                )
-                .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-            }
-        }
-        #[cfg(debug_assertions)]
-        if let Ok(mut log) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/ion-tui-debug.log")
-        {
-            use std::io::Write;
-            let _ = writeln!(
-                log,
-                "draw screen_h={:?} scrollback_pending={}",
-                terminal.size().map(|s| s.height).unwrap_or(0),
-                state.pending_scrollback.len()
-            );
-        }
+        let (lines, cursor) = build_frame(&transcript, &state, &palette, screen.size().0);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    lines: &lines,
+                    cursor,
+                },
+            )
+            .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
 
         if state.quit_requested {
             break;
@@ -1183,6 +1225,7 @@ pub async fn run(
             maybe_key = key_stream.next() => {
                 match maybe_key {
                     Some(Ok(TermEvent::Key(key))) => {
+                        stream_recreations = 0;
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
@@ -1194,10 +1237,14 @@ pub async fn run(
                         state = next;
                     }
                     _ => {
-                        result = Err(RuntimeError::OperationFailed(
-                            "terminal event stream ended".to_owned(),
-                        ));
-                        break;
+                        stream_recreations += 1;
+                        if stream_recreations > MAX_STREAM_RECREATIONS {
+                            result = Err(RuntimeError::OperationFailed(
+                                "terminal event stream ended".to_owned(),
+                            ));
+                            break;
+                        }
+                        key_stream = EventStream::new();
                     }
                 }
             }
@@ -1252,8 +1299,8 @@ pub async fn run(
         }
     }
 
+    screen.finish(&mut out).ok();
     guard.restore();
-    terminal.clear().ok();
     result?;
     match session.close().await {
         Ok(()) | Err(CommandError::Closed) => Ok(()),
@@ -1325,22 +1372,6 @@ async fn dispatch(
             }
         }
     }
-}
-
-fn print_banner(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    resumed: bool,
-) -> Result<(), RuntimeError> {
-    let banner = if resumed {
-        "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
-    } else {
-        "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
-    };
-    terminal
-        .insert_before(1, |buf| {
-            Paragraph::new(Line::from(banner).dim()).render(buf.area, buf);
-        })
-        .map_err(|err| RuntimeError::OperationFailed(format!("terminal write failed: {err}")))
 }
 
 fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>) {
@@ -1740,35 +1771,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn renders_composer_and_status_to_test_backend() {
-        use ratatui::{Terminal as RTerminal, backend::TestBackend};
+    fn live_region_carries_status_and_composer_cursor() {
         let mut state = UiState::new();
         state.composer = "hello world".to_owned();
         state.cursor = state.composer.chars().count();
         state.status = UiStatus::Working {
             operation: "running bash".to_owned(),
         };
-        let backend = TestBackend::new(40, 6);
-        let mut terminal = RTerminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| render(&state, frame, &palette(Theme::Dark)))
-            .expect("draw");
-        let buffer = terminal.backend().buffer();
-        let content: String = (0..buffer.area().height)
-            .map(|y| {
-                (0..buffer.area().width)
-                    .map(|x| {
-                        buffer
-                            .cell((x, y))
-                            .map(|cell| cell.symbol().to_owned())
-                            .unwrap_or_default()
-                    })
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(content.contains("hello world▏"), "{content}");
-        assert!(content.contains("● running bash"), "{content}");
+        let (lines, cursor) = build_live(&state, &palette(Theme::Dark), 40);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("hello world")), "{text:?}");
+        assert!(
+            text.iter().any(|l| l.contains("● running bash")),
+            "{text:?}"
+        );
+        // cursor sits at the end of the typed text on the composer row
+        let (row, col) = cursor.expect("cursor");
+        assert!(text[row].starts_with("› hello world"), "{}", text[row]);
+        assert_eq!(col as usize, 2 + "hello world".width());
     }
 }
 
