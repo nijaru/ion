@@ -22,7 +22,10 @@ mod session;
 mod store;
 mod tool;
 
-pub use context::{ContextMessage, ContextPlan, SYSTEM_SECTION, project};
+pub use context::{
+    CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
+    TrustedResource, load_trusted_resources, project, project_with_manifest,
+};
 pub use delegate::{ChildSpec, DelegateConfig, DelegateTool, child_budget_default};
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};

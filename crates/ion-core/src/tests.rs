@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::context::{ContextMessage, ContextPlan};
+use crate::context::{CapabilitySnapshot, ContextMessage, ContextPlan, load_trusted_resources};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId};
 use crate::policy::{AllowlistPolicy, PolicyEngine};
@@ -2046,9 +2046,10 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
                     state: OperationState::Finished(OperationOutcome::Completed),
                     cancel_requested: false,
                     prompt: String::new(),
-                    tools: Vec::new(),
+                    capability_snapshot_id: loaded.operations[0].capability_snapshot.id.clone(),
                     open_effect: None,
                 },
+                capability_snapshot: loaded.operations[0].capability_snapshot.clone(),
             },
             entries: Vec::new(),
             open_effects: Vec::new(),
@@ -2060,6 +2061,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
             inbox: Vec::new(),
             inbox_applied: Vec::new(),
             usage: Vec::new(),
+            context_manifests: Vec::new(),
         })
         .await
         .expect_err("ghost settlement must fail");
@@ -2322,6 +2324,39 @@ fn projector_is_deterministic_and_pairs_tool_calls() {
         panic!("tool result must project as a tool message");
     };
     assert_eq!((*call_id, content.as_str()), (7, "contents"));
+}
+
+#[tokio::test]
+async fn trusted_resources_enter_future_model_steps_only_when_host_supplies_them() {
+    let root = tempfile::tempdir().expect("root");
+    std::fs::write(root.path().join("AGENTS.md"), "project rules").expect("resource");
+    let trusted = load_trusted_resources(root.path(), true).expect("trusted resources");
+    assert_eq!(trusted.len(), 1);
+
+    let provider = SharedLogProvider::default();
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy_and_resources(
+        provider.clone(),
+        ToolRegistry::default(),
+        store,
+        Arc::new(crate::policy::DefaultPolicy),
+        trusted,
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("goal").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        provider
+            .requests()
+            .first()
+            .expect("model request")
+            .plan
+            .system
+            .contains("[Trusted project resource: AGENTS.md]\nproject rules")
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }
 
 #[tokio::test]
@@ -2798,9 +2833,10 @@ mod reconcile {
                 state: machine.state().clone(),
                 cancel_requested: false,
                 prompt: "go".to_owned(),
-                tools: Vec::new(),
+                capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
                 open_effect: None,
             },
+            capability_snapshot: CapabilitySnapshot::new(Vec::new()),
         };
         store
             .begin_operation(session_id, operation_id, root_inbox, checkpoint, entry)
@@ -2858,9 +2894,10 @@ mod reconcile {
                 state: machine.state().clone(),
                 cancel_requested: false,
                 prompt: "go".to_owned(),
-                tools: Vec::new(),
+                capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
                 open_effect: Some(effect.clone()),
             },
+            capability_snapshot: CapabilitySnapshot::new(Vec::new()),
         };
         store
             .commit(CommitRequest {
@@ -2874,6 +2911,7 @@ mod reconcile {
                 inbox: Vec::new(),
                 inbox_applied: Vec::new(),
                 usage: Vec::new(),
+                context_manifests: Vec::new(),
             })
             .await
             .expect("commit pending write");
@@ -4024,6 +4062,7 @@ fn delegate_tool(
             make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
             max_active_children: 4,
             child_budget: budget,
+            trusted_resources: Vec::new(),
         },
         parent,
     ))
@@ -4198,6 +4237,7 @@ async fn budget_stops_a_runaway_child() {
                     max_model_steps: Some(1),
                     max_tool_calls: None,
                 },
+                trusted_resources: Vec::new(),
             },
             parent_id,
         ))],
@@ -4280,6 +4320,7 @@ async fn parent_cancel_cancels_running_children() {
                 }),
                 max_active_children: 4,
                 child_budget: crate::RuntimeBudget::unbounded(),
+                trusted_resources: Vec::new(),
             },
             parent_id,
         ))],
@@ -4669,14 +4710,45 @@ async fn crash_recovery_replays_with_the_persisted_model_not_the_launch_default(
 
     // §11.3: each attempt row names the exact model that ran.
     let connection = rusqlite::Connection::open(&db).expect("open db");
-    let refs: Vec<String> = connection
-        .prepare("SELECT model_ref FROM model_steps ORDER BY created_at")
+    let refs: Vec<(String, String, String)> = connection
+        .prepare(
+            "SELECT model_ref, capability_snapshot_id, context_manifest_id
+             FROM model_steps ORDER BY created_at",
+        )
         .expect("prepare")
-        .query_map([], |row| row.get(0))
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .expect("query")
         .collect::<Result<Vec<_>, _>>()
         .expect("rows");
-    assert_eq!(refs, vec!["a".to_owned(), "a".to_owned()], "{refs:?}");
+    assert_eq!(refs.len(), 2, "{refs:?}");
+    assert!(refs.iter().all(|(model, snapshot, manifest)| {
+        model == "a" && snapshot.len() == 64 && manifest.len() == 64
+    }));
+    let snapshot_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM capability_snapshots", [], |row| {
+            row.get(0)
+        })
+        .expect("snapshot count");
+    let manifest_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM context_manifests", [], |row| {
+            row.get(0)
+        })
+        .expect("manifest count");
+    assert_eq!(snapshot_count, 1);
+    assert_eq!(manifest_count, 1);
+    let effect_inputs: Vec<String> = connection
+        .prepare("SELECT effective_input FROM effects WHERE kind = 'model_step'")
+        .expect("prepare effects")
+        .query_map([], |row| row.get(0))
+        .expect("query effects")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("effect rows");
+    assert!(effect_inputs.iter().all(|input| {
+        let value: serde_json::Value = serde_json::from_str(input).expect("effect json");
+        value.get("tools").is_none()
+            && value.get("capability_snapshot").is_none()
+            && value.get("context_manifest").is_none()
+    }));
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");

@@ -38,8 +38,9 @@ struct Cli {
     /// running the TUI or print mode.
     #[arg(long = "acp")]
     acp: bool,
-    /// Trust project-local executable configuration (.ion/
-    /// extensions.toml) for this run (§24.5). Never set automatically.
+    /// Trust project-local configuration and model-facing resources (.ion/
+    /// extensions.toml, AGENTS.md, and .ion/instructions.md) for this run
+    /// (§17.2, §24.5). Never set automatically.
     #[arg(long = "trust-project")]
     trust_project: bool,
     /// Tools this non-interactive run may execute without approval,
@@ -105,6 +106,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
         make_provider,
         store,
         policy,
+        trust_project: cli.trust_project,
     };
     match acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -224,14 +226,34 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         None
     };
     let tools = build_catalog(settings, cli).await;
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "cwd: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {
+        Ok(resources) => resources,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "trusted resources: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
         Arc::new(ion_core::DefaultPolicy)
     } else {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
     let runtime = if let Some(session_id) = resume_session {
-        match Runtime::open_session(root_provider, tools.clone(), (*store).clone(), session_id)
-            .await
+        match Runtime::open_session_with_resources(
+            root_provider,
+            tools.clone(),
+            (*store).clone(),
+            session_id,
+            trusted_resources.clone(),
+        )
+        .await
         {
             Ok(runtime) => runtime,
             Err(err) => {
@@ -240,13 +262,20 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             }
         }
     } else {
-        Runtime::start_with_policy(root_provider, tools.clone(), (*store).clone(), policy)
+        Runtime::start_with_policy_and_resources(
+            root_provider,
+            tools.clone(),
+            (*store).clone(),
+            policy,
+            trusted_resources.clone(),
+        )
     };
     enable_children(
         &tools,
         &store,
         Arc::clone(&make_provider),
         runtime.session_id(),
+        trusted_resources.clone(),
     );
     let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
         Ok(keymap) => keymap,
@@ -322,6 +351,10 @@ fn provider_factory(
 async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let tools = build_catalog(settings, cli).await;
+    let cwd =
+        std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    let trusted_resources = ion_core::load_trusted_resources(&cwd, cli.trust_project)
+        .map_err(RuntimeError::OperationFailed)?;
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
@@ -329,13 +362,19 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     } else {
         Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
     };
-    let runtime =
-        Runtime::start_with_policy((make_provider)(), tools.clone(), store.clone(), policy);
+    let runtime = Runtime::start_with_policy_and_resources(
+        (make_provider)(),
+        tools.clone(),
+        store.clone(),
+        policy,
+        trusted_resources.clone(),
+    );
     enable_children(
         &tools,
         &store,
         Arc::clone(&make_provider),
         runtime.session_id(),
+        trusted_resources.clone(),
     );
     let session = runtime.session();
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;

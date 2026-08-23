@@ -3,11 +3,15 @@
 //! Local semantic state is canonical; the model sees only a
 //! deterministic projection of it (P7, §31 invariant 15): the same
 //! entries and configuration always yield the same
-//! [`ContextPlan`]. This module is the v0 projector; the
-//! ContextManifest and compaction machinery extend it in later slices.
+//! [`ContextPlan`]. Content-addressed capability/manifests and explicit
+//! trusted resources are owned here; compaction remains a runtime boundary.
+
+use std::path::Path;
+
+use sha2::{Digest, Sha256};
 
 use crate::session::SessionEntry;
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolSpec};
 
 /// The small, stable system section every model step sees (DESIGN.md
 /// §14.4: no timestamps or random values in early prompt sections).
@@ -15,6 +19,153 @@ pub const SYSTEM_SECTION: &str = "You are Ion, a terminal coding agent. \
 You work inside the user's project directory. \
 Use the provided tools to read, write, edit, search, and run commands. \
 Prefer tools over guessing; report failures plainly.";
+
+/// A content-addressed immutable capability set for one model step.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CapabilitySnapshot {
+    pub id: String,
+    pub tools: Vec<ToolSpec>,
+}
+
+impl CapabilitySnapshot {
+    #[must_use]
+    pub fn new(mut tools: Vec<ToolSpec>) -> Self {
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        let id = digest_json(&tools);
+        Self { id, tools }
+    }
+
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        Self::new(self.tools.clone()).id == self.id
+    }
+}
+
+/// One explicitly trusted project-local model-facing resource.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TrustedResource {
+    pub path: String,
+    pub content: String,
+    pub sha256: String,
+}
+
+impl TrustedResource {
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        digest_bytes(self.content.as_bytes()) == self.sha256
+    }
+}
+
+/// Stable model-facing material shared by model steps until a capability or
+/// trusted-resource boundary changes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextManifest {
+    pub id: String,
+    pub system: String,
+    pub capability_snapshot_id: String,
+    pub resources: Vec<TrustedResource>,
+}
+
+impl ContextManifest {
+    #[must_use]
+    pub fn new(capability_snapshot: &CapabilitySnapshot, resources: Vec<TrustedResource>) -> Self {
+        let system = render_system(&resources);
+        let identity = (&system, &capability_snapshot.id, &resources);
+        let id = digest_json(&identity);
+        Self {
+            id,
+            system,
+            capability_snapshot_id: capability_snapshot.id.clone(),
+            resources,
+        }
+    }
+
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        self.resources.iter().all(TrustedResource::is_consistent)
+            && render_system(&self.resources) == self.system
+            && digest_json(&(&self.system, &self.capability_snapshot_id, &self.resources))
+                == self.id
+    }
+}
+
+/// Load only explicitly trusted, root-scoped instruction resources.
+///
+/// The loader has a closed candidate set. It rejects symlinked resources and
+/// canonical paths outside the trusted project root; retrieved text never
+/// grants trust by itself.
+pub fn load_trusted_resources(
+    root: &Path,
+    trust_project: bool,
+) -> Result<Vec<TrustedResource>, String> {
+    if !trust_project {
+        return Ok(Vec::new());
+    }
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|err| format!("trust root unavailable: {err}"))?;
+    let candidates = [Path::new("AGENTS.md"), Path::new(".ion/instructions.md")];
+    let mut resources = Vec::new();
+    for relative in candidates {
+        let path = root.join(relative);
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(format!(
+                    "inspect trusted resource {}: {err}",
+                    relative.display()
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "trusted resource {} must be a regular non-symlink file",
+                relative.display()
+            ));
+        }
+        let canonical = std::fs::canonicalize(&path)
+            .map_err(|err| format!("resolve trusted resource {}: {err}", relative.display()))?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err(format!(
+                "trusted resource {} escapes the project root",
+                relative.display()
+            ));
+        }
+        let bytes = std::fs::read(&canonical)
+            .map_err(|err| format!("read trusted resource {}: {err}", relative.display()))?;
+        let content = String::from_utf8(bytes.clone())
+            .map_err(|_| format!("trusted resource {} is not UTF-8", relative.display()))?;
+        resources.push(TrustedResource {
+            path: relative.to_string_lossy().into_owned(),
+            content,
+            sha256: digest_bytes(&bytes),
+        });
+    }
+    Ok(resources)
+}
+
+fn render_system(resources: &[TrustedResource]) -> String {
+    let mut system = SYSTEM_SECTION.to_owned();
+    for resource in resources {
+        system.push_str("\n\n[Trusted project resource: ");
+        system.push_str(&resource.path);
+        system.push_str("]\n");
+        system.push_str(&resource.content);
+    }
+    system
+}
+
+fn digest_json<T: serde::Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).expect("content-addressed values are serializable");
+    digest_bytes(&bytes)
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 /// One model-facing message in the projected conversation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -62,6 +213,20 @@ impl ContextMessage {
 /// compaction baseline can name what it covers (§14.7).
 #[must_use]
 pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
+    project_with_system(entries, first_seq, SYSTEM_SECTION.to_owned())
+}
+
+/// Project entries using one stable context manifest.
+#[must_use]
+pub fn project_with_manifest(
+    entries: &[SessionEntry],
+    first_seq: u64,
+    manifest: &ContextManifest,
+) -> ContextPlan {
+    project_with_system(entries, first_seq, manifest.system.clone())
+}
+
+fn project_with_system(entries: &[SessionEntry], first_seq: u64, system: String) -> ContextPlan {
     let mut messages: Vec<ContextMessage> = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         match entry {
@@ -116,10 +281,7 @@ pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
             }
         }
     }
-    ContextPlan {
-        system: SYSTEM_SECTION.to_owned(),
-        messages,
-    }
+    ContextPlan { system, messages }
 }
 
 /// Compact token count in pi hint style: `1m`, `128k`, or the raw
@@ -251,5 +413,72 @@ mod hint_tests {
     fn rehints_throttled_by_absolute_delta_without_window() {
         assert_eq!(usage_hint(160_000, None, Some(150_000)), None);
         assert!(usage_hint(176_000, None, Some(150_000)).is_some());
+    }
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    fn tool(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.to_owned(),
+            description: format!("{name} description"),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    #[test]
+    fn capability_and_manifest_ids_are_stable_across_tool_input_order() {
+        let first = CapabilitySnapshot::new(vec![tool("write"), tool("read")]);
+        let second = CapabilitySnapshot::new(vec![tool("read"), tool("write")]);
+        assert_eq!(first, second);
+
+        let resources = vec![TrustedResource {
+            path: "AGENTS.md".to_owned(),
+            content: "Use the project conventions.".to_owned(),
+            sha256: digest_bytes(b"Use the project conventions."),
+        }];
+        let first_manifest = ContextManifest::new(&first, resources.clone());
+        let second_manifest = ContextManifest::new(&second, resources);
+        assert_eq!(first_manifest, second_manifest);
+        assert!(
+            first_manifest
+                .system
+                .contains("[Trusted project resource: AGENTS.md]")
+        );
+    }
+
+    #[test]
+    fn trusted_resource_loading_is_explicit_and_root_scoped() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("AGENTS.md"), "trusted").expect("resource");
+        assert!(
+            load_trusted_resources(root.path(), false)
+                .expect("untrusted load")
+                .is_empty()
+        );
+        let resources = load_trusted_resources(root.path(), true).expect("trusted load");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].path, "AGENTS.md");
+        assert_eq!(resources[0].content, "trusted");
+        assert_eq!(resources[0].sha256.len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_resource_loading_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("instructions.md"), "outside").expect("outside");
+        symlink(
+            outside.path().join("instructions.md"),
+            root.path().join("AGENTS.md"),
+        )
+        .expect("symlink");
+        let error = load_trusted_resources(root.path(), true).expect_err("symlink must fail");
+        assert!(error.contains("regular non-symlink"));
     }
 }

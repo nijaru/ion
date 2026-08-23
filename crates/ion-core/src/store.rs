@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -126,12 +126,25 @@ CREATE TABLE IF NOT EXISTS effects (
     attempt INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS capability_snapshots (
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS context_manifests (
+    id TEXT PRIMARY KEY,
+    capability_snapshot_id TEXT NOT NULL REFERENCES capability_snapshots(id),
+    payload TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS model_steps (
     effect_id TEXT PRIMARY KEY REFERENCES effects(id),
     operation_id TEXT NOT NULL REFERENCES operations(id),
     step INTEGER NOT NULL,
     model_ref TEXT NOT NULL,
     context_window INTEGER,
+    capability_snapshot_id TEXT NOT NULL REFERENCES capability_snapshots(id),
+    context_manifest_id TEXT NOT NULL REFERENCES context_manifests(id),
     created_at INTEGER NOT NULL
 );
 ";
@@ -167,7 +180,7 @@ pub struct CheckpointPayload {
     pub state: OperationState,
     pub cancel_requested: bool,
     pub prompt: String,
-    pub tools: Vec<crate::tool::ToolSpec>,
+    pub capability_snapshot_id: String,
     pub open_effect: Option<EffectRecord>,
 }
 
@@ -175,6 +188,7 @@ pub struct CheckpointPayload {
 pub struct CheckpointRecord {
     pub state_seq: u64,
     pub payload: CheckpointPayload,
+    pub capability_snapshot: crate::context::CapabilitySnapshot,
 }
 
 /// An effect intent opened before repeat-sensitive execution
@@ -232,6 +246,9 @@ pub struct CommitRequest {
     /// Token usage rows persisted atomically with this transition
     /// (DESIGN.md §27.2).
     pub usage: Vec<UsageRecord>,
+    /// Context manifests published in the same transaction as their model
+    /// effect intent. The effect stores only their content-addressed IDs.
+    pub context_manifests: Vec<crate::context::ContextManifest>,
 }
 
 /// One persisted token-usage row (DESIGN.md §27.2).
@@ -268,6 +285,7 @@ pub struct LoadedSession {
 pub struct LoadedOperation {
     pub id: OperationId,
     pub latest: (u64, CheckpointPayload),
+    pub capability_snapshot: crate::context::CapabilitySnapshot,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -644,6 +662,7 @@ fn begin_operation(
         ],
     )?;
     insert_inbox(&tx, session_id, operation_id, root_inbox)?;
+    insert_capability_snapshot(&tx, &checkpoint.capability_snapshot)?;
     insert_checkpoint(&tx, operation_id, checkpoint)?;
     insert_entry(&tx, session_id, entry)?;
     tx.commit()?;
@@ -652,6 +671,10 @@ fn begin_operation(
 
 fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
+    insert_capability_snapshot(&tx, &request.checkpoint.capability_snapshot)?;
+    for manifest in &request.context_manifests {
+        insert_context_manifest(&tx, manifest)?;
+    }
     insert_checkpoint(&tx, request.operation_id, &request.checkpoint)?;
     for entry in &request.entries {
         insert_entry(&tx, request.session_id, entry)?;
@@ -675,6 +698,42 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             let model = effect.effective_input.get("model").ok_or_else(|| {
                 rusqlite::Error::InvalidParameterName("model step missing model".to_owned())
             })?;
+            let capability_snapshot_id = effect
+                .effective_input
+                .get("capability_snapshot_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "model step missing capability snapshot id".to_owned(),
+                    )
+                })?;
+            if capability_snapshot_id != request.checkpoint.capability_snapshot.id {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "context manifest capability snapshot mismatch".to_owned(),
+                ));
+            }
+            let context_manifest_id = effect
+                .effective_input
+                .get("context_manifest_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    rusqlite::Error::InvalidParameterName(
+                        "model step missing context manifest id".to_owned(),
+                    )
+                })?;
+            let manifest_exists: bool = tx.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM context_manifests
+                    WHERE id = ?1 AND capability_snapshot_id = ?2
+                )",
+                rusqlite::params![context_manifest_id, capability_snapshot_id],
+                |row| row.get(0),
+            )?;
+            if !manifest_exists {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "model step context manifest was not published".to_owned(),
+                ));
+            }
             let model_ref = model
                 .get("model_ref")
                 .and_then(serde_json::Value::as_str)
@@ -689,14 +748,21 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
                     rusqlite::Error::InvalidParameterName("model step missing step".to_owned())
                 })?;
             tx.execute(
-                "INSERT INTO model_steps (effect_id, operation_id, step, model_ref, context_window, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO model_steps (
+                    effect_id, operation_id, step, model_ref, context_window,
+                    capability_snapshot_id, context_manifest_id, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     effect.id.as_uuid().to_string(),
                     request.operation_id.as_uuid().to_string(),
                     step as i64,
                     model_ref,
-                    model.get("context_window").and_then(serde_json::Value::as_u64).map(|v| v as i64),
+                    model
+                        .get("context_window")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|v| v as i64),
+                    capability_snapshot_id,
+                    context_manifest_id,
                     now_ms(),
                 ],
             )?;
@@ -765,6 +831,64 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
     Ok(())
 }
 
+fn insert_capability_snapshot(
+    connection: &rusqlite::Transaction<'_>,
+    snapshot: &crate::context::CapabilitySnapshot,
+) -> Result<(), rusqlite::Error> {
+    if !snapshot.is_consistent() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "capability snapshot id does not match its payload".to_owned(),
+        ));
+    }
+    let payload = serde_json::to_string(snapshot)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    connection.execute(
+        "INSERT INTO capability_snapshots (id, payload) VALUES (?1, ?2)
+         ON CONFLICT(id) DO NOTHING",
+        rusqlite::params![snapshot.id, payload],
+    )?;
+    let stored: String = connection.query_row(
+        "SELECT payload FROM capability_snapshots WHERE id = ?1",
+        [&snapshot.id],
+        |row| row.get(0),
+    )?;
+    if stored != payload {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "capability snapshot hash collision or mismatched payload".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn insert_context_manifest(
+    connection: &rusqlite::Transaction<'_>,
+    manifest: &crate::context::ContextManifest,
+) -> Result<(), rusqlite::Error> {
+    if !manifest.is_consistent() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "context manifest id does not match its payload".to_owned(),
+        ));
+    }
+    let payload = serde_json::to_string(manifest)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    connection.execute(
+        "INSERT INTO context_manifests (id, capability_snapshot_id, payload)
+         VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING",
+        rusqlite::params![manifest.id, manifest.capability_snapshot_id, payload],
+    )?;
+    let stored: String = connection.query_row(
+        "SELECT payload FROM context_manifests WHERE id = ?1",
+        [&manifest.id],
+        |row| row.get(0),
+    )?;
+    if stored != payload {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "context manifest hash collision or mismatched payload".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn insert_inbox(
     connection: &Connection,
     session_id: SessionId,
@@ -797,6 +921,11 @@ fn insert_checkpoint(
     operation_id: OperationId,
     checkpoint: &CheckpointRecord,
 ) -> Result<(), rusqlite::Error> {
+    if checkpoint.payload.capability_snapshot_id != checkpoint.capability_snapshot.id {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "checkpoint capability snapshot mismatch".to_owned(),
+        ));
+    }
     let payload = serde_json::to_string(&checkpoint.payload)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     connection.execute(
@@ -890,11 +1019,25 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         let op_id: String = row.get(0)?;
         let state_seq: i64 = row.get(1)?;
         let payload: String = row.get(2)?;
+        let checkpoint: CheckpointPayload = decode("checkpoint", payload)?;
+        let snapshot_payload: String = connection.query_row(
+            "SELECT payload FROM capability_snapshots WHERE id = ?1",
+            [&checkpoint.capability_snapshot_id],
+            |row| row.get(0),
+        )?;
+        let capability_snapshot: crate::context::CapabilitySnapshot =
+            decode("capability snapshot", snapshot_payload)?;
+        if capability_snapshot.id != checkpoint.capability_snapshot_id {
+            return Err(StoreError::Sqlite(
+                "checkpoint capability snapshot id mismatch".to_owned(),
+            ));
+        }
         let uuid = Uuid::parse_str(&op_id)
             .map_err(|err| StoreError::Sqlite(format!("corrupt operation id: {err}")))?;
         operations.push(LoadedOperation {
             id: OperationId::from_uuid(uuid),
-            latest: (state_seq as u64, decode("checkpoint", payload)?),
+            latest: (state_seq as u64, checkpoint),
+            capability_snapshot,
         });
     }
 

@@ -83,6 +83,7 @@ async fn start_agent() -> TestClient {
         ]),
         store: Arc::new(SessionStore::open_in_memory().expect("store")),
         policy: Arc::new(AllowlistPolicy::new(["read"])),
+        trust_project: false,
     };
     tokio::spawn(async move {
         ion::acp::serve(server_in, server_write, config)

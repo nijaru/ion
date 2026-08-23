@@ -19,6 +19,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::context::TrustedResource;
 use crate::ids::SessionId;
 use crate::provider::Provider;
 use crate::runtime::{Runtime, RuntimeBudget};
@@ -54,6 +55,9 @@ pub struct DelegateConfig<P> {
     pub max_active_children: usize,
     /// Budget applied to every child.
     pub child_budget: RuntimeBudget,
+    /// Explicitly inherited project resources; empty when the host did not
+    /// grant project trust.
+    pub trusted_resources: Vec<TrustedResource>,
 }
 
 /// The model-facing delegation tool. Registered under a dedicated
@@ -188,13 +192,14 @@ where
     // resolution depend on the host process's working directory.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let catalog = crate::tool::ToolCatalog::read_only(cwd);
-    let runtime = Runtime::start_child(
+    let runtime = Runtime::start_child_with_resources(
         (config.make_provider)(),
         catalog,
         config.store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         config.child_budget,
         parent_id,
+        config.trusted_resources.clone(),
     );
     let child_id = runtime.session_id();
     let session = runtime.session();

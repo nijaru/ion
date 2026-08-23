@@ -64,6 +64,7 @@ pub fn enable_children<P>(
     store: &ion_core::SessionStore,
     make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     parent_id: ion_core::SessionId,
+    trusted_resources: Vec<ion_core::TrustedResource>,
 ) where
     P: ion_core::Provider,
 {
@@ -75,6 +76,7 @@ pub fn enable_children<P>(
                 make_provider,
                 max_active_children: 4,
                 child_budget: ion_core::child_budget_default(),
+                trusted_resources,
             },
             parent_id,
         ))],

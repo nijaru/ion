@@ -34,6 +34,7 @@ pub struct AcpConfig<P> {
     pub make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     pub store: Arc<SessionStore>,
     pub policy: Arc<dyn PolicyEngine>,
+    pub trust_project: bool,
 }
 
 use ion_core::PolicyEngine;
@@ -374,11 +375,14 @@ where
             .start_into(&servers, &catalog)
             .await;
     }
-    let runtime = Runtime::start_with_policy(
+    let trusted_resources =
+        ion_core::load_trusted_resources(std::path::Path::new(cwd), config.trust_project)?;
+    let runtime = Runtime::start_with_policy_and_resources(
         (config.make_provider)(),
         catalog.clone(),
         (*config.store).clone(),
         Arc::clone(&config.policy),
+        trusted_resources.clone(),
     );
     let session_id = runtime.session_id();
     // ACP sessions can delegate to bounded read-only children (§20).
@@ -388,6 +392,7 @@ where
         &config.store,
         Arc::new(move || factory()),
         session_id,
+        trusted_resources,
     );
     let session_id_string = session_id.to_string();
     let handle = runtime.session();

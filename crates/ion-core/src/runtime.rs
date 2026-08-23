@@ -20,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
-use crate::context::{ContextPlan, project};
+use crate::context::{
+    CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource, project_with_manifest,
+};
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
@@ -440,6 +442,7 @@ struct Composition<P> {
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
     parent: Option<SessionId>,
+    trusted_resources: Vec<TrustedResource>,
 }
 
 impl<P: Provider> Composition<P> {
@@ -451,6 +454,7 @@ impl<P: Provider> Composition<P> {
             policy: Arc::new(DefaultPolicy),
             budget: RuntimeBudget::unbounded(),
             parent: None,
+            trusted_resources: Vec::new(),
         }
     }
 
@@ -462,6 +466,7 @@ impl<P: Provider> Composition<P> {
         let provider = Arc::new(self.provider);
         let tools = Arc::new(self.tools);
         let artifact_root = self.store.artifact_root();
+        let trusted_resources = self.trusted_resources;
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -474,6 +479,7 @@ impl<P: Provider> Composition<P> {
                     initial_model_ref,
                     tools,
                     artifact_root,
+                    trusted_resources,
                     store: self.store,
                     policy: self.policy,
                     budget: self.budget,
@@ -534,8 +540,22 @@ impl Runtime {
         store: SessionStore,
         policy: Arc<dyn PolicyEngine>,
     ) -> Self {
+        Self::start_with_policy_and_resources(provider, tools, store, policy, Vec::new())
+    }
+
+    /// Compose a runtime with an explicit trusted project-resource snapshot.
+    /// Trust is supplied by the host; retrieved text cannot grant it.
+    #[must_use]
+    pub fn start_with_policy_and_resources(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+    ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
+        composition.trusted_resources = trusted_resources;
         composition.spawn(SessionId::generate(), None)
     }
 
@@ -551,10 +571,26 @@ impl Runtime {
         budget: RuntimeBudget,
         parent: SessionId,
     ) -> Self {
+        Self::start_child_with_resources(provider, tools, store, policy, budget, parent, Vec::new())
+    }
+
+    /// Compose a bounded child with an explicitly inherited trusted-resource
+    /// snapshot. The child receives no broader capability set than its host.
+    #[must_use]
+    pub fn start_child_with_resources(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        budget: RuntimeBudget,
+        parent: SessionId,
+        trusted_resources: Vec<TrustedResource>,
+    ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.budget = budget;
         composition.parent = Some(parent);
+        composition.trusted_resources = trusted_resources;
         composition.spawn(SessionId::generate(), None)
     }
 
@@ -586,11 +622,23 @@ impl Runtime {
         store: SessionStore,
         session_id: SessionId,
     ) -> Result<Self, RuntimeError> {
+        Self::open_session_with_resources(provider, tools, store, session_id, Vec::new()).await
+    }
+
+    /// Reopen a session with the host's explicit trusted-resource snapshot.
+    pub async fn open_session_with_resources(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        session_id: SessionId,
+        trusted_resources: Vec<TrustedResource>,
+    ) -> Result<Self, RuntimeError> {
         let loaded = store
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-        let composition = Composition::new(provider, tools, store);
+        let mut composition = Composition::new(provider, tools, store);
+        composition.trusted_resources = trusted_resources;
         Ok(composition.spawn(session_id, Some(loaded)))
     }
 
@@ -716,6 +764,7 @@ struct SessionDeps<P> {
     initial_model_ref: String,
     tools: Arc<ToolCatalog>,
     artifact_root: Option<PathBuf>,
+    trusted_resources: Vec<TrustedResource>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -732,6 +781,7 @@ struct SessionRuntime<P> {
     selected_model_ref: String,
     tools: Arc<ToolCatalog>,
     artifact_root: Option<PathBuf>,
+    trusted_resources: Vec<TrustedResource>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -775,7 +825,12 @@ struct SessionRuntime<P> {
     pending_compact: Option<PendingCompact>,
     /// Reopened Suspended operations awaiting durable settlement
     /// (§9.5); empty unless --resume found one.
-    suspended_operations: Vec<(OperationId, u64, crate::store::CheckpointPayload)>,
+    suspended_operations: Vec<(
+        OperationId,
+        u64,
+        crate::store::CheckpointPayload,
+        CapabilitySnapshot,
+    )>,
     /// Whether the consumed compaction should be followed by a hidden
     /// recovery turn.
     recovery_after_compaction: bool,
@@ -815,6 +870,7 @@ impl<P: Provider> SessionRuntime<P> {
             initial_model_ref,
             tools,
             artifact_root,
+            trusted_resources,
             store,
             policy,
             budget,
@@ -830,6 +886,7 @@ impl<P: Provider> SessionRuntime<P> {
             selected_model_ref: initial_model_ref,
             tools,
             artifact_root,
+            trusted_resources,
             store,
             policy,
             budget,
@@ -897,8 +954,12 @@ impl<P: Provider> SessionRuntime<P> {
                 // the operation can never continue. Skip it here; the
                 // async recovery pass settles it durably so it cannot
                 // block the session forever.
-                self.suspended_operations
-                    .push((operation.id, state_seq, payload.clone()));
+                self.suspended_operations.push((
+                    operation.id,
+                    state_seq,
+                    payload.clone(),
+                    operation.capability_snapshot.clone(),
+                ));
                 continue;
             }
             // Mid-flight operations are recoverable state (§9.5); they
@@ -933,7 +994,7 @@ impl<P: Provider> SessionRuntime<P> {
             let machine = OperationMachine::restore(
                 operation.id,
                 payload.prompt.clone(),
-                payload.tools.clone(),
+                operation.capability_snapshot.tools.clone(),
                 payload.state.clone(),
                 payload.cancel_requested,
                 steers,
@@ -1083,6 +1144,7 @@ impl<P: Provider> SessionRuntime<P> {
         let operation_id = OperationId::generate();
         let (machine, applied) =
             OperationMachine::accept(operation_id, prompt.clone(), self.tools.specs());
+        let capability_snapshot = CapabilitySnapshot::new(machine.frozen_tools().clone());
         let root_inbox = InboxRecord {
             id: InboxId::generate(),
             kind: InboxKind::Prompt,
@@ -1096,9 +1158,10 @@ impl<P: Provider> SessionRuntime<P> {
                 state: machine.state().clone(),
                 cancel_requested: false,
                 prompt: machine.prompt().to_owned(),
-                tools: machine_snapshot_tools(&machine),
+                capability_snapshot_id: capability_snapshot.id.clone(),
                 open_effect: None,
             },
+            capability_snapshot,
         };
         // Accepted intent is durable before acknowledgment (P4, §9.1).
         self.store
@@ -1284,7 +1347,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// never replayed (§12.2); quiescent operations simply continue.
     async fn recover_open_operation(&mut self) {
         let suspended = std::mem::take(&mut self.suspended_operations);
-        for (operation_id, state_seq, payload) in suspended {
+        for (operation_id, state_seq, payload, capability_snapshot) in suspended {
             let request = CommitRequest {
                 session_id: self.session_id,
                 operation_id,
@@ -1294,9 +1357,10 @@ impl<P: Provider> SessionRuntime<P> {
                         state: OperationState::Finished(OperationOutcome::Cancelled),
                         cancel_requested: false,
                         prompt: payload.prompt.clone(),
-                        tools: payload.tools.clone(),
+                        capability_snapshot_id: capability_snapshot.id.clone(),
                         open_effect: None,
                     },
+                    capability_snapshot,
                 },
                 entries: Vec::new(),
                 open_effects: Vec::new(),
@@ -1305,6 +1369,7 @@ impl<P: Provider> SessionRuntime<P> {
                 inbox: Vec::new(),
                 inbox_applied: Vec::new(),
                 usage: Vec::new(),
+                context_manifests: Vec::new(),
             };
             if let Err(err) = self.store.commit(request).await {
                 error!(session = %self.session_id, error = %err, "could not settle a suspended operation");
@@ -1327,7 +1392,7 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let Some((step, model, plan, persisted_tools)) =
+                let Some((step, model, plan, persisted_snapshot_id, persisted_manifest_id)) =
                     model_step_from_input(&open.effective_input)
                 else {
                     error!(session = %self.session_id, "pending model step lacks an exact model snapshot; fencing");
@@ -1335,6 +1400,13 @@ impl<P: Provider> SessionRuntime<P> {
                     return;
                 };
                 let mut staged = self.operation.clone().expect("operation present");
+                let snapshot_id =
+                    CapabilitySnapshot::new(staged.machine.frozen_tools().to_vec()).id;
+                if snapshot_id != persisted_snapshot_id || persisted_manifest_id.is_empty() {
+                    error!(session = %self.session_id, "pending model step capability snapshot disagrees with checkpoint; fencing");
+                    self.closed = true;
+                    return;
+                }
                 let applied = staged
                     .machine
                     .apply(Transition::RecoverModelStep {
@@ -1345,11 +1417,6 @@ impl<P: Provider> SessionRuntime<P> {
                 let EffectIntent::ModelStep { tools, .. } = applied.intents[0].clone() else {
                     panic!("RecoverModelStep must yield a model-step intent");
                 };
-                if tools != persisted_tools {
-                    error!(session = %self.session_id, "pending model step tool snapshot disagrees with checkpoint; fencing");
-                    self.closed = true;
-                    return;
-                }
                 let settled = vec![SettledEffect {
                     id: open.id,
                     settlement: serde_json::json!({ "recovered": "process_loss" }),
@@ -1895,9 +1962,18 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    async fn project_model_step_plan(&mut self) -> crate::context::ContextPlan {
+    fn current_context_manifest(&self) -> (CapabilitySnapshot, ContextManifest) {
+        let snapshot = CapabilitySnapshot::new(self.tools.specs());
+        let manifest = ContextManifest::new(&snapshot, self.trusted_resources.clone());
+        (snapshot, manifest)
+    }
+
+    async fn project_model_step_plan(
+        &mut self,
+        manifest: &ContextManifest,
+    ) -> crate::context::ContextPlan {
         let _ = self.current_model_config().await;
-        let mut plan = project(&self.entries, self.first_entry_seq());
+        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), manifest);
         let hint = crate::context::usage_hint(
             self.last_context_tokens.unwrap_or(0),
             self.context_window,
@@ -1934,7 +2010,8 @@ impl<P: Provider> SessionRuntime<P> {
     /// persistence failed.
     async fn start_compaction(&mut self, instructions: Option<String>) -> bool {
         let model = self.current_model_config().await;
-        let mut plan = project(&self.entries, self.first_entry_seq());
+        let (_, manifest) = self.current_context_manifest();
+        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), &manifest);
         let mut content = crate::context::SUMMARIZE_INSTRUCTION.to_owned();
         if let Some(instructions) = instructions {
             content.push_str("\n\nPreservation instructions from the caller: ");
@@ -2050,7 +2127,8 @@ impl<P: Provider> SessionRuntime<P> {
             self.fail_budgeted("model steps").await;
             return false;
         }
-        let plan = self.project_model_step_plan().await;
+        let (_, planning_manifest) = self.current_context_manifest();
+        let plan = self.project_model_step_plan(&planning_manifest).await;
         let model = self.current_model_config().await;
         let mut staged = self.operation.clone().expect("step needs an operation");
         let applied = staged
@@ -2069,6 +2147,9 @@ impl<P: Provider> SessionRuntime<P> {
         else {
             panic!("StartModelStep must yield a model-step intent");
         };
+        let capability_snapshot = CapabilitySnapshot::new(tools.clone());
+        let context_manifest =
+            ContextManifest::new(&capability_snapshot, self.trusted_resources.clone());
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: "model_step".to_owned(),
@@ -2077,14 +2158,15 @@ impl<P: Provider> SessionRuntime<P> {
                 "step": self.model_step + 1,
                 "model": model,
                 "plan": plan,
-                "tools": tools
+                "capability_snapshot_id": capability_snapshot.id,
+                "context_manifest_id": context_manifest.id
             }),
             attempt: 1,
         };
         // The pending effect is part of the checkpoint: it must be on the
         // staged operation before the commit is built.
         staged.open_effect = Some(effect.clone());
-        let (request, new_entry_seq) = build_commit_request(
+        let (mut request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
@@ -2097,6 +2179,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
+        request.context_manifests.push(context_manifest);
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
             return false;
@@ -2551,7 +2634,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.overflow_retry_used = true;
         let mut staged = self.operation.clone().expect("settle needs an operation");
         let model = self.current_model_config().await;
-        let mut plan = project(&self.entries, self.first_entry_seq());
+        let (_, manifest) = self.current_context_manifest();
+        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), &manifest);
         plan.messages.push(crate::context::ContextMessage::User {
             content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
         });
@@ -3106,12 +3190,19 @@ fn model_from_input(model: &serde_json::Value) -> Option<ModelConfig> {
 /// `(step, model, plan)` from a persisted model-step effect input.
 fn model_step_from_input(
     input: &serde_json::Value,
-) -> Option<(u64, ModelConfig, ContextPlan, Vec<ToolSpec>)> {
+) -> Option<(u64, ModelConfig, ContextPlan, String, String)> {
     let step = input.get("step")?.as_u64()?;
     let model = model_from_input(input.get("model")?)?;
     let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
-    let tools = serde_json::from_value(input.get("tools")?.clone()).ok()?;
-    Some((step, model, plan, tools))
+    let capability_snapshot_id = input.get("capability_snapshot_id")?.as_str()?.to_owned();
+    let context_manifest_id = input.get("context_manifest_id")?.as_str()?.to_owned();
+    Some((
+        step,
+        model,
+        plan,
+        capability_snapshot_id,
+        context_manifest_id,
+    ))
 }
 
 /// `(step, model, plan)` from a persisted compaction effect input.
@@ -3120,11 +3211,6 @@ fn compaction_from_input(input: &serde_json::Value) -> Option<(u64, ModelConfig,
     let model = model_from_input(input.get("model")?)?;
     let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
     Some((step, model, plan))
-}
-
-fn machine_snapshot_tools(machine: &OperationMachine) -> Vec<ToolSpec> {
-    // The frozen capability snapshot is part of every checkpoint.
-    machine.frozen_tools().clone()
 }
 
 fn effect_id_of(active: Option<&ActiveOperation>) -> Option<EffectId> {
@@ -3148,6 +3234,7 @@ fn build_commit_request(
     inbox_applied: Vec<InboxId>,
     usage: Vec<UsageRecord>,
 ) -> (CommitRequest, u64) {
+    let capability_snapshot = CapabilitySnapshot::new(staged.machine.frozen_tools().to_vec());
     let mut seq = next_entry_seq;
     let entries = entries
         .into_iter()
@@ -3169,9 +3256,10 @@ fn build_commit_request(
                 state: staged.machine.state().clone(),
                 cancel_requested: staged.machine.cancel_requested(),
                 prompt: staged.machine.prompt().to_owned(),
-                tools: staged.machine.frozen_tools().to_vec(),
+                capability_snapshot_id: capability_snapshot.id.clone(),
                 open_effect: staged.open_effect.clone(),
             },
+            capability_snapshot,
         },
         entries,
         open_effects,
@@ -3180,6 +3268,7 @@ fn build_commit_request(
         inbox,
         inbox_applied,
         usage,
+        context_manifests: Vec::new(),
     };
     (request, seq)
 }
