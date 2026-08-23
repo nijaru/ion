@@ -1760,10 +1760,26 @@ are not step-boundary synchronization and MUST NOT span provider futures.
 
 Ion SHOULD support the Pi-like inline terminal experience as a first-class mode: completed transcript remains useful terminal scrollback while the live composer/status area redraws efficiently.
 
-Use the line-diff screen (§22 intro): completed transcript lines are part of
-the same rendered array as the live composer/status area, so nothing is ever
-inserted above a reserved region and no stale cells can survive a flush.
-The screen layer owns cursor placement, scrolling, and resize handling.
+Use the line-diff screen (§22 intro). The screen layer owns, as an
+acceptance contract:
+
+- **Origin ownership**: the host reserves the window's rows before the
+  first draw (`reserve_rows`); the window occupies the bottom rows of
+  the physical screen and never overwrites content above the launch
+  point.
+- **Committed-vs-mutable scrolling**: physical scroll happens only when
+  committed history advances. The live band is fixed-height, so
+  reversible edits (composer wrapping, preview toggles) redraw in place
+  and can never leak rows into terminal scrollback.
+- **Invalidation**: resize or any loss of previous-window state repaints
+  every row from the fresh buffer; freed rows are erased, never left as
+  ghosts.
+- **Cursor translation**: the hardware cursor maps absolute wrapped row
+  -> visible row by subtracting the window offset; cursors outside the
+  window are hidden, never mispositioned.
+- **Width model**: wrapping, cursor mapping, and cell output use the
+  same display-width model; rows are diffed at row granularity so wide
+  characters and grapheme clusters always render from complete rows.
 
 ## 22.4 Terminal restoration
 

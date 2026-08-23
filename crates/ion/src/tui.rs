@@ -927,7 +927,11 @@ pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        let _ = execute!(io::stdout(), DisableBracketedPaste, crossterm::cursor::Show,);
+        // SGR reset: a draw interrupted mid-style must not tint the
+        // panic message or the shell prompt.
+        let _ = io::stdout().write_all(b"\x1b[0m");
+        let _ = io::stdout().flush();
         previous(info);
     }));
 }
@@ -965,11 +969,13 @@ pub fn palette(theme: Theme) -> Palette {
 /// Wrap one styled line to `width` columns (display width, char
 /// boundaries). Styles carry over to the continuation rows.
 /// Convert any borrowed Line to an owned `'static` one.
+/// Convert any borrowed Line to an owned `'static` one, folding the
+/// line-level style into each span so wrapping cannot discard it.
 fn clone_static(line: &Line<'_>) -> Line<'static> {
     Line::from(
         line.spans
             .iter()
-            .map(|s| Span::styled(s.content.to_string(), s.style))
+            .map(|s| Span::styled(s.content.to_string(), line.style.patch(s.style)))
             .collect::<Vec<_>>(),
     )
 }
@@ -1015,95 +1021,153 @@ fn str_width(line: &Line<'_>) -> usize {
     line.spans.iter().map(|s| s.content.width()).sum()
 }
 
-/// The live region below the committed transcript: tool rows, draft
-/// tail, status, composer. Returns pre-wrapped rows plus the hardware
-/// cursor position relative to this region.
+/// Fixed live-band height: tool row(s), draft tail, status, composer
+/// always fit without scrolling, so reversible edits never push rows
+/// into terminal scrollback (§22.3).
+const LIVE_REGION_ROWS: usize = 6;
+
+/// The live band below the committed transcript. Returns exactly
+/// LIVE_REGION_ROWS pre-wrapped rows plus the hardware cursor position
+/// relative to the band; the composer always occupies the last rows.
 fn build_live(
     state: &UiState,
     palette: &Palette,
     width: usize,
 ) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Composer first: it is anchored to the band's bottom and owns the
+    // hardware cursor.
+    let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
+    let before = &state.composer[..cursor_byte];
+    let after = &state.composer[cursor_byte..];
+    let prompt = "\u{203a} ";
+    let target_col = prompt.width() + before.width();
+    let composer = Line::from(format!("{prompt}{before}{after}"));
+    let composer_rows = wrap_line(&composer, width);
+    let composer_len = composer_rows.len();
 
+    let mut head: Vec<Line<'static>> = Vec::new();
     if let Some(latest) = state.tool_rows.last() {
-        lines.push(Line::from(latest.label.clone()).style(palette.tool_row));
+        head.extend(wrap_line(
+            &Line::from(latest.label.clone()).style(palette.tool_row),
+            width,
+        ));
         if state.tool_output_expanded {
             for line in latest.preview.iter().flat_map(|p| p.lines()) {
-                lines.push(
-                    Line::from(format!("  {line}"))
+                head.extend(wrap_line(
+                    &Line::from(format!("  {line}"))
                         .style(palette.tool_row)
                         .italic(),
-                );
+                    width,
+                ));
             }
         }
     }
     if !state.draft.is_empty() {
-        lines.push(Line::from(format!("ion « {}", state.draft)));
+        head.extend(wrap_line(
+            &Line::from(format!("ion \u{ab} {}", state.draft)),
+            width,
+        ));
     } else if let Some(last) = state
         .draft_thinking
         .lines()
         .last()
         .filter(|_| state.thinking_visible && !state.draft_thinking.is_empty())
     {
-        lines.push(Line::from(format!("✻ {last}")).dim().italic());
+        head.extend(wrap_line(
+            &Line::from(format!("\u{273b} {last}")).dim().italic(),
+            width,
+        ));
     }
 
     let status = match &state.status {
         UiStatus::Idle => {
-            let mut text = String::from("idle — type a prompt, esc quits");
+            let mut text = String::from("idle \u{2014} type a prompt, esc quits");
             if let Some(model) = &state.model_name {
-                text.push_str("  ·  ");
+                text.push_str("  \u{b7}  ");
                 text.push_str(model);
             }
             Line::from(text).style(palette.status_idle)
         }
         UiStatus::Working { operation } => {
-            Line::from(format!("● {operation}")).style(palette.status_working)
+            Line::from(format!("\u{25cf} {operation}")).style(palette.status_working)
         }
     };
-    lines.push(status);
+    head.push(status);
 
-    // Composer: real hardware cursor instead of a drawn bar.
-    let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
-    let before = &state.composer[..cursor_byte];
-    let after = &state.composer[cursor_byte..];
-    let prompt = "› ";
-    let target_col = prompt.width() + before.width();
-    let composer = Line::from(format!("{prompt}{before}{after}"));
-    let wrapped = wrap_line(&composer, width);
+    // Fit the head above the composer inside the fixed band, keeping
+    // the newest content when truncating.
+    let budget = LIVE_REGION_ROWS.saturating_sub(composer_len);
+    if head.len() > budget {
+        head = head.split_off(head.len() - budget);
+    }
+
+    let mut lines: Vec<Line<'static>> =
+        vec![Line::from(String::new()); LIVE_REGION_ROWS.saturating_sub(head.len() + composer_len)];
+    lines.extend(head);
+
+    // Cursor position within the wrapped composer rows.
     let mut cursor = None;
     let mut walked = 0usize;
-    for (i, row) in wrapped.iter().enumerate() {
+    for (i, row) in composer_rows.iter().enumerate() {
         let row_width = str_width(row);
         if target_col <= walked + row_width {
-            cursor = Some((lines.len() + i, (target_col - walked) as u16));
+            cursor = Some((
+                lines.len() + i,
+                (target_col - walked).min(width.saturating_sub(1)) as u16,
+            ));
             break;
         }
         walked += row_width;
     }
-    lines.extend(wrapped);
+    lines.extend(composer_rows);
+    debug_assert_eq!(lines.len(), LIVE_REGION_ROWS);
 
     (lines, cursor)
 }
 
-/// The complete frame: wrapped transcript plus the live region.
-fn build_frame(
-    transcript: &[Line<'static>],
-    state: &UiState,
-    palette: &Palette,
+/// Committed transcript with its wrapped projection cached per width:
+/// appending wraps only new lines; a resize rewraps once.
+struct Transcript {
+    raw: Vec<Line<'static>>,
+    wrapped: Vec<Line<'static>>,
     width: u16,
-) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(transcript.len() + 8);
-    for line in transcript {
-        lines.extend(wrap_line(line, width as usize));
+}
+
+impl Transcript {
+    fn new(width: u16) -> Self {
+        Self {
+            raw: Vec::new(),
+            wrapped: Vec::new(),
+            width,
+        }
     }
-    let committed_rows = lines.len();
-    let (live, mut cursor) = build_live(state, palette, width as usize);
-    if let Some((row, _col)) = &mut cursor {
-        *row += committed_rows;
+
+    fn push(&mut self, line: Line<'static>) {
+        self.wrapped.extend(wrap_line(&line, self.width as usize));
+        self.raw.push(line);
     }
-    lines.extend(live);
-    (lines, cursor)
+
+    fn extend(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+        for line in lines {
+            self.push(line);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.raw.clear();
+        self.wrapped.clear();
+    }
+
+    fn rewrap_if_needed(&mut self, width: u16) {
+        if width == self.width {
+            return;
+        }
+        self.width = width;
+        self.wrapped.clear();
+        for line in &self.raw {
+            self.wrapped.extend(wrap_line(line, width as usize));
+        }
+    }
 }
 
 /// Enter the terminal before any session state is touched: the
@@ -1141,10 +1205,16 @@ pub async fn run(
     let mut screen = Screen::new(term_w, term_h);
     let mut out = io::stdout();
 
+    // Reserve the window's rows below the launch cursor so the first
+    // draw never overwrites existing terminal content above it (§22.3).
+    let reserved = screen.reserve_rows();
+    print!("{}", "\n".repeat(reserved as usize));
+    io::stdout().flush().ok();
+
     // Committed transcript: banner, restored entries, flushed turns.
-    // The live region is rebuilt every frame from UiState; committed
+    // The live band is rebuilt every frame from UiState; committed
     // lines never change once appended (§22 line-diff model).
-    let mut transcript: Vec<Line<'static>> = Vec::new();
+    let mut transcript = Transcript::new(term_w);
     let banner = if resume_session.is_some() {
         "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
     } else {
@@ -1153,15 +1223,19 @@ pub async fn run(
     transcript.push(Line::from(banner).dim());
 
     // Resume: project the persisted transcript into the committed array.
+    let mut durable_prefix = 1usize; // banner
     if let Some(session_id) = resume_session {
         let loaded = store
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+        durable_prefix += loaded.entries.len(); // entry count, not line count
+        let mut restored: Vec<Line<'static>> = Vec::new();
         for (_, entry) in loaded.entries {
-            push_entry_lines(&entry, &mut transcript);
+            push_entry_lines(&entry, &mut restored);
         }
-        transcript.push(Line::from(format!("— resumed session {session_id} —")).dim());
+        restored.push(Line::from(format!("— resumed session {session_id} —")).dim());
+        transcript.extend(restored);
     }
 
     // The EventStream is the sole terminal reader, so crossterm parses
@@ -1183,6 +1257,13 @@ pub async fn run(
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
+    // §21.4/§31.14: the initial snapshot is authoritative for durable
+    // history. Entries settled between the resume load and this
+    // subscribe are appended; a fresh session's snapshot is empty.
+    if snapshot.entries.len() > durable_prefix - 1 {
+        let skip = durable_prefix - 1;
+        transcript.extend(entry_lines(&snapshot.entries[skip..]));
+    }
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
         OperationStatus::Idle => None,
@@ -1200,18 +1281,22 @@ pub async fn run(
         if let Ok((w, h)) = crossterm::terminal::size() {
             screen.resize(w, h);
         }
+        transcript.rewrap_if_needed(screen.size().0);
         // Flush completed turns into the committed transcript, then
-        // draw transcript + live region as one line-diff frame (§22).
+        // draw committed history + live band as one line-diff frame
+        // (§22).
         if !state.pending_scrollback.is_empty() {
             let flushed = std::mem::take(&mut state.pending_scrollback);
             transcript.extend(flushed);
         }
-        let (lines, cursor) = build_frame(&transcript, &state, &palette, screen.size().0);
+        let (live, live_cursor) = build_live(&state, &palette, screen.size().0 as usize);
+        let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    lines: &lines,
+                    committed: &transcript.wrapped,
+                    live: &live,
                     cursor,
                 },
             )
@@ -1233,10 +1318,17 @@ pub async fn run(
                         }
                     }
                     Some(Ok(TermEvent::Paste(text))) => {
+                        stream_recreations = 0;
                         let (next, _) = update(state, UiMessage::Paste(text));
                         state = next;
                     }
-                    _ => {
+                    // Resize/focus/mouse: handled by per-frame size
+                    // polling; a successfully read event proves the
+                    // stream is healthy.
+                    Some(Ok(_)) => {
+                        stream_recreations = 0;
+                    }
+                    None | Some(Err(_)) => {
                         stream_recreations += 1;
                         if stream_recreations > MAX_STREAM_RECREATIONS {
                             result = Err(RuntimeError::OperationFailed(
@@ -1282,6 +1374,14 @@ pub async fn run(
                                     OperationStatus::Idle => None,
                                 };
                                 state.resync_after_lag(&snapshot);
+                                // §21.4/§31.14: the snapshot is also
+                                // authoritative for committed history;
+                                // presentation prefix is preserved.
+                                let prefix: Vec<Line<'static>> =
+                                    transcript.raw[..durable_prefix].to_vec();
+                                transcript.clear();
+                                transcript.extend(prefix);
+                                transcript.extend(entry_lines(&snapshot.entries));
                             }
                             Err(err) => {
                                 result = Err(err.into());
@@ -1372,6 +1472,14 @@ async fn dispatch(
             }
         }
     }
+}
+
+fn entry_lines(entries: &[ion_core::SessionEntry]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for entry in entries {
+        push_entry_lines(entry, &mut out);
+    }
+    out
 }
 
 fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>) {
