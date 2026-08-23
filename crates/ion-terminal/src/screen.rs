@@ -139,11 +139,32 @@ impl Screen {
     /// Render one frame. Lines must already be wrapped to `width`;
     /// each occupies exactly one row (overlong spans truncate).
     pub fn draw(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {
-        let h = self.avail() as usize;
+        let previous = self.current.take();
+        let previous_offset = previous.as_ref().map_or(0, |window| window.offset);
+        let mut h = self.avail() as usize;
         let w = self.width;
         let committed_rows = frame.committed.len();
         let total = committed_rows + frame.live.len();
-        let offset = total.saturating_sub(h);
+        let mut offset = total.saturating_sub(h);
+
+        // A committed/live line can consume the blank rows above a
+        // nonzero launch origin before the physical terminal needs to
+        // scroll. Once the origin moves, the window height changes, so
+        // rebuild the frame and compare it as a fresh surface. Without
+        // this adjustment, a growing transcript keeps painting at the
+        // old origin after the terminal has already scrolled that origin
+        // upward, eventually addressing rows below the terminal.
+        let origin_before = self.origin;
+        if offset > previous_offset && self.origin > 0 {
+            let shift = offset
+                .saturating_sub(previous_offset)
+                .min(u16::MAX as usize) as u16;
+            self.origin = self.origin.saturating_sub(shift);
+            if self.origin != origin_before {
+                h = self.avail() as usize;
+                offset = total.saturating_sub(h);
+            }
+        }
 
         let mut next = Surface::new(w, self.avail());
         for r in 0..h {
@@ -163,10 +184,7 @@ impl Screen {
         // committed history grows, so scrolled rows are permanently
         // finished content and the shift maps old window row r + k to
         // new window row r.
-        let scrolled = match &self.current {
-            Some(prev) => offset.saturating_sub(prev.offset),
-            None => 0,
-        };
+        let scrolled = offset.saturating_sub(previous_offset);
         if scrolled > 0 {
             write!(out, "\x1b[{};1H", self.screen_height)?;
             for _ in 0..scrolled {
@@ -177,12 +195,14 @@ impl Screen {
         let mut painted = false;
         for r in 0..h as u16 {
             let src_row = r as usize + scrolled;
-            let comparable = self.current.is_some() && src_row < h;
+            let comparable = previous.as_ref().is_some_and(|prev| {
+                self.origin == origin_before && src_row < prev.surface.buffer.area.height as usize
+            });
             if !comparable
                 || row_differs(
                     &next.buffer,
                     r,
-                    &self.current.as_ref().expect("checked").surface.buffer,
+                    &previous.as_ref().expect("checked").surface.buffer,
                     src_row as u16,
                 )
             {
@@ -486,6 +506,51 @@ mod tests {
                 "row5".to_owned(),
                 "row6".to_owned(),
                 "row7".to_owned(),
+                "status".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn stateful_terminal_tracks_committed_scroll_from_a_nonzero_origin() {
+        // Launching below existing shell output leaves only four rows in
+        // the first inline region. Once committed history grows past that
+        // region, the physical scroll moves the anchor upward; the screen
+        // must still end with the newest six rows in the terminal window.
+        let first: Vec<Line> = (0..3).map(|i| line(&format!("row{i}"))).collect();
+        let second: Vec<Line> = (0..7).map(|i| line(&format!("row{i}"))).collect();
+        let live = [line("status")];
+        let mut screen = Screen::new(40, 2, 6);
+        let mut terminal = vt100::Parser::new(6, 40, 16);
+
+        for committed in [&first, &second] {
+            let mut bytes = Vec::new();
+            screen
+                .draw(
+                    &mut bytes,
+                    &Frame {
+                        committed,
+                        live: &live,
+                        cursor: None,
+                    },
+                )
+                .expect("draw");
+            terminal.process(&bytes);
+        }
+
+        let rows: Vec<String> = terminal
+            .screen()
+            .rows(0, 40)
+            .map(|row| row.trim_end().to_owned())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                "row2".to_owned(),
+                "row3".to_owned(),
+                "row4".to_owned(),
+                "row5".to_owned(),
+                "row6".to_owned(),
                 "status".to_owned(),
             ]
         );
