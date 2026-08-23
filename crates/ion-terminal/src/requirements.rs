@@ -11,6 +11,7 @@ pub enum TerminalSurface {
 pub struct TerminalRequirements {
     pub surface: TerminalSurface,
     pub bracketed_paste: bool,
+    pub keyboard_enhancement: bool,
     pub synchronized_output: bool,
     pub focus_reporting: bool,
     pub mouse: bool,
@@ -21,6 +22,7 @@ impl Default for TerminalRequirements {
         Self {
             surface: TerminalSurface::Inline,
             bracketed_paste: true,
+            keyboard_enhancement: true,
             synchronized_output: false,
             focus_reporting: false,
             mouse: false,

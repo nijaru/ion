@@ -123,6 +123,7 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
         let mut file = std::fs::File::from(master);
         let mut chunk = [0u8; 4096];
         let mut answered = 0usize;
+        let mut keyboard_answered = 0usize;
         // Non-blocking reads: EAGAIN just means no data yet; EOF (or
         // the master closing) ends the drain.
         loop {
@@ -138,12 +139,23 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
                         let queries = buffer.windows(4).filter(|w| *w == b"\x1b[6n").count();
                         let respond = queries > answered;
                         answered = queries;
-                        respond
+                        let keyboard_queries =
+                            buffer.windows(4).filter(|w| *w == b"\x1b[?u").count();
+                        let respond_keyboard = keyboard_queries > keyboard_answered;
+                        keyboard_answered = keyboard_queries;
+                        (respond, respond_keyboard)
                     };
-                    if pending {
+                    if pending.0 {
                         // Report row 5, column 1 (inside the viewport).
                         use std::io::Write as _;
                         let _ = responder.write_all(b"\x1b[5;1R");
+                        let _ = responder.flush();
+                    }
+                    if pending.1 {
+                        // Advertise Kitty keyboard disambiguation and then
+                        // answer the primary-device query Crossterm pairs
+                        // with it during capability detection.
+                        let _ = responder.write_all(b"\x1b[?1u\x1b[?1;2c");
                         let _ = responder.flush();
                     }
                 }
@@ -191,6 +203,17 @@ impl PtySession {
             .unwrap_or(false)
     }
 
+    fn wait_for_raw(&self, needle: &str, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if self.saw_raw(needle) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        self.saw_raw(needle)
+    }
+
     /// The TUI puts the tty in raw mode; after any exit path ECHO and
     /// ICANON must be back on (the guard restored cooked mode).
     fn assert_cooked(&self) {
@@ -225,6 +248,14 @@ fn panic_restores_the_terminal() {
     assert!(
         session.saw_raw("\x1b[?2004l"),
         "bracketed paste not disabled on panic"
+    );
+    assert!(
+        session.wait_for_raw("\x1b[>1u", std::time::Duration::from_secs(2)),
+        "keyboard enhancement was not enabled on panic"
+    );
+    assert!(
+        session.wait_for_raw("\x1b[<1u", std::time::Duration::from_secs(2)),
+        "keyboard enhancement was not restored on panic"
     );
     session.assert_cooked();
 }
@@ -266,6 +297,14 @@ fn clean_exit_restores_the_terminal() {
         }
     };
     assert!(status.success(), "clean exit must be code 0");
+    assert!(
+        session.wait_for_raw("\x1b[>1u", std::time::Duration::from_secs(2)),
+        "keyboard enhancement was not enabled on clean exit"
+    );
+    assert!(
+        session.wait_for_raw("\x1b[<1u", std::time::Duration::from_secs(2)),
+        "keyboard enhancement was not restored on clean exit"
+    );
     session.assert_cooked();
 }
 

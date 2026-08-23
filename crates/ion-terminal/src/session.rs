@@ -3,12 +3,17 @@ use std::io::{self, Stdout, Write};
 use std::path::{Path, PathBuf};
 
 use crossterm::cursor::Show;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
-use crossterm::{execute, terminal};
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
+use crossterm::{SynchronizedUpdate, execute, terminal};
 
 use crate::capabilities::{CapabilitySupport, TerminalCapabilities};
 use crate::input::InputStream;
 use crate::requirements::TerminalRequirements;
+use crate::{Frame, Screen};
 
 /// Output that mirrors bytes to the optional PTY capture without changing the
 /// writer contract used by the renderer.
@@ -72,6 +77,9 @@ pub struct TerminalSession {
     requirements: TerminalRequirements,
     capabilities: TerminalCapabilities,
     restored: bool,
+    keyboard_enhancement_enabled: bool,
+    focus_reporting_enabled: bool,
+    mouse_enabled: bool,
 }
 
 impl TerminalSession {
@@ -86,6 +94,9 @@ impl TerminalSession {
             requirements,
             capabilities: TerminalCapabilities::default(),
             restored: true,
+            keyboard_enhancement_enabled: false,
+            focus_reporting_enabled: false,
+            mouse_enabled: false,
         };
         session.activate()?;
         Ok(session)
@@ -115,6 +126,17 @@ impl TerminalSession {
         self.requirements
     }
 
+    /// Render one frame under the negotiated output policy. Synchronized
+    /// output is opt-in because terminals may ignore the private mode.
+    pub fn render(&mut self, screen: &mut Screen, frame: &Frame<'_>) -> io::Result<()> {
+        if self.requirements.synchronized_output {
+            self.output
+                .sync_update(|output| screen.draw(output, frame))?
+        } else {
+            screen.draw(&mut self.output, frame)
+        }
+    }
+
     pub fn suspend(&mut self) -> io::Result<()> {
         self.restore()
     }
@@ -130,10 +152,30 @@ impl TerminalSession {
         if self.restored {
             return Ok(());
         }
-        self.restored = true;
         let mut first_error = None;
+        if self.keyboard_enhancement_enabled {
+            match execute!(self.output, PopKeyboardEnhancementFlags) {
+                Ok(()) => self.keyboard_enhancement_enabled = false,
+                Err(err) => first_error = Some(err),
+            }
+        }
+        if self.mouse_enabled {
+            match execute!(self.output, DisableMouseCapture) {
+                Ok(()) => self.mouse_enabled = false,
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
+        if self.focus_reporting_enabled {
+            match execute!(self.output, DisableFocusChange) {
+                Ok(()) => self.focus_reporting_enabled = false,
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
         if self.requirements.bracketed_paste
             && let Err(err) = execute!(self.output, DisableBracketedPaste)
+            && first_error.is_none()
         {
             first_error = Some(err);
         }
@@ -147,21 +189,68 @@ impl TerminalSession {
         {
             first_error = Some(err);
         }
+        if first_error.is_none() {
+            self.restored = true;
+        }
         first_error.map_or(Ok(()), Err)
     }
 
     fn activate(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
+        self.restored = false;
         if self.requirements.bracketed_paste {
             if let Err(err) = execute!(self.output, EnableBracketedPaste) {
-                let _ = terminal::disable_raw_mode();
+                let _ = self.restore();
                 return Err(err);
             }
             self.capabilities.bracketed_paste = CapabilitySupport::Supported;
         } else {
             self.capabilities.bracketed_paste = CapabilitySupport::Unsupported;
         }
-        self.restored = false;
+
+        if self.requirements.focus_reporting {
+            if let Err(err) = execute!(self.output, EnableFocusChange) {
+                let _ = self.restore();
+                return Err(err);
+            }
+            self.focus_reporting_enabled = true;
+            self.capabilities.focus_reporting = CapabilitySupport::Supported;
+        } else {
+            self.capabilities.focus_reporting = CapabilitySupport::Unsupported;
+        }
+
+        if self.requirements.mouse {
+            if let Err(err) = execute!(self.output, EnableMouseCapture) {
+                let _ = self.restore();
+                return Err(err);
+            }
+            self.mouse_enabled = true;
+            self.capabilities.mouse = CapabilitySupport::Supported;
+        } else {
+            self.capabilities.mouse = CapabilitySupport::Unsupported;
+        }
+
+        if self.requirements.keyboard_enhancement {
+            match terminal::supports_keyboard_enhancement() {
+                Ok(true) => {
+                    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES;
+                    if let Err(err) = execute!(self.output, PushKeyboardEnhancementFlags(flags)) {
+                        let _ = self.restore();
+                        return Err(err);
+                    }
+                    self.keyboard_enhancement_enabled = true;
+                    self.capabilities.kitty_keyboard = CapabilitySupport::Supported;
+                }
+                Ok(false) => {
+                    self.capabilities.kitty_keyboard = CapabilitySupport::Unsupported;
+                }
+                Err(_) => {
+                    self.capabilities.kitty_keyboard = CapabilitySupport::Unknown;
+                }
+            }
+        } else {
+            self.capabilities.kitty_keyboard = CapabilitySupport::Unsupported;
+        }
         Ok(())
     }
 }
@@ -194,5 +283,20 @@ mod tests {
         let requirements = TerminalRequirements::default();
         assert_eq!(requirements.surface, crate::TerminalSurface::Inline);
         assert!(requirements.bracketed_paste);
+        assert!(requirements.keyboard_enhancement);
+    }
+
+    #[test]
+    fn synchronized_output_wraps_one_operation() {
+        let mut output = TerminalOutput::new(Vec::new(), None).expect("output");
+        output
+            .sync_update(|output| output.write_all(b"frame"))
+            .expect("sync update")
+            .expect("frame");
+        let bytes = output.output;
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(text.starts_with("\x1b[?2026h"));
+        assert!(text.ends_with("\x1b[?2026l"));
+        assert!(text.contains("frame"));
     }
 }

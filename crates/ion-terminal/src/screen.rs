@@ -25,9 +25,54 @@ pub struct Frame<'a> {
     pub cursor: Option<(usize, u16)>,
 }
 
+/// A virtual terminal surface used by the renderer before bytes are emitted.
+/// It is deliberately small: the surface owns cells and dimensions, while
+/// `Screen` owns physical cursor/scrollback policy.
+pub struct Surface {
+    buffer: Buffer,
+}
+
+impl Surface {
+    #[must_use]
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            buffer: Buffer::empty(Rect::new(0, 0, width.max(1), height.max(1))),
+        }
+    }
+
+    #[must_use]
+    pub fn size(&self) -> (u16, u16) {
+        (self.buffer.area.width, self.buffer.area.height)
+    }
+
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.buffer
+            .resize(Rect::new(0, 0, width.max(1), height.max(1)));
+    }
+
+    pub fn render_line(&mut self, line: Line<'_>, row: u16) {
+        if row < self.buffer.area.height {
+            Paragraph::new(line).render(
+                Rect::new(0, row, self.buffer.area.width, 1),
+                &mut self.buffer,
+            );
+        }
+    }
+
+    #[must_use]
+    pub fn row_text(&self, row: u16) -> String {
+        if row >= self.buffer.area.height {
+            return String::new();
+        }
+        (0..self.buffer.area.width)
+            .map(|column| self.buffer[(column, row)].symbol())
+            .collect()
+    }
+}
+
 /// What the physical screen shows in our window right now.
 struct Window {
-    buf: Buffer,
+    surface: Surface,
     offset: usize,
 }
 
@@ -100,7 +145,7 @@ impl Screen {
         let total = committed_rows + frame.live.len();
         let offset = total.saturating_sub(h);
 
-        let mut next = Buffer::empty(Rect::new(0, 0, w, self.avail()));
+        let mut next = Surface::new(w, self.avail());
         for r in 0..h {
             let absolute = r + offset;
             let line = if absolute < committed_rows {
@@ -109,7 +154,7 @@ impl Screen {
                 frame.live.get(absolute - committed_rows)
             };
             if let Some(line) = line {
-                Paragraph::new(line.clone()).render(Rect::new(0, r as u16, w, 1), &mut next);
+                next.render_line(line.clone(), r as u16);
             }
         }
 
@@ -135,13 +180,13 @@ impl Screen {
             let comparable = self.current.is_some() && src_row < h;
             if !comparable
                 || row_differs(
-                    &next,
+                    &next.buffer,
                     r,
-                    &self.current.as_ref().expect("checked").buf,
+                    &self.current.as_ref().expect("checked").surface.buffer,
                     src_row as u16,
                 )
             {
-                emit_buffer_row(out, &next, r, self.origin)?;
+                emit_buffer_row(out, &next.buffer, r, self.origin)?;
                 painted = true;
             }
         }
@@ -172,7 +217,10 @@ impl Screen {
         }
         out.flush()?;
 
-        self.current = Some(Window { buf: next, offset });
+        self.current = Some(Window {
+            surface: next,
+            offset,
+        });
         self.cursor_shown = cursor_shown;
         self.cursor_at = cursor_at_out;
         Ok(())
@@ -309,6 +357,23 @@ mod tests {
 
     fn line(text: &str) -> Line<'static> {
         Line::from(text.to_owned())
+    }
+
+    #[test]
+    fn virtual_surface_owns_rows_without_physical_terminal_state() {
+        let mut surface = Surface::new(8, 2);
+        surface.render_line(line("hello"), 0);
+        surface.render_line(line("world"), 1);
+
+        assert_eq!(surface.size(), (8, 2));
+        assert_eq!(surface.row_text(0), "hello   ");
+        assert_eq!(surface.row_text(1), "world   ");
+        assert_eq!(surface.row_text(2), "");
+
+        surface.resize(4, 1);
+        assert_eq!(surface.size(), (4, 1));
+        assert_eq!(surface.row_text(0), "hell");
+        assert_eq!(surface.row_text(1), "");
     }
 
     type Spec<'a> = (

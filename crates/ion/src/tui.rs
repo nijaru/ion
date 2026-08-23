@@ -1274,9 +1274,9 @@ pub async fn run(
         }
         let (live, live_cursor) = build_live(&state, &palette, screen.size().0 as usize);
         let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
-        screen
-            .draw(
-                terminal.output(),
+        terminal
+            .render(
+                &mut screen,
                 &Frame {
                     committed: &transcript.wrapped,
                     live: &live,
