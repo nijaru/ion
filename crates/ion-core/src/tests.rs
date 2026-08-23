@@ -3960,6 +3960,7 @@ fn delegate_tool(
         crate::DelegateConfig {
             store,
             make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
+            make_provider_for_model: None,
             max_active_children: 4,
             child_budget: budget,
             trusted_resources: Vec::new(),
@@ -4042,6 +4043,102 @@ async fn two_read_only_children_run_and_report_lineage() {
         let child_loaded = store.load(child).await.expect("child session");
         assert_eq!(child_loaded.session.parent_session_id, Some(parent_id));
     }
+}
+
+#[tokio::test]
+async fn fork_context_and_model_override_are_explicit() {
+    let child_script = vec![ScriptedMessage::text("child answer")];
+    let parent_provider = crate::SwitchingProvider::new(
+        "parent-model",
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("parent answer"),
+            ScriptedMessage::tool(
+                "delegate",
+                json!({
+                    "children": [{
+                        "objective": "continue the parent investigation",
+                        "context_mode": "fork_context",
+                        "model_override": "child-model"
+                    }]
+                }),
+            ),
+            ScriptedMessage::text("done"),
+        ]),
+    );
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::default();
+    let runtime = Runtime::start_with_store(parent_provider, catalog.clone(), store.clone());
+    let parent_id = runtime.session_id();
+    let override_script = child_script.clone();
+    catalog.register_scope(
+        "delegate",
+        vec![Arc::new(crate::DelegateTool::new(
+            crate::DelegateConfig {
+                store: store.clone(),
+                make_provider: Arc::new(move || {
+                    crate::SwitchingProvider::new(
+                        "default-child-model",
+                        ScriptedProvider::new(vec![ScriptedMessage::text("wrong child model")]),
+                    )
+                }),
+                make_provider_for_model: Some(Arc::new(move |model| {
+                    crate::SwitchingProvider::new(
+                        model,
+                        ScriptedProvider::new(override_script.clone()),
+                    )
+                })),
+                max_active_children: 4,
+                child_budget: crate::RuntimeBudget::unbounded(),
+                trusted_resources: Vec::new(),
+            },
+            parent_id,
+        ))],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session
+        .submit_if_idle("parent prompt")
+        .await
+        .expect("submit");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("parent turn");
+    session
+        .submit_if_idle("delegate with a fork")
+        .await
+        .expect("submit");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("delegate turn");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let parent = store.load(parent_id).await.expect("parent session");
+    let child_id = parent
+        .entries
+        .iter()
+        .find_map(|(_, entry)| {
+            serde_json::to_string(entry)
+                .ok()
+                .filter(|text| text.contains("child answer"))
+                .and_then(|text| child_ids(&text).into_iter().next())
+        })
+        .expect("fork child reference");
+    let child = store.load(child_id).await.expect("child session");
+    assert_eq!(child.session.initial_model_ref, "child-model");
+    let prompt = child
+        .entries
+        .iter()
+        .find_map(|(_, entry)| match entry {
+            crate::SessionEntry::UserMessage { text } => Some(text),
+            _ => None,
+        })
+        .expect("child objective is durable");
+    assert!(prompt.contains("continue the parent investigation"));
+    assert!(prompt.contains("[Explicit fork of parent semantic context]"));
+    assert!(prompt.contains("parent prompt"));
+    assert!(prompt.contains("parent answer"));
 }
 
 #[tokio::test]
@@ -4132,6 +4229,7 @@ async fn budget_stops_a_runaway_child() {
             crate::DelegateConfig {
                 store: store.clone(),
                 make_provider: Arc::new(looping_child),
+                make_provider_for_model: None,
                 max_active_children: 4,
                 child_budget: crate::RuntimeBudget {
                     max_model_steps: Some(1),
@@ -4218,6 +4316,7 @@ async fn parent_cancel_cancels_running_children() {
                 make_provider: Arc::new(move || HangingProvider {
                     tokens: Arc::clone(&spy_tokens),
                 }),
+                make_provider_for_model: None,
                 max_active_children: 4,
                 child_budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),

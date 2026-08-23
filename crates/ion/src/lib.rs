@@ -99,6 +99,7 @@ pub fn enable_children<P>(
             ion_core::DelegateConfig {
                 store: store.clone(),
                 make_provider,
+                make_provider_for_model: None,
                 max_active_children: 4,
                 child_budget: ion_core::child_budget_default(),
                 trusted_resources,
