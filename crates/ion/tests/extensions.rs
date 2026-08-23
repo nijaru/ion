@@ -3,7 +3,7 @@
 //! the project trust gate for executable configuration.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +23,17 @@ fn ext_def(script: &str) -> ExtensionDef {
         name: "textkit".to_owned(),
         command: "python3".to_owned(),
         args: vec![fixture(script)],
+    }
+}
+
+fn restarting_ext_def(marker: &std::path::Path) -> ExtensionDef {
+    ExtensionDef {
+        name: "restarting".to_owned(),
+        command: "python3".to_owned(),
+        args: vec![
+            fixture("restarting_extension.py"),
+            marker.to_string_lossy().into_owned(),
+        ],
     }
 }
 
@@ -114,6 +125,39 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     })
     .await
     .expect("a dead extension must be removed from future capability snapshots");
+}
+
+#[tokio::test]
+async fn extension_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("restarted");
+    let catalog = ToolCatalog::default();
+    ExtensionService::new()
+        .start_into(&[restarting_ext_def(&marker)], &catalog)
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut output = None;
+    while Instant::now() < deadline {
+        if marker.exists() && catalog.get("restarting__echo").is_some() {
+            let candidate = catalog
+                .execute(
+                    "restarting__echo",
+                    &json!({"message":"after restart"}),
+                    CancellationToken::new(),
+                )
+                .await;
+            if !candidate.is_error {
+                output = Some(candidate.output);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        output.expect("the extension must recover after its first discovery crash"),
+        "echo: after restart"
+    );
 }
 
 #[tokio::test]
